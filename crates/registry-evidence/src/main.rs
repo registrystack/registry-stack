@@ -546,6 +546,10 @@ fn runtime_initialization_error(error: RuntimeInitializationError) -> CommandErr
         RuntimeInitializationError::RateLimit => {
             CliError("runtime rate-limit initialization failed").into()
         }
+        RuntimeInitializationError::IssuerTrust => CliError(
+            "runtime authentication initialization failed: the access-token issuer TLS trust profile does not resolve to a bound certificate bundle trusted beside the system roots",
+        )
+        .into(),
     }
 }
 
@@ -5053,6 +5057,22 @@ mod tests {
     use registry_evidence::config::SubjectBindingMode;
     use registry_evidence::verifier::{ExpectedListItemForm, ExpectedValueForm};
     use std::fs;
+
+    /// The issuer trust refusal covers every way a named profile fails to
+    /// resolve, not only a file that holds no certificate.
+    #[test]
+    fn an_issuer_trust_refusal_names_a_profile_that_does_not_resolve() {
+        let CommandError::Cli(CliError(message)) =
+            runtime_initialization_error(RuntimeInitializationError::IssuerTrust)
+        else {
+            panic!("an issuer trust refusal is a plain CLI error");
+        };
+        assert_eq!(
+            message,
+            "runtime authentication initialization failed: the access-token issuer TLS trust \
+             profile does not resolve to a bound certificate bundle trusted beside the system roots"
+        );
+    }
 
     /// Every command that compiles a kernel renders the same two things: the
     /// failure class it owns, and the artifact diagnostic the kernel produced.

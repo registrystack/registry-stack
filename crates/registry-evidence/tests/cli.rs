@@ -3,7 +3,7 @@
 use std::{
     collections::BTreeMap,
     fs,
-    io::{Read as _, Write as _},
+    io::Write as _,
     net::{TcpListener, TcpStream},
     os::unix::fs::{MetadataExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
@@ -35,6 +35,39 @@ struct JwksServer {
 
 impl JwksServer {
     fn start() -> Self {
+        Self::start_with(None)
+    }
+
+    /// The same endpoint served over HTTPS, under a certificate a private
+    /// certificate authority signed. Returns the authority's PEM certificate,
+    /// which no platform root store holds.
+    fn start_under_private_ca() -> (Self, String) {
+        use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+
+        let mut authority =
+            rcgen::CertificateParams::new(Vec::<String>::new()).expect("private CA parameters");
+        authority.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let authority_key = rcgen::KeyPair::generate().expect("private CA key");
+        let authority = authority
+            .self_signed(&authority_key)
+            .expect("private CA certificate");
+        let server_key = rcgen::KeyPair::generate().expect("server key");
+        let server = rcgen::CertificateParams::new(vec!["127.0.0.1".to_owned()])
+            .expect("server parameters")
+            .signed_by(&server_key, &authority, &authority_key)
+            .expect("the private CA signs the server certificate");
+        let config = tokio_rustls::rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![server.der().clone()],
+                PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(server_key.serialize_der())),
+            )
+            .expect("TLS server configuration");
+        let server = Self::start_with(Some(Arc::new(config)));
+        (server, pem_certificate(authority.der()))
+    }
+
+    fn start_with(tls: Option<Arc<tokio_rustls::rustls::ServerConfig>>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("JWKS server binds");
         listener
             .set_nonblocking(true)
@@ -57,37 +90,30 @@ impl JwksServer {
         );
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
+        let tls_scheme = tls.is_some();
         let worker = std::thread::spawn(move || {
             while !worker_stop.load(Ordering::Acquire) {
                 match listener.accept() {
-                    Ok((mut stream, _)) => {
+                    Ok((stream, _)) => {
                         // A BSD socket inherits the listener's nonblocking
                         // mode, which would read an empty request whenever
                         // the client's bytes had not yet arrived.
                         let _ = stream.set_nonblocking(false);
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-                        let mut request = Vec::with_capacity(1_024);
-                        while request.len() < 8_192
-                            && !request.windows(4).any(|window| window == b"\r\n\r\n")
-                        {
-                            let mut chunk = [0_u8; 512];
-                            let Ok(read) = stream.read(&mut chunk) else {
-                                break;
-                            };
-                            if read == 0 {
-                                break;
+                        match &tls {
+                            None => answer_jwks_request(stream, &response),
+                            Some(config) => {
+                                let Ok(connection) =
+                                    tokio_rustls::rustls::ServerConnection::new(Arc::clone(config))
+                                else {
+                                    continue;
+                                };
+                                answer_jwks_request(
+                                    tokio_rustls::rustls::StreamOwned::new(connection, stream),
+                                    &response,
+                                );
                             }
-                            request.extend_from_slice(&chunk[..read]);
                         }
-                        let valid_request =
-                            request.starts_with(b"GET /.well-known/jwks.json HTTP/1.1\r\n");
-                        let rejected = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-                        let _ = stream.write_all(if valid_request {
-                            response.as_ref()
-                        } else {
-                            rejected
-                        });
-                        let _ = stream.flush();
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(Duration::from_millis(10));
@@ -96,8 +122,9 @@ impl JwksServer {
                 }
             }
         });
+        let scheme = if tls_scheme { "https" } else { "http" };
         Self {
-            origin: format!("http://{address}"),
+            origin: format!("{scheme}://{address}"),
             stop,
             worker: Some(worker),
         }
@@ -106,6 +133,40 @@ impl JwksServer {
     fn origin(&self) -> &str {
         &self.origin
     }
+}
+
+/// Read one request and answer it with the key set, or with 404 for any other
+/// request line.
+fn answer_jwks_request(mut stream: impl std::io::Read + std::io::Write, response: &[u8]) {
+    let mut request = Vec::with_capacity(1_024);
+    while request.len() < 8_192 && !request.windows(4).any(|window| window == b"\r\n\r\n") {
+        let mut chunk = [0_u8; 512];
+        let Ok(read) = stream.read(&mut chunk) else {
+            break;
+        };
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&chunk[..read]);
+    }
+    let valid_request = request.starts_with(b"GET /.well-known/jwks.json HTTP/1.1\r\n");
+    let rejected = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    let _ = stream.write_all(if valid_request { response } else { rejected });
+    let _ = stream.flush();
+}
+
+/// One DER certificate as a PEM block, the form a `caBundleFile` holds.
+fn pem_certificate(der: &[u8]) -> String {
+    use base64::Engine as _;
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(der);
+    let body = encoded
+        .as_bytes()
+        .chunks(64)
+        .map(|line| std::str::from_utf8(line).expect("base64 is ASCII"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("-----BEGIN CERTIFICATE-----\n{body}\n-----END CERTIFICATE-----\n")
 }
 
 impl Drop for JwksServer {
@@ -377,6 +438,83 @@ fn dependency_check_fails_closed_when_the_jwks_endpoint_is_unavailable() {
         "evidence: a required runtime dependency is unavailable\n"
     );
     assert!(!String::from_utf8_lossy(&output.stderr).contains(&origin));
+}
+
+/// An issuer whose key set is served under a private certificate authority is
+/// reachable only through the trust profile the bundle names for it: the
+/// system roots alone refuse its certificate, and naming the profile adds that
+/// one authority for that one connection.
+#[test]
+fn dependency_check_trusts_a_private_ca_issuer_only_through_its_named_profile() {
+    let (key_server, authority) = JwksServer::start_under_private_ca();
+    let deployment = Deployment::stage("all-definitions");
+    deployment.stage_acceptance_secrets();
+    deployment.point_authentication_to(key_server.origin());
+
+    let refused = deployment.check_with_runtime_dependencies();
+    assert!(
+        !refused.status.success(),
+        "an issuer under an untrusted private CA passed check"
+    );
+    assert_eq!(
+        std::str::from_utf8(&refused.stderr).expect("diagnostic is UTF-8"),
+        "evidence: a required runtime dependency is unavailable\n"
+    );
+
+    deployment.trust_issuer_through("issuer-pki", &authority);
+    let output = deployment.check_with_runtime_dependencies();
+
+    assert_success(
+        &output,
+        "Evidence deployment ",
+        " passed check (4 requirements)\n",
+    );
+}
+
+/// A trust profile trusts the authority it names and nothing else: an issuer
+/// whose certificate another private authority signed is still refused.
+#[test]
+fn dependency_check_refuses_an_issuer_the_named_profile_does_not_vouch_for() {
+    let (key_server, _authority) = JwksServer::start_under_private_ca();
+    let (_other_server, other_authority) = JwksServer::start_under_private_ca();
+    let deployment = Deployment::stage("all-definitions");
+    deployment.stage_acceptance_secrets();
+    deployment.point_authentication_to(key_server.origin());
+    deployment.trust_issuer_through("issuer-pki", &other_authority);
+
+    let output = deployment.check_with_runtime_dependencies();
+
+    assert!(
+        !output.status.success(),
+        "a profile naming another authority admitted the issuer"
+    );
+    assert_eq!(
+        std::str::from_utf8(&output.stderr).expect("diagnostic is UTF-8"),
+        "evidence: a required runtime dependency is unavailable\n"
+    );
+}
+
+/// A profile bound to a file that holds no certificate refuses when the
+/// runtime file loads, rather than leaving the issuer on the system roots
+/// alone.
+#[test]
+fn dependency_check_refuses_an_issuer_profile_that_is_not_a_certificate_bundle() {
+    let (key_server, _authority) = JwksServer::start_under_private_ca();
+    let deployment = Deployment::stage("all-definitions");
+    deployment.stage_acceptance_secrets();
+    deployment.point_authentication_to(key_server.origin());
+    deployment.trust_issuer_through("issuer-pki", "not a certificate\n");
+
+    let output = deployment.check_with_runtime_dependencies();
+
+    assert!(
+        !output.status.success(),
+        "a profile holding no certificate passed check"
+    );
+    assert_eq!(
+        std::str::from_utf8(&output.stderr).expect("diagnostic is UTF-8"),
+        "evidence: deployment artifact is invalid: artifact runtime.yaml: TLS CA bundle contains non-certificate PEM data\n"
+    );
 }
 
 #[tokio::test]
@@ -3407,6 +3545,35 @@ outboundTls:
             "bundle/evidence.yaml",
             "  jwksUri: https://identity.invalid/.well-known/jwks.json\n",
             &format!("  jwksUri: {origin}/.well-known/jwks.json\n"),
+        );
+    }
+
+    /// Name `profile` as the issuer's TLS trust profile in the bundle and bind
+    /// it in the runtime file to a read-only file holding `authority_pem`.
+    fn trust_issuer_through(&self, profile: &str, authority_pem: &str) {
+        let bundle_path = self.path(&format!("{profile}.pem"));
+        fs::write(&bundle_path, authority_pem).expect("stage the issuer CA bundle");
+        fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o444))
+            .expect("seal the issuer CA bundle");
+        let text =
+            fs::read_to_string(self.path("bundle/evidence.yaml")).expect("read staged bundle");
+        let jwks_line = text
+            .lines()
+            .find(|line| line.starts_with("  jwksUri: "))
+            .expect("the bundle names a JWKS URI")
+            .to_owned();
+        self.replace(
+            "bundle/evidence.yaml",
+            &format!("{jwks_line}\n"),
+            &format!("{jwks_line}\n  tlsTrustProfile: {profile}\n"),
+        );
+        self.replace(
+            "runtime.yaml",
+            "  trustProfiles: {}\n",
+            &format!(
+                "  trustProfiles:\n    {profile}: {{caBundleFile: {}}}\n",
+                bundle_path.display()
+            ),
         );
     }
 

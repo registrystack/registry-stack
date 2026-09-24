@@ -771,6 +771,20 @@ impl ValidatedFetchUrl {
         self.immediate_request_with_timeout(reqwest::Method::GET, timeout)
     }
 
+    /// Build an immediate GET that trusts `additional_roots` beside the
+    /// platform roots.
+    ///
+    /// For an endpoint served under a private certificate authority that the
+    /// deployment names explicitly. The roots are added to the platform roots,
+    /// never substituted for them, and certificate verification stays on.
+    pub fn immediate_get_with_additional_roots(
+        &self,
+        timeout: Duration,
+        additional_roots: &[reqwest::Certificate],
+    ) -> Result<reqwest::RequestBuilder, FetchUrlError> {
+        self.immediate_request_trusting(reqwest::Method::GET, timeout, additional_roots)
+    }
+
     /// Build an immediate POST request from this validated URL.
     ///
     /// This is useful for token endpoints and other SSRF-sensitive POST
@@ -854,21 +868,32 @@ impl ValidatedFetchUrl {
         method: reqwest::Method,
         timeout: Duration,
     ) -> Result<reqwest::RequestBuilder, FetchUrlError> {
+        self.immediate_request_trusting(method, timeout, &[])
+    }
+
+    fn immediate_request_trusting(
+        &self,
+        method: reqwest::Method,
+        timeout: Duration,
+        additional_roots: &[reqwest::Certificate],
+    ) -> Result<reqwest::RequestBuilder, FetchUrlError> {
         let host = self
             .url
             .host_str()
             .ok_or(FetchUrlError::MissingHost)?
             .to_string();
-        let client = reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder()
             .timeout(timeout)
             .connect_timeout(timeout.min(DEFAULT_VALIDATED_FETCH_CONNECT_TIMEOUT))
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
             .retry(reqwest::retry::never())
             .pool_max_idle_per_host(0)
-            .resolve_to_addrs(&host, &self.resolved_addrs)
-            .build()
-            .map_err(FetchUrlError::ClientBuild)?;
+            .resolve_to_addrs(&host, &self.resolved_addrs);
+        for root in additional_roots {
+            builder = builder.add_root_certificate(root.clone());
+        }
+        let client = builder.build().map_err(FetchUrlError::ClientBuild)?;
         Ok(client.request(method, self.url.clone()).timeout(timeout))
     }
 }
@@ -1068,6 +1093,91 @@ mod tests {
             axum::serve(listener, router).await.expect("serve test app");
         });
         addr
+    }
+
+    /// A TLS listener on loopback whose certificate a private certificate
+    /// authority signed, answering every request with `private-ca`. Returns
+    /// its address and the authority's certificate.
+    async fn serve_under_private_ca() -> (SocketAddr, reqwest::Certificate) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+
+        let mut authority =
+            rcgen::CertificateParams::new(Vec::<String>::new()).expect("private CA parameters");
+        authority.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let authority_key = rcgen::KeyPair::generate().expect("private CA key");
+        let authority = authority
+            .self_signed(&authority_key)
+            .expect("private CA certificate");
+        let server_key = rcgen::KeyPair::generate().expect("server key");
+        let server = rcgen::CertificateParams::new(vec!["127.0.0.1".to_owned()])
+            .expect("server parameters")
+            .signed_by(&server_key, &authority, &authority_key)
+            .expect("the private CA signs the server certificate");
+        let server_config = tokio_rustls::rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![server.der().clone()],
+                PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(server_key.serialize_der())),
+            )
+            .expect("TLS server configuration");
+        let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(server_config));
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind TLS test server");
+        let addr = listener.local_addr().expect("TLS test server address");
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    let Ok(mut stream) = acceptor.accept(stream).await else {
+                        return;
+                    };
+                    let mut request = Vec::new();
+                    let mut chunk = [0_u8; 512];
+                    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        match stream.read(&mut chunk).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => request.extend_from_slice(&chunk[..read]),
+                        }
+                    }
+                    let _ = stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nprivate-ca",
+                        )
+                        .await;
+                    let _ = stream.shutdown().await;
+                });
+            }
+        });
+        let authority = reqwest::Certificate::from_der(authority.der())
+            .expect("the private CA certificate parses");
+        (addr, authority)
+    }
+
+    #[tokio::test]
+    async fn a_pinned_get_trusts_a_private_ca_only_when_it_is_named() {
+        let (addr, authority) = serve_under_private_ca().await;
+        let url = reqwest::Url::parse(&format!("https://{addr}/keys")).expect("target URL");
+        let validated = FetchUrlPolicy::dev()
+            .validate_dns_pinned_for_immediate_fetch(&url)
+            .expect("loopback HTTPS target");
+
+        validated
+            .immediate_get_with_timeout(Duration::from_secs(5))
+            .expect("pinned request")
+            .send()
+            .await
+            .expect_err("a certificate a private CA signed is refused by default");
+
+        let response = validated
+            .immediate_get_with_additional_roots(Duration::from_secs(5), &[authority])
+            .expect("pinned request trusting the private CA")
+            .send()
+            .await
+            .expect("a certificate the named private CA signed is accepted");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.text().await.expect("response body"), "private-ca");
     }
 
     #[tokio::test]

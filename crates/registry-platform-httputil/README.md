@@ -84,6 +84,9 @@ async fn fetch_document() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 - `ValidatedFetchUrl::immediate_get` applies a 30 second request timeout and a
   10 second connect timeout by default. Use `immediate_get_with_timeout` or
   `RequestBuilder::timeout` for a tighter per-call bound.
+- `ValidatedFetchUrl::immediate_get_with_additional_roots` trusts the given
+  certificate authorities beside the system roots for that one request. It
+  adds trust anchors and never removes one or disables hostname verification.
 - Requests built from `ValidatedFetchUrl` disable redirects and ignore proxy
   environment variables, so a redirect response cannot move the fetch to a URL
   that bypassed validation.
