@@ -222,7 +222,7 @@ export type BRegRequestResultReferenceData = JsonObject & {
   /** Revision written by the application, not a current ETag or precondition. */
   readonly targetRevision: SafeInteger
 }
-export type BRegRequestState = 'draft' | 'submitted' | 'cancelled' | 'applied' | 'superseded'
+export type BRegRequestState = 'draft' | 'submitted' | 'cancelled' | 'applied'
 export type BRegRequestReviewRequirement =
   | Readonly<{ mode: 'none' }>
   | Readonly<{ authority: string; policyId: string }>
@@ -249,7 +249,7 @@ export type BRegExternalReviewStatus = Readonly<{
   }>
   application: Readonly<{
     mode: 'manual' | 'automatic'
-    state: 'awaitingReview' | 'ready' | 'queued' | 'applying' | 'applied' | 'blocked'
+    state: 'awaitingReview' | 'ready' | 'queued' | 'applying' | 'applied' | 'blocked' | 'expired'
     executor?: string
     applicationId?: string
     /** Durable automatic-application attempts, from 0 through 1000. */

@@ -1191,7 +1191,7 @@ fn request_get_lifecycle_expression(
                       FROM registry_internal.registry_request_state AS cr_state
                      WHERE cr_state.request_entity_id = {}
                        AND cr_state.request_id = record_id
-                       AND cr_state.state IN ('cancelled', 'superseded', 'applied')
+                       AND cr_state.state IN ('cancelled', 'applied')
                        AND cr_state.detail_erased_at IS NOT NULL
                 )
             )",
@@ -1646,7 +1646,7 @@ pub(crate) fn change_request_action_state_exists_expression(
 ) -> String {
     let context = change_request_action_context_expression();
     if command == PolicyCommand::Select {
-        let mut visible_states = vec!["draft", "submitted", "cancelled", "superseded"];
+        let mut visible_states = vec!["draft", "submitted", "cancelled"];
         if operation == Operation::ApplyRequest {
             visible_states.push("applied");
         }

@@ -38,7 +38,7 @@ use crate::model::{
     request_query_field_api_name, request_query_field_type, CompiledEntity, CompiledQueryKind,
     CompiledQueryOperation, CompiledQuerySortDirection, CompiledReadPath, CompiledRegistry,
     REQUEST_BREG_STATE_QUERY_FIELD, REQUEST_EFFECT_DIGEST_QUERY_FIELD,
-    REQUEST_PROPOSAL_VERSION_QUERY_FIELD,
+    REQUEST_PROPOSAL_VERSION_QUERY_FIELD, REQUEST_REVIEW_OUTCOME_QUERY_FIELD,
 };
 use crate::mutation::{strong_record_etag_for_representation, BoundValue};
 use crate::query_binding::{CursorBindingQuery, CursorBindingReferences};
@@ -51,6 +51,23 @@ use super::{
 
 const MAX_SQL_LIMIT: usize = 1000;
 const MAX_SPATIAL_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+/// The settled review outcome of the current proposal, spelled as the read
+/// projection spells it: `pending` while a submission awaits its result,
+/// `approvedExpired` once an approval is past its availability, and NULL when
+/// the current proposal was never submitted for review. It describes the
+/// review only; combine it with `bregState` to select unapplied requests.
+const REQUEST_REVIEW_OUTCOME_SQL: &str = "(SELECT CASE
+        WHEN review_result.status IS NULL THEN 'pending'
+        WHEN review_result.status = 'approved'
+         AND review_result.available_until <= transaction_timestamp() THEN 'approvedExpired'
+        WHEN review_result.status = 'changes_requested' THEN 'changesRequested'
+        ELSE review_result.status END
+   FROM registry_internal.registry_request_review_submissions AS review_submission
+   LEFT JOIN registry_internal.registry_request_review_results AS review_result
+     USING (request_entity_id, request_id, proposal_version)
+  WHERE review_submission.request_entity_id = request_state.request_entity_id
+    AND review_submission.request_id = request_state.request_id
+    AND review_submission.proposal_version = request_state.proposal_version)";
 
 /// Runtime PostgreSQL implementation of the read-only record surface.
 #[derive(Clone)]
@@ -2539,6 +2556,7 @@ impl ReadRelations {
                     REQUEST_BREG_STATE_QUERY_FIELD => "request_state.state",
                     REQUEST_PROPOSAL_VERSION_QUERY_FIELD => "request_state.proposal_version",
                     REQUEST_EFFECT_DIGEST_QUERY_FIELD => "request_proposal.effect_digest",
+                    REQUEST_REVIEW_OUTCOME_QUERY_FIELD => REQUEST_REVIEW_OUTCOME_SQL,
                     _ => return Err(ReadServiceError::Unavailable),
                 };
                 return Ok(FieldExpression {

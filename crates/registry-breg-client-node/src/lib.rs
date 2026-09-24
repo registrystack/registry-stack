@@ -360,7 +360,6 @@ fn request_state_name(value: BRegRequestState) -> &'static str {
         BRegRequestState::Submitted => "submitted",
         BRegRequestState::Cancelled => "cancelled",
         BRegRequestState::Applied => "applied",
-        BRegRequestState::Superseded => "superseded",
     }
 }
 

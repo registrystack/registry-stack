@@ -773,7 +773,7 @@ fn render_change_request(
             "maximumSnapshotBytes": request.maximum_snapshot_bytes,
         },
         "stateEnvelope": {
-            "states": ["draft", "submitted", "cancelled", "superseded", "applied"],
+            "states": ["draft", "submitted", "cancelled", "applied"],
             "proposalBinding": ["proposalVersion", "effectDigest", "contractFingerprint"],
             "actionAvailability": "advisory_rechecked_on_use",
         },
@@ -3415,7 +3415,7 @@ fn request_review_metadata_schema() -> Value {
                 }],
                 "properties": {
                     "mode": {"type": "string", "enum": ["manual", "automatic"]},
-                    "state": {"type": "string", "enum": ["awaitingReview", "ready", "queued", "applying", "applied", "blocked"]},
+                    "state": {"type": "string", "enum": ["awaitingReview", "ready", "queued", "applying", "applied", "blocked", "expired"]},
                     "executor": {"type": "string", "minLength": 1, "maxLength": 128},
                     "applicationId": {"type": "string", "format": "uuid"},
                     "attempts": {"type": "integer", "minimum": 0, "maximum": 1000},
@@ -3565,7 +3565,7 @@ fn request_presence_metadata_schema() -> Value {
 }
 
 fn request_state_schema() -> Value {
-    json!({"type": "string", "enum": ["draft", "submitted", "cancelled", "applied", "superseded"]})
+    json!({"type": "string", "enum": ["draft", "submitted", "cancelled", "applied"]})
 }
 
 fn effect_digest_schema() -> Value {

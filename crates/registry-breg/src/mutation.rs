@@ -880,7 +880,7 @@ impl MutationCoordinator {
         self
     }
 
-    async fn check_task_authority(
+    pub(crate) async fn check_task_authority(
         &self,
         binding: &crate::task_grant::TaskGrantBinding,
     ) -> Result<(), MutationError> {

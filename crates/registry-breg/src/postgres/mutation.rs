@@ -577,41 +577,43 @@ impl PostgresRecordMutationService {
                 }
             }
         };
-        if matches!(
-            receipt_preflight,
-            crate::mutation::RequestReceiptPreflight::Receipt
-        ) {
-            let client = self
-                .pool
-                .get()
-                .await
-                .map_err(|_| MutationError::Unavailable)?;
-            let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
-            let result = tokio::time::timeout_at(
-                deadline,
-                self.coordinator.execute_request_action(
-                    guard.client(),
-                    &self.registry,
-                    input,
-                    claims,
-                    fault,
-                    None,
-                    None,
-                    false,
-                ),
-            )
-            .await;
-            return match result {
-                Ok(result) => {
-                    guard.disarm();
-                    result
-                }
-                Err(_) => {
-                    guard.cancel_and_discard().await;
-                    Err(MutationError::Unavailable)
-                }
-            };
-        }
+        let proposal_authority = match receipt_preflight {
+            crate::mutation::RequestReceiptPreflight::Continue { proposal_authority } => {
+                proposal_authority
+            }
+            crate::mutation::RequestReceiptPreflight::Receipt => {
+                let client = self
+                    .pool
+                    .get()
+                    .await
+                    .map_err(|_| MutationError::Unavailable)?;
+                let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
+                let result = tokio::time::timeout_at(
+                    deadline,
+                    self.coordinator.execute_request_action(
+                        guard.client(),
+                        &self.registry,
+                        input,
+                        claims,
+                        fault,
+                        None,
+                        None,
+                        false,
+                    ),
+                )
+                .await;
+                return match result {
+                    Ok(result) => {
+                        guard.disarm();
+                        result
+                    }
+                    Err(_) => {
+                        guard.cancel_and_discard().await;
+                        Err(MutationError::Unavailable)
+                    }
+                };
+            }
+        };
         let crate::api::RequestActionBody::Apply {
             proposal_version,
             ref effect_digest,
@@ -638,6 +640,49 @@ impl PostgresRecordMutationService {
             .await?;
             (authority, accepted)
         };
+        // A guard acquisition is a protected disclosure too. Check both the
+        // current actor and the authority frozen at submission before the
+        // review authority is contacted.
+        let task_authority = async {
+            if let Some(grant) = claims.task_grant() {
+                self.coordinator.check_task_authority(grant).await?;
+            }
+            if let Some(grant) = proposal_authority.as_deref() {
+                self.coordinator.check_task_authority(grant).await?;
+            }
+            Ok::<(), MutationError>(())
+        }
+        .await;
+        if let Err(error) = task_authority {
+            // The refusal happens before any journaled attempt, so it is
+            // recorded here, the same as a refused evidence-apply preflight.
+            let client = tokio::time::timeout_at(deadline, self.pool.get())
+                .await
+                .map_err(|_| MutationError::Unavailable)?
+                .map_err(|_| MutationError::Unavailable)?;
+            let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
+            let recorded = tokio::time::timeout_at(
+                deadline,
+                self.coordinator.record_request_boundary_refusal(
+                    guard.client(),
+                    &self.registry,
+                    &input,
+                    claims,
+                ),
+            )
+            .await;
+            match recorded {
+                Ok(recorded) => {
+                    guard.disarm();
+                    recorded?;
+                }
+                Err(_) => {
+                    guard.cancel_and_discard().await;
+                    return Err(MutationError::Unavailable);
+                }
+            }
+            return Err(error);
+        }
         let source = self
             .review_result_source
             .as_ref()

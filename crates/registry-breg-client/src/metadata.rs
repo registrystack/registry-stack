@@ -3598,9 +3598,12 @@ fn validate_spatial_queries(value: Value) -> Result<(), BRegMetadataError> {
 
 fn query_field_identifier(value: Value) -> Result<String, BRegMetadataError> {
     match value.as_str() {
-        Some("__request_breg_state" | "__request_proposal_version" | "__request_effect_digest") => {
-            string(value)
-        }
+        Some(
+            "__request_breg_state"
+            | "__request_proposal_version"
+            | "__request_effect_digest"
+            | "__request_review_outcome",
+        ) => string(value),
         _ => identifier(value),
     }
 }

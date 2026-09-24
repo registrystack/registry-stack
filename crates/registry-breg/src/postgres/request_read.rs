@@ -30,6 +30,7 @@ use crate::request_retention::{
     RetainedRequestResultLink,
 };
 use crate::request_workflow::{ProposalSnapshot, RequestState, RequestWorkflow};
+use crate::review_store::SettledReviewOutcome;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn annotate_records(
@@ -230,6 +231,18 @@ async fn annotate_request_records(
                 && workflow.owner().as_str() == actor
                 && selected_profile_allows_draft_patch(entity, request)
         });
+        let outcome = if workflow.state() == RequestState::Submitted {
+            crate::review_store::settled_outcome(
+                transaction,
+                &entity.id,
+                record_uuid,
+                workflow.current_version().get(),
+            )
+            .await
+            .map_err(|_| ReadServiceError::Unavailable)?
+        } else {
+            None
+        };
         let actions = action_links(
             transaction,
             registry,
@@ -241,6 +254,7 @@ async fn annotate_request_records(
             field_encryption,
             record,
             &workflow,
+            outcome,
             &targets,
             actor_reference.as_deref(),
         )
@@ -298,6 +312,7 @@ async fn annotate_request_records(
                     &entity.id,
                     record_uuid,
                     proposal,
+                    workflow.state() == RequestState::Submitted,
                 )
                 .await
                 .map_err(|_| ReadServiceError::Unavailable)?
@@ -799,6 +814,7 @@ async fn action_links(
     _field_encryption: Option<&FieldEncryptionService>,
     record: &RecordEnvelope,
     workflow: &RequestWorkflow,
+    outcome: Option<SettledReviewOutcome>,
     _targets: &[RequestTargetSnapshot],
     actor_reference: Option<&str>,
 ) -> Result<Vec<Value>, ReadServiceError> {
@@ -806,7 +822,7 @@ async fn action_links(
         i64::try_from(record.revision).map_err(|_| ReadServiceError::Unavailable)?;
     let mut values = Vec::new();
     for action in request.context.request_actions() {
-        if !action_is_available(action, workflow, actor_reference) {
+        if !action_is_available(action, workflow, outcome, actor_reference) {
             continue;
         }
         let route = registry
@@ -838,7 +854,7 @@ async fn action_links(
             "href": action_href(action, request, &record.id),
             "ifMatch": precondition,
         });
-        if let Some(rebase) = revise_rebase_available(action, workflow) {
+        if let Some(rebase) = revise_rebase_available(action, workflow, outcome) {
             value["rebase"] = json!(rebase);
         }
         if let Some(proposal) = workflow.current_proposal() {
@@ -881,9 +897,16 @@ const HEX: [char; 16] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F',
 ];
 
+/// The advertised actions follow the settled review outcome of the current
+/// proposal, and the mutation path enforces the same shape: a rejection leaves
+/// only cancellation, a send-back or an expired approval is answered by a
+/// revision, and only an unexpired approval or an unsettled review keeps apply.
+/// An answered, cancelled, or superseded result cannot be applied either, but
+/// leaves revise, rebase, and cancel as they are.
 fn action_is_available(
     action: &VerifiedRequestAction,
     workflow: &RequestWorkflow,
+    outcome: Option<SettledReviewOutcome>,
     actor_reference: Option<&str>,
 ) -> bool {
     match action.operation() {
@@ -892,7 +915,7 @@ fn action_is_available(
                 && actor_reference.is_some_and(|actor| workflow.owner().as_str() == actor)
         }
         Operation::ReviseRequest => {
-            revise_rebase_available(action, workflow).is_some()
+            revise_rebase_available(action, workflow, outcome).is_some()
                 && actor_reference.is_some_and(|actor| workflow.owner().as_str() == actor)
         }
         Operation::CancelRequest => {
@@ -901,7 +924,18 @@ fn action_is_available(
                 RequestState::Cancelled | RequestState::Applied
             ) && actor_reference.is_some_and(|actor| workflow.owner().as_str() == actor)
         }
-        Operation::ApplyRequest => workflow.state() == RequestState::Submitted,
+        Operation::ApplyRequest => {
+            workflow.state() == RequestState::Submitted
+                && !matches!(
+                    outcome,
+                    Some(
+                        SettledReviewOutcome::Rejected
+                            | SettledReviewOutcome::ChangesRequested
+                            | SettledReviewOutcome::Approved { expired: true }
+                            | SettledReviewOutcome::Other
+                    )
+                )
+        }
         _ => false,
     }
 }
@@ -909,12 +943,21 @@ fn action_is_available(
 fn revise_rebase_available(
     action: &VerifiedRequestAction,
     workflow: &RequestWorkflow,
+    outcome: Option<SettledReviewOutcome>,
 ) -> Option<bool> {
     if action.operation() != Operation::ReviseRequest {
         return None;
     }
-    match workflow.state() {
-        RequestState::Submitted => Some(true),
+    match (workflow.state(), outcome) {
+        (RequestState::Submitted, Some(SettledReviewOutcome::Rejected)) => None,
+        (
+            RequestState::Submitted,
+            Some(
+                SettledReviewOutcome::ChangesRequested
+                | SettledReviewOutcome::Approved { expired: true },
+            ),
+        ) => Some(false),
+        (RequestState::Submitted, _) => Some(true),
         _ => None,
     }
 }
@@ -1492,7 +1535,6 @@ fn request_state_name(state: RequestState) -> &'static str {
         RequestState::Submitted => "submitted",
         RequestState::Cancelled => "cancelled",
         RequestState::Applied => "applied",
-        RequestState::Superseded => "superseded",
     }
 }
 
@@ -1596,7 +1638,7 @@ mod tests {
         erased_terminal_request_metadata, may_disclose_actor_references,
         may_disclose_application_reason, may_disclose_review_state, retained_history_value,
         revise_rebase_available, selected_profile_allows_draft_patch, ClaimContext,
-        RetainedHistoryMetadata, RowBoundaryContext,
+        RetainedHistoryMetadata, RowBoundaryContext, SettledReviewOutcome,
     };
     use crate::api::{
         AuthorizedRequestContext, RecordReadKind, RecordReadRequest, VerifiedRequestAction,
@@ -1621,13 +1663,72 @@ mod tests {
     fn revise_action_marks_rebase_required_on_submitted_requests() {
         let revise = action(Operation::ReviseRequest);
         let submitted = submitted_workflow();
-        assert_eq!(revise_rebase_available(&revise, &submitted), Some(true));
-        assert!(action_is_available(&revise, &submitted, Some("owner-ref")));
+        assert_eq!(
+            revise_rebase_available(&revise, &submitted, None),
+            Some(true)
+        );
+        assert!(action_is_available(
+            &revise,
+            &submitted,
+            None,
+            Some("owner-ref")
+        ));
         assert!(!action_is_available(
             &revise,
             &submitted,
+            None,
             Some("reviewer-ref")
         ));
+    }
+
+    #[test]
+    fn settled_review_outcome_narrows_the_advertised_actions() {
+        let revise = action(Operation::ReviseRequest);
+        let cancel = action(Operation::CancelRequest);
+        let apply = action(Operation::ApplyRequest);
+        let submitted = submitted_workflow();
+        for (outcome, rebase, apply_offered) in [
+            (None, Some(true), true),
+            (
+                Some(SettledReviewOutcome::Approved { expired: false }),
+                Some(true),
+                true,
+            ),
+            (
+                Some(SettledReviewOutcome::Approved { expired: true }),
+                Some(false),
+                false,
+            ),
+            (
+                Some(SettledReviewOutcome::ChangesRequested),
+                Some(false),
+                false,
+            ),
+            (Some(SettledReviewOutcome::Rejected), None, false),
+            (Some(SettledReviewOutcome::Other), Some(true), false),
+        ] {
+            assert_eq!(
+                revise_rebase_available(&revise, &submitted, outcome),
+                rebase,
+                "{outcome:?}"
+            );
+            assert_eq!(
+                action_is_available(&revise, &submitted, outcome, Some("owner-ref")),
+                rebase.is_some(),
+                "{outcome:?}"
+            );
+            assert!(action_is_available(
+                &cancel,
+                &submitted,
+                outcome,
+                Some("owner-ref")
+            ));
+            assert_eq!(
+                action_is_available(&apply, &submitted, outcome, Some("applier-ref")),
+                apply_offered,
+                "{outcome:?}"
+            );
+        }
     }
 
     #[test]
@@ -1641,15 +1742,31 @@ mod tests {
             actor("owner-ref"),
             StateRevision::new(1).expect("state revision"),
         );
-        assert!(action_is_available(&cancel, &draft, Some("owner-ref")));
-        assert!(!action_is_available(&cancel, &draft, Some("reviewer-ref")));
-        assert!(!action_is_available(&cancel, &draft, None));
+        assert!(action_is_available(
+            &cancel,
+            &draft,
+            None,
+            Some("owner-ref")
+        ));
+        assert!(!action_is_available(
+            &cancel,
+            &draft,
+            None,
+            Some("reviewer-ref")
+        ));
+        assert!(!action_is_available(&cancel, &draft, None, None));
 
         let submitted = submitted_workflow();
-        assert!(action_is_available(&cancel, &submitted, Some("owner-ref")));
+        assert!(action_is_available(
+            &cancel,
+            &submitted,
+            None,
+            Some("owner-ref")
+        ));
         assert!(!action_is_available(
             &cancel,
             &submitted,
+            None,
             Some("reviewer-ref")
         ));
 
@@ -1658,7 +1775,12 @@ mod tests {
             .cancel(context("owner-ref", 3))
             .expect("owner cancels")
             .into_workflow();
-        assert!(!action_is_available(&cancel, &canceled, Some("owner-ref")));
+        assert!(!action_is_available(
+            &cancel,
+            &canceled,
+            None,
+            Some("owner-ref")
+        ));
     }
 
     #[test]
@@ -1672,8 +1794,18 @@ mod tests {
             StateRevision::new(1).expect("state revision"),
         );
         let ordinary = action(Operation::SubmitRequest);
-        assert!(action_is_available(&ordinary, &draft, Some("owner-ref")));
-        assert!(!action_is_available(&ordinary, &draft, Some("other-ref")));
+        assert!(action_is_available(
+            &ordinary,
+            &draft,
+            None,
+            Some("owner-ref")
+        ));
+        assert!(!action_is_available(
+            &ordinary,
+            &draft,
+            None,
+            Some("other-ref")
+        ));
     }
 
     #[test]

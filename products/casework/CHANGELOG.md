@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+- The BReg source adapter projects a request whose approval expired before it
+  was applied (BReg application state `expired`) as a waiting application
+  occurrence instead of refusing the source read. The professional-review
+  journey follows the `rebase` value BReg's `revise_request` action carries
+  after a send-back, and asserts that BReg records a revision.
+- `caseworkctl source add` no longer refuses the whole pairing when the BReg
+  registry declares another change-request entity, besides the one being
+  paired, that names this Casework project's review authority with a
+  `policyId` no `reviewKinds` entry matches. BReg's own compile check only
+  validates that `review.authority` and `review.policyId` are well-formed
+  identifiers, so such an entity previously passed unnoticed until something
+  tried to submit a change request against it. Refusing the pairing over it
+  blocked incremental authoring (pairing this entity before that other
+  entity's review kind exists) and was wrong whenever several Casework
+  projects share the same authority id, since the other entity's policy may
+  legitimately live in one of them. The command now reports a finding
+  instead, naming the entity, the declared `policyId`, and that no
+  `reviewKinds[].id` matches it (a missing or non-string `policyId` still
+  fails `bregctl check` first). Preview
+  and apply report the same findings. The entity actually being paired is
+  unaffected: an unresolved `policyId` on it is still refused. A `policyId`
+  edited in the BReg project after pairing is not caught: nothing
+  `source add` writes records the BReg project's location or content, and
+  the existing pinned-description re-check is deliberately scoped to the
+  casework.yaml on disk now, not a re-derived BReg source.
+- `caseworkctl source add` no longer refuses the whole pairing when a
+  selected request's review or apply access profile declares a `rowBoundaries`
+  claim using operator `equals` over a string-shaped field. It writes the
+  source description and runtime binding as before, and the local BReg
+  dev-client export still grants the profile, since BReg's runtime keeps
+  enforcing the boundary and refuses a token that lacks the claim. What
+  changes is that the command now reports a finding naming the profile and
+  the boundary claim(s), so an operator knows a local Casework reviewer
+  client needs that claim added by hand, as a string equal to the field's
+  stored value, to exercise the profile. Preview and apply report the same
+  finding. A `rowBoundaries` claim using operator `in`, or `equals` over a
+  non-string-shaped field (for example Boolean or Int64), still refuses the
+  pairing: the local Casework dev-client claim model holds only strings, and
+  neither pairing can be represented that way.
+- The BReg source adapter refuses a source request reported as `superseded`,
+  a state BReg no longer defines. A BReg draft still projects as a superseded
+  application occurrence.
 - Fix the professional-review starter hiding every source-backed review task.
   Its `scope-correction` `displaySchema` described `record` as an object, but
   the professional-licences source discloses it as a UUID string, so every

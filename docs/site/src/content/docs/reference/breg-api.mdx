@@ -456,7 +456,7 @@ snapshot at or after the earliest erased commit unavailable, including later one
 ## Change requests
 
 A change request is a record of an entity that declares `changeRequest`. Creating it stores a
-draft; a submitted proposal changes its targets only when it is applied. BReg owns five source
+draft; a submitted proposal changes its targets only when it is applied. BReg owns four source
 states:
 
 ```text
@@ -464,7 +464,6 @@ draft ──submit──▶ submitted ──apply with exact approved evidence�
   ▲                   │
   └────revise─────────┘
 draft or submitted ──cancel by owner──▶ cancelled
-an older proposal replaced by a newer one ──▶ superseded
 ```
 
 `submit`, `revise`, and `cancel` belong to the principal that owns the request. Another principal
@@ -516,6 +515,67 @@ durable submission, terminal result, delivery, application, and recovery state. 
 result, delivery, and application identifiers are omitted until known. These observations do not
 grant authority. `editable` is `true` only while the request is a draft, the caller owns it, and
 the selected profile may patch it.
+
+A settled result never moves the request out of `submitted`: its owner acts on it, and the result
+decides which actions stay on offer.
+
+| Result for the current proposal | Actions offered | Refused |
+|---|---|---|
+| `rejected` | `cancel_request` | `revise_request` with `409 mutation.conflict`; `apply_request` with `412 precondition.failed` |
+| `changesRequested` | `revise_request` with `rebase: false`, `cancel_request` | a rebase with `409 mutation.conflict`; `apply_request` with `412 precondition.failed` |
+| `approved`, `availableUntil` not yet reached | `apply_request` for the applier; `revise_request` with `rebase: true` and `cancel_request` for the owner | nothing beyond the ordinary guards |
+| `approved`, `availableUntil` passed before application | `revise_request` with `rebase: false`, `cancel_request` | a rebase with `409 mutation.conflict`; `apply_request` with `412 precondition.failed` |
+| `answered`, `cancelled`, or `superseded` | `revise_request` with `rebase: true`, `cancel_request` | `apply_request` with `412 precondition.failed` |
+| none yet | unchanged | nothing beyond the ordinary guards |
+
+Send the `rebase` value the `revise_request` action carries: `false` records the new draft as a
+revision of the proposal, `true` as a rebase onto updated context. An approval that expired
+unapplied reports `review.application.state` `expired` beside the result's `availableUntil`, also
+when its automatic application is still queued; an application already `applying` keeps that state
+because it may still succeed. The other application states are `awaitingReview`, `ready`, `queued`,
+`applying`, `applied`, and `blocked`.
+
+The offered actions follow the result even when the selected profile does not disclose
+`review_state`, so the owner and the applier can tell a coarse outcome from which actions remain,
+for example that a request was rejected. This is deliberate: the same caller would learn as much
+from the refusal of an action BReg no longer offers.
+
+The read and apply decide expiry on different clocks. The read compares the cached result's
+`availableUntil` with the database clock, while apply fetches the result from the review authority
+and checks it with the BReg service clock. Close to `availableUntil` the two can briefly disagree:
+a read can still offer `apply_request` that then answers `412 precondition.failed`, or report
+`expired` while the authority's result is still available. Apply is authoritative.
+
+A request list whose selected profile discloses `review_state` may also filter on
+`reviewOutcome`, with `eq` or `in`. Its values are `pending`, `approved`, `approvedExpired`,
+`rejected`, `changesRequested`, `answered`, `cancelled`, and `superseded`; a request whose current
+proposal was never submitted for review matches none of them. The filter describes the review
+only, so combine it with `bregState`: an applied request keeps the outcome that authorized it, and
+its approval can pass `availableUntil` afterwards. The approvals still waiting for an applier, and
+those that expired before anyone applied them, are:
+
+```text
+$filter=bregState eq 'submitted' and reviewOutcome eq 'approved'
+$filter=bregState eq 'submitted' and reviewOutcome eq 'approvedExpired'
+```
+
+A profile that does not disclose `review_state` is refused the filter with `400 query.invalid`, the
+same answer as for any field its grant withholds.
+
+{/* Evidence: crates/registry-breg/src/postgres/request_read.rs, action_is_available and revise_rebase_available;
+    crates/registry-breg/src/mutation/request.rs, the settled review outcome check;
+    crates/registry-breg/src/review_store.rs, settled_outcome, read_projection, and approved_evidence;
+    crates/registry-breg/src/review_integration.rs, from_approved;
+    crates/registry-breg/src/postgres/read.rs, REQUEST_REVIEW_OUTCOME_SQL;
+    crates/registry-breg/src/compiler.rs, query_operation;
+    crates/registry-breg/tests/postgres_change_requests.rs, rejected_review_offers_only_cancel_and_refuses_revise_and_apply,
+    changes_requested_review_offers_revision_and_cancel_and_refuses_rebase_and_apply,
+    revision_after_changes_requested_records_revision_not_rebase,
+    answered_review_hides_apply_and_keeps_revise_and_cancel,
+    unexpired_approval_offers_apply_and_the_apply_succeeds,
+    expired_approval_hides_apply_and_is_answered_by_a_revision,
+    expired_automatic_approval_projects_expired_until_an_apply_is_in_flight, and
+    request_list_filters_on_the_settled_review_outcome. */}
 
 <ApiReferenceTable id="request-actions" />
 

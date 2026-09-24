@@ -18,6 +18,65 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+- BREAKING: Base Registry Engine (BReg) drops the `superseded` change-request
+  state, which no transition ever wrote. A request is `draft`, `submitted`, `cancelled`, or
+  `applied`; the `bregState` enum in generated OpenAPI and the Rust, Node.js,
+  and Python clients loses the value, and a hook `when` condition naming
+  `superseded` no longer compiles. The review result status `superseded` is
+  unchanged. See [change requests](../reference/breg-api/#change-requests).
+
+{/* Evidence: crates/registry-breg/src/request_workflow.rs, RequestState;
+    crates/registry-breg/src/request_store.rs, install();
+    crates/registry-breg/src/compiler.rs, REQUEST_LIFECYCLE_STATES. */}
+
+- BReg decides the change-request actions it offers from the settled review
+  result. A rejected request offers only `cancel_request`. A send-back, or an
+  approval whose `availableUntil` passed before it was applied, offers
+  `revise_request` with `rebase: false` and `cancel_request`, and no longer
+  offers `apply_request`. An `answered`, `cancelled`, or `superseded` result
+  keeps revise and cancel but no longer offers `apply_request`, which it
+  could never pass. BReg refuses the shapes it does not offer: a revise
+  after a rejection, or a rebase after a send-back or an expired approval,
+  answers `409 mutation.conflict`. The review projection reports an expired
+  approval as application state `expired`, including one whose automatic
+  application is queued but not yet `applying`, which the Rust, Node.js, and
+  Python clients accept, and request lists whose profile discloses
+  `review_state` can filter on `reviewOutcome`. The automatic application
+  worker leaves a queued job unclaimed once its cached approval's
+  `availableUntil` has passed, rather than spend a retry on a request that no
+  longer offers `apply_request`. Such a job also no longer holds its review
+  authority or executor binding: the activation check that refuses to drop a
+  binding with durable work outstanding no longer counts it, so an operator
+  may remove a binding an expired, queued job no longer needs. `bregctl
+  explain lifecycle` reports the check as its `review_outcome` layer. See
+  [change requests](../reference/breg-api/#change-requests).
+
+{/* Evidence: crates/registry-breg/src/postgres/request_read.rs, action_is_available and revise_rebase_available;
+    crates/registry-breg/src/mutation/request.rs, execute_request_action_transaction;
+    crates/registry-breg/src/postgres/read.rs, REQUEST_REVIEW_OUTCOME_SQL;
+    crates/registry-breg/src/review_store.rs, run_one, run_one_application, and verify_retained_bindings;
+    crates/registry-breg/src/lifecycle.rs, request_lifecycle;
+    crates/registry-breg-client/src/lifecycle.rs, BRegExternalReviewApplicationState. */}
+
+- BREAKING: BReg refuses to compile an access profile with a `taskGrant`
+  that holds `apply_request`, with
+  `access_profile.task_grant.operation_forbidden`. Applying a reviewed
+  request needs a profile of its own without delegated authority; move
+  `apply_request` there.
+
+{/* Evidence: crates/registry-breg/src/compiler.rs, access_profile.task_grant.operation_forbidden;
+    crates/registry-breg/tests/http_auth.rs, task-grant apply_request compile refusal;
+    products/breg/TASK_GRANTS.md. */}
+
+- BReg no longer contacts the review authority for an apply made under a
+  revoked or expired task grant, whether the caller's or the one frozen on
+  the proposal: it checks both grants first and records the refused apply
+  in the audit journal. The apply itself was already refused under such a
+  grant, so this closes an early outbound call, not an authorization bypass.
+
+{/* Evidence: crates/registry-breg/src/postgres/mutation.rs, request_reviewed_apply;
+    crates/registry-breg/tests/postgres_task_grants.rs, review_apply_checks_original_task_before_authority_and_before_commit. */}
+
 ## v0.33.0 beta-45
 
 - Registry Scheduling joins the release with published openings, exact-time

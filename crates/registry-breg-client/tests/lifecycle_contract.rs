@@ -94,7 +94,13 @@ fn legacy_actions_states_and_projection_members_are_refused() {
             BRegLifecycleDecodeError::Profile
         );
     }
-    for state in ["approved", "needs_changes", "rejected", "canceled"] {
+    for state in [
+        "approved",
+        "needs_changes",
+        "rejected",
+        "canceled",
+        "superseded",
+    ] {
         let mut value = request_metadata(Vec::new());
         value["bregState"] = json!(state);
         assert!(BRegRequestMetadata::from_value(value, false).is_err());

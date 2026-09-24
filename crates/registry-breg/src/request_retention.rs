@@ -986,10 +986,7 @@ async fn load_erasure_plan(
         return Err(RequestRetentionError::Unavailable);
     }
     let erase_current_intake = current_detail
-        && matches!(
-            current_state.as_str(),
-            "cancelled" | "applied" | "superseded"
-        )
+        && matches!(current_state.as_str(), "cancelled" | "applied")
         && !current_detail_already_erased;
     let erasure = count_request_detail_erasure(transaction, scope, erase_current_intake).await?;
     let proposal_erased = proposal

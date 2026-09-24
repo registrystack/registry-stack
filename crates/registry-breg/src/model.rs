@@ -1300,12 +1300,16 @@ pub struct CompiledQueryInventory {
 pub const REQUEST_BREG_STATE_QUERY_FIELD: &str = "__request_breg_state";
 pub const REQUEST_PROPOSAL_VERSION_QUERY_FIELD: &str = "__request_proposal_version";
 pub const REQUEST_EFFECT_DIGEST_QUERY_FIELD: &str = "__request_effect_digest";
+/// The settled review outcome of the current proposal. It is review state, so
+/// only a profile that may read review state may filter on it.
+pub const REQUEST_REVIEW_OUTCOME_QUERY_FIELD: &str = "__request_review_outcome";
 
 pub fn request_query_field_id_for_api(api_name: &str) -> Option<&'static str> {
     match api_name {
         "bregState" => Some(REQUEST_BREG_STATE_QUERY_FIELD),
         "proposalVersion" => Some(REQUEST_PROPOSAL_VERSION_QUERY_FIELD),
         "effectDigest" => Some(REQUEST_EFFECT_DIGEST_QUERY_FIELD),
+        "reviewOutcome" => Some(REQUEST_REVIEW_OUTCOME_QUERY_FIELD),
         _ => None,
     }
 }
@@ -1315,6 +1319,7 @@ pub fn request_query_field_api_name(field_id: &str) -> Option<&'static str> {
         REQUEST_BREG_STATE_QUERY_FIELD => Some("bregState"),
         REQUEST_PROPOSAL_VERSION_QUERY_FIELD => Some("proposalVersion"),
         REQUEST_EFFECT_DIGEST_QUERY_FIELD => Some("effectDigest"),
+        REQUEST_REVIEW_OUTCOME_QUERY_FIELD => Some("reviewOutcome"),
         _ => None,
     }
 }
@@ -1329,6 +1334,10 @@ pub fn request_query_field_type(field_id: &str) -> Option<FieldTypeSource> {
         REQUEST_EFFECT_DIGEST_QUERY_FIELD => Some(FieldTypeSource::String {
             min_length: 71,
             max_length: 71,
+        }),
+        REQUEST_REVIEW_OUTCOME_QUERY_FIELD => Some(FieldTypeSource::String {
+            min_length: 7,
+            max_length: 16,
         }),
         _ => None,
     }
@@ -1361,6 +1370,17 @@ pub fn request_state_query_filter_fields() -> Vec<CompiledQueryFilterField> {
             ],
         },
     ]
+}
+
+/// Filter-only: the outcome is a queue selector, not an ordering.
+pub fn request_review_query_filter_field() -> CompiledQueryFilterField {
+    CompiledQueryFilterField {
+        field: REQUEST_REVIEW_OUTCOME_QUERY_FIELD.to_owned(),
+        operators: vec![
+            CompiledQueryFilterOperator::Equals,
+            CompiledQueryFilterOperator::In,
+        ],
+    }
 }
 
 pub fn request_state_query_sort_fields() -> Vec<CompiledQuerySortField> {

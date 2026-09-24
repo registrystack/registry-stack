@@ -328,7 +328,7 @@ impl RequestWorkflow {
                     return Err(WorkflowError::InvalidRestoredState);
                 }
             }
-            RequestState::Cancelled | RequestState::Superseded => {
+            RequestState::Cancelled => {
                 if self.application.is_some() {
                     return Err(WorkflowError::InvalidRestoredState);
                 }
@@ -1530,7 +1530,6 @@ pub enum RequestState {
     Submitted,
     Cancelled,
     Applied,
-    Superseded,
 }
 
 #[cfg(feature = "runtime")]
@@ -1541,7 +1540,6 @@ impl RequestState {
             "submitted" => Ok(Self::Submitted),
             "cancelled" => Ok(Self::Cancelled),
             "applied" => Ok(Self::Applied),
-            "superseded" => Ok(Self::Superseded),
             "approved" | "needs_changes" | "rejected" | "canceled" => {
                 Err(WorkflowError::OccupiedLegacyApprovalState)
             }
@@ -1555,7 +1553,6 @@ impl RequestState {
             Self::Submitted => "submitted",
             Self::Cancelled => "cancelled",
             Self::Applied => "applied",
-            Self::Superseded => "superseded",
         }
     }
 }

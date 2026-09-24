@@ -373,9 +373,7 @@ impl BregAdapter {
         request: &BRegRequestMetadata,
     ) -> Result<OccurrenceState, SourceAdapterError> {
         match request.breg_state() {
-            BRegRequestState::Draft | BRegRequestState::Superseded => {
-                Ok(OccurrenceState::Superseded)
-            }
+            BRegRequestState::Draft => Ok(OccurrenceState::Superseded),
             BRegRequestState::Cancelled => Ok(OccurrenceState::Cancelled),
             BRegRequestState::Applied => Ok(OccurrenceState::Completed),
             BRegRequestState::Submitted => match request
@@ -383,7 +381,8 @@ impl BregAdapter {
                 .map(|review| review.application().state())
             {
                 Some(BRegExternalReviewApplicationState::AwaitingReview)
-                | Some(BRegExternalReviewApplicationState::Blocked) => {
+                | Some(BRegExternalReviewApplicationState::Blocked)
+                | Some(BRegExternalReviewApplicationState::Expired) => {
                     Ok(OccurrenceState::WaitingApplication)
                 }
                 Some(BRegExternalReviewApplicationState::Ready) => Ok(OccurrenceState::Open),
@@ -557,7 +556,6 @@ fn state_name(state: BRegRequestState) -> &'static str {
         BRegRequestState::Submitted => "submitted",
         BRegRequestState::Cancelled => "cancelled",
         BRegRequestState::Applied => "applied",
-        BRegRequestState::Superseded => "superseded",
     }
 }
 
@@ -836,10 +834,7 @@ impl SourceAdapter for BregAdapter {
         let request = Self::request(&record)?;
         if matches!(
             request.breg_state(),
-            BRegRequestState::Draft
-                | BRegRequestState::Applied
-                | BRegRequestState::Cancelled
-                | BRegRequestState::Superseded
+            BRegRequestState::Draft | BRegRequestState::Applied | BRegRequestState::Cancelled
         ) {
             return Err(SourceAdapterError::Denied);
         }

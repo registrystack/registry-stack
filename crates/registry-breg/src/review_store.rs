@@ -40,6 +40,27 @@ const MAX_APPLICATION_RESPONSE_BYTES: u64 = 256 * 1024;
 pub(crate) const MAXIMUM_COMPLETION_RECIPIENT_BYTES: usize = 256;
 pub(crate) const MAXIMUM_REVIEW_RECOVERY_DAYS: u32 = 3_650;
 
+/// A `queued` job has never been applied, so claiming one whose cached
+/// approval already passed `available_until` only spends an attempt on a
+/// request that no longer advertises `apply_request`: discovery ends in
+/// `block_application_job(..., "source-action-unavailable")`, or a cached
+/// action draws a 412 that requeues the same job, up to
+/// `MAX_APPLICATION_ATTEMPTS`. Leaving it `queued` costs nothing, since the
+/// read projection already reports that combination as application state
+/// `expired`. An `applying` job stays claimable regardless: the earlier claim
+/// may still be in flight, or its receipt may need recovery, and a 412 there
+/// returns the job to `queued`, where this predicate then applies on its next
+/// pass. `verify_retained_bindings` shares this predicate: a job it would not
+/// let the worker claim is not durable work either, so it does not pin the
+/// review authority or executor binding it used, and an operator may drop
+/// that binding. `q` names the candidate job row in every query this is
+/// spliced into.
+const APPLICATION_JOB_CLAIMABLE: &str = "(q.state <> 'queued' OR NOT EXISTS (
+        SELECT 1 FROM registry_internal.registry_request_review_results r
+         WHERE (r.request_entity_id,r.request_id,r.proposal_version)
+               =(q.request_entity_id,q.request_id,q.proposal_version)
+           AND r.status='approved' AND r.available_until <= transaction_timestamp()))";
+
 fn outbound_lease_seconds(request_timeout: Duration) -> i64 {
     // The claim lease must outlive the outbound call it guards: an expiry
     // inside the request timeout lets another instance treat the job as
@@ -180,12 +201,15 @@ impl ReviewExecutorRegistry {
         }
         let Some(row) = client
             .query_opt(
-                "SELECT executor,job_id
-                   FROM registry_internal.registry_request_application_jobs
-                  WHERE state IN ('queued','applying')
-                    AND attempt_count < $1
-                    AND next_attempt_at <= transaction_timestamp()
-                  ORDER BY next_attempt_at,created_at LIMIT 1",
+                &format!(
+                    "SELECT q.executor,q.job_id
+                       FROM registry_internal.registry_request_application_jobs q
+                      WHERE q.state IN ('queued','applying')
+                        AND q.attempt_count < $1
+                        AND q.next_attempt_at <= transaction_timestamp()
+                        AND {APPLICATION_JOB_CLAIMABLE}
+                      ORDER BY q.next_attempt_at,q.created_at LIMIT 1"
+                ),
                 &[&MAX_APPLICATION_ATTEMPTS],
             )
             .await
@@ -226,7 +250,8 @@ pub async fn verify_retained_bindings(
     let client = pool.get().await.map_err(|_| MutationError::Unavailable)?;
     let authority_rows = client
         .query(
-            "SELECT DISTINCT authority,producer_id
+            &format!(
+                "SELECT DISTINCT authority,producer_id
                FROM registry_internal.registry_request_review_submissions s
               WHERE state IN ('pending','submitting','uncertain','cancelling')
                  OR (state='accepted' AND NOT EXISTS (
@@ -234,10 +259,11 @@ pub async fn verify_retained_bindings(
                          WHERE (r.request_entity_id,r.request_id,r.proposal_version)=
                                (s.request_entity_id,s.request_id,s.proposal_version)))
                  OR EXISTS (
-                        SELECT 1 FROM registry_internal.registry_request_application_jobs j
-                         WHERE (j.request_entity_id,j.request_id,j.proposal_version)=
+                        SELECT 1 FROM registry_internal.registry_request_application_jobs q
+                         WHERE (q.request_entity_id,q.request_id,q.proposal_version)=
                                (s.request_entity_id,s.request_id,s.proposal_version)
-                           AND j.state IN ('queued','applying'))
+                           AND q.state IN ('queued','applying')
+                           AND {APPLICATION_JOB_CLAIMABLE})
                  OR (s.state='accepted' AND s.on_approved_mode='manual'
                      AND EXISTS (
                          SELECT 1 FROM registry_internal.registry_request_review_results r
@@ -248,7 +274,8 @@ pub async fn verify_retained_bindings(
                          SELECT 1 FROM registry_internal.registry_request_state w
                           WHERE (w.request_entity_id,w.request_id,w.proposal_version)=
                                 (s.request_entity_id,s.request_id,s.proposal_version)
-                            AND w.state='submitted'))",
+                            AND w.state='submitted'))"
+            ),
             &[],
         )
         .await
@@ -265,9 +292,12 @@ pub async fn verify_retained_bindings(
     }
     let executor_rows = client
         .query(
-            "SELECT DISTINCT executor,request_entity_id
-               FROM registry_internal.registry_request_application_jobs
-              WHERE state IN ('queued','applying')",
+            &format!(
+                "SELECT DISTINCT executor,request_entity_id
+               FROM registry_internal.registry_request_application_jobs q
+              WHERE q.state IN ('queued','applying')
+                AND {APPLICATION_JOB_CLAIMABLE}"
+            ),
             &[],
         )
         .await
@@ -2201,19 +2231,22 @@ async fn run_one_application(
     let claim_token = Uuid::new_v4();
     let Some(row) = client
         .query_opt(
-            "UPDATE registry_internal.registry_request_application_jobs j
-                SET state='applying',attempt_count=attempt_count+1,
-                    next_attempt_at=transaction_timestamp()+($4::bigint * interval '1 second'),
-                    claim_token=$2,last_error_code=NULL,updated_at=transaction_timestamp()
-              WHERE (request_entity_id,request_id,proposal_version)=(
-                    SELECT q.request_entity_id,q.request_id,q.proposal_version
-                      FROM registry_internal.registry_request_application_jobs q
-                     WHERE q.executor=$1 AND q.state IN ('queued','applying')
-                       AND q.attempt_count < $3
-                       AND q.next_attempt_at <= transaction_timestamp()
-                     ORDER BY q.next_attempt_at,q.created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
-          RETURNING request_entity_id,request_id,proposal_version,job_id,proposal_digest,
-                    action_href,action_if_match,attempt_count",
+            &format!(
+                "UPDATE registry_internal.registry_request_application_jobs j
+                    SET state='applying',attempt_count=attempt_count+1,
+                        next_attempt_at=transaction_timestamp()+($4::bigint * interval '1 second'),
+                        claim_token=$2,last_error_code=NULL,updated_at=transaction_timestamp()
+                  WHERE (request_entity_id,request_id,proposal_version)=(
+                        SELECT q.request_entity_id,q.request_id,q.proposal_version
+                          FROM registry_internal.registry_request_application_jobs q
+                         WHERE q.executor=$1 AND q.state IN ('queued','applying')
+                           AND q.attempt_count < $3
+                           AND q.next_attempt_at <= transaction_timestamp()
+                           AND {APPLICATION_JOB_CLAIMABLE}
+                         ORDER BY q.next_attempt_at,q.created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
+              RETURNING request_entity_id,request_id,proposal_version,job_id,proposal_digest,
+                        action_href,action_if_match,attempt_count"
+            ),
             &[
                 &executor.executor,
                 &claim_token,
@@ -2707,11 +2740,60 @@ fn result_status(status: registry_review_client::ReviewResultStatus) -> &'static
     }
 }
 
+/// The locally reconciled review result for one proposal, as far as it
+/// decides which request actions remain meaningful. The request workflow
+/// itself does not change when a result settles: the owner acts on it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SettledReviewOutcome {
+    Approved {
+        expired: bool,
+    },
+    Rejected,
+    ChangesRequested,
+    /// Answered, cancelled, or superseded: none of them can be applied, and
+    /// none of them narrows the other actions.
+    Other,
+}
+
+pub(crate) async fn settled_outcome(
+    client: &impl GenericClient,
+    request_entity_id: &str,
+    request_id: Uuid,
+    proposal_version: u32,
+) -> Result<Option<SettledReviewOutcome>, MutationError> {
+    let row = client
+        .query_opt(
+            "SELECT status, available_until <= transaction_timestamp()
+               FROM registry_internal.registry_request_review_results
+              WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3",
+            &[
+                &request_entity_id,
+                &request_id,
+                &i64::from(proposal_version),
+            ],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    Ok(Some(match row.get::<_, String>(0).as_str() {
+        "approved" => SettledReviewOutcome::Approved {
+            expired: row.get::<_, bool>(1),
+        },
+        "rejected" => SettledReviewOutcome::Rejected,
+        "changes_requested" => SettledReviewOutcome::ChangesRequested,
+        "answered" | "cancelled" | "superseded" => SettledReviewOutcome::Other,
+        _ => return Err(MutationError::Unavailable),
+    }))
+}
+
 pub(crate) async fn read_projection(
     transaction: &Transaction<'_>,
     request_entity_id: &str,
     request_id: Uuid,
     proposal: &ProposalSnapshot,
+    request_submitted: bool,
 ) -> Result<Option<Value>, MutationError> {
     let CompiledChangeRequestReview::Required(requirement) = proposal.review_requirement() else {
         return Ok(None);
@@ -2729,7 +2811,8 @@ pub(crate) async fn read_projection(
                     to_char(s.recovery_deadline AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
                     j.attempt_count,
                     to_char(j.next_attempt_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
-                    j.receipt_recovered
+                    j.receipt_recovered,
+                    r.available_until <= transaction_timestamp()
                FROM registry_internal.registry_request_review_submissions s
                LEFT JOIN registry_internal.registry_request_review_results r
                  USING (request_entity_id,request_id,proposal_version)
@@ -2830,6 +2913,16 @@ pub(crate) async fn read_projection(
         }
     }
     let application_state = match row.get::<_, Option<String>>(9).as_deref() {
+        // Automatic application queues every approval, so a queued job must
+        // not hide that the approval passed its availability unapplied. An
+        // apply already in flight keeps its state: it may still succeed.
+        Some("queued")
+            if request_submitted
+                && row.get::<_, Option<String>>(5).as_deref() == Some("approved")
+                && row.get::<_, Option<bool>>(20) == Some(true) =>
+        {
+            "expired"
+        }
         Some("queued") => "queued",
         Some("applying") => "applying",
         Some("applied") => "applied",
@@ -2839,6 +2932,14 @@ pub(crate) async fn read_projection(
         // applied: the projection must not offer it as ready.
         None if withdrawn && row.get::<_, Option<String>>(5).as_deref() == Some("approved") => {
             "blocked"
+        }
+        // An unapplied approval past its availability can no longer be
+        // applied: the owner revises it or cancels it.
+        None if request_submitted
+            && row.get::<_, Option<String>>(5).as_deref() == Some("approved")
+            && row.get::<_, Option<bool>>(20) == Some(true) =>
+        {
+            "expired"
         }
         None if row.get::<_, Option<String>>(5).as_deref() == Some("approved") => "ready",
         None => "awaitingReview",
@@ -3293,6 +3394,202 @@ mod tests {
                 decode_application_receipt(&job, &serde_json::to_vec(&substituted).unwrap()),
                 Err(ApplicationExchangeError::InvalidResponse)
             ));
+        }
+    }
+
+    // Both settled_outcome and read_projection decide the same thing (has this
+    // approval passed its available_until) and must agree even when a slow
+    // earlier statement in the same transaction has let wall-clock time move
+    // on. pg_sleep before the approval's available_until deterministically
+    // separates transaction_timestamp() (fixed at BEGIN) from
+    // statement_timestamp() (advances per statement) without racing exact
+    // statement boundaries.
+    #[cfg(feature = "postgres-test")]
+    mod transaction_instant_tests {
+        use registry_platform_canonical_json::canonicalize_json;
+        use serde_json::json;
+        use uuid::Uuid;
+
+        use super::*;
+        use crate::contract::Operation;
+        use crate::model::CompiledChangeRequestReviewRequirement;
+        use crate::request_workflow::{
+            ContractFingerprint, EffectId, EntityId, FieldId, FieldValue, FrozenPlannerKind,
+            FrozenPlanningBinding, PackageFingerprint, PreparedEffect, PreparedFieldChange,
+            PreparedProposal, PreparedTarget, RecordId, RecordRevision, RequestKey,
+            RequestWorkflow, StateRevision, TrustedActorRef, TrustedTimestamp,
+            TrustedTransitionContext,
+        };
+
+        #[allow(dead_code)]
+        mod postgres_harness {
+            use crate as registry_breg;
+            include!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/support/postgres_harness.rs"
+            ));
+        }
+        use postgres_harness::TestDatabase;
+
+        const DIGEST: &str =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+        // A proposal with a required review, detached from the fixture rows
+        // below: settled_outcome and read_projection take the request
+        // entity id, request id, and proposal version as explicit
+        // parameters, so only proposal.version(), .review_requirement(), and
+        // .on_approved() need to line up with the inserted rows.
+        fn required_review_proposal() -> RequestWorkflow {
+            let effect = PreparedEffect::new(
+                EffectId::new("patch-placement").expect("effect id"),
+                Operation::Patch,
+                PreparedTarget::existing(
+                    EntityId::new("asset-placement").expect("entity id"),
+                    RecordId::new("placement-1").expect("record id"),
+                    RecordRevision::new(3).expect("record revision"),
+                ),
+                vec![PreparedFieldChange::set(
+                    FieldId::new("site").expect("field id"),
+                    FieldValue::present(json!("site-a")),
+                    json!("site-b"),
+                )
+                .expect("field change")],
+            )
+            .expect("effect");
+            let snapshot_bytes = canonicalize_json(
+                &serde_json::to_value(std::slice::from_ref(&effect)).expect("effect serializes"),
+            )
+            .expect("effect canonicalizes")
+            .len();
+            let proposal = PreparedProposal::new_with_binding(
+                RecordRevision::new(7).expect("record revision"),
+                ContractFingerprint::new("sha256:contract").expect("contract fingerprint"),
+                PackageFingerprint::new("sha256:package").expect("package fingerprint"),
+                CompiledChangeRequestReview::Required(CompiledChangeRequestReviewRequirement {
+                    authority: "casework-main".to_owned(),
+                    policy_id: "request-review".to_owned(),
+                }),
+                FrozenPlanningBinding::new(
+                    FrozenPlannerKind::Declarative,
+                    "registry.change-request-plan/v1",
+                    None,
+                )
+                .expect("planning binding"),
+                vec![effect],
+                snapshot_bytes,
+            )
+            .expect("proposal");
+            let workflow = RequestWorkflow::new_draft(
+                RequestKey::new(
+                    EntityId::new("placement-correction-request").expect("entity id"),
+                    RecordId::new("request-1").expect("record id"),
+                ),
+                TrustedActorRef::from_verified_context("submitter").expect("owner"),
+                StateRevision::new(1).expect("state revision"),
+            );
+            let context = TrustedTransitionContext::from_verified_context(
+                TrustedActorRef::from_verified_context("submitter").expect("actor"),
+                TrustedTimestamp::from_server_clock("2026-09-19T00:00:00Z").expect("timestamp"),
+            );
+            workflow
+                .submit(context, proposal)
+                .expect("submit")
+                .into_workflow()
+        }
+
+        #[tokio::test]
+        async fn settled_outcome_and_read_projection_judge_expiry_at_one_instant() {
+            let mut database = TestDatabase::create(2).await;
+            database
+                .admin
+                .batch_execute(
+                    "CREATE TABLE registry_internal.registry_request_proposals (
+                         request_entity_id text NOT NULL,
+                         request_id uuid NOT NULL,
+                         proposal_version bigint NOT NULL,
+                         PRIMARY KEY (request_entity_id,request_id,proposal_version)
+                     );",
+                )
+                .await
+                .expect("proposal parent table");
+            install_review_storage_for_test(&database.admin, &database.runtime_role)
+                .await
+                .expect("review storage");
+
+            let request_entity_id = "requests";
+            let request_id = Uuid::new_v4();
+            let result_id = Uuid::new_v4();
+            database
+                .admin
+                .execute(
+                    "INSERT INTO registry_internal.registry_request_proposals VALUES ($1,$2,1)",
+                    &[&request_entity_id, &request_id],
+                )
+                .await
+                .expect("proposal");
+            database
+                .admin
+                .execute(
+                    "INSERT INTO registry_internal.registry_request_review_submissions
+                 (request_entity_id,request_id,proposal_version,proposal_digest,job_id,authority,
+                  producer_id,policy_id,idempotency_key,create_request,expected_submission_digest,
+                  on_approved_mode,executor,state,accepted_binding)
+                 VALUES ($1,$2,1,$3,$4,'casework-main','registry-producer','request-review',
+                         'submission-key','{}'::jsonb,$3::text,'manual',NULL,'accepted',$5)",
+                    &[
+                        &request_entity_id,
+                        &request_id,
+                        &DIGEST,
+                        &Uuid::new_v4(),
+                        &json!({"requestId": Uuid::new_v4()}),
+                    ],
+                )
+                .await
+                .expect("submission");
+
+            let transaction = database.admin.transaction().await.expect("transaction");
+            transaction
+                .batch_execute("SELECT pg_sleep(0.3)")
+                .await
+                .expect("sleep past the approval's halfway point");
+            transaction
+                .execute(
+                    "INSERT INTO registry_internal.registry_request_review_results
+                 (request_entity_id,request_id,proposal_version,authority,result_id,result,
+                  status,completed_at,available_until)
+                 VALUES ($1,$2,1,'casework-main',$3,'{}'::jsonb,'approved',
+                         transaction_timestamp(),
+                         transaction_timestamp() + interval '150 milliseconds')",
+                    &[&request_entity_id, &request_id, &result_id],
+                )
+                .await
+                .expect("result");
+
+            let workflow = required_review_proposal();
+            let proposal = workflow.current_proposal().expect("frozen proposal");
+
+            let outcome = settled_outcome(&transaction, request_entity_id, request_id, 1)
+                .await
+                .expect("settled outcome query")
+                .expect("settled outcome row");
+            let projection =
+                read_projection(&transaction, request_entity_id, request_id, proposal, true)
+                    .await
+                    .expect("projection query")
+                    .expect("projection row");
+
+            assert_eq!(
+                outcome,
+                SettledReviewOutcome::Approved { expired: false },
+                "an approval that has not reached its available_until at the transaction's \
+                 own instant must not be judged expired just because an earlier statement \
+                 in the same transaction ran slowly"
+            );
+            assert_eq!(
+                projection["application"]["state"],
+                json!("ready"),
+                "read_projection must agree with settled_outcome about the same approval"
+            );
         }
     }
 }

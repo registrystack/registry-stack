@@ -130,7 +130,7 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "review_evidence_load",
-            description: "An apply on an entity whose plan requires review is routed through a path of its own before the coordinator runs, and this is where that path can refuse. The receipt and applied short-circuits named by the preflight below are consulted first, so a replay and an already-applied request never load review evidence at all. Otherwise the accepted review submission recorded for exactly this request, this proposal version, and this effect digest is loaded, and the evidence itself is fetched from the configured review authority: no accepted submission matching all three is a precondition failure, and so is an authority whose name does not match, a result that is pending, concealed, unknown, or expired, and one whose availability lapses between the fetch and the check. A review-result source that is not configured, a token that cannot be obtained, and an authority that does not answer are each refused as unavailable instead. What this layer obtains is only matched against the frozen review requirement much later, by the workflow transition below.",
+            description: "An apply on an entity whose plan requires review is routed through a path of its own before the coordinator runs, and this is where that path can refuse. The receipt and applied short-circuits named by the preflight below are consulted first, so a replay and an already-applied request never load review evidence at all. Otherwise the accepted review submission recorded for exactly this request, this proposal version, and this effect digest is loaded. With that row read and no further row held, the caller's task grant and the grant frozen on the proposal are each confirmed current and live, because acquiring a guard is itself a protected disclosure: a revoked or expired grant is refused here, ahead of the review authority, the same as it is ahead of the Evidence provider below. Only then is the evidence itself fetched from the configured review authority: no accepted submission matching all three is a precondition failure, and so is an authority whose name does not match, a result that is pending, concealed, unknown, or expired, and one whose availability lapses between the fetch and the check. A review-result source that is not configured, a token that cannot be obtained, and an authority that does not answer are each refused as unavailable instead. What this layer obtains is only matched against the frozen review requirement much later, by the workflow transition below.",
             events: &["apply"],
         },
         EnforcementLayer {
@@ -155,12 +155,12 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
         },
         EnforcementLayer {
             id: "idempotency_replay",
-            description: "After the header lookup above, the idempotency row for this action's key is locked and read before the request row and workflow are read under that lock. The stored binding covers the caller's If-Match, the target authority, and the canonical body, so a key already bound to a different request is refused as a conflict here, before those reads, and so is a key whose stored result was erased, because erasure is permanent and keeps the key reserved. Submit is the exception to the reading order: an unlocked probe for this key runs first, and where it finds no receipt the preparation layer above reads the row and plans the submission before this lock is taken. A binding that matches replays the stored response once row visibility and, where they apply, submitter targets have been re-checked, and, on an apply whose workflow still carries a current proposal, once that proposal's targets have been re-authorized against the authority this caller presents now: an apply replay by a caller who has since lost authority over a target is refused rather than answered from the record. The other four actions reach that re-authorization and pass through it deciding nothing, so for them a replay is authorized by the row policy above and nothing else. A stored application result presented on any action but apply is refused as a precondition failure here rather than replayed. The replay returns without re-running the action ETag, request ownership, the in-transaction task grant check, the workflow transition, or the persist policy.",
+            description: "After the header lookup above, the idempotency row for this action's key is locked and read before the request row and workflow are read under that lock. The stored binding covers the caller's If-Match, the target authority, and the canonical body, so a key already bound to a different request is refused as a conflict here, before those reads, and so is a key whose stored result was erased, because erasure is permanent and keeps the key reserved. Submit is the exception to the reading order: an unlocked probe for this key runs first, and where it finds no receipt the preparation layer above reads the row and plans the submission before this lock is taken. A binding that matches replays the stored response once row visibility and, where they apply, submitter targets have been re-checked, and, on an apply whose workflow still carries a current proposal, once that proposal's targets have been re-authorized against the authority this caller presents now: an apply replay by a caller who has since lost authority over a target is refused rather than answered from the record. The other four actions reach that re-authorization and pass through it deciding nothing, so for them a replay is authorized by the row policy above and nothing else. A stored application result presented on any action but apply is refused as a precondition failure here rather than replayed. The replay returns without re-running the action ETag, request ownership, the in-transaction task grant check, the settled review outcome check, the workflow transition, or the persist policy.",
             events: EVERY_EVENT,
         },
         EnforcementLayer {
             id: "row_visibility",
-            description: "The request row is read under the row-level SELECT policy generated for this profile and operation, which admits only an active row whose request state the operation may see (draft, submitted, cancelled, and superseded; applied as well for apply) and only within the profile's request visibility. A row the policy hides is treated as absent.",
+            description: "The request row is read under the row-level SELECT policy generated for this profile and operation, which admits only an active row whose request state the operation may see (draft, submitted, and cancelled; applied as well for apply) and only within the profile's request visibility. A row the policy hides is treated as absent.",
             events: EVERY_EVENT,
         },
         EnforcementLayer {
@@ -187,6 +187,11 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
             id: "task_grant",
             description: "Inside the transaction, apply re-verifies that the caller's grant is the one the preflight checked and that both it and the proposal's grant are still current. For every other action, a caller acting under a task grant has that grant's status checked here.",
             events: EVERY_EVENT,
+        },
+        EnforcementLayer {
+            id: "review_outcome",
+            description: "Where the reviewed submission of the request's current version has a settled result, revise and rebase are checked against it, as the read reports them. A rejected result is answered only by cancel, so both are refused as a conflict. A send-back, or an approval past its availability that was never applied, is answered by a revision, so a rebase is refused as a conflict and a revision is admitted. Any other result, or none, leaves both admitted.",
+            events: &["revise", "rebase"],
         },
         EnforcementLayer {
             id: "submit_commit_preconditions",
@@ -224,21 +229,12 @@ fn request_enforcement() -> Vec<EnforcementLayer> {
 /// Describes the request lifecycle enforced by `RequestWorkflow`: the states in
 /// `RequestState` and the transitions its `submit`, `revise`, `rebase`, `cancel`, and
 /// `apply` methods run.
-///
-/// `superseded` is in the table as a state and in no edge. Nothing writes it: no
-/// transition targets it, `initialize_draft` stores `draft`, and `save` stores the state
-/// a transition reached. `cancel`'s own check would accept it as a source, since it
-/// refuses only `Applied` and `Cancelled`, but the UPDATE policy generated for cancel
-/// admits only `draft` and `submitted` rows, so such a cancel would write nothing and be
-/// refused at persist. An edge that cannot fire from a state that cannot exist is not a
-/// transition the engine runs, so the state reports as unreachable and terminal rather
-/// than carrying a dead edge.
 pub fn request_lifecycle() -> LifecycleDescription {
     build_lifecycle(
         "request",
         "BReg change request lifecycle",
         "draft",
-        &["draft", "submitted", "cancelled", "applied", "superseded"],
+        &["draft", "submitted", "cancelled", "applied"],
         vec![
             LifecycleTransition {
                 from: "draft",
@@ -370,6 +366,7 @@ mod tests {
                 "action_etag",
                 "request_ownership",
                 "task_grant",
+                "review_outcome",
                 "submit_commit_preconditions",
                 "apply_target_authorization",
                 "apply_preconditions",
@@ -395,7 +392,8 @@ mod tests {
     /// choice this module makes: `admit_submitter_targets` runs for Submit
     /// and Revise, and rebase is Revise with a flag; `action_requires_request_owner`
     /// is false only for Apply; the receipt and task-status preflight runs
-    /// only for Apply. Every other layer runs for every action.
+    /// only for Apply; the settled review outcome is checked only for Revise.
+    /// Every other layer runs for every action.
     #[test]
     fn selective_layers_cover_exactly_the_events_the_runtime_gates() {
         let lifecycle = request_lifecycle();
@@ -418,6 +416,10 @@ mod tests {
         assert_eq!(
             layer(&lifecycle, "request_ownership").events,
             ["submit", "revise", "rebase", "cancel"]
+        );
+        assert_eq!(
+            layer(&lifecycle, "review_outcome").events,
+            ["revise", "rebase"]
         );
         for id in [
             "route_admission",
@@ -578,6 +580,7 @@ mod tests {
             ("action_etag", "the action ETag"),
             ("request_ownership", "request ownership"),
             ("task_grant", "the in-transaction task grant check"),
+            ("review_outcome", "the settled review outcome check"),
             ("workflow_transition", "the workflow transition"),
             ("persist_policy", "the persist policy"),
         ];
@@ -603,11 +606,6 @@ mod tests {
         }
     }
 
-    /// The persist layer is what makes `superseded` a dead source state: the
-    /// UPDATE policy generated for cancel admits only draft and submitted
-    /// rows, so a cancel the workflow accepted from `superseded` writes no
-    /// row and is refused. The table declares no such edge, and this pins the
-    /// policy the omission rests on.
     #[test]
     fn the_planner_runs_inside_no_transaction() {
         let lifecycle = request_lifecycle();
@@ -687,6 +685,34 @@ mod tests {
         }
     }
 
+    /// The review path checks the same two grants before it contacts the
+    /// review authority that the Evidence path checks before it contacts its
+    /// provider. Reporting the grant check only at the grant layer further
+    /// down would put it after remote I/O it actually precedes.
+    #[test]
+    fn the_review_layer_checks_both_grants_before_the_authority() {
+        let lifecycle = request_lifecycle();
+        let index = |id: &str| {
+            lifecycle
+                .enforcement
+                .iter()
+                .position(|layer| layer.id == id)
+                .unwrap_or_else(|| panic!("enforcement layer {id} declared"))
+        };
+        assert!(index("review_evidence_load") < index("task_grant"));
+        let review = layer(&lifecycle, "review_evidence_load").description;
+        for phrase in [
+            "caller's task grant",
+            "frozen on the proposal",
+            "ahead of the review authority",
+        ] {
+            assert!(
+                review.contains(phrase),
+                "{phrase:?} stopped being reported: {review}"
+            );
+        }
+    }
+
     /// If-Match presence and syntax are settled by the HTTP dispatcher before
     /// any mutation path runs, so a missing or malformed value outranks every
     /// layer above this one. A layer claiming to be where the header is
@@ -714,7 +740,7 @@ mod tests {
     }
 
     #[test]
-    fn the_cancel_update_policy_admits_no_superseded_row() {
+    fn the_cancel_update_policy_admits_only_draft_and_submitted_rows() {
         use crate::contract::Operation;
         use crate::generated_ddl::{change_request_action_state_exists_expression, PolicyCommand};
 
@@ -722,8 +748,7 @@ mod tests {
             Operation::CancelRequest,
             PolicyCommand::Update,
         );
-        assert!(cancel.contains("'draft', 'submitted'"), "{cancel}");
-        assert!(!cancel.contains("superseded"), "{cancel}");
+        assert!(cancel.contains("'draft', 'submitted')"), "{cancel}");
     }
 
     use registry_platform_canonical_json::canonicalize_json;
@@ -931,10 +956,7 @@ mod tests {
     }
 
     // `cancel`'s own check refuses exactly `Applied` and `Cancelled`, the two states the
-    // table declares no `cancel` edge from. It would also accept `Superseded`, which the
-    // table does not declare either: no transition produces a `Superseded` workflow, so
-    // none can be constructed to call `cancel` on, and the persist layer refuses the write
-    // regardless (see `the_cancel_update_policy_admits_no_superseded_row`).
+    // table declares no `cancel` edge from.
     #[test]
     fn cancel_refuses_applied_and_cancelled_sources() {
         let applied = applied_workflow();
@@ -963,7 +985,6 @@ mod tests {
                 RequestState::Submitted => "submitted",
                 RequestState::Cancelled => "cancelled",
                 RequestState::Applied => "applied",
-                RequestState::Superseded => "superseded",
             }
         }
         let declared: Vec<&str> = [
@@ -971,7 +992,6 @@ mod tests {
             RequestState::Submitted,
             RequestState::Cancelled,
             RequestState::Applied,
-            RequestState::Superseded,
         ]
         .into_iter()
         .map(storage_id)
@@ -984,30 +1004,20 @@ mod tests {
         assert_eq!(table, declared);
     }
 
-    /// `superseded` is stored and matched but never written by any transition
-    /// and never accepted as a source by the persist layer, so the table
-    /// declares no edge touching it and it reports as both unreachable and
-    /// terminal.
     #[test]
-    fn superseded_is_unreachable_and_terminal_and_applied_and_cancelled_are_terminal() {
+    fn every_state_is_reachable_and_only_applied_and_cancelled_are_terminal() {
         let lifecycle = request_lifecycle();
-        let state = |id: &str| {
-            lifecycle
-                .states
-                .iter()
-                .find(|state| state.id == id)
-                .unwrap_or_else(|| panic!("state {id} declared"))
-        };
-
-        let superseded = state("superseded");
-        assert!(superseded.unreachable);
-        assert!(superseded.terminal);
-        assert_eq!(superseded.incoming_transitions, 0);
-        assert_eq!(superseded.outgoing_transitions, 0);
+        let ids: Vec<&str> = lifecycle.states.iter().map(|state| state.id).collect();
+        assert_eq!(ids, ["draft", "submitted", "cancelled", "applied"]);
+        assert!(lifecycle.states.iter().all(|state| !state.unreachable));
+        let terminal: Vec<&str> = lifecycle
+            .states
+            .iter()
+            .filter(|state| state.terminal)
+            .map(|state| state.id)
+            .collect();
+        assert_eq!(terminal, ["cancelled", "applied"]);
         assert_eq!(lifecycle.transitions.len(), 6);
-
-        assert!(state("applied").terminal);
-        assert!(state("cancelled").terminal);
     }
 
     #[test]

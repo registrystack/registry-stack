@@ -48,7 +48,7 @@ pub(crate) async fn install(
              request_id uuid NOT NULL,
              owner_reference text NOT NULL CHECK (owner_reference <> ''),
             state text NOT NULL CHECK (state IN
-                 ('draft','submitted','cancelled','applied','superseded')),
+                 ('draft','submitted','cancelled','applied')),
              proposal_version bigint NOT NULL CHECK (proposal_version BETWEEN 1 AND 4294967295),
              workflow_revision bigint NOT NULL CHECK (workflow_revision > 0),
              detail_erased_at timestamptz,
@@ -62,12 +62,12 @@ pub(crate) async fn install(
              DROP CONSTRAINT IF EXISTS registry_request_state_state_check;
          ALTER TABLE registry_internal.registry_request_state
              ADD CONSTRAINT registry_request_state_state_check CHECK (state IN
-                 ('draft','submitted','cancelled','applied','superseded'));
+                 ('draft','submitted','cancelled','applied'));
          ALTER TABLE registry_internal.registry_request_state
              DROP CONSTRAINT IF EXISTS registry_request_state_detail_erasure_terminal;
          ALTER TABLE registry_internal.registry_request_state
              ADD CONSTRAINT registry_request_state_detail_erasure_terminal CHECK (
-                 detail_erased_at IS NULL OR state IN ('cancelled','superseded','applied')
+                 detail_erased_at IS NULL OR state IN ('cancelled','applied')
              );
          CREATE TABLE IF NOT EXISTS registry_internal.registry_request_intake_presence (
              request_entity_id text NOT NULL CHECK (request_entity_id <> ''),
@@ -316,7 +316,7 @@ impl RequestWorkflowHeader {
     #[must_use]
     #[allow(dead_code)]
     pub(crate) fn is_terminal(&self) -> bool {
-        matches!(self.state.as_str(), "cancelled" | "applied" | "superseded")
+        matches!(self.state.as_str(), "cancelled" | "applied")
     }
 }
 
@@ -1186,7 +1186,7 @@ mod tests {
         ContractFingerprint, EffectId, FieldId, FieldValue, FrozenPlannerKind,
         FrozenPlanningBinding, PackageFingerprint, PreparedEffect, PreparedFieldChange,
         PreparedProposal, PreparedTarget, RecordRevision, RequestState, TrustedTimestamp,
-        TrustedTransitionContext,
+        TrustedTransitionContext, WorkflowError,
     };
 
     #[allow(dead_code)]
@@ -1499,6 +1499,36 @@ mod tests {
             Err(MutationError::IdempotencyConflict)
         );
         tx.commit().await.expect("commit");
+        migration_task.abort();
+        database.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn request_state_storage_admits_only_the_states_a_transition_reaches() {
+        let (database, mut migration, migration_task) = install_schema().await;
+        let request_id = Uuid::new_v4();
+        let transaction = migration.transaction().await.expect("draft transaction");
+        initialize_draft(&transaction, REQUEST_ENTITY, request_id, "submitter")
+            .await
+            .expect("draft initializes");
+        transaction.commit().await.expect("draft commits");
+
+        let error = migration
+            .execute(
+                "UPDATE registry_internal.registry_request_state SET state = 'superseded'
+                  WHERE request_entity_id = $1 AND request_id = $2",
+                &[&REQUEST_ENTITY, &request_id],
+            )
+            .await
+            .expect_err("an unreachable state is refused by storage");
+        assert_eq!(
+            error.code(),
+            Some(&tokio_postgres::error::SqlState::CHECK_VIOLATION)
+        );
+        assert_eq!(
+            RequestState::from_storage("superseded"),
+            Err(WorkflowError::InvalidRestoredState)
+        );
         migration_task.abort();
         database.cleanup().await;
     }

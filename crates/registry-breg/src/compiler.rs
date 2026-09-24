@@ -1889,6 +1889,17 @@ fn expand_project_access(
                     "a task-grant profile can author only governed request drafts; direct target mutations, batch operations, tombstones, and immediate actions are forbidden",
                 ));
             }
+            if profile
+                .permissions
+                .iter()
+                .any(|permission| permission.operations.contains(&Operation::ApplyRequest))
+            {
+                errors.push(Diagnostic::error(
+                    "access_profile.task_grant.operation_forbidden",
+                    "project.accessProfiles[].permissions[].operations",
+                    "a task-grant profile cannot apply a reviewed request; review-decision operations require a non-delegated authority",
+                ));
+            }
         }
         let compiled_task_grant = profile.task_grant.as_ref().map(|task_grant| {
             let permissions = profile
@@ -4455,8 +4466,7 @@ pub const REQUEST_LIFECYCLE_TRANSITIONS: [&str; 5] =
 /// Every change request state a request lifecycle event may select, in
 /// workflow order. Authoring documentation reads this list rather than
 /// restating it.
-pub const REQUEST_LIFECYCLE_STATES: [&str; 5] =
-    ["draft", "submitted", "cancelled", "applied", "superseded"];
+pub const REQUEST_LIFECYCLE_STATES: [&str; 4] = ["draft", "submitted", "cancelled", "applied"];
 
 fn valid_request_lifecycle_transition(value: &str) -> bool {
     REQUEST_LIFECYCLE_TRANSITIONS.contains(&value)
@@ -6148,6 +6158,13 @@ fn query_operation(
                         || field.field != crate::model::REQUEST_EFFECT_DIGEST_QUERY_FIELD
                 }),
         );
+        if !profile.anonymous
+            && profile
+                .readable_request_fields
+                .contains(&crate::contract::RequestMetadataFieldSource::ReviewState)
+        {
+            filter_fields.push(crate::model::request_review_query_filter_field());
+        }
         sort_fields.extend(
             request_state_query_sort_fields()
                 .into_iter()
