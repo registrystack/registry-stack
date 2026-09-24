@@ -5631,6 +5631,81 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-messaging"
+version = "0.34.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "clap",
+ "deadpool-postgres",
+ "jsonwebtoken",
+ "registry-messaging-client",
+ "registry-messaging-core",
+ "registry-platform-audit",
+ "registry-platform-authcommon",
+ "registry-platform-buildinfo",
+ "registry-platform-config",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "registry-platform-oidc",
+ "rustls",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "serde_path_to_error",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "wiremock",
+ "zeroize",
+]
+
+[[package]]
+name = "registry-messaging-client"
+version = "0.34.0"
+dependencies = [
+ "axum",
+ "registry-messaging-core",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "reqwest",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "registry-messaging-core"
+version = "0.34.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "registry-messagingctl"
+version = "0.34.0"
+dependencies = [
+ "clap",
+ "registry-messaging",
+ "registry-messaging-core",
+ "registry-platform-buildinfo",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "registry-platform-audit"
 version = "0.34.0"
 dependencies = [

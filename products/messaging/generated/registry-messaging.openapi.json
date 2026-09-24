@@ -1,0 +1,322 @@
+{
+  "components": {
+    "schemas": {
+      "Problem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "enum": [
+              "authentication.refused",
+              "idempotency.expired",
+              "idempotency.key-reused",
+              "message.not-visible",
+              "operation.not-authorized",
+              "profile.not-authorized",
+              "request.body-too-large",
+              "request.invalid",
+              "request.method-not-allowed",
+              "request.not-found",
+              "request.unprocessable",
+              "request.unsupported-media-type",
+              "service.unavailable"
+            ],
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "traceId": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "https://id.registrystack.org/problems/registry-messaging/authentication/refused",
+              "https://id.registrystack.org/problems/registry-messaging/idempotency/expired",
+              "https://id.registrystack.org/problems/registry-messaging/idempotency/key-reused",
+              "https://id.registrystack.org/problems/registry-messaging/message/not-visible",
+              "https://id.registrystack.org/problems/registry-messaging/operation/not-authorized",
+              "https://id.registrystack.org/problems/registry-messaging/profile/not-authorized",
+              "https://id.registrystack.org/problems/registry-messaging/request/body-too-large",
+              "https://id.registrystack.org/problems/registry-messaging/request/invalid",
+              "https://id.registrystack.org/problems/registry-messaging/request/method-not-allowed",
+              "https://id.registrystack.org/problems/registry-messaging/request/not-found",
+              "https://id.registrystack.org/problems/registry-messaging/request/unprocessable",
+              "https://id.registrystack.org/problems/registry-messaging/request/unsupported-media-type",
+              "https://id.registrystack.org/problems/registry-messaging/service/unavailable"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "detail",
+          "code",
+          "traceId"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "bearerFormat": "JWT",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Registry Messaging HTTP contract. Every refusal is one application/problem+json document from the closed vocabulary.",
+    "license": {
+      "identifier": "Apache-2.0",
+      "name": "Apache-2.0"
+    },
+    "title": "Registry Messaging API",
+    "version": "v1alpha1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "The operation succeeded. The body is empty."
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.method-not-allowed"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.method-not-allowed."
+          }
+        },
+        "security": [],
+        "summary": "Report that the process is serving."
+      }
+    },
+    "/ready": {
+      "get": {
+        "operationId": "getReady",
+        "responses": {
+          "200": {
+            "description": "The operation succeeded. The body is empty."
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.method-not-allowed"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.method-not-allowed."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "service.unavailable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: service.unavailable."
+          }
+        },
+        "security": [],
+        "summary": "Report that the store answers with the expected schema."
+      }
+    },
+    "/v1/messages/{message_id}": {
+      "get": {
+        "operationId": "getMessage",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The operation succeeded. The body is empty."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "authentication.refused"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: authentication.refused."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "profile.not-authorized"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: profile.not-authorized."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "message.not-visible"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: message.not-visible."
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.method-not-allowed"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.method-not-allowed."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "service.unavailable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: service.unavailable."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Read the status of a message the caller submitted, or any message for an operator. A message the caller may not see answers exactly like one that does not exist."
+      }
+    }
+  }
+}

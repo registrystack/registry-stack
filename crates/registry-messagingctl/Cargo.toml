@@ -1,0 +1,27 @@
+[package]
+name = "registry-messagingctl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Registry Messaging adopter and local operator tooling."
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "messagingctl"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap.workspace = true
+registry-messaging.workspace = true
+registry-platform-buildinfo.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+registry-messaging-core.workspace = true
+tempfile.workspace = true

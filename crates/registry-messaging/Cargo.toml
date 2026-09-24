@@ -1,0 +1,63 @@
+[package]
+name = "registry-messaging"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Registry Messaging HTTP service and PostgreSQL runtime."
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "messaging"
+path = "src/main.rs"
+
+[[test]]
+name = "postgres_migrate"
+path = "tests/postgres_migrate.rs"
+required-features = ["postgres-test"]
+
+[features]
+default = []
+postgres-test = []
+schema = ["dep:schemars"]
+
+[lints]
+workspace = true
+
+[dependencies]
+axum.workspace = true
+clap.workspace = true
+deadpool-postgres.workspace = true
+jsonwebtoken.workspace = true
+registry-messaging-core.workspace = true
+registry-platform-audit.workspace = true
+registry-platform-authcommon.workspace = true
+registry-platform-buildinfo.workspace = true
+registry-platform-config.workspace = true
+registry-platform-httpsec = { workspace = true, features = ["server"] }
+registry-platform-httputil.workspace = true
+registry-platform-oidc.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+serde_path_to_error.workspace = true
+schemars = { workspace = true, optional = true }
+thiserror.workspace = true
+tokio.workspace = true
+tokio-postgres.workspace = true
+tokio-postgres-rustls.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+base64.workspace = true
+chrono.workspace = true
+registry-messaging-client.workspace = true
+tempfile.workspace = true
+tower.workspace = true
+uuid.workspace = true
+wiremock.workspace = true

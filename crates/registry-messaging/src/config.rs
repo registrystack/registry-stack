@@ -1,0 +1,1312 @@
+// SPDX-License-Identifier: Apache-2.0
+
+//! The operator runtime configuration document and the package it names.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
+use jsonwebtoken::Algorithm;
+use registry_messaging_core::{
+    AccessProfiles, MessagingPackage, MESSAGING_RUNTIME_API_VERSION, MESSAGING_RUNTIME_KIND,
+    PACKAGE_FILE,
+};
+use registry_platform_config::{
+    SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,
+};
+use registry_platform_oidc::{
+    access_token_typ_set, fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
+    TokenVerifierConfig,
+};
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+use crate::environment::{substitute, SubstitutionError};
+
+/// Explain one refused secret reference without disclosing what it protects.
+///
+/// A valid reference is safe and useful to name, but invalid operator-authored
+/// text might itself be a literal credential, so only its field is named. The
+/// resolved bytes and opened path never appear.
+pub(crate) fn describe_secret_failure(
+    field: &'static str,
+    reference: &str,
+    error: &SecretError,
+) -> String {
+    let reason = match error {
+        SecretError::InvalidReference => {
+            "it is not an exact secret:env/NAME or secret:file/name reference".to_owned()
+        }
+        SecretError::ProviderDisabled => "its provider is not enabled for this runtime".to_owned(),
+        SecretError::InvalidProviderConfiguration => {
+            "the secret provider configuration is invalid".to_owned()
+        }
+        SecretError::Unavailable => {
+            "no readable secret of that name exists under the configured provider".to_owned()
+        }
+        SecretError::UnsafeFile => concat!(
+            "the secret file must be a regular file owned by the runtime user, ",
+            "with mode 0400 or 0600, and exactly one hard link"
+        )
+        .to_owned(),
+        SecretError::Read => "the secret could not be read".to_owned(),
+        SecretError::InvalidValue => format!(
+            "the secret value must be non-empty text of at most {MAX_SECRET_BYTES} bytes \
+             without NUL bytes"
+        ),
+    };
+    if error == &SecretError::InvalidReference {
+        format!("the secret reference configured at {field} could not be resolved: {reason}")
+    } else {
+        format!("the secret reference {reference} could not be resolved: {reason}")
+    }
+}
+
+/// The largest runtime document or package document the runtime reads.
+const MAXIMUM_DOCUMENT_BYTES: u64 = 1024 * 1024;
+
+/// The default listener binding. Each Registry Stack runtime has its own
+/// default port so a laptop can run several side by side.
+pub const DEFAULT_LISTENER_BIND: &str = "127.0.0.1:8107";
+
+/// The RFC 9068 access-token media type this runtime verifies. The pair of
+/// spellings it admits is derived, never authored, so no deployment can widen
+/// it to an ordinary JWT.
+const MESSAGING_ACCESS_TOKEN_TYPE: &str = "at+jwt";
+
+/// Bounds on the authored assertion-issuer map, matching the Casework and
+/// Scheduling runtimes. They keep one operator document from becoming an
+/// unbounded verifier input.
+pub(crate) const MAXIMUM_ASSERTION_ISSUER_CLIENTS: usize = 64;
+pub(crate) const MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES: usize = 128;
+pub(crate) const MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT: usize = 16;
+pub(crate) const MAXIMUM_ASSERTION_ISSUER_BYTES: usize = 512;
+
+/// Retention defaults and bounds. A jurisdiction's retention schedule
+/// approves the deployed values; the bounds only keep a typo from becoming a
+/// policy.
+pub const DEFAULT_PAYLOAD_DAYS: u16 = 7;
+pub const MAXIMUM_PAYLOAD_DAYS: u16 = 30;
+pub const DEFAULT_RECORD_DAYS: u16 = 90;
+pub const MAXIMUM_RECORD_DAYS: u16 = 3650;
+pub const DEFAULT_SUBMISSION_RECEIPT_DAYS: u16 = 7;
+
+/// The operator runtime configuration document.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeConfig {
+    pub api_version: String,
+    pub kind: String,
+    pub package: RuntimePackageConfig,
+    pub listener: ListenerConfig,
+    #[serde(default)]
+    pub metrics_listener: Option<MetricsListenerConfig>,
+    pub secret_providers: SecretProvidersConfig,
+    pub database: DatabaseConfig,
+    pub authentication: AuthenticationConfig,
+    pub audit: AuditConfig,
+    #[serde(default)]
+    pub retention: RetentionConfig,
+}
+
+/// The root of an authored Messaging package, holding `messaging.yaml`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePackageConfig {
+    pub root: PathBuf,
+    /// The `sha256:` digest the operator pins the package to. This version
+    /// cannot compute a package digest yet, so a pinned digest is refused
+    /// rather than accepted unverified.
+    #[serde(default)]
+    pub expected_digest: Option<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ListenerConfig {
+    #[serde(default = "default_listener_bind")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
+    pub bind: SocketAddr,
+    pub tls_termination: TlsTermination,
+    #[serde(default)]
+    pub network_exposure: ListenerNetworkExposure,
+}
+
+fn default_listener_bind() -> SocketAddr {
+    DEFAULT_LISTENER_BIND
+        .parse()
+        .expect("valid Messaging listener default")
+}
+
+/// Declares the trusted transport boundary for the plaintext HTTP listener.
+/// Production listeners require operator-controlled upstream TLS termination;
+/// direct plaintext is limited to the explicit loopback-only development mode.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TlsTermination {
+    OperatorControlledUpstream,
+    DevelopmentLoopback,
+}
+
+/// The operator-declared private network placement of the HTTP listener.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ListenerNetworkExposure {
+    #[default]
+    PrivateAddress,
+    ContainerPrivate,
+}
+
+/// The operator-private listener that serves `/metrics`. It is a separate
+/// socket rather than a route on the public listener, so reaching the
+/// counters requires reaching a different, private address.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MetricsListenerConfig {
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
+    pub bind: SocketAddr,
+}
+
+impl std::fmt::Debug for MetricsListenerConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MetricsListenerConfig")
+            .field("bind", &"<redacted>")
+            .finish()
+    }
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SecretProvidersConfig {
+    #[serde(default)]
+    pub file: Option<FileSecretProviderConfig>,
+    #[serde(default)]
+    pub environment: Option<EnvironmentSecretProviderConfig>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnvironmentSecretProviderConfig {}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FileSecretProviderConfig {
+    pub root: PathBuf,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DatabaseConfig {
+    pub runtime_url_ref: String,
+    pub migration_url_ref: String,
+    #[serde(default)]
+    pub trusted_root_certificate_ref: Option<String>,
+    #[serde(default)]
+    pub test_only_plaintext: bool,
+}
+
+impl std::fmt::Debug for DatabaseConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DatabaseConfig")
+            .field("runtime_url_ref", &"<redacted>")
+            .field("migration_url_ref", &"<redacted>")
+            .field(
+                "trusted_root_certificate_ref",
+                &self
+                    .trusted_root_certificate_ref
+                    .as_ref()
+                    .map(|_| "<redacted>"),
+            )
+            .field("test_only_plaintext", &self.test_only_plaintext)
+            .finish()
+    }
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthenticationConfig {
+    pub oidc: OidcConfig,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OidcConfig {
+    pub issuer: String,
+    pub audience: String,
+    #[serde(default)]
+    pub jwks_uri: Option<String>,
+    #[serde(default)]
+    pub jwks_source: OidcJwksSource,
+    #[serde(default = "default_scope_claim")]
+    pub scope_claim: String,
+    /// The OAuth clients this runtime admits. Every access profile resolves
+    /// its caller from the matched client, so the list is never empty, and
+    /// every client a profile names must appear here.
+    pub allowed_clients: Vec<String>,
+    /// The assertion authorities each client may exchange a subject token
+    /// from, keyed by client identifier. A deployment that performs no token
+    /// exchange leaves this empty, and an exchanged token is then refused.
+    #[serde(default)]
+    pub assertion_issuers: BTreeMap<String, Vec<String>>,
+}
+
+fn default_scope_claim() -> String {
+    "registry_scopes".to_owned()
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum OidcJwksSource {
+    #[default]
+    Discovery,
+    Static {
+        #[serde(rename = "documentRef")]
+        document_ref: String,
+    },
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuditConfig {
+    pub path: PathBuf,
+    pub hash_key_ref: String,
+}
+
+/// Retention periods the retention sweep enforces. Every value is deployment
+/// configuration: a jurisdiction's retention schedule approves the deployed
+/// numbers, and the audit journal records them at startup.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetentionConfig {
+    /// How long a message's rendered payload and recipient contact are kept,
+    /// from 1 to 30 days.
+    #[serde(default = "default_payload_days")]
+    pub payload_days: u16,
+    /// How long the content-free message record is kept, at least as long as
+    /// the payload and at most ten years.
+    #[serde(default = "default_record_days")]
+    pub record_days: u16,
+    /// How long a submission receipt stays replayable under its idempotency
+    /// key, from one day to the record period.
+    #[serde(default = "default_submission_receipt_days")]
+    pub submission_receipt_days: u16,
+}
+
+impl Default for RetentionConfig {
+    fn default() -> Self {
+        Self {
+            payload_days: DEFAULT_PAYLOAD_DAYS,
+            record_days: DEFAULT_RECORD_DAYS,
+            submission_receipt_days: DEFAULT_SUBMISSION_RECEIPT_DAYS,
+        }
+    }
+}
+
+const fn default_payload_days() -> u16 {
+    DEFAULT_PAYLOAD_DAYS
+}
+
+const fn default_record_days() -> u16 {
+    DEFAULT_RECORD_DAYS
+}
+
+const fn default_submission_receipt_days() -> u16 {
+    DEFAULT_SUBMISSION_RECEIPT_DAYS
+}
+
+impl RuntimeConfig {
+    /// Load and validate the operator document at an absolute path, reading
+    /// `${VAR}` expressions from the process environment.
+    pub fn load(path: impl AsRef<Path>) -> Result<Self, RuntimeConfigError> {
+        Self::load_with_environment(path, &|name| std::env::var(name).ok())
+    }
+
+    /// Load and validate the operator document, reading `${VAR}` expressions
+    /// through `lookup`.
+    pub fn load_with_environment(
+        path: impl AsRef<Path>,
+        lookup: &impl Fn(&str) -> Option<String>,
+    ) -> Result<Self, RuntimeConfigError> {
+        if !path.as_ref().is_absolute() {
+            return Err(RuntimeConfigError::RelativeRuntimePath);
+        }
+        let bytes = read_bounded(path.as_ref()).map_err(RuntimeConfigError::Read)?;
+        let config = Self::parse_with_environment(&bytes, lookup)?;
+        config.check()?;
+        Ok(config)
+    }
+
+    /// Parse the operator document without checking it. Environment
+    /// expressions are substituted in string values after the YAML is parsed,
+    /// so a substituted value can never change the document's shape.
+    fn parse_with_environment(
+        bytes: &[u8],
+        lookup: &impl Fn(&str) -> Option<String>,
+    ) -> Result<Self, RuntimeConfigError> {
+        let mut document: serde_norway::Value =
+            serde_norway::from_slice(bytes).map_err(|error| RuntimeConfigError::Parse {
+                path: "/".to_owned(),
+                cause: redact_refused_values(&error.to_string()),
+            })?;
+        substitute(&mut document, lookup).map_err(RuntimeConfigError::Environment)?;
+        serde_path_to_error::deserialize(document).map_err(|error| {
+            let (path, cause) = refused_yaml(error);
+            RuntimeConfigError::Parse { path, cause }
+        })
+    }
+
+    #[must_use]
+    pub fn package_path(&self) -> PathBuf {
+        self.package.root.join(PACKAGE_FILE)
+    }
+
+    /// Read and check the package this deployment runs, returning its access
+    /// profiles. Every client a profile names must be one the OIDC settings
+    /// admit, or the profile could never be reached.
+    pub fn load_package(&self) -> Result<AccessProfiles, RuntimeConfigError> {
+        let bytes = read_bounded(&self.package_path()).map_err(RuntimeConfigError::PackageRead)?;
+        let deserializer = serde_norway::Deserializer::from_slice(&bytes);
+        let package: MessagingPackage =
+            serde_path_to_error::deserialize(deserializer).map_err(|error| {
+                let (path, cause) = refused_yaml(error);
+                RuntimeConfigError::PackageParse { path, cause }
+            })?;
+        let profiles = package
+            .check()
+            .map_err(|error| RuntimeConfigError::Package(error.to_string()))?;
+        let allowed: BTreeSet<&str> = self
+            .authentication
+            .oidc
+            .allowed_clients
+            .iter()
+            .map(String::as_str)
+            .collect();
+        for profile in profiles.iter() {
+            if let Some(client) = profile
+                .requester_clients
+                .iter()
+                .find(|client| !allowed.contains(client.as_str()))
+            {
+                return Err(RuntimeConfigError::ProfileClientNotAllowed {
+                    profile: profile.id.clone(),
+                    client: client.clone(),
+                });
+            }
+        }
+        Ok(profiles)
+    }
+
+    pub fn check(&self) -> Result<(), RuntimeConfigError> {
+        if self.api_version != MESSAGING_RUNTIME_API_VERSION {
+            return Err(RuntimeConfigError::InvalidApiVersion);
+        }
+        if self.kind != MESSAGING_RUNTIME_KIND {
+            return Err(RuntimeConfigError::InvalidKind);
+        }
+        if !self.package.root.is_absolute() {
+            return Err(RuntimeConfigError::RelativeOperatedPath("package.root"));
+        }
+        if let Some(digest) = &self.package.expected_digest {
+            if !valid_sha256_digest(digest) {
+                return Err(RuntimeConfigError::InvalidExpectedDigest);
+            }
+            return Err(RuntimeConfigError::ExpectedDigestUnsupported);
+        }
+        if self
+            .secret_providers
+            .file
+            .as_ref()
+            .is_some_and(|file| !file.root.is_absolute())
+        {
+            return Err(RuntimeConfigError::RelativeOperatedPath(
+                "secretProviders.file.root",
+            ));
+        }
+        if !self.audit.path.is_absolute() {
+            return Err(RuntimeConfigError::RelativeOperatedPath("audit.path"));
+        }
+        if self.secret_providers.file.is_none() && self.secret_providers.environment.is_none() {
+            return Err(RuntimeConfigError::InvalidSecretProviders);
+        }
+        if !valid_listener(
+            self.listener.bind.ip(),
+            self.listener.network_exposure,
+            self.listener.tls_termination,
+        ) {
+            return Err(RuntimeConfigError::InvalidListener);
+        }
+        if let Some(metrics) = &self.metrics_listener {
+            if !valid_metrics_listener(metrics.bind, self.listener.bind) {
+                return Err(RuntimeConfigError::InvalidMetricsListener);
+            }
+        }
+        let oidc = &self.authentication.oidc;
+        if oidc.issuer.is_empty()
+            || oidc.audience.is_empty()
+            || oidc.scope_claim.is_empty()
+            || oidc.allowed_clients.is_empty()
+            || oidc.allowed_clients.iter().any(String::is_empty)
+        {
+            return Err(RuntimeConfigError::InvalidOidc);
+        }
+        self.validate_assertion_issuers()?;
+        if self.database.runtime_url_ref.is_empty() || self.database.migration_url_ref.is_empty() {
+            return Err(RuntimeConfigError::InvalidDatabaseReference);
+        }
+        if self.audit.hash_key_ref.is_empty() {
+            return Err(RuntimeConfigError::InvalidAuditReference);
+        }
+        let retention = self.retention;
+        if !(1..=MAXIMUM_PAYLOAD_DAYS).contains(&retention.payload_days)
+            || !(retention.payload_days..=MAXIMUM_RECORD_DAYS).contains(&retention.record_days)
+            || !(1..=retention.record_days).contains(&retention.submission_receipt_days)
+        {
+            return Err(RuntimeConfigError::InvalidRetention);
+        }
+        self.validate_secret_references()?;
+        #[cfg(not(feature = "postgres-test"))]
+        if self.database.test_only_plaintext {
+            return Err(RuntimeConfigError::PlaintextDatabase);
+        }
+        self.load_package()?;
+        Ok(())
+    }
+
+    /// Refuse an assertion-issuer map with too many clients, an oversized
+    /// client key or issuer string, too many issuers for one client, a
+    /// repeated issuer, or a client the deployment does not admit.
+    fn validate_assertion_issuers(&self) -> Result<(), RuntimeConfigError> {
+        let oidc = &self.authentication.oidc;
+        if oidc.assertion_issuers.len() > MAXIMUM_ASSERTION_ISSUER_CLIENTS {
+            return Err(RuntimeConfigError::InvalidOidc);
+        }
+        for (client, issuers) in &oidc.assertion_issuers {
+            if client.is_empty()
+                || client.len() > MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES
+                || issuers.is_empty()
+                || issuers.len() > MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT
+                || !oidc.allowed_clients.contains(client)
+            {
+                return Err(RuntimeConfigError::InvalidOidc);
+            }
+            let mut seen = BTreeSet::new();
+            for issuer in issuers {
+                if issuer.is_empty()
+                    || issuer.len() > MAXIMUM_ASSERTION_ISSUER_BYTES
+                    || !seen.insert(issuer)
+                {
+                    return Err(RuntimeConfigError::InvalidOidc);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_secret_references(&self) -> Result<(), RuntimeConfigError> {
+        let mut references = vec![
+            ("database.runtimeUrlRef", &self.database.runtime_url_ref),
+            ("database.migrationUrlRef", &self.database.migration_url_ref),
+            ("audit.hashKeyRef", &self.audit.hash_key_ref),
+        ];
+        if let Some(reference) = &self.database.trusted_root_certificate_ref {
+            references.push(("database.trustedRootCertificateRef", reference));
+        }
+        if let OidcJwksSource::Static { document_ref } = &self.authentication.oidc.jwks_source {
+            references.push(("authentication.oidc.jwksSource.documentRef", document_ref));
+        }
+        for (path, raw) in references {
+            let reference = SecretReference::parse(raw.clone())
+                .map_err(|_| RuntimeConfigError::InvalidSecretReference { path })?;
+            let enabled = match reference.provider() {
+                SecretProvider::File => self.secret_providers.file.is_some(),
+                SecretProvider::Environment => self.secret_providers.environment.is_some(),
+            };
+            if !enabled {
+                return Err(RuntimeConfigError::SecretProviderRequired { path });
+            }
+        }
+        Ok(())
+    }
+
+    /// Build the token verifier's key source from the configured JWKS source.
+    pub async fn jwks_fetcher(
+        &self,
+        secrets: &SecretResolver,
+    ) -> Result<std::sync::Arc<JwksFetcher>, RuntimeConfigError> {
+        let fetcher = match &self.authentication.oidc.jwks_source {
+            OidcJwksSource::Discovery => {
+                let discovery = fetch_discovery(&OidcDiscoveryConfig {
+                    issuer: self.authentication.oidc.issuer.clone(),
+                    jwks_uri_override: self.authentication.oidc.jwks_uri.clone(),
+                    discovery_timeout: Duration::from_secs(5),
+                    max_doc_bytes: 1024 * 1024,
+                })
+                .await
+                .map_err(|_| RuntimeConfigError::Oidc)?;
+                JwksFetcher::new(discovery.jwks_uri, JwksFetcherConfig::defaults())
+            }
+            OidcJwksSource::Static { document_ref } => {
+                let document = secrets.resolve(document_ref).map_err(|error| {
+                    RuntimeConfigError::OidcJwksSecret(describe_secret_failure(
+                        "authentication.oidc.jwksSource.documentRef",
+                        document_ref,
+                        &error,
+                    ))
+                })?;
+                let jwks = parse_static_jwks(document.expose_secret())?;
+                JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
+            }
+        };
+        Ok(std::sync::Arc::new(fetcher))
+    }
+
+    /// The access-token verifier profile this deployment's OIDC settings
+    /// describe.
+    ///
+    /// RFC 9068 gives the access token one media type spelled two ways, and
+    /// [`access_token_typ_set`] admits exactly that pair, so an ID token or any
+    /// other JWT minted for this audience is refused.
+    #[must_use]
+    pub fn verifier_profile(&self) -> TokenVerifierConfig {
+        TokenVerifierConfig::access_token_profile(
+            self.authentication.oidc.issuer.clone(),
+            vec![self.authentication.oidc.audience.clone()],
+            vec![Algorithm::RS256, Algorithm::ES256],
+            access_token_typ_set(MESSAGING_ACCESS_TOKEN_TYPE),
+        )
+        .with_scope_claim(self.authentication.oidc.scope_claim.clone())
+        .with_allowed_clients(self.authentication.oidc.allowed_clients.clone())
+        .with_assertion_issuers(self.authentication.oidc.assertion_issuers.clone())
+    }
+
+    /// Whether this deployment declared any token-exchange authority.
+    #[must_use]
+    pub fn binds_assertion_issuers(&self) -> bool {
+        !self.authentication.oidc.assertion_issuers.is_empty()
+    }
+
+    /// Build the secret resolver from the providers this document enables.
+    pub fn secret_resolver(&self) -> Result<SecretResolver, RuntimeConfigError> {
+        let mut providers = Vec::new();
+        if self.secret_providers.environment.is_some() {
+            providers.push(SecretProvider::Environment);
+        }
+        if self.secret_providers.file.is_some() {
+            providers.push(SecretProvider::File);
+        }
+        let root = self
+            .secret_providers
+            .file
+            .as_ref()
+            .map_or_else(|| PathBuf::from("/"), |file| file.root.clone());
+        SecretResolver::new(providers, root).map_err(|_| RuntimeConfigError::InvalidSecretProviders)
+    }
+}
+
+fn read_bounded(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read as _;
+    let file = std::fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take(MAXIMUM_DOCUMENT_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAXIMUM_DOCUMENT_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "the document exceeds one mebibyte",
+        ));
+    }
+    Ok(bytes)
+}
+
+fn valid_sha256_digest(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
+fn valid_listener(
+    address: IpAddr,
+    exposure: ListenerNetworkExposure,
+    tls_termination: TlsTermination,
+) -> bool {
+    if address.is_multicast() {
+        return false;
+    }
+    if tls_termination == TlsTermination::DevelopmentLoopback {
+        return exposure == ListenerNetworkExposure::PrivateAddress && address.is_loopback();
+    }
+    match (address, exposure) {
+        (IpAddr::V4(address), ListenerNetworkExposure::PrivateAddress) => {
+            address.is_loopback() || address.is_private()
+        }
+        (IpAddr::V6(address), ListenerNetworkExposure::PrivateAddress) => {
+            address.is_loopback() || is_unique_local(address)
+        }
+        (IpAddr::V4(address), ListenerNetworkExposure::ContainerPrivate) => {
+            address.is_unspecified() || address.is_loopback() || address.is_private()
+        }
+        (IpAddr::V6(address), ListenerNetworkExposure::ContainerPrivate) => {
+            address.is_unspecified() || address.is_loopback() || is_unique_local(address)
+        }
+    }
+}
+
+/// The metrics listener binds a concrete private address on a non-zero port
+/// and never shares the public listener's socket: sharing it would publish
+/// the counters on the listener the public contract describes.
+fn valid_metrics_listener(metrics: SocketAddr, listener: SocketAddr) -> bool {
+    let address = metrics.ip();
+    let private = match address {
+        IpAddr::V4(address) => address.is_loopback() || address.is_private(),
+        IpAddr::V6(address) => address.is_loopback() || is_unique_local(address),
+    };
+    if metrics.port() == 0 || !private || address.is_unspecified() || address.is_multicast() {
+        return false;
+    }
+    // An IPv6 wildcard socket is commonly dual-stack, so it covers both
+    // families; the IPv4 wildcard covers only IPv4.
+    let wildcard_covers_metrics = match listener.ip() {
+        IpAddr::V4(listener) => listener.is_unspecified() && address.is_ipv4(),
+        IpAddr::V6(listener) => listener.is_unspecified(),
+    };
+    !((address == listener.ip() || wildcard_covers_metrics) && metrics.port() == listener.port())
+}
+
+fn is_unique_local(address: Ipv6Addr) -> bool {
+    address.segments()[0] & 0xfe00 == 0xfc00
+}
+
+fn parse_static_jwks(bytes: &[u8]) -> Result<JwkSet, RuntimeConfigError> {
+    let jwks: JwkSet = serde_json::from_slice(bytes).map_err(|_| RuntimeConfigError::Oidc)?;
+    let mut kids = BTreeSet::new();
+    if jwks.keys.is_empty()
+        || jwks.keys.iter().any(|key| {
+            !matches!(
+                key.algorithm,
+                AlgorithmParameters::RSA(_) | AlgorithmParameters::EllipticCurve(_)
+            ) || key
+                .common
+                .key_id
+                .as_ref()
+                .is_none_or(|kid| kid.is_empty() || !kids.insert(kid.clone()))
+        })
+    {
+        return Err(RuntimeConfigError::Oidc);
+    }
+    Ok(jwks)
+}
+
+/// Name where a YAML document was refused and why. A refusal serde never
+/// attributed to a member is reported at the document root.
+fn refused_yaml(error: serde_path_to_error::Error<serde_norway::Error>) -> (String, String) {
+    let path = error.path().to_string();
+    let path = if path == "." { "/".to_owned() } else { path };
+    (path, redact_refused_values(&error.into_inner().to_string()))
+}
+
+/// Keep the member, the reason, and the location of a refusal while the
+/// refused value stays out of the message. Only the shape word that opens an
+/// `invalid type:` or `invalid value:` clause survives, because the value
+/// might be a secret reference, a database URL, or a credential typed in the
+/// wrong place, and a startup refusal is written to the operator's log.
+fn redact_refused_values(message: &str) -> String {
+    const CLAUSES: [&str; 2] = ["invalid type: ", "invalid value: "];
+    let mut redacted = String::with_capacity(message.len());
+    let mut rest = message;
+    loop {
+        let Some((start, len)) = CLAUSES
+            .iter()
+            .filter_map(|clause| rest.find(clause).map(|start| (start, clause.len())))
+            .min_by_key(|(start, _)| *start)
+        else {
+            redacted.push_str(rest);
+            return redacted;
+        };
+        let opened = start + len;
+        redacted.push_str(&rest[..opened]);
+        let (shape, tail) = split_refused_value(&rest[opened..]);
+        redacted.push_str(shape);
+        rest = tail;
+    }
+}
+
+/// Split the text after a clause marker into the shape word serde names and
+/// the remainder that follows the refused value, which serde renders with
+/// `Debug` inside quotes or backticks.
+fn split_refused_value(clause: &str) -> (&str, &str) {
+    let bytes = clause.as_bytes();
+    let mut index = 0;
+    let mut shape_end = None;
+    while index < bytes.len() {
+        match bytes[index] {
+            delimiter @ (b'"' | b'`') => {
+                shape_end.get_or_insert(index);
+                index = skip_delimited(bytes, index, delimiter);
+            }
+            b',' => break,
+            _ => index += 1,
+        }
+    }
+    let shape_end = shape_end.unwrap_or(index);
+    (clause[..shape_end].trim_end(), &clause[index..])
+}
+
+/// Return the offset just past the delimited run that opens at `open`. An
+/// escaped delimiter inside the run does not end it.
+fn skip_delimited(bytes: &[u8], open: usize, delimiter: u8) -> usize {
+    let mut index = open + 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            byte if byte == delimiter => return index + 1,
+            _ => index += 1,
+        }
+    }
+    bytes.len()
+}
+
+#[derive(Debug, Error)]
+pub enum RuntimeConfigError {
+    #[error("the Messaging runtime configuration could not be read")]
+    Read(#[source] std::io::Error),
+    #[error("the Messaging runtime configuration is not valid at {path}: {cause}")]
+    Parse { path: String, cause: String },
+    #[error("the environment expression at {} is refused: {}", .0.path, .0.reason)]
+    Environment(SubstitutionError),
+    #[error("unsupported Messaging runtime apiVersion; expected {MESSAGING_RUNTIME_API_VERSION}")]
+    InvalidApiVersion,
+    #[error("unsupported Messaging runtime kind; expected {MESSAGING_RUNTIME_KIND}")]
+    InvalidKind,
+    #[error("the operated runtime path {0} must be absolute")]
+    RelativeOperatedPath(&'static str),
+    #[error("the selected Messaging runtime configuration path must be absolute")]
+    RelativeRuntimePath,
+    #[error("package.expectedDigest must be sha256: followed by 64 lowercase hexadecimal digits")]
+    InvalidExpectedDigest,
+    #[error(
+        "package.expectedDigest cannot be verified by this version of the runtime; remove it \
+         rather than run an unverified pin"
+    )]
+    ExpectedDigestUnsupported,
+    #[error("secretProviders must explicitly enable file, environment, or both")]
+    InvalidSecretProviders,
+    #[error("{path} is not a valid secret reference")]
+    InvalidSecretReference { path: &'static str },
+    #[error("{path} uses a secret provider that is not explicitly enabled")]
+    SecretProviderRequired { path: &'static str },
+    #[error("listener is not valid for its declared TLS termination and network exposure")]
+    InvalidListener,
+    #[error(
+        "metricsListener.bind must be a private address on a non-zero port, apart from the \
+         listener"
+    )]
+    InvalidMetricsListener,
+    #[error(
+        "authentication.oidc is invalid: issuer, audience, scopeClaim, and a non-empty \
+         allowedClients list are required, and assertionIssuers may name only allowed clients \
+         within its bounds"
+    )]
+    InvalidOidc,
+    #[error(
+        "database.runtimeUrlRef and database.migrationUrlRef must be non-empty secret references"
+    )]
+    InvalidDatabaseReference,
+    #[error("audit.hashKeyRef must be a non-empty secret reference")]
+    InvalidAuditReference,
+    #[error(
+        "retention is out of bounds: payloadDays 1 to 30, recordDays from payloadDays to 3650, \
+         submissionReceiptDays from 1 to recordDays"
+    )]
+    InvalidRetention,
+    #[error("plaintext PostgreSQL is test-only")]
+    PlaintextDatabase,
+    #[error("the Messaging package could not be read")]
+    PackageRead(#[source] std::io::Error),
+    #[error("the Messaging package is not valid at {path}: {cause}")]
+    PackageParse { path: String, cause: String },
+    #[error("the Messaging package is invalid: {0}")]
+    Package(String),
+    #[error(
+        "access profile {profile} names requester client {client}, which \
+         authentication.oidc.allowedClients does not admit"
+    )]
+    ProfileClientNotAllowed { profile: String, client: String },
+    #[error("the OIDC issuer could not be initialized")]
+    Oidc,
+    #[error("the static OIDC signing keys could not be loaded: {0}")]
+    OidcJwksSecret(String),
+}
+
+impl RuntimeConfigError {
+    /// The document member the refusal is about.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        match self {
+            Self::InvalidApiVersion => "apiVersion",
+            Self::InvalidKind => "kind",
+            Self::RelativeOperatedPath(path) => path,
+            Self::RelativeRuntimePath | Self::Read(_) => "/",
+            Self::Parse { path, .. } => path,
+            Self::Environment(error) => &error.path,
+            Self::InvalidExpectedDigest | Self::ExpectedDigestUnsupported => {
+                "package.expectedDigest"
+            }
+            Self::InvalidSecretProviders => "secretProviders",
+            Self::InvalidSecretReference { path } | Self::SecretProviderRequired { path } => path,
+            Self::InvalidOidc | Self::Oidc => "authentication.oidc",
+            Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",
+            Self::InvalidListener => "listener",
+            Self::InvalidMetricsListener => "metricsListener.bind",
+            Self::InvalidDatabaseReference | Self::PlaintextDatabase => "database",
+            Self::InvalidAuditReference => "audit.hashKeyRef",
+            Self::InvalidRetention => "retention",
+            Self::PackageRead(_) | Self::PackageParse { .. } | Self::Package(_) => {
+                "package.root/messaging.yaml"
+            }
+            Self::ProfileClientNotAllowed { .. } => "authentication.oidc.allowedClients",
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use registry_messaging_core::{MESSAGING_PACKAGE_API_VERSION, MESSAGING_PACKAGE_KIND};
+    use serde_json::{json, Value};
+
+    pub(crate) fn package_value() -> Value {
+        json!({
+            "apiVersion": MESSAGING_PACKAGE_API_VERSION,
+            "kind": MESSAGING_PACKAGE_KIND,
+            "accessProfiles": [
+                {
+                    "id": "case-notices",
+                    "principalClaim": "sub",
+                    "requiredScopes": ["messaging:send"],
+                    "requesterClients": ["case-system"],
+                    "actorKind": "service",
+                    "role": "sender",
+                    "senderProfiles": ["transactional"],
+                    "templates": ["appointment-reminder"],
+                    "requestsPerMinute": 60,
+                    "burst": 10
+                },
+                {
+                    "id": "operations",
+                    "principalClaim": "sub",
+                    "requiredScopes": ["messaging:operate"],
+                    "requesterClients": ["operations-console"],
+                    "role": "operator",
+                    "requestsPerMinute": 60,
+                    "burst": 10
+                }
+            ]
+        })
+    }
+
+    pub(crate) fn runtime_value(root: &Path) -> Value {
+        json!({
+            "apiVersion": MESSAGING_RUNTIME_API_VERSION,
+            "kind": MESSAGING_RUNTIME_KIND,
+            "package": {"root": root.join("package")},
+            "listener": {"bind": "127.0.0.1:8107", "tlsTermination": "development-loopback"},
+            "secretProviders": {"file": {"root": root.join("secrets")}, "environment": {}},
+            "database": {
+                "runtimeUrlRef": "secret:env/MESSAGING_RUNTIME_URL",
+                "migrationUrlRef": "secret:env/MESSAGING_MIGRATION_URL"
+            },
+            "authentication": {"oidc": {
+                "issuer": "https://identity.example.test",
+                "audience": "urn:example:messaging",
+                "allowedClients": ["case-system", "operations-console"]
+            }},
+            "audit": {"path": root.join("audit"), "hashKeyRef": "secret:file/audit-hash-key"}
+        })
+    }
+
+    /// Write a package and a runtime document under `root`, returning the
+    /// runtime document's path.
+    pub(crate) fn write_project(root: &Path, runtime: &Value, package: &Value) -> PathBuf {
+        let package_root = root.join("package");
+        std::fs::create_dir_all(&package_root).unwrap();
+        std::fs::write(
+            package_root.join(PACKAGE_FILE),
+            serde_norway::to_string(package).unwrap(),
+        )
+        .unwrap();
+        let path = root.join("runtime.yaml");
+        std::fs::write(&path, serde_norway::to_string(runtime).unwrap()).unwrap();
+        path
+    }
+
+    fn no_environment(_: &str) -> Option<String> {
+        None
+    }
+
+    fn load(runtime: Value) -> Result<RuntimeConfig, RuntimeConfigError> {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = runtime;
+        rebase(&mut runtime, root.path());
+        let path = write_project(root.path(), &runtime, &package_value());
+        RuntimeConfig::load_with_environment(path, &no_environment)
+    }
+
+    /// Tests build documents against a placeholder root; point every path
+    /// still under it at the temporary directory this load runs in.
+    fn rebase(runtime: &mut Value, root: &Path) {
+        for pointer in ["/package/root", "/audit/path", "/secretProviders/file/root"] {
+            if let Some(value) = runtime.pointer_mut(pointer) {
+                if let Some(rest) = value
+                    .as_str()
+                    .and_then(|text| text.strip_prefix("/placeholder/"))
+                {
+                    *value = json!(root.join(rest));
+                }
+            }
+        }
+    }
+
+    fn base() -> Value {
+        runtime_value(Path::new("/placeholder"))
+    }
+
+    #[test]
+    fn a_development_configuration_loads_with_its_defaults() {
+        let config = load(base()).unwrap();
+        assert_eq!(config.retention, RetentionConfig::default());
+        assert_eq!(config.authentication.oidc.scope_claim, "registry_scopes");
+        assert!(config.metrics_listener.is_none());
+        assert_eq!(config.listener.bind, DEFAULT_LISTENER_BIND.parse().unwrap());
+        assert!(!config.binds_assertion_issuers());
+    }
+
+    #[test]
+    fn an_unknown_key_is_refused_with_its_path() {
+        for (pointer, key) in [
+            ("", "extraSection"),
+            ("/listener", "port"),
+            ("/database", "url"),
+            ("/authentication/oidc", "clientSecret"),
+            ("/retention", "payloadHours"),
+        ] {
+            let mut value = base();
+            if pointer == "/retention" {
+                value["retention"] = json!({});
+            }
+            value
+                .pointer_mut(pointer)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert(key.to_owned(), json!("x"));
+            let error = load(value).unwrap_err();
+            assert!(
+                matches!(error, RuntimeConfigError::Parse { .. }),
+                "{key}: {error}"
+            );
+            assert!(error.to_string().contains(key), "{error}");
+        }
+    }
+
+    #[test]
+    fn an_environment_expression_in_a_credential_field_is_refused() {
+        let mut value = base();
+        value["database"]["runtimeUrlRef"] = json!("${DATABASE_URL}");
+        let error = load(value).unwrap_err();
+        assert!(
+            matches!(error, RuntimeConfigError::Environment(_)),
+            "{error}"
+        );
+        assert_eq!(error.path(), "database.runtimeUrlRef");
+
+        let mut value = base();
+        value["audit"]["hashKeyRef"] = json!("secret:env/${KEY_NAME:-AUDIT}");
+        let error = load(value).unwrap_err();
+        assert_eq!(error.path(), "audit.hashKeyRef");
+    }
+
+    #[test]
+    fn an_environment_expression_elsewhere_is_substituted_after_parsing() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = runtime_value(root.path());
+        runtime["listener"]["bind"] = json!("${MESSAGING_BIND}");
+        runtime["authentication"]["oidc"]["issuer"] = json!("${ISSUER:-https://fallback.test}");
+        let path = write_project(root.path(), &runtime, &package_value());
+        let config = RuntimeConfig::load_with_environment(&path, &|name| {
+            (name == "MESSAGING_BIND").then(|| "127.0.0.1:9107".to_owned())
+        })
+        .unwrap();
+        assert_eq!(config.listener.bind, "127.0.0.1:9107".parse().unwrap());
+        assert_eq!(config.authentication.oidc.issuer, "https://fallback.test");
+
+        let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
+        assert_eq!(error.path(), "listener.bind");
+    }
+
+    #[test]
+    fn retention_bounds_are_enforced() {
+        for retention in [
+            json!({"payloadDays": 0}),
+            json!({"payloadDays": 31}),
+            json!({"payloadDays": 10, "recordDays": 9}),
+            json!({"recordDays": 3651}),
+            json!({"submissionReceiptDays": 0}),
+            json!({"recordDays": 10, "payloadDays": 5, "submissionReceiptDays": 11}),
+        ] {
+            let mut value = base();
+            value["retention"] = retention.clone();
+            let error = load(value).unwrap_err();
+            assert!(
+                matches!(error, RuntimeConfigError::InvalidRetention),
+                "{retention}: {error}"
+            );
+        }
+        let mut value = base();
+        value["retention"] =
+            json!({"payloadDays": 30, "recordDays": 30, "submissionReceiptDays": 30});
+        load(value).unwrap();
+    }
+
+    #[test]
+    fn the_metrics_listener_must_be_private_and_apart_from_the_listener() {
+        for bind in [
+            "127.0.0.1:8107",
+            "0.0.0.0:9090",
+            "[::]:9090",
+            "203.0.113.4:9090",
+            "127.0.0.1:0",
+            "[2001:db8::1]:9090",
+        ] {
+            let mut value = base();
+            value["metricsListener"] = json!({"bind": bind});
+            let error = load(value).unwrap_err();
+            assert!(
+                matches!(error, RuntimeConfigError::InvalidMetricsListener),
+                "{bind}: {error}"
+            );
+            assert!(!format!("{error:?}").contains(bind));
+        }
+        let mut value = base();
+        value["metricsListener"] = json!({"bind": "127.0.0.1:9107"});
+        assert!(load(value).unwrap().metrics_listener.is_some());
+    }
+
+    #[test]
+    fn the_metrics_listener_may_not_share_a_wildcard_listener_port() {
+        assert!(!valid_metrics_listener(
+            "10.0.0.5:8107".parse().unwrap(),
+            "0.0.0.0:8107".parse().unwrap()
+        ));
+        assert!(!valid_metrics_listener(
+            "10.0.0.5:8107".parse().unwrap(),
+            "[::]:8107".parse().unwrap()
+        ));
+        assert!(valid_metrics_listener(
+            "[fd00::5]:8107".parse().unwrap(),
+            "0.0.0.0:8107".parse().unwrap()
+        ));
+    }
+
+    #[test]
+    fn allowed_clients_are_required_and_must_cover_every_profile() {
+        let mut value = base();
+        value["authentication"]["oidc"]["allowedClients"] = json!([]);
+        assert!(matches!(
+            load(value).unwrap_err(),
+            RuntimeConfigError::InvalidOidc
+        ));
+
+        let mut value = base();
+        value["authentication"]["oidc"]
+            .as_object_mut()
+            .unwrap()
+            .remove("allowedClients");
+        assert!(matches!(
+            load(value).unwrap_err(),
+            RuntimeConfigError::Parse { .. }
+        ));
+
+        let mut value = base();
+        value["authentication"]["oidc"]["allowedClients"] = json!(["case-system"]);
+        let error = load(value).unwrap_err();
+        assert!(
+            matches!(error, RuntimeConfigError::ProfileClientNotAllowed { .. }),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn assertion_issuers_may_name_only_allowed_clients() {
+        let mut value = base();
+        value["authentication"]["oidc"]["assertionIssuers"] =
+            json!({"unknown-client": ["https://assertions.example.test"]});
+        assert!(matches!(
+            load(value).unwrap_err(),
+            RuntimeConfigError::InvalidOidc
+        ));
+        let mut value = base();
+        value["authentication"]["oidc"]["assertionIssuers"] =
+            json!({"case-system": ["https://a.test", "https://a.test"]});
+        assert!(matches!(
+            load(value).unwrap_err(),
+            RuntimeConfigError::InvalidOidc
+        ));
+        let mut value = base();
+        value["authentication"]["oidc"]["assertionIssuers"] =
+            json!({"case-system": ["https://assertions.example.test"]});
+        assert!(load(value).unwrap().binds_assertion_issuers());
+    }
+
+    #[test]
+    fn a_pinned_package_digest_is_refused_until_it_can_be_verified() {
+        let mut value = base();
+        value["package"]["expectedDigest"] = json!("sha256:ABC");
+        assert!(matches!(
+            load(value).unwrap_err(),
+            RuntimeConfigError::InvalidExpectedDigest
+        ));
+        let mut value = base();
+        value["package"]["expectedDigest"] = json!(format!("sha256:{}", "a".repeat(64)));
+        assert!(matches!(
+            load(value).unwrap_err(),
+            RuntimeConfigError::ExpectedDigestUnsupported
+        ));
+    }
+
+    #[test]
+    fn listener_and_secret_rules_are_enforced() {
+        let mut value = base();
+        value["listener"]["bind"] = json!("10.0.0.5:8107");
+        assert!(matches!(
+            load(value).unwrap_err(),
+            RuntimeConfigError::InvalidListener
+        ));
+
+        let mut value = base();
+        value["listener"] = json!({
+            "bind": "0.0.0.0:8107",
+            "tlsTermination": "operator-controlled-upstream",
+            "networkExposure": "container-private"
+        });
+        load(value).unwrap();
+
+        let mut value = base();
+        value["database"]["runtimeUrlRef"] = json!("postgres://user:hunter2@db/messaging");
+        let error = load(value).unwrap_err();
+        assert!(matches!(
+            error,
+            RuntimeConfigError::InvalidSecretReference {
+                path: "database.runtimeUrlRef"
+            }
+        ));
+        assert!(!error.to_string().contains("hunter2"));
+
+        let mut value = base();
+        value["secretProviders"] = json!({"file": {"root": "/placeholder/secrets"}});
+        assert!(matches!(
+            load(value).unwrap_err(),
+            RuntimeConfigError::SecretProviderRequired { .. }
+        ));
+
+        let mut value = base();
+        value["secretProviders"] = json!({});
+        assert!(matches!(
+            load(value).unwrap_err(),
+            RuntimeConfigError::InvalidSecretProviders
+        ));
+    }
+
+    #[test]
+    fn relative_paths_are_refused() {
+        let mut value = base();
+        value["audit"]["path"] = json!("audit");
+        let error = load(value).unwrap_err();
+        assert_eq!(error.path(), "audit.path");
+        assert!(matches!(
+            RuntimeConfig::load_with_environment("runtime.yaml", &no_environment),
+            Err(RuntimeConfigError::RelativeRuntimePath)
+        ));
+    }
+
+    #[cfg(not(feature = "postgres-test"))]
+    #[test]
+    fn plaintext_postgres_is_refused_outside_the_test_build() {
+        let mut value = base();
+        value["database"]["testOnlyPlaintext"] = json!(true);
+        assert!(matches!(
+            load(value).unwrap_err(),
+            RuntimeConfigError::PlaintextDatabase
+        ));
+    }
+
+    #[test]
+    fn a_refused_value_is_not_repeated() {
+        let mut value = base();
+        value["retention"] = json!({"payloadDays": "secret:env/hunter2"});
+        let error = load(value).unwrap_err();
+        assert!(!error.to_string().contains("hunter2"), "{error}");
+    }
+
+    #[test]
+    fn debug_output_redacts_database_references() {
+        let config = load(base()).unwrap();
+        let rendered = format!("{config:?}");
+        assert!(!rendered.contains("MESSAGING_RUNTIME_URL"));
+        assert!(!rendered.contains("MESSAGING_MIGRATION_URL"));
+    }
+
+    #[test]
+    fn an_invalid_package_is_refused_at_load() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = runtime_value(root.path());
+        let mut package = package_value();
+        package["accessProfiles"][0]["templates"] = json!([]);
+        let path = write_project(root.path(), &runtime, &package);
+        let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
+        assert!(matches!(error, RuntimeConfigError::Package(_)), "{error}");
+
+        let mut package = package_value();
+        package["accessProfiles"][0]["providerUrl"] = json!("https://x.test");
+        let path = write_project(root.path(), &runtime, &package);
+        let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
+        assert!(
+            matches!(error, RuntimeConfigError::PackageParse { .. }),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn the_verifier_admits_only_the_access_token_media_type() {
+        let config = load(base()).unwrap();
+        let profile = config.verifier_profile();
+        assert!(registry_platform_oidc::is_access_token_typ_pair(
+            &profile.allowed_typ
+        ));
+        assert!(!profile
+            .allowed_typ
+            .iter()
+            .any(|value| value.eq_ignore_ascii_case("JWT")));
+    }
+}

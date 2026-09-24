@@ -65,6 +65,10 @@ members = [
     "crates/registry-scheduling",
     "crates/registry-schedulingctl",
     "crates/registry-scheduling-client",
+    "crates/registry-messaging-core",
+    "crates/registry-messaging",
+    "crates/registry-messagingctl",
+    "crates/registry-messaging-client",
 ]
 exclude = [
     "products/breg/wasm-handler-sdk",
@@ -127,6 +131,10 @@ registry-scheduling = { path = "crates/registry-scheduling", version = "0.34.0" 
 registry-scheduling-core = { path = "crates/registry-scheduling-core", version = "0.34.0" }
 registry-schedulingctl = { path = "crates/registry-schedulingctl", version = "0.34.0" }
 registry-scheduling-client = { path = "crates/registry-scheduling-client", version = "0.34.0" }
+registry-messaging = { path = "crates/registry-messaging", version = "0.34.0" }
+registry-messaging-core = { path = "crates/registry-messaging-core", version = "0.34.0" }
+registry-messagingctl = { path = "crates/registry-messagingctl", version = "0.34.0" }
+registry-messaging-client = { path = "crates/registry-messaging-client", version = "0.34.0" }
 registry-breg = { path = "crates/registry-breg", version = "0.34.0", default-features = false }
 registry-bregctl = { path = "crates/registry-bregctl", version = "0.34.0" }
 registry-stack-client = { path = "crates/registry-stack-client", version = "0.34.0" }
