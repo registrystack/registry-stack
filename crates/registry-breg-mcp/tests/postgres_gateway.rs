@@ -131,7 +131,7 @@ async fn the_gateway_writes_only_the_citizens_own_address() {
         let mut smuggled = fields.clone();
         smuggled[field] = json!(value);
         let result = gateway::call(&client, "start_application", smuggled).await;
-        assert_eq!(gateway::error_code(&result), "invalid_arguments", "{field}");
+        assert_eq!(gateway::error_code(&result), "invalid-arguments", "{field}");
     }
     assert!(fixture.listed_requests().await.is_empty());
 
@@ -148,7 +148,7 @@ async fn the_gateway_writes_only_the_citizens_own_address() {
                 "patch": [{"op": "replace", "path": path, "value": address_a}]}),
         )
         .await;
-        assert_eq!(gateway::error_code(&result), "invalid_arguments", "{path}");
+        assert_eq!(gateway::error_code(&result), "invalid-arguments", "{path}");
     }
     let updated = gateway::call(
         &client,

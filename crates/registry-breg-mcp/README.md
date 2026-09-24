@@ -81,14 +81,14 @@ start walks a chain of keys derived from the same values and stops at the first
 application that is still open: a retried start returns the draft its first
 attempt made, while a citizen whose last identical application was cancelled,
 rejected, or applied gets a new draft. A start that would walk past more than 32
-closed identical applications is refused with `not_permitted`. Once request
+closed identical applications is refused with `not-permitted`. Once request
 retention erases a closed application, the chain meets a key the registry will
-never replay and the start answers `idempotency_conflict`; the citizen can start
+never replay and the start answers `idempotency-conflict`; the citizen can start
 again with any different value. Registry problems map to a fixed set of tool error
-codes, each with fixed text: `invalid_arguments`, `record_not_resolved`,
-`not_found`, `application_not_editable`, `stale_application`,
-`idempotency_conflict`, `not_permitted`, `authorization_failed`,
-`registry_unavailable`, `service_unavailable`, and `unexpected_response`.
+codes, each with fixed text: `invalid-arguments`, `record-not-resolved`,
+`not-found`, `application-not-editable`, `stale-application`,
+`idempotency-conflict`, `not-permitted`, `authorization-failed`,
+`registry-unavailable`, `service-unavailable`, and `unexpected-response`.
 
 ## Run it
 

@@ -213,11 +213,11 @@ async fn no_linked_record_or_more_than_one_creates_nothing() {
     for citizen in ["synthetic-citizen-unlinked", CITIZEN_B] {
         let caller = fixture.caller(citizen);
         let details = fixture.call(&caller, GET_MY_DETAILS, json!({})).await;
-        assert_eq!(error_code(&details), "record_not_resolved");
+        assert_eq!(error_code(&details), "record-not-resolved");
         let started = fixture
             .call(&caller, START_APPLICATION, start_arguments())
             .await;
-        assert_eq!(error_code(&started), "record_not_resolved");
+        assert_eq!(error_code(&started), "record-not-resolved");
     }
     assert!(fixture.writes().is_empty());
 }
@@ -251,11 +251,11 @@ async fn a_smuggled_target_argument_never_reaches_the_registry() {
     let mut arguments = start_arguments();
     arguments["address"] = json!(ADDRESS_A);
     let value = fixture.call(&caller, START_APPLICATION, arguments).await;
-    assert_eq!(error_code(&value), "invalid_arguments");
+    assert_eq!(error_code(&value), "invalid-arguments");
     let mut arguments = start_arguments();
     arguments["owner"] = json!(CITIZEN_A);
     let value = fixture.call(&caller, START_APPLICATION, arguments).await;
-    assert_eq!(error_code(&value), "invalid_arguments");
+    assert_eq!(error_code(&value), "invalid-arguments");
     assert!(fixture.registry.seen().is_empty());
     assert!(fixture.registry.applications().is_empty());
 }
@@ -277,7 +277,7 @@ async fn a_patch_path_aimed_at_the_target_never_reaches_the_registry() {
                     "patch": [{"op": "replace", "path": path, "value": ADDRESS_A}]}),
             )
             .await;
-        assert_eq!(error_code(&value), "invalid_arguments", "{path}");
+        assert_eq!(error_code(&value), "invalid-arguments", "{path}");
     }
     assert!(fixture.registry.seen().is_empty());
     assert_eq!(
@@ -303,7 +303,7 @@ async fn a_draft_naming_another_target_is_neither_changed_nor_shown() {
                 "patch": [{"op": "replace", "path": "/newLocality", "value": "Old Town"}]}),
         )
         .await;
-    assert_eq!(error_code(&update), "not_found");
+    assert_eq!(error_code(&update), "not-found");
     for tool in [GET_APPLICATION_STATUS, PREPARE_REVIEW] {
         let value = fixture
             .call(
@@ -312,7 +312,7 @@ async fn a_draft_naming_another_target_is_neither_changed_nor_shown() {
                 json!({"applicationId": application.to_string()}),
             )
             .await;
-        assert_eq!(error_code(&value), "not_found", "{tool}");
+        assert_eq!(error_code(&value), "not-found", "{tool}");
         assert!(!value.to_string().contains("5 Quay"));
     }
     assert!(fixture.writes().is_empty());
@@ -372,7 +372,7 @@ async fn a_stale_revision_or_a_closed_application_is_not_written() {
                 "patch": [{"op": "replace", "path": "/newLocality", "value": "Old Town"}]}),
         )
         .await;
-    assert_eq!(error_code(&stale), "stale_application");
+    assert_eq!(error_code(&stale), "stale-application");
     let submitted = fixture.registry.add_application(
         json!({"address": ADDRESS_A, "newAddressLine": "5 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
         json!({"bregState": "submitted", "editable": false, "proposalVersion": 1,
@@ -386,7 +386,7 @@ async fn a_stale_revision_or_a_closed_application_is_not_written() {
                 "patch": [{"op": "replace", "path": "/newLocality", "value": "Old Town"}]}),
         )
         .await;
-    assert_eq!(error_code(&closed), "application_not_editable");
+    assert_eq!(error_code(&closed), "application-not-editable");
     assert!(fixture.writes().is_empty());
 }
 
@@ -400,7 +400,7 @@ async fn registry_problems_map_to_stable_codes_with_a_trace() {
     let conflict = fixture
         .call(&caller, START_APPLICATION, start_arguments())
         .await;
-    assert_eq!(error_code(&conflict), "idempotency_conflict");
+    assert_eq!(error_code(&conflict), "idempotency-conflict");
     assert!(conflict["error"]["traceId"].is_string());
     let draft = fixture.registry.add_application(
         json!({"address": ADDRESS_A, "newAddressLine": "5 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
@@ -417,7 +417,7 @@ async fn registry_problems_map_to_stable_codes_with_a_trace() {
                 "patch": [{"op": "replace", "path": "/newLocality", "value": "Old Town"}]}),
         )
         .await;
-    assert_eq!(error_code(&stale), "stale_application");
+    assert_eq!(error_code(&stale), "stale-application");
 }
 
 #[tokio::test]
@@ -515,7 +515,7 @@ async fn a_start_past_too_many_closed_applications_is_refused() {
     let refused = fixture
         .call(&caller, START_APPLICATION, start_arguments())
         .await;
-    assert_eq!(error_code(&refused), "not_permitted");
+    assert_eq!(error_code(&refused), "not-permitted");
     assert_eq!(
         fixture.registry.applications().len(),
         usize::try_from(MAX_CLOSED_REPEATS + 1).expect("bound fits")
@@ -607,7 +607,7 @@ async fn every_call_is_audited_without_values_or_credentials() {
             (START_APPLICATION, "attempt", None),
             (START_APPLICATION, "outcome", Some("ok")),
             (START_APPLICATION, "attempt", None),
-            (START_APPLICATION, "outcome", Some("invalid_arguments")),
+            (START_APPLICATION, "outcome", Some("invalid-arguments")),
         ]
     );
     assert_eq!(records[0]["principalPseudonym"], caller.citizen_pseudonym());

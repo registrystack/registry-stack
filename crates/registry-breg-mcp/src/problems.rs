@@ -35,17 +35,17 @@ pub(crate) enum ToolErrorCode {
 impl ToolErrorCode {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
-            Self::InvalidArguments => "invalid_arguments",
-            Self::RecordNotResolved => "record_not_resolved",
-            Self::NotFound => "not_found",
-            Self::ApplicationNotEditable => "application_not_editable",
-            Self::StaleApplication => "stale_application",
-            Self::IdempotencyConflict => "idempotency_conflict",
-            Self::NotPermitted => "not_permitted",
-            Self::AuthorizationFailed => "authorization_failed",
-            Self::RegistryUnavailable => "registry_unavailable",
-            Self::ServiceUnavailable => "service_unavailable",
-            Self::UnexpectedResponse => "unexpected_response",
+            Self::InvalidArguments => "invalid-arguments",
+            Self::RecordNotResolved => "record-not-resolved",
+            Self::NotFound => "not-found",
+            Self::ApplicationNotEditable => "application-not-editable",
+            Self::StaleApplication => "stale-application",
+            Self::IdempotencyConflict => "idempotency-conflict",
+            Self::NotPermitted => "not-permitted",
+            Self::AuthorizationFailed => "authorization-failed",
+            Self::RegistryUnavailable => "registry-unavailable",
+            Self::ServiceUnavailable => "service-unavailable",
+            Self::UnexpectedResponse => "unexpected-response",
         }
     }
 
@@ -239,34 +239,68 @@ mod tests {
     }
 
     #[test]
+    fn every_tool_code_is_kebab_case() {
+        let codes = [
+            ToolErrorCode::InvalidArguments,
+            ToolErrorCode::RecordNotResolved,
+            ToolErrorCode::NotFound,
+            ToolErrorCode::ApplicationNotEditable,
+            ToolErrorCode::StaleApplication,
+            ToolErrorCode::IdempotencyConflict,
+            ToolErrorCode::NotPermitted,
+            ToolErrorCode::AuthorizationFailed,
+            ToolErrorCode::RegistryUnavailable,
+            ToolErrorCode::ServiceUnavailable,
+            ToolErrorCode::UnexpectedResponse,
+        ]
+        .map(ToolErrorCode::as_str);
+        assert_eq!(
+            codes,
+            [
+                "invalid-arguments",
+                "record-not-resolved",
+                "not-found",
+                "application-not-editable",
+                "stale-application",
+                "idempotency-conflict",
+                "not-permitted",
+                "authorization-failed",
+                "registry-unavailable",
+                "service-unavailable",
+                "unexpected-response",
+            ]
+        );
+    }
+
+    #[test]
     fn every_registry_problem_has_one_stable_tool_code() {
         let expected = [
-            (BRegProblemCode::IdempotencyConflict, "idempotency_conflict"),
-            (BRegProblemCode::PreconditionFailed, "stale_application"),
-            (BRegProblemCode::PreconditionRequired, "stale_application"),
-            (BRegProblemCode::MutationConflict, "stale_application"),
-            (BRegProblemCode::ResourceNotFound, "not_found"),
-            (BRegProblemCode::LookupUnresolved, "not_found"),
+            (BRegProblemCode::IdempotencyConflict, "idempotency-conflict"),
+            (BRegProblemCode::PreconditionFailed, "stale-application"),
+            (BRegProblemCode::PreconditionRequired, "stale-application"),
+            (BRegProblemCode::MutationConflict, "stale-application"),
+            (BRegProblemCode::ResourceNotFound, "not-found"),
+            (BRegProblemCode::LookupUnresolved, "not-found"),
             (
                 BRegProblemCode::AuthenticationRefused,
-                "authorization_failed",
+                "authorization-failed",
             ),
-            (BRegProblemCode::RequestInvalid, "invalid_arguments"),
-            (BRegProblemCode::QueryInvalid, "invalid_arguments"),
-            (BRegProblemCode::QueryCursorInvalid, "invalid_arguments"),
-            (BRegProblemCode::UnsupportedMediaType, "invalid_arguments"),
-            (BRegProblemCode::RuntimeNotReady, "registry_unavailable"),
-            (BRegProblemCode::ServiceUnavailable, "registry_unavailable"),
-            (BRegProblemCode::SourceUnavailable, "registry_unavailable"),
-            (BRegProblemCode::RequestTimeout, "registry_unavailable"),
+            (BRegProblemCode::RequestInvalid, "invalid-arguments"),
+            (BRegProblemCode::QueryInvalid, "invalid-arguments"),
+            (BRegProblemCode::QueryCursorInvalid, "invalid-arguments"),
+            (BRegProblemCode::UnsupportedMediaType, "invalid-arguments"),
+            (BRegProblemCode::RuntimeNotReady, "registry-unavailable"),
+            (BRegProblemCode::ServiceUnavailable, "registry-unavailable"),
+            (BRegProblemCode::SourceUnavailable, "registry-unavailable"),
+            (BRegProblemCode::RequestTimeout, "registry-unavailable"),
             (
                 BRegProblemCode::RuntimeFieldEncryptionUnavailable,
-                "registry_unavailable",
+                "registry-unavailable",
             ),
-            (BRegProblemCode::ActionEvidenceFailed, "not_permitted"),
-            (BRegProblemCode::ActionHandlerFailed, "not_permitted"),
-            (BRegProblemCode::ActionRefused, "not_permitted"),
-            (BRegProblemCode::IngestionRunBlocked, "unexpected_response"),
+            (BRegProblemCode::ActionEvidenceFailed, "not-permitted"),
+            (BRegProblemCode::ActionHandlerFailed, "not-permitted"),
+            (BRegProblemCode::ActionRefused, "not-permitted"),
+            (BRegProblemCode::IngestionRunBlocked, "unexpected-response"),
         ];
         for (code, tool_code) in expected {
             let error = problem(code);
@@ -283,7 +317,7 @@ mod tests {
             error.keys().map(String::as_str).collect::<Vec<_>>(),
             ["code", "message", "traceId"]
         );
-        assert_eq!(error["code"], "stale_application");
+        assert_eq!(error["code"], "stale-application");
     }
 
     #[test]

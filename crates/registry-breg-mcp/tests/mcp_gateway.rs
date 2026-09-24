@@ -157,7 +157,7 @@ async fn the_citizen_is_only_ever_the_token_subject() {
         json!({"sub": CITIZEN_B}),
     ] {
         let result = call(&client, "get_my_details", smuggled).await;
-        assert_eq!(error_code(&result), "invalid_arguments");
+        assert_eq!(error_code(&result), "invalid-arguments");
     }
     // An identity named in the request metadata changes nothing.
     let mut params = CallToolRequestParams::new("get_my_details").with_arguments(Map::new());
@@ -217,7 +217,7 @@ async fn a_smuggled_target_is_never_written() {
         let mut smuggled = start_arguments();
         smuggled[field] = json!(value);
         let result = call(&client, "start_application", smuggled).await;
-        assert_eq!(error_code(&result), "invalid_arguments", "{field}");
+        assert_eq!(error_code(&result), "invalid-arguments", "{field}");
     }
     assert!(harness.registry.applications().is_empty());
 
@@ -235,7 +235,7 @@ async fn a_smuggled_target_is_never_written() {
                 "patch": [{"op": "replace", "path": path, "value": ADDRESS_A}]}),
         )
         .await;
-        assert_eq!(error_code(&result), "invalid_arguments", "{path}");
+        assert_eq!(error_code(&result), "invalid-arguments", "{path}");
     }
 
     let applications = harness.registry.applications();
