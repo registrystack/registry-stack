@@ -75,9 +75,10 @@ relevant product pages on this site rather than duplicating release notes.
     apply_reports_an_empty_successor_plan_as_nothing_to_apply;
     crates/registry-bregctl/tests/cli/reviewed_migrations.rs, apply_reports_an_unchanged_successor_as_nothing_to_apply. */}
 
-- BReg no longer fails an accepted review that the review authority still
-  reports as pending. A `202` from the result resource no longer spends the
-  result-poll attempt budget and clears an earlier `result-lookup-uncertain`,
+- Base Registry Engine (BReg) no longer fails an accepted review that the
+  review authority still reports as pending. A `202` from the result resource
+  no longer spends the result-poll attempt budget and clears an earlier
+  `result-lookup-uncertain`,
   and the submission recovery deadline no longer ends an accepted review, so
   an approval that arrives days later is still reconciled and, in automatic
   mode, applied. Failed lookups and empty `404` answers still exhaust the
