@@ -79,7 +79,7 @@ async fn reject_legacy_review_data(client: &impl GenericClient) -> Result<(), Mu
             .query_one(
                 "SELECT EXISTS (
                      SELECT 1 FROM registry_internal.registry_request_state
-                     WHERE state NOT IN ('draft', 'submitted', 'cancelled', 'applied', 'superseded')
+                     WHERE state NOT IN ('draft', 'submitted', 'cancelled', 'applied')
                  )",
                 &[],
             )
@@ -1532,21 +1532,31 @@ mod tests {
     #[tokio::test]
     async fn install_refuses_a_database_still_carrying_legacy_review_states() {
         load_postgres_env();
-        let database = TestDatabase::create(1).await;
-        let (migration, migration_task) = database.connect_migration().await;
-        migration
-            .batch_execute(
-                "CREATE TABLE registry_internal.registry_request_state (state text);
-                 INSERT INTO registry_internal.registry_request_state (state) VALUES ('approved');",
-            )
-            .await
-            .expect("legacy state fixture installs");
-        assert_eq!(
-            install_mutation_schema(&migration, &database.runtime_role).await,
-            Err(MutationError::LegacyReviewDataPresent)
-        );
-        migration_task.abort();
-        database.cleanup().await;
+        for legacy_state in ["approved", "superseded"] {
+            let database = TestDatabase::create(1).await;
+            let (migration, migration_task) = database.connect_migration().await;
+            migration
+                .execute(
+                    "CREATE TABLE registry_internal.registry_request_state (state text)",
+                    &[],
+                )
+                .await
+                .expect("legacy state table installs");
+            migration
+                .execute(
+                    "INSERT INTO registry_internal.registry_request_state (state) VALUES ($1)",
+                    &[&legacy_state],
+                )
+                .await
+                .expect("legacy state fixture installs");
+            assert_eq!(
+                install_mutation_schema(&migration, &database.runtime_role).await,
+                Err(MutationError::LegacyReviewDataPresent),
+                "{legacy_state}"
+            );
+            migration_task.abort();
+            database.cleanup().await;
+        }
     }
 
     #[tokio::test]
