@@ -365,7 +365,10 @@ pub async fn assemble(
     Ok(Assembled {
         public: router(HttpState {
             authenticator,
-            readiness: Readiness::Store(store.clone()),
+            readiness: Readiness::Store {
+                store: store.clone(),
+                package_digest: loaded.package.digest().to_owned(),
+            },
             metrics: Arc::clone(&metrics),
             limits,
             package: Arc::new(loaded.package),

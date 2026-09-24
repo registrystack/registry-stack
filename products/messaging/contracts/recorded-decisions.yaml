@@ -338,3 +338,35 @@ decisions:
     evidence:
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_paced_provider_starts_one_send_per_interval}
       - {path: crates/registry-messaging/src/limits.rs, name: a_slot_that_opens_after_the_deadline_is_refused_without_waiting}
+  - id: MESSAGING-DEC-23
+    subject: Readiness includes the package ledger
+    decision: >-
+      /ready answers 200 only while the store carries the expected schema
+      and its package ledger names active the package digest the runtime
+      loaded at start. After messagingctl apply --apply records another
+      package, a running runtime answers 503 service.unavailable until it
+      is restarted. /health stays 200 while the process serves.
+    reasoning: >-
+      A package change applies on restart (MESSAGING-DEC-06). A runtime
+      still serving the previous package after the operator recorded a new
+      one is running content the deployment no longer names, and readiness
+      is how an orchestrator learns to stop routing to it and roll it.
+      Liveness stays unaffected, so nothing restarts the process on its
+      own; the operator's restart is the apply.
+    evidence:
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: the_runtime_is_ready_only_while_the_ledger_names_its_package_active}
+  - id: MESSAGING-DEC-24
+    subject: Symbolic links in the package stay refused
+    decision: >-
+      The package loader refuses a symbolic link anywhere under
+      package.root, including the ones a Kubernetes ConfigMap or Secret
+      volume uses to publish its files. Operators copy the package into
+      place, for example from an init container, before the runtime starts.
+    reasoning: >-
+      A link can point outside package.root, and the target can change
+      between the digest and the read without the ledger seeing it.
+      Scheduling and Casework refuse links in their packages the same way,
+      and allowing only a ConfigMap's link shape would be a special case
+      the loader has to get exactly right.
+    evidence:
+      - {path: crates/registry-messaging/src/package.rs, name: a_symbolic_link_anywhere_in_the_package_is_refused}

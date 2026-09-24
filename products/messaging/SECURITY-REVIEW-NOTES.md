@@ -103,7 +103,10 @@ the package read; `messagingctl apply --apply` is the one writer of the
 ledger, under an advisory lock, so a change is recorded before it can serve
 and applies on restart (MESSAGING-DEC-06). The runtime reads the package
 once at startup, so a later edit changes nothing until the next restart,
-which then refuses the unrecorded digest.
+which then refuses the unrecorded digest. `/ready` asks the ledger on every
+call: once an operator applies another package, a running runtime answers
+`503` until it is restarted onto it, so a load balancer stops sending it
+traffic for a package the deployment no longer names (MESSAGING-DEC-23).
 
 `messagingctl apply` does not write the audit journal: the runtime is its
 single writer, and the ledger row with its runtime version and time is the
@@ -113,7 +116,7 @@ Residual risks: the package is read twice at startup (once while the
 configuration is checked, once for serving), and only the second read is
 compared with the ledger, which is the one served. A ConfigMap-style mount
 that publishes files through symbolic links is refused; operators copy the
-package into place instead.
+package into place instead (MESSAGING-DEC-24).
 
 Tests: `config.rs::a_pinned_package_digest_must_equal_the_digest_of_the_package_read`,
 `runtime.rs::the_runtime_serves_only_the_package_the_ledger_names_active`,

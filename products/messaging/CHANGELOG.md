@@ -104,6 +104,8 @@
   --before` runs the same sweep on demand, previewing unless `--apply` is
   given. A deleted record frees its idempotency key. Migration 0005 drops
   the per-payload erase deadline, which counted from acceptance.
+- Answer `/ready` with `503` once the package ledger names a package other
+  than the one the runtime serves, until the runtime is restarted onto it.
 - Add `registry-messaging-client` with health, readiness, and
   `MessagingClient::message`, which reads one message's view under a bearer
   token.

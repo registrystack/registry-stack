@@ -684,3 +684,24 @@ async fn concurrent_submissions_never_take_more_than_the_daily_limit() {
         5
     );
 }
+
+#[tokio::test]
+async fn the_runtime_is_ready_only_while_the_ledger_names_its_package_active() {
+    let harness = Harness::start().await;
+    assert_eq!(harness.call("GET", "/ready", None).await.0, StatusCode::OK);
+
+    // An operator applies another package; this runtime still serves the
+    // one it loaded, so it stops answering ready until it is restarted.
+    let other = format!("sha256:{}", "0".repeat(64));
+    harness
+        .execute(
+            "INSERT INTO messaging_package_ledger (package_digest, runtime_version, activated_at) \
+             VALUES ($1, 'test', now())",
+            &[&other],
+        )
+        .await;
+    let (status, problem) = harness.call("GET", "/ready", None).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+    assert_eq!(problem["code"], "service.unavailable");
+    assert_eq!(harness.call("GET", "/health", None).await.0, StatusCode::OK);
+}

@@ -131,7 +131,7 @@ never hand-edited.
 | Route | Authentication | Answer |
 |---|---|---|
 | `GET /health` | none | `200` with an empty body while the process serves |
-| `GET /ready` | none | `200` when the database carries every expected migration, `503 service.unavailable` otherwise |
+| `GET /ready` | none | `200` when the database carries every expected migration and its package ledger names the served package active, `503 service.unavailable` otherwise |
 | `POST /v1/messages` | bearer, an access profile listing the sender profile and template, and an `Idempotency-Key` header | `202` with the message receipt; the same key and request answer the stored receipt again; `429 rate-limit.exceeded` past the caller's rate and `429 quota.exceeded` past the profile's daily limit, both with `Retry-After` |
 | `GET /v1/messages/{message_id}` | bearer, the submitting principal (the same issuer and subject) or an operator | `200` with the status derived from the dispatch state and the delivery report, both of those, the masked recipient, and the attempts; `404 message.not-visible` for any other message |
 | `POST /v1/messages/{message_id}/cancel` | bearer, the submitting principal (the same issuer and subject) or an operator | `200` with the cancelled status; `409 message.dispatch-started` once dispatch started, `409 message.terminal` once it is final |

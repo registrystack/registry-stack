@@ -74,8 +74,14 @@ tokio::task_local! {
 /// What `/ready` asks before it answers.
 #[derive(Clone, Debug)]
 pub enum Readiness {
-    /// The store answers and carries the expected schema.
-    Store(PostgresStore),
+    /// The store answers, carries the expected schema, and its package
+    /// ledger still names active the package this runtime serves. Once an
+    /// operator applies another package, the runtime answers not ready
+    /// until it is restarted onto it.
+    Store {
+        store: PostgresStore,
+        package_digest: String,
+    },
     /// A fixed answer, for tests of the HTTP surface without a database.
     #[cfg(test)]
     Fixed(bool),
@@ -84,13 +90,29 @@ pub enum Readiness {
 impl Readiness {
     async fn is_ready(&self) -> bool {
         match self {
-            Self::Store(store) => match store.ready().await {
-                Ok(()) => true,
-                Err(error) => {
-                    tracing::warn!(error = %error, "the Messaging store is not ready");
-                    false
+            Self::Store {
+                store,
+                package_digest,
+            } => {
+                let active = match store.ready().await {
+                    Ok(()) => store.active_package_digest().await,
+                    Err(error) => Err(error),
+                };
+                match active {
+                    Ok(Some(active)) if active == *package_digest => true,
+                    Ok(_) => {
+                        tracing::warn!(
+                            "the Messaging package ledger names another package active; \
+                             restart the runtime to serve it"
+                        );
+                        false
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "the Messaging store is not ready");
+                        false
+                    }
                 }
-            },
+            }
             #[cfg(test)]
             Self::Fixed(ready) => *ready,
         }

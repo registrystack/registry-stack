@@ -268,7 +268,10 @@ impl Harness {
         ));
         let app = router(HttpState {
             authenticator,
-            readiness: Readiness::Store(store.clone()),
+            readiness: Readiness::Store {
+                store: store.clone(),
+                package_digest: package.digest().to_owned(),
+            },
             metrics: Arc::clone(&metrics),
             limits: Arc::new(unmetered_limits(&package)),
             package: Arc::clone(&package),
@@ -399,7 +402,10 @@ impl Harness {
                 self.package.access_profiles().clone(),
                 false,
             )),
-            readiness: Readiness::Store(self.store.clone()),
+            readiness: Readiness::Store {
+                store: self.store.clone(),
+                package_digest: self.package.digest().to_owned(),
+            },
             metrics: Arc::new(Metrics::default()),
             limits: Arc::new(unmetered_limits(&self.package)),
             package: Arc::clone(&self.package),
