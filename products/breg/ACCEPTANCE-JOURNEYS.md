@@ -2,7 +2,7 @@
 
 Base Registry Engine proves that the same binary and compiler profile serve five
 configuration projects. Their contract identifiers and delivery state are in
-`contracts/acceptance-scenario-matrix.yaml`. Ten further projects under
+`contracts/acceptance-scenario-matrix.yaml`. Eleven further projects under
 `acceptance/` each prove one governed surface, and are listed at the end of this
 page.
 
@@ -75,6 +75,7 @@ one governed surface, and each is executed by the test or script named beside it
 | `farmer-landholding-evidence` | A governed action resolving a declared Evidence capability under the trial `registry.action-handler/v2` ABI | `action_evidence_compiler.rs` and `action_evidence_handler.rs` in the workspace test run, then `postgres_action_evidence.rs`, `postgres_action_evidence_targets.rs`, and `postgres_action_evidence_retention.rs` against a real `evidence` binary in the postgres lane |
 | `spatial-service-sites` | Bounding-box read permissions over spatial rows | `postgres_fixture_journeys.rs` in the postgres lane, and `quickstart/run.sh --spatial --smoke`, whose contract `test_quickstart.py` holds under `scripts/check-contracts.sh` |
 | `registry-record-conformance` | The HTTP record contract across every configured record profile | `postgres_record_profile_conformance.rs` in the postgres lane |
+| `citizen-address-correction` | A citizen's standing agent reads the citizen's address through a steward-provisioned self-service link and drafts a declarative correction; the citizen's own review page submits it; staff approve through the review authority and apply it | `postgres_citizen_address_correction.rs` in the postgres lane |
 | `household-history` | Historical households loaded and queried across effective periods | `scripts/test-historical-workflow.sh` only, which no continuous integration job selects |
 | `issuer-portability` | An authority cutover from the pinned stock issuer to a second issuer, with the old issuer rejected | the ignored `issuer_portability.rs` test, driven by `scripts/test-issuer-portability.py` only, which no continuous integration job selects |
 

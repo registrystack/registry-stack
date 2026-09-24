@@ -1,0 +1,180 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: citizen-address-correction
+  canonicalBaseIri: "https://citizen-address-correction.example.gov"
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  environment: acceptance
+  instanceId: citizen-address-correction-acceptance
+  sequence: 1
+  sourceRevision: citizen-address-correction-acceptance-0.1.0
+manifestProjection:
+  accessProfile: steward
+  classificationCeiling: restricted
+  catalog:
+    baseUrl: https://citizen-address-correction.example.gov
+    title: Citizen Address Correction Catalog
+    description: Portable metadata for the citizen address correction registry.
+    publisher:
+      id: citizen-address-correction-authority
+      name: Civil Address Authority
+      iri: https://citizen-address-correction.example.gov/authority
+  datasets:
+    - id: citizen-address-correction
+      title: Citizen Address Registry
+      description: Persons, their registered addresses, self-service links, and address correction requests.
+      owner: Civil Address Authority
+      status: active
+  dataServices:
+    - id: citizen-address-correction-data-service
+      title: Citizen Address Correction Catalog
+      endpointUrl: https://citizen-address-correction.example.gov
+      servesDatasets: [citizen-address-correction]
+  publicService:
+    id: citizen-address-correction-service
+    title: Citizen Address Correction Catalog
+  distributions: []
+entities:
+  - id: person
+    primaryDataset: citizen-address-correction
+    route: persons
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - {id: person-code, type: string, required: true, maxLength: 64, classification: restricted}
+      - {id: family-name, type: string, required: true, maxLength: 200, classification: restricted}
+      - {id: given-name, type: string, required: true, maxLength: 200, classification: restricted}
+    constraints:
+      - {kind: unique, fields: [person-code]}
+  # The registered address is its own record so a citizen can read it through
+  # the self-service link, whose membership key is a reference to the person.
+  - id: person-address
+    primaryDataset: citizen-address-correction
+    route: person-addresses
+    mutationMode: mutable
+    classification: restricted
+    changeControl:
+      requiredFor: [patch]
+    fields:
+      - {id: subject, type: reference, target: person, required: true, classification: restricted}
+      - {id: address-line, type: string, required: true, maxLength: 200, classification: restricted}
+      - {id: locality, type: string, required: true, maxLength: 120, classification: restricted}
+      - {id: postal-code, type: string, required: true, maxLength: 16, classification: restricted}
+    constraints:
+      - {kind: unique, fields: [subject]}
+  # A steward-provisioned fact binding a verified principal to one person.
+  - id: self-service-link
+    primaryDataset: citizen-address-correction
+    route: self-service-links
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - {id: subject, type: reference, target: person, required: true, classification: restricted}
+      - {id: principal, type: string, required: true, maxLength: 128, classification: restricted}
+      - {id: active, type: boolean, required: true, classification: internal}
+    constraints:
+      - {kind: unique, fields: [principal]}
+    indexes:
+      - {id: self-service-link-principal-key, fields: [principal, subject, active]}
+  - id: address-correction-request
+    primaryDataset: citizen-address-correction
+    route: address-correction-requests
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - {id: address, type: reference, target: person-address, required: true, classification: restricted}
+      - {id: new-address-line, type: string, required: true, maxLength: 200, classification: restricted}
+      - {id: new-locality, type: string, required: true, maxLength: 120, classification: restricted}
+      - {id: new-postal-code, type: string, required: true, maxLength: 16, classification: restricted}
+      - {id: owner, type: string, required: true, maxLength: 128, classification: restricted}
+    changeRequest:
+      retention:
+        mode: operator_erase
+      effects:
+        - target: {fromField: address}
+          operation: patch
+          set:
+            address-line: {fromField: new-address-line}
+            locality: {fromField: new-locality}
+            postal-code: {fromField: new-postal-code}
+      review:
+        authority: casework
+        policyId: citizen-address-correction
+      onApproved:
+        mode: manual
+accessProfiles:
+  # The citizen's standing agent: the citizen's own principal, the gateway
+  # client, and the actor the runtime pins to that client. It reads the
+  # citizen's address and authors a draft; it never submits or writes a record.
+  - id: citizen-agent
+    principalClaim: sub
+    actorKind: agent
+    requesterClients: [citizen-gateway]
+    requiredScopes: ['address-correction:self']
+    permissions:
+      - entity: person-address
+        rowBoundaries: []
+        membershipBoundaries:
+          - {field: subject, membershipEntity: self-service-link, membershipKeyField: subject, principalField: principal, activeField: active}
+        operations: [get]
+        readableFields: [address-line, locality, postal-code]
+      - entity: address-correction-request
+        rowBoundaries:
+          - {field: owner, claim: sub, operator: equals}
+        operations: [create, get, patch]
+        readableFields: [address, new-address-line, new-locality, new-postal-code]
+        writableFields: [address, new-address-line, new-locality, new-postal-code, owner]
+        requestVisibility: owner
+  # The citizen's own review page: the citizen confirms and submits the draft.
+  - id: citizen-review
+    principalClaim: sub
+    actorKind: human
+    requesterClients: [citizen-review-page]
+    requiredScopes: ['address-correction:self']
+    permissions:
+      - entity: address-correction-request
+        rowBoundaries:
+          - {field: owner, claim: sub, operator: equals}
+        operations: [get, patch, submit_request, cancel_request]
+        readableFields: [address, new-address-line, new-locality, new-postal-code]
+        writableFields: [new-address-line, new-locality, new-postal-code]
+        requestVisibility: owner
+  - id: reviewer
+    principalClaim: sub
+    actorKind: human
+    requesterClients: [registry-staff-console]
+    requiredScopes: ['address-correction:review']
+    permissions:
+      - entity: address-correction-request
+        rowBoundaries: []
+        operations: [get, list]
+        readableFields: [address, new-address-line, new-locality, new-postal-code]
+  - id: applier
+    principalClaim: sub
+    actorKind: human
+    requesterClients: [registry-staff-console]
+    requiredScopes: ['address-correction:apply']
+    permissions:
+      - entity: address-correction-request
+        rowBoundaries: []
+        operations: [get, apply_request]
+        readableFields: [address, new-address-line, new-locality, new-postal-code]
+        applyTargets:
+          - {entity: person-address, rowBoundaries: []}
+  - id: steward
+    principalClaim: sub
+    actorKind: human
+    requesterClients: [registry-staff-console]
+    requiredScopes: ['registry:steward']
+    permissions:
+      - {entity: person, rowBoundaries: [], operations: [create, get, list], readableFields: [person-code, family-name, given-name], writableFields: [person-code, family-name, given-name]}
+      - entity: person-address
+        rowBoundaries: []
+        operations: [create, get, list]
+        readableFields: [subject, address-line, locality, postal-code]
+        writableFields: [subject, address-line, locality, postal-code]
+        requestPresence:
+          - {requestType: address-correction-request, rowBoundaries: []}
+      - {entity: self-service-link, rowBoundaries: [], operations: [create, get, list, patch], readableFields: [subject, principal, active], writableFields: [subject, principal, active]}

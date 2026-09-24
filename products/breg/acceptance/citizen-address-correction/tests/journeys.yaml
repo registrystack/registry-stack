@@ -1,0 +1,224 @@
+apiVersion: registry.registrystack.org/breg-journeys/v1
+journeys:
+  - id: agent-drafts-and-review-page-submits
+    steps:
+      - id: steward-registers-person
+        entity: person
+        accessProfile: steward
+        claims: &steward_claims
+          principal: synthetic-steward
+          scopes: ['registry:steward']
+          actorKind: human
+          requesterClient: registry-staff-console
+        request:
+          operation: create
+          data: {person-code: P-0001, family-name: Okafor, given-name: Ada}
+        expect:
+          outcome: success
+          status: 201
+          fields: {person-code: P-0001}
+        capture: person
+      - id: steward-registers-address
+        entity: person-address
+        accessProfile: steward
+        claims: *steward_claims
+        request:
+          operation: create
+          data: {subject: {recordRef: person}, address-line: 1 Harbour Road, locality: Port Selene, postal-code: PS-100}
+        expect:
+          outcome: success
+          status: 201
+          fields: {address-line: 1 Harbour Road, locality: Port Selene, postal-code: PS-100}
+        capture: address
+      - id: steward-links-citizen
+        entity: self-service-link
+        accessProfile: steward
+        claims: *steward_claims
+        request:
+          operation: create
+          data: {subject: {recordRef: person}, principal: synthetic-citizen-a, active: true}
+        expect:
+          outcome: success
+          status: 201
+          fields: {principal: synthetic-citizen-a, active: true}
+      - id: agent-reads-own-address
+        entity: person-address
+        accessProfile: citizen-agent
+        claims: &agent_claims
+          principal: synthetic-citizen-a
+          scopes: ['address-correction:self']
+          actorKind: agent
+          requesterClient: citizen-gateway
+          actorSubject: 6f1c2d8e-3b4a-4e59-9c7d-2a8b5e0f1d34
+        request: {operation: get, recordRef: address}
+        expect:
+          outcome: success
+          status: 200
+          fields: {address-line: 1 Harbour Road, locality: Port Selene, postal-code: PS-100}
+      - id: agent-drafts-correction
+        entity: address-correction-request
+        accessProfile: citizen-agent
+        claims: &agent_request_claims
+          principal: synthetic-citizen-a
+          scopes: ['address-correction:self']
+          actorKind: agent
+          requesterClient: citizen-gateway
+          actorSubject: 6f1c2d8e-3b4a-4e59-9c7d-2a8b5e0f1d34
+          directClaims: {sub: synthetic-citizen-a}
+        request:
+          operation: create
+          data: {address: {recordRef: address}, new-address-line: 2 Quarry Lane, new-locality: Port Selene, new-postal-code: PS-100, owner: synthetic-citizen-a}
+        expect:
+          outcome: success
+          status: 201
+          fields: {new-address-line: 2 Quarry Lane}
+        capture: draft
+      - id: agent-edits-draft
+        entity: address-correction-request
+        accessProfile: citizen-agent
+        claims: *agent_request_claims
+        request:
+          operation: patch
+          recordRef: draft
+          etagRef: draft
+          changes:
+            - {field: new-postal-code, value: PS-205}
+        expect:
+          outcome: success
+          status: 200
+          fields: {new-address-line: 2 Quarry Lane, new-postal-code: PS-205}
+        capture: edited-draft
+      - id: review-page-reads-draft
+        entity: address-correction-request
+        accessProfile: citizen-review
+        claims: &review_claims
+          principal: synthetic-citizen-a
+          scopes: ['address-correction:self']
+          actorKind: human
+          requesterClient: citizen-review-page
+          directClaims: {sub: synthetic-citizen-a}
+        request: {operation: get, recordRef: edited-draft}
+        expect:
+          outcome: success
+          status: 200
+          fields: {new-address-line: 2 Quarry Lane, new-postal-code: PS-205}
+        capture: reviewed-draft
+      - id: review-page-submits
+        entity: address-correction-request
+        accessProfile: citizen-review
+        claims: *review_claims
+        request: {operation: submit_request, recordRef: reviewed-draft, etagRef: reviewed-draft}
+        expect: {outcome: success, status: 200}
+      - id: reviewer-sees-submission
+        entity: address-correction-request
+        accessProfile: reviewer
+        claims:
+          principal: synthetic-reviewer
+          scopes: ['address-correction:review']
+          actorKind: human
+          requesterClient: registry-staff-console
+        request: {operation: get, recordRef: draft}
+        expect:
+          outcome: success
+          status: 200
+          fields: {new-address-line: 2 Quarry Lane, new-postal-code: PS-205}
+      - id: address-unchanged-after-submission
+        entity: person-address
+        accessProfile: steward
+        claims: *steward_claims
+        request: {operation: get, recordRef: address}
+        expect:
+          outcome: success
+          status: 200
+          fields: {address-line: 1 Harbour Road, postal-code: PS-100}
+  - id: other-citizen-cannot-reach-the-draft
+    steps:
+      - id: steward-registers-first-person
+        entity: person
+        accessProfile: steward
+        claims: *steward_claims
+        request:
+          operation: create
+          data: {person-code: P-0003, family-name: Mensah, given-name: Kofi}
+        expect:
+          outcome: success
+          status: 201
+          fields: {person-code: P-0003}
+        capture: first-person
+      - id: steward-registers-first-address
+        entity: person-address
+        accessProfile: steward
+        claims: *steward_claims
+        request:
+          operation: create
+          data: {subject: {recordRef: first-person}, address-line: 3 Lighthouse Way, locality: Port Selene, postal-code: PS-300}
+        expect:
+          outcome: success
+          status: 201
+          fields: {address-line: 3 Lighthouse Way}
+        capture: first-address
+      - id: steward-links-first-citizen
+        entity: self-service-link
+        accessProfile: steward
+        claims: *steward_claims
+        request:
+          operation: create
+          data: {subject: {recordRef: first-person}, principal: synthetic-citizen-c, active: true}
+        expect:
+          outcome: success
+          status: 201
+          fields: {principal: synthetic-citizen-c}
+      - id: first-agent-drafts-correction
+        entity: address-correction-request
+        accessProfile: citizen-agent
+        claims:
+          principal: synthetic-citizen-c
+          scopes: ['address-correction:self']
+          actorKind: agent
+          requesterClient: citizen-gateway
+          actorSubject: 6f1c2d8e-3b4a-4e59-9c7d-2a8b5e0f1d34
+          directClaims: {sub: synthetic-citizen-c}
+        request:
+          operation: create
+          data: {address: {recordRef: first-address}, new-address-line: 5 Beacon Street, new-locality: Port Selene, new-postal-code: PS-300, owner: synthetic-citizen-c}
+        expect:
+          outcome: success
+          status: 201
+          fields: {new-address-line: 5 Beacon Street}
+        capture: first-draft
+      - id: other-agent-cannot-read-draft
+        entity: address-correction-request
+        accessProfile: citizen-agent
+        claims: &other_agent_claims
+          principal: synthetic-citizen-d
+          scopes: ['address-correction:self']
+          actorKind: agent
+          requesterClient: citizen-gateway
+          actorSubject: 6f1c2d8e-3b4a-4e59-9c7d-2a8b5e0f1d34
+        request: {operation: get, recordRef: first-draft}
+        expect:
+          outcome: refusal
+          status: 404
+          problemCode: resource.not_found
+      - id: other-agent-cannot-read-address
+        entity: person-address
+        accessProfile: citizen-agent
+        claims: *other_agent_claims
+        request: {operation: get, recordRef: first-address}
+        expect:
+          outcome: refusal
+          status: 404
+          problemCode: resource.not_found
+      - id: other-review-page-cannot-read-draft
+        entity: address-correction-request
+        accessProfile: citizen-review
+        claims:
+          principal: synthetic-citizen-d
+          scopes: ['address-correction:self']
+          actorKind: human
+          requesterClient: citizen-review-page
+        request: {operation: get, recordRef: first-draft}
+        expect:
+          outcome: refusal
+          status: 404
+          problemCode: resource.not_found
