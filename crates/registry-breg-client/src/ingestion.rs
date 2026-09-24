@@ -133,10 +133,14 @@ impl Serialize for BRegIngestionRunStatus {
     }
 }
 
-/// The one reason an open run refuses chunk submissions.
+/// Why an open run refuses chunk submissions.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BRegIngestionBlockedReason {
+    /// The active package no longer matches the run's binding.
     ActivePackageChanged,
+    /// The import authority an `import` run consumes is closed, expired,
+    /// superseded, exhausted, or has no room for the next chunk.
+    ImportAuthorityClosed,
 }
 
 impl BRegIngestionBlockedReason {
@@ -144,12 +148,14 @@ impl BRegIngestionBlockedReason {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::ActivePackageChanged => "activePackageChanged",
+            Self::ImportAuthorityClosed => "importAuthorityClosed",
         }
     }
 
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "activePackageChanged" => Some(Self::ActivePackageChanged),
+            "importAuthorityClosed" => Some(Self::ImportAuthorityClosed),
             _ => None,
         }
     }
@@ -1758,6 +1764,14 @@ mod tests {
         );
         assert_eq!(serde_json::to_value(&run).unwrap(), wire);
 
+        wire["blockedReason"] = json!("importAuthorityClosed");
+        let run = decode_wire(&wire).expect("an authority-blocked run decodes");
+        assert_eq!(
+            run.blocked_reason(),
+            Some(BRegIngestionBlockedReason::ImportAuthorityClosed)
+        );
+        assert_eq!(serde_json::to_value(&run).unwrap(), wire);
+
         let mut wire = run_wire();
         wire["status"] = json!("complete");
         wire["complete"] = json!(true);
@@ -1774,6 +1788,7 @@ mod tests {
             |wire: &mut Value| wire["status"] = json!("archived"),
             |wire: &mut Value| wire["status"] = json!(7),
             |wire: &mut Value| wire["blockedReason"] = json!("active_package_changed"),
+            |wire: &mut Value| wire["blockedReason"] = json!("import_authority_closed"),
             |wire: &mut Value| wire["operation"] = json!("delete"),
             |wire: &mut Value| wire["lastAttempt"]["outcome"] = json!("crashed"),
             |wire: &mut Value| {

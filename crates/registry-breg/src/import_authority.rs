@@ -489,6 +489,98 @@ pub(crate) async fn admit_run(
         .map(|authority| authority.authority_id))
 }
 
+/// Decide whether one chunk of an import run may commit, inside the chunk
+/// transaction and under the run row lock. The authority row is locked
+/// `FOR UPDATE` so a close waits for an in-flight chunk and the next chunk
+/// sees it. A transition already due is collected into `pending` first, so
+/// the caller must commit this transaction and append that record even when
+/// it refuses the chunk. Answers whether
+/// the authority is still open and has room for `chunk_items`.
+///
+/// The runtime role's row security admits only open rows to a locking read,
+/// so a terminal authority reads as absent, which refuses the chunk exactly
+/// as a closed one does.
+pub(crate) async fn admit_chunk(
+    transaction: &Transaction<'_>,
+    pending: &mut Vec<Value>,
+    package_revision: &str,
+    authority_id: Uuid,
+    chunk_items: i64,
+) -> Result<bool, ImportAuthorityError> {
+    let Some(row) = transaction
+        .query_opt(
+            &format!(
+                "SELECT {AUTHORITY_COLUMNS}
+                   FROM registry_internal.registry_import_authorities
+                  WHERE authority_id = $1 AND status = 'open'
+                  FOR UPDATE"
+            ),
+            &[&authority_id],
+        )
+        .await
+        .map_err(|_| ImportAuthorityError::Unavailable)?
+    else {
+        return Ok(false);
+    };
+    let authority = parse_row(&row)?;
+    let now = transaction_now(transaction).await?;
+    if let Some(to) = due_transition(&authority, package_revision, now) {
+        transition(
+            transaction,
+            pending,
+            authority_id,
+            to,
+            package_revision,
+            None,
+        )
+        .await?;
+        return Ok(false);
+    }
+    Ok(chunk_items <= authority.max_items - authority.committed_items)
+}
+
+/// Count one committed chunk against its authority, in the chunk commit
+/// transaction. The authority reaching its volume moves to `exhausted` and
+/// collects that transition record into `pending`. The caller has
+/// already admitted the chunk under the same row lock, so an authority that
+/// no longer counts it is corruption and refuses the commit.
+pub(crate) async fn consume(
+    transaction: &Transaction<'_>,
+    pending: &mut Vec<Value>,
+    package_revision: &str,
+    authority_id: Uuid,
+    chunk_items: i64,
+) -> Result<(), ImportAuthorityError> {
+    let row = transaction
+        .query_opt(
+            &format!(
+                "UPDATE registry_internal.registry_import_authorities
+                    SET committed_items = committed_items + $2,
+                        status = CASE WHEN committed_items + $2 = max_items
+                                      THEN 'exhausted' ELSE 'open' END,
+                        closed_at = CASE WHEN committed_items + $2 = max_items
+                                         THEN transaction_timestamp() END
+                  WHERE authority_id = $1 AND status = 'open'
+                    AND committed_items + $2 <= max_items
+                  RETURNING {AUTHORITY_COLUMNS}"
+            ),
+            &[&authority_id, &chunk_items],
+        )
+        .await
+        .map_err(|_| ImportAuthorityError::Unavailable)?
+        .ok_or(ImportAuthorityError::Unavailable)?;
+    let authority = parse_row(&row)?;
+    if authority.status == ImportAuthorityStatus::Exhausted {
+        pending.push(audit_record(
+            ImportAuthorityStatus::Exhausted,
+            &authority,
+            package_revision,
+            None,
+        ));
+    }
+    Ok(())
+}
+
 fn is_digest(value: &str) -> bool {
     value.len() == 64
         && value
