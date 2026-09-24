@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- BREAKING: read `runtime.yaml` through the shared Registry Stack runtime
+  configuration loader. The file is capped at 1 MiB, and the runtime
+  configuration path and every configured path are refused when they pass
+  through a symbolic link.
+- BREAKING: remove `authentication.oidc.jwksUri`. Declare
+  `authentication.oidc.jwksSource` with `kind: uri` and `uri` instead; the
+  removed key is refused with a diagnostic naming its replacement.
+- BREAKING: `listener.bind` is required; it no longer defaults to
+  `127.0.0.1:8105`.
+- BREAKING: an environment expression such as `${VAR}` in the authored
+  `scheduling.yaml`, or in a records or fixture document the authoring tooling
+  reads, is refused with the path of the field that holds it.
+- Accept `${VAR}`, `${VAR:-default}`, and `${VAR:?message}` in string values of
+  `runtime.yaml`, never in a `*Ref` field or beneath one.
+- Add the optional `package.expectedDigest` pin, compared with the verified
+  package's policy digest at startup.
+
 ## v0.34.0 - 2026-09-25
 
 - Registry Scheduling has no user-visible changes in this release.

@@ -26,7 +26,7 @@ use registry_platform_hooks::delivery::DeliveryOutcome;
 use registry_platform_hooks::{EnvelopeLimits, HookEnvelope, HookHandlerSource};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
 use registry_scheduling::auth::SchedulingAuthenticator;
-use registry_scheduling::config::{DatabaseConfig, OidcConfig, OidcJwksSource};
+use registry_scheduling::config::{DatabaseConfig, JwksSource, OidcConfig};
 use registry_scheduling::config::{HookDestinationConfig, ReminderDestinationConfig};
 use registry_scheduling::hooks::{ActivatedHooks, HookRuntimeIdentity};
 use registry_scheduling::http::{router, HttpState};
@@ -416,8 +416,7 @@ fn authenticator() -> SchedulingAuthenticator {
         assertion_issuers: std::collections::BTreeMap::new(),
         issuer: ISSUER.to_owned(),
         audience: AUDIENCE.to_owned(),
-        jwks_uri: None,
-        jwks_source: OidcJwksSource::Discovery,
+        jwks_source: JwksSource::Discovery,
         scope_claim: "registry_scopes".to_owned(),
         reads_scope: "scheduling-read".to_owned(),
         explain_scope: "scheduling-explain".to_owned(),
@@ -3198,7 +3197,8 @@ fn unreachable_deployment(root: &std::path::Path) -> std::path::PathBuf {
 
 #[tokio::test]
 async fn a_database_that_refuses_at_startup_names_the_step_and_the_cause() {
-    let root = tempfile::tempdir().expect("a temporary deployment root");
+    let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+        .expect("a temporary deployment root");
     let operator = unreachable_deployment(root.path());
     let failure = registry_scheduling::runtime::migrate_from_path(&operator)
         .await

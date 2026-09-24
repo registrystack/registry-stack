@@ -2,8 +2,21 @@
 
 Scheduling reads one versioned operator document selected with
 `scheduling --runtime-config ABSOLUTE_FILE serve` or `migrate`. The selected
-file path and every operated resource path are absolute. Local development
-tooling may resolve paths before it writes the file.
+file path and every operated resource path are absolute, and none may pass
+through a symbolic link. Local development tooling may resolve paths before it
+writes the file. The file is read through the shared Registry Stack runtime
+configuration loader: it must be a YAML mapping of at most 1 MiB, and unknown
+keys are refused with the path of the offending field.
+
+String values in `runtime.yaml` may take a deployment value from the
+environment when the runtime starts: `${VAR}` requires `VAR`, `${VAR:-default}`
+falls back to `default`, and `${VAR:?message}` refuses to start with `message`
+when `VAR` is unset. Substitution never applies to a field whose name ends in
+`Ref` or `Refs`, or to any value beneath one, because a secret reference must
+be written literally and resolved by a declared provider. It never applies to
+the authored `scheduling.yaml` or to the records and fixture documents the
+authoring tooling reads either: an environment expression there is refused
+with the path of the field that holds it.
 
 The closed envelope is:
 
@@ -17,10 +30,14 @@ kind: SchedulingRuntimeConfig
 With `listener.tlsTermination: operator-controlled-upstream`, the directory
 must also contain a matching `scheduling.package.json`. Development loopback
 may select an authored project directory without that manifest.
+`package.expectedDigest` optionally pins the package the runtime must serve:
+the `sha256:` label `schedulingctl package` records as the policy digest. A
+different package, or a pin over a directory without a manifest, is a startup
+refusal.
 
-`listener` is required. `listener.bind` is one numeric socket address,
-including bracketed IPv6 forms, and defaults to `127.0.0.1:8105` when omitted
-from the listener block. `listener.tlsTermination` is required. Use
+`listener` is required. `listener.bind` is required and is one numeric
+socket address, including bracketed IPv6 forms. `listener.tlsTermination` is
+required. Use
 `operator-controlled-upstream` behind an operator-managed TLS edge or
 `development-loopback` for direct local development, which the runtime refuses
 on any non-loopback bind. `listener.networkExposure` defaults to
@@ -53,10 +70,13 @@ because its database URL is absent is not database verification, and the
 escape never turns a deployed runtime into a plaintext client.
 
 `authentication.oidc` requires `issuer` and `audience`. `jwksSource` defaults
-to discovery and can instead select a static `documentRef`, which does no
-rotation of its own: rolling a key means replacing the referenced document and
-restarting Scheduling. `jwksUri` overrides the discovery document's JWKS
-address. `scopeClaim` defaults to `registry_scopes` for compatibility with
+to `kind: discovery`. `kind: uri` with `uri` fetches the key set from a fixed
+HTTPS address instead of the one discovery names; plain `http` is accepted only
+for a loopback host under development loopback. `kind: static` with
+`documentRef` reads a pinned key set, which does no rotation of its own:
+rolling a key means replacing the referenced document and restarting
+Scheduling. The removed `jwksUri` key is refused with a diagnostic naming
+`jwksSource` `kind: uri` as its replacement. `scopeClaim` defaults to `registry_scopes` for compatibility with
 existing deployments; stock ThunderID emits `scope`, so the maintained example
 and `schedulingctl init` set that explicit override. `readsScope` defaults to
 `scheduling-read` and `explainScope` to `scheduling-explain`; the two must

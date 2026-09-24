@@ -460,7 +460,11 @@ mod tests {
     }
 
     fn initialized(template: &str) -> (tempfile::TempDir, PathBuf) {
-        let root = tempfile::tempdir().unwrap();
+        // Canonical, because the runtime configuration loader refuses a path
+        // reached through a symbolic link and the system temporary
+        // directory is one on some platforms.
+        let root =
+            tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
         let project = root.path().join("project");
         project::init(&project, template).unwrap();
         (root, project)
@@ -980,8 +984,33 @@ mod tests {
     }
 
     #[test]
+    fn an_authored_policy_carrying_an_environment_expression_is_refused() {
+        let (_root, project) = initialized("standalone-exact-time");
+        let policy_path = project.join(AUTHORED_POLICY_FILE);
+        let policy = std::fs::read_to_string(&policy_path).unwrap();
+        let (line, _) = policy
+            .lines()
+            .find_map(|line| {
+                line.trim_start()
+                    .strip_prefix("because: ")
+                    .map(|v| (line, v))
+            })
+            .expect("the template states a reason");
+        let indent = &line[..line.len() - line.trim_start().len()];
+        std::fs::write(
+            &policy_path,
+            policy.replacen(line, &format!("{indent}because: ${{REASON}}"), 1),
+        )
+        .unwrap();
+        let (exit, report, _) = run_json(&["check", project.to_str().unwrap()]);
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        let message = report["diagnostics"][0]["message"].as_str().unwrap();
+        assert!(message.contains("runtime.yaml only"), "{message}");
+    }
+
+    #[test]
     fn runtime_configuration_and_store_failures_map_to_their_own_diagnostics() {
-        let config_error = anyhow::Error::new(RuntimeConfigError::RelativeRuntimePath);
+        let config_error = anyhow::Error::new(RuntimeConfigError::InvalidEnvelope);
         let (exit, diagnostic) = classify_failure(&config_error);
         assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
         assert_eq!(

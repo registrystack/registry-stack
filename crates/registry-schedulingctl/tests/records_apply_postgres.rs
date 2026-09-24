@@ -183,7 +183,7 @@ async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
         .await
         .expect("a disposable schema is created");
 
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     let project = root.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
     std::fs::write(project.join("scheduling.yaml"), POLICY).unwrap();
@@ -319,7 +319,7 @@ async fn records_apply_rejects_a_different_deployment_identity_without_writing()
         .await
         .expect("a disposable schema is created");
 
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     let adopted_project = root.path().join("adopted-project");
     let other_project = root.path().join("other-project");
     std::fs::create_dir_all(&adopted_project).unwrap();

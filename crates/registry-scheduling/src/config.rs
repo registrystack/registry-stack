@@ -4,14 +4,21 @@
 //! identity it verifies.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
 use jsonwebtoken::Algorithm;
+pub(crate) use registry_platform_config::describe_secret_failure;
 use registry_platform_config::{
-    SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,
+    redact_refused_values, reject_environment_expressions_in_authored_yaml, sha256_uri,
+    ConfigBlockError, PackageDigestMismatch, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
+    SecretResolver,
+};
+pub use registry_platform_config::{
+    DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig, JwksSource,
+    ListenerNetworkExposure, PackageConfig, PrivateListenerConfig as ListenerConfig,
+    SecretProvidersConfig, TlsTermination,
 };
 use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
@@ -22,48 +29,7 @@ use registry_scheduling_core::{
     SCHEDULING_RUNTIME_API_VERSION, SCHEDULING_RUNTIME_KIND,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use thiserror::Error;
-
-/// Explain one refused secret reference without disclosing what it protects.
-///
-/// A startup refusal reaches an operator as a single line, and the resolver
-/// reports only which rule broke. A valid reference is safe and useful to name,
-/// but invalid operator-authored text might itself be a literal credential, so
-/// only its field is named. The resolved bytes and opened path never appear.
-pub(crate) fn describe_secret_failure(
-    field: &'static str,
-    reference: &str,
-    error: &SecretError,
-) -> String {
-    let reason = match error {
-        SecretError::InvalidReference => {
-            "it is not an exact secret:env/NAME or secret:file/name reference".to_owned()
-        }
-        SecretError::ProviderDisabled => "its provider is not enabled for this runtime".to_owned(),
-        SecretError::InvalidProviderConfiguration => {
-            "the secret provider configuration is invalid".to_owned()
-        }
-        SecretError::Unavailable => {
-            "no readable secret of that name exists under the configured provider".to_owned()
-        }
-        SecretError::UnsafeFile => concat!(
-            "the secret file must be a regular file owned by the runtime user, ",
-            "with mode 0400 or 0600, and exactly one hard link"
-        )
-        .to_owned(),
-        SecretError::Read => "the secret could not be read".to_owned(),
-        SecretError::InvalidValue => format!(
-            "the secret value must be non-empty text of at most {MAX_SECRET_BYTES} bytes \
-             without NUL bytes"
-        ),
-    };
-    if error == &SecretError::InvalidReference {
-        format!("the secret reference configured at {field} could not be resolved: {reason}")
-    } else {
-        format!("the secret reference {reference} could not be resolved: {reason}")
-    }
-}
 
 const MAXIMUM_POLICY_FILE_BYTES: usize = 1024 * 1024;
 const MAXIMUM_PACKAGE_MANIFEST_BYTES: usize = 1024 * 1024;
@@ -85,6 +51,19 @@ pub const SCHEDULING_PACKAGE_MANIFEST_KIND: &str = "SchedulingPolicyPackageManif
 /// value, and the deployed value is what the audit journal records.
 pub const DEFAULT_ATTEMPT_RECEIPT_DAYS: u16 = 7;
 
+/// The envelope every Scheduling runtime configuration carries.
+pub const SCHEDULING_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
+    api_version: SCHEDULING_RUNTIME_API_VERSION,
+    kind: SCHEDULING_RUNTIME_KIND,
+};
+
+/// Keys an earlier Scheduling runtime configuration accepted, each refused
+/// with the key that replaced it.
+pub const SCHEDULING_REMOVED_KEYS: &[RemovedKey] = &[RemovedKey {
+    path: "authentication.oidc.jwksUri",
+    replacement: "declare authentication.oidc.jwksSource with kind: uri and uri: <https URL>",
+}];
+
 /// The operator runtime configuration document.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
@@ -92,7 +71,7 @@ pub const DEFAULT_ATTEMPT_RECEIPT_DAYS: u16 = 7;
 pub struct RuntimeConfig {
     pub api_version: String,
     pub kind: String,
-    pub package: RuntimePackageConfig,
+    pub package: PackageConfig,
     pub listener: ListenerConfig,
     pub secret_providers: SecretProvidersConfig,
     pub database: DatabaseConfig,
@@ -103,112 +82,11 @@ pub struct RuntimeConfig {
     pub retention: RetentionConfig,
 }
 
-/// The root of an authored scheduling project, holding `scheduling.yaml` and
-/// its optional package manifest.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RuntimePackageConfig {
-    pub root: PathBuf,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ListenerConfig {
-    #[serde(default = "default_listener_bind")]
-    #[cfg_attr(feature = "schema", schemars(with = "String"))]
-    pub bind: SocketAddr,
-    pub tls_termination: TlsTermination,
-    #[serde(default)]
-    pub network_exposure: ListenerNetworkExposure,
-}
-
-fn default_listener_bind() -> SocketAddr {
-    "127.0.0.1:8105"
-        .parse()
-        .expect("valid Scheduling listener default")
-}
-
-/// Declares the trusted transport boundary for the runtime's plaintext HTTP
-/// listener. Production listeners require operator-controlled upstream TLS
-/// termination; direct plaintext is limited to the explicit loopback-only
-/// development mode.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-pub enum TlsTermination {
-    OperatorControlledUpstream,
-    DevelopmentLoopback,
-}
-
-/// The operator-declared private network placement of the HTTP listener.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-pub enum ListenerNetworkExposure {
-    #[default]
-    PrivateAddress,
-    ContainerPrivate,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SecretProvidersConfig {
-    #[serde(default)]
-    pub file: Option<FileSecretProviderConfig>,
-    #[serde(default)]
-    pub environment: Option<EnvironmentSecretProviderConfig>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EnvironmentSecretProviderConfig {}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FileSecretProviderConfig {
-    pub root: PathBuf,
-}
-
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuthenticationConfig {
     pub oidc: OidcConfig,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DatabaseConfig {
-    pub runtime_url_ref: String,
-    pub migration_url_ref: String,
-    #[serde(default)]
-    pub trusted_root_certificate_ref: Option<String>,
-    #[serde(default)]
-    pub test_only_plaintext: bool,
-}
-
-impl std::fmt::Debug for DatabaseConfig {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("DatabaseConfig")
-            .field("runtime_url_ref", &"<redacted>")
-            .field("migration_url_ref", &"<redacted>")
-            .field(
-                "trusted_root_certificate_ref",
-                &self
-                    .trusted_root_certificate_ref
-                    .as_ref()
-                    .map(|_| "<redacted>"),
-            )
-            .field("test_only_plaintext", &self.test_only_plaintext)
-            .finish()
-    }
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -230,9 +108,7 @@ pub struct OidcConfig {
     pub issuer: String,
     pub audience: String,
     #[serde(default)]
-    pub jwks_uri: Option<String>,
-    #[serde(default)]
-    pub jwks_source: OidcJwksSource,
+    pub jwks_source: JwksSource,
     #[serde(default = "default_scope_claim")]
     pub scope_claim: String,
     /// The scope every listing and availability read requires.
@@ -264,18 +140,6 @@ fn default_reads_scope() -> String {
 }
 fn default_explain_scope() -> String {
     "scheduling-explain".to_owned()
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
-pub enum OidcJwksSource {
-    #[default]
-    Discovery,
-    Static {
-        #[serde(rename = "documentRef")]
-        document_ref: String,
-    },
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -393,7 +257,7 @@ impl PolicyPackageManifest {
         }
         let files = vec![PolicyPackageFile {
             path: AUTHORED_POLICY_FILE.to_owned(),
-            sha256: sha256_bytes(bytes),
+            sha256: sha256_uri(bytes),
             bytes: u64::try_from(bytes.len()).map_err(|_| PolicyPackageError::Invalid)?,
         }];
         Ok(Self {
@@ -453,35 +317,23 @@ fn package_digest(files: &[PolicyPackageFile]) -> Result<String, PolicyPackageEr
     });
     let canonical = registry_platform_canonical_json::canonicalize_json(&identity)
         .map_err(|_| PolicyPackageError::Invalid)?;
-    Ok(sha256_bytes(&canonical))
-}
-
-fn sha256_bytes(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    format!(
-        "sha256:{}",
-        digest
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    )
+    Ok(sha256_uri(&canonical))
 }
 
 impl RuntimeConfig {
     /// Load and validate the operator document, reading the authored policy
     /// beside it. The bytes never re-enter a parser after startup.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, RuntimeConfigError> {
-        if !path.as_ref().is_absolute() {
-            return Err(RuntimeConfigError::RelativeRuntimePath);
-        }
-        let bytes = std::fs::read(path.as_ref()).map_err(RuntimeConfigError::Read)?;
-        let deserializer = serde_norway::Deserializer::from_slice(&bytes);
-        let config: Self = serde_path_to_error::deserialize(deserializer).map_err(|error| {
-            let (path, cause) = refused_yaml(error);
-            RuntimeConfigError::Parse { path, cause }
-        })?;
-        config.check()?;
-        Ok(config)
+        let loaded = Self::loader().load::<Self>(path.as_ref())?;
+        loaded.config.check()?;
+        Ok(loaded.config)
+    }
+
+    /// The shared runtime configuration loader under Scheduling's envelope
+    /// and removed keys.
+    #[must_use]
+    pub const fn loader() -> RuntimeConfigLoader {
+        RuntimeConfigLoader::new(SCHEDULING_RUNTIME_ENVELOPE).removed_keys(SCHEDULING_REMOVED_KEYS)
     }
 
     #[must_use]
@@ -493,6 +345,11 @@ impl RuntimeConfig {
     pub fn load_policy(&self) -> Result<SchedulingPolicy, RuntimeConfigError> {
         let policy_text =
             std::fs::read_to_string(self.policy_path()).map_err(RuntimeConfigError::PolicyRead)?;
+        reject_environment_expressions_in_authored_yaml(&policy_text).map_err(|error| {
+            RuntimeConfigError::PolicyEnvironmentExpression {
+                field: error.field().to_owned(),
+            }
+        })?;
         let policy = parse_policy_yaml(&policy_text).map_err(|error| {
             let (path, cause) = refused_yaml(error);
             RuntimeConfigError::PolicyParse { path, cause }
@@ -517,38 +374,23 @@ impl RuntimeConfig {
     }
 
     pub fn check(&self) -> Result<(), RuntimeConfigError> {
-        if self.api_version != SCHEDULING_RUNTIME_API_VERSION {
-            return Err(RuntimeConfigError::InvalidApiVersion);
-        }
-        if self.kind != SCHEDULING_RUNTIME_KIND {
-            return Err(RuntimeConfigError::InvalidKind);
-        }
-        if !self.package.root.is_absolute() {
-            return Err(RuntimeConfigError::RelativeOperatedPath("package.root"));
-        }
-        if self
-            .secret_providers
-            .file
-            .as_ref()
-            .is_some_and(|file| !file.root.is_absolute())
+        if self.api_version != SCHEDULING_RUNTIME_API_VERSION
+            || self.kind != SCHEDULING_RUNTIME_KIND
         {
-            return Err(RuntimeConfigError::RelativeOperatedPath(
-                "secretProviders.file.root",
-            ));
+            return Err(RuntimeConfigError::InvalidEnvelope);
         }
+        self.package.check()?;
+        self.secret_providers.check()?;
         if !self.audit.path.is_absolute() {
             return Err(RuntimeConfigError::RelativeOperatedPath("audit.path"));
         }
-        if self.secret_providers.file.is_none() && self.secret_providers.environment.is_none() {
-            return Err(RuntimeConfigError::InvalidSecretProviders);
-        }
-        if !valid_listener(
-            self.listener.bind.ip(),
-            self.listener.network_exposure,
-            self.listener.tls_termination,
-        ) {
+        if !self.listener.is_valid() {
             return Err(RuntimeConfigError::InvalidListener);
         }
+        self.authentication.oidc.jwks_source.check(
+            "authentication.oidc.jwksSource",
+            self.listener.tls_termination == TlsTermination::DevelopmentLoopback,
+        )?;
         if self.authentication.oidc.issuer.is_empty()
             || self.authentication.oidc.audience.is_empty()
             || self.authentication.oidc.scope_claim.is_empty()
@@ -615,11 +457,13 @@ impl RuntimeConfig {
         if !declared_hook_destinations.is_subset(&configured_hook_destinations) {
             return Err(RuntimeConfigError::HookDestinationInventoryMismatch);
         }
+        let package_digest = self.policy_package_digest()?;
         if self.listener.tls_termination == TlsTermination::OperatorControlledUpstream
-            && self.policy_package_digest()?.is_none()
+            && package_digest.is_none()
         {
             return Err(RuntimeConfigError::ProductionPolicyPackageRequired);
         }
+        self.package.verify_digest(package_digest.as_deref())?;
         #[cfg(not(feature = "postgres-test"))]
         if self.database.test_only_plaintext {
             return Err(RuntimeConfigError::PlaintextDatabase);
@@ -658,21 +502,14 @@ impl RuntimeConfig {
     }
 
     fn validate_secret_references(&self) -> Result<(), RuntimeConfigError> {
-        let mut references = vec![
-            (
-                "database.runtimeUrlRef".to_owned(),
-                &self.database.runtime_url_ref,
-            ),
-            (
-                "database.migrationUrlRef".to_owned(),
-                &self.database.migration_url_ref,
-            ),
-            ("audit.hashKeyRef".to_owned(), &self.audit.hash_key_ref),
-        ];
-        if let Some(reference) = &self.database.trusted_root_certificate_ref {
-            references.push(("database.trustedRootCertificateRef".to_owned(), reference));
-        }
-        if let OidcJwksSource::Static { document_ref } = &self.authentication.oidc.jwks_source {
+        let mut references: Vec<(String, &str)> = self
+            .database
+            .references()
+            .into_iter()
+            .map(|(field, reference)| (field.to_owned(), reference))
+            .collect();
+        references.push(("audit.hashKeyRef".to_owned(), &self.audit.hash_key_ref));
+        if let Some(document_ref) = self.authentication.oidc.jwks_source.document_ref() {
             references.push((
                 "authentication.oidc.jwksSource.documentRef".to_owned(),
                 document_ref,
@@ -692,16 +529,8 @@ impl RuntimeConfig {
                 &destination.hmac_sha256_key_ref,
             ));
         }
-        for (path, raw) in references {
-            let reference = SecretReference::parse(raw.clone())
-                .map_err(|_| RuntimeConfigError::InvalidSecretReference { path: path.clone() })?;
-            let enabled = match reference.provider() {
-                SecretProvider::File => self.secret_providers.file.is_some(),
-                SecretProvider::Environment => self.secret_providers.environment.is_some(),
-            };
-            if !enabled {
-                return Err(RuntimeConfigError::SecretProviderRequired { path });
-            }
+        for (field, raw) in references {
+            self.secret_providers.check_reference(&field, raw)?;
         }
         Ok(())
     }
@@ -712,18 +541,24 @@ impl RuntimeConfig {
     ) -> Result<(TokenVerifierConfig, std::sync::Arc<JwksFetcher>), RuntimeConfigError> {
         let discovery_config = OidcDiscoveryConfig {
             issuer: self.authentication.oidc.issuer.clone(),
-            jwks_uri_override: self.authentication.oidc.jwks_uri.clone(),
+            jwks_uri_override: self
+                .authentication
+                .oidc
+                .jwks_source
+                .uri()
+                .map(str::to_owned),
             discovery_timeout: Duration::from_secs(5),
             max_doc_bytes: 1024 * 1024,
         };
         let fetcher = match &self.authentication.oidc.jwks_source {
-            OidcJwksSource::Discovery => {
+            JwksSource::Uri { uri } => JwksFetcher::new(uri.clone(), JwksFetcherConfig::defaults()),
+            JwksSource::Discovery => {
                 let discovery = fetch_discovery(&discovery_config)
                     .await
                     .map_err(|_| RuntimeConfigError::Oidc)?;
                 JwksFetcher::new(discovery.jwks_uri, JwksFetcherConfig::defaults())
             }
-            OidcJwksSource::Static { document_ref } => {
+            JwksSource::Static { document_ref } => {
                 let document = secrets.resolve(document_ref).map_err(|error| {
                     RuntimeConfigError::OidcJwksSecret(describe_secret_failure(
                         "authentication.oidc.jwksSource.documentRef",
@@ -806,37 +641,6 @@ fn valid_logical_destination_id(value: &str) -> bool {
         })
 }
 
-fn valid_listener(
-    address: IpAddr,
-    exposure: ListenerNetworkExposure,
-    tls_termination: TlsTermination,
-) -> bool {
-    if address.is_multicast() {
-        return false;
-    }
-    if tls_termination == TlsTermination::DevelopmentLoopback {
-        return exposure == ListenerNetworkExposure::PrivateAddress && address.is_loopback();
-    }
-    match (address, exposure) {
-        (IpAddr::V4(address), ListenerNetworkExposure::PrivateAddress) => {
-            address.is_loopback() || address.is_private()
-        }
-        (IpAddr::V6(address), ListenerNetworkExposure::PrivateAddress) => {
-            address.is_loopback() || is_unique_local(address)
-        }
-        (IpAddr::V4(address), ListenerNetworkExposure::ContainerPrivate) => {
-            address.is_unspecified() || address.is_loopback() || address.is_private()
-        }
-        (IpAddr::V6(address), ListenerNetworkExposure::ContainerPrivate) => {
-            address.is_unspecified() || address.is_loopback() || is_unique_local(address)
-        }
-    }
-}
-
-fn is_unique_local(address: Ipv6Addr) -> bool {
-    address.octets()[0] & 0xfe == 0xfc
-}
-
 fn parse_static_jwks(bytes: &[u8]) -> Result<JwkSet, RuntimeConfigError> {
     let jwks: JwkSet = serde_json::from_slice(bytes).map_err(|_| RuntimeConfigError::Oidc)?;
     let mut kids = BTreeSet::new();
@@ -870,75 +674,6 @@ fn refused_yaml(error: serde_path_to_error::Error<serde_norway::Error>) -> (Stri
     (path, redact_refused_values(&error.into_inner().to_string()))
 }
 
-/// Keep the parts of a refusal an operator acts on, the member, the reason
-/// and the location, while the refused value stays out of the message.
-///
-/// serde reports the offending value inside an `invalid type:` or an
-/// `invalid value:` clause. Only the shape word that opens such a clause
-/// survives, so the message still says a string arrived where a number was
-/// required without repeating the string. A runtime configuration names
-/// secret references, database URLs and destinations, and a startup refusal
-/// is written to the operator's log.
-fn redact_refused_values(message: &str) -> String {
-    const CLAUSES: [&str; 2] = ["invalid type: ", "invalid value: "];
-    let mut redacted = String::with_capacity(message.len());
-    let mut rest = message;
-    loop {
-        let Some((start, len)) = CLAUSES
-            .iter()
-            .filter_map(|clause| rest.find(clause).map(|start| (start, clause.len())))
-            .min_by_key(|(start, _)| *start)
-        else {
-            redacted.push_str(rest);
-            return redacted;
-        };
-        let opened = start + len;
-        redacted.push_str(&rest[..opened]);
-        let (shape, tail) = split_refused_value(&rest[opened..]);
-        redacted.push_str(shape);
-        rest = tail;
-    }
-}
-
-/// Split the text after a clause marker into the shape word serde names and
-/// the remainder that follows the refused value.
-///
-/// serde renders the value with `Debug`, so it opens with a quote or a
-/// backtick and may hold the comma that would otherwise end the clause.
-fn split_refused_value(clause: &str) -> (&str, &str) {
-    let bytes = clause.as_bytes();
-    let mut index = 0;
-    let mut shape_end = None;
-    while index < bytes.len() {
-        match bytes[index] {
-            delimiter @ (b'"' | b'`') => {
-                shape_end.get_or_insert(index);
-                index = skip_delimited(bytes, index, delimiter);
-            }
-            b',' => break,
-            _ => index += 1,
-        }
-    }
-    let shape_end = shape_end.unwrap_or(index);
-    (clause[..shape_end].trim_end(), &clause[index..])
-}
-
-/// Return the offset just past the delimited run that opens at `open`.
-///
-/// A delimiter inside a `Debug` rendering arrives escaped, so it does not end
-/// the run.
-fn skip_delimited(bytes: &[u8], open: usize, delimiter: u8) -> usize {
-    let mut index = open + 1;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'\\' => index += 2,
-            byte if byte == delimiter => return index + 1,
-            _ => index += 1,
-        }
-    }
-    bytes.len()
-}
-
 #[derive(Debug, Error)]
 pub enum PolicyPackageError {
     #[error("the Scheduling policy package could not be read")]
@@ -949,28 +684,24 @@ pub enum PolicyPackageError {
 
 #[derive(Debug, Error)]
 pub enum RuntimeConfigError {
-    #[error("the Scheduling runtime configuration could not be read")]
-    Read(#[source] std::io::Error),
-    #[error("the Scheduling runtime configuration is not valid YAML at {path}: {cause}")]
-    Parse { path: String, cause: String },
+    #[error(transparent)]
+    Load(#[from] registry_platform_config::RuntimeConfigError),
+    #[error(transparent)]
+    Block(#[from] ConfigBlockError),
+    #[error(transparent)]
+    PackageDigest(#[from] PackageDigestMismatch),
     #[error(
-        "unsupported Scheduling runtime apiVersion; expected registry.registrystack.org/scheduling-runtime/v1alpha1"
+        "apiVersion and kind must be exactly registry.registrystack.org/scheduling-runtime/v1alpha1 and SchedulingRuntimeConfig"
     )]
-    InvalidApiVersion,
-    #[error("unsupported Scheduling runtime kind; expected SchedulingRuntimeConfig")]
-    InvalidKind,
+    InvalidEnvelope,
     #[error("the operated runtime path {0} must be absolute")]
     RelativeOperatedPath(&'static str),
-    #[error("the selected Scheduling runtime configuration path must be absolute")]
-    RelativeRuntimePath,
-    #[error("secretProviders must explicitly enable file, environment, or both")]
-    InvalidSecretProviders,
-    #[error("{path} is not a valid secret reference")]
-    InvalidSecretReference { path: String },
-    #[error("{path} uses a secret provider that is not explicitly enabled")]
-    SecretProviderRequired { path: String },
     #[error("the authored scheduling policy could not be read")]
     PolicyRead(#[source] std::io::Error),
+    #[error(
+        "{field} in the authored scheduling policy holds an environment expression; ${{...}} substitution applies to runtime.yaml only, so write the value in scheduling.yaml directly"
+    )]
+    PolicyEnvironmentExpression { field: String },
     #[error("the authored scheduling policy is not valid YAML at {path}: {cause}")]
     PolicyParse { path: String, cause: String },
     #[error("the authored scheduling policy does not pass its checks")]
@@ -1009,13 +740,11 @@ impl RuntimeConfigError {
     #[must_use]
     pub fn path(&self) -> &str {
         match self {
-            Self::InvalidApiVersion => "apiVersion",
-            Self::InvalidKind => "kind",
+            Self::Load(error) => error.field(),
+            Self::Block(error) => error.field(),
+            Self::PackageDigest(_) => "package.expectedDigest",
+            Self::InvalidEnvelope => "apiVersion",
             Self::RelativeOperatedPath(path) => path,
-            Self::RelativeRuntimePath | Self::Read(_) => "/",
-            Self::Parse { path, .. } => path,
-            Self::InvalidSecretProviders => "secretProviders",
-            Self::InvalidSecretReference { path } | Self::SecretProviderRequired { path } => path,
             Self::InvalidOidc | Self::Oidc => "authentication.oidc",
             Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",
             Self::InvalidListener => "listener",
@@ -1026,7 +755,9 @@ impl RuntimeConfigError {
             Self::InvalidHookDestination | Self::HookDestinationInventoryMismatch => {
                 "destinations.hooks"
             }
-            Self::PolicyRead(_) | Self::PolicyParse { .. } => "package.root/scheduling.yaml",
+            Self::PolicyRead(_)
+            | Self::PolicyParse { .. }
+            | Self::PolicyEnvironmentExpression { .. } => "package.root/scheduling.yaml",
             Self::PolicyFindings | Self::PolicyPackage(_) => "package.root",
             Self::ProductionPolicyPackageRequired => "package.root",
         }
@@ -1076,6 +807,13 @@ offerings:
 holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
 "#;
 
+    /// A temporary directory named by its canonical path: the loader refuses
+    /// a runtime configuration reached through a symbolic link, and the
+    /// system temporary directory is one on some platforms.
+    fn canonical_tempdir() -> tempfile::TempDir {
+        tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap()
+    }
+
     fn write_policy(root: &Path) {
         std::fs::create_dir_all(root).unwrap();
         std::fs::write(root.join(AUTHORED_POLICY_FILE), POLICY).unwrap();
@@ -1112,7 +850,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
 
     #[test]
     fn a_development_configuration_loads_and_exposes_its_defaults() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         write_policy(&package);
         let operator = write_operator(
@@ -1136,7 +874,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
 
     #[test]
     fn production_requires_a_verified_package_while_loopback_accepts_authoring() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         write_policy(&package);
         let operator = write_operator(
@@ -1173,7 +911,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
 
     #[test]
     fn explain_and_read_scopes_must_differ_and_retention_must_be_positive() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         write_policy(&package);
         for (patch, expected) in [
@@ -1218,7 +956,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
 
     #[test]
     fn a_hook_policy_requires_and_accepts_its_deployment_binding() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         write_policy(&package);
         let hooked = format!(
@@ -1245,7 +983,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
 
     #[test]
     fn typed_parse_path_does_not_echo_the_rejected_value() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         write_policy(&package);
         let canary = "DO_NOT_DISCLOSE_RUNTIME_VALUE";
@@ -1265,7 +1003,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
 
     #[test]
     fn a_runtime_document_refused_whole_is_reported_at_the_root() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let operator = root.path().join("runtime.yaml");
         let canary = "DO_NOT_DISCLOSE_RUNTIME_VALUE";
         std::fs::write(&operator, format!("{canary}\n")).unwrap();
@@ -1276,8 +1014,131 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
         // document, and "." names nothing an operator can look up.
         assert_eq!(error.path(), "/");
         assert!(!message.contains(" at ."), "{message}");
-        assert!(message.contains("invalid type: string"), "{message}");
+        assert!(message.contains("must be a YAML mapping"), "{message}");
         assert!(!message.contains(canary), "{message}");
+    }
+
+    #[test]
+    fn the_runtime_configuration_is_read_through_the_shared_loader() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        write_policy(&package);
+
+        let error = RuntimeConfig::load("runtime.yaml").unwrap_err();
+        assert!(matches!(
+            &error,
+            RuntimeConfigError::Load(load) if load.code() == "runtime_config.path"
+        ));
+
+        let mut document = operator_value(&package, "development-loopback");
+        document["listener"].as_object_mut().unwrap().remove("bind");
+        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        assert_eq!(error.path(), "listener");
+        assert!(error.to_string().contains("bind"), "{error}");
+    }
+
+    #[test]
+    fn a_removed_jwks_uri_names_its_replacement() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        write_policy(&package);
+        let mut document = operator_value(&package, "development-loopback");
+        document["authentication"]["oidc"]["jwksUri"] =
+            serde_json::json!("https://identity.example.test/jwks");
+        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        assert_eq!(error.path(), "authentication.oidc.jwksUri");
+        assert!(
+            error.to_string().contains("authentication.oidc.jwksSource"),
+            "{error}"
+        );
+
+        let mut document = operator_value(&package, "development-loopback");
+        document["authentication"]["oidc"]["jwksSource"] =
+            serde_json::json!({"kind": "uri", "uri": "https://identity.example.test/jwks"});
+        let config = RuntimeConfig::load(write_operator(root.path(), document)).unwrap();
+        assert_eq!(
+            config.authentication.oidc.jwks_source.uri(),
+            Some("https://identity.example.test/jwks")
+        );
+    }
+
+    #[test]
+    fn environment_expressions_substitute_values_but_never_secret_references() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        write_policy(&package);
+        let mut document = operator_value(&package, "development-loopback");
+        document["authentication"]["oidc"]["audience"] =
+            serde_json::json!("${SCHEDULING_TEST_AUDIENCE:-urn:example:substituted}");
+        let config = RuntimeConfig::load(write_operator(root.path(), document)).unwrap();
+        assert_eq!(
+            config.authentication.oidc.audience,
+            "urn:example:substituted"
+        );
+
+        let mut document = operator_value(&package, "development-loopback");
+        document["database"]["runtimeUrlRef"] =
+            serde_json::json!("${SCHEDULING_TEST_REFERENCE:-secret:env/RUNTIME}");
+        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        assert!(matches!(
+            &error,
+            RuntimeConfigError::Load(load)
+                if load.code() == "runtime_config.substitution_in_reference"
+        ));
+        assert_eq!(error.path(), "database.runtimeUrlRef");
+    }
+
+    #[test]
+    fn an_authored_policy_carrying_an_environment_expression_is_refused() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(
+            package.join(AUTHORED_POLICY_FILE),
+            POLICY.replace(
+                "    because: test\nofferings:",
+                "    because: ${OPENING_REASON}\nofferings:",
+            ),
+        )
+        .unwrap();
+        let operator = write_operator(
+            root.path(),
+            operator_value(&package, "development-loopback"),
+        );
+        let error = RuntimeConfig::load(&operator).unwrap_err();
+        assert!(matches!(
+            &error,
+            RuntimeConfigError::PolicyEnvironmentExpression { field } if field == "openings.0.because"
+        ));
+        assert!(error.to_string().contains("runtime.yaml only"), "{error}");
+    }
+
+    #[test]
+    fn a_pinned_package_digest_must_match_the_verified_package() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        write_policy(&package);
+        let manifest = PolicyPackageManifest::build(POLICY).unwrap();
+        std::fs::write(
+            package.join(SCHEDULING_PACKAGE_MANIFEST_FILE),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let mut document = operator_value(&package, "operator-controlled-upstream");
+        document["package"]["expectedDigest"] = serde_json::json!(manifest.policy_digest);
+        RuntimeConfig::load(write_operator(root.path(), document)).expect("the pin matches");
+
+        let mut document = operator_value(&package, "operator-controlled-upstream");
+        document["package"]["expectedDigest"] =
+            serde_json::json!(format!("sha256:{}", "0".repeat(64)));
+        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        assert!(matches!(error, RuntimeConfigError::PackageDigest(_)));
+        assert_eq!(error.path(), "package.expectedDigest");
+        assert!(
+            error.to_string().contains("update package.expectedDigest"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -1300,7 +1161,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
 
     #[test]
     fn a_runtime_document_the_reader_stops_on_names_the_line_and_column() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let operator = root.path().join("runtime.yaml");
         // A tab can never open an indented line, so the reader stops on it.
         std::fs::write(&operator, "apiVersion: v1\n\tkind: x\n").unwrap();
@@ -1313,7 +1174,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
 
     #[test]
     fn a_rejected_runtime_member_names_the_cause_without_the_value() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         write_policy(&package);
         let canary = "DO_NOT_DISCLOSE_RUNTIME_VALUE";
@@ -1335,7 +1196,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
 
     #[test]
     fn a_refused_authored_policy_names_the_member_and_the_cause() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir_all(&package).unwrap();
         std::fs::write(
@@ -1378,7 +1239,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
     // so an authored policy's names never carry a package identity.
     #[test]
     fn a_manifest_wearing_the_authored_policy_names_is_refused() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         write_policy(&package);
         let manifest = PolicyPackageManifest::build(POLICY).expect("the policy is packaged");
@@ -1398,7 +1259,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
 
     #[test]
     fn a_production_deployment_must_name_the_clients_it_admits() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         write_policy(&package);
         let manifest = PolicyPackageManifest::build(POLICY).unwrap();
@@ -1441,7 +1302,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
 
     #[test]
     fn a_declared_assertion_authority_binds_the_client_that_may_exchange_from_it() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         write_policy(&package);
         let mut document = operator_value(&package, "development-loopback");
@@ -1462,7 +1323,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
 
     #[test]
     fn an_assertion_issuer_map_outside_its_bounds_is_refused() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         write_policy(&package);
         let oversized_client = "c".repeat(MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES + 1);
@@ -1501,7 +1362,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
 
     #[test]
     fn the_access_token_profile_admits_only_the_rfc_9068_pair() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         write_policy(&package);
         let operator = write_operator(
@@ -1527,26 +1388,46 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
 
     #[test]
     fn listener_requires_a_private_address_or_explicit_container_network() {
-        use std::net::{Ipv4Addr, Ipv6Addr};
-        assert!(valid_listener(
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
+        let listener = |bind: &str, exposure, tls_termination| ListenerConfig {
+            bind: bind.parse().unwrap(),
+            tls_termination,
+            network_exposure: exposure,
+        };
+        assert!(listener(
+            "127.0.0.1:8105",
             ListenerNetworkExposure::PrivateAddress,
             TlsTermination::OperatorControlledUpstream,
-        ));
-        assert!(!valid_listener(
-            "203.0.113.10".parse::<IpAddr>().unwrap(),
+        )
+        .is_valid());
+        assert!(!listener(
+            "203.0.113.10:8105",
             ListenerNetworkExposure::ContainerPrivate,
             TlsTermination::OperatorControlledUpstream,
-        ));
-        assert!(valid_listener(
-            IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+        )
+        .is_valid());
+        assert!(listener(
+            "[::]:8105",
             ListenerNetworkExposure::ContainerPrivate,
             TlsTermination::OperatorControlledUpstream,
-        ));
-        assert!(!valid_listener(
-            "10.20.30.40".parse::<IpAddr>().unwrap(),
+        )
+        .is_valid());
+        assert!(!listener(
+            "10.20.30.40:8105",
             ListenerNetworkExposure::PrivateAddress,
             TlsTermination::DevelopmentLoopback,
+        )
+        .is_valid());
+
+        // The runtime refuses the same listener at load.
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        write_policy(&package);
+        let mut document = operator_value(&package, "development-loopback");
+        document["listener"]["bind"] = serde_json::json!("10.20.30.40:8105");
+        let operator = write_operator(root.path(), document);
+        assert!(matches!(
+            RuntimeConfig::load(&operator),
+            Err(RuntimeConfigError::InvalidListener)
         ));
     }
 

@@ -32,21 +32,26 @@
     },
     "DatabaseConfig": {
       "additionalProperties": false,
+      "description": "The PostgreSQL connection a stateful runtime uses. Both URLs are secret\nreferences and may name the same secret.",
       "properties": {
         "migrationUrlRef": {
+          "description": "Secret reference to the migration connection URL.",
           "pattern": "^secret:(?:env|file)/",
           "type": "string"
         },
         "runtimeUrlRef": {
+          "description": "Secret reference to the least-privileged runtime connection URL.",
           "pattern": "^secret:(?:env|file)/",
           "type": "string"
         },
         "testOnlyPlaintext": {
           "default": false,
+          "description": "Allow a plaintext connection. Refused outside test builds.",
           "type": "boolean"
         },
         "trustedRootCertificateRef": {
           "default": null,
+          "description": "Secret reference to a PEM root certificate the connection trusts.",
           "pattern": "^secret:(?:env|file)/",
           "type": [
             "string",
@@ -86,12 +91,15 @@
     },
     "EnvironmentSecretProviderConfig": {
       "additionalProperties": false,
+      "description": "The environment secret provider. It takes no settings.",
       "type": "object"
     },
     "FileSecretProviderConfig": {
       "additionalProperties": false,
+      "description": "The file secret provider.",
       "properties": {
         "root": {
+          "description": "Absolute directory holding one file per secret. Each file must be a\nregular file owned by the runtime user, mode 0400 or 0600, with exactly\none hard link.",
           "pattern": "^/",
           "type": "string"
         }
@@ -111,6 +119,7 @@
           "type": "integer"
         },
         "hmacSha256KeyRef": {
+          "pattern": "^secret:(?:env|file)/",
           "type": "string"
         },
         "maximumAttempts": {
@@ -130,27 +139,70 @@
       ],
       "type": "object"
     },
-    "ListenerConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "bind": {
-          "default": "127.0.0.1:8105",
-          "type": "string"
+    "JwksSource": {
+      "description": "Where a runtime obtains the OIDC issuer's signing keys.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Read `jwks_uri` from the issuer's OpenID Connect discovery document.",
+          "properties": {
+            "kind": {
+              "const": "discovery",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
         },
-        "networkExposure": {
-          "$ref": "#/$defs/ListenerNetworkExposure"
+        {
+          "additionalProperties": false,
+          "description": "Fetch the key set from this absolute `https` URI, skipping discovery.",
+          "properties": {
+            "kind": {
+              "const": "uri",
+              "type": "string"
+            },
+            "uri": {
+              "pattern": "^https?://",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "uri"
+          ],
+          "type": "object"
         },
-        "tlsTermination": {
-          "$ref": "#/$defs/TlsTermination"
+        {
+          "additionalProperties": false,
+          "description": "Read the key set from a secret, for deployments without network access\nto the issuer.",
+          "properties": {
+            "documentRef": {
+              "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+              "type": "string"
+            },
+            "kind": {
+              "const": "static",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "documentRef"
+          ],
+          "type": "object"
         }
-      },
-      "required": [
-        "tlsTermination"
-      ],
-      "type": "object"
+      ]
+    },
+    "ListenerBind": {
+      "description": "Socket address the runtime listens on, written host:port with an IP address host ([addr]:port for IPv6).",
+      "minLength": 1,
+      "type": "string"
     },
     "ListenerNetworkExposure": {
-      "description": "The operator-declared private network placement of the HTTP listener.",
+      "description": "The operator-declared private network placement of an HTTP listener.",
       "enum": [
         "private-address",
         "container-private"
@@ -199,14 +251,7 @@
           "type": "string"
         },
         "jwksSource": {
-          "$ref": "#/$defs/OidcJwksSource"
-        },
-        "jwksUri": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/JwksSource"
         },
         "readsScope": {
           "default": "scheduling-read",
@@ -224,40 +269,49 @@
       ],
       "type": "object"
     },
-    "OidcJwksSource": {
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "kind": {
-              "const": "discovery",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "type": "object"
+    "PackageConfig": {
+      "additionalProperties": false,
+      "description": "The package a runtime serves: `root` is the absolute package directory,\nand `expectedDigest`, when set, pins the package identity the runtime must\nfind there.",
+      "properties": {
+        "expectedDigest": {
+          "default": null,
+          "description": "`sha256:` label of the package identity. When set, the runtime refuses\nto start on any other package.",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
         },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "documentRef": {
-              "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
-              "type": "string"
-            },
-            "kind": {
-              "const": "static",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "documentRef"
-          ],
-          "type": "object"
+        "root": {
+          "description": "Absolute path of the package directory.",
+          "pattern": "^/",
+          "type": "string"
         }
-      ]
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "PrivateListenerConfig": {
+      "additionalProperties": false,
+      "description": "The listener of a runtime that declares its TLS termination and network\nexposure.",
+      "properties": {
+        "bind": {
+          "$ref": "#/$defs/ListenerBind"
+        },
+        "networkExposure": {
+          "$ref": "#/$defs/ListenerNetworkExposure"
+        },
+        "tlsTermination": {
+          "$ref": "#/$defs/TlsTermination"
+        }
+      },
+      "required": [
+        "bind",
+        "tlsTermination"
+      ],
+      "type": "object"
     },
     "ReminderDestinationConfig": {
       "additionalProperties": false,
@@ -302,20 +356,6 @@
       },
       "type": "object"
     },
-    "RuntimePackageConfig": {
-      "additionalProperties": false,
-      "description": "The root of an authored scheduling project, holding `scheduling.yaml` and\nits optional package manifest.",
-      "properties": {
-        "root": {
-          "pattern": "^/",
-          "type": "string"
-        }
-      },
-      "required": [
-        "root"
-      ],
-      "type": "object"
-    },
     "SecretProvidersConfig": {
       "additionalProperties": false,
       "anyOf": [
@@ -340,6 +380,7 @@
           ]
         }
       ],
+      "description": "The secret providers a runtime enables. A reference is resolved only by a\nprovider declared here: `secret:file/name` under `file.root`, and\n`secret:env/NAME` only when `environment: {}` is present.",
       "properties": {
         "environment": {
           "anyOf": [
@@ -349,7 +390,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Enables `secret:env/NAME` references, read from the process\nenvironment. Declared as an empty mapping: `environment: {}`."
         },
         "file": {
           "anyOf": [
@@ -359,13 +401,14 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Enables `secret:file/name` references, read from files under `root`."
         }
       },
       "type": "object"
     },
     "TlsTermination": {
-      "description": "Declares the trusted transport boundary for the runtime's plaintext HTTP\nlistener. Production listeners require operator-controlled upstream TLS\ntermination; direct plaintext is limited to the explicit loopback-only\ndevelopment mode.",
+      "description": "Declares the trusted transport boundary for a runtime's plaintext HTTP\nlistener. Production listeners require operator-controlled upstream TLS\ntermination; direct plaintext is limited to the explicit loopback-only\ndevelopment mode.",
       "enum": [
         "operator-controlled-upstream",
         "development-loopback"
@@ -495,10 +538,10 @@
       "type": "string"
     },
     "listener": {
-      "$ref": "#/$defs/ListenerConfig"
+      "$ref": "#/$defs/PrivateListenerConfig"
     },
     "package": {
-      "$ref": "#/$defs/RuntimePackageConfig"
+      "$ref": "#/$defs/PackageConfig"
     },
     "retention": {
       "$ref": "#/$defs/RetentionConfig"
