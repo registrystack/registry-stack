@@ -291,6 +291,20 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg/tests/postgres_review_executor.rs, a_live_review_is_polled_before_one_its_authority_does_not_know and a_webhook_completion_makes_its_review_due_and_first_in_the_poll_queue;
     crates/registry-breg/tests/postgres_change_requests.rs, an_operator_resubmits_or_closes_a_review_its_authority_lost. */}
 
+- **Breaking:** Registry Discovery reads `runtime.yaml` through the shared
+  runtime configuration loader. The file now opens with
+  `apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1` and
+  `kind: DiscoveryRuntimeConfig` instead of `schemaVersion`, and
+  `listener.address` is `listener.bind`. The binary takes
+  `--runtime-config FILE`, an absolute path free of symbolic links, in
+  place of `--runtime`, and the container image passes it in its default
+  command. A removed key is refused with the name of its replacement. See
+  [configure Registry Discovery](../configure/discovery/#deploy-and-restart-the-service).
+
+{/* Evidence: crates/registry-discovery/src/startup.rs, load_runtime() and
+    removed_runtime_keys_name_their_replacements;
+    release/docker/Dockerfile.discovery. */}
+
 - **Breaking:** Registry Render reads `runtime.yaml` through the shared
   runtime configuration loader. The file now opens with
   `apiVersion: registry.registrystack.org/render-runtime/v1alpha1` and
