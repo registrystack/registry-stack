@@ -313,6 +313,7 @@ fn require_ok(operation: &str, report: &Value) -> Result<()> {
 /// from the selected BReg request's review and apply access profiles, plus
 /// any finding raised because a profile's rowBoundaries claims are not
 /// reflected in the local dev-client export.
+#[derive(Debug)]
 struct ReviewerAuthority {
     profiles: BTreeSet<String>,
     scopes: BTreeSet<String>,
@@ -999,10 +1000,13 @@ fn reviewer_authority(
             bail!("BReg access profile {id} requesterClients must exactly match the Casework staff and supervisor clients");
         }
         let mut row_boundary_locations = Vec::new();
-        collect_row_boundary_locations(profile, &mut Vec::new(), &mut row_boundary_locations);
-        for (pointer, claims) in &row_boundary_locations {
-            row_boundary_findings.push(row_boundary_finding(id, profile_index, pointer, claims));
-        }
+        collect_row_boundary_locations(profile, None, &mut Vec::new(), &mut row_boundary_locations);
+        row_boundary_findings.extend(represent_row_boundary_locations(
+            authored,
+            id,
+            profile_index,
+            &row_boundary_locations,
+        )?);
         let required_scopes = match profile.get("requiredScopes") {
             None | Some(Value::Null) => &[][..],
             Some(Value::Array(scopes)) => scopes.as_slice(),
@@ -1055,43 +1059,61 @@ fn reviewer_authority(
     })
 }
 
-/// Locates every non-empty `rowBoundaries` claim list nested under a BReg
-/// access profile (directly under a `permissions[]` entry, or nested deeper
-/// under a permission's `targets[]`), paired with the JSON Pointer segments,
-/// relative to the profile itself, that reach it. `path` is the traversal's
-/// working stack of segments; it is empty again on return.
+/// One row boundary found nested under a BReg access profile, paired with
+/// the JSON Pointer segments (relative to the profile itself) that reach its
+/// enclosing `rowBoundaries` array, and the entity it constrains: the entity
+/// named by the permission, apply target, action target, or request
+/// presence binding the boundary is nested under.
+struct RowBoundaryLocation {
+    pointer: String,
+    entity: Option<String>,
+    field: String,
+    claim: String,
+    operator: Option<String>,
+}
+
+/// Locates every row boundary nested under a BReg access profile (directly
+/// under a `permissions[]` entry, or nested deeper under a permission's
+/// `applyTargets[]`, `targets[]`, or `requestPresence[]`). `entity` is the
+/// ambient entity carried down from the nearest enclosing object that names
+/// one with an `entity` or `requestType` string field; `path` is the
+/// traversal's working stack of segments and is empty again on return.
 fn collect_row_boundary_locations(
     value: &Value,
+    entity: Option<&str>,
     path: &mut Vec<String>,
-    locations: &mut Vec<(String, BTreeSet<String>)>,
+    locations: &mut Vec<RowBoundaryLocation>,
 ) {
     match value {
         Value::Array(values) => {
             for (index, value) in values.iter().enumerate() {
                 path.push(index.to_string());
-                collect_row_boundary_locations(value, path, locations);
+                collect_row_boundary_locations(value, entity, path, locations);
                 path.pop();
             }
         }
         Value::Object(values) => {
+            let scoped_entity = values
+                .get("entity")
+                .and_then(Value::as_str)
+                .or_else(|| values.get("requestType").and_then(Value::as_str))
+                .or(entity);
             for (key, value) in values {
                 path.push(key.clone());
                 if key == "rowBoundaries" {
-                    if value
-                        .as_array()
-                        .is_none_or(|boundaries| !boundaries.is_empty())
-                    {
-                        let claims = value
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|boundary| boundary["claim"].as_str())
-                            .map(str::to_owned)
-                            .collect();
-                        locations.push((path.join("/"), claims));
+                    for boundary in value.as_array().into_iter().flatten() {
+                        if let Some(claim) = boundary["claim"].as_str() {
+                            locations.push(RowBoundaryLocation {
+                                pointer: path.join("/"),
+                                entity: scoped_entity.map(str::to_owned),
+                                field: boundary["field"].as_str().unwrap_or_default().to_owned(),
+                                claim: claim.to_owned(),
+                                operator: boundary["operator"].as_str().map(str::to_owned),
+                            });
+                        }
                     }
                 } else {
-                    collect_row_boundary_locations(value, path, locations);
+                    collect_row_boundary_locations(value, scoped_entity, path, locations);
                 }
                 path.pop();
             }
@@ -1100,12 +1122,100 @@ fn collect_row_boundary_locations(
     }
 }
 
+/// BReg field types whose row boundary claim BReg's runtime reads with
+/// `.as_str()` (`registry-breg`'s `auth.rs` `mapped_scalar_claim`), the same
+/// shape a local Casework dev-client claim uses. A `boolean` field reads its
+/// claim with `.as_bool()` and an `int64` field with `.as_i64()`, and
+/// `crs84-point` and `structured` fields cannot be row-boundary fields at
+/// all: none of those can be represented by a local dev-client claim.
+const STRING_SHAPED_ROW_BOUNDARY_FIELD_TYPES: &[&str] = &[
+    "string",
+    "text",
+    "decimal",
+    "date",
+    "timestamp",
+    "uuid",
+    "reference",
+    "vocabulary-code",
+];
+
+/// The authored `type` tag of `field` on `entity`, read from the raw
+/// registry.yaml JSON the same way BReg's compiler resolves it, or `None`
+/// when the entity or field cannot be found there. `source add` always runs
+/// `bregctl check` first, so a registry.yaml naming an entity or field that
+/// does not exist is already refused before this is reached; this stays
+/// `Option` rather than panicking so an unexpected shape here is treated as
+/// unresolved, and so refused conservatively, rather than crashing.
+fn resolve_row_boundary_field_type(authored: &Value, entity: &str, field: &str) -> Option<String> {
+    if field == "id" {
+        // The canonical id field is always an implicit Uuid; it carries no
+        // authored `type` tag of its own for a lookup below to find.
+        return Some("uuid".to_owned());
+    }
+    authored["entities"]
+        .as_array()?
+        .iter()
+        .find(|candidate| candidate["id"] == entity)?
+        .get("fields")?
+        .as_array()?
+        .iter()
+        .find(|candidate| candidate["id"] == field)?
+        .get("type")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+/// Groups every row boundary location representable by a local dev-client
+/// claim into one finding per `rowBoundaries` array, and refuses the
+/// pairing outright for any location the local claim model cannot carry.
+/// BReg's runtime reads an `equals` row boundary claim as the field's own
+/// scalar shape and an `in` claim as a JSON array of that shape, but a local
+/// Casework dev-client claim (`human_dev_client`) is always a plain string,
+/// so only `equals` over a string-shaped field can be added to one by hand.
+fn represent_row_boundary_locations(
+    authored: &Value,
+    id: &str,
+    profile_index: usize,
+    locations: &[RowBoundaryLocation],
+) -> Result<Vec<Value>> {
+    let mut claims_by_pointer: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+    for location in locations {
+        let field_type = location
+            .entity
+            .as_deref()
+            .and_then(|entity| resolve_row_boundary_field_type(authored, entity, &location.field));
+        let representable = location.operator.as_deref() == Some("equals")
+            && field_type.as_deref().is_some_and(|field_type| {
+                STRING_SHAPED_ROW_BOUNDARY_FIELD_TYPES.contains(&field_type)
+            });
+        if !representable {
+            bail!(
+                "BReg access profile {id} row boundary claim {claim} uses operator `{operator}` against a `{field_type}` field; the local Casework dev-client claim model holds only strings, so only operator `equals` over a string-shaped field can be added to a local reviewer client by hand",
+                claim = location.claim,
+                operator = location.operator.as_deref().unwrap_or("<none>"),
+                field_type = field_type.as_deref().unwrap_or("<unresolved>"),
+            );
+        }
+        claims_by_pointer
+            .entry(location.pointer.as_str())
+            .or_default()
+            .insert(location.claim.clone());
+    }
+    Ok(claims_by_pointer
+        .into_iter()
+        .map(|(pointer, claims)| row_boundary_finding(id, profile_index, pointer, &claims))
+        .collect())
+}
+
 /// A finding warning that a BReg access profile's rowBoundaries claims are
 /// not reflected in the local dev-client export: BReg's runtime still
 /// refuses that profile for a local reviewer client whose token lacks the
 /// claim, so access is neither widened nor silently bypassed, but an
 /// operator who wants a local reviewer to exercise the profile must add the
-/// claim to that client by hand.
+/// claim to that client by hand. Only reached for an `equals` row boundary
+/// over a string-shaped field; `represent_row_boundary_locations` refuses
+/// every other operator or field type instead, since none of those can be
+/// represented by a local dev-client claim.
 fn row_boundary_finding(
     id: &str,
     profile_index: usize,
@@ -1119,10 +1229,10 @@ fn row_boundary_finding(
         "artifact": "breg_access_profile",
         "path": format!("registry.yaml:/accessProfiles/{profile_index}/{pointer}"),
         "message": format!(
-            "BReg access profile {id} uses rowBoundaries on claim(s) {claim_list}; the local dev-client export does not add these claims, so a local Casework reviewer client cannot exercise the profile until an operator adds them by hand"
+            "BReg access profile {id} uses rowBoundaries on claim(s) {claim_list}; the local dev-client export does not add these claims, so a local Casework reviewer client cannot exercise the profile until an operator adds them by hand, each set to the string value equal to the field's stored value"
         ),
         "suggestedAction": format!(
-            "Add claim(s) {claim_list} to the local Casework reviewer dev clients that need access profile {id}, matching the values BReg's rowBoundaries expects."
+            "Add claim(s) {claim_list} to the local Casework reviewer dev clients that need access profile {id}, each set to the string value BReg's rowBoundaries operator equals expects for the matching field."
         ),
     })
 }
@@ -1150,6 +1260,11 @@ fn human_dev_client(
         .filter_map(Value::as_str)
         .map(str::to_owned)
         .collect();
+    // Every local dev-client claim is a plain string: BReg's runtime accepts
+    // a JSON array for an `in` row boundary and a JSON bool or number for a
+    // Boolean or Int64 field, neither of which this map can hold. See
+    // `represent_row_boundary_locations`, which refuses those pairings
+    // instead of reporting a finding no local claim could ever satisfy.
     let mut claims: BTreeMap<String, String> = client["claims"]
         .as_object()
         .into_iter()
@@ -2311,9 +2426,13 @@ mod tests {
         )
         .unwrap();
         let (mut authored, request) = reviewer_fixture();
+        authored["entities"] = json!([{
+            "id": "request",
+            "fields": [{"id": "region", "type": "string"}]
+        }]);
         authored["accessProfiles"][0]["permissions"] = json!([{
             "entity": "request",
-            "rowBoundaries": [{"field": "region", "claim": "allowed_regions", "operator": "in"}]
+            "rowBoundaries": [{"field": "region", "claim": "allowed_regions", "operator": "equals"}]
         }]);
 
         let plan = plan_breg_dev_clients(
@@ -2754,9 +2873,20 @@ mod tests {
         assert!(merged["claims"].get("registry_purpose").is_none());
     }
 
-    #[test]
-    fn reviewer_authority_reports_a_finding_for_profiles_with_row_boundary_claims() {
+    /// `accessProfiles` fixture shared by the row-boundary tests below: an
+    /// "operator" profile with no row boundaries, and a "reviewer" profile
+    /// (at the real index 1, which the finding and error paths must name)
+    /// whose one permission on entity "request" carries the row boundary
+    /// under test.
+    fn row_boundary_fixture(row_boundary: Value) -> (Value, Value) {
         let authored = json!({
+            "entities": [{
+                "id": "request",
+                "fields": [
+                    {"id": "region", "type": "string"},
+                    {"id": "flagged", "type": "boolean"}
+                ]
+            }],
             "accessProfiles": [
                 {
                     "id":"operator",
@@ -2771,15 +2901,23 @@ mod tests {
                     "requesterClients":["staff","supervisor"],
                     "permissions":[{
                         "entity":"request",
-                        "rowBoundaries":[{"field":"region","claim":"allowed_regions","operator":"in"}]
+                        "rowBoundaries":[row_boundary]
                     }]
                 }
             ]
         });
         let request = json!({"reviewPermissions":[{"profile":"reviewer"}],"applyPermissions":[]});
+        (authored, request)
+    }
+
+    #[test]
+    fn reviewer_authority_reports_a_finding_for_a_row_boundary_claim_equals_over_a_string_field() {
+        let (authored, request) = row_boundary_fixture(
+            json!({"field":"region","claim":"allowed_regions","operator":"equals"}),
+        );
 
         let authority = reviewer_authority(&authored, &request, &reviewer_clients())
-            .expect("a rowBoundaries profile must not refuse the whole pairing");
+            .expect("an equals row boundary over a string field must not refuse the pairing");
         assert_eq!(authority.profiles, BTreeSet::from(["reviewer".to_owned()]));
         let [finding] = authority.row_boundary_findings.as_slice() else {
             panic!(
@@ -2798,12 +2936,40 @@ mod tests {
         let message = finding["message"].as_str().unwrap();
         assert!(message.contains("reviewer"), "{message}");
         assert!(message.contains("allowed_regions"), "{message}");
+        assert!(message.contains("string"), "{message}");
         let suggested_action = finding["suggestedAction"].as_str().unwrap();
         assert!(suggested_action.contains("reviewer"), "{suggested_action}");
         assert!(
             suggested_action.contains("allowed_regions"),
             "{suggested_action}"
         );
+    }
+
+    #[test]
+    fn reviewer_authority_refuses_a_row_boundary_claim_using_operator_in() {
+        let (authored, request) = row_boundary_fixture(
+            json!({"field":"region","claim":"allowed_regions","operator":"in"}),
+        );
+
+        let error = reviewer_authority(&authored, &request, &reviewer_clients()).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("reviewer"), "{message}");
+        assert!(message.contains("allowed_regions"), "{message}");
+        assert!(message.contains("`in`"), "{message}");
+        assert!(message.contains("string"), "{message}");
+    }
+
+    #[test]
+    fn reviewer_authority_refuses_a_row_boundary_claim_equals_over_a_boolean_field() {
+        let (authored, request) = row_boundary_fixture(
+            json!({"field":"flagged","claim":"allowed_flag","operator":"equals"}),
+        );
+
+        let error = reviewer_authority(&authored, &request, &reviewer_clients()).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("reviewer"), "{message}");
+        assert!(message.contains("allowed_flag"), "{message}");
+        assert!(message.contains("`boolean`"), "{message}");
     }
 
     #[test]
