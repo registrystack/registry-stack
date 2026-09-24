@@ -757,7 +757,8 @@ REQ-PR-EVIDENCE-056: The bundle revision MUST be a digest over the complete atom
 layout manifest and MUST be carried in every native audit event.
 Every assertion MUST instead carry the configuration revision for its requirement, computed over
 that requirement's configuration and artifact closure, which excludes the active and published
-public signing keys whose trust the JWKS carries, and published with the requirement through
+public signing keys and the revoked key identifiers, whose trust the JWKS and the verification
+policy's denylist carry, and published with the requirement through
 authenticated definition discovery, in the forms fixed by
 `products/evidence/contracts/definitions.schema.yaml`,
 `products/evidence/contracts/evidence.schema.yaml`, and

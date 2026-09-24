@@ -44,10 +44,10 @@ has no export or plaintext-backup permission.
 Do not overwrite an active public key file. A candidate revision must be complete and checkable
 before activation.
 
-Publishing, activating, and retiring a key each change the bundle revision you record at approval,
-but no requirement's `configurationRevision`. Which keys sign is trust consumers take from the JWKS,
-so they update their pinned key set, not the revisions their verification policies pin. Revoking a
-key is the exception described below.
+Publishing, activating, retiring, and revoking a key each change the bundle revision you record at
+approval, but no requirement's `configurationRevision`. Which keys sign is trust consumers take from
+the JWKS and their own denylist, so they update their pinned key set and `revokedKeyIds`, not the
+revisions their verification policies pin.
 
 ## Build the overlap revision
 
@@ -144,8 +144,9 @@ For an emergency rotation:
 3. Activate a checked replacement or leave Evidence Gateway unavailable.
 4. Deploy and restart every affected issuer and consumer.
 
-A key identifier in `signing.revokedKeyIds` changes every requirement's `configurationRevision`, so
-give consumers the new revisions through the same emergency channel before they resume decisions.
+A key identifier in `signing.revokedKeyIds` leaves every requirement's `configurationRevision`
+unchanged, so consumers keep their pinned policies. Give them the revoked thumbprint through the
+emergency onboarding channel so they add it to their own denylist before they resume decisions.
 
 For an exposed OIDC issuer key, add the thumbprint to Evidence Gateway
 `authentication.revokedKeyIds` before restarting Evidence Gateway. This is service-key revocation,

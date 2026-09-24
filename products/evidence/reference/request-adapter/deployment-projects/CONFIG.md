@@ -1430,11 +1430,12 @@ records at approval. A signed `configurationRevision` is narrower: it covers
 only the configuration and artifacts one requirement depends on. Editing a
 requirement, its source, one of its selector profiles, an authority grant naming
 it, or any script, schema, codelist, or fixture file those reach changes that
-requirement's revision. The public verification keys are in no requirement's
-closure: which keys are published and which one signs is trust a relying party
-takes from the JWKS, so publishing, activating, or retiring a key changes the
-bundle revision but no requirement's revision. Adding a key identifier to
-`signing.revokedKeyIds` still changes every requirement's revision. An edit
+requirement's revision. The public verification keys and
+`signing.revokedKeyIds` are in no requirement's closure: which keys are
+published, which one signs, and which are revoked is trust a relying party
+takes from the JWKS and its verification policy's denylist, so publishing,
+activating, retiring, or revoking a key changes the bundle revision but no
+requirement's revision. An edit
 outside a requirement's closure leaves its revision unchanged, so it does not
 force every relying party to re-review.
 
