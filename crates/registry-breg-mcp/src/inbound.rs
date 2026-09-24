@@ -209,7 +209,9 @@ impl ResourceServer {
         &self.metadata
     }
 
-    /// Verify the request's bearer token and charge both rate limits.
+    /// Verify the request's bearer token and charge both rate limits. The
+    /// citizen's own limit is charged first, so a citizen already over it is
+    /// refused without spending the chat host's shared allowance.
     pub(crate) async fn authenticate(
         &self,
         headers: &HeaderMap,
@@ -227,8 +229,8 @@ impl ResourceServer {
             Err(_) => return Err(Refusal::InvalidToken),
         };
         let caller = self.caller(&verified, token)?;
-        admit(&self.per_client, caller.client_pseudonym()).await?;
         admit(&self.per_citizen, caller.citizen_pseudonym()).await?;
+        admit(&self.per_client, caller.client_pseudonym()).await?;
         Ok(caller)
     }
 
@@ -712,6 +714,31 @@ mod tests {
             call(&router, Some(&second)).await.status(),
             StatusCode::TOO_MANY_REQUESTS
         );
+    }
+
+    /// A citizen over their own limit is refused before the chat host's
+    /// shared bucket is charged, so their repeated calls cost the other
+    /// citizens on the same client nothing.
+    #[tokio::test]
+    async fn an_over_limit_citizen_does_not_drain_the_shared_client_limit() {
+        let authorization = authorization_server().await;
+        let router = server_for(&authorization, limits(1, 3));
+        let noisy =
+            authorization.issue_access_token(CHAT_HOST, "citizen-a", RESOURCE, SCOPE, now() + 300);
+        let quiet =
+            authorization.issue_access_token(CHAT_HOST, "citizen-b", RESOURCE, SCOPE, now() + 300);
+        assert_eq!(call(&router, Some(&noisy)).await.status(), StatusCode::OK);
+        for _ in 0..5 {
+            assert_eq!(
+                call(&router, Some(&noisy)).await.status(),
+                StatusCode::TOO_MANY_REQUESTS
+            );
+        }
+        // The client bucket held three; the noisy citizen spent one.
+        assert_eq!(call(&router, Some(&quiet)).await.status(), StatusCode::OK);
+        let third =
+            authorization.issue_access_token(CHAT_HOST, "citizen-c", RESOURCE, SCOPE, now() + 300);
+        assert_eq!(call(&router, Some(&third)).await.status(), StatusCode::OK);
     }
 
     #[tokio::test]
