@@ -99,7 +99,10 @@ breg-mcp --runtime-config /etc/breg-mcp/runtime.yaml serve
 
 `check` validates the document and resolves every secret without opening a
 socket or the audit log. `serve` answers until `SIGINT` or `SIGTERM`. Logs are
-JSON on standard output, filtered by `BREG_MCP_LOG` (default `info`).
+JSON lines on standard output from the gateway alone, at the level
+`BREG_MCP_LOG` names: `error`, `warn`, or `info` (the default). Any other value,
+including a filter directive, is refused on standard error with exit status 2
+before any work.
 
 ```yaml
 apiVersion: registry.registrystack.org/breg-mcp-runtime/v1alpha1

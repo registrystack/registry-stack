@@ -10,19 +10,51 @@ use registry_breg_mcp::{
     config::RuntimeConfig,
     runtime,
 };
+use tracing::Level;
+use tracing_subscriber::{filter::Targets, prelude::*};
 
-/// The environment variable holding the log filter directives.
-const LOG_FILTER_VARIABLE: &str = "BREG_MCP_LOG";
+/// The environment variable holding the operational log level.
+const LOG_VARIABLE: &str = "BREG_MCP_LOG";
+
+/// The operational log level. The vocabulary is closed so a typo cannot
+/// silently turn logging off or turn a dependency's logging on.
+fn operational_log_level(value: Result<String, std::env::VarError>) -> Result<Level, String> {
+    match value {
+        Err(std::env::VarError::NotPresent) => Ok(Level::INFO),
+        Ok(value) => match value.as_str() {
+            "error" => Ok(Level::ERROR),
+            "warn" => Ok(Level::WARN),
+            "info" => Ok(Level::INFO),
+            _ => Err(format!(
+                "{LOG_VARIABLE} must be one of error, warn, or info"
+            )),
+        },
+        Err(std::env::VarError::NotUnicode(_)) => Err(format!(
+            "{LOG_VARIABLE} must be one of error, warn, or info"
+        )),
+    }
+}
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env(LOG_FILTER_VARIABLE)
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+    let level = match operational_log_level(std::env::var(LOG_VARIABLE)) {
+        Ok(level) => level,
+        Err(error) => {
+            eprintln!("breg-mcp: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    // JSON lines on standard output, from this crate only.
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_target(false)
+                .with_current_span(false)
+                .with_span_list(false),
         )
-        .json()
+        .with(Targets::new().with_target("registry_breg_mcp", level))
         .init();
 
     match run(cli) {
@@ -84,4 +116,38 @@ async fn shutdown_signal() {
         () = terminate => {}
     }
     tracing::info!(target: "registry_breg_mcp", "shutting down");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_log_level_vocabulary_is_closed() {
+        assert_eq!(
+            operational_log_level(Err(std::env::VarError::NotPresent)),
+            Ok(Level::INFO)
+        );
+        for (value, level) in [
+            ("error", Level::ERROR),
+            ("warn", Level::WARN),
+            ("info", Level::INFO),
+        ] {
+            assert_eq!(operational_log_level(Ok(value.to_owned())), Ok(level));
+        }
+        for refused in [
+            "debug",
+            "trace",
+            "off",
+            "Info",
+            "",
+            "registry_breg_mcp=info",
+        ] {
+            assert_eq!(
+                operational_log_level(Ok(refused.to_owned())),
+                Err("BREG_MCP_LOG must be one of error, warn, or info".to_owned()),
+                "{refused:?}"
+            );
+        }
+    }
 }

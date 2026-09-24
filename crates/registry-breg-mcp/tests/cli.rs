@@ -97,6 +97,58 @@ fn a_valid_configuration_checks_without_disclosing_its_secrets() {
     assert!(!project.directory.path().join("audit").exists());
 }
 
+fn check_with_log(project: &Project, level: &str) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_breg-mcp"))
+        .args(["--runtime-config", path_text(&project.config), "check"])
+        .env("BREG_MCP_LOG", level)
+        .output()
+        .expect("breg-mcp runs")
+}
+
+/// `BREG_MCP_LOG` is a closed level, not a filter: `error`, `warn`, or
+/// `info`, with the log as JSON lines on standard output. Anything else is
+/// refused with exit status 2 before any work, so a typo can neither silence
+/// the log nor turn on a dependency's.
+#[test]
+fn the_log_level_vocabulary_is_closed() {
+    let project = Project::new();
+    for refused in [
+        "debug",
+        "trace",
+        "off",
+        "INFO",
+        "",
+        "registry_breg_mcp=info",
+    ] {
+        let output = check_with_log(&project, refused);
+        assert_eq!(output.status.code(), Some(2), "{refused:?}");
+        assert!(output.stdout.is_empty(), "{refused:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            "breg-mcp: BREG_MCP_LOG must be one of error, warn, or info\n",
+            "{refused:?}"
+        );
+    }
+
+    let info = check_with_log(&project, "info");
+    assert!(info.status.success());
+    assert!(info.stderr.is_empty());
+    let lines: Vec<serde_json::Value> = String::from_utf8_lossy(&info.stdout)
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("each log line is JSON"))
+        .collect();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["level"], "INFO");
+    assert_eq!(lines[0]["fields"]["message"], "configuration is valid");
+
+    for quiet in ["warn", "error"] {
+        let output = check_with_log(&project, quiet);
+        assert!(output.status.success(), "{quiet}");
+        assert!(output.stdout.is_empty(), "{quiet}");
+        assert!(output.stderr.is_empty(), "{quiet}");
+    }
+}
+
 #[test]
 fn an_inline_credential_is_refused_without_echoing_it() {
     let project = Project::new();
