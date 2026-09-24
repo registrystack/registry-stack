@@ -95,12 +95,31 @@ the retention periods in force.
 
 The start record carries the deployed values. `submissionReceiptDays` is
 also the idempotency window: a submission repeating a key whose receipt is
-older is refused with `idempotency.expired`. Each accepted message records
-the time its payload may be erased, `payloadDays` after acceptance, and a
-submission whose `expiresAt` is already past or falls later is refused with
-`request.unprocessable`. The sweep that erases
-payloads and records when their periods end arrives in a later slice; until
-then nothing is erased.
+older is refused with `idempotency.expired`. A submission whose `expiresAt`
+is already past, or falls more than `payloadDays` after acceptance, is
+refused with `request.unprocessable`, so a message is never still waiting to
+send when its payload's period could end.
+
+Each period counts from the moment the message reached a terminal state
+(delivered, failed, expired, or cancelled), not from acceptance, so a message
+still waiting in a retry keeps its payload. `payloadDays` after that moment
+the rendered parts and the recipient contact are erased and the message
+record stays; `recordDays` after it the record is deleted with its attempts,
+receipts, and idempotency key, and the key can be used again.
+`submissionReceiptDays` after acceptance the stored submission receipt is
+dropped and a repeat of its key is refused with `idempotency.expired`. A
+message that is queued, sending, or in an unknown outcome is never erased,
+and an operator retry committed while a sweep waits for the message keeps
+its payload.
+
+The runtime sweeps once at start and then hourly, under the runtime
+credential, and journals `messaging.retention.erased` with the counts
+whenever it erased something. `messagingctl retention erase-expired --before
+<RFC 3339 instant>` runs the same sweep on demand under the migration
+credential: it previews by default, erases with `--apply`, journals every
+applied run through the outbox, and refuses a cutoff later than the
+database's clock. One advisory lock serializes the runtime's sweep and the
+command.
 
 ### Providers
 

@@ -97,3 +97,13 @@ entries:
       - {path: crates/registry-messaging-core/src/template.rs, name: a_schema_may_not_reach_outside_the_package}
       - {path: crates/registry-messaging/src/package.rs, name: a_symbolic_link_anywhere_in_the_package_is_refused}
       - {path: crates/registry-messaging/src/http.rs, name: a_preview_refuses_each_malformed_request_with_its_problem}
+  - id: MESSAGING-SEC-10
+    tests:
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_payload_is_erased_payload_days_after_a_terminal_state_and_never_while_sending_or_unknown}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_requeue_committed_while_retention_waits_keeps_the_payload}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_record_is_deleted_record_days_after_a_terminal_state_with_everything_it_holds}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_submission_receipt_expires_after_its_period_and_its_key_stays_spent}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_preview_changes_nothing_and_a_cutoff_in_the_future_is_refused}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: the_runtime_sweep_erases_on_its_interval}
+      - {path: crates/registry-messagingctl/tests/postgres_messages_cli.rs, name: retention_previews_by_default_and_erases_only_expired_terminal_messages_with_apply}
+      - {path: crates/registry-messagingctl/src/lib.rs, name: a_malformed_or_future_cutoff_is_refused_before_any_file_or_database}

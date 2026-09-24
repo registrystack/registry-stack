@@ -177,17 +177,24 @@ invariants:
       path: crates/registry-messaging-core/src/render.rs
       name: a_runaway_template_runs_out_of_fuel
   - id: MESSAGING-SEC-10
-    state: pending
-    plannedSlice: S6
+    state: enforced
     threat: >-
       Payloads outlive their retention, or erasure removes the payload of a
       message still sending or in an unknown outcome.
     enforcementPoint: >-
-      The retention job: payloads are nulled retention.payloadDays after a
-      terminal state, and a message in sending or unknown is never erased.
+      The retention run, hourly in the runtime and on demand through
+      messagingctl retention erase-expired, in one transaction under one
+      advisory lock: a payload is nulled retention.payloadDays after its
+      dispatch job reached a terminal state, a record is deleted
+      retention.recordDays after it, and a submission receipt is dropped
+      when its retention.submissionReceiptDays end. Each terminal job is
+      locked before its payload is erased, so an operator requeue that
+      commits first keeps the payload.
     refusal: >-
-      Skip a non-terminal message and erase every expired terminal payload.
-    pendingNote: >-
-      Retention lands in slice S6. The negative test proves erasure runs on
-      schedule and skips sending and unknown messages.
+      Skip every pending, leased, or unknown message whatever its age, and
+      erase every expired terminal payload; refuse a cutoff later than the
+      database's clock and erase nothing.
+    negativeTest:
+      path: crates/registry-messaging/tests/postgres_retention.rs
+      name: a_payload_is_erased_payload_days_after_a_terminal_state_and_never_while_sending_or_unknown
 deferred: []

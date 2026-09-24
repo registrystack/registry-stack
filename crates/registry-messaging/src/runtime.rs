@@ -15,9 +15,10 @@
 //!
 //! Beside the listeners, `serve` runs the dispatch worker, which sends
 //! accepted messages through the transports registered for their
-//! providers, and the audit publisher, which appends the outbox to the
-//! journal. Either one stopping is a runtime failure, as a listener
-//! stopping is.
+//! providers, the audit publisher, which appends the outbox to the
+//! journal, and the retention sweep, which erases what the retention
+//! periods say has expired. Any one of them stopping is a runtime failure,
+//! as a listener stopping is.
 
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -42,6 +43,9 @@ use crate::messages::{MessageService, MessageStore};
 use crate::metrics::Metrics;
 use crate::outbox::Publisher;
 use crate::providers::{activate_providers, ProviderActivationError};
+use crate::retention::{
+    erase_expired, RetentionActor, RetentionError, RetentionReport, RetentionSweep, SWEEP_INTERVAL,
+};
 use crate::store::{PostgresStore, StoreError};
 
 /// The event the journal records when a runtime starts serving.
@@ -208,6 +212,40 @@ pub async fn message_store(config: &RuntimeConfig) -> Result<MessageStore, Runti
     Ok(MessageStore::new(store, dispatcher))
 }
 
+/// Count what expired by `before` under the configured retention, and with
+/// `apply` erase it, as the operator tool. The store is reached with the
+/// migration credential, like `apply_package`, so an operator can erase
+/// with the runtime stopped; the run takes the same lock the runtime's
+/// sweep takes, so the two never interleave.
+pub async fn erase_expired_as_operator(
+    config: &RuntimeConfig,
+    before: std::time::SystemTime,
+    apply: bool,
+) -> Result<RetentionReport, RuntimeError> {
+    let secrets = config.secret_resolver()?;
+    let store = PostgresStore::connect_migration(&config.database, &secrets)
+        .map_err(database_step("migration database configuration"))?;
+    store
+        .ready()
+        .await
+        .map_err(database_step("schema readiness check"))?;
+    erase_expired(
+        &store,
+        config.retention,
+        Some(before),
+        apply,
+        RetentionActor::OperatorTool,
+    )
+    .await
+    .map_err(|error| match error {
+        RetentionError::Store(source) => RuntimeError::Database {
+            stage: "retention run",
+            source,
+        },
+        refused => RuntimeError::Retention(refused),
+    })
+}
+
 pub async fn serve_from_path(
     path: impl AsRef<Path>,
     transports: Transports,
@@ -224,12 +262,14 @@ pub async fn serve_from_path(
 }
 
 /// The assembled service: the routers both listeners serve, and the
-/// dispatch worker and audit publisher that run beside them.
+/// dispatch worker, audit publisher, and retention sweep that run beside
+/// them.
 pub struct Assembled {
     public: axum::Router,
     metrics: axum::Router,
     worker: DispatchWorker<crate::dispatch::MessageDispatchStore, MessageSender>,
     publisher: Publisher,
+    retention: RetentionSweep,
 }
 
 /// Build everything `serve` needs from a checked configuration: the
@@ -325,7 +365,7 @@ pub async fn assemble(
     Ok(Assembled {
         public: router(HttpState {
             authenticator,
-            readiness: Readiness::Store(store),
+            readiness: Readiness::Store(store.clone()),
             metrics: Arc::clone(&metrics),
             limits,
             package: Arc::new(loaded.package),
@@ -336,6 +376,7 @@ pub async fn assemble(
         metrics: metrics_router(metrics),
         worker,
         publisher,
+        retention: RetentionSweep::new(store, config.retention),
     })
 }
 
@@ -367,18 +408,19 @@ impl Listeners {
         Ok(Self { public, metrics })
     }
 
-    /// Serve both listeners beside the worker and the publisher until any
-    /// of them stops. Each one stopping is a failure: a runtime that
-    /// answers requests but not its operator's metrics, or accepts messages
-    /// it no longer sends or audits, is not the deployment that was
-    /// configured.
+    /// Serve both listeners beside the worker, the publisher, and the
+    /// retention sweep until any of them stops. Each one stopping is a
+    /// failure: a runtime that answers requests but not its operator's
+    /// metrics, or accepts messages it no longer sends, audits, or erases,
+    /// is not the deployment that was configured.
     pub async fn serve(self, app: Assembled) -> Result<(), RuntimeError> {
-        // Nothing turns the signal: the worker and the publisher run for
-        // the life of the process, and the sender is held so they never
-        // observe it closing.
+        // Nothing turns the signal: the worker, the publisher, and the
+        // sweep run for the life of the process, and the sender is held so
+        // they never observe it closing.
         let (_shutdown, stopped) = tokio::sync::watch::channel(false);
         let worker = app.worker.run(stopped.clone());
-        let publisher = app.publisher.run(PUBLICATION_INTERVAL, stopped);
+        let publisher = app.publisher.run(PUBLICATION_INTERVAL, stopped.clone());
+        let retention = app.retention.run(SWEEP_INTERVAL, stopped);
         let public = axum::serve(self.public, app.public);
         let listeners = async move {
             match self.metrics {
@@ -405,6 +447,7 @@ impl Listeners {
             served = listeners => served,
             () = worker => Err(RuntimeError::Stopped { task: "dispatch worker" }),
             () = publisher => Err(RuntimeError::Stopped { task: "audit publisher" }),
+            () = retention => Err(RuntimeError::Stopped { task: "retention sweep" }),
         }
     }
 }
@@ -509,6 +552,8 @@ pub enum RuntimeError {
     Dispatch(String),
     #[error("the Messaging limits could not be configured: {0}")]
     Limits(String),
+    #[error(transparent)]
+    Retention(RetentionError),
     #[error("the Messaging {0}")]
     Provider(#[from] ProviderActivationError),
     #[error("the Messaging {task} stopped")]

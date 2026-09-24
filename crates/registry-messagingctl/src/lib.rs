@@ -18,9 +18,12 @@
 //!   the action would do to one message, and with `--apply` do it. Each
 //!   applied action writes its audit record into the outbox the running
 //!   runtime publishes.
+//! - `retention erase-expired` reports what the configured retention
+//!   periods say had expired by `--before`, and with `--apply` erases it,
+//!   with the migration credential. A cutoff in the future is refused.
 //!
 //! Exit codes: 0 when the command succeeds, 1 when the configuration,
-//! package, preview, or message action is refused, 2 for a usage error, and
+//! package, preview, message action, or retention cutoff is refused, 2 for a usage error, and
 //! 3 when a file, secret, or database could not be reached or the report
 //! could not be written.
 
@@ -36,7 +39,10 @@ use registry_messaging::messages::{
     MessageStore, MessageStoreError, OperatorAction, OperatorActionReport, SettleOutcome,
 };
 use registry_messaging::package::{load_package, LoadedPackage};
-use registry_messaging::runtime::{apply_package, message_store, PackageChange, RuntimeError};
+use registry_messaging::retention::RetentionError;
+use registry_messaging::runtime::{
+    apply_package, erase_expired_as_operator, message_store, PackageChange, RuntimeError,
+};
 use registry_messaging_core::{
     ContentRefusal, MessageDispatch, MessageStatus, TemplatePreviewRequest,
 };
@@ -74,6 +80,35 @@ enum Command {
     /// Read accepted messages, and retry, settle, or cancel one.
     #[command(subcommand)]
     Messages(MessagesCommand),
+    /// Erase what the retention periods say has expired.
+    #[command(subcommand)]
+    Retention(RetentionCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum RetentionCommand {
+    /// Report what had expired by --before, and erase it with --apply.
+    EraseExpired(EraseExpiredArgs),
+}
+
+#[derive(Debug, Args)]
+struct EraseExpiredArgs {
+    /// Absolute path to the runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+    /// The RFC 3339 instant every retention period is counted back from. It
+    /// must not be in the future.
+    #[arg(long, value_name = "RFC3339", value_parser = parse_cutoff)]
+    before: chrono::DateTime<chrono::Utc>,
+    /// Erase. Without it, only report what would be erased.
+    #[arg(long)]
+    apply: bool,
+}
+
+fn parse_cutoff(value: &str) -> Result<chrono::DateTime<chrono::Utc>, String> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|instant| instant.with_timezone(&chrono::Utc))
+        .map_err(|_| "expected an RFC 3339 instant such as 2026-09-01T00:00:00Z".to_owned())
 }
 
 #[derive(Debug, Subcommand)]
@@ -270,6 +305,7 @@ enum View {
     MessageList,
     MessageShow,
     MessageAction,
+    Retention,
 }
 
 impl Outcome {
@@ -347,6 +383,7 @@ where
         Command::Preview(args) => preview(&args),
         Command::Apply(args) => apply(&args.runtime_config, args.apply),
         Command::Messages(command) => messages(&command),
+        Command::Retention(RetentionCommand::EraseExpired(args)) => erase_expired(&args),
     };
     finish(&outcome, cli.format, stdout, stderr)
 }
@@ -676,6 +713,54 @@ fn messages(command: &MessagesCommand) -> Outcome {
     })
 }
 
+fn future_cutoff() -> Outcome {
+    Outcome::refused(
+        REFUSAL_EXIT,
+        "retention.future-cutoff",
+        "--before",
+        "the cutoff is in the future; retention erases only what has already expired".to_owned(),
+    )
+}
+
+/// Report, and with `--apply` erase, what had expired by the cutoff. A
+/// future cutoff is refused before the configuration is read, and again
+/// against the database's clock.
+fn erase_expired(args: &EraseExpiredArgs) -> Outcome {
+    if args.before > chrono::Utc::now() {
+        return future_cutoff();
+    }
+    let config = match RuntimeConfig::load(&args.runtime_config) {
+        Ok(config) => config,
+        Err(error) => return config_refusal(&error),
+    };
+    let runtime = match async_runtime() {
+        Ok(runtime) => runtime,
+        Err(refused) => return refused,
+    };
+    match runtime.block_on(erase_expired_as_operator(
+        &config,
+        args.before.into(),
+        args.apply,
+    )) {
+        Ok(report) => Outcome::new(
+            json!({
+                "ok": true,
+                "runtimeConfig": args.runtime_config,
+                "before": report.before,
+                "applied": report.applied,
+                "payloads": report.payloads,
+                "records": report.records,
+                "submissionReceipts": report.submission_receipts,
+                "retention": config.retention,
+            }),
+            View::Retention,
+        ),
+        Err(RuntimeError::Config(error)) => config_refusal(&error),
+        Err(RuntimeError::Retention(RetentionError::FutureCutoff)) => future_cutoff(),
+        Err(error) => database_unavailable(&error),
+    }
+}
+
 fn database_unavailable(error: &dyn std::fmt::Display) -> Outcome {
     Outcome::refused(
         OPERATIONAL_FAILURE_EXIT,
@@ -865,6 +950,7 @@ fn render_human(
         View::MessageList => render_message_list(report, stdout),
         View::MessageShow => render_message_show(report, stdout),
         View::MessageAction => render_message_action(report, stdout),
+        View::Retention => render_retention(report, stdout),
     }
 }
 
@@ -978,6 +1064,26 @@ fn render_apply(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
         "activate: run again with --apply to record this package"
     };
     writeln!(stdout, "change: {change}")
+}
+
+fn render_retention(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
+    writeln!(stdout, "before: {}", text(&report["before"]))?;
+    let verb = if report["applied"] == json!(true) {
+        "erased"
+    } else {
+        "due"
+    };
+    writeln!(stdout, "payloads {verb}: {}", report["payloads"])?;
+    writeln!(stdout, "records {verb}: {}", report["records"])?;
+    writeln!(
+        stdout,
+        "submission receipts {verb}: {}",
+        report["submissionReceipts"]
+    )?;
+    if report["applied"] != json!(true) {
+        writeln!(stdout, "run again with --apply to erase")?;
+    }
+    Ok(())
 }
 
 fn render_message_list(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
@@ -1620,6 +1726,42 @@ audit:
             assert_eq!(exit, ExitCode::from(USAGE_EXIT), "{case:?}");
             assert_eq!(report["diagnostics"][0]["code"], "usage.invalid");
         }
+    }
+
+    #[test]
+    fn a_malformed_or_future_cutoff_is_refused_before_any_file_or_database() {
+        let missing = OsStr::new("/nonexistent/messaging/runtime.yaml");
+        let (exit, report) = json_run(&[
+            OsStr::new("retention"),
+            OsStr::new("erase-expired"),
+            OsStr::new("--runtime-config"),
+            missing,
+            OsStr::new("--before"),
+            OsStr::new("last-tuesday"),
+        ]);
+        assert_eq!(exit, ExitCode::from(USAGE_EXIT), "{report}");
+        assert_eq!(report["diagnostics"][0]["code"], "usage.invalid");
+        let (exit, report) = json_run(&[
+            OsStr::new("retention"),
+            OsStr::new("erase-expired"),
+            OsStr::new("--runtime-config"),
+            missing,
+            OsStr::new("--before"),
+            OsStr::new("9999-01-01T00:00:00Z"),
+            OsStr::new("--apply"),
+        ]);
+        assert_eq!(exit, ExitCode::from(REFUSAL_EXIT), "{report}");
+        assert_eq!(report["diagnostics"][0]["code"], "retention.future-cutoff");
+        // A past cutoff reaches the configuration, which is missing here.
+        let (exit, report) = json_run(&[
+            OsStr::new("retention"),
+            OsStr::new("erase-expired"),
+            OsStr::new("--runtime-config"),
+            missing,
+            OsStr::new("--before"),
+            OsStr::new("2026-01-01T00:00:00Z"),
+        ]);
+        assert_eq!(exit, ExitCode::from(OPERATIONAL_FAILURE_EXIT), "{report}");
     }
 
     #[test]

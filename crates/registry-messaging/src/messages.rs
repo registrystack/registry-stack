@@ -1136,13 +1136,16 @@ fn replay(stored: StoredKey, submission: &PreparedSubmission) -> Result<Submissi
 struct Window {
     not_before: Option<SystemTime>,
     expires_at: SystemTime,
-    erase_after: SystemTime,
 }
 
 impl Window {
     /// `expiresAt` must lie after acceptance and within the payload
-    /// retention, and defaults to the sender profile's expiry capped by
-    /// that retention; `notBefore` must precede it.
+    /// retention counted from acceptance, and defaults to the sender
+    /// profile's expiry capped by that retention; `notBefore` must precede
+    /// it. The cap keeps a message from waiting in the queue longer than
+    /// its payload would be kept once it ends; the payload itself is erased
+    /// `payloadDays` after the message reaches a terminal state (see
+    /// [`crate::retention`]).
     fn new(
         now: SystemTime,
         submission: &PreparedSubmission,
@@ -1150,11 +1153,9 @@ impl Window {
     ) -> Result<Self, Refusal> {
         let invalid = || Refusal::Problem(ProblemCode::RequestUnprocessable);
         let payload = days(retention.payload_days);
-        let erase_after = now + payload;
+        let latest = now + payload;
         let expires_at = match submission.expires_at {
-            Some(expires_at) if expires_at <= now || expires_at > erase_after => {
-                return Err(invalid())
-            }
+            Some(expires_at) if expires_at <= now || expires_at > latest => return Err(invalid()),
             Some(expires_at) => expires_at,
             None => {
                 now + Duration::from_secs(u64::from(submission.profile.expiry_seconds()))
@@ -1170,7 +1171,6 @@ impl Window {
         Ok(Self {
             not_before: submission.not_before,
             expires_at,
-            erase_after,
         })
     }
 }
@@ -1244,15 +1244,14 @@ async fn insert_message(
     transaction
         .execute(
             "INSERT INTO messaging_message_payloads \
-                 (message_id, recipient, subject, text_body, html_body, erase_after) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
+                 (message_id, recipient, subject, text_body, html_body) \
+             VALUES ($1, $2, $3, $4, $5)",
             &[
                 &message_id,
                 &submission.request.to.contact(),
                 &content.parts.subject,
                 &content.parts.text,
                 &content.parts.html,
-                &window.erase_after,
             ],
         )
         .await?;

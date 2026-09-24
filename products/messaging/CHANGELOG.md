@@ -88,6 +88,15 @@
   `failed` once its report is final. `messagingctl messages list --status`
   filters on the derived status, list and show print the dispatch state, and
   `retry`, `settle`, and `cancel` decide eligibility from it.
+- Enforce retention: a payload is erased `retention.payloadDays` and a
+  record deleted `retention.recordDays` after the message reached a terminal
+  state, and a submission receipt is dropped after
+  `retention.submissionReceiptDays`. A queued, sending, or unknown message
+  is never erased. The runtime sweeps at start and hourly and journals
+  `messaging.retention.erased`; `messagingctl retention erase-expired
+  --before` runs the same sweep on demand, previewing unless `--apply` is
+  given. A deleted record frees its idempotency key. Migration 0005 drops
+  the per-payload erase deadline, which counted from acceptance.
 - Add `registry-messaging-client` with health, readiness, and
   `MessagingClient::message`, which reads one message's view under a bearer
   token.

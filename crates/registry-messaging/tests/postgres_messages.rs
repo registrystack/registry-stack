@@ -53,7 +53,7 @@ async fn an_accepted_submission_records_its_rendered_parts_and_answers_a_receipt
         .query_one(
             "SELECT message.template_id, message.template_version, message.template_locale, \
                     message.package_digest, message.sender, message.provider, \
-                    payload.recipient, payload.subject, payload.text_body, payload.erase_after > now() \
+                    payload.recipient, payload.subject, payload.text_body, payload.erased_at IS NULL \
                FROM messaging_messages AS message \
                JOIN messaging_message_payloads AS payload USING (message_id) \
               WHERE message_id = $1",

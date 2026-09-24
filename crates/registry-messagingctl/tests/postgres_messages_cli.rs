@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Database-backed tests of `messagingctl messages`: the built binary lists,
-//! shows, retries, settles, and cancels messages the runtime accepted,
+//! Database-backed tests of `messagingctl messages` and `messagingctl
+//! retention`: the built binary lists, shows, retries, settles, and cancels
+//! messages the runtime accepted, erases what retention says is due,
 //! previews each action unless `--apply` is given, and never prints a
 //! contact, template data, or a principal.
 //!
@@ -273,4 +274,71 @@ async fn actions_preview_by_default_and_change_the_message_only_with_apply() {
     for record in &operator_records {
         assert_absent("an operator-tool record", record);
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retention_previews_by_default_and_erases_only_expired_terminal_messages_with_apply() {
+    let harness = Harness::start().await;
+    let (failed, unknown, queued) = three_messages(&harness).await;
+    for id in [failed, unknown, queued] {
+        harness
+            .execute(
+                "UPDATE messaging_dispatch_jobs SET updated_at = now() - interval '8 days' \
+                  WHERE message_id = $1",
+                &[&id],
+            )
+            .await;
+    }
+    let runtime = harness.runtime_path();
+    // A minute back, so a database clock behind this host's still accepts it.
+    let before = (chrono::Utc::now() - chrono::Duration::minutes(1)).to_rfc3339();
+    let erased = "SELECT count(*) FROM messaging_message_payloads WHERE erased_at IS NOT NULL";
+
+    let (code, preview) = json(
+        &runtime,
+        &["retention", "erase-expired", "--before", &before],
+    );
+    assert_eq!(code, 0, "{preview}");
+    assert_eq!(preview["applied"], false);
+    assert_eq!(preview["payloads"], 1);
+    assert_eq!(preview["records"], 0);
+    assert_eq!(preview["retention"]["payloadDays"], 7);
+    assert_eq!(harness.count(erased).await, 0);
+
+    let (code, stdout, _) = messagingctl(
+        &runtime,
+        &["retention", "erase-expired", "--before", &before, "--apply"],
+    );
+    assert_eq!(code, 0, "{stdout}");
+    assert!(stdout.contains("payloads erased: 1"), "{stdout}");
+    assert_eq!(harness.count(erased).await, 1);
+    let kept: bool = harness
+        .isolated
+        .admin
+        .query_one(
+            "SELECT bool_and(erased_at IS NULL) FROM messaging_message_payloads \
+              WHERE message_id = ANY($1)",
+            &[&vec![unknown, queued]],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(kept, "an unknown or queued payload was erased");
+    let records: Vec<Value> = harness
+        .outbox()
+        .await
+        .into_iter()
+        .filter(|record| record["event"] == "messaging.retention.erased")
+        .collect();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["actor"]["kind"], "operator-tool");
+    assert_eq!(records[0]["payloads"], 1);
+
+    let future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    let (code, refused) = json(
+        &runtime,
+        &["retention", "erase-expired", "--before", &future, "--apply"],
+    );
+    assert_eq!(code, 1, "{refused}");
+    assert_eq!(refused["diagnostics"][0]["code"], "retention.future-cutoff");
 }

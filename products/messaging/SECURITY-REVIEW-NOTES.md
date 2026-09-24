@@ -409,12 +409,6 @@ Tests: `providers/tests.rs`, including
 `a_provider_that_cannot_be_activated_names_itself_and_never_a_secret`, and the
 `config.rs` provider connection tests.
 
-## Open questions
-
-- A payload may be erased `retention.payloadDays` after acceptance even when
-  the message still waits in a retry; MESSAGING-SEC-10 and the sweep must
-  decide how the two interact.
-
 ## Callbacks
 
 Threat: a forged, replayed, or reordered provider callback changes a
@@ -558,9 +552,49 @@ Tests: MESSAGING-SEC-09 in `contracts/security-test-traceability.yaml`, the
 `http.rs`, including the unauthenticated, operator, unlisted-template, and
 journal-failure negatives.
 
-## Retention (pending, slice S6)
+## Retention
 
-MESSAGING-SEC-10. The `retention` bounds are validated and recorded at start
-today: payloads 1 to 30 days, records up to ten years, receipts up to the
-record period. The sweep that enforces them, and refuses to erase a message
-still sending or in an unknown outcome, lands with slice S6.
+Threat: payloads, contacts, or the records that describe them outlive the
+periods the deployment declared; erasure removes the payload of a message
+that may still be sent, requeued, or settled; a retention run erases what
+has not expired, races an operator, or leaves no trace
+(MESSAGING-SEC-10, enforced).
+
+`retention.payloadDays` (1 to 30), `recordDays` (up to ten years), and
+`submissionReceiptDays` (up to the record period) are validated and recorded
+at start. The payload and record periods count from the instant the
+message's dispatch job reached a terminal state, `delivered`,
+`dead_lettered`, `expired`, or `cancelled`, which the job row already holds
+(MESSAGING-DEC-16). A `pending`, `leased`, or `unknown` message is never
+erased, whatever its age. A submission's `expiresAt` stays capped at
+acceptance plus `payloadDays`. Past `payloadDays` the recipient and the
+rendered parts are nulled and the content-free record stays; past
+`recordDays` the record is deleted with its payload, job, attempts, delivery
+receipts, and idempotency row, so its key can be used again
+(MESSAGING-DEC-17). Past `submissionReceiptDays` the stored receipt is
+dropped and a repeat of its key is `410 idempotency.expired`.
+
+One run is one transaction under a transaction advisory lock, with a
+five-second lock timeout and a sixty-second statement timeout; a run that
+exceeds either is rolled back whole. Each due terminal job is locked
+`FOR UPDATE` before its payload is erased, and the predicate is read again
+under the lock, so an operator requeue that commits first keeps the payload,
+and one that comes after fails as `payload-erased` without a send
+(MESSAGING-DEC-12). The runtime runs retention at start and hourly under its
+own credential with the database's clock as the cutoff
+(MESSAGING-DEC-18). `messagingctl retention erase-expired --before` runs it
+under the migration credential, previews unless `--apply` is given, and
+refuses a cutoff later than the local clock before any input or output and
+later than the database's clock inside the run (MESSAGING-DEC-19). A run
+writes `messaging.retention.erased` into the outbox in its own transaction,
+carrying the cutoff, the three counts, the periods in force, and its actor
+(`runtime` or `operator-tool`), never an identifier of what it erased. The
+runtime's sweep writes it only when it erased something; an applied operator
+run always writes it; a preview writes nothing.
+
+Residual risk: a run does not batch. A backlog large enough to exceed the
+statement timeout erases nothing until an operator runs the command against
+a cutoff that bounds the backlog. Published outbox rows, whose records carry
+no payload value, are not pruned by retention.
+
+Tests: MESSAGING-SEC-10 in `contracts/security-test-traceability.yaml`.

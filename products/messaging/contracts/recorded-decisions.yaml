@@ -224,3 +224,67 @@ decisions:
       the callers' polling rate rather than with what happened.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_status_read_writes_no_audit_record}
+  - id: MESSAGING-DEC-16
+    subject: Retention periods count from the terminal state
+    decision: >-
+      A payload is erased retention.payloadDays, and a record deleted
+      retention.recordDays, after the message's dispatch job reached a
+      terminal state, not after acceptance. A message's expiresAt stays
+      capped at acceptance plus payloadDays, so a message never waits to
+      send past the point its payload could be erased.
+    reasoning: >-
+      Counting from acceptance erased the payload of a message still waiting
+      in a retry, which then failed without a send. The terminal instant is
+      the first moment the payload has no further use, and it is already on
+      the job row, so the sweep needs no stored deadline.
+    evidence:
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_payload_is_erased_payload_days_after_a_terminal_state_and_never_while_sending_or_unknown}
+  - id: MESSAGING-DEC-17
+    subject: A deleted record frees its idempotency key
+    decision: >-
+      When a record is deleted its idempotency row goes with it, so after
+      recordDays a caller may use the key again and gets a new message.
+      Until then an expired key is refused with idempotency.expired.
+    reasoning: >-
+      Keeping the key row would keep the caller's issuer, subject, and
+      request hash beyond the record they describe, which is the data the
+      record period exists to bound. Callers reuse keys only by mistake, and
+      the record period is months.
+    evidence:
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_record_is_deleted_record_days_after_a_terminal_state_with_everything_it_holds}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_submission_receipt_expires_after_its_period_and_its_key_stays_spent}
+  - id: MESSAGING-DEC-18
+    subject: The runtime sweeps hourly and journals only what it erased
+    decision: >-
+      The runtime runs retention once at start and then every hour under its
+      own credential, with the database's clock as the cutoff, and writes a
+      messaging.retention.erased record only when a run erased something. A
+      failed run is logged once until a run succeeds again and does not stop
+      the runtime.
+    reasoning: >-
+      Retention that depends on an operator's cron is retention that stops
+      when the cron does. An hour is fine grain against periods counted in
+      days, and a record for every empty run would grow the journal with the
+      clock rather than with what happened.
+    evidence:
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: the_runtime_sweep_erases_on_its_interval}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_retention_run_is_journaled_with_its_counts_only}
+  - id: MESSAGING-DEC-19
+    subject: messagingctl retention erase-expired previews by default
+    decision: >-
+      messagingctl retention erase-expired --before <instant> reports what is
+      due and erases nothing unless --apply is given, like every other
+      messagingctl action. It connects with the migration credential, takes
+      the same advisory lock as the runtime's sweep, journals every applied
+      run through the outbox as operator-tool, and refuses a cutoff later
+      than the local clock before any input or output and later than the
+      database's clock inside the run.
+    reasoning: >-
+      Base Registry Engine's bregctl evidence-retention erase-expired erases
+      directly; messagingctl keeps its own convention (MESSAGING-DEC-13) so
+      one tool does not mix previewing and immediate actions. The lock and
+      the outbox keep an operator run and the runtime's sweep from
+      interleaving or forking the journal.
+    evidence:
+      - {path: crates/registry-messagingctl/tests/postgres_messages_cli.rs, name: retention_previews_by_default_and_erases_only_expired_terminal_messages_with_apply}
+      - {path: crates/registry-messagingctl/src/lib.rs, name: a_malformed_or_future_cutoff_is_refused_before_any_file_or_database}
