@@ -58,7 +58,7 @@ and `CASEWORK_SECRET_ROOT`. It mounts the local audit directory on a named
 volume and publishes no host port by default.
 
 The builder and runtime base images are pinned to the same digests the rest
-of the repository uses: `rust:1.98-trixie` and
+of the repository uses: `rust:1.95-trixie` and
 `gcr.io/distroless/cc-debian13:nonroot`. Both final images run as the
 distroless `nonroot` user (UID and GID 65532) with no shell or package tools.
 The official images have the same nonroot runtime identity and publish it as
