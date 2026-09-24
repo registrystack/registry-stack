@@ -301,6 +301,23 @@ async fn check_refuses_an_unreadable_secret_by_its_field() {
 }
 
 #[tokio::test]
+async fn check_reports_a_missing_configuration_file_without_a_root_path_suffix() {
+    let directory = tempfile::tempdir().unwrap();
+    let missing = directory.path().join("missing-runtime.yaml");
+    let output = Command::new(BINARY)
+        .arg("--runtime-config")
+        .arg(&missing)
+        .arg("check")
+        .stdin(Stdio::null())
+        .output()
+        .expect("run breg-review");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(!stderr.contains("(at /)"), "{stderr}");
+}
+
+#[tokio::test]
 async fn a_missing_subcommand_is_a_usage_error() {
     let environment = Environment::prepare(free_address().await, &Options::default()).await;
     let output = Command::new(BINARY)

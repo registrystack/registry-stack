@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use registry_breg_review::{check, command, router, serve, RuntimeConfig};
+use registry_breg_review::{check, command, router, serve, RuntimeConfig, RuntimeConfigError};
 use tracing::Level;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
@@ -70,7 +70,13 @@ async fn main() {
 }
 
 fn load(path: &std::path::Path) -> Result<RuntimeConfig, String> {
-    RuntimeConfig::load(path).map_err(|error| format!("{error} (at {})", error.path()))
+    // `Read` and `RelativeRuntimePath` fail before any document field is
+    // reached, so `error.path()` names nothing an operator can look up; the
+    // suffix is dropped rather than printed as a misleading "(at /)".
+    RuntimeConfig::load(path).map_err(|error| match error {
+        RuntimeConfigError::Read(_) | RuntimeConfigError::RelativeRuntimePath => error.to_string(),
+        error => format!("{error} (at {})", error.path()),
+    })
 }
 
 fn run_check(path: &std::path::Path) -> Result<(), String> {
