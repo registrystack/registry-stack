@@ -922,6 +922,13 @@ struct HistoryEraseArgs {
     /// bits, because it names the records the erasure covers.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     request_file: PathBuf,
+
+    /// Acknowledge that erasure cannot be undone and blocks successor packages until `history rebaseline`.
+    ///
+    /// Without this flag the command is refused before any file is read or
+    /// any database connection is opened.
+    #[arg(long)]
+    acknowledge_irreversible: bool,
 }
 
 #[derive(Debug, Args)]
@@ -2274,6 +2281,21 @@ fn audit_failure(command: &'static str, error: AuditCliError) -> FailureReport {
 }
 
 fn history_erase(args: &HistoryEraseArgs) -> Result<HistoryEraseSuccessReport, FailureReport> {
+    if !args.acknowledge_irreversible {
+        return Err(FailureReport {
+            ok: false,
+            command: "history erase",
+            diagnostics: vec![tool_diagnostic(
+                diagnostic(
+                    "history.erase.acknowledgement.required",
+                    "acknowledgeIrreversible",
+                    "history erasure is irreversible, and no successor package can be applied until `history rebaseline` restores snapshot coverage; pass --acknowledge-irreversible to proceed",
+                ),
+                DiagnosticArtifact::CommandArguments,
+                SuggestedAction::CorrectCommandUsage,
+            )],
+        });
+    }
     let outcome = history_erasure_lifecycle::run(HistoryErasureLifecycleRequest {
         runtime_config: &args.runtime_config,
         request_file: &args.request_file,
@@ -12666,6 +12688,7 @@ mod tests {
             "/tmp/runtime.yaml",
             "--request-file",
             "/tmp/request.json",
+            "--acknowledge-irreversible",
         ])
         .expect("history erase parses");
         let Command::History(args) = parsed.command else {
@@ -12676,6 +12699,7 @@ mod tests {
         };
         assert_eq!(args.runtime_config, PathBuf::from("/tmp/runtime.yaml"));
         assert_eq!(args.request_file, PathBuf::from("/tmp/request.json"));
+        assert!(args.acknowledge_irreversible);
         assert!(Cli::try_parse_from([
             "bregctl",
             "history",

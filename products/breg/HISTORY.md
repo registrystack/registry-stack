@@ -354,8 +354,13 @@ not need to appear in process arguments:
 ```bash
 bregctl history erase \
   --runtime-config /absolute/path/runtime.yaml \
-  --request-file /absolute/path/erasure.json
+  --request-file /absolute/path/erasure.json \
+  --acknowledge-irreversible
 ```
+
+The command refuses without `--acknowledge-irreversible`, before it reads any
+file or opens any connection, because erasure cannot be undone and no successor
+package can be applied until `history rebaseline` restores snapshot coverage.
 
 One transaction erases at most 10,000 retained revisions, scrubs affected shared
 correction context and retained outbox payloads, and replaces affected cached
