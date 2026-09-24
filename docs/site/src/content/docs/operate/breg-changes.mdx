@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-04"
+last_reviewed: "2026-09-24"
 doc_type: how-to
 persona:
   - operator
@@ -41,21 +41,28 @@ credentials or activation authority; the report labels that baseline `integrity_
 
 The diff lists model, access, and route changes with their change codes and, for access changes,
 their direction: a scope, purpose, row-boundary, field, count, history, or export change is marked
-as widening or narrowing, and mixed changes are marked for review. Set `package.sequence` in
+as widening or narrowing, and mixed changes are marked for review. A change to consent,
+recipients, or a consent-issuing action carries a `reason` when it alters who holds an existing
+consent, such as a client added to a recipient organization or a gated profile widened in place.
+The `reason` is a review aid in the diff output, not a runtime guarantee: the successor enforces
+exactly what its package declares. Set `package.sequence` in
 `registry.yaml` to the next sequence. `registry.version` is bound to the database for its
 lifetime: a package that changes it can only initialize a new database.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, DiffArgs;
-    crates/registry-breg/src/tooling.rs, AccessChangeDirection;
+    crates/registry-breg/src/tooling.rs, AccessChangeDirection and GATED_SCOPE_WIDENED;
     crates/registry-breg/src/migration.rs, apply_verified_package(). */}
 
 ## Test and package the successor
 
 Pass the active runtime file as `--baseline-runtime-config` to both `test` and `package`, so the
 receipt and the package bind to the baseline they will succeed. A change the migration planner
-classifies as compatible additive, such as a new optional field, needs no further evidence. A
-widened grant is an access change: the planner accepts it as metadata-only, but it still needs a
-reviewed migration descriptor and rehearsal evidence, as the metadata-only case below describes.
+classifies as compatible additive, such as a new optional field or a code added to a vocabulary a
+field or action input uses (`field_vocabulary_codes_added`, `action_vocabulary_codes_added`), needs
+no further evidence. An added action input code is still marked for review in the diff, because the
+action accepts it with no further check. A widened grant is an access change: the planner accepts
+it as metadata-only, but it still needs a reviewed migration descriptor and rehearsal evidence, as
+the metadata-only case below describes.
 When `test` or `package` reports `migration.review.required`, prepare a reviewed migration
 directory and pass it to both commands as `--reviewed-migrations`:
 

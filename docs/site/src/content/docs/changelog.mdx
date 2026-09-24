@@ -77,6 +77,31 @@ relevant product pages on this site rather than duplicating release notes.
 {/* Evidence: crates/registry-breg/src/postgres/mutation.rs, request_reviewed_apply;
     crates/registry-breg/tests/postgres_task_grants.rs, review_apply_checks_original_task_before_authority_and_before_commit. */}
 
+- Base Registry Engine (BReg) read permissions can require the subject's
+  recorded consent with
+  `requireConsent`. A row reaches a declared recipient organization only while
+  a live give for that recipient, purpose, and profile is recorded; PostgreSQL
+  checks it on every read, and a withdrawal applies to the next request.
+  `bregctl module add consent` generates the consent records, actions, and
+  profiles for one subject entity. `bregctl check` reports
+  `access.consent.ungated_client` for an ungated profile that reads the same
+  rows. Access preview scenarios accept `actorKind` and `requesterClient` and
+  report the derived `recipients`. See
+  [require consent for a read](../configure/breg-access/#require-consent-for-a-read)
+  and [membership and consent read boundaries](../explanation/membership-read-boundaries/).
+
+{/* Evidence: crates/registry-breg/src/consent.rs;
+    crates/registry-bregctl/src/consent_module.rs, plan();
+    crates/registry-breg/src/access_preview.rs, ScenarioClaims and AccessPreview. */}
+
+- A code added to a BReg field or action input vocabulary is now a compatible
+  additive migration, so it needs no reviewed migration evidence.
+  `bregctl diff` attaches a review `reason` to consent-related access changes.
+  See [change an active registry](../operate/breg-changes/).
+
+{/* Evidence: crates/registry-breg/src/package.rs, FieldVocabularyCodesAdded and ActionVocabularyCodesAdded;
+    crates/registry-breg/src/tooling.rs, ACTION_CODES_ADDED. */}
+
 ## v0.33.0 beta-45
 
 - Registry Scheduling joins the release with published openings, exact-time

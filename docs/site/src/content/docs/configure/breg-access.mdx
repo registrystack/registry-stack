@@ -5,14 +5,14 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-04"
+last_reviewed: "2026-09-24"
 doc_type: how-to
 locale: en
 standards_referenced: []
 ---
 
 You are authoring a registry project that `bregctl check` compiles, and you want to decide who may read and write what.
-This page covers access profiles and their permissions, the three field lists that bound a response, a filter, and a write, the row boundaries that tie rows to a caller's claims, the requirements an entity imposes on every profile that touches it, and the offline preview that tells you whether a set of synthetic claims would be admitted.
+This page covers access profiles and their permissions, the three field lists that bound a response, a filter, and a write, the row boundaries that tie rows to a caller's claims, the requirements an entity imposes on every profile that touches it, reads gated on the subject's recorded consent, and the offline preview that tells you whether a set of synthetic claims would be admitted.
 At the end, every profile permissions what its callers need and nothing more, and you can show a reviewer why.
 
 ## One profile per request
@@ -181,6 +181,99 @@ Requirements grant no exemption based on a profile's name.
 
 {/* Evidence: crates/registry-breg/src/contract.rs, AccessRequirementsSource; products/breg/acceptance/facility/registry.yaml. */}
 
+## Require consent for a read
+
+A read permission can disclose a row to a named recipient only while the subject's recorded consent is in force.
+[Membership and consent read boundaries](../../explanation/membership-read-boundaries/) explains what the database checks; this section authors it on the project `init` wrote.
+
+Declare the organizations that may receive gated rows, with the OAuth clients each one reads through, and the purposes the registry discloses data for:
+
+```yaml
+vocabularies:
+  - id: data-use-purpose
+    values: [food-assistance]
+
+recipients:
+  organizations:
+    - id: food-agency
+      name: Food Assistance Agency
+      contact: privacy@food-agency.example.gov
+      clients: [food-agency-portal]
+```
+
+The consent records the generator writes belong to a dataset named `consent`.
+A project with a `manifestProjection`, like the one `init` wrote, declares it under `datasets`, names a generated profile that reads it, and adds `consent` to its data service's `servesDatasets`:
+
+```yaml
+    - id: consent
+      title: Consent records
+      description: Recorded consent decisions and the recipients they name.
+      owner: Generic Registry Authority
+      status: under_development
+      accessProfile: record-consent-steward
+```
+
+Without it, the next command refuses with `manifest_projection.entity.dataset_dangling` or `manifest_projection.dataset.access_profile_unknown` and writes nothing.
+Then generate the consent module for the subject entity:
+
+```sh
+bregctl module add consent --subject record ./my-registry
+```
+
+```text
+Added the consent module. 2 artifacts written.
+
+  modules/consent-record/module.yaml
+  registry.yaml
+```
+
+The module adds a privacy notice and its clauses, a principal link, a create-only consent decision, the actions that record a decision, and five profiles: self, assisted capture, steward, link steward, and a recipient feed.
+Its `Next:` list names the line that gates a permission on the new decision.
+Until a permission carries it, `check` refuses with `consent.require.unused`.
+Add it to a read-only profile for the recipient's client:
+
+```yaml
+  - id: food-targeting
+    principalClaim: registry_principal
+    actorKind: service
+    requesterClients: [food-agency-portal]
+    requiredScopes: [registry:record:targeting]
+    requiredPurposes: [food-assistance]
+    permissions:
+      - entity: record
+        operations: [get, list]
+        readableFields: [code, label, status]
+        rowBoundaries: []
+        requireConsent:
+          - {record: record-consent-decision, on: id}
+```
+
+A gated profile needs `actorKind`, `requesterClients` that a recipient organization lists, and `requiredPurposes` from `data-use-purpose`.
+It grants reads only: writes, actions, spatial queries, bulk export, and Evidence source export are refused on a gated permission.
+The profile id is the consent scope subjects agree to. To widen a gated profile or drop its `requireConsent`, declare a new profile id and list the old one under `retiredConsentScopes`; `bregctl diff` marks an in-place change for review.
+
+The project now passes `check`, with a finding the gate cannot close by itself:
+
+```text
+  finding  access.consent.ungated_client  3 paths
+           this profile admits any client and reads `record` without consent, so a
+           client of the consent-gated `food-targeting` can read the same rows through
+           it. List requesterClients that no gated profile admits
+             entities[id=record].accessProfiles[id=evidence-source].requesterClients
+             entities[id=record].accessProfiles[id=operator].requesterClients
+             entities[id=record].accessProfiles[id=record-reader].requesterClients
+```
+
+A profile without `requireConsent` reads without consent, so the `food-agency-portal` client could select `record-reader` and skip the gate.
+Give each ungated profile that reads the entity its own `requesterClients`, none of which a gated profile admits.
+At startup, every client a recipient organization lists must also be in the issuer's `allowedClients`; the server refuses to start otherwise.
+
+{/* Evidence: crates/registry-bregctl/src/consent_module.rs, plan();
+    crates/registry-breg/src/consent.rs, validate_recipients();
+    crates/registry-breg/src/access.rs, access.consent.ungated_client;
+    crates/registry-breg/src/auth.rs, validate_claim_mapping();
+    products/breg/consent.md. */}
+
 ## Read the compiled access
 
 ```sh
@@ -251,7 +344,7 @@ Synthetic profile admission: allowed
 ```
 
 Remove `registry:generic:read` from `scopes` and the heading becomes `Synthetic profile admission: refused` over the reason `required_scope_missing`.
-The other reasons are `principal_missing_or_mismatched`, `purpose_missing_or_not_allowed`, `row_claim_missing_or_wrong_cardinality`, `operation_not_granted`, and `entity_or_profile_not_found`.
+The other reasons are `principal_missing_or_mismatched`, `purpose_missing_or_not_allowed`, `actor_kind_missing`, `actor_kind_mismatched`, `requester_client_missing_or_mismatched`, `row_claim_missing_or_wrong_cardinality`, `operation_not_granted`, and `entity_or_profile_not_found`.
 Both admitted and refused previews exit successfully, because a refusal is the answer you asked for; `bregctl --format json explain access ./my-registry --scenario ./access-scenario.json` reports the same verdict as `explanation.admitted` and `explanation.reason`.
 A scenario may add `readPath` with `operation: list` to preview a read path.
 The file is limited to 64 KiB, must be strict JSON without duplicate keys, and refuses unknown members.
@@ -261,6 +354,40 @@ Use invented claims only, never a real token or personal data. The preview verif
 :::
 
 {/* Evidence: crates/registry-breg/src/access_preview.rs, AccessScenario and preview_access(); crates/registry-bregctl/src/lib.rs, ExplainArgs and explain(); products/breg/examples/access-review/registry.yaml. */}
+
+A profile that declares `actorKind` or `requesterClients` needs the same members in the scenario's `claims`.
+For the consent-gated `food-targeting` profile above:
+
+```json
+{
+  "entity": "record",
+  "accessProfile": "food-targeting",
+  "operation": "list",
+  "claims": {
+    "principalClaim": "registry_principal",
+    "principal": "synthetic-portal",
+    "actorKind": "service",
+    "requesterClient": "food-agency-portal",
+    "scopes": ["registry:record:targeting"],
+    "purpose": "food-assistance"
+  }
+}
+```
+
+```text
+Synthetic profile admission: allowed
+  reason      profile_requirements_satisfied
+  recipients  food-agency
+```
+
+`recipients` is the recipient set the runtime derives from the verified client: the organization that lists it and every group that organization belongs to.
+A client no organization lists yields an empty set, and every consent check it reaches fails closed.
+Admission is not disclosure: whether a row is returned depends on the consent decisions stored in the database, which the preview does not read.
+`directClaims` cannot name `registry:recipients` or a `registry:consent-decisions:` claim; the preview refuses the scenario with `access.scenario.invalid`, because only the engine fills those claims, never a token.
+
+{/* Evidence: crates/registry-breg/src/access_preview.rs, ScenarioClaims, AccessPreview.recipients and synthetic_claims();
+    crates/registry-breg/src/model.rs, recipient_set();
+    crates/registry-breg/src/api/mod.rs, requester_client_missing_or_mismatched. */}
 
 ## Start from a working example
 
@@ -281,6 +408,11 @@ Follow its README to compare profile admission with the limits that need a runni
 | The preview refuses with `row_claim_missing_or_wrong_cardinality`. | A row boundary found no claim, or an `in` boundary found a single value where it needs a list. Add the claim under `directClaims` with the cardinality the operator expects. |
 | The preview refuses with `operation_not_granted` or `entity_or_profile_not_found`. | The scenario names an operation the permission does not list, or an entity or profile the project does not declare. Check the ids against `explain access`. |
 | `check` reports `access.profile.unrestricted_collection`. | A profile lists an entity with no row boundary. Add a claim-bound boundary, or accept a registry-wide role knowingly and record why. |
+| `check` refuses with `consent.require.unused`. | A consent record exists and no permission requires it yet. Add the `requireConsent` line the error names to a read permission, or list a former gated profile id under `retiredConsentScopes`. |
+| `check` reports `access.consent.ungated_client`. | A profile reads a gated entity without `requireConsent` and admits any client, or a client a gated profile admits. List `requesterClients` on it that no gated profile admits. |
+| The preview refuses with `actor_kind_missing`, `actor_kind_mismatched`, or `requester_client_missing_or_mismatched`. | The profile declares `actorKind` or `requesterClients`. Add `actorKind` and `requesterClient` to the scenario's `claims` with the values the profile lists. |
+| The preview refuses a scenario with `access.scenario.invalid` naming `registry:recipients`. | `directClaims` named a claim only the engine fills. Remove it and set `requesterClient`; the preview derives the recipients from it. |
+| The server refuses to start after recipients were declared. | A client a recipient organization lists is missing from the issuer's `allowedClients`. Add it there, or remove it from the organization. |
 
 ## Next
 
