@@ -962,7 +962,7 @@ async fn real_postgres_field_encryption_flip_seals_resumes_and_drops_the_plainte
     let coverage_refusal = apply_flip(&database, &package, &active, &keys, None).await;
     assert_eq!(
         coverage_refusal.expect_err("incomplete coverage refuses successor begin"),
-        MigrationError::ApplyFailed
+        MigrationError::HistoryCoverage
     );
     let untouched = database
         .admin

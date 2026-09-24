@@ -102,7 +102,9 @@ An erasure of revisions committed after the coverage baseline does not hold back
 package: `bregctl apply` accepts a successor when the only gap in coverage is one the audit
 journal records as that erasure. Erasing baseline data, or any gap the journal does not record as
 a committed erasure, still refuses every successor package until `history rebaseline` restores
-coverage. That includes an erasure whose audit record `audit prune` has since removed.
+coverage. That includes an erasure whose audit record `audit prune` has since removed. The
+refusal is `apply.history.coverage_incomplete`, and it leaves maintenance state unchanged, so
+apply the same package again once the rebaseline completes.
 
 {/* Evidence: crates/registry-breg/src/history_erasure.rs;
     crates/registry-bregctl/src/history_erasure_lifecycle.rs;

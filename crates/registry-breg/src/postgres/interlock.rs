@@ -2229,7 +2229,7 @@ async fn verify_complete_history_coverage(
         .await?
         .unwrap_or(false)
     {
-        return Err(PostgresKernelError::RegistryUnavailable);
+        return Err(PostgresKernelError::HistoryCoverageIncomplete);
     }
     Ok(())
 }
@@ -2244,7 +2244,7 @@ async fn verify_history_coverage_can_begin_successor(
         .await?
         .unwrap_or(true)
     {
-        return Err(PostgresKernelError::RegistryUnavailable);
+        return Err(PostgresKernelError::HistoryCoverageIncomplete);
     }
     Ok(())
 }
