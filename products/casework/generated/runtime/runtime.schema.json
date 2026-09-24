@@ -316,6 +316,19 @@
       ],
       "type": "string"
     },
+    "MetricsListenerConfig": {
+      "additionalProperties": false,
+      "description": "Operator-private listener for `/metrics` and `/version`.\n\nIt is separate from the API listener so the counters and the active\npackage digest never appear on the surface the public contract describes.",
+      "properties": {
+        "bind": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bind"
+      ],
+      "type": "object"
+    },
     "OidcConfig": {
       "additionalProperties": false,
       "properties": {
@@ -749,6 +762,16 @@
     },
     "listener": {
       "$ref": "#/$defs/ListenerConfig"
+    },
+    "metricsListener": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MetricsListenerConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "package": {
       "$ref": "#/$defs/RuntimePackageConfig"

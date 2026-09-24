@@ -611,15 +611,31 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         ));
     }
     drop(worker_stopped);
+    let metrics_state = crate::metrics::MetricsState::new(
+        Arc::new(store),
+        config.sources.keys().cloned().collect(),
+        package_digest.clone(),
+    );
     let app = router(HttpState {
         service,
         authenticator,
         project: Arc::new(project),
     });
+    // Both sockets bind before either serves, so a metrics address already in
+    // use refuses startup instead of leaving an API without its telemetry.
+    let metrics = match &config.metrics_listener {
+        Some(metrics_listener) => Some((
+            tokio::net::TcpListener::bind(metrics_listener.bind)
+                .await
+                .map_err(RuntimeError::MetricsListen)?,
+            crate::metrics::metrics_router(metrics_state),
+        )),
+        None => None,
+    };
     let listener = tokio::net::TcpListener::bind(config.listener.bind)
         .await
         .map_err(RuntimeError::Listen)?;
-    let served = serve_until_worker_stops(listener, app, worker_stops).await;
+    let served = serve_until_worker_stops(listener, app, metrics, worker_stops).await;
     for worker in workers {
         worker.abort();
     }
@@ -640,16 +656,40 @@ fn reconciliation_timer(period: Duration) -> Interval {
 
 /// Serve until a supervised background loop stops. The listener never stops on
 /// its own, so a clean return means a worker stopped, and the process reports
-/// that as a failure for whatever supervises it to restart.
+/// that as a failure for whatever supervises it to restart. The optional
+/// operator-private metrics listener serves beside it and stops with it.
 async fn serve_until_worker_stops(
     listener: tokio::net::TcpListener,
     app: axum::Router,
+    metrics: Option<(tokio::net::TcpListener, axum::Router)>,
     stops: mpsc::Receiver<&'static str>,
 ) -> Result<(), RuntimeError> {
-    axum::serve(listener, app)
+    let (api_stopped, mut metrics_stop) = tokio::sync::watch::channel(());
+    let metrics = metrics.map(|(metrics_listener, metrics_app)| {
+        tokio::spawn(async move {
+            axum::serve(metrics_listener, metrics_app)
+                .with_graceful_shutdown(async move {
+                    let _ = metrics_stop.changed().await;
+                })
+                .await
+        })
+    });
+    let served = axum::serve(listener, app)
         .with_graceful_shutdown(worker_stop(stops))
-        .await
-        .map_err(RuntimeError::Listen)?;
+        .await;
+    drop(api_stopped);
+    if let Some(metrics) = metrics {
+        match metrics.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::error!(error = %error, "the Casework metrics listener failed");
+            }
+            Err(error) => {
+                tracing::error!(error = %error, "the Casework metrics listener stopped unexpectedly");
+            }
+        }
+    }
+    served.map_err(RuntimeError::Listen)?;
     Err(RuntimeError::WorkerStopped)
 }
 
@@ -1060,11 +1100,63 @@ mod tests {
             .expect("report a stopped worker");
         let served = tokio::time::timeout(
             Duration::from_secs(5),
-            serve_until_worker_stops(listener, axum::Router::new(), stops),
+            serve_until_worker_stops(listener, axum::Router::new(), None, stops),
         )
         .await
         .expect("the listener stops after a background worker stops");
         assert!(matches!(served, Err(RuntimeError::WorkerStopped)));
+    }
+
+    #[tokio::test]
+    async fn the_metrics_listener_serves_beside_the_api_and_stops_with_it() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local listener");
+        let metrics = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local metrics listener");
+        let metrics_address = metrics.local_addr().expect("metrics address");
+        let metrics_app =
+            axum::Router::new().route("/version", axum::routing::get(|| async { "ok" }));
+        let (stopped, stops) = mpsc::channel(1);
+        let served = tokio::spawn(serve_until_worker_stops(
+            listener,
+            axum::Router::new(),
+            Some((metrics, metrics_app)),
+            stops,
+        ));
+
+        let mut stream = tokio::net::TcpStream::connect(metrics_address)
+            .await
+            .expect("reach the metrics listener");
+        stream
+            .write_all(b"GET /version HTTP/1.1\r\nhost: metrics\r\nconnection: close\r\n\r\n")
+            .await
+            .expect("send a request");
+        let mut response = String::new();
+        stream
+            .read_to_string(&mut response)
+            .await
+            .expect("read the response");
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(response.ends_with("ok"), "{response}");
+
+        stopped
+            .send("clock")
+            .await
+            .expect("report a stopped worker");
+        let served = tokio::time::timeout(Duration::from_secs(5), served)
+            .await
+            .expect("the listeners stop after a background worker stops")
+            .expect("the serving task completes");
+        assert!(matches!(served, Err(RuntimeError::WorkerStopped)));
+        assert!(
+            tokio::net::TcpStream::connect(metrics_address)
+                .await
+                .is_err(),
+            "the metrics listener closes with the API listener"
+        );
     }
 
     fn breg_binding(reconciliation_interval_milliseconds: u64) -> BregBinding {
@@ -1163,6 +1255,8 @@ pub enum RuntimeError {
     Service(#[from] crate::ServiceError),
     #[error("the Casework listener failed")]
     Listen(#[source] std::io::Error),
+    #[error("the Casework metrics listener at metricsListener.bind failed")]
+    MetricsListen(#[source] std::io::Error),
     #[error("a Casework background worker stopped")]
     WorkerStopped,
 }

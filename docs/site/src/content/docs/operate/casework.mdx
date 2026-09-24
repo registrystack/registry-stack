@@ -207,6 +207,7 @@ sources:
 | --- | --- |
 | `package` | The absolute root of the package containing `casework.yaml`, its manifest, and exact source descriptions, and optionally the one policy digest the runtime may load from it. |
 | `listener` | The listener address and the transport boundary the deployment declares for it. |
+| `metricsListener` | Optional. A second, operator-private address for `/metrics` and `/version`; see [Scrape metrics and the running version](#scrape-metrics-and-the-running-version). |
 | `secretProviders` | The explicitly enabled file and environment secret providers. |
 | `database` | Secret references for the runtime and migration connection URLs, and an optional trusted root certificate for the PostgreSQL connection. |
 | `authentication` | The OpenID Connect issuer, audience, claim names, human-identity assertion, and the source of the issuer's keys. |
@@ -563,6 +564,41 @@ unreachable or its schema is not current, or a source's reconciliation has faile
 passes, and `200` otherwise. Readiness checks the audit writer first, then the store, then
 reconciliation health. The `503` body names none of these; the runtime log and `caseworkctl doctor`
 do.
+
+### Scrape metrics and the running version
+
+Set `metricsListener` to serve telemetry on a second address that the proxy in front of the API
+never routes to:
+
+```yaml
+metricsListener:
+  bind: 127.0.0.1:9100
+```
+
+The address must be loopback or private with a nonzero port, never a wildcard, and never the address
+and port the API listener occupies; the runtime refuses anything else at `metricsListener` before
+it opens a connection. Both addresses bind before either serves, so a metrics address already in
+use refuses startup, and the metrics listener stops with the API listener. Without the block no
+telemetry socket opens.
+
+`GET /version` answers JSON with the running `version` and the `packageDigest` of the verified
+policy package, `null` for an unpackaged local project, so a rollout can confirm which package each
+replica serves. `GET /metrics` answers the Prometheus text format, read at scrape time:
+
+| Series | Meaning |
+| --- | --- |
+| `casework_build_info{version,package_digest}` | Always `1`; the labels carry the build and the package digest. |
+| `casework_database_up` | `1` when this scrape read PostgreSQL. The series below appear only then. |
+| `casework_source_reconciliation_consecutive_failures{source_id}` | Failed reconciliation passes in a row for each configured source. |
+| `casework_source_reconciliation_last_success_age_seconds{source_id}` | Seconds since the source last reconciled; absent until its first success. |
+
+Alert on a reconciliation age well beyond the source's interval: that age catches a pass that
+hangs, which readiness does not. Audit writer health is reported by `/ready`, not by a series. The only label values are the configured source identifiers, the version, and
+the package digest.
+
+{/* Evidence: crates/registry-casework/src/config.rs, MetricsListenerConfig;
+    crates/registry-casework/src/metrics.rs, metrics_router() and render();
+    crates/registry-casework/src/runtime.rs, serve_from_path() and serve_until_worker_stops(). */}
 
 Each audited call writes a request entry, schema `registry-casework-audit/v1`, before it opens its
 transaction, and its response entries after the transaction commits, all sharing one correlation.
