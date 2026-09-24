@@ -130,3 +130,11 @@
 - Add `products/messaging/scripts/measure-throughput.sh`, which measures SMS
   dispatch on one replica against a 200 ms mock provider; the README records
   the measured rates.
+- Extend `registry-messaging-client` with `submit` under a caller-chosen
+  idempotency key, `cancel`, and `preview`, each refusing a malformed key,
+  message identifier, template identifier, or version before any request,
+  and never retrying. Expose the client through `registry-stack-client` and
+  through the `messaging` namespace of `@registrystack/client` and
+  `registry-stack-client` from Registry Stack v0.35.0, and hold its Node.js
+  and Python bindings to the dependency-direction and vendor-neutrality
+  gates.

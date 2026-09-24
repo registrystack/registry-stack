@@ -8,7 +8,7 @@ ensure_built()
 
 from registry_messaging_client import MessagingClient  # noqa: E402
 
-_METHODS = {"health", "ready", "submit", "message"}
+_METHODS = {"health", "ready", "submit", "message", "cancel", "preview"}
 _STUB = (
     pathlib.Path(__file__).resolve().parents[2]
     / "python"

@@ -6,5 +6,7 @@ This internal napi-rs binding supplies the `messaging` module assembled into
 Every message operation accepts a bearer token for that call; `health` and
 `ready` take none. `submit` requires a caller-chosen idempotency key of 1 to
 128 visible ASCII characters and refuses any other key before a request is
-sent. The binding does not retain credentials, never invents an idempotency
-key, and never retries a submission.
+sent. `cancel` takes a message identifier and `preview` a template identifier,
+version, and `{ locale, data }` request; each refuses a malformed name before a
+request is sent. The binding does not retain credentials, never invents an
+idempotency key, and never retries a submission or a cancellation.

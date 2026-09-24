@@ -8,7 +8,7 @@ use std::time::Duration;
 use messaging_client_sdk::{
     BearerToken, MessagingClient as RustClient, MessagingClientConfig,
     MessagingClientError as RustClientError, MessagingComplete, MessagingProtocolFailure,
-    ProblemCode, SubmitMessageRequest,
+    ProblemCode, SubmitMessageRequest, TemplatePreviewRequest,
 };
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
@@ -285,6 +285,38 @@ impl MessagingClient {
             py.detach(|| {
                 self.runtime
                     .block_on(self.inner.message(&token, message_id))
+            }),
+        )
+    }
+
+    fn cancel<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        message_id: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        complete(
+            py,
+            py.detach(|| self.runtime.block_on(self.inner.cancel(&token, message_id))),
+        )
+    }
+
+    fn preview<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        template_id: &str,
+        version: &str,
+        request: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let request: TemplatePreviewRequest = input(py, request)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime
+                    .block_on(self.inner.preview(&token, template_id, version, &request))
             }),
         )
     }

@@ -91,6 +91,36 @@ class MessageView(_MessageViewOptional):
     attempts: list[AttemptSummary]
     links: MessageLinks
 
+class TemplatePreviewRequest(TypedDict):
+    locale: str
+    data: JsonValue
+
+SmsEncoding: TypeAlias = Literal["gsm7", "ucs2"]
+
+class SegmentCount(TypedDict):
+    """Septets for GSM-7, UTF-16 code units for UCS-2."""
+
+    encoding: SmsEncoding
+    units: int
+    segments: int
+
+class _RenderedPartsOptional(TypedDict, total=False):
+    subject: str
+    html: str
+
+class RenderedParts(_RenderedPartsOptional):
+    text: str
+
+class _TemplatePreviewOptional(TypedDict, total=False):
+    sms: SegmentCount
+
+class TemplatePreview(_TemplatePreviewOptional):
+    template: TemplateReference
+    locale: str
+    channel: Channel
+    packageDigest: str
+    parts: RenderedParts
+
 T = TypeVar("T")
 
 class Complete(TypedDict, Generic[T]):
@@ -149,6 +179,8 @@ class MessagingClient:
     def ready(self) -> Complete[None]: ...
     def submit(self, token: str, idempotency_key: str, request: SubmitMessageRequest) -> Complete[MessageReceipt]: ...
     def message(self, token: str, message_id: MessageId) -> Complete[MessageView]: ...
+    def cancel(self, token: str, message_id: MessageId) -> Complete[MessageView]: ...
+    def preview(self, token: str, template_id: str, version: str, request: TemplatePreviewRequest) -> Complete[TemplatePreview]: ...
 
 PROBLEM_CODES: list[str]
 __version__: str

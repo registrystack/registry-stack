@@ -55,6 +55,20 @@ async function sendNotice(): Promise<messaging.MessageStatus> {
 }
 void sendNotice
 
+async function withdrawNotice(messageId: string): Promise<messaging.MessageStatus> {
+  const cancelled = await messagingClient.cancel('header.payload.signature', messageId)
+  return cancelled.value.status
+}
+void withdrawNotice
+
+async function previewNotice(): Promise<string> {
+  const preview: messaging.MessagingOutcome<messaging.TemplatePreview> = await messagingClient.preview(
+    'header.payload.signature', 'notice', '1', { locale: 'en', data: {} },
+  )
+  return preview.value.parts.text
+}
+void previewNotice
+
 // The progressive request surface refines the generated declaration: it names
 // the request shape and discriminates the result on its response format.
 async function readEvidence(): Promise<Buffer | string> {

@@ -7,6 +7,8 @@ import {
   type MessagingProblemCode,
   type MessagingProtocolFailure,
   type SubmitMessageRequest,
+  type TemplatePreview,
+  type TemplatePreviewRequest,
 } from '../client'
 
 const client = new MessagingClient({ baseUrl: 'https://messaging.example.test/' })
@@ -33,6 +35,11 @@ const ready: Promise<MessagingOutcome<null>> = client.ready()
 const receipt: Promise<MessagingOutcome<MessageReceipt>> = client.submit(token, 'reminder-1', templated)
 void client.submit(token, 'notice-1', direct)
 const view: Promise<MessagingOutcome<MessageView>> = client.message(token, messageId)
+const previewRequest: TemplatePreviewRequest = { locale: 'en', data: { time: '10:00' } }
+const cancelled: Promise<MessagingOutcome<MessageView>> = client.cancel(token, messageId)
+const preview: Promise<MessagingOutcome<TemplatePreview>> = client.preview(token, 'appointment-reminder', '1', previewRequest)
+void cancelled
+void preview
 void health
 void ready
 void receipt
@@ -63,3 +70,14 @@ const neither: SubmitMessageRequest = { senderProfile: 'reminders-sms', to: {}, 
 void neither
 // @ts-expect-error the idempotency key is required
 void client.submit(token, templated)
+
+async function segmentsOf(): Promise<number | undefined> {
+  const outcome = await client.preview(token, 'appointment-reminder', '1', previewRequest)
+  const text: string = outcome.value.parts.text
+  void text
+  return outcome.value.sms?.segments
+}
+void segmentsOf
+
+// @ts-expect-error a preview names its locale
+void client.preview(token, 'appointment-reminder', '1', { data: {} })

@@ -6,6 +6,8 @@ export declare class MessagingClient {
   ready(): Promise<MessagingOutcome>
   submit(token: string, idempotencyKey: string, request: any): Promise<MessagingOutcome>
   message(token: string, messageId: string): Promise<MessagingOutcome>
+  cancel(token: string, messageId: string): Promise<MessagingOutcome>
+  preview(token: string, templateId: string, version: string, request: any): Promise<MessagingOutcome>
 }
 
 export interface MessagingClientConfig {

@@ -99,6 +99,8 @@ for (const [method, jsonIndexes] of [
   ['ready', []],
   ['submit', [2]],
   ['message', []],
+  ['cancel', []],
+  ['preview', [3]],
 ]) {
   MessagingClient.prototype[method] = function (...args) {
     try {

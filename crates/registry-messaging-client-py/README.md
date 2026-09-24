@@ -19,18 +19,28 @@ receipt = client.submit(
     },
 )
 view = client.message(token, receipt["value"]["id"])
+cancelled = client.cancel(token, receipt["value"]["id"])
+preview = client.preview(
+    token,
+    "appointment-reminder",
+    "1",
+    {"locale": "en", "data": {"time": "10:00"}},
+)
 ```
 
 The client keeps service configuration, but never a bearer token. Supply it
 explicitly on each call; `health` and `ready` take none. A submission requires
 the idempotency key chosen by the caller, 1 to 128 visible ASCII characters;
 the binding refuses any other key before a request is sent, and never invents
-or replaces a key or retries a submission. Results use the canonical Rust
+or replaces a key or retries a submission or a cancellation. A message
+identifier, template identifier, or version outside the runtime's grammar is
+refused before a request is sent. Results use the canonical Rust
 client's camel-case wire DTOs inside a
 `{"kind": "complete", "value": ..., "trace_id": ...}` envelope.
 
 `MessagingClientError` preserves the problem code, its pinned title and
 detail, the status, and trace context, so a caller handles a reused or
-expired idempotency key explicitly.
+expired idempotency key, a cancellation that lost the race to dispatch, and a
+template refusal explicitly.
 
 This crate is private and does not publish a standalone Python distribution.

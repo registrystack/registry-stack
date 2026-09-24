@@ -10,6 +10,7 @@ use napi_derive::napi;
 use registry_messaging_client::{
     BearerToken, MessagingClient as CoreClient, MessagingClientConfig as CoreConfig,
     MessagingClientError, MessagingComplete, MessagingProtocolFailure, SubmitMessageRequest,
+    TemplatePreviewRequest,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -93,6 +94,29 @@ impl MessagingClient {
     pub async fn message(&self, token: String, message_id: String) -> Result<MessagingOutcome> {
         let token = bearer(token)?;
         outcome(self.inner.message(&token, &message_id).await)
+    }
+
+    #[napi]
+    pub async fn cancel(&self, token: String, message_id: String) -> Result<MessagingOutcome> {
+        let token = bearer(token)?;
+        outcome(self.inner.cancel(&token, &message_id).await)
+    }
+
+    #[napi]
+    pub async fn preview(
+        &self,
+        token: String,
+        template_id: String,
+        version: String,
+        request: Value,
+    ) -> Result<MessagingOutcome> {
+        let token = bearer(token)?;
+        let request: TemplatePreviewRequest = input(request)?;
+        outcome(
+            self.inner
+                .preview(&token, &template_id, &version, &request)
+                .await,
+        )
     }
 }
 

@@ -24,6 +24,32 @@ const SUBMISSION = {
   correlationId: 'case-42',
 };
 
+const CANCELLED_VIEW = {
+  id: MESSAGE_ID,
+  status: 'cancelled',
+  dispatch: 'cancelled',
+  report: 'none',
+  channel: 'sms',
+  senderProfile: 'reminders-sms',
+  to: { phone: '+15550100' },
+  acceptedAt: '2026-09-25T10:00:00Z',
+  expiresAt: '2026-09-26T10:00:00Z',
+  updatedAt: '2026-09-25T10:00:01Z',
+  attempts: [],
+  links: LINKS,
+};
+
+const PREVIEW_REQUEST = { locale: 'en', data: { time: '10:00' } };
+
+const PREVIEW = {
+  template: { id: 'appointment-reminder', version: '1' },
+  locale: 'en',
+  channel: 'sms',
+  packageDigest: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+  parts: { text: 'Your appointment is at 10:00.' },
+  sms: { encoding: 'gsm7', units: 29, segments: 1 },
+};
+
 async function serve(context, answer) {
   const requests = [];
   const server = http.createServer((request, response) => {
@@ -192,6 +218,117 @@ test('message refuses an identifier outside the lowercase UUID form before any r
   assert.equal(requests.length, 0);
 });
 
+test('cancel posts to the cancel route and answers the cancelled view', async (context) => {
+  const { baseUrl, requests } = await serve(context, () => ({
+    status: 200,
+    contentType: 'application/json',
+    document: CANCELLED_VIEW,
+  }));
+  const { MessagingClient } = require('../client');
+  const client = new MessagingClient({ baseUrl });
+
+  const outcome = await client.cancel('one-call-secret', MESSAGE_ID);
+
+  assert.deepEqual(outcome, { kind: 'complete', value: CANCELLED_VIEW, traceId: TRACE_ID });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, 'POST');
+  assert.equal(requests[0].path, `/v1/messages/${MESSAGE_ID}/cancel`);
+  assert.equal(requests[0].headers.authorization, 'Bearer one-call-secret');
+  assert.equal(requests[0].headers['idempotency-key'], undefined);
+  assert.equal(requests[0].body, '');
+});
+
+test('cancel refuses an identifier outside the lowercase UUID form before any request', async (context) => {
+  const { baseUrl, requests } = await serve(context, () => ({ status: 500 }));
+  const { MessagingClient } = require('../client');
+  const client = new MessagingClient({ baseUrl });
+
+  for (const id of ['', '../ready', MESSAGE_ID.toUpperCase()]) {
+    await assert.rejects(client.cancel('one-call-secret', id), (error) => error.kind === 'invalid_request');
+  }
+  assert.equal(requests.length, 0);
+});
+
+test('a cancellation that lost the race is the mapped conflict', async (context) => {
+  for (const [code, title, detail] of [
+    ['message.dispatch-started', 'Message dispatch started', 'Dispatch already started.'],
+    ['message.terminal', 'Message already final', 'The message is already final.'],
+  ]) {
+    const { baseUrl } = await serve(context, () => problem(code, 409, title, detail));
+    const { MessagingClient } = require('../client');
+    const client = new MessagingClient({ baseUrl });
+
+    await assert.rejects(client.cancel('one-call-secret', MESSAGE_ID), (error) => {
+      assert.equal(error.kind, 'problem');
+      assert.equal(error.status, 409);
+      assert.equal(error.code, code);
+      assert.equal(error.traceId, TRACE_ID);
+      return true;
+    });
+  }
+});
+
+test('preview posts the locale and data and answers the rendered parts', async (context) => {
+  const { baseUrl, requests } = await serve(context, () => ({
+    status: 200,
+    contentType: 'application/json',
+    document: PREVIEW,
+  }));
+  const { MessagingClient } = require('../client');
+  const client = new MessagingClient({ baseUrl });
+
+  const outcome = await client.preview('one-call-secret', 'appointment-reminder', '1', PREVIEW_REQUEST);
+
+  assert.deepEqual(outcome, { kind: 'complete', value: PREVIEW, traceId: TRACE_ID });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, 'POST');
+  assert.equal(requests[0].path, '/v1/templates/appointment-reminder/versions/1/preview');
+  assert.equal(requests[0].headers.authorization, 'Bearer one-call-secret');
+  assert.equal(requests[0].headers['content-type'], 'application/json');
+  assert.deepEqual(JSON.parse(requests[0].body), PREVIEW_REQUEST);
+});
+
+test('preview refuses a template name outside the package grammar before any request', async (context) => {
+  const { baseUrl, requests } = await serve(context, () => ({ status: 500 }));
+  const { MessagingClient, MessagingClientError } = require('../client');
+  const client = new MessagingClient({ baseUrl });
+
+  for (const [templateId, version] of [['', '1'], ['../ready', '1'], ['Reminder', '1'], ['reminder', '1/preview']]) {
+    await assert.rejects(
+      client.preview('one-call-secret', templateId, version, PREVIEW_REQUEST),
+      (error) => error.kind === 'invalid_request',
+    );
+  }
+  await assert.rejects(
+    client.preview('one-call-secret', 'reminder', '1', { ...PREVIEW_REQUEST, channel: 'sms' }),
+    (error) => error.kind === 'invalid_request',
+  );
+  assert.throws(
+    () => client.preview('one-call-secret', 'reminder', '1', { locale: 'en', data: { count: Number.MAX_SAFE_INTEGER + 1 } }),
+    (error) => error instanceof MessagingClientError && error.kind === 'invalid_request',
+  );
+  assert.equal(requests.length, 0);
+});
+
+test('a template refusal is the mapped problem', async (context) => {
+  const { baseUrl } = await serve(context, () => problem(
+    'template.data-invalid',
+    422,
+    'Template data invalid',
+    'The data does not match the template schema.',
+  ));
+  const { MessagingClient } = require('../client');
+  const client = new MessagingClient({ baseUrl });
+
+  await assert.rejects(client.preview('one-call-secret', 'appointment-reminder', '1', PREVIEW_REQUEST), (error) => {
+    assert.equal(error.kind, 'problem');
+    assert.equal(error.status, 422);
+    assert.equal(error.code, 'template.data-invalid');
+    assert.equal(error.traceId, TRACE_ID);
+    return true;
+  });
+});
+
 test('a reused idempotency key is the mapped problem with its pinned detail', async (context) => {
   const { baseUrl } = await serve(context, () => problem(
     'idempotency.key-reused',
@@ -287,8 +424,11 @@ test('bearer tokens never reach error text, fields, or inspection', async (conte
   await client.message(secret, MESSAGE_ID).catch((error) => failures.push(error));
   await client.submit(answered, 'key-1', SUBMISSION).catch((error) => failures.push(error));
   await client.message(answered, MESSAGE_ID).catch((error) => failures.push(error));
+  await client.cancel(answered, MESSAGE_ID).catch((error) => failures.push(error));
+  await client.preview(answered, 'appointment-reminder', '1', PREVIEW_REQUEST).catch((error) => failures.push(error));
+  await client.cancel(secret, MESSAGE_ID).catch((error) => failures.push(error));
 
-  assert.equal(failures.length, 3);
+  assert.equal(failures.length, 6);
   assert.equal(failures[0].kind, 'invalid_request');
   assert.equal(failures[1].kind, 'problem');
   assert.equal(failures[1].code, 'authentication.refused');

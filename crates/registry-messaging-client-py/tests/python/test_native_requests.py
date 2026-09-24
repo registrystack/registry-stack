@@ -15,6 +15,7 @@ TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
 TRACEPARENT = f"00-{TRACE_ID}-00f067aa0ba902b7-01"
 MESSAGE_ID = "0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d"
 HIDDEN_ID = "00000000-0000-4000-8000-000000000404"
+RACED_ID = "00000000-0000-4000-8000-000000000409"
 REUSED_KEY = "reused-key"
 PROBLEM_BASE = "https://id.registrystack.org/problems/registry-messaging/"
 LINKS = {
@@ -55,6 +56,31 @@ VIEW = {
     ],
     "links": LINKS,
 }
+CANCELLED_VIEW = {
+    "id": MESSAGE_ID,
+    "status": "cancelled",
+    "dispatch": "cancelled",
+    "report": "none",
+    "channel": "sms",
+    "senderProfile": "reminders-sms",
+    "to": {"phone": "+15550100"},
+    "acceptedAt": "2026-09-25T10:00:00Z",
+    "expiresAt": "2026-09-26T10:00:00Z",
+    "updatedAt": "2026-09-25T10:00:01Z",
+    "attempts": [],
+    "links": LINKS,
+}
+PREVIEW_REQUEST = {"locale": "en", "data": {"time": "10:00"}}
+PREVIEW = {
+    "template": {"id": "appointment-reminder", "version": "1"},
+    "locale": "en",
+    "channel": "sms",
+    "packageDigest": "sha256:" + "0" * 64,
+    "parts": {"text": "Your appointment is at 10:00."},
+    "sms": {"encoding": "gsm7", "units": 29, "segments": 1},
+}
+PREVIEW_PATH = "/tenant/v1/templates/appointment-reminder/versions/1/preview"
+FRENCH_PREVIEW_PATH = "/tenant/v1/templates/appointment-reminder/versions/2/preview"
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -95,6 +121,28 @@ class _Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("content-length", "0"))
         body = self.rfile.read(length).decode("utf-8")
         self.observe(body)
+        if self.path == f"/tenant/v1/messages/{MESSAGE_ID}/cancel":
+            self.respond(200, CANCELLED_VIEW)
+            return
+        if self.path == f"/tenant/v1/messages/{RACED_ID}/cancel":
+            self.respond_problem(
+                "message.dispatch-started",
+                409,
+                "Message dispatch started",
+                "Dispatch already started.",
+            )
+            return
+        if self.path == PREVIEW_PATH:
+            self.respond(200, PREVIEW)
+            return
+        if self.path == FRENCH_PREVIEW_PATH:
+            self.respond_problem(
+                "template.locale-unavailable",
+                422,
+                "Template locale unavailable",
+                "The template version has no text for this locale.",
+            )
+            return
         if self.headers.get("idempotency-key") == REUSED_KEY:
             self.respond_problem(
                 "idempotency.key-reused",
@@ -228,6 +276,66 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(raised.exception.kind, "problem")
         self.assertEqual(raised.exception.status, 404)
         self.assertEqual(raised.exception.code, "message.not-visible")
+
+    def test_cancel_posts_to_the_cancel_route_and_answers_the_cancelled_view(self) -> None:
+        outcome = self.client.cancel("one-call-token", MESSAGE_ID)
+
+        self.assertEqual(outcome, {"kind": "complete", "value": CANCELLED_VIEW, "trace_id": TRACE_ID})
+        observed = _Handler.observations[-1]
+        self.assertEqual(observed["method"], "POST")
+        self.assertEqual(observed["path"], f"/tenant/v1/messages/{MESSAGE_ID}/cancel")
+        self.assertEqual(observed["authorization"], "Bearer one-call-token")
+        self.assertEqual(observed["idempotency_key"], "")
+        self.assertEqual(observed["body"], "")
+
+    def test_cancel_refuses_a_non_canonical_identifier_before_io(self) -> None:
+        for message_id in ("", "../ready", MESSAGE_ID.upper()):
+            with self.subTest(message_id=message_id):
+                with self.assertRaises(MessagingClientError) as raised:
+                    self.client.cancel("one-call-token", message_id)
+                self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(_Handler.observations, [])
+
+    def test_a_cancellation_that_lost_the_race_is_the_mapped_conflict(self) -> None:
+        with self.assertRaises(MessagingClientError) as raised:
+            self.client.cancel("answered-token-canary", RACED_ID)
+
+        error = raised.exception
+        self.assertEqual(error.kind, "problem")
+        self.assertEqual(error.status, 409)
+        self.assertEqual(error.code, "message.dispatch-started")
+        self.assertEqual(error.trace_id, TRACE_ID)
+        rendered = "\n".join((str(error), repr(error), repr(vars(error))))
+        self.assertNotIn("canary", rendered)
+
+    def test_preview_posts_the_locale_and_data_and_answers_the_rendered_parts(self) -> None:
+        outcome = self.client.preview("one-call-token", "appointment-reminder", "1", PREVIEW_REQUEST)
+
+        self.assertEqual(outcome, {"kind": "complete", "value": PREVIEW, "trace_id": TRACE_ID})
+        observed = _Handler.observations[-1]
+        self.assertEqual(observed["method"], "POST")
+        self.assertEqual(observed["path"], PREVIEW_PATH)
+        self.assertEqual(observed["authorization"], "Bearer one-call-token")
+        self.assertEqual(observed["content_type"], "application/json")
+        self.assertEqual(json.loads(observed["body"]), PREVIEW_REQUEST)
+
+    def test_preview_refuses_a_template_name_outside_the_package_grammar_before_io(self) -> None:
+        for template_id, version in (("", "1"), ("../ready", "1"), ("Reminder", "1"), ("reminder", "1/preview")):
+            with self.subTest(template_id=template_id, version=version):
+                with self.assertRaises(MessagingClientError) as raised:
+                    self.client.preview("one-call-token", template_id, version, PREVIEW_REQUEST)
+                self.assertEqual(raised.exception.kind, "invalid_request")
+        with self.assertRaises(MessagingClientError) as raised:
+            self.client.preview("one-call-token", "reminder", "1", {**PREVIEW_REQUEST, "channel": "sms"})
+        self.assertEqual(raised.exception.kind, "invalid_request")
+        self.assertEqual(_Handler.observations, [])
+
+    def test_a_template_refusal_is_the_mapped_problem(self) -> None:
+        with self.assertRaises(MessagingClientError) as raised:
+            self.client.preview("one-call-token", "appointment-reminder", "2", PREVIEW_REQUEST)
+        self.assertEqual(raised.exception.kind, "problem")
+        self.assertEqual(raised.exception.status, 422)
+        self.assertEqual(raised.exception.code, "template.locale-unavailable")
 
     def test_unreachable_service_is_a_transport_failure(self) -> None:
         probe = HTTPServer(("127.0.0.1", 0), _Handler)

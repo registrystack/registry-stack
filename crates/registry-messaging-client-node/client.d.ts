@@ -69,6 +69,20 @@ export interface MessageView {
   links: MessageLinks
 }
 
+export interface TemplatePreviewRequest { locale: string; data: JsonValue }
+export type SmsEncoding = 'gsm7' | 'ucs2'
+/** Septets for GSM-7, UTF-16 code units for UCS-2. */
+export interface SegmentCount { encoding: SmsEncoding; units: SafeInteger; segments: SafeInteger }
+export interface RenderedParts { subject?: string; text: string; html?: string }
+export interface TemplatePreview {
+  template: TemplateReference
+  locale: string
+  channel: Channel
+  packageDigest: string
+  parts: RenderedParts
+  sms?: SegmentCount
+}
+
 export interface MessagingOutcome<T> { kind: 'complete'; value: T; traceId: string }
 
 /** The closed catalogue: the client answers any other code as a protocol failure. */
@@ -116,4 +130,6 @@ export class MessagingClient {
   ready(): Promise<MessagingOutcome<null>>
   submit(token: string, idempotencyKey: string, request: SubmitMessageRequest): Promise<MessagingOutcome<MessageReceipt>>
   message(token: string, messageId: MessageId): Promise<MessagingOutcome<MessageView>>
+  cancel(token: string, messageId: MessageId): Promise<MessagingOutcome<MessageView>>
+  preview(token: string, templateId: string, version: string, request: TemplatePreviewRequest): Promise<MessagingOutcome<TemplatePreview>>
 }

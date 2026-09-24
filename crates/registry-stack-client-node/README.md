@@ -42,7 +42,8 @@ const sender = new messaging.MessagingClient({
 - `casework`: Registry Casework, staff inbox, claims, drafts, decisions,
   recovery, history, holdings, and directory bootstrap.
 - `messaging`: Registry Messaging, submit one message under a caller-chosen
-  idempotency key and read what is known about its delivery.
+  idempotency key, read what is known about its delivery, cancel it before
+  dispatch, and preview a template version without sending.
 
 Each product remains in its own namespace because its routing,
 authentication, errors, and verification rules are different.
@@ -125,7 +126,12 @@ caller-chosen idempotency key: a retry after a lost response sends the same key
 and request, and the runtime answers the stored receipt again instead of
 accepting a second message. The client never retries a submission
 automatically. `message` reads the delivery state the runtime knows, including
-its attempt history; it does not return the rendered content.
+its attempt history; it does not return the rendered content. `cancel`
+withdraws a message that has not been dispatched and answers its view; a
+cancellation that lost the race to dispatch or to a final state answers
+`message.dispatch-started` or `message.terminal` and is never retried.
+`preview` renders one template version for a locale and data and sends
+nothing.
 
 ## Documentation
 

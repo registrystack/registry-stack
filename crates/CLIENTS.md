@@ -51,9 +51,10 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   I/O; never generate its idempotency key or retry it implicitly. Record ETags
   and lifecycle-action ETags are distinct.
 - Messaging submissions take a caller-chosen idempotency key; a binding never
-  generates one or retries a submission. Bindings add no Messaging semantics:
-  the closed problem catalogue, message view, and receipt come from the Rust
-  client unchanged.
+  generates one or retries a submission or a cancellation. Message, template,
+  and version names are checked by the Rust client before any request.
+  Bindings add no Messaging semantics: the closed problem catalogue, message
+  view, receipt, and template preview come from the Rust client unchanged.
 - Preserve strict duplicate-member rejection, bounded responses, product media
   types, trace/Problem validation, and value-free errors. Bindings must not
   expose URLs, headers, payloads, selectors, credentials, or transport chains
