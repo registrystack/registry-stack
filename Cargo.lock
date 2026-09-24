@@ -4975,6 +4975,7 @@ dependencies = [
  "jsonwebtoken",
  "registry-breg",
  "registry-breg-client",
+ "registry-breg-review",
  "registry-platform-audit",
  "registry-platform-authcommon",
  "registry-platform-buildinfo",

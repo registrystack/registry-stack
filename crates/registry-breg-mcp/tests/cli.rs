@@ -11,7 +11,7 @@ mod mock_registry;
 
 use std::{os::unix::fs::PermissionsExt as _, path::Path, process::Command};
 
-use gateway::{document, write_secrets, Document, Limits};
+use gateway::{document, write_secrets, Document, Limits, REVIEW_BASE_URL};
 use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm};
 use tempfile::TempDir;
 
@@ -35,6 +35,7 @@ impl Project {
             jwks: "http://127.0.0.1:8111/jwks.json",
             registry: "http://127.0.0.1:8112/",
             token_endpoint: "http://127.0.0.1:8111/token",
+            review: REVIEW_BASE_URL,
             secrets: &secrets,
             audit: &directory.path().join("audit").join("audit.jsonl"),
             limits: Limits::default(),

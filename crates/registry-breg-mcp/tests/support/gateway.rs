@@ -52,6 +52,8 @@ pub const CHAT_HOST: &str = "chat-host";
 pub const OTHER_HOST: &str = "other-host";
 pub const ACTOR: &str = "6f1c2d8e-3b4a-4e59-9c7d-2a8b5e0f1d34";
 pub const SCOPE: &str = "address-correction:self";
+/// The review page base of every gateway that serves no real page.
+pub const REVIEW_BASE_URL: &str = "https://review.example.test/citizen/";
 pub const CITIZEN_A: &str = "synthetic-citizen-a";
 pub const CITIZEN_B: &str = "synthetic-citizen-b";
 pub const ADDRESS_A: &str = "c7110c06-8938-4294-bd68-7390de8e752e";
@@ -127,6 +129,7 @@ impl Harness {
             jwks: &authorization.jwks_uri(),
             registry: &registry.base_url,
             token_endpoint: &token_endpoint,
+            review: REVIEW_BASE_URL,
             secrets: &secrets,
             audit: &directory.path().join("audit").join("audit.jsonl"),
             limits,
@@ -287,6 +290,8 @@ pub struct Document<'a> {
     pub jwks: &'a str,
     pub registry: &'a str,
     pub token_endpoint: &'a str,
+    /// The review page base the gateway builds each review link under.
+    pub review: &'a str,
     pub secrets: &'a Path,
     pub audit: &'a Path,
     pub limits: Limits,
@@ -332,7 +337,7 @@ service:
     entity: address-correction-request
     targetField: address
     ownerField: owner
-  reviewBaseUrl: https://review.example.test/citizen/
+  reviewBaseUrl: {review}
 audit:
   path: {audit}
   hashKeyRef: secret:file/audit-key
@@ -351,6 +356,7 @@ rateLimits:
         jwks = values.jwks,
         registry = values.registry,
         token_endpoint = values.token_endpoint,
+        review = values.review,
         audit = values.audit.display(),
         citizen_burst = values.limits.per_citizen_burst,
         client_burst = values.limits.per_client_burst,

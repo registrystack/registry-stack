@@ -64,6 +64,9 @@ zeroize.workspace = true
 [dev-dependencies]
 base64.workspace = true
 registry-breg.workspace = true
+# The composed journey test serves the citizen review page beside the gateway;
+# the gateway itself never links the page.
+registry-breg-review.workspace = true
 registry-platform-testing = { workspace = true, features = ["test-authorization-server"] }
 reqwest.workspace = true
 rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
