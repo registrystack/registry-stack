@@ -274,6 +274,7 @@ server binary, and earlier packages keep verifying under their recorded rules.
 | `test` or `package` reports `migration.review.fingerprint_mismatch` | The rehearsal receipt was taken for a different candidate or baseline. Rehearse the exact candidate again. |
 | `apply` fails after maintenance begins | Read the report, fix the cause, and retry the same target. If that is not available, run `migration reconcile` to assess the pinned target, execute the transition it names, and restore the pre-activation backup only when it reports `unresolvable`. |
 | `apply` reports `apply.package.older_than_active` | The target package is older than the active one, and packages apply forward only. Build a successor that reverts the change, or restore the pre-activation backup, as [roll back by rolling forward](#roll-back-by-rolling-forward) describes. Nothing was changed. |
+| `apply` reports `apply.package.empty_plan` | The successor has nothing to apply: its plan has no schema statement and no reviewed migration, and it is not an access or disclosure change alone, for example a successor built from unchanged sources with only `package.sequence` raised. Keep the active package until the model changes, then build the successor from that change. Nothing was changed. |
 | `migration reconcile` reports `in_progress` | Another session holds the migration lock. Wait for it to finish, then assess again. |
 | The process still serves the old package after `apply` | Activation changes the database, not the process. Update the runtime file and restart the server. |
 
