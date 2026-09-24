@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-docs
-last_reviewed: "2026-09-15"
+last_reviewed: "2026-09-25"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -365,6 +365,47 @@ relevant product pages on this site rather than duplicating release notes.
 
 {/* Evidence: crates/registry-scheduling/src/config.rs, SCHEDULING_REMOVED_KEYS and
     a_removed_jwks_uri_names_its_replacement; products/scheduling/RUNTIME-CONFIG.md. */}
+
+- Base Registry Engine (BReg) adds the `import` operation and import authorities, so a governed
+  entity can take a bulk load without granting `batch`, `create`, or `patch`
+  to a direct-write profile. `import` is create-only, is served only through
+  ingestion runs, and is not a direct write for change control, so
+  `change_control.direct_write_grant` accepts it on a controlled entity. An
+  import run is created only inside an open import authority that an operator
+  opens with `bregctl import-authority open` for one entity and one profile,
+  with a window of at most 30 days, a maximum item count, and optional pinned
+  input digests. Every chunk counts against the authority; closing it, its
+  expiry, its exhaustion, or a successor package activation stops the run with
+  `blockedReason` `importAuthorityClosed`. Opening, closing, expiry,
+  exhaustion, and supersession each append an audit record, and every run
+  audit record carries `importAuthorityId`. The compiler refuses `import`
+  without entity batch bounds (`import.batch_bounds.required`), without an
+  authenticated principal (`import.principal.required`), and beside a `batch`
+  grant on the same entity (`import.batch.redundant`). `bregctl data
+  validate` reports the source's `inputDigest` for pinning. The runtime
+  installs a new internal table and a run column on its next apply. See
+  [load a governed entity through an import window](../operate/breg-data/#load-a-governed-entity-through-an-import-window).
+
+- BREAKING: the ingestion-run `blockedReason` gains the value
+  `importAuthorityClosed`, and the Rust `BRegIngestionBlockedReason` enum
+  gains `ImportAuthorityClosed`; a client that matched the only previous value
+  exhaustively must handle the new one. The `ingestion.run_blocked` problem
+  detail now reads "The ingestion run is blocked and refuses further chunks."
+  because the run's `blockedReason`, not the detail, names the cause.
+
+- BREAKING: `bregctl data import` reports a run creation the server refuses
+  with `412` as `data.import.ingestion_run.import_authority_required` when the
+  grant is `import`, and `data.import.ingestion_run.precondition_failed`
+  otherwise, instead of `data.import.operation.refused`. A blocked run reports
+  `data.import.ingestion_run.import_authority_closed` or
+  `data.import.ingestion_run.blocked` with its reason.
+
+{/* Evidence: crates/registry-breg/src/import_authority.rs, admit_run() and admit_chunk();
+    crates/registry-breg/src/compiler.rs, import checks;
+    crates/registry-breg/tests/postgres_import_authority.rs;
+    crates/registry-breg/tests/import_grant_compiler.rs;
+    crates/registry-bregctl/src/import_authority_lifecycle.rs;
+    crates/registry-bregctl/src/data_lifecycle.rs, a_run_blocked_by_its_import_authority_names_that_reason. */}
 
 ## v0.34.0 beta-46
 

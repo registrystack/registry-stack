@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-04"
+last_reviewed: "2026-09-25"
 doc_type: how-to
 persona:
   - operator
@@ -22,8 +22,9 @@ interrupted and resumed from its checkpoint.
 `data import` and `data export` drive the ordinary authenticated routes, so every row passes the
 same grants, validation, and audit as an interactive client: the import commits its chunks
 through the entity's ingestion-run routes, and the export pages through the list route. Nothing
-here bypasses a profile: an import needs a profile that may create or patch the entity, and an
-export needs one that is export-enabled. A chunk is one batch request the import commits as a
+here bypasses a profile: an import needs a profile that may create or patch the entity, or one
+that holds `import` on it inside an open import authority, and an export needs one that is
+export-enabled. A chunk is one batch request the import commits as a
 unit; a page is one list response the export appends as a unit; a checkpoint is the file each
 command writes after every unit so a rerun continues where the last one stopped.
 
@@ -62,8 +63,8 @@ bregctl data validate \
 ```
 
 The report names the package revision and schema fingerprint it validated against, the entity,
-profile, and operation, the input length, and the item and chunk counts the import would use. A
-line that does not fit the entity's shape or the profile's grants is reported without record
+profile, and operation, the input length and its SHA-256 `inputDigest`, and the item and chunk
+counts the import would use. A line that does not fit the entity's shape or the profile's grants is reported without record
 values.
 
 {/* Evidence: crates/registry-bregctl/src/data_lifecycle.rs;
@@ -107,6 +108,65 @@ run stays inspectable.
     crates/registry-bregctl/src/lib.rs, DataImportArgs;
     crates/registry-bregctl/tests/cli.rs. */}
 
+## Load a governed entity through an import window
+
+Change control refuses `create` and `batch` as direct writes on an entity it governs, so a
+governed entity receives its initial or additional records through an `import` grant instead. An
+`import` grant is create only and is served only by the ingestion-run routes, so it never changes
+an existing record. It loads nothing on its own: an operator first opens an import authority, a
+window bounded by entity, profile, item volume, expiry, and optionally the exact input files, over
+the migration connection that no API caller holds. The authority is bound to the package revision
+active when it opened.
+
+Validate the file, then open the window with the digest the report names. `--expires-in` takes a
+whole number of minutes, hours, or days (`90m`, `12h`, `7d`), defaults to `7d`, and is at most
+`30d`; there is no extension, a longer load opens a second authority. `--input-sha256` may repeat
+up to 16 times; without it any input within the volume is admitted.
+
+```sh
+bregctl import-authority open \
+  --runtime-config /etc/registry/runtime.yaml \
+  --entity record --profile loader --max-items 10000 --expires-in 2d \
+  --input-sha256 <inputDigest from data validate> \
+  --operator-reference change-1482 --reason "District 4 initial load"
+```
+
+Then run `data import` with the `loader` profile exactly as above. Close the window when the load
+is done, and list authorities to see what is open:
+
+```sh
+bregctl import-authority close --runtime-config /etc/registry/runtime.yaml \
+  --authority-id <authorityId> --operator-reference change-1482 --reason "District 4 loaded"
+bregctl import-authority list --runtime-config /etc/registry/runtime.yaml
+```
+
+One entity holds at most one open authority. It stops admitting work when the operator closes it,
+when its expiry passes, when its committed items reach the volume (`exhausted`), or when another
+package revision is activated (`superseded`). Run `bregctl import-authority close-expired` on a
+schedule, or after an activation, to record the expiries and supersessions no load has observed
+yet; `list` records them too before it answers. The operator reference and reason are
+stored and audited only as keyed hashes, so do not rely on reading them back; every opening,
+close, expiry, exhaustion, and supersession appends one record to the audit journal, and every
+committed chunk's run record names the authority it consumed. Hooks and events fire for imported
+records exactly as for a batch create; pause event destinations for the window if a flood of
+events is a concern.
+
+A run is created only when an open authority for its entity and profile has room for the whole
+input and, if digests are pinned, one of them is the input's digest. Otherwise `data import`
+reports `data.import.ingestion_run.import_authority_required` and no run exists. Every chunk
+rechecks the authority inside its own transaction and counts its items against the volume, so a
+close or expiry during a load stops the next chunk: the run is `blocked` with reason
+`importAuthorityClosed`, `data import` reports
+`data.import.ingestion_run.import_authority_closed`, and the chunks already committed stay. A
+blocked run is final. To load the rest, open a new authority and import only the uncommitted lines
+under a fresh checkpoint path; the run's `committedItems` says how many lines committed.
+
+{/* Evidence: crates/registry-breg/src/import_authority.rs, MAX_IMPORT_AUTHORITY_WINDOW,
+    MAX_PINNED_INPUT_DIGESTS, admit_run(), and admit_chunk();
+    crates/registry-bregctl/src/import_authority_lifecycle.rs, parse_expires_in();
+    crates/registry-bregctl/src/data_lifecycle.rs, IngestionRunPrecondition;
+    crates/registry-breg/tests/postgres_import_authority.rs. */}
+
 ## Resume a load through a durable ingestion run
 
 The checkpoint of an import is a file beside the client, so the process that resumes must reach
@@ -118,16 +178,16 @@ stores no source rows; reading one returns operational metadata and bounded fail
 classifications only.
 
 One run covers one input file. Create it on the entity's `ingestion-runs` route: the create or
-patch operation, the profile, the package revision and schema fingerprint, the input length, and
+patch operation (create for an `import` grant), the profile, the package revision and schema fingerprint, the input length, and
 the item and chunk counts are what `data validate` reports for the same input; the run also
 needs the source digest and the chunking algorithm `greedy-canonical-http-batch-v1`. Submit each
 chunk in order, naming its index, its digest, and the digest of the source prefix it ends at.
-Every submission rechecks the profile against the entity's batch route, so a run id alone grants
-nothing.
+Every submission rechecks the profile against the entity's batch or import grant, so a run id
+alone grants nothing.
 
 A run is `open` while chunks are due, `complete` when the last chunk commits, `cancelled` after
-an explicit cancel, and `blocked` once the active package no longer matches its binding. Each
-failure has one recovery:
+an explicit cancel, and `blocked` once the active package no longer matches its binding or, for
+an `import` run, once its import authority stops admitting chunks. Each failure has one recovery:
 
 | Failure | Next move |
 | --- | --- |
@@ -137,6 +197,7 @@ failure has one recovery:
 | A chunk holds an invalid item or a business refusal | The checkpoint stays where it is. Start a successor run for the remainder; skipping the refused rows is never a default recovery. |
 | Authorization is lost | Progress refuses until the selected profile satisfies the batch route again. |
 | The package or schema changed | The run reports `blocked` with reason `activePackageChanged` and stays inspectable. Start a successor run under the new binding. |
+| The import authority closed, expired, or ran out | The run reports `blocked` with reason `importAuthorityClosed` and stays inspectable. Open a new authority and start a successor run for the remainder. |
 | You stop the load on purpose | Cancel the run. Its counts and audit are preserved. |
 
 {/* Evidence: crates/registry-breg/src/ingestion_store.rs, IngestionRunStatus, IngestionBlockedReason, and IngestionAttemptOutcome;
@@ -188,7 +249,11 @@ server response is bounded at 2 MiB.
 | An export refuses to start | Exactly one of the output and checkpoint files exists, or the existing output no longer matches its checkpoint. Keep both files together and unedited, or start both afresh. |
 | `data export` is refused with `data.export.checkpoint.refused` | The output file and its checkpoint no longer describe one another: the output is shorter than the checkpoint, its checkpointed prefix changed, more than one page follows the checkpoint, or the checkpoint belongs to another export. Keep both files and resume from copies you trust. A rerun discards at most the single page an interrupted run left unrecorded. |
 | The report says the run is incomplete | `--max-chunks` or `--max-pages` bounded it. Run the same command again to continue. |
-| A durable ingestion run reports `blocked` | The active package no longer matches the binding the run was created under. Read the run, then start a successor run under the new package; the blocked run stays inspectable. `data import` surfaces the same state as `data.import.ingestion_run.blocked`. |
+| A durable ingestion run reports `blocked` | Read the run's `blockedReason`. `activePackageChanged`: the active package no longer matches the binding the run was created under; start a successor run under the new package. `importAuthorityClosed`: see the next row. The blocked run stays inspectable. `data import` surfaces the first as `data.import.ingestion_run.blocked`. |
+| An import reports `data.import.ingestion_run.import_authority_closed` | The run's import authority was closed, expired, reached its volume, or was superseded by an activation. The committed chunks stay. Open a new authority and import only the uncommitted lines under a fresh checkpoint path. |
+| An import reports `data.import.ingestion_run.import_authority_required` | No open authority admits the run: none is open for the entity, it names another profile, it expired, its remaining volume is smaller than the input, or it pins other digests. Check `bregctl import-authority list`, then open one that covers this input. |
+| `import-authority open` reports `import_authority.already_open` | The entity already has an open authority. Close it, or wait for it to expire, before opening another. |
+| `import-authority open` reports `import_authority.grant.not_importable` | The profile holds no `import` grant on the entity in the active package. |
 
 ## Next
 

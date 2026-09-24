@@ -41,6 +41,26 @@ selected profile cannot execute to the end of every chunk, decided exactly as
 an import binding decides it: the profile's operations, the item route for the
 profile, and patch only on a mutable entity. The refused run never exists.
 
+A profile holding the `import` operation drives the same runs, create only:
+`import` mounts no item route and no batch route, so an ingestion run is the
+only path an import grant can write through. Creating an import run also
+requires the entity's open import authority for that profile. The authority
+must be unexpired, opened under the active package revision, hold remaining
+volume that covers the run's whole announced item count, and, when it pins
+input digests, list the run's input digest. Without one the run is refused
+with `precondition.failed` and never exists; with one the run binds the
+authority's id. Every chunk rechecks the bound authority under a row lock in
+the chunk's own transaction and counts its committed items against the
+authority's volume in that transaction. A chunk the authority no longer
+admits (closed, expired, exhausted, or superseded by a successor activation)
+blocks the run with reason `importAuthorityClosed` and commits nothing. An
+authority is opened and closed only by the migration role through
+`bregctl import-authority`; the runtime role can read it and advance an open
+authority's counter or record its expiry, exhaustion, or supersession, never
+open, close, or reopen one. Each transition appends a
+`breg-import-authority-audit/v1` record, and every run audit record under an
+authority carries `importAuthorityId`.
+
 ## Chunk protocol
 
 A submission names the run, the expected chunk index, the chunk digest, and the
@@ -98,7 +118,9 @@ run.
 
 A run is `open`, `complete`, `cancelled`, or `blocked`. An open run whose
 package or schema binding no longer matches the active package reports
-`blocked` with reason `activePackageChanged`; the report and the blocked
+`blocked` with reason `activePackageChanged`; an import run whose bound
+import authority no longer admits a chunk is `blocked` with reason
+`importAuthorityClosed`. For `activePackageChanged`, the report and the blocked
 transition answer to the binding the database holds active, so a serving
 instance a successor activation has left stale reports and blocks the run the
 same way the successor does. The blocking transition verifies it changed the
@@ -159,6 +181,7 @@ refusals.
 | Invalid item or business refusal | Keep the checkpoint and start a successor run. Row skipping is never a default recovery. |
 | Authorization lost | Refuse progress. |
 | Package or schema binding changed | Block the run; continue in a successor run. |
+| Import authority closed, expired, exhausted, or superseded | Block the run; open a new authority and continue the uncommitted remainder in a successor run. |
 | Operator stop | Explicit cancel, preserving counts and audit. |
 
 ## Retention
