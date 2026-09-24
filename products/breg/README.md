@@ -118,6 +118,9 @@ The [facility registration and transfer example](registry-extensibility.md)
 combines those actions with a related-record acceptance condition, current
 ownership and committed events. [Membership access](membership-access.md)
 describes read permissions based on current governed membership records.
+[Consent-gated reads](consent.md) describes read permissions that disclose a
+row to a named recipient only while the subject's recorded consent is in
+force.
 The create-only asset example introduces typed inputs, fixed effects and an
 action-only grant. The household example adds narrow target conditions and
 recovery from stale input or a lost response. Mandatory reviewed change control

@@ -86,3 +86,19 @@ traceability:
   - {id: BREG-SEC-83, state: enforced, negativeId: BREG-NEG-83, negativeTest: {path: crates/registry-breg/tests/postgres_review_executor.rs, name: real_postgres_automatic_application_claim_fences_stale_owner}}
   - {id: BREG-SEC-84, state: enforced, negativeId: BREG-NEG-84, negativeTest: {path: crates/registry-breg/tests/postgres_change_requests.rs, name: cached_review_result_cannot_authorize_fresh_apply_but_committed_receipt_recovers_offline}}
   - {id: BREG-SEC-85, state: enforced, negativeId: BREG-NEG-85, negativeTest: {path: crates/registry-breg/tests/postgres_change_requests.rs, name: expired_online_review_blocks_final_automatic_attempt_until_authorized_recovery}}
+  - {id: BREG-SEC-86, state: enforced, negativeId: BREG-NEG-86, negativeTest: {path: crates/registry-breg/tests/postgres_consent_access.rs, name: real_postgres_consent_gates_every_read_operation_on_id_and_on_reference}}
+  - {id: BREG-SEC-87, state: enforced, negativeId: BREG-NEG-87, negativeTest: {path: crates/registry-breg/tests/postgres_consent_access.rs, name: real_postgres_consent_orders_decisions_by_capped_time_and_expires_gives}}
+  - {id: BREG-SEC-88, state: enforced, negativeId: BREG-NEG-88, negativeTest: {path: crates/registry-breg/tests/postgres_consent_access.rs, name: real_postgres_consent_matches_recipient_sets_purpose_and_scope_exactly}}
+  - {id: BREG-SEC-89, state: enforced, negativeId: BREG-NEG-89, negativeTest: {path: crates/registry-breg/tests/postgres_consent_access.rs, name: real_postgres_consent_probe_is_blind_and_recipients_parse_strictly}}
+  - {id: BREG-SEC-90, state: enforced, negativeId: BREG-NEG-90, negativeTest: {path: crates/registry-breg/tests/consent_access.rs, name: consent_record_is_never_written_directly}}
+  - {id: BREG-SEC-91, state: enforced, negativeId: BREG-NEG-91, negativeTest: {path: crates/registry-breg/tests/consent_access.rs, name: self_issued_consent_binds_the_subject_through_the_principal_link}}
+  - {id: BREG-SEC-92, state: enforced, negativeId: BREG-NEG-92, negativeTest: {path: crates/registry-breg/tests/consent_access.rs, name: gated_permissions_are_read_only}}
+  - {id: BREG-SEC-93, state: enforced, negativeId: BREG-NEG-93, negativeTest: {path: crates/registry-breg/tests/consent_access.rs, name: gated_permissions_refuse_spatial_queries}}
+  - {id: BREG-SEC-94, state: enforced, negativeId: BREG-NEG-94, negativeTest: {path: crates/registry-breg/tests/consent_access.rs, name: gated_permissions_refuse_data_export}}
+  - {id: BREG-SEC-95, state: enforced, negativeId: BREG-NEG-95, negativeTest: {path: crates/registry-breg/tests/consent_access.rs, name: evidence_source_export_refuses_a_gated_profile}}
+  - {id: BREG-SEC-96, state: enforced, negativeId: BREG-NEG-96, negativeTest: {path: crates/registry-breg/tests/consent_access.rs, name: read_paths_cannot_reach_a_gated_entity}}
+  - {id: BREG-SEC-97, state: enforced, negativeId: BREG-NEG-97, negativeTest: {path: crates/registry-breg/tests/postgres_consent_examples.rs, name: person_registry_consent_journeys_run_through_the_authenticated_postgres_runner}}
+  - {id: BREG-SEC-98, state: enforced, negativeId: BREG-NEG-98, negativeTest: {path: crates/registry-breg/tests/consent_access.rs, name: the_recipient_claim_binds_only_the_consent_feed}}
+  - {id: BREG-SEC-99, state: enforced, negativeId: BREG-NEG-99, negativeTest: {path: crates/registry-breg/tests/consent_access.rs, name: every_recipient_client_must_be_an_allowed_client}}
+  - {id: BREG-SEC-100, state: enforced, negativeId: BREG-NEG-100, negativeTest: {path: crates/registry-breg/tests/postgres_consent_access.rs, name: real_postgres_consent_successors_match_fresh_install_when_added_changed_and_removed}}
+  - {id: BREG-SEC-101, state: enforced, negativeId: BREG-NEG-101, negativeTest: {path: crates/registry-breg/tests/postgres_consent_examples.rs, name: self_action_answers_an_unknown_subject_like_a_subject_its_link_does_not_cover}}

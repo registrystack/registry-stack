@@ -173,6 +173,13 @@ Use `in` to distinguish absence from an explicitly supplied value. The example
 name policy treats omission, null and blank strings as empty name parts.
 Fixed-effect actions reject explicit null inputs. Supply a typed value for each
 input used by a fixed mapping.
+
+A fixed mapping may set an optional field from an optional input. When the
+caller omits that input, the effect leaves the field out: a create stores the
+field's ordinary absent value and a patch leaves the stored value unchanged.
+Omitting a required input still refuses the request, as does an absent input
+mapped to a required field. A handler's proposal is taken as written, so a
+proposal that names an absent input is refused rather than skipped.
 Rhai has no database query, stored-record snapshot, clock, filesystem or network
 API. The script returns exactly one of `effects` or `refusal`:
 
