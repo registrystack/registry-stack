@@ -455,6 +455,9 @@ pub struct MutationPlan {
     submitter_target_entities: BTreeMap<String, CompiledEntity>,
     event_deliveries: Vec<CompiledEventDelivery>,
     temporal_exclusion_constraints: Vec<String>,
+    /// A create item of an `import` route. Change control does not count it
+    /// as a direct write: an operator-opened import authority bounds it.
+    imported_item: bool,
 }
 
 impl MutationPlan {
@@ -476,7 +479,8 @@ impl MutationPlan {
             (Operation::Create, HttpMethod::Post)
             | (Operation::Patch, HttpMethod::Patch)
             | (Operation::Tombstone, HttpMethod::Delete)
-            | (Operation::Batch, HttpMethod::Post) => {}
+            | (Operation::Batch, HttpMethod::Post)
+            | (Operation::Import, HttpMethod::Post) => {}
             _ => return Err(MutationError::InvalidRequest),
         }
         if matches!(route.operation, Operation::Patch | Operation::Tombstone)
@@ -487,7 +491,8 @@ impl MutationPlan {
         if route.operation == Operation::Tombstone && !entity.tombstone {
             return Err(MutationError::InvalidRequest);
         }
-        if route.operation == Operation::Batch && entity.batch.is_none() {
+        if matches!(route.operation, Operation::Batch | Operation::Import) && entity.batch.is_none()
+        {
             return Err(MutationError::InvalidRequest);
         }
         let inventory = registry
@@ -526,6 +531,7 @@ impl MutationPlan {
                 .collect::<Result<_, _>>()?,
             event_deliveries,
             temporal_exclusion_constraints,
+            imported_item: false,
         })
     }
 
@@ -561,9 +567,14 @@ impl MutationPlan {
     }
 
     fn batch_item(&self, operation: Operation, profile_id: &str) -> Result<Self, MutationError> {
-        if self.route.operation != Operation::Batch
-            || !matches!(operation, Operation::Create | Operation::Patch)
-        {
+        // An `import` route drives create items alone; it never reaches an
+        // existing record.
+        let admitted = match self.route.operation {
+            Operation::Batch => matches!(operation, Operation::Create | Operation::Patch),
+            Operation::Import => operation == Operation::Create,
+            _ => false,
+        };
+        if !admitted {
             return Err(MutationError::InvalidRequest);
         }
         let (method, path) = match operation {
@@ -603,6 +614,7 @@ impl MutationPlan {
             submitter_target_entities: self.submitter_target_entities.clone(),
             event_deliveries: self.event_deliveries.clone(),
             temporal_exclusion_constraints: self.temporal_exclusion_constraints.clone(),
+            imported_item: self.route.operation == Operation::Import,
         })
     }
 }
@@ -2658,7 +2670,11 @@ async fn apply_current_row(
         .entity
         .change_control
         .as_ref()
-        .is_some_and(|control| control.required_for.contains(&request.plan.route.operation))
+        .is_some_and(|control| {
+            control.required_for.contains(&request.plan.route.operation)
+                && !(request.plan.imported_item
+                    && request.plan.route.operation == Operation::Create)
+        })
         || (request.plan.entity.change_request.is_some()
             && request.plan.route.operation == Operation::Tombstone)
     {
@@ -3804,12 +3820,19 @@ fn validate_batch_request(
         .access_profiles
         .get(request.claims.access_profile())
         .ok_or(MutationError::InvalidRequest)?;
-    if request.plan.route.operation != Operation::Batch
+    // An `import` route executes only as a chunk of a durable ingestion run,
+    // whose binding the transaction checks under the run lock.
+    let bulk_route = match request.plan.route.operation {
+        Operation::Batch => true,
+        Operation::Import => request.ingestion.is_some(),
+        _ => false,
+    };
+    if !bulk_route
         || request.plan.route.method != HttpMethod::Post
         || request.claims.entity_id() != request.plan.entity.id
         || request.claims.principal().is_none()
         || profile.anonymous
-        || !profile.operations.contains(&Operation::Batch)
+        || !profile.operations.contains(&request.plan.route.operation)
         || !request
             .plan
             .route
@@ -3827,7 +3850,11 @@ fn validate_batch_request(
     }
 
     for item in &request.items {
-        if !profile.operations.contains(&item.operation())
+        let item_granted = match request.plan.route.operation {
+            Operation::Import => item.operation() == Operation::Create,
+            _ => profile.operations.contains(&item.operation()),
+        };
+        if !item_granted
             || item.operation() == Operation::Patch
                 && request.plan.entity.mutation_mode != MutationMode::Mutable
         {

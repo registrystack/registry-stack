@@ -1103,7 +1103,7 @@ fn runtime_privileges(
     {
         privileges.insert(TablePrivilege::Select);
     }
-    if operations.contains(&Operation::Create) {
+    if profile_inserts(&operations) {
         privileges.insert(TablePrivilege::Insert);
         privileges.insert(TablePrivilege::Select);
     }
@@ -1270,7 +1270,7 @@ fn policies(
                 check_expression,
             });
         }
-        if profile.operations.contains(&Operation::Create)
+        if profile_inserts(&profile.operations)
             && (!profile_supports_command(&profile.operations, PolicyCommand::Select)
                 || profile.request_visibility.is_some())
         {
@@ -1534,6 +1534,13 @@ fn spatial_bbox_predicate(
     )
 }
 
+/// A profile inserts rows through `create`, or through `import` chunks of a
+/// durable ingestion run. Neither grants a standing read: a create-only
+/// profile reads back only the row it just created.
+fn profile_inserts(operations: &BTreeSet<Operation>) -> bool {
+    operations.contains(&Operation::Create) || operations.contains(&Operation::Import)
+}
+
 fn profile_supports_command(operations: &BTreeSet<Operation>, command: PolicyCommand) -> bool {
     match command {
         PolicyCommand::Select => operations.iter().any(|operation| {
@@ -1547,7 +1554,7 @@ fn profile_supports_command(operations: &BTreeSet<Operation>, command: PolicyCom
                     | Operation::Snapshot
             )
         }),
-        PolicyCommand::Insert => operations.contains(&Operation::Create),
+        PolicyCommand::Insert => profile_inserts(operations),
         PolicyCommand::Update => operations
             .iter()
             .any(|operation| matches!(operation, Operation::Patch | Operation::Tombstone)),

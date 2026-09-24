@@ -2818,6 +2818,30 @@ fn batch_input_schema(
     allow_create: bool,
     allow_patch: bool,
 ) -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+            "changeContext": change_context_request_schema(),
+            "items": openapi_batch_items_schema(
+                create_data_schema,
+                maximum_items,
+                allow_create,
+                allow_patch,
+            )
+        }
+    })
+}
+
+/// The bounded array of batch items one grant admits. The batch request body
+/// and the ingestion chunk body carry the same item shapes.
+pub(crate) fn openapi_batch_items_schema(
+    create_data_schema: Value,
+    maximum_items: u16,
+    allow_create: bool,
+    allow_patch: bool,
+) -> Value {
     let mut item_schemas = Vec::new();
     if allow_create {
         item_schemas.push(json!({
@@ -2844,18 +2868,10 @@ fn batch_input_schema(
         }));
     }
     json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["items"],
-        "properties": {
-            "changeContext": change_context_request_schema(),
-            "items": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": maximum_items,
-                "items": {"oneOf": item_schemas}
-            }
-        }
+        "type": "array",
+        "minItems": 1,
+        "maxItems": maximum_items,
+        "items": {"oneOf": item_schemas}
     })
 }
 
