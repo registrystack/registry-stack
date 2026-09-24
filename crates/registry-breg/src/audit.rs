@@ -97,7 +97,8 @@ impl GrantAuditContext {
                 Some(actor.as_str()),
             ),
         };
-        let event = AuthorizationAuditEvent::new(
+        // BREG records purpose presence, never the purpose value.
+        let event = AuthorizationAuditEvent::without_purpose(
             self.actor_kind.as_str(),
             pseudonym("breg-principal-v1", principal)?,
             pseudonym("breg-client-v1", client)?,
@@ -107,10 +108,6 @@ impl GrantAuditContext {
             grant
                 .map(|grant| pseudonym("breg-approver-v1", grant.approver()))
                 .transpose()?,
-            // The shared event requires a purpose code. BREG removes it below
-            // and records only purpose presence, so a delegated token without
-            // a grant supplies a fixed code that never reaches the journal.
-            grant.map_or("delegated", |grant| grant.purpose()),
             operation,
             if allowed {
                 AuthorizationOutcome::Allowed
@@ -126,11 +123,6 @@ impl GrantAuditContext {
         .map_err(|_| RegistryAuditError::InvalidContext)?;
         let mut value =
             serde_json::to_value(event).map_err(|_| RegistryAuditError::InvalidContext)?;
-        // BREG records purpose presence, never the purpose value.
-        value
-            .as_object_mut()
-            .ok_or(RegistryAuditError::InvalidContext)?
-            .remove("purpose");
         if let Some(grant) = grant {
             value["sourceIssuer"] = json!(grant.source_issuer());
             value["expiresAt"] = json!(grant.exp());

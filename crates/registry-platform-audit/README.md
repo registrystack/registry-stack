@@ -90,7 +90,8 @@ async fn write_audit_event() -> Result<(), registry_platform_audit::AuditError> 
 - `AuthorizationAuditEvent` accepts only platform hash handles and Evidence's
   established key-versioned pseudonyms for principal, client, grant, and
   approver identity fields. It does not derive keys or replace a product's
-  pseudonym scope policy.
+  pseudonym scope policy. `without_purpose` builds an allowed or denied event
+  that carries no purpose, for a product that never records one.
 - Redaction helpers intentionally avoid preserving email local parts, phone
   digits, or sensitive query values.
 
