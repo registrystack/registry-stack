@@ -281,23 +281,25 @@ properties:
       systemRoots:
         description: >-
           Fixes the system certificate authority store as always trusted for outbound calls;
-          because Version 1 has no way to disable it, a source's public certificate must still
-          chain to a trusted root even when a private trust profile also applies.
+          because Version 1 has no way to disable it, a source's or the access-token issuer's
+          public certificate must still chain to a trusted root even when a private trust
+          profile also applies.
         const: true
       trustProfiles:
         description: >-
-          Closed map of private certificate-authority bundles a source may reference by logical
-          id; the set of ids present here must exactly match the `tlsTrustProfile` names the
-          bundle's sources declare, with no extra or missing profile.
+          Closed map of private certificate-authority bundles a source or the access-token
+          issuer may reference by logical id; the set of ids present here must exactly match
+          the `tlsTrustProfile` names the bundle's sources and `authentication` declare, with
+          no extra or missing profile.
         type: object
         maxProperties: 64
         propertyNames:
           $ref: '#/$defs/local-id'
         additionalProperties:
           description: >-
-            One named private trust profile, binding a logical id a source's `tlsTrustProfile`
-            reference names to the certificate-authority bundle used only for that source's
-            outbound connections.
+            One named private trust profile, binding a logical id a `tlsTrustProfile`
+            reference names to the certificate-authority bundle used only for the outbound
+            connections of the source or access-token issuer that names it.
           type: object
           additionalProperties: false
           required:
@@ -392,7 +394,8 @@ startup:
     independent SHA-256 revision over exact runtime.yaml bytes plus logical trust-profile
     names and exact CA bytes
   trust_profiles: >-
-    names must exactly equal the logical tlsTrustProfile names used by the governed bundle
+    names must exactly equal the logical tlsTrustProfile names the governed bundle's sources
+    and authentication use
   secrets: >-
     values and provider tokens are never parsed into or included in the runtime document or
     digest

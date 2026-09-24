@@ -2534,13 +2534,15 @@ fn validate_runtime_bindings(
     // The binding is exact in both directions, but the two directions are
     // different repairs in different files: a profile the bundle names and the
     // runtime does not bind is missing trust material the deployment must add,
-    // while a profile the runtime binds that no source names is trust the
-    // deployment grants nobody asked for. One cause covering both leaves the
-    // operator to diff the two files by hand to learn which way round it went.
+    // while a profile the runtime binds that neither a source nor the issuer
+    // names is trust the deployment grants nobody asked for. One cause
+    // covering both leaves the operator to diff the two files by hand to learn
+    // which way round it went.
     let required = bundle
         .sources
         .iter()
         .filter_map(|(_, source)| source.tls_trust_profile())
+        .chain(bundle.authentication.tls_trust_profile.as_deref())
         .collect::<BTreeSet<_>>();
     let configured = runtime
         .outbound_tls
@@ -2550,13 +2552,13 @@ fn validate_runtime_bindings(
     if let Some(unbound) = required.difference(&configured).next() {
         return Err(trust_profile_fault(
             unbound,
-            "the runtime configuration does not bind a TLS trust profile a bundle source names",
+            "the runtime configuration does not bind a TLS trust profile the bundle names",
         ));
     }
     if let Some(unused) = configured.difference(&required).next() {
         return Err(trust_profile_fault(
             unused,
-            "the runtime configuration binds a TLS trust profile no bundle source names",
+            "the runtime configuration binds a TLS trust profile the bundle does not name",
         ));
     }
     // Extracts bind exactly, in both directions, and each direction says which
@@ -4832,7 +4834,7 @@ outboundTls:
         assert_eq!(fault.artifact(), "trustProfiles/internal-pki");
         assert_eq!(
             fault.fault().cause(),
-            "the runtime configuration does not bind a TLS trust profile a bundle source names"
+            "the runtime configuration does not bind a TLS trust profile the bundle names"
         );
 
         let binding = RuntimeConfig::parse_yaml(
@@ -4857,8 +4859,51 @@ outboundTls:
         assert_eq!(fault.artifact(), "trustProfiles/internal-pki");
         assert_eq!(
             fault.fault().cause(),
-            "the runtime configuration binds a TLS trust profile no bundle source names"
+            "the runtime configuration binds a TLS trust profile the bundle does not name"
         );
+    }
+
+    /// The issuer's trust profile joins the same exact binding as the
+    /// sources': the runtime must bind the profile `authentication` names, and
+    /// a profile only the issuer names is not unused trust.
+    #[test]
+    fn the_issuer_trust_profile_is_bound_exactly_like_a_source_profile() {
+        const ACCEPTANCE: &str = include_str!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        );
+        let naming = EvidenceConfig::parse_yaml(
+            ACCEPTANCE
+                .replace(
+                    "  jwksUri: https://identity.invalid/.well-known/jwks.json\n",
+                    "  jwksUri: https://identity.invalid/.well-known/jwks.json\n  tlsTrustProfile: issuer-pki\n",
+                )
+                .as_bytes(),
+        )
+        .expect("a bundle naming an issuer trust profile validates");
+        let silent = RuntimeConfig::parse_yaml(OPERATOR_RUNTIME_DOCUMENT.as_bytes())
+            .expect("the operator runtime document parses");
+        let missing = validate_runtime_bindings(&naming, &silent)
+            .expect_err("an issuer profile the runtime does not bind is refused");
+        let fault = missing
+            .artifact_fault()
+            .expect("the refusal names the profile");
+        assert_eq!(fault.artifact(), "trustProfiles/issuer-pki");
+        assert_eq!(
+            fault.fault().cause(),
+            "the runtime configuration does not bind a TLS trust profile the bundle names"
+        );
+
+        let binding = RuntimeConfig::parse_yaml(
+            OPERATOR_RUNTIME_DOCUMENT
+                .replace(
+                    "  trustProfiles: {}\n",
+                    "  trustProfiles: {issuer-pki: {caBundleFile: /etc/registry-evidence/issuer-pki.pem}}\n",
+                )
+                .as_bytes(),
+        )
+        .expect("a runtime binding the issuer profile parses");
+        validate_runtime_bindings(&naming, &binding)
+            .expect("a profile only the issuer names is bound, not unused");
     }
 
     /// New operator surface must not move the revision of a deployment that did

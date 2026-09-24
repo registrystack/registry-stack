@@ -99,6 +99,22 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-platform-crypto/src/lib.rs, TransitInitializationError and transit_signer_initialization_names_the_fault_it_met;
     crates/registry-evidence/src/runtime_tests.rs, signing_initialization_faults_name_distinct_causes. */}
 
+- An Evidence access-token issuer that serves its key set under a private
+  certificate authority can be trusted through a named `tlsTrustProfile` on
+  the bundle's `authentication` block, bound in `runtime.yaml` exactly like a
+  source's profile. The CA is trusted beside the system roots for the
+  `jwksUri` connection alone, hostname verification stays on, and a local
+  HTTP `jwksUri` cannot name a profile. A profile bound on one side only is
+  refused, and `evidence check --require-runtime-dependencies` fetches the key
+  set through it before the listener binds. See
+  [an issuer behind a private CA](../configure/evidence/#an-issuer-behind-a-private-ca).
+
+{/* Evidence: crates/registry-evidence/src/runtime.rs, issuer_trust_roots();
+    crates/registry-evidence/src/bundle.rs, the_issuer_trust_profile_is_bound_exactly_like_a_source_profile;
+    crates/registry-evidence/src/config.rs, an_issuer_trust_profile_is_a_local_id_for_an_https_key_set_only;
+    crates/registry-evidence/tests/cli.rs, dependency_check_trusts_a_private_ca_issuer_only_through_its_named_profile;
+    crates/registry-platform-httputil/src/lib.rs, a_pinned_get_trusts_a_private_ca_only_when_it_is_named. */}
+
 - `evidencectl doctor --runtime-config <file> --without-audit-lock`, and the
   runtime's `evidence check --require-runtime-dependencies
   --without-audit-lock`, check a candidate staged beside the Evidence instance

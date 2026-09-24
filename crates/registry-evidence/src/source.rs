@@ -1544,32 +1544,39 @@ fn build_client(
             return builder.build().map_err(|_| SourceError::InvalidPlan);
         }
         let (tls, captured_ca_bundles) = outbound_tls.ok_or(SourceError::InvalidPlan)?;
-        if !tls.system_roots {
-            return Err(SourceError::InvalidPlan);
-        }
-        let binding = tls
-            .trust_profiles
-            .get(profile_name)
+        let certificates = trust_profile_roots(profile_name, tls, captured_ca_bundles)
             .ok_or(SourceError::InvalidPlan)?;
-        if binding.ca_bundle_file.is_empty() {
-            return Err(SourceError::InvalidPlan);
-        }
-        let pem = captured_ca_bundles
-            .get(profile_name)
-            .ok_or(SourceError::InvalidPlan)?;
-        if pem.is_empty() || pem.len() as u64 > PRIVATE_CA_MAXIMUM_BYTES {
-            return Err(SourceError::InvalidPlan);
-        }
-        let certificates =
-            reqwest::Certificate::from_pem_bundle(pem).map_err(|_| SourceError::InvalidPlan)?;
-        if certificates.is_empty() {
-            return Err(SourceError::InvalidPlan);
-        }
         for certificate in certificates {
             builder = builder.add_root_certificate(certificate);
         }
     }
     builder.build().map_err(|_| SourceError::InvalidPlan)
+}
+
+/// The private certificate authorities a runtime-bound TLS trust profile
+/// names, to be trusted beside the system roots, or `None` when the profile is
+/// unbound, empty, oversized, or not a PEM certificate bundle.
+pub(crate) fn trust_profile_roots(
+    profile_name: &str,
+    tls: &OutboundTlsConfig,
+    captured_ca_bundles: &BTreeMap<String, Vec<u8>>,
+) -> Option<Vec<reqwest::Certificate>> {
+    if !tls.system_roots {
+        return None;
+    }
+    let binding = tls.trust_profiles.get(profile_name)?;
+    if binding.ca_bundle_file.is_empty() {
+        return None;
+    }
+    let pem = captured_ca_bundles.get(profile_name)?;
+    if pem.is_empty() || pem.len() as u64 > PRIVATE_CA_MAXIMUM_BYTES {
+        return None;
+    }
+    let certificates = reqwest::Certificate::from_pem_bundle(pem).ok()?;
+    if certificates.is_empty() {
+        return None;
+    }
+    Some(certificates)
 }
 
 fn conservative_selector_sets(

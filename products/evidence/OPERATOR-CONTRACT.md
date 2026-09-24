@@ -619,9 +619,12 @@ integer slots paired with minimized selectors and closed parameters.
 It must return an exact slot bijection over ordinary lookup results. Missing,
 duplicate, extra, negative, or out-of-range slots abort the whole request.
 
-A source may name a logical TLS trust profile. `runtime.yaml` binds it to one
-bounded PEM CA file. Hostname and fixed-origin verification remain mandatory;
-there is no insecure or trust-all mode. Version 1 ignores `HTTP_PROXY`,
+A source may name a logical TLS trust profile, and so may `authentication` for
+the connection that fetches the access-token issuer's key set. `runtime.yaml`
+binds each name to one bounded PEM CA file, trusted beside the system roots for
+the connections of the source or issuer that names it and no other. Hostname
+and fixed-origin verification remain mandatory; there is no insecure or
+trust-all mode. Version 1 ignores `HTTP_PROXY`,
 `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` and has no application-level proxy.
 
 ## Audit and operational data

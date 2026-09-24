@@ -334,7 +334,7 @@ cross_cutting:
     negative_test: sec-runtime-cannot-override-governed-bundle
   outbound_tls_and_proxy:
     threat: A mutable or untrusted CA or ambient proxy redirects credentials and protected source queries to another authority.
-    enforcement: Runtime captures validated private-CA bytes at startup, fixed-origin hostname verification stays enabled, and both evidence-data and OAuth clients ignore ambient proxy variables.
+    enforcement: Runtime captures validated private-CA bytes at startup, fixed-origin hostname verification stays enabled, and both evidence-data and OAuth clients ignore ambient proxy variables. The access-token issuer's key-set connection trusts a private CA only through the one profile its authentication block names, beside the system roots and for that connection alone, and the runtime binds that profile exactly as it binds a source's.
     negative_test: sec-tls-and-proxy-authority-fixed
   subject_role_order:
     threat: Caller-controlled array position substitutes one subject role for another or changes the signed binding order.

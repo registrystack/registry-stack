@@ -13,6 +13,11 @@
   and verifies the retained chain read-only, without taking the writer lock a
   running instance holds. Beside that writer it verifies the complete records
   of the active segment too, up to its last full line.
+- Add `ValidatedFetchUrl::immediate_get_with_additional_roots` and
+  `JwksFetcher::new_trusting_additional_roots`, so a key set served under a
+  private certificate authority is fetched with that authority trusted beside
+  the system roots for that connection alone, without a process-wide trust
+  store change.
 
 ## v0.34.0 - 2026-09-25
 

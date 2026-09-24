@@ -90,6 +90,8 @@ pub enum RuntimeInitializationError {
     Source,
     #[error("the Evidence rate limiter could not initialize")]
     RateLimit,
+    #[error("the Evidence access-token issuer TLS trust profile could not initialize")]
+    IssuerTrust,
 }
 
 /// Why the audit boundary refused to initialize.
@@ -550,6 +552,26 @@ fn build_sources(
     Ok(sources)
 }
 
+/// The private certificate authorities the runtime binds to the access-token
+/// issuer's `tlsTrustProfile`, empty when the bundle names none. A named
+/// profile that does not resolve, whether unbound, bound to no captured
+/// certificate bundle, or bound where system roots are off, refuses, so the
+/// issuer is never silently left on the system roots alone.
+fn issuer_trust_roots(
+    bundle: &Bundle,
+    runtime_document: &RuntimeDocument,
+) -> Result<Vec<reqwest::Certificate>, RuntimeInitializationError> {
+    let Some(profile_name) = bundle.config.authentication.tls_trust_profile.as_deref() else {
+        return Ok(Vec::new());
+    };
+    crate::source::trust_profile_roots(
+        profile_name,
+        &runtime_document.config.outbound_tls,
+        &runtime_document.ca_bundles,
+    )
+    .ok_or(RuntimeInitializationError::IssuerTrust)
+}
+
 /// Build the per-principal rate limiter the bundle declares.
 fn rate_limiter(bundle: &Bundle) -> Result<EvidenceRateLimiter, RuntimeInitializationError> {
     let configured_limits = &bundle.config.rate_limits;
@@ -624,6 +646,7 @@ async fn assemble<A>(
         None => Arc::new(Authenticator::from_config(
             &bundle.config.authentication,
             bundle.config.assurance_profile,
+            issuer_trust_roots(&bundle, &runtime_document)?,
         )),
     };
 

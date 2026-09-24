@@ -180,6 +180,7 @@ artifact, or alternate evaluator is introduced by the assurance profile.
 | `authentication.assertionIssuers` | no | Per-client assertion-authority admission for a token carrying the platform verifier's `registry_assertion_issuer` claim, keyed by the client the token's `client_id`/`azp` names and naming the issuers that client may present the claim as. Omission applies no rule, so a claim-bearing token is admitted regardless of its value. A stated map must be non-empty and bounded (at most 32 client keys of 1..=128 bytes), and each client's issuer list must be non-empty, unique, and bounded (at most 8 entries of 1..=512 bytes). A token carrying no such claim is never affected by this admission. |
 | `authentication.requiredScopes` | no | Scopes every inbound token must carry, read from the verified token's scope set after signature verification and before any authority claim is read. Omission keeps the no-scope-gate behavior. A stated list must be non-empty, unique RFC 6749 scope-tokens (at most 32 entries of 1..=256 bytes). A missing scope is never inferred from tags, principal, roles, `sub`, or request fields. |
 | `authentication.actorClaim` | no | Optional verified actor claim. Omission does not enable a fallback actor source. |
+| `authentication.tlsTrustProfile` | no | Logical profile name bound by `runtime.yaml` to a private CA file trusted beside the system roots for the `jwksUri` connection alone. Omission uses system roots only. Refused when `jwksUri` is a local HTTP origin. |
 
 ### Audit, subject binding, rates, and signing
 
@@ -1260,7 +1261,7 @@ sourceExtracts:
 | `auditStorage.path` | yes | Absolute keyed-JSONL audit path on operator-owned durable storage. |
 | `auditStorage.maximumFileBytes` | yes | 1,048,576 through 1,099,511,627,776 bytes. Reaching the bound seals the active segment under an ascending sequence number and opens a fresh empty segment at the configured path for subsequent writes; sealed segments are never deleted. A write or sync failure, not rotation itself, is what fails closed. |
 | `outboundTls.systemRoots` | yes | Literal `true`. |
-| `outboundTls.trustProfiles` | yes | Closed map of at most 64 logical profile ids. It may be empty when no source names a private trust profile. |
+| `outboundTls.trustProfiles` | yes | Closed map of at most 64 logical profile ids. It may be empty when neither a source nor `authentication` names a private trust profile. |
 | `outboundTls.trustProfiles.<id>.caBundleFile` | for each profile | Absolute path to one bounded PEM CA file. Profile names must exactly match bundle `tlsTrustProfile` references. |
 | `sourceExtracts` | no | Closed map of at most 64 logical extract names. Omission binds none, which is what a runtime file for a bundle with no extract source says. |
 | `sourceExtracts.<name>.path` | for each name | Absolute path to one read-only regular file. Names must exactly match bundle `extractProfile` references. |
@@ -1307,11 +1308,16 @@ initialization failed`, naming neither the artifact nor the cause. Write
 `evidence check` before `evidence serve` so a fault surfaces with its artifact
 and cause instead of only as `runtime bundle initialization failed`.
 
-A bundle source may name one `tlsTrustProfile`. The corresponding bounded PEM
-file is loaded and validated at startup. Hostname verification and source-origin
-checks remain mandatory. There is no `insecure`, `skipVerification`, or
-`trustAll` setting. Changing a trust file requires restart and changes the
-runtime digest.
+A bundle source may name one `tlsTrustProfile`, and so may `authentication`
+for the connection that fetches the access-token issuer's key set from
+`jwksUri`. The corresponding bounded PEM file is loaded and validated at
+startup and is trusted beside the system roots, only for the connection of the
+source or issuer that names it. A source and the issuer may name the same
+profile. Hostname verification and source-origin checks remain mandatory.
+There is no `insecure`, `skipVerification`, or `trustAll` setting, and the
+issuer needs no process-wide trust store change such as `SSL_CERT_FILE`.
+Changing a trust file requires restart and changes the runtime
+digest.
 
 A bundle source that reads an extract names one `extractProfile` and never a
 filesystem location, so the operator decides where the file sits without
@@ -1551,6 +1557,7 @@ authentication.requiredScopes
 authentication.requiredScopes[]
 authentication.revokedKeyIds
 authentication.revokedKeyIds[]
+authentication.tlsTrustProfile
 authentication.tokenTypes
 authentication.tokenTypes[]
 authorityProfiles

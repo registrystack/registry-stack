@@ -96,8 +96,8 @@ not require target-host paths or secrets to exist, run fixtures, or prove live r
 ## The runtime file
 
 `runtime.yaml` binds one governed bundle to one process: where the bundle lives, what the
-listener binds to, where secrets and audit storage sit, and which private CA files a source may
-trust. It is process-local operator configuration, not part of the reviewed bundle, and
+listener binds to, where secrets and audit storage sit, and which private CA files a source or the
+access-token issuer may trust. It is process-local operator configuration, not part of the reviewed bundle, and
 `products/evidence/contracts/runtime.schema.yaml` is its schema of record.
 
 Top-level required fields:
@@ -109,7 +109,7 @@ Top-level required fields:
 | `listener` | `bindHost` (loopback, private IPv4, or unique-local IPv6 only), `port`, `tlsTermination` (fixed at `operator-controlled-upstream`: TLS terminates ahead of Evidence Gateway), `trustProxyIdentityHeaders` (fixed `false`: proxy-supplied identity is never trusted), plus request-size, concurrency, timeout, and shutdown-grace bounds. |
 | `secretProviders.file.root` | The owner-only directory the file secret provider resolves every `secret:file/<name>` reference beneath. |
 | `auditStorage` | `path` for the active audit segment and `maximumFileBytes`, a per-segment rotation threshold. |
-| `outboundTls` | `systemRoots` (fixed `true`) plus named `trustProfiles`, each a local id bound to one CA bundle file a source can select through `tlsTrustProfile`. |
+| `outboundTls` | `systemRoots` (fixed `true`) plus named `trustProfiles`, each a local id bound to one CA bundle file a source or `authentication` can select through `tlsTrustProfile`. |
 
 An optional `metricsListener` (`bindHost`, `port`) serves `GET /metrics` on a second private
 binding; absent by default, it is documented in `products/evidence/OPERATOR-CONTRACT.md` under
@@ -129,7 +129,7 @@ atomic revision (`products/evidence/contracts/bundle.schema.yaml`). Its top-leve
 | Section | Declares |
 | --- | --- |
 | `service`, `issuer` | The technical provider and the legal issuing authority, both URIs. |
-| `authentication` | The one trusted OIDC access-token profile: issuer, audiences, token type, algorithms, JWKS URI, maximum token lifetime, revoked key identifiers, and the claim names for principal, requester tags, evidence audience, grant id, and grant authority. |
+| `authentication` | The one trusted OIDC access-token profile: issuer, audiences, token type, algorithms, JWKS URI, maximum token lifetime, revoked key identifiers, and the claim names for principal, requester tags, evidence audience, grant id, and grant authority. An optional `tlsTrustProfile` names the private CA the JWKS URI is served under; see [An issuer behind a private CA](#an-issuer-behind-a-private-ca). |
 | `audit` | Keyed JSONL audit: the hash secret reference, key version, and fixed fail-closed behavior. |
 | `subjectBinding` | The secret reference and key version behind the audience-scoped entity-reference HMAC. |
 | `rateLimits` | Per-principal request, burst, and failed-selector-attempt bounds. |
@@ -180,6 +180,41 @@ FactSet to the fetch as transient `prior_facts`; a fetch source may bind one dec
 complete path segment. Neither a response nor a script can select a source, origin, method, credential,
 or additional call. The requirement's effective acquisition posture is the weaker posture of its two
 sources (`products/evidence/contracts/source-contract.yaml`, invariant `V1-I40`).
+
+### An issuer behind a private CA
+
+When the access-token issuer serves its key set under a certificate authority that is not in the
+system trust store, name a trust profile on `authentication` and bind it in `runtime.yaml`, exactly
+as a source does:
+
+```yaml
+# bundle (governance.yaml in a production project)
+authentication:
+  jwksUri: https://issuer.internal.example/oauth2/jwks
+  tlsTrustProfile: issuer-pki
+```
+
+```yaml
+# runtime.yaml
+outboundTls:
+  systemRoots: true
+  trustProfiles:
+    issuer-pki: {caBundleFile: /etc/registry-evidence/ca/issuer-pki.pem}
+```
+
+The CA file is trusted beside the system roots for the `jwksUri` connection alone; it widens no
+source connection and no other process. Hostname verification stays on, and there is no setting
+that disables verification. The file follows the same rules as a source CA file: an absolute path,
+no write permission for anyone, a bounded PEM bundle, and part of the runtime revision, so changing
+it requires a restart. The binding is exact in both directions, so a runtime file that binds the
+profile without the bundle naming it, or the reverse, is refused. A source and the issuer may share
+one profile. A local HTTP `jwksUri` cannot name a profile. `evidence check
+--require-runtime-dependencies` fetches the key set through the profile, so a missing or wrong CA
+is reported before the listener binds.
+
+{/* Evidence: crates/registry-evidence/src/runtime.rs, issuer_trust_roots();
+    crates/registry-evidence/src/bundle.rs, validate_runtime_bindings();
+    products/evidence/contracts/bundle.schema.yaml, authentication.tlsTrustProfile. */}
 
 ## What Rhai scripts may and may not do
 

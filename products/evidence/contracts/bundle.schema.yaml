@@ -543,6 +543,13 @@ $defs:
         type: string
         pattern: ^https?://
         maxLength: 512
+      tlsTrustProfile:
+        description: >-
+          Logical name resolved to an exact private certificate authority file bound in
+          `runtime.yaml`, trusted beside the system roots for the `jwksUri` connection alone.
+          Omission trusts only the system roots, and the profile is rejected outright when
+          `jwksUri` is a local HTTP origin.
+        $ref: '#/$defs/local-id'
       principalClaim:
         description: >-
           The only claim read as the principal, whose absence denies the request; `client_id`,
@@ -651,6 +658,16 @@ $defs:
           minLength: 1
           maxLength: 256
           pattern: ^[\x21\x23-\x5B\x5D-\x7E]+$
+    if:
+      required:
+        - jwksUri
+      properties:
+        jwksUri:
+          pattern: ^http://
+    then:
+      not:
+        required:
+          - tlsTrustProfile
   audit:
     type: object
     additionalProperties: false
