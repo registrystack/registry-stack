@@ -291,9 +291,10 @@ Residual risks: the test suite cannot inject a resolver, so it proves the
 refusal with a name that resolves to loopback and with literal private and
 metadata addresses; the substrate's own tests cover an answer that changes
 between resolutions. Scripts run on the async runtime thread within the send
-deadline. The OAuth token decoder is strict, so a token endpoint that returns
-members beyond `access_token`, `token_type`, and `expires_in` is refused and
-the send is transient. The configuration loader that activates providers,
+deadline. The OAuth token decoder is closed: it accepts `access_token`,
+`token_type` compared case-insensitively to `Bearer`, `expires_in` unless the
+connection sets `assumedLifetimeSeconds`, and an optional string `scope`, and
+refuses any other member, so the send is transient. The configuration loader that activates providers,
 and the adapter that registers them as the worker's transport, are not wired
 yet.
 

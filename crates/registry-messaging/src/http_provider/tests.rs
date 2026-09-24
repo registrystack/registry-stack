@@ -405,6 +405,70 @@ async fn oauth2_client_credentials_fetches_caches_and_drops_a_refused_token() {
     }
 }
 
+#[tokio::test]
+async fn oauth2_accepts_a_token_response_with_scope_and_a_lowercase_type() {
+    for (token, expiry) in [
+        (
+            json!({
+                "access_token": "issued-token-2",
+                "token_type": "bearer",
+                "expires_in": 3600,
+                "scope": "messages.send"
+            }),
+            "",
+        ),
+        (
+            json!({
+                "access_token": "issued-token-2",
+                "token_type": "BEARER",
+                "scope": "messages.send"
+            }),
+            "  assumedLifetimeSeconds: 300\n",
+        ),
+    ] {
+        let upstream = MockHttpUpstream::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/oauth/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(token))
+            .mount(upstream.wiremock_server())
+            .await;
+        upstream
+            .expect("POST", "/v1/messages")
+            .respond_status(201)
+            .await;
+        let secrets = secrets(&[("client-id", b"client-1"), ("client-secret", PASSWORD)]);
+        let settings = settings(
+            &base(&upstream),
+            &format!(
+                "  kind: oauth2-client-credentials\n  tokenEndpoint: {}/oauth/token\n  \
+                 clientIdRef: secret:file/client-id\n  clientSecretRef: secret:file/client-secret\n  \
+                 maximumCacheSeconds: 600\n{expiry}",
+                upstream.url().trim_end_matches('/')
+            ),
+        );
+        let provider = activate(
+            &settings,
+            &plain_package(false),
+            scripts(JSON_PREPARE, None),
+            &secrets,
+        );
+        let content = content();
+
+        let sent = provider.send(&message(&content)).await;
+
+        assert_eq!(sent.outcome, accepted(None), "{expiry}");
+        let requests = received(&upstream).await;
+        let send = requests
+            .iter()
+            .find(|request| request.url.path() == "/v1/messages")
+            .expect("the message was sent");
+        assert_eq!(
+            header(send, "authorization").as_deref(),
+            Some("Bearer issued-token-2")
+        );
+    }
+}
+
 #[test]
 fn no_authentication_is_refused_for_an_https_provider() {
     let settings = settings("https://gateway.example.org/v1/", NONE);

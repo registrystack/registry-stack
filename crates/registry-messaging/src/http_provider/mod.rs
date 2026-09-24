@@ -535,10 +535,10 @@ fn freeze_oauth(
     }
     let (schema, assumed_lifetime_milliseconds) = match oauth.assumed_lifetime_seconds {
         Some(seconds) => (
-            StrictOAuthTokenSchema::BearerWithoutExpiry,
+            StrictOAuthTokenSchema::Rfc6749BearerWithoutExpiry,
             Some(seconds.saturating_mul(1_000)),
         ),
-        None => (StrictOAuthTokenSchema::BearerWithExpiresIn, None),
+        None => (StrictOAuthTokenSchema::Rfc6749BearerWithExpiresIn, None),
     };
     Ok(OAuth2 {
         policy,
@@ -924,7 +924,8 @@ impl OAuth2 {
             .await
             .map_err(|_| failed())?;
         let token = match self.schema {
-            StrictOAuthTokenSchema::BearerWithExpiresIn => decode_strict_oauth_token(
+            StrictOAuthTokenSchema::BearerWithExpiresIn
+            | StrictOAuthTokenSchema::Rfc6749BearerWithExpiresIn => decode_strict_oauth_token(
                 body,
                 self.schema,
                 MAXIMUM_TOKEN_RESPONSE_BYTES,
@@ -934,7 +935,8 @@ impl OAuth2 {
                 Some(self.maximum_cache_milliseconds),
                 Some(TOKEN_EXPIRY_SKEW_MILLISECONDS),
             ),
-            StrictOAuthTokenSchema::BearerWithoutExpiry => decode_strict_oauth_token(
+            StrictOAuthTokenSchema::BearerWithoutExpiry
+            | StrictOAuthTokenSchema::Rfc6749BearerWithoutExpiry => decode_strict_oauth_token(
                 body,
                 self.schema,
                 MAXIMUM_TOKEN_RESPONSE_BYTES,
