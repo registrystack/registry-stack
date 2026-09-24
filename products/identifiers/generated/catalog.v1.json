@@ -1639,7 +1639,7 @@
       "description": "The bearer credential is missing, invalid, or expired. Sign in again.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "authentication.refused",
@@ -1658,7 +1658,7 @@
       "description": "The callback was verified, but the provider's receipt script could not read a delivery report from it.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "callback.unreadable",
@@ -1677,7 +1677,7 @@
       "description": "The callback did not verify for a provider this deployment accepts callbacks from.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "callback.unverified",
@@ -1696,7 +1696,7 @@
       "description": "The content does not have the parts the channel requires, or the template's channel differs from the sender profile's.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "content.invalid",
@@ -1715,7 +1715,7 @@
       "description": "A content part exceeds the size the channel accepts. Shorten the content or the data.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "content.too-large",
@@ -1734,7 +1734,7 @@
       "description": "The SMS text needs more segments than the sender profile allows. Shorten the text or the data.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "content.too-many-segments",
@@ -1753,7 +1753,7 @@
       "description": "The stored response for this idempotency key has expired. Reconcile the original submission before choosing a new key.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "idempotency.expired",
@@ -1772,7 +1772,7 @@
       "description": "This idempotency key was used for a different request.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "idempotency.key-reused",
@@ -1791,7 +1791,7 @@
       "description": "The message is being sent or has been handed to the provider, so it can no longer be cancelled.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "message.dispatch-started",
@@ -1810,7 +1810,7 @@
       "description": "No message with this identifier is visible to the caller.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "message.not-visible",
@@ -1829,7 +1829,7 @@
       "description": "The message has reached a final state, so it can no longer be cancelled.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "message.terminal",
@@ -1848,7 +1848,7 @@
       "description": "Your Messaging access profile does not allow this operation.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "operation.not-authorized",
@@ -1867,12 +1867,50 @@
       "description": "No Messaging access profile authorizes this caller for this request.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "profile.not-authorized",
         "httpStatuses": [
           403
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-messaging/quota/exceeded",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "messaging",
+      "title": "Daily limit reached",
+      "description": "Your Messaging access profile has accepted its daily limit of messages. Try again after the time in Retry-After.",
+      "source": {
+        "path": "crates/registry-messaging-core/src/problem.rs",
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
+      },
+      "problem": {
+        "code": "quota.exceeded",
+        "httpStatuses": [
+          429
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-messaging/rate-limit/exceeded",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "messaging",
+      "title": "Request rate exceeded",
+      "description": "Your Messaging access profile's request rate is exceeded. Try again after the time in Retry-After.",
+      "source": {
+        "path": "crates/registry-messaging-core/src/problem.rs",
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
+      },
+      "problem": {
+        "code": "rate-limit.exceeded",
+        "httpStatuses": [
+          429
         ]
       }
     },
@@ -1886,7 +1924,7 @@
       "description": "The request body exceeds the accepted size.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "request.body-too-large",
@@ -1905,7 +1943,7 @@
       "description": "The request could not be read as a Messaging request.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "request.invalid",
@@ -1924,7 +1962,7 @@
       "description": "The route exists but not for this method.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "request.method-not-allowed",
@@ -1943,7 +1981,7 @@
       "description": "The requested route does not exist.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "request.not-found",
@@ -1962,7 +2000,7 @@
       "description": "The request body could not be processed.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "request.unprocessable",
@@ -1981,7 +2019,7 @@
       "description": "The request body is not JSON.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "request.unsupported-media-type",
@@ -2000,7 +2038,7 @@
       "description": "Messaging is unavailable. Try again after the service recovers.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "service.unavailable",
@@ -2019,7 +2057,7 @@
       "description": "The data does not match the template's data schema.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "template.data-invalid",
@@ -2038,7 +2076,7 @@
       "description": "The template version has no content in the requested locale. Choose one of its declared locales.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "template.locale-unavailable",
@@ -2057,7 +2095,7 @@
       "description": "No template with this identifier and version is available to the caller.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "template.not-found",
@@ -2076,7 +2114,7 @@
       "description": "The template could not be rendered with this data within the rendering limits.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "0521992fee39803e958820f4dd93bc9576ae5a692ac296ffd2778dbb797b2999"
+        "sha256": "0c4278e6334469edf72e8dc41154794b24446dae7e76a1345fcb2ad6fcc6eb80"
       },
       "problem": {
         "code": "template.render-refused",
@@ -3305,11 +3343,11 @@
       "description": "Registry Messaging runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-messaging/src/schema.rs",
-        "sha256": "59f82749670b8c76dd4df132ee85485204b8af32ba6459f1553486ae64ad11d5"
+        "sha256": "e7ed8eb90597151a5ef095dca7abe6e9926f5a6a91c035f0f1a1034b8ce2874b"
       },
       "artifact": {
         "path": "products/messaging/generated/runtime/runtime.schema.json",
-        "sha256": "e81dd19edd2f694def4bb0ac76ed0d19bf0446ad995ba20056d2c45945e23134",
+        "sha256": "482b4b04dba1eed67e3ed41b6172857e62a5b1239cefdfc13e8129fbb4ba161b",
         "mediaType": "application/schema+json"
       }
     },

@@ -188,6 +188,23 @@ pub struct SubmissionAnswer {
     pub replayed: bool,
 }
 
+/// Why a submission was not accepted: the problem, and for a limit, how
+/// long the caller should wait before trying again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SubmissionRefusal {
+    pub problem: ProblemCode,
+    pub retry_after: Option<Duration>,
+}
+
+impl From<ProblemCode> for SubmissionRefusal {
+    fn from(problem: ProblemCode) -> Self {
+        Self {
+            problem,
+            retry_after: None,
+        }
+    }
+}
+
 /// Why the store could not answer an operator action.
 #[derive(Debug, Error)]
 pub enum MessageStoreError {
@@ -804,14 +821,15 @@ impl MessageService {
     /// # Errors
     ///
     /// `idempotency.expired`, `idempotency.key-reused`, `request.invalid`
-    /// for a window the retention does not allow, and `service.unavailable`
-    /// when the store or the journal's keys fail.
+    /// for a window the retention does not allow, `quota.exceeded` with the
+    /// wait until the profile's oldest counted acceptance ages out, and
+    /// `service.unavailable` when the store or the journal's keys fail.
     pub async fn submit(
         &self,
         caller: &Caller,
         key: &str,
         submission: &PreparedSubmission,
-    ) -> Result<SubmissionAnswer, ProblemCode> {
+    ) -> Result<SubmissionAnswer, SubmissionRefusal> {
         let unavailable = |_| ProblemCode::ServiceUnavailable;
         let principal_pseudonym = self
             .audit
@@ -832,17 +850,23 @@ impl MessageService {
             match self.try_submit(caller, key, submission, &references).await {
                 Ok(Some(answer)) => return Ok(answer),
                 Ok(None) => {}
-                Err(Refusal::Problem(problem)) => return Err(problem),
+                Err(Refusal::Problem(problem)) => return Err(problem.into()),
+                Err(Refusal::Quota { retry_after }) => {
+                    return Err(SubmissionRefusal {
+                        problem: ProblemCode::QuotaExceeded,
+                        retry_after: Some(retry_after),
+                    })
+                }
                 Err(Refusal::Store(error)) => {
                     tracing::warn!(
                         error = %error,
                         "the Messaging store could not record a submission"
                     );
-                    return Err(ProblemCode::ServiceUnavailable);
+                    return Err(ProblemCode::ServiceUnavailable.into());
                 }
             }
         }
-        Err(ProblemCode::ServiceUnavailable)
+        Err(ProblemCode::ServiceUnavailable.into())
     }
 
     async fn try_submit(
@@ -863,6 +887,9 @@ impl MessageService {
             return replay(stored, submission).map(Some);
         }
         let window = Window::new(now, submission, &self.retention)?;
+        if let Some(limit) = caller.profile.daily_limit {
+            check_daily_limit(&transaction, &caller.profile.id, limit, now).await?;
+        }
         let message_id = Uuid::new_v4();
         let receipt = serde_json::to_value(MessageReceipt {
             id: message_id.to_string(),
@@ -990,6 +1017,11 @@ struct References {
 
 enum Refusal {
     Problem(ProblemCode),
+    /// The access profile accepted its daily limit; the oldest counted
+    /// acceptance ages out after `retry_after`.
+    Quota {
+        retry_after: Duration,
+    },
     Store(StoreError),
 }
 
@@ -1008,6 +1040,49 @@ impl From<tokio_postgres::Error> for Refusal {
 const fn days(count: u16) -> Duration {
     Duration::from_secs(count as u64 * SECONDS_PER_DAY)
 }
+
+/// The window a `dailyLimit` counts over.
+const DAILY_WINDOW: Duration = Duration::from_secs(SECONDS_PER_DAY);
+
+/// Refuse a submission once `profile` accepted `limit` messages in the last
+/// 24 hours. The count runs under a transaction-scoped advisory lock of the
+/// profile, so two submissions of one profile are counted one after the
+/// other and cannot both take the last place; the lock is released when
+/// the acceptance commits or rolls back. The count is the accepted
+/// messages themselves, so it survives a restart without a counter.
+async fn check_daily_limit(
+    transaction: &tokio_postgres::Transaction<'_>,
+    profile: &str,
+    limit: u32,
+    now: SystemTime,
+) -> Result<(), Refusal> {
+    transaction
+        .execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+            &[&format!("{DAILY_LIMIT_LOCK_NAMESPACE}{profile}")],
+        )
+        .await?;
+    let window_start = now - DAILY_WINDOW;
+    let row = transaction
+        .query_one(
+            "SELECT count(*), min(accepted_at) FROM messaging_messages \
+              WHERE access_profile = $1 AND accepted_at > $2",
+            &[&profile, &window_start],
+        )
+        .await?;
+    let accepted: i64 = row.try_get(0)?;
+    if accepted < i64::from(limit) {
+        return Ok(());
+    }
+    let oldest: SystemTime = row.try_get(1)?;
+    let retry_after = (oldest + DAILY_WINDOW)
+        .duration_since(now)
+        .unwrap_or(Duration::ZERO);
+    Err(Refusal::Quota { retry_after })
+}
+
+/// The advisory-lock name prefix a profile's daily count is taken under.
+const DAILY_LIMIT_LOCK_NAMESPACE: &str = "registry-messaging.daily-limit:";
 
 async fn lookup_key(
     transaction: &tokio_postgres::Transaction<'_>,

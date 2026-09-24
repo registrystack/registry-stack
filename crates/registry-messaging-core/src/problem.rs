@@ -41,6 +41,8 @@ pub const MESSAGE_NOT_VISIBLE_PROBLEM: &str = "message.not-visible";
 pub const MESSAGE_TERMINAL_PROBLEM: &str = "message.terminal";
 pub const OPERATION_NOT_AUTHORIZED_PROBLEM: &str = "operation.not-authorized";
 pub const PROFILE_NOT_AUTHORIZED_PROBLEM: &str = "profile.not-authorized";
+pub const QUOTA_EXCEEDED_PROBLEM: &str = "quota.exceeded";
+pub const RATE_LIMIT_EXCEEDED_PROBLEM: &str = "rate-limit.exceeded";
 pub const REQUEST_BODY_TOO_LARGE_PROBLEM: &str = "request.body-too-large";
 pub const REQUEST_INVALID_PROBLEM: &str = "request.invalid";
 pub const REQUEST_METHOD_NOT_ALLOWED_PROBLEM: &str = "request.method-not-allowed";
@@ -69,6 +71,8 @@ pub enum ProblemCode {
     MessageTerminal,
     OperationNotAuthorized,
     ProfileNotAuthorized,
+    QuotaExceeded,
+    RateLimitExceeded,
     RequestBodyTooLarge,
     RequestInvalid,
     RequestMethodNotAllowed,
@@ -98,6 +102,8 @@ impl ProblemCode {
         Self::MessageTerminal,
         Self::OperationNotAuthorized,
         Self::ProfileNotAuthorized,
+        Self::QuotaExceeded,
+        Self::RateLimitExceeded,
         Self::RequestBodyTooLarge,
         Self::RequestInvalid,
         Self::RequestMethodNotAllowed,
@@ -127,6 +133,8 @@ impl ProblemCode {
             Self::MessageTerminal => MESSAGE_TERMINAL_PROBLEM,
             Self::OperationNotAuthorized => OPERATION_NOT_AUTHORIZED_PROBLEM,
             Self::ProfileNotAuthorized => PROFILE_NOT_AUTHORIZED_PROBLEM,
+            Self::QuotaExceeded => QUOTA_EXCEEDED_PROBLEM,
+            Self::RateLimitExceeded => RATE_LIMIT_EXCEEDED_PROBLEM,
             Self::RequestBodyTooLarge => REQUEST_BODY_TOO_LARGE_PROBLEM,
             Self::RequestInvalid => REQUEST_INVALID_PROBLEM,
             Self::RequestMethodNotAllowed => REQUEST_METHOD_NOT_ALLOWED_PROBLEM,
@@ -178,6 +186,7 @@ impl ProblemCode {
             | Self::TemplateDataInvalid
             | Self::TemplateLocaleUnavailable
             | Self::TemplateRenderRefused => 422,
+            Self::QuotaExceeded | Self::RateLimitExceeded => 429,
             Self::ServiceUnavailable => 503,
         }
     }
@@ -200,6 +209,8 @@ impl ProblemCode {
             Self::MessageTerminal => "Message already final",
             Self::OperationNotAuthorized => "Operation not authorized",
             Self::ProfileNotAuthorized => "Profile not authorized",
+            Self::QuotaExceeded => "Daily limit reached",
+            Self::RateLimitExceeded => "Request rate exceeded",
             Self::RequestBodyTooLarge => "Payload too large",
             Self::RequestInvalid => "Request invalid",
             Self::RequestMethodNotAllowed => "Method not allowed",
@@ -257,6 +268,12 @@ impl ProblemCode {
             Self::ProfileNotAuthorized => {
                 "No Messaging access profile authorizes this caller for this request."
             }
+            Self::QuotaExceeded => {
+                "Your Messaging access profile has accepted its daily limit of messages. Try again after the time in Retry-After."
+            }
+            Self::RateLimitExceeded => {
+                "Your Messaging access profile's request rate is exceeded. Try again after the time in Retry-After."
+            }
             Self::RequestBodyTooLarge => "The request body exceeds the accepted size.",
             Self::RequestInvalid => "The request could not be read as a Messaging request.",
             Self::RequestMethodNotAllowed => "The route exists but not for this method.",
@@ -294,7 +311,7 @@ mod tests {
 
     #[test]
     fn the_vocabulary_is_complete_and_closed() {
-        assert_eq!(ProblemCode::ALL.len(), 24);
+        assert_eq!(ProblemCode::ALL.len(), 26);
         for code in ProblemCode::ALL {
             assert_eq!(ProblemCode::from_code(code.code()), Some(*code));
         }
@@ -341,7 +358,7 @@ mod tests {
 
     #[test]
     fn every_code_pins_a_status_title_and_detail() {
-        let statuses = [400, 401, 403, 404, 405, 409, 410, 413, 415, 422, 503];
+        let statuses = [400, 401, 403, 404, 405, 409, 410, 413, 415, 422, 429, 503];
         for code in ProblemCode::ALL {
             assert!(
                 statuses.contains(&code.http_status()),
@@ -426,6 +443,24 @@ mod tests {
         assert_eq!(
             ProblemCode::from_code("callback.unreadable"),
             Some(ProblemCode::CallbackUnreadable)
+        );
+    }
+
+    /// A caller over its access profile's request rate, and one over its
+    /// daily limit, answer 429 with codes that say which: the rate refusal
+    /// clears within seconds, the quota refusal only as the day's oldest
+    /// accepted messages age out.
+    #[test]
+    fn limit_refusals_answer_too_many_requests() {
+        assert_eq!(ProblemCode::RateLimitExceeded.http_status(), 429);
+        assert_eq!(ProblemCode::QuotaExceeded.http_status(), 429);
+        assert_eq!(
+            ProblemCode::from_code("rate-limit.exceeded"),
+            Some(ProblemCode::RateLimitExceeded)
+        );
+        assert_eq!(
+            ProblemCode::from_code("quota.exceeded"),
+            Some(ProblemCode::QuotaExceeded)
         );
     }
 }

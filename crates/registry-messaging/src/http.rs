@@ -58,8 +58,9 @@ use serde::Serialize;
 use crate::audit::AuditJournal;
 use crate::auth::{AuthenticationError, MessagingAuthenticator};
 use crate::callbacks;
+use crate::limits::{CallerLimits, LimitRefusal};
 use crate::messages::{
-    prepare_submission, valid_idempotency_key, MessageService, SubmissionAnswer,
+    prepare_submission, valid_idempotency_key, MessageService, SubmissionAnswer, SubmissionRefusal,
     MESSAGE_REFUSED_EVENT, MESSAGE_REPLAYED_EVENT,
 };
 use crate::metrics::{count_requests, serve_metrics, Metrics};
@@ -103,6 +104,8 @@ pub struct HttpState {
     pub metrics: Arc<Metrics>,
     /// The package the ledger names active.
     pub package: Arc<Package>,
+    /// The request rate of each of the package's access profiles.
+    pub limits: Arc<CallerLimits>,
     pub audit: Arc<AuditJournal>,
     /// The message store, absent only in tests of the HTTP surface without
     /// a database, where every route that needs it answers unavailable.
@@ -212,6 +215,8 @@ pub const OPERATIONS: &[Operation] = &[
             ProblemCode::TemplateDataInvalid,
             ProblemCode::TemplateLocaleUnavailable,
             ProblemCode::TemplateRenderRefused,
+            ProblemCode::RateLimitExceeded,
+            ProblemCode::QuotaExceeded,
             ProblemCode::ServiceUnavailable,
         ],
     },
@@ -438,7 +443,7 @@ async fn submit_message(
     let record = match &result {
         Ok(answer) if !answer.replayed => None,
         Ok(answer) => Some(SubmissionRecord::replayed(&state, &caller, answer)?),
-        Err(problem) => Some(SubmissionRecord::refused(&state, &caller, *problem)?),
+        Err(refusal) => Some(SubmissionRecord::refused(&state, &caller, refusal.problem)?),
     };
     if let Some(record) = record {
         if let Err(error) = state.audit.append(record).await {
@@ -446,7 +451,10 @@ async fn submit_message(
             return Err(HttpError(ProblemCode::ServiceUnavailable));
         }
     }
-    let answer = result.map_err(HttpError)?;
+    let answer = match result {
+        Ok(answer) => answer,
+        Err(refusal) => return Ok(refusal_response(refusal)),
+    };
     let status = StatusCode::from_u16(answer.status).map_err(|_| {
         tracing::error!("a stored Messaging receipt carries an invalid status");
         HttpError(ProblemCode::ServiceUnavailable)
@@ -455,19 +463,21 @@ async fn submit_message(
 }
 
 /// Every check a submission passes before it is recorded, in the order a
-/// caller learns of them: the role, the media type, the idempotency key,
-/// and then the body.
+/// caller learns of them: the role, the caller's request rate, the media
+/// type, the idempotency key, and then the body. The daily limit is
+/// counted when the submission is recorded.
 async fn accept_submission(
     state: &HttpState,
     caller: &Caller,
     headers: &HeaderMap,
     body: &[u8],
-) -> Result<SubmissionAnswer, ProblemCode> {
+) -> Result<SubmissionAnswer, SubmissionRefusal> {
     if caller.role() != AccessRole::Sender {
-        return Err(ProblemCode::OperationNotAuthorized);
+        return Err(ProblemCode::OperationNotAuthorized.into());
     }
+    check_caller_rate(state, caller).await?;
     if !is_json(headers) {
-        return Err(ProblemCode::RequestUnsupportedMediaType);
+        return Err(ProblemCode::RequestUnsupportedMediaType.into());
     }
     let key = headers
         .get(IDEMPOTENCY_KEY_HEADER)
@@ -478,6 +488,29 @@ async fn accept_submission(
     message_service(state)?
         .submit(caller, key, &submission)
         .await
+}
+
+/// Charge one submission to the caller's access profile, keyed by the
+/// caller's audit pseudonym.
+async fn check_caller_rate(state: &HttpState, caller: &Caller) -> Result<(), SubmissionRefusal> {
+    let pseudonym = state
+        .audit
+        .principal_pseudonym(&caller.identity)
+        .map_err(|error| {
+            tracing::error!(error = %error, "a Messaging principal pseudonym failed");
+            ProblemCode::ServiceUnavailable
+        })?;
+    match state.limits.check(&caller.profile.id, &pseudonym).await {
+        Ok(()) => Ok(()),
+        Err(LimitRefusal::Exceeded { retry_after }) => Err(SubmissionRefusal {
+            problem: ProblemCode::RateLimitExceeded,
+            retry_after: Some(retry_after),
+        }),
+        Err(LimitRefusal::Unavailable) => {
+            tracing::error!("the Messaging request-rate limiter could not decide");
+            Err(ProblemCode::ServiceUnavailable.into())
+        }
+    }
 }
 
 /// The journal record of a refused or replayed submission. It names the
@@ -776,6 +809,24 @@ fn authentication_problem(error: AuthenticationError) -> HttpError {
 
 pub struct HttpError(pub ProblemCode);
 
+/// Render a refused submission: its problem, with `Retry-After` in whole
+/// seconds, never below one, when a limit says how long to wait.
+fn refusal_response(refusal: SubmissionRefusal) -> Response {
+    let mut response = problem_response(refusal.problem);
+    if let Some(retry_after) = refusal.retry_after {
+        response
+            .headers_mut()
+            .insert(RETRY_AFTER, retry_after_seconds(retry_after).into());
+    }
+    response
+}
+
+/// Whole seconds to wait, rounded up and never below one.
+fn retry_after_seconds(wait: std::time::Duration) -> u64 {
+    let seconds = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
+    seconds.max(1)
+}
+
 impl IntoResponse for HttpError {
     fn into_response(self) -> Response {
         problem_response(self.0)
@@ -860,15 +911,33 @@ mod tests {
         ready: bool,
         audit: AuditJournal,
     ) -> HttpState {
+        let package = starter_package();
         HttpState {
             authenticator: Arc::new(authenticator),
             readiness: Readiness::Fixed(ready),
             metrics: Arc::new(Metrics::default()),
-            package: Arc::new(starter_package()),
+            limits: Arc::new(unmetered_limits(&package)),
+            package: Arc::new(package),
             audit: Arc::new(audit),
             messages: None,
             callbacks: Arc::default(),
         }
+    }
+
+    /// Limits no test of another behavior reaches: the starter's burst of
+    /// ten would refuse a test that sends more.
+    fn unmetered_limits(package: &Package) -> CallerLimits {
+        let profiles = package
+            .access_profiles()
+            .iter()
+            .cloned()
+            .map(|profile| registry_messaging_core::AccessProfile {
+                requests_per_minute: 60_000,
+                burst: 10_000,
+                ..profile
+            })
+            .collect();
+        CallerLimits::new(&registry_messaging_core::AccessProfiles::new(profiles).unwrap()).unwrap()
     }
 
     /// A router over the starter package and an in-memory journal the test
@@ -1452,6 +1521,56 @@ mod tests {
                 "{leaked} reached the journal: {written}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_caller_past_its_profile_rate_is_refused_with_the_wait_needed() {
+        let (sink, journal_handle) = memory_journal();
+        let mut state = state_over(authenticator(), true, journal_handle);
+        state.limits = Arc::new(CallerLimits::new(state.package.access_profiles()).unwrap());
+        let app = router(state);
+        let sender = token(sender_claims());
+        // The starter's `case-notices` profile admits a burst of ten; the
+        // runtime here has no message store, so each admitted submission
+        // is answered as unavailable after its rate was charged.
+        for _ in 0..10 {
+            expect_problem(
+                submit_json(app.clone(), &sender, &submission()).await,
+                ProblemCode::ServiceUnavailable,
+            )
+            .await;
+        }
+        let headers = expect_problem(
+            submit_json(app.clone(), &sender, &submission()).await,
+            ProblemCode::RateLimitExceeded,
+        )
+        .await;
+        assert_eq!(headers.get(RETRY_AFTER).unwrap(), "1");
+        // The operator's own profile has its own budget, and the role
+        // refusal comes before the rate is charged.
+        expect_problem(
+            submit_json(app, &token(operator_claims()), &submission()).await,
+            ProblemCode::OperationNotAuthorized,
+        )
+        .await;
+        let records = journal(&sink);
+        let refused = records
+            .iter()
+            .find(|record| record["problem"] == "rate-limit.exceeded")
+            .expect("the rate refusal is journaled");
+        assert_eq!(refused["event"], MESSAGE_REFUSED_EVENT);
+        assert_eq!(refused["accessProfile"], "case-notices");
+        assert_no_submission_values(&records);
+    }
+
+    #[test]
+    fn retry_after_rounds_up_to_whole_seconds() {
+        use std::time::Duration;
+        assert_eq!(retry_after_seconds(Duration::ZERO), 1);
+        assert_eq!(retry_after_seconds(Duration::from_millis(1)), 1);
+        assert_eq!(retry_after_seconds(Duration::from_secs(1)), 1);
+        assert_eq!(retry_after_seconds(Duration::from_millis(1_001)), 2);
+        assert_eq!(retry_after_seconds(Duration::from_secs(3_600)), 3_600);
     }
 
     #[tokio::test]

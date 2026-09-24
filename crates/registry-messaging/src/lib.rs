@@ -12,6 +12,7 @@ pub mod dispatch;
 pub mod environment;
 pub mod http;
 pub mod http_provider;
+pub mod limits;
 pub mod messages;
 pub mod metrics;
 pub mod outbox;

@@ -75,6 +75,7 @@ registry-platform-dispatch = { workspace = true, features = ["postgres"] }
 registry-platform-httpsec = { workspace = true, features = ["server"] }
 registry-platform-httputil.workspace = true
 registry-platform-oidc.workspace = true
+registry-platform-ratelimit.workspace = true
 registry-platform-script.workspace = true
 rhai.workspace = true
 rustls.workspace = true

@@ -20,8 +20,8 @@ use axum::http::StatusCode;
 use registry_platform_dispatch::postgres::Claim;
 use serde_json::{json, Value};
 use support::{
-    email_submission, operator_token, sender_token, sender_token_for, sms_submission, token,
-    Harness, NAME, OTHER_SENDER_PRINCIPAL, RECIPIENT,
+    email_submission, operator_token, sender_token, sender_token_for, sms_submission, submit_to,
+    token, Harness, NAME, OTHER_SENDER_PRINCIPAL, RECIPIENT,
 };
 use uuid::Uuid;
 
@@ -557,4 +557,130 @@ async fn no_contact_content_data_principal_or_credential_reaches_the_journal_or_
     support::assert_absent("the journal", &Value::Array(journal));
     support::assert_absent("the outbox", &Value::Array(harness.outbox().await));
     support::assert_logs_clean();
+}
+
+/// Give the starter's sender profile a daily limit of `limit`.
+fn with_daily_limit(limit: u32) -> impl FnOnce(&std::path::Path) {
+    move |package: &std::path::Path| {
+        let manifest = package.join("messaging.yaml");
+        let text = std::fs::read_to_string(&manifest).unwrap();
+        let limited = text.replacen(
+            "    burst: 10\n",
+            &format!("    burst: 10\n    dailyLimit: {limit}\n"),
+            1,
+        );
+        assert_ne!(limited, text, "the starter's sender profile moved");
+        std::fs::write(&manifest, limited).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn a_profile_past_its_daily_limit_is_refused_across_a_restart() {
+    let harness = Harness::start_with(Value::Null, with_daily_limit(3)).await;
+    let sender = sender_token();
+    for key in ["daily-1", "daily-2", "daily-3"] {
+        let (status, receipt) = harness.submit(&sender, key, &email_submission()).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{receipt}");
+    }
+    // A replay answers its stored receipt and is not counted again.
+    assert_eq!(
+        harness
+            .submit(&sender, "daily-1", &email_submission())
+            .await
+            .0,
+        StatusCode::ACCEPTED
+    );
+    // The limit belongs to the profile, not the principal.
+    let (status, headers, problem) = submit_to(
+        harness.restarted_app().await,
+        &sender_token_for(OTHER_SENDER_PRINCIPAL),
+        "daily-4",
+        &email_submission(),
+    )
+    .await;
+    assert_problem(
+        &(status, problem),
+        StatusCode::TOO_MANY_REQUESTS,
+        "quota.exceeded",
+    );
+    // The oldest counted acceptance leaves the window a day after it was
+    // accepted, which is at most a day from now.
+    let retry_after: u64 = headers
+        .get("retry-after")
+        .expect("a Retry-After")
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!((86_300..=86_400).contains(&retry_after), "{retry_after}");
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_messages")
+            .await,
+        3
+    );
+
+    // Once the oldest acceptance is a day old, one more is admitted.
+    harness
+        .execute(
+            "UPDATE messaging_messages SET accepted_at = accepted_at - interval '1 day' \
+              WHERE accepted_at = (SELECT min(accepted_at) FROM messaging_messages)",
+            &[],
+        )
+        .await;
+    assert_eq!(
+        harness
+            .submit(&sender, "daily-5", &email_submission())
+            .await
+            .0,
+        StatusCode::ACCEPTED
+    );
+    assert_problem(
+        &harness
+            .submit(&sender, "daily-6", &email_submission())
+            .await,
+        StatusCode::TOO_MANY_REQUESTS,
+        "quota.exceeded",
+    );
+    harness.publish().await;
+    let refused: Vec<Value> = harness
+        .journal()
+        .into_iter()
+        .filter(|entry| entry["record"]["problem"] == "quota.exceeded")
+        .collect();
+    assert_eq!(refused.len(), 2);
+    assert!(refused
+        .iter()
+        .all(|entry| entry["record"]["event"] == "messaging.message.refused"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_submissions_never_take_more_than_the_daily_limit() {
+    let harness = Harness::start_with(Value::Null, with_daily_limit(5)).await;
+    let sender = sender_token();
+    let submissions = (0..12).map(|index| {
+        let app = harness.app.clone();
+        let sender = sender.clone();
+        tokio::spawn(async move {
+            submit_to(app, &sender, &format!("race-{index}"), &email_submission())
+                .await
+                .0
+        })
+    });
+    let mut accepted = 0;
+    let mut refused = 0;
+    for submission in submissions.collect::<Vec<_>>() {
+        match submission.await.unwrap() {
+            StatusCode::ACCEPTED => accepted += 1,
+            StatusCode::TOO_MANY_REQUESTS => refused += 1,
+            other => panic!("unexpected {other}"),
+        }
+    }
+    assert_eq!((accepted, refused), (5, 7));
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_messages")
+            .await,
+        5
+    );
 }

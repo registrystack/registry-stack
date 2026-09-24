@@ -26,13 +26,15 @@ use crate::config::{describe_secret_failure, DatabaseConfig};
 const MESSAGING_MIGRATION: &str = include_str!("../migrations/0001_messaging.sql");
 pub(crate) const MESSAGES_MIGRATION: &str = include_str!("../migrations/0002_messages.sql");
 const RECEIPTS_MIGRATION: &str = include_str!("../migrations/0003_receipts.sql");
+const DAILY_LIMIT_MIGRATION: &str = include_str!("../migrations/0004_daily_limit.sql");
 
 /// Every schema version, in the order it is applied. Readiness requires the
 /// applied set to be exactly this list.
-const MIGRATIONS: [(i64, &str); 3] = [
+const MIGRATIONS: [(i64, &str); 4] = [
     (1, MESSAGING_MIGRATION),
     (2, MESSAGES_MIGRATION),
     (3, RECEIPTS_MIGRATION),
+    (4, DAILY_LIMIT_MIGRATION),
 ];
 
 /// Serializes operator-run migrations on one session lock. A second migrator

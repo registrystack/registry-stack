@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use axum::body::{to_bytes, Body};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderMap, Request, StatusCode};
 use axum::Router;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
@@ -24,6 +24,7 @@ use registry_messaging::auth::MessagingAuthenticator;
 use registry_messaging::config::RuntimeConfig;
 use registry_messaging::dispatch::Transports;
 use registry_messaging::http::{router, HttpState, Readiness};
+use registry_messaging::limits::CallerLimits;
 use registry_messaging::messages::{MessageService, MessageStore};
 use registry_messaging::metrics::Metrics;
 use registry_messaging::outbox::Publisher;
@@ -31,7 +32,7 @@ use registry_messaging::package::load_package;
 use registry_messaging::providers::activate_providers;
 use registry_messaging::runtime::{apply_package, message_store, migrate_from_path};
 use registry_messaging::store::PostgresStore;
-use registry_messaging_core::{Package, IDEMPOTENCY_KEY_HEADER};
+use registry_messaging_core::{AccessProfile, AccessProfiles, Package, IDEMPOTENCY_KEY_HEADER};
 use registry_platform_audit::AuditProfile;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
 use serde_json::{json, Value};
@@ -169,6 +170,23 @@ fn copy_tree(from: &Path, to: &Path) {
     }
 }
 
+/// Caller limits no suite of another behavior reaches: the starter's burst
+/// of ten would refuse a suite that submits more. The request rate itself
+/// is proven by the HTTP unit tests.
+pub fn unmetered_limits(package: &Package) -> CallerLimits {
+    let profiles = package
+        .access_profiles()
+        .iter()
+        .cloned()
+        .map(|profile| AccessProfile {
+            requests_per_minute: 60_000,
+            burst: 10_000,
+            ..profile
+        })
+        .collect();
+    CallerLimits::new(&AccessProfiles::new(profiles).expect("the profiles")).expect("the limits")
+}
+
 /// A migrated schema with the starter package applied, and the runtime
 /// pieces the message routes and the worker run on.
 pub struct Harness {
@@ -252,6 +270,7 @@ impl Harness {
             authenticator,
             readiness: Readiness::Store(store.clone()),
             metrics: Arc::clone(&metrics),
+            limits: Arc::new(unmetered_limits(&package)),
             package: Arc::clone(&package),
             audit: Arc::clone(&audit),
             messages: Some(Arc::clone(&service)),
@@ -355,15 +374,39 @@ impl Harness {
     }
 
     pub async fn submit(&self, bearer: &str, key: &str, body: &Value) -> (StatusCode, Value) {
-        let request = Request::builder()
-            .method("POST")
-            .uri("/v1/messages")
-            .header(AUTHORIZATION, format!("Bearer {bearer}"))
-            .header(IDEMPOTENCY_KEY_HEADER, key)
-            .header(CONTENT_TYPE, "application/json")
-            .body(Body::from(serde_json::to_vec(body).unwrap()))
-            .unwrap();
-        send(self.app.clone(), request).await
+        let (status, _, answer) = submit_to(self.app.clone(), bearer, key, body).await;
+        (status, answer)
+    }
+
+    /// A router over the same schema, package, and journal with a message
+    /// service and limits built again, as a restarted runtime builds them:
+    /// nothing held in memory by the first survives into it.
+    pub async fn restarted_app(&self) -> Router {
+        let messages: MessageStore = message_store(&self.config)
+            .await
+            .expect("the message store");
+        let loaded = self.config.load_package().expect("the package");
+        let service = Arc::new(MessageService::new(
+            messages,
+            Arc::clone(&self.audit),
+            self.config.retention,
+            loaded.receipt_providers(),
+        ));
+        router(HttpState {
+            authenticator: Arc::new(MessagingAuthenticator::new(
+                verifier(),
+                keys(),
+                self.package.access_profiles().clone(),
+                false,
+            )),
+            readiness: Readiness::Store(self.store.clone()),
+            metrics: Arc::new(Metrics::default()),
+            limits: Arc::new(unmetered_limits(&self.package)),
+            package: Arc::clone(&self.package),
+            audit: Arc::clone(&self.audit),
+            messages: Some(service),
+            callbacks: Arc::default(),
+        })
     }
 
     /// Submit `body` as the starter's sender and return the accepted id.
@@ -387,6 +430,34 @@ impl Harness {
         }
         send(self.app.clone(), request.body(Body::empty()).unwrap()).await
     }
+}
+
+/// Submit `body` under `key` through `app`, answering the status, the
+/// headers, and the body.
+pub async fn submit_to(
+    app: Router,
+    bearer: &str,
+    key: &str,
+    body: &Value,
+) -> (StatusCode, HeaderMap, Value) {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/messages")
+        .header(AUTHORIZATION, format!("Bearer {bearer}"))
+        .header(IDEMPOTENCY_KEY_HEADER, key)
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(body).unwrap()))
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = to_bytes(response.into_body(), 256 * 1024).await.unwrap();
+    let body = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    };
+    (status, headers, body)
 }
 
 async fn send(app: Router, request: Request<Body>) -> (StatusCode, Value) {

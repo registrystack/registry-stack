@@ -37,6 +37,7 @@ use crate::auth::MessagingAuthenticator;
 use crate::config::{describe_secret_failure, RetentionConfig, RuntimeConfig, RuntimeConfigError};
 use crate::dispatch::{dispatcher, MessageDispatcher, MessageSender, Transports};
 use crate::http::{metrics_router, router, HttpState, Readiness};
+use crate::limits::CallerLimits;
 use crate::messages::{MessageService, MessageStore};
 use crate::metrics::Metrics;
 use crate::outbox::Publisher;
@@ -316,12 +317,17 @@ pub async fn assemble(
         .await
         .map_err(|error| RuntimeError::AuditJournal(describe_audit_failure(&error)))?;
 
+    let limits = Arc::new(
+        CallerLimits::new(loaded.package.access_profiles())
+            .map_err(|error| RuntimeError::Limits(error.to_string()))?,
+    );
     let metrics = Arc::new(Metrics::default());
     Ok(Assembled {
         public: router(HttpState {
             authenticator,
             readiness: Readiness::Store(store),
             metrics: Arc::clone(&metrics),
+            limits,
             package: Arc::new(loaded.package),
             audit,
             messages: Some(Arc::new(messages)),
@@ -501,6 +507,8 @@ pub enum RuntimeError {
     },
     #[error("the Messaging dispatcher could not be configured: {0}")]
     Dispatch(String),
+    #[error("the Messaging limits could not be configured: {0}")]
+    Limits(String),
     #[error("the Messaging {0}")]
     Provider(#[from] ProviderActivationError),
     #[error("the Messaging {task} stopped")]
