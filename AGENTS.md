@@ -93,6 +93,7 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-schedulingctl` | Scheduling authoring and local operator tooling and the `schedulingctl` binary |
 | `crates/registry-scheduling-client` | Bounded Rust Scheduling client over the runtime's HTTP contract |
 | `crates/registry-record` | Product-neutral Registry Record v1 response DTOs shared by the Base Registry Engine and Relay clients |
+| `crates/registry-render` | Registry Render: governed, byte-stable PDF documents from registry data, rendered with Typst, and the `registry-render` binary |
 | `crates/registry-stack-client` | Rust facade over the maintained Registry Stack product clients |
 | `crates/registry-stack-client-node` | Public `@registrystack/client` facade and platform package definitions |
 | `crates/registry-stack-client-py` | Public `registry-stack-client` Python facade assembled with all native bindings |
