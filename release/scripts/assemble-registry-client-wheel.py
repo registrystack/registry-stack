@@ -26,7 +26,7 @@ from macos_fips_packaging import bundle_macos_fips
 
 ROOT = Path(__file__).resolve().parents[2]
 FACADE = ROOT / "crates" / "registry-stack-client-py"
-PRODUCTS = ("discovery", "evidence", "relay", "breg", "casework")
+PRODUCTS = ("discovery", "evidence", "relay", "breg", "casework", "messaging")
 WHEEL_PATTERN = re.compile(r"^[^-]+-(?P<version>[^-]+)-(?P<tag>.+)\.whl$")
 MACOS_SHARED_FIPS_MINIMUM_VERSION = (0, 33, 0)
 
@@ -113,6 +113,11 @@ def main() -> int:
         action="store_true",
         help="include Casework in an explicit local candidate before version 0.30.0",
     )
+    parser.add_argument(
+        "--include-messaging",
+        action="store_true",
+        help="include Messaging in an explicit local candidate before version 0.35.0",
+    )
     for product in PRODUCTS:
         parser.add_argument(f"--{product}-wheel", type=Path, required=True)
     args = parser.parse_args()
@@ -121,12 +126,20 @@ def main() -> int:
         casework_included = client_registry.includes_casework(
             args.version, include_casework=args.include_casework
         )
+        messaging_included = client_registry.includes_messaging(
+            args.version, include_messaging=args.include_messaging
+        )
     except client_registry.ClientRegistryError as exc:
         parser.error(str(exc))
     if not casework_included:
         parser.error(
             "this checkout contains the Casework Python facade; versions before "
             "0.30.0 require the explicit --include-casework local-candidate option"
+        )
+    if not messaging_included:
+        parser.error(
+            "this checkout contains the Messaging Python facade; versions before "
+            "0.35.0 require the explicit --include-messaging local-candidate option"
         )
 
     configured_version = None

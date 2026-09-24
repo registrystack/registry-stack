@@ -177,7 +177,7 @@ class BuildLinuxPythonClientTest(unittest.TestCase):
 
     def test_reuses_compiler_paths_for_all_products(self) -> None:
         compilers = []
-        for client in ("discovery", "evidence", "relay", "breg", "casework"):
+        for client in ("discovery", "evidence", "relay", "breg", "casework", "messaging"):
             self.make_client(client)
             result = self.run_build(client=client)
             self.assertEqual(result.returncode, 0, result.stderr)

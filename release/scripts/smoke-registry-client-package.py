@@ -16,6 +16,7 @@ def main() -> None:
             registry_client.casework.CaseworkClient,
             registry_client.discovery.DiscoveryClient,
             registry_client.evidence.EvidenceClient,
+            registry_client.messaging.MessagingClient,
             registry_client.relay.RelayClient,
         )
     ):
@@ -32,6 +33,8 @@ def main() -> None:
         ("discovery", registry_client.discovery.DiscoveryClientError),
         ("evidence", registry_client.evidence.EvidenceClient),
         ("evidence", registry_client.evidence.EvidenceClientError),
+        ("messaging", registry_client.messaging.MessagingClient),
+        ("messaging", registry_client.messaging.MessagingClientError),
         ("relay", registry_client.relay.RelayClient),
         ("relay", registry_client.relay.RelayClientError),
     )
@@ -61,6 +64,11 @@ def main() -> None:
     )
     if casework_client is None:
         raise SystemExit("Casework client construction returned no client")
+    messaging_client = registry_client.messaging.MessagingClient(
+        base_url="https://messaging.invalid",
+    )
+    if messaging_client is None:
+        raise SystemExit("Messaging client construction returned no client")
     print("Unified Python Registry client package smoke passed")
 
 
