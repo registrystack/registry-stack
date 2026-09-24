@@ -1,0 +1,234 @@
+id: https://publicschema.org/linkml/transport
+name: publicschema-transport
+title: Vehicles and driving permissions
+description: Road vehicles and the driving entitlements that licensing authorities record for persons.
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  bibo: http://purl.org/ontology/bibo/
+  schema: http://schema.org/
+imports:
+- linkml:types
+- common
+- value_types
+- registry
+classes:
+  DrivingEntitlement:
+    class_uri: publicschema:transport/DrivingEntitlement
+    title: Driving Entitlement
+    description: A permission for a person to drive vehicles of one license category, recorded by a
+      licensing authority, with its own conditions and dates. One driver's license can record several
+      entitlements that start and expire on different dates. The license document is evidence of the
+      entitlements, not the permission itself.
+    slots:
+    - driving_category
+    - driving_condition_codes
+    status: bibo:draft
+    is_a: Authorization
+    annotations:
+      label_es: Derecho de conducción
+      label_fr: Droit de conduire
+      description_es: Un permiso otorgado a una persona para conducir vehículos de una categoría de
+        permiso determinada, registrado por una autoridad expedidora de permisos, con sus propias
+        condiciones y fechas. Un mismo permiso de conducción puede registrar varios derechos que
+        comienzan y expiran en fechas distintas. El documento del permiso acredita los derechos, y
+        no el permiso en sí.
+      description_fr: Une permission accordée à une personne de conduire des véhicules d'une
+        catégorie de permis donnée, enregistrée par une autorité de délivrance des permis, avec ses
+        propres conditions et dates. Un même permis de conduire peut enregistrer plusieurs droits
+        qui débutent et expirent à des dates différentes. Le document du permis atteste des droits,
+        et non de la permission elle-même.
+      source_domain: transport
+      bibliography_refs: '["eu-dir-2025-2205", "uk-dvla-driving-licence-categories"]'
+      external_alignments_json: '[{"label": "Driving licence category entry", "match": "related", "note":
+        "Directive (EU) 2025/2205, Annex I Part D point 4, fields 9 to 12, records each category with its
+        own issue date, expiry date and restriction codes on one license document. This concept is that
+        per-category entry, not the license card.", "uri": "https://eur-lex.europa.eu/eli/dir/2025/2205/oj",
+        "vocabulary": "Directive (EU) 2025/2205", "vocabulary_id": "eu-dir-2025-2205"}]'
+  Vehicle:
+    class_uri: publicschema:transport/Vehicle
+    title: Vehicle
+    description: A single, identifiable road vehicle or trailer, such as a car, lorry, motorcycle or
+      agricultural tractor. It stays the same vehicle when its registration number, keeper or owner changes.
+      The registered keeper is not necessarily the owner; keepers and owners are recorded as dated asset
+      roles.
+    slots:
+    - identifiers
+    - vehicle_make
+    - vehicle_model
+    - vehicle_category
+    - manufacture_year
+    status: bibo:draft
+    broad_mappings:
+    - schema:Vehicle
+    annotations:
+      label_es: Vehículo
+      label_fr: Véhicule
+      description_es: Un vehículo de carretera o un remolque único e identificable, por ejemplo un
+        automóvil, un camión, una motocicleta o un tractor agrícola. Sigue siendo el mismo vehículo
+        cuando cambian su número de matrícula, su titular o su propietario. El titular registrado no
+        es necesariamente el propietario; los titulares y los propietarios se registran como roles
+        fechados sobre el bien.
+      description_fr: Un véhicule routier ou une remorque unique et identifiable, par exemple une
+        voiture, un camion, une motocyclette ou un tracteur agricole. Il reste le même véhicule
+        lorsque son numéro d'immatriculation, son détenteur ou son propriétaire change. Le détenteur
+        enregistré n'est pas nécessairement le propriétaire ; les détenteurs et les propriétaires
+        sont enregistrés comme des rôles datés sur le bien.
+      source_domain: transport
+      bibliography_refs: '["eu-dir-1999-37", "schema-org", "uk-dvla-vehicle-enquiry-api"]'
+      external_alignments_json: '[{"label": "Vehicle", "match": "broad", "note": "schema.org Vehicle also
+        covers aircraft, boats and vehicles offered for sale; this concept is a registered road vehicle.",
+        "uri": "https://schema.org/Vehicle", "vocabulary": "schema.org", "vocabulary_id": "schema-org"},
+        {"label": "Vehicle", "match": "related", "note": "Council Directive 1999/37/EC, Article 2, defines
+        the vehicle whose registration certificate this concept''s attributes follow; the registration itself
+        is a separate Registration record.", "uri": "https://eur-lex.europa.eu/eli/dir/1999/37/oj", "vocabulary":
+        "Council Directive 1999/37/EC", "vocabulary_id": "eu-dir-1999-37"}]'
+slots:
+  driving_category:
+    slot_uri: publicschema:transport/driving_category
+    title: Driving category
+    description: The license category this entitlement covers, such as B for cars, taken from a named
+      category list. The same letter can mean different vehicles in different jurisdictions or editions
+      of a list.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Categoría de permiso
+      label_fr: Catégorie de permis
+      description_es: La categoría de permiso que cubre este derecho, por ejemplo B para automóviles,
+        tomada de una lista de categorías designada. Una misma letra puede designar vehículos
+        diferentes según la jurisdicción o la edición de una lista.
+      description_fr: La catégorie de permis que couvre ce droit, par exemple B pour les voitures,
+        tirée d'une liste de catégories nommée. Une même lettre peut désigner des véhicules
+        différents selon les juridictions ou les éditions d'une liste.
+      source_domain: transport
+      category: classification
+      external_alignments_json: '[{"label": "Driving licence categories", "match": "related", "note": "Directive
+        (EU) 2025/2205, Article 6(1), defines the EU categories AM to DE; other jurisdictions use their own
+        lists.", "uri": "https://eur-lex.europa.eu/eli/dir/2025/2205/oj", "vocabulary": "Directive (EU) 2025/2205",
+        "vocabulary_id": "eu-dir-2025-2205"}]'
+      bibliography_refs: '["eu-dir-2025-2205"]'
+  driving_condition_codes:
+    slot_uri: publicschema:transport/driving_condition_codes
+    title: Driving condition codes
+    description: Coded conditions or restrictions recorded against this entitlement, such as a requirement
+      to wear glasses or to drive only vehicles with automatic transmission, each taken from a named
+      code list. Conditions without a code are stated as text in authorization_conditions. Some codes
+      reveal a medical condition.
+    range: CodedValue
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Códigos de condiciones de conducción
+      label_fr: Codes de conditions de conduite
+      description_es: Las condiciones o restricciones codificadas registradas para este derecho, por
+        ejemplo la obligación de usar gafas o de conducir únicamente vehículos con transmisión
+        automática, cada una tomada de una lista de códigos designada. Las condiciones sin código se
+        indican como texto en authorization_conditions. Algunos códigos revelan una condición médica.
+      description_fr: Les conditions ou restrictions codées enregistrées pour ce droit, par exemple
+        l'obligation de porter des lunettes ou de ne conduire que des véhicules à transmission
+        automatique, chacune tirée d'une liste de codes nommée. Les conditions sans code sont
+        indiquées sous forme de texte dans authorization_conditions. Certains codes révèlent une
+        condition médicale.
+      source_domain: transport
+      category: classification
+      sensitivity: sensitive
+      external_alignments_json: '[{"label": "Harmonised licence codes", "match": "related", "note": "Directive
+        (EU) 2025/2205, Annex I Part E, lists the harmonised restriction codes; codes 01 to 44 concern the
+        driver''s health or the vehicle adaptations the driver needs.", "uri": "https://eur-lex.europa.eu/eli/dir/2025/2205/oj",
+        "vocabulary": "Directive (EU) 2025/2205", "vocabulary_id": "eu-dir-2025-2205"}]'
+      bibliography_refs: '["eu-dir-2025-2205"]'
+  vehicle_make:
+    slot_uri: publicschema:transport/vehicle_make
+    title: Vehicle make
+    description: The make of the vehicle as recorded in the vehicle register, usually the manufacturer's
+      trade name.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Marca del vehículo
+      label_fr: Marque du véhicule
+      description_es: La marca del vehículo tal como consta en el registro de vehículos, generalmente
+        el nombre comercial del fabricante.
+      description_fr: La marque du véhicule telle qu'enregistrée dans le registre des véhicules,
+        généralement le nom commercial du constructeur.
+      source_domain: transport
+      category: assets
+      external_alignments_json: '[{"label": "Make (D.1)", "match": "related", "note": "Council Directive
+        1999/37/EC, Annex I, registration certificate field D.1.", "uri": "https://eur-lex.europa.eu/eli/dir/1999/37/oj",
+        "vocabulary": "Council Directive 1999/37/EC", "vocabulary_id": "eu-dir-1999-37"}]'
+      bibliography_refs: '["eu-dir-1999-37"]'
+  vehicle_model:
+    slot_uri: publicschema:transport/vehicle_model
+    title: Vehicle model
+    description: The commercial name of the vehicle model as recorded in the register. It is not the
+      type-approval variant or version.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - schema:model
+    annotations:
+      label_es: Modelo del vehículo
+      label_fr: Modèle du véhicule
+      description_es: La denominación comercial del modelo del vehículo tal como consta en el
+        registro. No es la variante o versión de homologación de tipo.
+      description_fr: La dénomination commerciale du modèle du véhicule telle qu'enregistrée dans le
+        registre. Elle n'est pas la variante ou la version de réception par type.
+      source_domain: transport
+      category: assets
+      external_alignments_json: '[{"label": "Commercial description(s) (D.3)", "match": "related", "note":
+        "Council Directive 1999/37/EC, Annex I, registration certificate field D.3.", "uri": "https://eur-lex.europa.eu/eli/dir/1999/37/oj",
+        "vocabulary": "Council Directive 1999/37/EC", "vocabulary_id": "eu-dir-1999-37"}, {"label": "model",
+        "match": "close", "uri": "https://schema.org/model", "vocabulary": "schema.org", "vocabulary_id":
+        "schema-org"}]'
+      bibliography_refs: '["eu-dir-1999-37", "schema-org"]'
+  vehicle_category:
+    slot_uri: publicschema:transport/vehicle_category
+    title: Vehicle category
+    description: The technical class of the vehicle, such as M1 for passenger cars or N1 for light goods
+      vehicles, taken from a named classification. It describes the vehicle, not what a driver may drive.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Categoría de vehículo
+      label_fr: Catégorie de véhicule
+      description_es: La clase técnica del vehículo, por ejemplo M1 para turismos o N1 para vehículos
+        comerciales ligeros, tomada de una clasificación designada. Describe el vehículo, no lo que
+        un conductor está autorizado a conducir.
+      description_fr: La classe technique du véhicule, par exemple M1 pour les voitures particulières
+        ou N1 pour les véhicules utilitaires légers, tirée d'une classification nommée. Elle décrit
+        le véhicule, et non ce qu'un conducteur est autorisé à conduire.
+      source_domain: transport
+      category: classification
+      external_alignments_json: '[{"label": "Vehicle categories", "match": "related", "note": "Regulation
+        (EU) 2018/858, Article 4, defines the M, N and O categories used in EU type approval.", "uri": "https://eur-lex.europa.eu/eli/reg/2018/858/oj",
+        "vocabulary": "Regulation (EU) 2018/858", "vocabulary_id": "eu-reg-2018-858"}]'
+      bibliography_refs: '["eu-reg-2018-858"]'
+  manufacture_year:
+    slot_uri: publicschema:transport/manufacture_year
+    title: Manufacture year
+    description: The calendar year the vehicle was built, when known. It is not the date of first registration.
+    range: integer
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - schema:productionDate
+    annotations:
+      label_es: Año de fabricación
+      label_fr: Année de fabrication
+      description_es: El año natural de fabricación del vehículo, cuando se conoce. No es la fecha
+        de primera matriculación.
+      description_fr: L'année civile de construction du véhicule, lorsqu'elle est connue. Elle n'est
+        pas la date de première immatriculation.
+      source_domain: transport
+      category: assets
+      external_alignments_json: '[{"label": "productionDate", "match": "close", "note": "schema.org productionDate
+        is a full date; this slot keeps only the year.", "uri": "https://schema.org/productionDate", "vocabulary":
+        "schema.org", "vocabulary_id": "schema-org"}]'
+      bibliography_refs: '["schema-org"]'

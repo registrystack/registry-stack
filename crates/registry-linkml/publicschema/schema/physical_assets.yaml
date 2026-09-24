@@ -1,0 +1,226 @@
+id: https://publicschema.org/linkml/physical_assets
+name: publicschema-physical-assets
+title: Physical assets, responsibilities and addresses
+description: Buildings, building units, the responsibilities that parties hold for physical assets, and
+  the addresses assigned to those assets.
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  bibo: http://purl.org/ontology/bibo/
+imports:
+- linkml:types
+- common
+- identity
+- value_types
+- registry
+classes:
+  AssetPartyRole:
+    class_uri: publicschema:AssetPartyRole
+    title: Asset Party Role
+    description: A dated statement that a person, organization or group holds a stated responsibility for
+      a physical asset, such as ownership, operation, upkeep or registered keeping. Each responsibility
+      is recorded separately; holding one does not imply another or give permission to carry out a regulated
+      activity.
+    slots:
+    - subject_uri
+    - asset_actor
+    - asset_role_type
+    - start_date
+    - end_date
+    status: bibo:draft
+    annotations:
+      label_es: Función de parte sobre el activo
+      label_fr: Rôle de partie sur un bien
+      description_es: Una declaración fechada según la cual una persona, organización o grupo tiene
+        una responsabilidad determinada sobre un bien físico, como la propiedad, la explotación, el
+        mantenimiento o la tenencia registrada. Cada responsabilidad se registra por separado; tener
+        una no implica tener otra ni otorga permiso para llevar a cabo una actividad regulada.
+      description_fr: Une déclaration datée selon laquelle une personne, une organisation ou un groupe
+        détient une responsabilité déterminée sur un bien physique, telle que la propriété, l'exploitation,
+        l'entretien ou la garde enregistrée. Chaque responsabilité est enregistrée séparément; en détenir
+        une n'implique pas d'en détenir une autre ni n'accorde la permission d'exercer une activité réglementée.
+      bibliography_refs: '["fhir-r5", "uk-dft-v5c-2010"]'
+  AssetAddressAssignment:
+    class_uri: publicschema:AssetAddressAssignment
+    title: Asset Address Assignment
+    description: A dated association between a physical asset and an address used for a stated purpose,
+      such as postal delivery or site access. A change of address does not create a new asset or change
+      its owner.
+    slots:
+    - subject_uri
+    - assigned_address
+    - address_purpose
+    - start_date
+    - end_date
+    status: bibo:draft
+    annotations:
+      label_es: Asignación de dirección a un activo
+      label_fr: Attribution d'adresse à un bien
+      description_es: Una asociación fechada entre un activo físico y una dirección utilizada para
+        un fin determinado, como la entrega postal o el acceso al sitio. Un cambio de dirección no crea
+        un nuevo activo ni cambia su propietario.
+      description_fr: Une association datée entre un bien physique et une adresse utilisée à une fin
+        déterminée, telle que la livraison postale ou l'accès au site. Un changement d'adresse ne crée
+        pas un nouveau bien et n'en change pas le propriétaire.
+      bibliography_refs: '["fhir-r5", "w3c-vcard-rdf"]'
+  Building:
+    class_uri: publicschema:Building
+    title: Building
+    description: A permanent, enclosed construction, above or below ground, used or intended to shelter
+      people, animals or things, or to produce goods. A building's identity is separate from its addresses,
+      the land parcel it stands on, its owners and any service delivered inside it.
+    slots:
+    - name
+    - identifiers
+    - building_use
+    - spatial_geometry
+    status: bibo:draft
+    close_mappings:
+    - http://inspire.ec.europa.eu/featureconcept/Building
+    annotations:
+      label_es: Edificio
+      label_fr: Bâtiment
+      description_es: Una construcción permanente y cerrada, sobre o bajo el nivel del suelo, utilizada
+        o destinada a albergar personas, animales o cosas, o a producir bienes. La identidad de un edificio
+        es independiente de sus direcciones, de la parcela de tierra sobre la que se asienta, de sus
+        propietarios y de cualquier servicio prestado en su interior.
+      description_fr: Une construction permanente et fermée, au-dessus ou en dessous du niveau du sol,
+        utilisée ou destinée à abriter des personnes, des animaux ou des choses, ou à produire des biens.
+        L'identité d'un bâtiment est distincte de ses adresses, de la parcelle de terrain sur laquelle
+        il se trouve, de ses propriétaires et de tout service rendu à l'intérieur.
+      bibliography_refs: '["inspire-fc", "inspire-tg-bu"]'
+      external_alignments_json: '[{"label": "Building", "match": "close", "note": "INSPIRE defines a building as an enclosed construction above or below ground, permanently constructed on its site, used or intended to shelter humans, animals or things or to produce economic goods. This concept follows that definition but does not include the INSPIRE decomposition into building parts or its address, parcel and use attributes.", "uri": "http://inspire.ec.europa.eu/featureconcept/Building", "vocabulary": "INSPIRE feature concepts", "vocabulary_id": "inspire-fc"}]'
+  BuildingUnit:
+    class_uri: publicschema:BuildingUnit
+    title: Building Unit
+    description: A part of a building used as a separate unit in daily life, such as a dwelling, shop or
+      office, usually with its own lockable entrance from outside or from a shared area. A unit need not
+      be separately owned or have its own address.
+    slots:
+    - name
+    - identifiers
+    - within_building
+    - building_use
+    status: bibo:draft
+    annotations:
+      label_es: Unidad de edificio
+      label_fr: Unité de bâtiment
+      description_es: Una parte de un edificio utilizada como unidad separada en la vida cotidiana,
+        como una vivienda, un comercio o una oficina, generalmente con su propia entrada con cerradura
+        desde el exterior o desde una zona compartida. Una unidad no necesita ser propiedad separada
+        ni tener su propia dirección.
+      description_fr: Une partie d'un bâtiment utilisée comme unité distincte dans la vie quotidienne,
+        telle qu'un logement, un commerce ou un bureau, généralement dotée de sa propre entrée verrouillable
+        depuis l'extérieur ou depuis une zone commune. Une unité n'a pas nécessairement une propriété
+        distincte ni sa propre adresse.
+      bibliography_refs: '["inspire-tg-bu"]'
+slots:
+  building_use:
+    slot_uri: publicschema:building_use
+    title: Building use
+    description: What a building or building unit is currently used for, such as housing, farming or public
+      services, taken from a named classification. Several uses can apply at once.
+    range: CodedValue
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Uso del edificio
+      label_fr: Usage du bâtiment
+      description_es: Para qué se utiliza actualmente un edificio o una unidad de edificio, como vivienda,
+        agricultura o servicios públicos, tomado de una clasificación con nombre. Pueden aplicarse varios
+        usos a la vez.
+      description_fr: L'usage actuel d'un bâtiment ou d'une unité de bâtiment, tel que le logement, l'agriculture
+        ou les services publics, tiré d'une classification nommée. Plusieurs usages peuvent s'appliquer
+        à la fois.
+      category: classification
+  within_building:
+    slot_uri: publicschema:within_building
+    title: Within building
+    description: The building that this building unit is part of.
+    range: Building
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dentro del edificio
+      label_fr: Au sein du bâtiment
+      description_es: El edificio del que forma parte esta unidad de edificio.
+      description_fr: Le bâtiment dont cette unité de bâtiment fait partie.
+      category: location
+  asset_actor:
+    slot_uri: publicschema:asset_actor
+    title: Asset actor
+    description: The URI of the person, organization or group that holds the responsibility for the asset.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Actor del activo
+      label_fr: Acteur du bien
+      description_es: El URI de la persona, organización o grupo que tiene la responsabilidad sobre
+        el activo.
+      description_fr: L'URI de la personne, de l'organisation ou du groupe qui détient la responsabilité
+        sur le bien.
+      category: governance
+      sensitivity: sensitive
+  asset_role_type:
+    slot_uri: publicschema:asset_role_type
+    title: Asset role type
+    description: The responsibility the actor holds for the asset, such as ownership, operation, upkeep
+      or registered keeping. Operation and upkeep are not ownership. Codes from
+      https://publicschema.org/vocab/asset-role-type can be used where the source has no scheme of its
+      own.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de función sobre el activo
+      label_fr: Type de rôle sur le bien
+      description_es: La responsabilidad que el actor tiene sobre el activo, como la propiedad, la
+        explotación, el mantenimiento o la tenencia registrada. La explotación y el mantenimiento no son
+        propiedad. Pueden usarse los códigos de https://publicschema.org/vocab/asset-role-type cuando la
+        fuente no tenga un esquema propio.
+      description_fr: La responsabilité que l'acteur détient sur le bien, telle que la propriété,
+        l'exploitation, l'entretien ou la garde enregistrée. L'exploitation et l'entretien ne sont pas
+        la propriété. Les codes de https://publicschema.org/vocab/asset-role-type peuvent être utilisés
+        lorsque la source n'a pas de référentiel propre.
+      category: classification
+  assigned_address:
+    slot_uri: publicschema:assigned_address
+    title: Assigned address
+    description: The address associated with the asset for the stated purpose and period. An address change
+      need not identify a different asset.
+    range: Address
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Dirección asignada
+      label_fr: Adresse attribuée
+      description_es: La dirección asociada al activo para el fin y el período indicados. Un cambio
+        de dirección no implica necesariamente que se trate de un activo distinto.
+      description_fr: L'adresse associée au bien pour la finalité et la période indiquées. Un changement
+        d'adresse n'implique pas nécessairement qu'il s'agisse d'un bien différent.
+      category: location
+  address_purpose:
+    slot_uri: publicschema:address_purpose
+    title: Address purpose
+    description: The purpose of the address for this asset, such as postal delivery or physical access.
+      A postal address does not establish where the asset is. Codes from
+      https://publicschema.org/vocab/address-purpose can be used where the source has no scheme of its
+      own.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Finalidad de la dirección
+      label_fr: Finalité de l'adresse
+      description_es: La finalidad de la dirección para este activo, como la entrega postal o el acceso
+        físico. Una dirección postal no establece dónde se encuentra el activo. Pueden usarse los
+        códigos de https://publicschema.org/vocab/address-purpose cuando la fuente no tenga un esquema
+        propio.
+      description_fr: La finalité de l'adresse pour ce bien, telle que la livraison postale ou l'accès
+        physique. Une adresse postale n'établit pas où se trouve le bien. Les codes de
+        https://publicschema.org/vocab/address-purpose peuvent être utilisés lorsque la source n'a pas
+        de référentiel propre.
+      category: classification

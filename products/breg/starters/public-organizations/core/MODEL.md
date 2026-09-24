@@ -51,8 +51,9 @@ state binds exact input bytes and captured UUIDs to each attempt.
 ## Semantic scope
 
 PublicOrganization inherits Organization, without asserting separate legal
-personality. The optional `description` field is a bounded mandate summary,
-aligned to `public_mandate`. InstitutionalRelationship has typed source and
+personality. The optional `description` field is a bounded free-text summary,
+aligned to `description`; PublicSchema's coded `public_functions` has no field
+in this starter. InstitutionalRelationship has typed source and
 target organizations. Its profile code `reports-to` belongs to the declared
 `https://public-organizations.example.org/relationship-types` scheme, directed
 from a district office to its department. It is not a universal PublicSchema
@@ -69,7 +70,7 @@ Community Services and River and Hill District Offices.
 ## Attribution and adoption
 
 The model maps selected fields and native references to PublicSchema draft
-concepts at commit `1ea9ce333918693b29aec31068fac412e02cb8dc`, under CC BY 4.0.
+concepts at commit `bd07bda1fe9cb9eb8582cf7bc1c77367e2455e5b`, under CC BY 4.0.
 See `PUBLICSCHEMA-LICENSE.txt` and the pinned source in `starter-template.json`.
 The local key representation, permissions, review policy, reference target
 narrowing and validation rules are Registry Stack starter decisions. Local

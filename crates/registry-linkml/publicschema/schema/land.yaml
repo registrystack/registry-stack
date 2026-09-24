@@ -1,0 +1,301 @@
+id: https://publicschema.org/linkml/land
+name: publicschema-land
+title: Land administration
+description: Land spatial and administrative units, tenure assertions and boundary assertions.
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  bibo: http://purl.org/ontology/bibo/
+imports:
+- linkml:types
+- common
+- vocabularies
+- value_types
+- registry
+classes:
+  LandSpatialUnit:
+    class_uri: publicschema:land/LandSpatialUnit
+    title: Land Spatial Unit
+    description: A separately identified area of land, or volume of space, recorded in land administration.
+      A cadastral parcel is one kind of spatial unit. A spatial unit is not itself a right or a title.
+    slots:
+    - name
+    - identifiers
+    - spatial_geometry
+    - land_area
+    - location
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      label_es: Unidad espacial de tierra
+      label_fr: Unité spatiale foncière
+      description_es: Una superficie de tierra, o un volumen de espacio, identificada por separado y
+        registrada en la administración de tierras. Una parcela catastral es un tipo de unidad espacial.
+        Una unidad espacial no es en sí misma un derecho ni un título.
+      description_fr: Une zone de terre, ou un volume d'espace, identifiée séparément et enregistrée
+        dans l'administration foncière. Une parcelle cadastrale est un type d'unité spatiale. Une unité
+        spatiale n'est pas elle-même un droit ni un titre.
+      bibliography_refs: '["iso-19152-1-2024", "unece-property-units-2004"]'
+  LandAdministrativeUnit:
+    class_uri: publicschema:land/LandAdministrativeUnit
+    title: Land Administrative Unit
+    description: A unit recorded in land administration to which one or more uniform rights, restrictions
+      or responsibilities apply. It may be formally registered or informally or customarily recorded.
+      It groups zero or more spatial units. It is not a territorial administrative area.
+    slots:
+    - name
+    - identifiers
+    - administrative_spatial_units
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      label_es: Unidad administrativa de tierra
+      label_fr: Unité administrative foncière
+      description_es: Una unidad registrada en la administración de tierras a la que se aplican uno
+        o más derechos, restricciones o responsabilidades uniformes. Puede estar registrada formalmente
+        o consignada de manera informal o consuetudinaria. Agrupa cero o más unidades espaciales. No
+        es un área administrativa territorial.
+      description_fr: Une unité enregistrée dans l'administration foncière à laquelle s'appliquent un
+        ou plusieurs droits, restrictions ou responsabilités uniformes. Elle peut être enregistrée formellement
+        ou consignée de manière informelle ou coutumière. Elle regroupe zéro ou plusieurs unités spatiales.
+        Ce n'est pas une zone administrative territoriale.
+      bibliography_refs: '["iso-19152-1-2024", "unece-property-units-2004"]'
+  LandTenureAssertion:
+    class_uri: publicschema:land/LandTenureAssertion
+    title: Land Tenure Assertion
+    description: A statement that a party holds, or claims, a right, restriction or responsibility over
+      an identified land administrative unit during a stated period. It records the claim and its evidence.
+      It does not decide between competing claims and does not convert customary or informal tenure into
+      registered ownership. Some restrictions and responsibilities have no named holder.
+    slots:
+    - tenure_holder
+    - tenure_object
+    - tenure_category
+    - tenure_type
+    - tenure_share_numerator
+    - tenure_share_denominator
+    - valid_from
+    - valid_to
+    - evidence_assertions
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      label_es: Aseveración de tenencia de la tierra
+      label_fr: Assertion de régime foncier
+      description_es: Una declaración de que una parte posee, o reclama, un derecho, una restricción
+        o una responsabilidad sobre una unidad administrativa de tierra identificada durante un período
+        determinado. Registra la reclamación y sus pruebas. No decide entre reclamaciones en competencia
+        ni convierte la tenencia consuetudinaria o informal en propiedad registrada. Algunas restricciones
+        y responsabilidades no tienen un titular nombrado.
+      description_fr: Une déclaration selon laquelle une partie détient, ou revendique, un droit, une
+        restriction ou une responsabilité sur une unité administrative foncière identifiée pendant une
+        période donnée. Elle enregistre la revendication et ses preuves. Elle ne tranche pas entre des
+        revendications concurrentes et ne convertit pas la tenure coutumière ou informelle en propriété
+        enregistrée. Certaines restrictions et responsabilités n'ont pas de détenteur nommé.
+      bibliography_refs: '["fao-vggt", "iso-19152-1-2024", "unece-property-units-2004"]'
+  LandBoundaryAssertion:
+    class_uri: publicschema:land/LandBoundaryAssertion
+    title: Land Boundary Assertion
+    description: A statement of where the boundary of a land spatial unit lies and how far it is recognized
+      or agreed, with its supporting evidence. Geometry alone does not establish legal agreement.
+    slots:
+    - boundary_unit
+    - spatial_geometry
+    - boundary_recognition
+    - evidence_assertions
+    - recorded_at
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      label_es: Aseveración de límite de tierra
+      label_fr: Assertion de limite foncière
+      description_es: Una declaración de dónde se sitúa el límite de una unidad espacial de tierra y
+        hasta qué punto está reconocido o acordado, con sus pruebas de respaldo. La geometría por sí
+        sola no establece un acuerdo jurídico.
+      description_fr: Une déclaration indiquant où se situe la limite d'une unité spatiale foncière et
+        dans quelle mesure elle est reconnue ou convenue, avec ses preuves à l'appui. La géométrie seule
+        n'établit pas un accord juridique.
+      bibliography_refs: '["fao-vggt", "iso-19152-1-2024", "unece-property-units-2004"]'
+slots:
+  land_area:
+    slot_uri: publicschema:land/land_area
+    title: Land area
+    description: The measured area of a spatial land unit, distinct from ownership
+      share.
+    range: QuantityValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      label_es: Superficie de tierra
+      label_fr: Superficie foncière
+      description_es: La superficie medida de una unidad espacial de tierra, distinta de la parte de
+        propiedad.
+      description_fr: La superficie mesurée d'une unité spatiale foncière, distincte de la part de propriété.
+      category: administrative
+  administrative_spatial_units:
+    slot_uri: publicschema:land/administrative_spatial_units
+    title: Administrative spatial units
+    description: The spatial units grouped by this land administrative unit. It may be empty where no
+      cadastral map exists. A spatial unit can belong to more than one administrative unit.
+    range: LandSpatialUnit
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      label_es: Unidades espaciales administrativas
+      label_fr: Unités spatiales administratives
+      description_es: Las unidades espaciales agrupadas por esta unidad administrativa de tierra. Puede
+        estar vacía cuando no existe un mapa catastral. Una unidad espacial puede pertenecer a más de
+        una unidad administrativa.
+      description_fr: Les unités spatiales regroupées par cette unité administrative foncière. Elle peut
+        être vide lorsqu'aucune carte cadastrale n'existe. Une unité spatiale peut appartenir à plus d'une
+        unité administrative.
+      category: administrative
+  tenure_holder:
+    slot_uri: publicschema:land/tenure_holder
+    title: Tenure holder
+    description: The person, organization or group that holds or claims the right, or bears the restriction
+      or responsibility. It may be absent for restrictions attached to the land alone. The URI does not
+      create legal personality.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      label_es: Titular de la tenencia
+      label_fr: Détenteur de tenure
+      description_es: La persona, organización o grupo que posee o reclama el derecho, o que soporta
+        la restricción o la responsabilidad. Puede estar ausente en las restricciones vinculadas únicamente
+        a la tierra. El URI no crea personalidad jurídica.
+      description_fr: La personne, l'organisation ou le groupe qui détient ou revendique le droit, ou
+        qui supporte la restriction ou la responsabilité. Elle peut être absente pour les restrictions
+        attachées à la terre seule. L'URI ne crée pas de personnalité juridique.
+      category: administrative
+      sensitivity: sensitive
+      bibliography_refs: '["iso-19152-1-2024"]'
+  tenure_object:
+    slot_uri: publicschema:land/tenure_object
+    title: Tenure object
+    description: The land administrative unit to which the right, restriction or responsibility applies.
+    range: LandAdministrativeUnit
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      label_es: Objeto de la tenencia
+      label_fr: Objet de la tenure
+      description_es: La unidad administrativa de tierra a la que se aplica el derecho, la restricción
+        o la responsabilidad.
+      description_fr: L'unité administrative foncière à laquelle s'applique le droit, la restriction
+        ou la responsabilité.
+      category: administrative
+      bibliography_refs: '["iso-19152-1-2024"]'
+  tenure_category:
+    slot_uri: publicschema:land/tenure_category
+    title: Tenure category
+    description: Whether the assertion concerns a right, a restriction or a responsibility.
+    range: TenureCategory
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      label_es: Categoría de tenencia
+      label_fr: Catégorie de tenure
+      description_es: Si la aseveración se refiere a un derecho, una restricción o una responsabilidad.
+      description_fr: Si l'assertion concerne un droit, une restriction ou une responsabilité.
+      category: administrative
+      bibliography_refs: '["iso-19152-1-2024"]'
+  tenure_type:
+    slot_uri: publicschema:land/tenure_type
+    title: Tenure type
+    description: The statutory, customary or informal kind of tenure asserted, coded in a stated classification
+      and kept as recorded, without conversion to ownership.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      label_es: Tipo de tenencia
+      label_fr: Type de tenure
+      description_es: El tipo de tenencia estatutaria, consuetudinaria o informal declarado, codificado
+        en una clasificación indicada y conservado tal como se registró, sin conversión en propiedad.
+      description_fr: Le type de tenure statutaire, coutumière ou informelle revendiqué, codé dans une
+        classification indiquée et conservé tel qu'enregistré, sans conversion en propriété.
+      category: administrative
+      sensitivity: sensitive
+  tenure_share_numerator:
+    slot_uri: publicschema:land/tenure_share_numerator
+    title: Tenure share numerator
+    description: The numerator of the holder's share of the right, restriction or responsibility, stated
+      as a fraction of whole numbers with tenure_share_denominator, such as 1 of 3. The numerator does
+      not exceed the denominator. Shares in competing claims are not normalized or added.
+    range: integer
+    minimum_value: 0
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      label_es: Numerador de la parte de tenencia
+      label_fr: Numérateur de la part de tenure
+      description_es: El numerador de la parte del titular en el derecho, la restricción o la responsabilidad,
+        expresada como una fracción de números enteros con tenure_share_denominator, como 1 de 3. El numerador
+        no supera al denominador. Las partes de reclamaciones en competencia no se normalizan ni se suman.
+      description_fr: Le numérateur de la part du détenteur dans le droit, la restriction ou la responsabilité,
+        exprimée comme une fraction de nombres entiers avec tenure_share_denominator, par exemple 1 sur
+        3. Le numérateur ne dépasse pas le dénominateur. Les parts de revendications concurrentes ne sont
+        ni normalisées ni additionnées.
+      category: administrative
+      bibliography_refs: '["iso-19152-1-2024"]'
+  tenure_share_denominator:
+    slot_uri: publicschema:land/tenure_share_denominator
+    title: Tenure share denominator
+    description: The denominator of the holder's share of the right, restriction or responsibility,
+      stated with tenure_share_numerator. A share of 1 of 1 is the entire interest.
+    range: integer
+    minimum_value: 1
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      label_es: Denominador de la parte de tenencia
+      label_fr: Dénominateur de la part de tenure
+      description_es: El denominador de la parte del titular en el derecho, la restricción o la responsabilidad,
+        expresada con tenure_share_numerator. Una parte de 1 de 1 es el interés completo.
+      description_fr: Le dénominateur de la part du détenteur dans le droit, la restriction ou la responsabilité,
+        exprimée avec tenure_share_numerator. Une part de 1 sur 1 représente l'intérêt entier.
+      category: administrative
+      bibliography_refs: '["iso-19152-1-2024"]'
+  boundary_unit:
+    slot_uri: publicschema:land/boundary_unit
+    title: Boundary unit
+    description: The spatial unit whose boundary is described.
+    range: LandSpatialUnit
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      label_es: Unidad de límite
+      label_fr: Unité de limite
+      description_es: La unidad espacial cuyo límite se describe.
+      description_fr: L'unité spatiale dont la limite est décrite.
+      category: administrative
+  boundary_recognition:
+    slot_uri: publicschema:land/boundary_recognition
+    title: Boundary recognition
+    description: How far the asserted boundary is recognized or agreed, coded in a stated classification.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      source_domain: land
+      label_es: Reconocimiento del límite
+      label_fr: Reconnaissance de la limite
+      description_es: Hasta qué punto el límite declarado está reconocido o acordado, codificado en
+        una clasificación indicada.
+      description_fr: Dans quelle mesure la limite revendiquée est reconnue ou convenue, codée dans une
+        classification indiquée.
+      category: administrative
+      sensitivity: sensitive

@@ -153,6 +153,45 @@ enums:
         Programs choose the rule appropriate to the subject and cite it on the AnthropometricProfile.",
         "uri": "https://www.who.int/publications/i/item/9789241598163"}'
       bibliography_refs: '["who-child-growth-standards", "who-muac-cutoffs"]'
+  AddressPurpose:
+    enum_uri: publicschema:AddressPurpose
+    title: Address Purpose
+    description: The purpose for which an address is given for an asset, following the postal and physical
+      address types of HL7 FHIR. A source may use its own scheme instead.
+    status: bibo:draft
+    permissible_values:
+      physical:
+        meaning: publicschema:AddressPurpose/physical
+        title: Physical
+        description: An address that identifies where the asset is or how to reach it on the ground.
+        annotations:
+          label_es: Física
+          label_fr: Physique
+          description_es: Una dirección que identifica dónde se encuentra el activo o cómo llegar a él
+            sobre el terreno.
+          description_fr: Une adresse qui indique où se trouve le bien ou comment s'y rendre sur le
+            terrain.
+      postal:
+        meaning: publicschema:AddressPurpose/postal
+        title: Postal
+        description: An address at which mail for the asset is delivered. It need not be where the asset
+          is.
+        annotations:
+          label_es: Postal
+          label_fr: Postale
+          description_es: Una dirección en la que se entrega el correo destinado al activo. No tiene por
+            qué ser el lugar donde se encuentra el activo.
+          description_fr: Une adresse à laquelle le courrier destiné au bien est distribué. Ce n'est pas
+            nécessairement l'endroit où se trouve le bien.
+    annotations:
+      label_es: Finalidad de la dirección
+      label_fr: Finalité de l'adresse
+      description_es: La finalidad con la que se indica una dirección para un activo, según los tipos
+        de dirección postal y física de HL7 FHIR. Una fuente puede usar su propio esquema en su lugar.
+      description_fr: La finalité pour laquelle une adresse est indiquée pour un bien, selon les types
+        d'adresse postale et physique de HL7 FHIR. Une source peut utiliser son propre référentiel à la
+        place.
+      bibliography_refs: '["fhir-r5"]'
   AdministrationMode:
     enum_uri: publicschema:AdministrationMode
     title: Administration Mode
@@ -284,6 +323,119 @@ enums:
         on WG-ES item HEAR_3 (hearing aid use frequency, OPTIONAL) per the 11 October 2022 PDF.", "uri":
         "https://www.washingtongroup-disability.com/question-sets/wg-extended-set-on-functioning-wg-es/"}'
       bibliography_refs: '["washington-group-es"]'
+  AnimalResponsibilityRole:
+    enum_uri: publicschema:AnimalResponsibilityRole
+    title: Animal Responsibility Role
+    description: Kinds of responsibility a person or organization holds for animals. Owner, keeper and
+      operator can be different parties for the same animals. A source may use its own scheme instead.
+    status: bibo:draft
+    permissible_values:
+      keeper:
+        meaning: publicschema:AnimalResponsibilityRole/keeper
+        title: Keeper
+        description: The party that has the animals in its care and custody, whether or not it owns them.
+        annotations:
+          label_es: Poseedor
+          label_fr: Détenteur
+          description_es: La parte que tiene los animales a su cuidado y bajo su custodia, sea o no
+            propietaria de ellos.
+          description_fr: La partie qui a les animaux sous sa garde et à sa charge, qu'elle en soit
+            propriétaire ou non.
+      operator:
+        meaning: publicschema:AnimalResponsibilityRole/operator
+        title: Operator
+        description: The party responsible for the animals under animal health law, such as an operator
+          under Regulation (EU) 2016/429, including for a limited period.
+        annotations:
+          label_es: Operador
+          label_fr: Opérateur
+          description_es: La parte responsable de los animales conforme a la legislación de sanidad
+            animal, como un operador en el sentido del Reglamento (UE) 2016/429, incluso por un período
+            limitado.
+          description_fr: La partie responsable des animaux au titre de la législation sur la santé
+            animale, tel qu'un opérateur au sens du règlement (UE) 2016/429, y compris pour une durée
+            limitée.
+      owner:
+        meaning: publicschema:AnimalResponsibilityRole/owner
+        title: Owner
+        description: The party that owns the animals.
+        annotations:
+          label_es: Propietario
+          label_fr: Propriétaire
+          description_es: La parte que es propietaria de los animales.
+          description_fr: La partie qui est propriétaire des animaux.
+    annotations:
+      label_es: Función de responsabilidad animal
+      label_fr: Rôle de responsabilité animale
+      description_es: Tipos de responsabilidad que una persona u organización asume respecto de animales.
+        El propietario, el poseedor y el operador pueden ser partes distintas para los mismos animales.
+        Una fuente puede usar su propio esquema en su lugar.
+      description_fr: Types de responsabilité qu'une personne ou une organisation assume à l'égard
+        d'animaux. Le propriétaire, le détenteur et l'opérateur peuvent être des parties différentes pour
+        les mêmes animaux. Une source peut utiliser son propre référentiel à la place.
+      bibliography_refs: '["eu-reg-2016-429", "woah-identification-2024"]'
+  AssetRoleType:
+    enum_uri: publicschema:AssetRoleType
+    title: Asset Role Type
+    description: Kinds of responsibility a party holds for a physical asset. Operation, upkeep and registered
+      keeping are not ownership. A source may use its own scheme instead.
+    status: bibo:draft
+    permissible_values:
+      keeper:
+        meaning: publicschema:AssetRoleType/keeper
+        title: Registered keeper
+        description: The party registered as responsible for the asset, such as the registered keeper of
+          a vehicle. It need not be the owner.
+        annotations:
+          label_es: Tenedor registrado
+          label_fr: Détenteur enregistré
+          description_es: La parte registrada como responsable del activo, como el tenedor registrado de
+            un vehículo. No tiene por qué ser el propietario.
+          description_fr: La partie enregistrée comme responsable du bien, telle que le détenteur enregistré
+            d'un véhicule. Ce n'est pas nécessairement le propriétaire.
+      operator:
+        meaning: publicschema:AssetRoleType/operator
+        title: Operator
+        description: The party that runs the asset or the activity carried out at it, whether or not it
+          owns the asset.
+        annotations:
+          label_es: Operador
+          label_fr: Exploitant
+          description_es: La parte que explota el activo o la actividad que se realiza en él, sea o no
+            propietaria del activo.
+          description_fr: La partie qui exploite le bien ou l'activité qui y est exercée, qu'elle soit
+            propriétaire du bien ou non.
+      owner:
+        meaning: publicschema:AssetRoleType/owner
+        title: Owner
+        description: The party that owns the asset.
+        annotations:
+          label_es: Propietario
+          label_fr: Propriétaire
+          description_es: La parte que es propietaria del activo.
+          description_fr: La partie qui est propriétaire du bien.
+      upkeep:
+        meaning: publicschema:AssetRoleType/upkeep
+        title: Upkeep
+        description: The party that maintains or repairs the asset without operating or owning it through
+          this role.
+        annotations:
+          label_es: Mantenimiento
+          label_fr: Entretien
+          description_es: La parte que mantiene o repara el activo sin explotarlo ni ser su propietaria
+            en virtud de esta función.
+          description_fr: La partie qui entretient ou répare le bien sans l'exploiter ni en être propriétaire
+            au titre de ce rôle.
+    annotations:
+      label_es: Tipo de función sobre el activo
+      label_fr: Type de rôle sur le bien
+      description_es: Tipos de responsabilidad que una parte tiene sobre un activo físico. La explotación,
+        el mantenimiento y la tenencia registrada no son propiedad. Una fuente puede usar su propio esquema
+        en su lugar.
+      description_fr: Types de responsabilité qu'une partie détient sur un bien physique. L'exploitation,
+        l'entretien et la garde enregistrée ne sont pas la propriété. Une source peut utiliser son propre
+        référentiel à la place.
+      bibliography_refs: '["uk-dft-v5c-2010", "us-epa-frs"]'
   BiometricExceptionReason:
     enum_uri: publicschema:BiometricExceptionReason
     title: Biometric Exception Reason
@@ -4303,6 +4455,48 @@ enums:
         "match": "none", "note": "The field is an untyped String; values are defined at country-deployment
         time. Farajaland uses MONOGAMY/POLYGAMY.", "vocabulary": "OpenCRVS v2 event service", "vocabulary_id":
         "opencrvs"}]'
+  NameUse:
+    enum_uri: publicschema:NameUse
+    title: Name Use
+    description: Contexts in which a subject uses a name, following the legal and alternative names of
+      the SEMIC Core Business Vocabulary and the official name of HL7 FHIR. Whether a name is current or
+      former is stated by the name usage period, not by a code. A source may use its own scheme instead.
+    status: bibo:draft
+    permissible_values:
+      legal:
+        meaning: publicschema:NameUse/legal
+        title: Legal
+        description: The name under which the subject is legally registered or officially identified.
+        annotations:
+          label_es: Legal
+          label_fr: Légal
+          description_es: El nombre con el que el sujeto está legalmente registrado u oficialmente
+            identificado.
+          description_fr: Le nom sous lequel le sujet est légalement enregistré ou officiellement
+            identifié.
+      trading:
+        meaning: publicschema:NameUse/trading
+        title: Trading
+        description: A name the subject uses in trade or with the public that is not its legal name.
+        annotations:
+          label_es: Comercial
+          label_fr: Commercial
+          description_es: Un nombre que el sujeto usa en el comercio o ante el público y que no es su
+            nombre legal.
+          description_fr: Un nom que le sujet utilise dans le commerce ou auprès du public et qui n'est
+            pas son nom légal.
+    annotations:
+      label_es: Uso del nombre
+      label_fr: Usage du nom
+      description_es: Contextos en los que un sujeto usa un nombre, según los nombres legales y
+        alternativos del vocabulario Core Business de SEMIC y el nombre oficial de HL7 FHIR. Si un nombre
+        es actual o anterior lo indica el período de uso del nombre, no un código. Una fuente puede usar
+        su propio esquema en su lugar.
+      description_fr: Contextes dans lesquels un sujet utilise un nom, selon les noms légaux et alternatifs
+        du vocabulaire Core Business de SEMIC et le nom officiel de HL7 FHIR. Le caractère actuel ou ancien
+        d'un nom est indiqué par la période d'usage du nom, et non par un code. Une source peut utiliser
+        son propre référentiel à la place.
+      bibliography_refs: '["fhir-r5", "semic-core-business"]'
   ParentEstablishmentBasis:
     enum_uri: publicschema:ParentEstablishmentBasis
     title: Parent Establishment Basis
@@ -4557,6 +4751,332 @@ enums:
         "OpenCRVS eventLocation is typed as a Location entity rather than a coded place-type; Location.type
         is an untyped String defined at country-deployment time, not a core enum.", "vocabulary": "OpenCRVS
         v2 event service", "vocabulary_id": "opencrvs"}]'
+  EvidenceRole:
+    enum_uri: publicschema:EvidenceRole
+    title: Evidence Role
+    description: Whether a cited source supports or contradicts the claim it is offered for. Citing
+      a source does not verify the claim.
+    status: bibo:draft
+    permissible_values:
+      supports:
+        meaning: publicschema:EvidenceRole/supports
+        title: Supports
+        description: The source provides factual support for the claim.
+        annotations:
+          label_es: Respalda
+          label_fr: Appuie
+          description_es: La fuente aporta un respaldo fáctico a la afirmación.
+          description_fr: La source apporte un soutien factuel à l'affirmation.
+      contradicts:
+        meaning: publicschema:EvidenceRole/contradicts
+        title: Contradicts
+        description: The source refutes or disputes the claim.
+        annotations:
+          label_es: Contradice
+          label_fr: Contredit
+          description_es: La fuente refuta o cuestiona la afirmación.
+          description_fr: La source réfute ou conteste l'affirmation.
+    annotations:
+      label_es: Función de la evidencia
+      label_fr: Rôle de la preuve
+      description_es: Indica si una fuente citada respalda o contradice la afirmación para la que
+        se aporta. Citar una fuente no valida la afirmación.
+      description_fr: Indique si une source citée appuie ou contredit l'affirmation pour laquelle
+        elle est apportée. Citer une source n'en valide pas l'affirmation.
+      bibliography_refs: '["spar-cito", "w3c-prov-o"]'
+  ContactChannel:
+    enum_uri: publicschema:ContactChannel
+    title: Contact Channel
+    description: The kind of communication channel through which a subject can be reached, following
+      the FHIR contact point system codes.
+    status: bibo:draft
+    permissible_values:
+      phone:
+        meaning: publicschema:ContactChannel/phone
+        title: Phone
+        description: A telephone number used for voice calls.
+        annotations:
+          label_es: Teléfono
+          label_fr: Téléphone
+          description_es: Un número de teléfono utilizado para llamadas de voz.
+          description_fr: Un numéro de téléphone utilisé pour les appels vocaux.
+      fax:
+        meaning: publicschema:ContactChannel/fax
+        title: Fax
+        description: A number for a fax machine.
+        annotations:
+          label_es: Fax
+          label_fr: Télécopie
+          description_es: Un número para un aparato de fax.
+          description_fr: Un numéro pour un télécopieur.
+      email:
+        meaning: publicschema:ContactChannel/email
+        title: Email
+        description: An email address.
+        annotations:
+          label_es: Correo electrónico
+          label_fr: Courriel
+          description_es: Una dirección de correo electrónico.
+          description_fr: Une adresse de courrier électronique.
+      pager:
+        meaning: publicschema:ContactChannel/pager
+        title: Pager
+        description: A pager number, which may be usable only on a particular pager system.
+        annotations:
+          label_es: Buscapersonas
+          label_fr: Récepteur d'appel
+          description_es: Un número de buscapersonas, que puede ser utilizable únicamente en un
+            sistema de radiobúsqueda determinado.
+          description_fr: Un numéro de récepteur d'appel, qui peut n'être utilisable que sur un
+            système de radiomessagerie particulier.
+      url:
+        meaning: publicschema:ContactChannel/url
+        title: Web address
+        description: A web address, such as a web page or chat link, that is not one of the other channels.
+        annotations:
+          label_es: Dirección web
+          label_fr: Adresse web
+          description_es: Una dirección web, como una página web o un enlace de chat, que no es
+            ninguno de los otros canales.
+          description_fr: Une adresse web, telle qu'une page web ou un lien de discussion, qui
+            n'est aucun des autres canaux.
+      sms:
+        meaning: publicschema:ContactChannel/sms
+        title: SMS
+        description: A number that can receive text messages.
+        annotations:
+          label_es: SMS
+          label_fr: SMS
+          description_es: Un número que puede recibir mensajes de texto.
+          description_fr: Un numéro pouvant recevoir des messages texte.
+      other:
+        meaning: publicschema:ContactChannel/other
+        title: Other
+        description: A channel that is none of the listed kinds, such as an internal mail address.
+        annotations:
+          label_es: Otro
+          label_fr: Autre
+          description_es: Un canal que no es ninguno de los tipos enumerados, como una dirección
+            de correo interno.
+          description_fr: Un canal qui n'est aucun des types énumérés, comme une adresse de
+            courrier interne.
+    exact_mappings:
+    - http://hl7.org/fhir/contact-point-system
+    annotations:
+      label_es: Canal de contacto
+      label_fr: Canal de contact
+      description_es: El tipo de canal de comunicación por el que se puede contactar a un sujeto,
+        según los códigos del sistema de puntos de contacto (contact point system) de FHIR.
+      description_fr: Le type de canal de communication par lequel un sujet peut être joint, selon
+        les codes du système de coordonnées de contact (contact point system) de FHIR.
+      external_alignments_json: '[{"label": "ContactPointSystem", "match": "exact", "note": "The same
+        seven codes with the same meanings.", "uri": "http://hl7.org/fhir/contact-point-system", "vocabulary":
+        "FHIR R5", "vocabulary_id": "fhir-r5"}]'
+      bibliography_refs: '["fhir-r5"]'
+  GeometryEncoding:
+    enum_uri: publicschema:GeometryEncoding
+    title: Geometry Encoding
+    description: The text format in which a geometry is written, following the geometry literal types
+      that GeoSPARQL defines.
+    status: bibo:draft
+    permissible_values:
+      geojson:
+        meaning: publicschema:GeometryEncoding/geojson
+        title: GeoJSON
+        description: GeoJSON as defined by RFC 7946, with coordinates in longitude then latitude order.
+        annotations:
+          label_es: GeoJSON
+          label_fr: GeoJSON
+          description_es: GeoJSON tal como lo define la RFC 7946, con las coordenadas en el orden
+            longitud y luego latitud.
+          description_fr: GeoJSON tel que défini par la RFC 7946, avec les coordonnées dans
+            l'ordre longitude puis latitude.
+      wkt:
+        meaning: publicschema:GeometryEncoding/wkt
+        title: Well-Known Text
+        description: Well-Known Text as profiled by GeoSPARQL, optionally preceded by the URI of its
+          coordinate reference system.
+        annotations:
+          label_es: Well-Known Text
+          label_fr: Well-Known Text
+          description_es: Well-Known Text tal como lo perfila GeoSPARQL, opcionalmente precedido
+            por el URI de su sistema de referencia de coordenadas.
+          description_fr: Well-Known Text tel que profilé par GeoSPARQL, éventuellement précédé
+            de l'URI de son système de référence de coordonnées.
+      gml:
+        meaning: publicschema:GeometryEncoding/gml
+        title: Geography Markup Language
+        description: Geography Markup Language as profiled by GeoSPARQL.
+        annotations:
+          label_es: Geography Markup Language
+          label_fr: Geography Markup Language
+          description_es: Geography Markup Language tal como lo perfila GeoSPARQL.
+          description_fr: Geography Markup Language tel que profilé par GeoSPARQL.
+      kml:
+        meaning: publicschema:GeometryEncoding/kml
+        title: Keyhole Markup Language
+        description: Keyhole Markup Language as profiled by GeoSPARQL.
+        annotations:
+          label_es: Keyhole Markup Language
+          label_fr: Keyhole Markup Language
+          description_es: Keyhole Markup Language tal como lo perfila GeoSPARQL.
+          description_fr: Keyhole Markup Language tel que profilé par GeoSPARQL.
+    annotations:
+      label_es: Codificación de geometría
+      label_fr: Encodage de géométrie
+      description_es: El formato de texto en el que se escribe una geometría, según los tipos de
+        literales de geometría que define GeoSPARQL.
+      description_fr: Le format texte dans lequel une géométrie est écrite, selon les types de
+        littéraux de géométrie que définit GeoSPARQL.
+      bibliography_refs: '["ogc-geosparql-11", "rfc-7946"]'
+  UnitSystem:
+    enum_uri: publicschema:UnitSystem
+    title: Unit System
+    description: The system of codes that defines a unit of measure used in a quantity value.
+    status: bibo:draft
+    permissible_values:
+      ucum:
+        meaning: publicschema:UnitSystem/ucum
+        title: Unified Code for Units of Measure
+        description: Case-sensitive codes formed by the Unified Code for Units of Measure grammar, such
+          as m2 for square metre and har for hectare.
+        annotations:
+          label_es: Unified Code for Units of Measure
+          label_fr: Unified Code for Units of Measure
+          description_es: Códigos que distinguen entre mayúsculas y minúsculas, formados según
+            la gramática del Unified Code for Units of Measure (UCUM), como m2 para metro
+            cuadrado y har para hectárea.
+          description_fr: Codes sensibles à la casse formés selon la grammaire de l'Unified Code
+            for Units of Measure (UCUM), tels que m2 pour mètre carré et har pour hectare.
+      unece_rec20:
+        meaning: publicschema:UnitSystem/unece_rec20
+        title: UN/CEFACT Recommendation 20
+        description: Common codes from UN/CEFACT Recommendation 20, such as MTK for square metre and
+          HAR for hectare.
+        annotations:
+          label_es: Recomendación 20 de CEFACT-ONU
+          label_fr: Recommandation 20 du CEFACT-ONU
+          description_es: Códigos comunes de la Recomendación 20 de CEFACT-ONU, como MTK para
+            metro cuadrado y HAR para hectárea.
+          description_fr: Codes communs de la Recommandation 20 du CEFACT-ONU, tels que MTK pour
+            mètre carré et HAR pour hectare.
+    annotations:
+      label_es: Sistema de unidades
+      label_fr: Système d'unités
+      description_es: El sistema de códigos que define una unidad de medida utilizada en un valor
+        cuantitativo.
+      description_fr: Le système de codes qui définit une unité de mesure utilisée dans une
+        valeur quantitative.
+      bibliography_refs: '["regenstrief-ucum", "un-cefact-rec20"]'
+  MatchOutcome:
+    enum_uri: publicschema:MatchOutcome
+    title: Match Outcome
+    description: The judgement reached about whether a source record describes a given subject.
+    status: bibo:draft
+    permissible_values:
+      match:
+        meaning: publicschema:MatchOutcome/match
+        title: Match
+        description: The record was judged to describe the subject.
+        annotations:
+          label_es: Coincidencia
+          label_fr: Correspondance
+          description_es: Se determinó que el registro describe al sujeto.
+          description_fr: L'enregistrement a été jugé décrire le sujet.
+      possible_match:
+        meaning: publicschema:MatchOutcome/possible_match
+        title: Possible match
+        description: The record may describe the subject and needs further review before it is treated
+          as a match.
+        annotations:
+          label_es: Posible coincidencia
+          label_fr: Correspondance possible
+          description_es: El registro podría describir al sujeto y requiere una revisión adicional
+            antes de tratarse como una coincidencia.
+          description_fr: L'enregistrement pourrait décrire le sujet et nécessite un examen
+            complémentaire avant d'être traité comme une correspondance.
+      non_match:
+        meaning: publicschema:MatchOutcome/non_match
+        title: Non-match
+        description: The record was judged not to describe the subject.
+        annotations:
+          label_es: No coincidencia
+          label_fr: Non-correspondance
+          description_es: Se determinó que el registro no describe al sujeto.
+          description_fr: L'enregistrement a été jugé ne pas décrire le sujet.
+    annotations:
+      label_es: Resultado de la coincidencia
+      label_fr: Résultat de la correspondance
+      description_es: El juicio alcanzado sobre si un registro de origen describe a un sujeto
+        determinado.
+      description_fr: Le jugement porté sur la question de savoir si un enregistrement source
+        décrit un sujet donné.
+      bibliography_refs: '["fellegi-sunter-1969", "sssom"]'
+  RecordChangeKind:
+    enum_uri: publicschema:RecordChangeKind
+    title: Record Change Kind
+    description: The kind of change to the standing of a register record, following the register item
+      actions of ISO 19135. These codes describe the record's standing; they do not decide whether a
+      record is deleted or how long it is kept, which follow applicable law.
+    status: bibo:draft
+    permissible_values:
+      clarification:
+        meaning: publicschema:RecordChangeKind/clarification
+        title: Clarification
+        description: A non-substantive correction was made to the record, such as a spelling or
+          wording fix. It does not change what the record states or means.
+        annotations:
+          label_es: Aclaración
+          label_fr: Clarification
+          description_es: Se hizo una corrección no sustantiva en la entrada, como la corrección de
+            la ortografía o la redacción. No cambia lo que la entrada declara ni lo que significa.
+          description_fr: Une correction non substantielle a été apportée à l'entrée, telle qu'une
+            correction d'orthographe ou de formulation. Elle ne change pas ce que l'entrée déclare
+            ni ce qu'elle signifie.
+      invalidation:
+        meaning: publicschema:RecordChangeKind/invalidation
+        title: Invalidation
+        description: The record was found to contain a substantive error and is marked invalid.
+        annotations:
+          label_es: Invalidación
+          label_fr: Invalidation
+          description_es: Se determinó que la entrada contenía un error sustantivo y se marca
+            como no válida.
+          description_fr: Il a été constaté que l'entrée contenait une erreur substantielle et
+            elle est marquée invalide.
+      retirement:
+        meaning: publicschema:RecordChangeKind/retirement
+        title: Retirement
+        description: The record is no longer suitable for use in new data but remains in the register.
+        annotations:
+          label_es: Retiro
+          label_fr: Retrait
+          description_es: La entrada ya no es adecuada para su uso en nuevos datos, pero permanece
+            en el registro.
+          description_fr: L'entrée n'est plus adaptée à un usage dans de nouvelles données mais
+            demeure dans le registre.
+      supersession:
+        meaning: publicschema:RecordChangeKind/supersession
+        title: Supersession
+        description: The record was retired and replaced by one or more new records.
+        annotations:
+          label_es: Sustitución
+          label_fr: Remplacement
+          description_es: La entrada fue retirada y sustituida por una o más entradas nuevas.
+          description_fr: L'entrée a été retirée et remplacée par une ou plusieurs nouvelles
+            entrées.
+    annotations:
+      label_es: Tipo de cambio de una entrada de registro
+      label_fr: Type de changement d'une entrée de registre
+      description_es: El tipo de cambio en la situación de una entrada de registro, según las
+        acciones sobre elementos de registro de la norma ISO 19135. Estos códigos describen la
+        situación de la entrada; no deciden si una entrada se elimina ni cuánto tiempo se conserva,
+        lo que se rige por el derecho aplicable.
+      description_fr: Le type de changement apporté au statut d'une entrée de registre, selon les
+        actions sur les éléments de registre de la norme ISO 19135. Ces codes décrivent le statut
+        de l'entrée; ils ne décident pas si une entrée est supprimée ni combien de temps elle est
+        conservée, ce qui relève du droit applicable.
+      bibliography_refs: '["ec-inspire-registers-2017", "iso-19135-1"]'
   RegistrationStatus:
     enum_uri: publicschema:RegistrationStatus
     title: Registration Status
@@ -9291,48 +9811,105 @@ enums:
         de mesure. Les programmes qui déploient un instrument national ou spécifique au programme ajoutent
         un code local aux côtés des codes publiés.
       bibliography_refs: '["fao-fies", "washington-group-cfm", "washington-group-es", "washington-group-ss"]'
+  InterestDirectness:
+    enum_uri: publicschema:InterestDirectness
+    title: Interest directness
+    description: Whether an ownership or control interest is held directly or through intermediate entities
+      or arrangements.
+    status: bibo:draft
+    permissible_values:
+      direct:
+        meaning: publicschema:InterestDirectness/direct
+        title: Direct
+        description: Held with no intermediate entity or arrangement.
+        status: bibo:draft
+        annotations:
+          label_es: Directo
+          label_fr: Direct
+          description_es: Poseído sin entidad ni mecanismo intermediario.
+          description_fr: Détenu sans entité ni montage intermédiaire.
+      indirect:
+        meaning: publicschema:InterestDirectness/indirect
+        title: Indirect
+        description: Held through one or more intermediate entities or arrangements.
+        status: bibo:draft
+        annotations:
+          label_es: Indirecto
+          label_fr: Indirect
+          description_es: Poseído a través de una o más entidades o mecanismos intermediarios.
+          description_fr: Détenu par l'intermédiaire d'une ou plusieurs entités ou d'un ou
+            plusieurs montages intermédiaires.
+      unknown:
+        meaning: publicschema:InterestDirectness/unknown
+        title: Unknown
+        description: The source does not establish whether the interest is direct or indirect.
+        status: bibo:draft
+        annotations:
+          label_es: Desconocido
+          label_fr: Inconnu
+          description_es: La fuente no permite determinar si la participación es directa o
+            indirecta.
+          description_fr: La source ne permet pas d'établir si la participation est directe ou
+            indirecte.
+    annotations:
+      label_es: Carácter directo de la participación
+      label_fr: Caractère direct de la participation
+      description_es: Indica si una participación de propiedad o de control se posee directamente
+        o a través de entidades o mecanismos intermediarios.
+      description_fr: Indique si une participation de propriété ou de contrôle est détenue
+        directement ou par l'intermédiaire d'entités ou de montages intermédiaires.
+      standard_json: '{"name": "Beneficial Ownership Data Standard 0.4.0, directOrIndirect",
+        "notes": "The codes match the BODS values direct, indirect and unknown.", "uri":
+        "https://standard.openownership.org/en/0.4.0/standard/reference.html"}'
+      bibliography_refs: '["openownership-bods"]'
   LandTenure:
-    enum_uri: publicschema:land/LandTenure
+    enum_uri: publicschema:agri/LandTenure
     title: Land Tenure
-    description: The legal or customary arrangement under which land is held, classified according to
-      FAO Voluntary Guidelines on the Responsible Governance of Tenure (VGGT) categories.
+    description: Kinds of arrangement under which a farm operates the land it uses, following the land
+      tenure types of the FAO World Programme for the Census of Agriculture.
     status: bibo:draft
     permissible_values:
       owned_with_title:
-        meaning: publicschema:land/LandTenure/owned_with_title
+        meaning: publicschema:agri/LandTenure/owned_with_title
         title: Owned with title
-        description: Land held with a formal, legally recognized title deed or certificate of ownership.
+        description: Land the farm operates as legal owner or legal owner-like possessor, with rights recognized
+          and enforceable under statutory law.
         annotations:
           label_es: Propiedad con título
           label_fr: Propriété titrée
-          description_es: Tierra mantenida con un título de propiedad o certificado de propiedad formalmente
-            reconocido legalmente.
-          description_fr: Terre détenue avec un titre de propriété ou un certificat de propriété formellement
-            reconnu par la loi.
+          description_es: Tierra que la finca opera como propietaria legal o poseedora con
+            derechos asimilables a los de propietaria, con derechos reconocidos y exigibles
+            conforme al derecho positivo.
+          description_fr: Terre que l'exploitation agricole opère en tant que propriétaire légale
+            ou possédante assimilée à un propriétaire légal, avec des droits reconnus et
+            opposables en vertu du droit positif.
       owned_without_title:
-        meaning: publicschema:land/LandTenure/owned_without_title
+        meaning: publicschema:agri/LandTenure/owned_without_title
         title: Owned without title
-        description: Land held through customary or informal ownership without a formal title document.
+        description: Land the farm operates as owner or owner-like possessor without statutory recognition
+          of that ownership, for example under customary tenure.
         annotations:
           label_es: Propiedad sin título
           label_fr: Propriété sans titre
-          description_es: Tierra mantenida mediante propiedad consuetudinaria o informal sin documento
-            de título formal.
-          description_fr: Terre détenue par possession coutumière ou informelle sans document de titre
-            formel.
+          description_es: Tierra que la finca opera como propietaria o poseedora asimilada a
+            propietaria sin reconocimiento legal de esa propiedad, por ejemplo bajo un régimen
+            de tenencia consuetudinario.
+          description_fr: Terre que l'exploitation agricole opère en tant que propriétaire ou
+            possédante assimilée à un propriétaire sans reconnaissance légale de cette
+            propriété, par exemple dans le cadre d'un régime foncier coutumier.
       rented:
-        meaning: publicschema:land/LandTenure/rented
+        meaning: publicschema:agri/LandTenure/rented
         title: Rented
-        description: Land used under a rental or lease agreement with a landowner for a fixed payment.
+        description: Land the farm rents or leases from someone else for a fixed payment in money, produce or services.
         annotations:
           label_es: Arrendada
           label_fr: Louée
-          description_es: Tierra utilizada bajo un contrato de arrendamiento con un propietario a cambio
-            de un pago fijo.
-          description_fr: Terre utilisée dans le cadre d'un contrat de location ou de bail avec un propriétaire
-            foncier moyennant un paiement fixe.
+          description_es: Tierra que la finca alquila o arrienda a un tercero a cambio de un
+            pago fijo en dinero, productos o servicios.
+          description_fr: Terre que l'exploitation agricole loue ou prend à bail auprès d'un
+            tiers en contrepartie d'un paiement fixe en argent, en produits ou en services.
       sharecropped:
-        meaning: publicschema:land/LandTenure/sharecropped
+        meaning: publicschema:agri/LandTenure/sharecropped
         title: Sharecropped
         description: Land cultivated under an arrangement where the tenant pays the landowner a share
           of the harvest or proceeds.
@@ -9344,40 +9921,41 @@ enums:
           description_fr: Terre cultivée dans le cadre d'un arrangement où le locataire verse au propriétaire
             une part de la récolte ou des revenus.
       communal:
-        meaning: publicschema:land/LandTenure/communal
+        meaning: publicschema:agri/LandTenure/communal
         title: Communal
-        description: Land held collectively by a community, clan, or group under customary or statutory
-          communal tenure.
+        description: Common land the farm uses under rights shared with others, not belonging to the farm itself.
         annotations:
           label_es: Comunal
           label_fr: Communautaire
-          description_es: Tierra mantenida colectivamente por una comunidad, clan o grupo bajo tenencia
-            comunal consuetudinaria o estatutaria.
-          description_fr: Terre détenue collectivement par une communauté, un clan ou un groupe sous régime
-            foncier communautaire coutumier ou légal.
+          description_es: Tierra comunal que la finca utiliza en virtud de derechos compartidos
+            con otros, y que no pertenece a la propia finca.
+          description_fr: Terre communautaire que l'exploitation agricole utilise en vertu de
+            droits partagés avec d'autres, et qui n'appartient pas à l'exploitation elle-même.
       state_allocated:
-        meaning: publicschema:land/LandTenure/state_allocated
+        meaning: publicschema:agri/LandTenure/state_allocated
         title: State-allocated
-        description: Land allocated by the state or government authority for use, often without transfer
-          of ownership.
+        description: Public land the farm uses under a use right granted by a public authority, without
+          ownership.
         annotations:
           label_es: Asignación estatal
           label_fr: Attribution étatique
-          description_es: Tierra asignada por el Estado o una autoridad gubernamental para su uso, generalmente
-            sin transferencia de propiedad.
-          description_fr: Terre attribuée par l'État ou une autorité gouvernementale pour usage, souvent
-            sans transfert de propriété.
+          description_es: Tierra pública que la finca utiliza en virtud de un derecho de uso
+            otorgado por una autoridad pública, sin propiedad.
+          description_fr: Terre publique que l'exploitation agricole utilise en vertu d'un droit
+            d'usage accordé par une autorité publique, sans droit de propriété.
       informal:
-        meaning: publicschema:land/LandTenure/informal
+        meaning: publicschema:agri/LandTenure/informal
         title: Informal/squatting
-        description: Land occupied and used without any formal or customary legal basis.
+        description: Land the farm occupies and uses without the owner's permission or any recognized right.
         annotations:
           label_es: Informal/ocupación ilegal
           label_fr: Occupation informelle/squat
-          description_es: Tierra ocupada y utilizada sin ninguna base legal formal o consuetudinaria.
-          description_fr: Terre occupée et utilisée sans aucune base juridique formelle ou coutumière.
+          description_es: Tierra que la finca ocupa y utiliza sin el permiso del propietario ni
+            ningún derecho reconocido.
+          description_fr: Terre que l'exploitation agricole occupe et utilise sans l'autorisation
+            du propriétaire ni aucun droit reconnu.
       borrowed:
-        meaning: publicschema:land/LandTenure/borrowed
+        meaning: publicschema:agri/LandTenure/borrowed
         title: Borrowed
         description: Land used temporarily without payment, typically lent by a relative, friend, or community
           member.
@@ -9389,7 +9967,7 @@ enums:
           description_fr: Terre utilisée temporairement sans paiement, généralement prêtée par un parent,
             un ami ou un membre de la communauté.
       other:
-        meaning: publicschema:land/LandTenure/other
+        meaning: publicschema:agri/LandTenure/other
         title: Other
         description: A tenure arrangement not covered by the other categories.
         annotations:
@@ -9398,19 +9976,21 @@ enums:
           description_es: Un régimen de tenencia no cubierto por las otras categorías.
           description_fr: Un régime foncier non couvert par les autres catégories.
     annotations:
-      source_domain: land
+      source_domain: agri
       label_es: Tenencia de la tierra
       label_fr: Régime foncier
-      description_es: El régimen legal o consuetudinario bajo el cual se mantiene la tierra, clasificado
-        según las categorías de las Directrices voluntarias de la FAO sobre la gobernanza responsable
-        de la tenencia (VGGT).
-      description_fr: Le régime légal ou coutumier sous lequel les terres sont détenues, classifié selon
-        les catégories des Directives volontaires de la FAO sur la gouvernance responsable des régimes
-        fonciers (VGGT).
-      standard_json: '{"name": "FAO Voluntary Guidelines on the Responsible Governance of Tenure (VGGT)",
-        "notes": "International framework for governance of tenure of land, fisheries, and forests. Provides
-        the conceptual basis for tenure classification.", "uri": "https://www.fao.org/tenure/voluntary-guidelines/en/"}'
-      bibliography_refs: '["fao-vggt", "lsms-isa"]'
+      description_es: Tipos de arreglo bajo los cuales una finca opera la tierra que utiliza,
+        según los tipos de tenencia de la tierra del Programa Mundial del Censo Agropecuario
+        de la FAO.
+      description_fr: Types d'arrangement selon lesquels une exploitation agricole opère la terre
+        qu'elle utilise, selon les types de régime foncier du Programme mondial du recensement
+        de l'agriculture de la FAO.
+      standard_json: '{"name": "FAO World Programme for the Census of Agriculture 2030 (WCA 2030), Item 0204
+        Area of holding according to land tenure types", "notes": "Tenure types follow WCA 2030 Item 0204
+        and paragraphs 7.2.38 to 7.2.47. WCA 2020 Item 0203 gives the equivalent types for data from the
+        2020 round. The FAO Voluntary Guidelines on the Responsible Governance of Tenure give context but
+        define no classification.", "uri": "https://doi.org/10.4060/cd9437en"}'
+      bibliography_refs: '["fao-vggt", "fao-wca-2020-vol1", "fao-wca-2030", "lsms-isa"]'
   Language:
     enum_uri: publicschema:Language
     title: Language
@@ -50580,8 +51160,8 @@ enums:
   LivestockType:
     enum_uri: publicschema:agri/LivestockType
     title: Livestock Type
-    description: Types of livestock kept by the agricultural holding, classified according to the FAO
-      World Programme for the Census of Agriculture.
+    description: Kinds of livestock kept on a farm, grouped following the livestock classification of
+      the FAO World Programme for the Census of Agriculture.
     status: bibo:draft
     permissible_values:
       cattle:
@@ -50589,15 +51169,27 @@ enums:
         title: Cattle
         description: Domesticated bovines including cows, bulls, oxen, and calves.
         annotations:
+          standard_code: '11'
           label_es: Ganado bovino
           label_fr: Bovins
           description_es: Bovinos domesticados, incluidas vacas, toros, bueyes y terneros.
           description_fr: Bovins domestiqués, y compris vaches, taureaux, bœufs et veaux.
+      buffaloes:
+        meaning: publicschema:agri/LivestockType/buffaloes
+        title: Buffaloes
+        description: Domesticated water buffaloes and other buffaloes of all ages.
+        annotations:
+          standard_code: '12'
+          label_es: Búfalos
+          label_fr: Buffles
+          description_es: Búfalos de agua domesticados y otros búfalos de todas las edades.
+          description_fr: Buffles d'eau domestiqués et autres buffles de tous âges.
       sheep:
         meaning: publicschema:agri/LivestockType/sheep
         title: Sheep
         description: Domesticated sheep of all ages.
         annotations:
+          standard_code: '21'
           label_es: Ovejas
           label_fr: Ovins
           description_es: Ovejas domesticadas de todas las edades.
@@ -50607,6 +51199,7 @@ enums:
         title: Goats
         description: Domesticated goats of all ages.
         annotations:
+          standard_code: '22'
           label_es: Cabras
           label_fr: Caprins
           description_es: Cabras domesticadas de todas las edades.
@@ -50616,6 +51209,7 @@ enums:
         title: Pigs
         description: Domesticated pigs and swine of all ages.
         annotations:
+          standard_code: '3'
           label_es: Cerdos
           label_fr: Porcins
           description_es: Cerdos domesticados de todas las edades.
@@ -50625,6 +51219,7 @@ enums:
         title: Chickens
         description: Domesticated chickens, hens, roosters, and chicks.
         annotations:
+          standard_code: '61'
           label_es: Pollos
           label_fr: Poulets
           description_es: Pollos, gallinas, gallos y pollitos domesticados.
@@ -50635,6 +51230,7 @@ enums:
         description: Domesticated birds other than chickens, including ducks, turkeys, guinea fowl, and
           geese.
         annotations:
+          note: WCA 2030 Annex 8 classes 62 to 65 (turkeys, geese, ducks, guinea fowls).
           label_es: Otras aves de corral
           label_fr: Autres volailles
           description_es: Aves domesticadas distintas de los pollos, incluidos patos, pavos, gallinas
@@ -50646,6 +51242,7 @@ enums:
         title: Horses
         description: Domesticated horses of all ages.
         annotations:
+          standard_code: '41'
           label_es: Caballos
           label_fr: Chevaux
           description_es: Caballos domesticados de todas las edades.
@@ -50655,6 +51252,7 @@ enums:
         title: Donkeys/mules
         description: Domesticated donkeys, mules, and hinnies.
         annotations:
+          note: WCA 2030 Annex 8 classes 42 (asses) and 43 (mules and hinnies).
           label_es: Asnos/mulas
           label_fr: Ânes/mulets
           description_es: Asnos, mulas y burdéganos domesticados.
@@ -50664,33 +51262,50 @@ enums:
         title: Camels
         description: Domesticated camels (dromedary and Bactrian).
         annotations:
+          note: WCA 2030 Annex 8 classes 51 (dromedary) and 52 (Bactrian camel); WCA 2020 class 51.
           label_es: Camellos
           label_fr: Chameaux
           description_es: Camellos domesticados (dromedarios y camellos bactrianos).
           description_fr: Chameaux domestiqués (dromadaires et chameaux de Bactriane).
+      llamas_alpacas:
+        meaning: publicschema:agri/LivestockType/llamas_alpacas
+        title: Llamas and alpacas
+        description: Domesticated llamas and alpacas of all ages.
+        annotations:
+          standard_code: '53'
+          note: WCA 2030 Annex 8 class 53; WCA 2020 class 52.
+          label_es: Llamas y alpacas
+          label_fr: Lamas et alpagas
+          description_es: Llamas y alpacas domesticadas de todas las edades.
+          description_fr: Lamas et alpagas domestiqués de tous âges.
       rabbits:
         meaning: publicschema:agri/LivestockType/rabbits
         title: Rabbits
-        description: Domesticated rabbits raised for meat, fur, or other products.
+        description: Rabbits and hares raised for meat, fur or other products.
         annotations:
+          standard_code: '72'
           label_es: Conejos
           label_fr: Lapins
-          description_es: Conejos domesticados criados para carne, piel u otros productos.
-          description_fr: Lapins domestiqués élevés pour la viande, la fourrure ou d'autres produits.
-      beehives:
-        meaning: publicschema:agri/LivestockType/beehives
-        title: Beehives
-        description: Bee colonies maintained in hives for honey production.
+          description_es: Conejos y liebres criados para carne, piel u otros productos.
+          description_fr: Lapins et lièvres élevés pour la viande, la fourrure ou d'autres
+            produits.
+      bees:
+        meaning: publicschema:agri/LivestockType/bees
+        title: Bees
+        description: Bees kept on the farm, counted by hive or colony.
         annotations:
-          label_es: Colmenas
-          label_fr: Ruches
-          description_es: Colonias de abejas mantenidas en colmenas para la producción de miel.
-          description_fr: Colonies d'abeilles maintenues dans des ruches pour la production de miel.
+          standard_code: '81'
+          label_es: Abejas
+          label_fr: Abeilles
+          description_es: Abejas mantenidas en la finca, contabilizadas por colmena o colonia.
+          description_fr: Abeilles détenues dans l'exploitation agricole, comptabilisées par
+            ruche ou colonie.
       other_livestock:
         meaning: publicschema:agri/LivestockType/other_livestock
         title: Other livestock
         description: Livestock species not covered by the other categories.
         annotations:
+          note: WCA 2030 Annex 8 classes 19, 59, 71, 73 to 79, 82 and 89.
           label_es: Otro ganado
           label_fr: Autre bétail
           description_es: Especies de ganado no cubiertas por las otras categorías.
@@ -50699,14 +51314,70 @@ enums:
       source_domain: agri
       label_es: Tipo de ganado
       label_fr: Type de bétail
-      description_es: Tipos de ganado criados por la explotación agrícola, clasificados según el Programa
-        Mundial del Censo Agropecuario de la FAO.
-      description_fr: Types de bétail élevés par l'exploitation agricole, classifiés selon le Programme
-        mondial du recensement de l'agriculture de la FAO.
-      standard_json: '{"name": "FAO World Programme for the Census of Agriculture 2020", "notes": "FAO
-        defines livestock categories for agricultural censuses. The list below covers the main species
-        relevant to social protection targeting.", "uri": "https://www.fao.org/world-census-agriculture/wcarounds/wca2020/en/"}'
-      bibliography_refs: '["dhs-recode7", "fao-wca-2020-vol1", "lsms-isa"]'
+      description_es: Tipos de ganado mantenido en una finca, agrupados según la clasificación
+        de ganado del Programa Mundial del Censo Agropecuario de la FAO.
+      description_fr: Types de bétail détenu dans une exploitation agricole, regroupés selon la
+        classification du bétail du Programme mondial du recensement de l'agriculture de la FAO.
+      standard_json: '{"name": "FAO World Programme for the Census of Agriculture 2030 (WCA 2030), Annex
+        8 Classification of livestock", "notes": "Standard codes are WCA 2030 Annex 8 classes. WCA 2020 Annex
+        6 uses the same classes, except that camels are one class (51) and llamas and alpacas are class 52.
+        Livestock kept on the farm are counted whether or not the farm owns them; bees are counted by hive
+        or colony.", "uri": "https://doi.org/10.4060/cd9437en"}'
+      bibliography_refs: '["dhs-recode7", "fao-wca-2020-vol1", "fao-wca-2030", "lsms-isa"]'
+  TenureCategory:
+    enum_uri: publicschema:land/TenureCategory
+    title: Tenure Category
+    description: Whether a land tenure assertion concerns a right, a restriction or a responsibility, following
+      the three kinds of tenure relationship distinguished by the Land Administration Domain Model (ISO
+      19152-1).
+    status: bibo:draft
+    permissible_values:
+      right:
+        meaning: publicschema:land/TenureCategory/right
+        title: Right
+        description: A formal or informal entitlement to own, use or perform an action on the land.
+        annotations:
+          label_es: Derecho
+          label_fr: Droit
+          description_es: Una prerrogativa formal o informal de poseer, usar o realizar una
+            acción sobre la tierra.
+          description_fr: Une prérogative formelle ou informelle de posséder, d'utiliser ou
+            d'accomplir une action sur la terre.
+      restriction:
+        meaning: publicschema:land/TenureCategory/restriction
+        title: Restriction
+        description: A formal or informal obligation to refrain from performing an action on the land.
+        annotations:
+          label_es: Restricción
+          label_fr: Restriction
+          description_es: Una obligación formal o informal de abstenerse de realizar una acción
+            sobre la tierra.
+          description_fr: Une obligation formelle ou informelle de s'abstenir d'accomplir une
+            action sur la terre.
+      responsibility:
+        meaning: publicschema:land/TenureCategory/responsibility
+        title: Responsibility
+        description: A formal or informal obligation to allow or perform an action on the land.
+        annotations:
+          label_es: Responsabilidad
+          label_fr: Responsabilité
+          description_es: Una obligación formal o informal de permitir o realizar una acción
+            sobre la tierra.
+          description_fr: Une obligation formelle ou informelle d'autoriser ou d'accomplir une
+            action sur la terre.
+    annotations:
+      source_domain: land
+      label_es: Categoría de tenencia
+      label_fr: Catégorie de tenure
+      description_es: Indica si una aseveración de tenencia de la tierra se refiere a un derecho,
+        una restricción o una responsabilidad, según los tres tipos de relación de tenencia
+        distinguidos por el modelo LADM (Land Administration Domain Model, ISO 19152-1).
+      description_fr: Indique si une assertion de régime foncier concerne un droit, une
+        restriction ou une responsabilité, selon les trois types de relation foncière distingués
+        par le modèle LADM (Land Administration Domain Model, ISO 19152-1).
+      standard_json: '{"name": "ISO 19152-1:2024 Land Administration Domain Model (LADM)", "notes": "Values
+        follow the LADM classes LA_Right, LA_Restriction and LA_Responsibility.", "uri": "https://www.iso.org/standard/81263.html"}'
+      bibliography_refs: '["iso-19152-1-2024"]'
   MaritalStatus:
     enum_uri: publicschema:MaritalStatus
     title: Marital Status
@@ -60303,6 +60974,333 @@ enums:
         operational datasets, civic-tech service registries, and sector-specific typologies (e.g. WHO
         SARA for health, JMP for WASH, cluster 4W reporting for distributions).", "relationship": "prose_guidance",
         "uri": "https://data.humdata.org/"}]'
+  AgriculturalFacilityFunction:
+    enum_uri: publicschema:agri/AgriculturalFacilityFunction
+    title: Agricultural Facility Function
+    description: The kind of agricultural activity carried out at an agricultural facility, such as keeping
+      animals, propagating plants, storing produce or trading. One facility can carry out several functions.
+    status: bibo:draft
+    permissible_values:
+      apiary:
+        meaning: publicschema:agri/AgriculturalFacilityFunction/apiary
+        title: Apiary
+        description: A site where bee colonies are kept.
+        status: bibo:draft
+        annotations:
+          label_es: Colmenar
+          label_fr: Rucher
+          description_es: Un lugar donde se mantienen colonias de abejas.
+          description_fr: Un site où sont détenues des colonies d'abeilles.
+      aquaculture_establishment:
+        meaning: publicschema:agri/AgriculturalFacilityFunction/aquaculture_establishment
+        title: Aquaculture establishment
+        description: A site or installation where aquatic organisms are farmed or held for aquaculture.
+        status: bibo:draft
+        annotations:
+          label_es: Establecimiento de acuicultura
+          label_fr: Établissement d'aquaculture
+          description_es: Un lugar o instalación donde se crían o mantienen organismos acuáticos
+            con fines de acuicultura.
+          description_fr: Un site ou une installation où des organismes aquatiques sont élevés
+            ou détenus à des fins d'aquaculture.
+      livestock_establishment:
+        meaning: publicschema:agri/AgriculturalFacilityFunction/livestock_establishment
+        title: Livestock establishment
+        description: A premises where terrestrial animals are kept, gathered or handled, including production
+          sites and assembly centres.
+        status: bibo:draft
+        annotations:
+          label_es: Establecimiento pecuario
+          label_fr: Établissement d'élevage
+          description_es: Un local donde se mantienen, reúnen o manipulan animales terrestres,
+            incluidos los sitios de producción y los centros de concentración.
+          description_fr: Un site où des animaux terrestres sont détenus, rassemblés ou
+            manipulés, y compris les sites de production et les centres de rassemblement.
+      plant_nursery:
+        meaning: publicschema:agri/AgriculturalFacilityFunction/plant_nursery
+        title: Plant nursery
+        description: A site where plants are propagated or grown on for planting elsewhere.
+        status: bibo:draft
+        annotations:
+          label_es: Vivero
+          label_fr: Pépinière
+          description_es: Un lugar donde se propagan o cultivan plantas para ser plantadas en
+            otro lugar.
+          description_fr: Un site où des végétaux sont multipliés ou cultivés en vue d'être
+            plantés ailleurs.
+      storage:
+        meaning: publicschema:agri/AgriculturalFacilityFunction/storage
+        title: Storage
+        description: A site where agricultural produce or agricultural inputs are stored.
+        status: bibo:draft
+        annotations:
+          label_es: Almacenamiento
+          label_fr: Stockage
+          description_es: Un lugar donde se almacenan productos o insumos agropecuarios.
+          description_fr: Un site où des produits agricoles ou des intrants agricoles sont
+            stockés.
+      processing:
+        meaning: publicschema:agri/AgriculturalFacilityFunction/processing
+        title: Processing
+        description: A site where agricultural produce is cleaned, graded, packed or transformed.
+        status: bibo:draft
+        annotations:
+          label_es: Transformación
+          label_fr: Transformation
+          description_es: Un lugar donde los productos agrícolas se limpian, clasifican,
+            envasan o transforman.
+          description_fr: Un site où des produits agricoles sont nettoyés, calibrés,
+            conditionnés ou transformés.
+      market:
+        meaning: publicschema:agri/AgriculturalFacilityFunction/market
+        title: Market
+        description: A site where agricultural produce or animals are traded.
+        status: bibo:draft
+        annotations:
+          label_es: Mercado
+          label_fr: Marché
+          description_es: Un lugar donde se comercializan productos agrícolas o animales.
+          description_fr: Un site où des produits agricoles ou des animaux sont échangés.
+      other:
+        meaning: publicschema:agri/AgriculturalFacilityFunction/other
+        title: Other
+        description: An agricultural facility function not covered by the other values.
+        status: bibo:draft
+        annotations:
+          label_es: Otro
+          label_fr: Autre
+          description_es: Una función de instalación agropecuaria no cubierta por los demás valores.
+          description_fr: Une fonction d'installation agricole non couverte par les autres
+            valeurs.
+    annotations:
+      source_domain: agri
+      label_es: Función de la instalación agropecuaria
+      label_fr: Fonction de l'installation agricole
+      description_es: El tipo de actividad agropecuaria que se realiza en una instalación
+        agropecuaria, como la cría de animales, la propagación de plantas, el almacenamiento de
+        productos o el comercio. Una misma instalación puede desempeñar varias funciones.
+      description_fr: Le type d'activité agricole exercée dans une installation agricole, comme
+        l'élevage d'animaux, la multiplication de végétaux, le stockage de produits ou le
+        commerce. Une même installation peut exercer plusieurs fonctions.
+      bibliography_refs: '["apha-nbu-hive-count-faq-2021", "eu-reg-2016-2031", "eu-reg-2016-429", "india-enam-facilities",
+        "inspire-tg-af", "scotland-aquaculture-register", "uk-plant-passports", "woah-aquatic-2024", "woah-terrestrial-2024"]'
+  AgriculturalServiceType:
+    enum_uri: publicschema:agri/AgriculturalServiceType
+    title: Agricultural Service Type
+    description: A kind of service or activity that an actor offers or performs for agricultural producers.
+    status: bibo:draft
+    permissible_values:
+      input_supply:
+        meaning: publicschema:agri/AgriculturalServiceType/input_supply
+        title: Input supply
+        description: Selling or otherwise making agricultural inputs, such as seed, feed, fertilising products
+          or pesticides, available to producers.
+        status: bibo:draft
+        annotations:
+          label_es: Suministro de insumos
+          label_fr: Fourniture d'intrants
+          description_es: Vender o poner de otro modo a disposición de los productores insumos
+            agropecuarios, como semillas, piensos, productos fertilizantes o plaguicidas.
+          description_fr: Le fait de vendre ou de mettre à la disposition des producteurs des
+            intrants agricoles, tels que semences, aliments pour animaux, produits fertilisants
+            ou pesticides.
+      pesticide_application:
+        meaning: publicschema:agri/AgriculturalServiceType/pesticide_application
+        title: Pesticide application
+        description: Applying pesticides for others or in the course of a professional activity.
+        status: bibo:draft
+        annotations:
+          label_es: Aplicación de plaguicidas
+          label_fr: Application de pesticides
+          description_es: Aplicar plaguicidas por cuenta de terceros o en el marco de una
+            actividad profesional.
+          description_fr: Le fait d'appliquer des pesticides pour le compte d'autrui ou dans le
+            cadre d'une activité professionnelle.
+      seed_processing:
+        meaning: publicschema:agri/AgriculturalServiceType/seed_processing
+        title: Seed processing
+        description: Cleaning, drying, grading, treating or otherwise processing seed for sowing.
+        status: bibo:draft
+        annotations:
+          label_es: Procesamiento de semillas
+          label_fr: Traitement des semences
+          description_es: Limpiar, secar, clasificar, tratar o procesar de otro modo semillas
+            destinadas a la siembra.
+          description_fr: Le fait de nettoyer, sécher, calibrer, traiter ou transformer d'une
+            autre manière des semences destinées aux semis.
+      seed_packing:
+        meaning: publicschema:agri/AgriculturalServiceType/seed_packing
+        title: Seed packing
+        description: Packing, sealing or labelling seed for sowing.
+        status: bibo:draft
+        annotations:
+          label_es: Envasado de semillas
+          label_fr: Conditionnement des semences
+          description_es: Envasar, sellar o etiquetar semillas destinadas a la siembra.
+          description_fr: Le fait de conditionner, sceller ou étiqueter des semences destinées
+            aux semis.
+      seed_marketing:
+        meaning: publicschema:agri/AgriculturalServiceType/seed_marketing
+        title: Seed marketing
+        description: Selling, holding for sale or otherwise supplying seed for sowing to third parties.
+        status: bibo:draft
+        annotations:
+          label_es: Comercialización de semillas
+          label_fr: Commercialisation des semences
+          description_es: Vender, tener a la venta o suministrar de otro modo a terceros semillas
+            destinadas a la siembra.
+          description_fr: Le fait de vendre, de détenir en vue de la vente ou de fournir d'une
+            autre manière des semences destinées aux semis à des tiers.
+      machinery_hire:
+        meaning: publicschema:agri/AgriculturalServiceType/machinery_hire
+        title: Machinery hire
+        description: Hiring out agricultural machines, with or without an operator.
+        status: bibo:draft
+        annotations:
+          label_es: Alquiler de maquinaria agrícola
+          label_fr: Location de matériel agricole
+          description_es: Alquilar maquinaria agrícola, con o sin operador.
+          description_fr: Le fait de louer des machines agricoles, avec ou sans opérateur.
+      advisory:
+        meaning: publicschema:agri/AgriculturalServiceType/advisory
+        title: Advisory
+        description: Advising producers on production methods, input use or farm management.
+        status: bibo:draft
+        annotations:
+          label_es: Asesoramiento
+          label_fr: Conseil
+          description_es: Asesorar a los productores sobre métodos de producción, uso de insumos
+            o gestión de la finca.
+          description_fr: Le fait de conseiller les producteurs sur les méthodes de production,
+            l'utilisation des intrants ou la gestion de l'exploitation.
+      animal_health_service:
+        meaning: publicschema:agri/AgriculturalServiceType/animal_health_service
+        title: Animal health service
+        description: Providing animal health care, such as vaccination, diagnosis or treatment, for producers'
+          animals.
+        status: bibo:draft
+        annotations:
+          label_es: Servicio de sanidad animal
+          label_fr: Service de santé animale
+          description_es: Prestar atención de sanidad animal, como vacunación, diagnóstico o
+            tratamiento, para los animales de los productores.
+          description_fr: Le fait de fournir des soins de santé animale, tels que vaccination,
+            diagnostic ou traitement, pour les animaux des producteurs.
+      post_harvest:
+        meaning: publicschema:agri/AgriculturalServiceType/post_harvest
+        title: Post-harvest
+        description: Cleaning, drying, sorting, grading or storing harvested produce before it reaches primary
+          markets.
+        status: bibo:draft
+        annotations:
+          label_es: Poscosecha
+          label_fr: Post-récolte
+          description_es: Limpiar, secar, clasificar, calibrar o almacenar los productos
+            cosechados antes de que lleguen a los mercados primarios.
+          description_fr: Le fait de nettoyer, sécher, trier, calibrer ou stocker les produits
+            récoltés avant qu'ils n'atteignent les marchés primaires.
+      other:
+        meaning: publicschema:agri/AgriculturalServiceType/other
+        title: Other
+        description: An agricultural service not covered by the other values.
+        status: bibo:draft
+        annotations:
+          label_es: Otro
+          label_fr: Autre
+          description_es: Un servicio agropecuario no cubierto por los demás valores.
+          description_fr: Un service agricole non couvert par les autres valeurs.
+    annotations:
+      source_domain: agri
+      label_es: Tipo de servicio agropecuario
+      label_fr: Type de service agricole
+      description_es: Un tipo de servicio o actividad que un actor ofrece o presta a productores
+        agropecuarios.
+      description_fr: Un type de service ou d'activité qu'un acteur propose ou exerce pour des
+        producteurs agricoles.
+      bibliography_refs: '["eu-dir-2009-128", "india-farms", "sasa-seed-register", "uk-pesticide-work",
+        "unsd-isic-rev4"]'
+  AgriculturalInputCategory:
+    enum_uri: publicschema:agri/AgriculturalInputCategory
+    title: Agricultural Input Category
+    description: The regulatory category of an agricultural input product. One product can belong to more
+      than one category.
+    status: bibo:draft
+    permissible_values:
+      feed:
+        meaning: publicschema:agri/AgriculturalInputCategory/feed
+        title: Feed
+        description: A product intended for oral feeding to animals, including feed materials, compound feed
+          and feed additives.
+        status: bibo:draft
+        annotations:
+          label_es: Pienso
+          label_fr: Aliment pour animaux
+          description_es: Un producto destinado a la alimentación por vía oral de los animales,
+            incluidas las materias primas para piensos, los piensos compuestos y los aditivos
+            para piensos.
+          description_fr: Un produit destiné à l'alimentation orale des animaux, y compris les
+            matières premières pour aliments des animaux, les aliments composés et les additifs
+            pour l'alimentation animale.
+      fertilising_product:
+        meaning: publicschema:agri/AgriculturalInputCategory/fertilising_product
+        title: Fertilising product
+        description: A product applied to plants, their root zone or their growing medium to supply nutrients
+          or improve nutrient use, including fertilisers, liming materials, soil improvers, growing media,
+          inhibitors and plant biostimulants.
+        status: bibo:draft
+        annotations:
+          label_es: Producto fertilizante
+          label_fr: Produit fertilisant
+          description_es: Un producto aplicado a las plantas, su zona radicular o su sustrato de
+            cultivo para aportarles nutrientes o mejorar el uso de los nutrientes, incluidos los
+            fertilizantes, las enmiendas calizas, los mejoradores del suelo, los sustratos de
+            cultivo, los inhibidores y los bioestimulantes vegetales.
+          description_fr: Un produit appliqué aux végétaux, à leur zone racinaire ou à leur
+            support de culture pour leur apporter des éléments nutritifs ou améliorer
+            l'utilisation des éléments nutritifs, y compris les engrais, les amendements
+            calcaires et magnésiens, les améliorants pour sols, les supports de culture, les
+            inhibiteurs et les biostimulants des végétaux.
+      pesticide:
+        meaning: publicschema:agri/AgriculturalInputCategory/pesticide
+        title: Pesticide
+        description: A formulated product intended to repel, destroy or control pests or to regulate plant
+          growth, including plant protection products and biocidal products. It excludes fertilising products
+          and veterinary medicines.
+        status: bibo:draft
+        annotations:
+          label_es: Plaguicida
+          label_fr: Pesticide
+          description_es: Un producto formulado destinado a repeler, destruir o controlar plagas
+            o a regular el crecimiento de las plantas, incluidos los productos fitosanitarios y
+            los productos biocidas. Excluye los productos fertilizantes y los medicamentos
+            veterinarios.
+          description_fr: Un produit formulé destiné à repousser, détruire ou maîtriser des
+            organismes nuisibles ou à réguler la croissance des végétaux, y compris les produits
+            phytopharmaceutiques et les produits biocides. Il exclut les produits fertilisants et
+            les médicaments vétérinaires.
+      other:
+        meaning: publicschema:agri/AgriculturalInputCategory/other
+        title: Other
+        description: An agricultural input product category not covered by the other values.
+        status: bibo:draft
+        annotations:
+          label_es: Otro
+          label_fr: Autre
+          description_es: Una categoría de producto que constituye un insumo agropecuario no
+            cubierta por los demás valores.
+          description_fr: Une catégorie de produit intrant agricole non couverte par les autres
+            valeurs.
+    annotations:
+      source_domain: agri
+      label_es: Categoría de insumo agropecuario
+      label_fr: Catégorie d'intrant agricole
+      description_es: La categoría reglamentaria de un producto que constituye un insumo
+        agropecuario. Un mismo producto puede pertenecer a más de una categoría.
+      description_fr: La catégorie réglementaire d'un produit intrant agricole. Un même produit
+        peut relever de plusieurs catégories.
+      bibliography_refs: '["codex-cxc-54-2004", "ec-pesticides-database", "eu-dir-2009-128", "eu-reg-2005-183",
+        "eu-reg-2009-1107", "eu-reg-2019-1009", "fao-fertilizer-code-2019", "fao-who-pesticide-code-2014",
+        "faoterm-pesticide", "uk-feed-business"]'
   SettlementType:
     enum_uri: publicschema:SettlementType
     title: Settlement Type
@@ -61990,6 +62988,85 @@ enums:
         contractor, employee, contributing family worker, cooperative member. Implementers requiring the
         full ICSE-18 structure should extend or refine this list.", "uri": "https://www.ilo.org/media/209766/download"}'
       bibliography_refs: '["ilo-20th-icls-2018"]'
+  FormOfWork:
+    enum_uri: publicschema:FormOfWork
+    title: Form of Work
+    description: The form of productive activity that a piece of work belongs to under the international
+      statistical standards on work, distinguished by the intended destination of the production and the
+      nature of the transaction.
+    status: bibo:draft
+    permissible_values:
+      own_use_production_work:
+        meaning: publicschema:FormOfWork/own_use_production_work
+        title: Own-use production work
+        description: Production of goods or services for own final use.
+        annotations:
+          label_es: Trabajo de producción para uso final propio
+          label_fr: Travail de production pour usage final propre
+          description_es: Producción de bienes o servicios para uso final propio.
+          description_fr: Production de biens ou de services pour usage final propre.
+      employment_work:
+        meaning: publicschema:FormOfWork/employment_work
+        title: Employment work
+        description: Work performed for others in exchange for pay or profit.
+        annotations:
+          label_es: Trabajo en el marco del empleo
+          label_fr: Travail relevant de l'emploi
+          description_es: Trabajo realizado para terceros a cambio de una remuneración o un
+            beneficio.
+          description_fr: Travail effectué pour autrui en échange d'une rémunération ou d'un
+            profit.
+      unpaid_trainee_work:
+        meaning: publicschema:FormOfWork/unpaid_trainee_work
+        title: Unpaid trainee work
+        description: Work performed for others without pay to acquire workplace experience or skills.
+        annotations:
+          label_es: Trabajo de pasantía no remunerada
+          label_fr: Travail de stage non rémunéré
+          description_es: Trabajo realizado para terceros sin remuneración con el fin de adquirir
+            experiencia laboral o competencias.
+          description_fr: Travail effectué pour autrui sans rémunération afin d'acquérir une
+            expérience professionnelle ou des compétences.
+      volunteer_work:
+        meaning: publicschema:FormOfWork/volunteer_work
+        title: Volunteer work
+        description: Non-compulsory work performed for others without pay.
+        annotations:
+          label_es: Trabajo voluntario
+          label_fr: Travail bénévole
+          description_es: Trabajo no obligatorio realizado para terceros sin remuneración.
+          description_fr: Travail non obligatoire effectué pour autrui sans rémunération.
+      other_work_activities:
+        meaning: publicschema:FormOfWork/other_work_activities
+        title: Other work activities
+        description: Work in none of the other four forms, such as unpaid community service or unpaid work
+          by prisoners when ordered by a court or similar authority, and unpaid military or alternative civilian
+          service.
+        annotations:
+          label_es: Otras actividades de trabajo
+          label_fr: Autres activités de travail
+          description_es: Trabajo que no corresponde a ninguna de las otras cuatro formas, como
+            el servicio comunitario no remunerado, el trabajo no remunerado realizado por
+            reclusos por orden de un tribunal o autoridad similar, o el servicio militar o civil
+            alternativo no remunerado.
+          description_fr: Travail qui ne relève d'aucune des quatre autres formes, comme le
+            service communautaire non rémunéré, le travail non rémunéré effectué par des
+            détenus sur ordre d'un tribunal ou d'une autorité similaire, ou le service militaire
+            ou civil alternatif non rémunéré.
+    annotations:
+      label_es: Forma de trabajo
+      label_fr: Forme de travail
+      description_es: La forma de actividad productiva a la que pertenece un trabajo según las
+        normas estadísticas internacionales del trabajo, distinguida por el destino previsto de
+        la producción y la naturaleza de la transacción.
+      description_fr: La forme d'activité productive à laquelle appartient un travail selon les
+        normes statistiques internationales du travail, distinguée par la destination prévue de
+        la production et la nature de la transaction.
+      standard_json: '{"name": "ILO 19th ICLS Resolution concerning statistics of work, employment, and
+        labour underutilization", "notes": "Paragraph 7 defines the five mutually exclusive forms of work.
+        Each ICSaW-18 status at work group relates to one form (20th ICLS resolution, para 60), so a form
+        can be derived from an ICSaW-18 code.", "uri": "https://ilostat.ilo.org/methods/concepts-and-definitions/description-work-statistics-icls19/"}'
+      bibliography_refs: '["ilo-19th-icls-2013", "ilo-20th-icls-2018"]'
   SymptomChronicity:
     enum_uri: publicschema:SymptomChronicity
     title: Symptom Chronicity

@@ -19,7 +19,7 @@ BReg returns a UUID for each record. The custodian's `localIdentifier` is unique
 and remains unchanged by the supplied correction. `lotNumber` is separately
 unique in the fixed custodian namespace
 `https://seed-lots.example.org/lot-number-scheme`. It is a bounded single local
-representation of PublicSchema `seed_lot_identifiers`, not an implementation of
+representation of the PublicSchema `identifiers` slot on SeedLot, not an implementation of
 all multivalued Identifier fields or an internationally unique lot number.
 
 `quantityKg` is an exact decimal with at most 12 digits and three fractional
@@ -100,6 +100,6 @@ regressions prove typed-reference refusals and independently authorized review.
 Presence of these artifacts is not an execution receipt for an edited project.
 
 The vocabulary is pinned to PublicSchema draft commit
-`1ea9ce333918693b29aec31068fac412e02cb8dc`. See `ATTRIBUTION.md` and
+`bd07bda1fe9cb9eb8582cf7bc1c77367e2455e5b`. See `ATTRIBUTION.md` and
 `PUBLICSCHEMA-LICENSE.txt`. These cardinalities, permissions, local numbering and
 unit decisions are starter policy, not universal PublicSchema requirements.

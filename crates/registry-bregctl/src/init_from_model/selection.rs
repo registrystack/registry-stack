@@ -48,10 +48,17 @@ pub(crate) struct Selection {
     pub kind: String,
     pub model: ModelName,
     /// The model version the selection was written against. When present it
-    /// must equal the embedded snapshot's version, so a selection written for
-    /// one revision of the model is not silently applied to another.
+    /// must equal the embedded snapshot's declared version label. Several
+    /// revisions of the model can share one version label, so this alone does
+    /// not pin a revision; `modelRevision` does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_version: Option<String>,
+    /// The upstream commit of the model snapshot the selection was written
+    /// against. When present it must equal the embedded snapshot's commit, so
+    /// a selection written for one revision of the model is not silently
+    /// applied to another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_revision: Option<String>,
     pub registry: RegistrySelection,
     pub entities: Vec<EntitySelection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -177,6 +184,7 @@ entities:
         let selection = Selection::parse("test", MINIMAL.as_bytes()).expect("parses");
         assert_eq!(selection.model, ModelName::Publicschema);
         assert_eq!(selection.model_version, None);
+        assert_eq!(selection.model_revision, None);
         assert_eq!(selection.entities.len(), 1);
         assert_eq!(selection.entities[0].concept, "Thing");
         assert_eq!(selection.entities[0].id, None);

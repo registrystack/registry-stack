@@ -1,0 +1,682 @@
+id: https://publicschema.org/linkml/animals
+name: publicschema-animals
+title: Animals
+description: Individual animals, animal groups, breeds, residence, responsibility and movement.
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  bibo: http://purl.org/ontology/bibo/
+imports:
+- linkml:types
+- common
+- core
+- identity
+- value_types
+- registry
+- agriculture_operations
+classes:
+  IdentifiedAnimalUnit:
+    class_uri: publicschema:IdentifiedAnimalUnit
+    title: Identified Animal Unit
+    description: An animal or a group of animals identified as one unit. Records about residence, responsibility
+      or other facts can refer to either kind, because individual and group identification are alternative
+      ways to identify animals.
+    slots:
+    - name
+    - biological_taxon
+    - identifiers
+    status: bibo:draft
+    see_also:
+    - https://www.woah.org/fileadmin/Home/eng/Health_standards/tahc/2024/en_chapitre_ident_design.htm
+    annotations:
+      label_es: Unidad animal identificada
+      label_fr: Unité animale identifiée
+      description_es: Un animal o un grupo de animales identificado como una sola unidad. Los
+        registros sobre residencia, responsabilidad u otros hechos pueden referirse a cualquiera de
+        los dos tipos, ya que la identificación individual y la identificación por grupo son formas
+        alternativas de identificar a los animales.
+      description_fr: Un animal ou un groupe d'animaux identifié comme une seule unité. Les
+        enregistrements relatifs à la résidence, à la responsabilité ou à d'autres faits peuvent se
+        rapporter à l'un ou l'autre type, l'identification individuelle et l'identification par
+        groupe étant des manières alternatives d'identifier les animaux.
+      bibliography_refs: '["woah-identification-2024", "woah-tahc-2024-ch4-2", "woah-terrestrial-2024"]'
+    abstract: true
+  IndividualAnimal:
+    class_uri: publicschema:IndividualAnimal
+    title: Individual Animal
+    is_a: IdentifiedAnimalUnit
+    description: A single animal, identified as the same organism throughout its life regardless of the
+      identifiers it carries, the people responsible for it or the places where it is kept.
+    slots:
+    - animal_breed
+    - animal_birth_date
+    - animal_death_date
+    - animal_sex
+    - genetic_dam
+    - genetic_sire
+    status: bibo:draft
+    see_also:
+    - https://www.woah.org/fileadmin/Home/eng/Health_standards/tahc/2024/en_chapitre_ident_design.htm
+    annotations:
+      label_es: Animal individual
+      label_fr: Animal individuel
+      description_es: Un único animal, identificado como el mismo organismo a lo largo de toda su
+        vida, con independencia de los identificadores que porte, de las personas responsables de él
+        o de los lugares donde se mantenga.
+      description_fr: Un animal unique, identifié comme le même organisme tout au long de sa vie,
+        indépendamment des identifiants qu'il porte, des personnes responsables de lui ou des lieux
+        où il est détenu.
+      bibliography_refs: '["eu-reg-2016-429", "icar-ade-1-5-1", "tdwg-dwc-2026-05-26", "woah-identification-2024",
+        "woah-terrestrial-2024"]'
+  AnimalGroup:
+    class_uri: publicschema:AnimalGroup
+    title: Animal Group
+    is_a: IdentifiedAnimalUnit
+    description: Animals of one kind identified or managed together as one unit, such as a herd, flock
+      or batch. The group keeps its identity while its membership changes, and it is distinct from a
+      human household or organization.
+    slots:
+    - known_animal_members
+    - predecessor_animal_groups
+    status: bibo:draft
+    see_also:
+    - https://www.woah.org/fileadmin/Home/eng/Health_standards/tahc/2024/en_chapitre_ident_design.htm
+    annotations:
+      label_es: Grupo de animales
+      label_fr: Groupe d'animaux
+      description_es: Animales de una misma especie identificados o gestionados conjuntamente como
+        una sola unidad, como una manada, una bandada o un lote. El grupo conserva su identidad
+        aunque su composición cambie, y es distinto de un hogar humano o una organización.
+      description_fr: Des animaux d'une même espèce identifiés ou gérés ensemble comme une seule
+        unité, tels qu'un troupeau, une bande ou un lot. Le groupe conserve son identité alors que
+        sa composition évolue, et il est distinct d'un ménage humain ou d'une organisation.
+      bibliography_refs: '["woah-identification-2024", "woah-terrestrial-2024"]'
+  AnimalGroupCount:
+    class_uri: publicschema:AnimalGroupCount
+    title: Animal Group Count
+    description: An observation of how many animals belonged to an animal group on a stated date. The
+      count need not equal the number of individually identified members.
+    slots:
+    - counted_animal_group
+    - animal_count
+    - animal_count_date
+    status: bibo:draft
+    see_also:
+    - https://www.woah.org/fileadmin/Home/eng/Health_standards/tahc/2024/en_chapitre_ident_design.htm
+    annotations:
+      label_es: Recuento del grupo de animales
+      label_fr: Dénombrement du groupe d'animaux
+      description_es: Una observación del número de animales que pertenecían a un grupo de animales
+        en una fecha indicada. Este número no tiene por qué coincidir con el número de miembros
+        identificados individualmente.
+      description_fr: Une observation du nombre d'animaux appartenant à un groupe d'animaux à une
+        date indiquée. Ce nombre ne doit pas nécessairement être égal au nombre de membres
+        identifiés individuellement.
+      bibliography_refs: '["woah-identification-2024"]'
+  AnimalBreed:
+    class_uri: publicschema:agri/AnimalBreed
+    title: Animal Breed
+    description: A named population of domesticated animals that a breed society, public authority or
+      breed information system recognizes as a breed. A breed is distinct from any animal attributed to
+      it and from a national breed population or its risk status.
+    slots:
+    - name
+    - biological_taxon
+    - identifiers
+    - breed_recognized_by
+    status: bibo:draft
+    see_also:
+    - https://www.fao.org/dad-is/data/en/
+    annotations:
+      label_es: Raza animal
+      label_fr: Race animale
+      description_es: Una población denominada de animales domésticos que una asociación de
+        criadores, una autoridad pública o un sistema de información sobre razas reconoce como una
+        raza. Una raza es distinta de cualquier animal que se le atribuya y de la población nacional
+        de esa raza o de su estado de riesgo.
+      description_fr: Une population nommée d'animaux domestiques qu'une société d'éleveurs, une
+        autorité publique ou un système d'information sur les races reconnaît comme une race. Une
+        race est distincte de tout animal qui lui est attribué et de la population nationale de
+        cette race ou de son statut de risque.
+      source_domain: agri
+      bibliography_refs: '["fao-dad-is-data"]'
+  AnimalResidence:
+    class_uri: publicschema:agri/AnimalResidence
+    title: Animal Residence
+    description: A period during which an individual animal or animal group is kept at an identified agricultural
+      facility. A change of keeper need not change residence, and a residence does not itself record a
+      movement.
+    slots:
+    - animal_subject
+    - animal_residence_site
+    - start_date
+    - end_date
+    - recorded_at
+    status: bibo:draft
+    see_also:
+    - https://www.woah.org/fileadmin/Home/eng/Health_standards/tahc/2024/en_chapitre_ident_design.htm
+    annotations:
+      label_es: Residencia animal
+      label_fr: Résidence animale
+      description_es: Un período durante el cual un animal individual o un grupo de animales se
+        mantiene en una instalación agrícola identificada. Un cambio de poseedor no implica
+        necesariamente un cambio de residencia, y una residencia no registra por sí misma un
+        desplazamiento.
+      description_fr: Une période durant laquelle un animal individuel ou un groupe d'animaux est
+        détenu dans une installation agricole identifiée. Un changement de détenteur ne modifie pas
+        nécessairement la résidence, et une résidence n'enregistre pas en elle-même un mouvement.
+      source_domain: agri
+      bibliography_refs: '["woah-identification-2024", "woah-terrestrial-2024"]'
+  AnimalResponsibility:
+    class_uri: publicschema:AnimalResponsibility
+    title: Animal Responsibility
+    description: A period during which a person, organization or group holds a stated responsibility for an individual
+      animal or animal group, such as owner, keeper or operator. Each responsibility is a separate record;
+      one does not imply another, and keeping an animal does not establish ownership or residence.
+    slots:
+    - animal_subject
+    - animal_responsible_actor
+    - animal_responsibility_role
+    - start_date
+    - end_date
+    - recorded_at
+    status: bibo:draft
+    see_also:
+    - https://www.woah.org/fileadmin/Home/eng/Health_standards/tahc/2024/en_chapitre_ident_design.htm
+    annotations:
+      label_es: Responsabilidad sobre el animal
+      label_fr: Responsabilité sur l'animal
+      description_es: Un período durante el cual una persona, una organización o un grupo asume una
+        responsabilidad declarada respecto de un animal individual o de un grupo de animales, como
+        propietario, poseedor u operador. Cada responsabilidad constituye un registro independiente;
+        una no implica la otra, y el hecho de mantener un animal no establece la propiedad ni la
+        residencia.
+      description_fr: Une période durant laquelle une personne, une organisation ou un groupe assume une
+        responsabilité déclarée à l'égard d'un animal individuel ou d'un groupe d'animaux, telle que
+        propriétaire, détenteur ou exploitant. Chaque responsabilité constitue un enregistrement
+        distinct ; l'une n'implique pas l'autre, et le fait de détenir un animal n'établit ni la
+        propriété ni la résidence.
+      bibliography_refs: '["eu-reg-2016-429", "woah-identification-2024"]'
+  AnimalMovement:
+    class_uri: publicschema:AnimalMovement
+    title: Animal Movement
+    is_a: Event
+    description: The transfer of one or more animals from an origin facility to a destination facility,
+      possibly through transit facilities, recorded as one event. A movement alone does not establish
+      a residence period or a change of keeper or owner.
+    slots:
+    - moved_animals
+    - movement_source_group
+    - moved_animal_count
+    - movement_origin_site
+    - movement_destination_site
+    - movement_transit_sites
+    - movement_departure_date
+    - movement_arrival_date
+    - recorded_at
+    status: bibo:draft
+    see_also:
+    - https://www.woah.org/fileadmin/Home/eng/Health_standards/tahc/2024/en_chapitre_ident_design.htm
+    annotations:
+      label_es: Desplazamiento de animales
+      label_fr: Mouvement d'animaux
+      description_es: El traslado de uno o varios animales desde una instalación de origen a una
+        instalación de destino, posiblemente a través de instalaciones de tránsito, registrado como
+        un único evento. Un desplazamiento por sí solo no establece un período de residencia ni un
+        cambio de poseedor o propietario.
+      description_fr: Le transfert d'un ou plusieurs animaux d'une installation d'origine vers une
+        installation de destination, éventuellement via des installations de transit, enregistré
+        comme un seul événement. Un mouvement à lui seul n'établit ni une période de résidence ni un
+        changement de détenteur ou de propriétaire.
+      bibliography_refs: '["eu-reg-2016-429", "woah-identification-2024", "woah-tahc-2024-ch4-2", "woah-terrestrial-2024"]'
+slots:
+  biological_taxon:
+    slot_uri: publicschema:biological_taxon
+    title: Biological taxon
+    description: The taxon to which this organism, group, breed, variety or sample belongs, as a code
+      or scientific name from an identified taxonomy such as Catalogue of Life or the taxonomy of the National
+      Center for Biotechnology Information. No single taxonomy is required.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Taxón biológico
+      label_fr: Taxon biologique
+      description_es: El taxón al que pertenece este organismo, grupo, raza, variedad o muestra,
+        como un código o un nombre científico procedente de una taxonomía identificada, como
+        Catalogue of Life o la taxonomía del National Center for Biotechnology Information. No se
+        exige una única taxonomía.
+      description_fr: Le taxon auquel appartient cet organisme, ce groupe, cette race, cette variété
+        ou cet échantillon, sous la forme d'un code ou d'un nom scientifique issu d'une taxonomie
+        identifiée telle que Catalogue of Life ou la taxonomie du National Center for Biotechnology
+        Information. Aucune taxonomie unique n'est imposée.
+      category: agriculture
+      bibliography_refs: '["col-xr", "tdwg-dwc-2026-05-26"]'
+  animal_breed:
+    slot_uri: publicschema:agri/animal_breed
+    title: Animal breed
+    description: The breed to which the animal is attributed. Attribution does not certify pedigree.
+    range: AnimalBreed
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Raza del animal
+      label_fr: Race de l'animal
+      description_es: La raza a la que se atribuye el animal. Esta atribución no certifica el
+        pedigrí.
+      description_fr: La race à laquelle l'animal est attribué. Cette attribution ne certifie pas la
+        généalogie.
+      source_domain: agri
+      category: agriculture
+  animal_birth_date:
+    slot_uri: publicschema:animal_birth_date
+    title: Animal birth date
+    description: The date of birth of the animal to the precision known, in ISO 8601 form as a year (2021),
+      a year and month (2021-05) or a full date (2021-05-14). A month or day that was not recorded is left
+      out, not invented.
+    range: string
+    pattern: ^[0-9]{4}(-(0[1-9]|1[0-2])(-(0[1-9]|[12][0-9]|3[01]))?)?$
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de nacimiento del animal
+      label_fr: Date de naissance de l'animal
+      description_es: La fecha de nacimiento del animal, con la precisión conocida, en formato ISO
+        8601, en forma de un año (2021), un año y un mes (2021-05) o una fecha completa
+        (2021-05-14). Un mes o un día no registrado se omite y no se inventa.
+      description_fr: La date de naissance de l'animal, à la précision connue, au format ISO 8601,
+        sous la forme d'une année (2021), d'une année et d'un mois (2021-05) ou d'une date complète
+        (2021-05-14). Un mois ou un jour non enregistré est omis et non inventé.
+      category: agriculture
+      bibliography_refs: '["eu-reg-del-2019-2035", "tdwg-dwc-2026-05-26"]'
+  animal_death_date:
+    slot_uri: publicschema:animal_death_date
+    title: Animal death date
+    description: The date on which the animal died or was slaughtered. A lost or missing animal has no
+      death date until its death is known, and closing a registration does not imply death.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de muerte del animal
+      label_fr: Date de mort de l'animal
+      description_es: La fecha en la que el animal murió o fue sacrificado. Un animal perdido o
+        desaparecido no tiene fecha de muerte hasta que se conoce su muerte, y el cierre de un
+        registro no implica la muerte.
+      description_fr: La date à laquelle l'animal est mort ou a été abattu. Un animal perdu ou
+        disparu n'a pas de date de mort tant que sa mort n'est pas connue, et la clôture d'un
+        enregistrement n'implique pas la mort.
+      category: agriculture
+  animal_sex:
+    slot_uri: publicschema:animal_sex
+    title: Animal sex
+    description: The sex of the animal as recorded in an identified animal terminology, such as the animal
+      gender codes of the International Committee for Animal Recording for livestock. It is independent of
+      the Person sex vocabulary.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Sexo del animal
+      label_fr: Sexe de l'animal
+      description_es: El sexo del animal tal como se registra en una terminología animal
+        identificada, como los códigos de género animal del International Committee for Animal
+        Recording para el ganado. Es independiente del vocabulario de sexo de Person.
+      description_fr: Le sexe de l'animal tel qu'enregistré dans une terminologie animale
+        identifiée, telle que les codes de genre animal de l'International Committee for Animal
+        Recording pour le bétail. Il est indépendant du vocabulaire de sexe de Person.
+      category: agriculture
+      bibliography_refs: '["icar-ade-1-5-1"]'
+  genetic_dam:
+    slot_uri: publicschema:genetic_dam
+    title: Genetic dam
+    description: The female that is the genetic mother of the animal. A recipient (gestational) or foster
+      mother is not the genetic dam.
+    range: IndividualAnimal
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Madre genética
+      label_fr: Mère génétique
+      description_es: La hembra que es la madre genética del animal. Una madre receptora
+        (gestacional) o de acogida no es la madre genética.
+      description_fr: La femelle qui est la mère génétique de l'animal. Une mère receveuse
+        (gestationnelle) ou nourricière n'est pas la mère génétique.
+      category: agriculture
+      bibliography_refs: '["icar-ade-1-5-1"]'
+  genetic_sire:
+    slot_uri: publicschema:genetic_sire
+    title: Genetic sire
+    description: The male that is the genetic father of the animal. Unknown parentage is omitted.
+    range: IndividualAnimal
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Padre genético
+      label_fr: Père génétique
+      description_es: El macho que es el padre genético del animal. Una filiación desconocida se
+        omite.
+      description_fr: Le mâle qui est le père génétique de l'animal. Une filiation inconnue est
+        omise.
+      category: agriculture
+      bibliography_refs: '["icar-ade-1-5-1"]'
+  known_animal_members:
+    slot_uri: publicschema:known_animal_members
+    title: Known animal members
+    description: Individually identified animals known to belong to the group. The list can be incomplete
+      and is not a movement history.
+    range: IndividualAnimal
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Miembros animales conocidos
+      label_fr: Membres animaux connus
+      description_es: Los animales identificados individualmente que se sabe que pertenecen al
+        grupo. La lista puede estar incompleta y no constituye un historial de desplazamientos.
+      description_fr: Les animaux identifiés individuellement et connus pour appartenir au groupe.
+        La liste peut être incomplète et ne constitue pas un historique des mouvements.
+      category: agriculture
+  predecessor_animal_groups:
+    slot_uri: publicschema:predecessor_animal_groups
+    title: Predecessor animal groups
+    description: Groups from which this group was formed by splitting or merging. No chronology of those
+      events is implied.
+    range: AnimalGroup
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Grupos de animales predecesores
+      label_fr: Groupes d'animaux prédécesseurs
+      description_es: Los grupos a partir de los cuales se formó este grupo por división o fusión.
+        No se implica ninguna cronología de esos eventos.
+      description_fr: Les groupes à partir desquels ce groupe a été formé par scission ou fusion.
+        Aucune chronologie de ces événements n'est impliquée.
+      category: agriculture
+  counted_animal_group:
+    slot_uri: publicschema:counted_animal_group
+    title: Counted animal group
+    description: The animal group whose animals were counted.
+    range: AnimalGroup
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Grupo de animales contado
+      label_fr: Groupe d'animaux compté
+      description_es: El grupo de animales cuyos animales fueron contados.
+      description_fr: Le groupe d'animaux dont les animaux ont été comptés.
+      category: agriculture
+  animal_count:
+    slot_uri: publicschema:animal_count
+    title: Animal count
+    description: The number of animals counted in the group. Zero means that none were present; an unknown
+      count is omitted.
+    range: integer
+    minimum_value: 0
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Número de animales
+      label_fr: Nombre d'animaux
+      description_es: El número de animales contados en el grupo. Cero significa que no había
+        ninguno presente; un número desconocido se omite.
+      description_fr: Le nombre d'animaux comptés dans le groupe. Zéro signifie qu'aucun animal
+        n'était présent ; un nombre inconnu est omis.
+      category: agriculture
+      bibliography_refs: '["tdwg-dwc-2026-05-26"]'
+  animal_count_date:
+    slot_uri: publicschema:animal_count_date
+    title: Animal count date
+    description: The date to which the animal count applies, distinct from the time the count was recorded.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha del recuento
+      label_fr: Date du dénombrement
+      description_es: La fecha a la que se refiere el recuento de animales, distinta del momento en
+        que se registró dicho recuento.
+      description_fr: La date à laquelle s'applique le dénombrement des animaux, distincte du moment
+        où ce dénombrement a été enregistré.
+      category: agriculture
+  breed_recognized_by:
+    slot_uri: publicschema:agri/breed_recognized_by
+    title: Breed recognized by
+    description: The organization, such as a breed society, public authority or breed information system
+      operator, that recognizes the breed. Breed codes from that organization belong in the breed's identifiers.
+    range: Organization
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Raza reconocida por
+      label_fr: Race reconnue par
+      description_es: La organización, como una asociación de criadores, una autoridad pública o un
+        operador de sistema de información sobre razas, que reconoce la raza. Los códigos de raza
+        atribuidos por esa organización figuran en los identificadores de la raza.
+      description_fr: L'organisation, telle qu'une société d'éleveurs, une autorité publique ou un
+        opérateur de système d'information sur les races, qui reconnaît la race. Les codes de race
+        attribués par cette organisation figurent dans les identifiants de la race.
+      source_domain: agri
+      category: agriculture
+      bibliography_refs: '["eu-reg-del-2019-2035"]'
+  animal_subject:
+    slot_uri: publicschema:animal_subject
+    title: Animal subject
+    description: The individual animal or animal group to which the residence or responsibility applies,
+      rather than a tag or a registry entry.
+    range: IdentifiedAnimalUnit
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Sujeto animal
+      label_fr: Sujet animal
+      description_es: El animal individual o el grupo de animales al que se aplica la residencia o
+        la responsabilidad, y no una marca de identificación o una entrada de registro.
+      description_fr: L'animal individuel ou le groupe d'animaux auquel s'applique la résidence ou
+        la responsabilité, et non une marque d'identification ou une entrée de registre.
+      category: agriculture
+  animal_residence_site:
+    slot_uri: publicschema:agri/animal_residence_site
+    title: Animal residence site
+    description: The agricultural facility where the animal or group is kept during the residence. A
+      holding or a keeper's home address does not identify it.
+    range: AgriculturalFacility
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Sitio de residencia animal
+      label_fr: Site de résidence animale
+      description_es: La instalación agrícola donde se mantiene el animal o el grupo durante la
+        residencia. Una explotación agropecuaria o el domicilio particular de un poseedor no lo
+        identifican.
+      description_fr: L'installation agricole où l'animal ou le groupe est détenu pendant la
+        résidence. Une exploitation agricole ou l'adresse personnelle d'un détenteur ne l'identifie
+        pas.
+      source_domain: agri
+      category: agriculture
+  animal_responsible_actor:
+    slot_uri: publicschema:animal_responsible_actor
+    title: Animal responsible actor
+    description: The URI of the person, organization or group, such as a household, that holds the stated
+      responsibility for the animal or animal group.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Actor responsable del animal
+      label_fr: Acteur responsable de l'animal
+      description_es: El URI de la persona, organización o grupo, como un hogar, que asume la
+        responsabilidad declarada respecto del animal o del grupo de animales.
+      description_fr: L'URI de la personne, de l'organisation ou du groupe, tel qu'un ménage, qui
+        assume la responsabilité déclarée à l'égard de l'animal ou du groupe d'animaux.
+      category: agriculture
+      sensitivity: sensitive
+      bibliography_refs: '["eu-reg-2016-429"]'
+  animal_responsibility_role:
+    slot_uri: publicschema:animal_responsibility_role
+    title: Animal responsibility role
+    description: The kind of responsibility held, such as owner, keeper or operator, as a code from an
+      identified scheme. The role is not inferred from residence and does not prove legal title. Codes
+      from https://publicschema.org/vocab/animal-responsibility-role can be used where the source has no
+      scheme of its own.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Función de responsabilidad animal
+      label_fr: Rôle de responsabilité animale
+      description_es: El tipo de responsabilidad asumida, como propietario, poseedor u operador, como un
+        código procedente de un esquema identificado. Esta función no se deduce de la residencia y no
+        demuestra un título legal. Pueden usarse los códigos de
+        https://publicschema.org/vocab/animal-responsibility-role cuando la fuente no tenga un esquema
+        propio.
+      description_fr: Le type de responsabilité assumée, tel que propriétaire, détenteur ou exploitant,
+        sous forme de code issu d'un référentiel identifié. Ce rôle n'est pas déduit de la résidence et
+        ne prouve pas un titre légal. Les codes de
+        https://publicschema.org/vocab/animal-responsibility-role peuvent être utilisés lorsque la
+        source n'a pas de référentiel propre.
+      category: agriculture
+  moved_animals:
+    slot_uri: publicschema:moved_animals
+    title: Moved animals
+    description: Individually identified animals known to have moved. The list can be incomplete; members
+      of the source group are not added without evidence that they moved.
+    range: IndividualAnimal
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Animales desplazados
+      label_fr: Animaux déplacés
+      description_es: Los animales identificados individualmente que se sabe que se desplazaron. La
+        lista puede estar incompleta; los miembros del grupo de origen no se añaden sin pruebas de
+        que se desplazaron.
+      description_fr: Les animaux identifiés individuellement et connus pour avoir été déplacés. La
+        liste peut être incomplète ; les membres du groupe source ne sont pas ajoutés sans preuve
+        qu'ils ont été déplacés.
+      category: agriculture
+      bibliography_refs: '["woah-identification-2024"]'
+  movement_source_group:
+    slot_uri: publicschema:movement_source_group
+    title: Movement source group
+    description: The animal group from which the moved animals came. It does not mean that the whole
+      group or every known member moved.
+    range: AnimalGroup
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Grupo de origen del desplazamiento
+      label_fr: Groupe source du mouvement
+      description_es: El grupo de animales del que proceden los animales desplazados. Esto no
+        significa que todo el grupo o cada uno de sus miembros conocidos se haya desplazado.
+      description_fr: Le groupe d'animaux dont proviennent les animaux déplacés. Cela ne signifie
+        pas que la totalité du groupe ou chacun de ses membres connus a été déplacé.
+      category: agriculture
+      bibliography_refs: '["woah-identification-2024"]'
+  moved_animal_count:
+    slot_uri: publicschema:moved_animal_count
+    title: Moved animal count
+    description: The number of animals dispatched in the movement, including animals that are not individually
+      identified. It is not an observation of the source group's size and does not determine that group's
+      remaining inventory.
+    range: integer
+    minimum_value: 1
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Número de animales desplazados
+      label_fr: Nombre d'animaux déplacés
+      description_es: El número de animales expedidos en el desplazamiento, incluidos los animales
+        no identificados individualmente. No constituye una observación del tamaño del grupo de
+        origen ni determina el inventario restante de ese grupo.
+      description_fr: Le nombre d'animaux expédiés lors du mouvement, y compris les animaux non
+        identifiés individuellement. Il ne s'agit pas d'une observation de la taille du groupe
+        source et il ne détermine pas l'effectif restant de ce groupe.
+      category: agriculture
+      bibliography_refs: '["icar-ade-1-5-1", "woah-identification-2024"]'
+  movement_origin_site:
+    slot_uri: publicschema:movement_origin_site
+    title: Movement origin site
+    description: The agricultural facility from which the animals departed. A holding's economic identity
+      or an owner's or keeper's address does not identify the departure premises.
+    range: AgriculturalFacility
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Sitio de origen del desplazamiento
+      label_fr: Site d'origine du mouvement
+      description_es: La instalación agrícola desde la que partieron los animales. La identidad
+        económica de una explotación o la dirección de un propietario o poseedor no identifican las
+        instalaciones de salida.
+      description_fr: L'installation agricole d'où les animaux sont partis. L'identité économique
+        d'une exploitation ou l'adresse d'un propriétaire ou d'un détenteur n'identifie pas les
+        locaux de départ.
+      category: agriculture
+      bibliography_refs: '["woah-identification-2024"]'
+  movement_destination_site:
+    slot_uri: publicschema:movement_destination_site
+    title: Movement destination site
+    description: The agricultural facility to which the animals moved. Arrival does not by itself establish
+      a residence period or a change of responsibility.
+    range: AgriculturalFacility
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Sitio de destino del desplazamiento
+      label_fr: Site de destination du mouvement
+      description_es: La instalación agrícola hacia la que se desplazaron los animales. La llegada
+        no establece por sí sola un período de residencia ni un cambio de responsabilidad.
+      description_fr: L'installation agricole vers laquelle les animaux ont été déplacés. L'arrivée
+        n'établit pas à elle seule une période de résidence ou un changement de responsabilité.
+      category: agriculture
+      bibliography_refs: '["woah-identification-2024"]'
+  movement_transit_sites:
+    slot_uri: publicschema:movement_transit_sites
+    title: Movement transit sites
+    description: Agricultural facilities through which the animals passed during the movement, in no stated
+      order. They do not assert arrival dates or residence periods.
+    range: AgriculturalFacility
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Sitios de tránsito del desplazamiento
+      label_fr: Sites de transit du mouvement
+      description_es: Las instalaciones agrícolas por las que pasaron los animales durante el
+        desplazamiento, sin un orden indicado. No establecen fechas de llegada ni períodos de
+        residencia.
+      description_fr: Les installations agricoles par lesquelles les animaux sont passés pendant le
+        mouvement, sans ordre indiqué. Elles n'établissent ni dates d'arrivée ni périodes de
+        résidence.
+      category: agriculture
+      bibliography_refs: '["woah-identification-2024"]'
+  movement_departure_date:
+    slot_uri: publicschema:movement_departure_date
+    title: Movement departure date
+    description: The date on which the animals left the origin facility, distinct from the time the movement
+      was recorded.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de salida del desplazamiento
+      label_fr: Date de départ du mouvement
+      description_es: La fecha en que los animales abandonaron la instalación de origen, distinta
+        del momento en que se registró el desplazamiento.
+      description_fr: La date à laquelle les animaux ont quitté l'installation d'origine, distincte
+        du moment où le mouvement a été enregistré.
+      category: agriculture
+      bibliography_refs: '["eu-reg-del-2019-2035", "woah-identification-2024"]'
+  movement_arrival_date:
+    slot_uri: publicschema:movement_arrival_date
+    title: Movement arrival date
+    description: The date on which the animals arrived at the destination facility.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de llegada del desplazamiento
+      label_fr: Date d'arrivée du mouvement
+      description_es: La fecha en que los animales llegaron a la instalación de destino.
+      description_fr: La date à laquelle les animaux sont arrivés à l'installation de destination.
+      category: agriculture
+      bibliography_refs: '["eu-reg-del-2019-2035", "woah-identification-2024"]'

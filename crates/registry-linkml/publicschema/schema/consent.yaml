@@ -153,7 +153,7 @@ classes:
         "evidence_ref", "verified_by", "verified_date"]}, {"category": "consent_lifecycle", "properties":
         ["status", "withdrawal_channel", "withdrawal_uri", "withdrawal_reason", "refusal_reason"]}, {"category":
         "consent_retention", "properties": ["storage_duration_days"]}]'
-      bibliography_refs: '["fhir-r4", "govstack-consent", "iso-27560", "kantara-ancr", "kantara-consent-receipt",
+      bibliography_refs: '["fhir-r4", "fhir-r5", "govstack-consent", "iso-27560", "kantara-ancr", "kantara-consent-receipt",
         "w3c-dpv"]'
 slots:
   allowed_recipient_categories:
