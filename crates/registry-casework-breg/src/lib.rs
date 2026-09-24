@@ -183,14 +183,12 @@ impl BregAdapter {
         let operation = metadata
             .operation(&identifier)
             .ok_or(SourceAdapterError::Denied)?;
-        let required_fields = std::iter::once("record")
-            .chain(
-                self.config
-                    .routing_metadata
-                    .fields
-                    .iter()
-                    .map(|field| field.field.as_str()),
-            )
+        let required_fields = self
+            .config
+            .routing_metadata
+            .fields
+            .iter()
+            .map(|field| field.field.as_str())
             .chain(
                 self.config
                     .display_reference

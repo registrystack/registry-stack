@@ -66,9 +66,10 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     let mut findings =
         check_unpaired_review_policies(&project, &authored, &request_entity, &request.authority)?;
     let projection = source_projection(&project, &args.source_id, request.metadata)?;
-    let changes = apply_breg_candidate(&mut authored, &request_entity, &projection)?;
+    let reader = reader_grant(request.metadata, &projection)?;
+    let changes = apply_breg_candidate(&mut authored, &request_entity, &reader)?;
     let proposed =
-        render_candidate_preserving_authored_text(&bytes, &request_entity, &authored, &projection)?;
+        render_candidate_preserving_authored_text(&bytes, &request_entity, &authored, &reader)?;
     let candidate_explanation = verify_candidate(&args.bregctl_bin, &registry, &proposed)?;
     let candidate_request = select_request(
         &project,
@@ -76,7 +77,7 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
         &registry_id,
         &candidate_explanation,
     )?;
-    let (event_patch, reader_patch) = candidate_fragments(&request_entity, &projection);
+    let (event_patch, reader_patch) = candidate_fragments(&request_entity, &reader);
     let dev_clients_plan =
         plan_breg_dev_clients(&registry, &project, &authored, &candidate_request)?;
     findings.extend(dev_clients_plan.findings.iter().cloned());
@@ -687,12 +688,52 @@ fn source_projection(project: &Path, source_id: &str, metadata: &Value) -> Resul
     Ok(projection)
 }
 
-fn reader_fields(projection: &[String]) -> Vec<String> {
-    std::iter::once("record".to_owned())
-        .chain(projection.iter().cloned())
-        .collect::<std::collections::BTreeSet<_>>()
+/// What the casework-reader profile may read on the request entity, and the one
+/// field the lifecycle event carries. BReg requires an event projection of at
+/// least one field; the adapter discards its value and reads the request
+/// through the reader, so the event carries a field the reader already sees.
+struct ReaderGrant {
+    fields: Vec<String>,
+    event_field: String,
+}
+
+/// The reader reads every request field that names an existing target record,
+/// whatever the model calls it, plus the Casework projection. A request that
+/// only creates records has no target field, so its event carries the first
+/// projected field instead.
+fn reader_grant(metadata: &Value, projection: &[String]) -> Result<ReaderGrant> {
+    let declared = metadata["effects"]
+        .as_array()
         .into_iter()
-        .collect()
+        .flatten()
+        .map(|effect| &effect["target"]["binding"]);
+    let planned = metadata
+        .pointer("/planner/possibleWrites")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|write| &write["target"]);
+    let targets = declared
+        .chain(planned)
+        .filter(|target| target["kind"] == "existing")
+        .filter_map(|target| target.pointer("/fromField/field").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    let event_field = targets
+        .first()
+        .or_else(|| projection.first())
+        .context("the BReg request names no existing target record and the Casework source declares no projection; add a projection field so the lifecycle event has a field to carry")?
+        .clone();
+    let fields = targets
+        .into_iter()
+        .chain(projection.iter().cloned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    Ok(ReaderGrant {
+        fields,
+        event_field,
+    })
 }
 
 fn load_casework_policy(project: &Path) -> Result<Value> {
@@ -701,7 +742,7 @@ fn load_casework_policy(project: &Path) -> Result<Value> {
     Ok(root)
 }
 
-fn apply_breg_candidate(root: &mut Value, entity_id: &str, projection: &[String]) -> Result<Value> {
+fn apply_breg_candidate(root: &mut Value, entity_id: &str, reader: &ReaderGrant) -> Result<Value> {
     let object = root
         .as_object_mut()
         .context("BReg registry.yaml must contain an object")?;
@@ -721,7 +762,7 @@ fn apply_breg_candidate(root: &mut Value, entity_id: &str, projection: &[String]
         .or_insert_with(|| json!([]))
         .as_array_mut()
         .context("BReg entity hooks must be an array")?;
-    let (hook, profile) = candidate_fragments(entity_id, projection);
+    let (hook, profile) = candidate_fragments(entity_id, reader);
     match hooks
         .iter()
         .find(|item| item["id"] == "casework-lifecycle-v1")
@@ -749,10 +790,10 @@ fn apply_breg_candidate(root: &mut Value, entity_id: &str, projection: &[String]
     ]))
 }
 
-fn candidate_fragments(entity_id: &str, projection: &[String]) -> (Value, Value) {
-    let fields = reader_fields(projection);
+fn candidate_fragments(entity_id: &str, reader: &ReaderGrant) -> (Value, Value) {
+    let fields = &reader.fields;
     (
-        json!({"id":"casework-lifecycle-v1","phase":"after","trigger":"request_lifecycle","projection":["record"],"handler":{"kind":"url","destinationId":"casework"}}),
+        json!({"id":"casework-lifecycle-v1","phase":"after","trigger":"request_lifecycle","projection":[reader.event_field],"handler":{"kind":"url","destinationId":"casework"}}),
         json!({
             "id":READER_CLIENT_ID, "default":false, "principalClaim":READER_PRINCIPAL_CLAIM,
             "requiredScopes":[READER_SCOPE], "requiredPurposes":[READER_PURPOSE],
@@ -765,7 +806,7 @@ fn render_candidate_preserving_authored_text(
     original: &[u8],
     entity_id: &str,
     expected: &Value,
-    projection: &[String],
+    reader: &ReaderGrant,
 ) -> Result<String> {
     let text = std::str::from_utf8(original).context("BReg registry.yaml must be UTF-8")?;
     if text.trim_start().starts_with('{') {
@@ -793,10 +834,10 @@ fn render_candidate_preserving_authored_text(
     });
     let mut rendered = text.to_owned();
     if !has_hook {
-        rendered = insert_entity_hook(&rendered, entity_id)?;
+        rendered = insert_entity_hook(&rendered, entity_id, &reader.event_field)?;
     }
     if !has_profile {
-        rendered = insert_access_profile(&rendered, entity_id, projection)?;
+        rendered = insert_access_profile(&rendered, entity_id, reader)?;
     }
     let round_trip: Value =
         serde_norway::from_str(&rendered).context("parsing narrow BReg YAML patch")?;
@@ -806,7 +847,7 @@ fn render_candidate_preserving_authored_text(
     Ok(rendered)
 }
 
-fn insert_entity_hook(text: &str, entity_id: &str) -> Result<String> {
+fn insert_entity_hook(text: &str, entity_id: &str, event_field: &str) -> Result<String> {
     let lines = text.split_inclusive('\n').collect::<Vec<_>>();
     let marker = format!("- id: {entity_id}");
     let start = lines
@@ -842,15 +883,15 @@ fn insert_entity_hook(text: &str, entity_id: &str) -> Result<String> {
         end
     };
     let block = if hooks.is_some() {
-        format!("{}- id: casework-lifecycle-v1\n{}  phase: after\n{}  trigger: request_lifecycle\n{}  projection: [record]\n{}  handler: {{kind: url, destinationId: casework}}\n", " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2))
+        format!("{}- id: casework-lifecycle-v1\n{}  phase: after\n{}  trigger: request_lifecycle\n{}  projection: [{event_field}]\n{}  handler: {{kind: url, destinationId: casework}}\n", " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2))
     } else {
-        format!("{}hooks:\n{}- id: casework-lifecycle-v1\n{}  phase: after\n{}  trigger: request_lifecycle\n{}  projection: [record]\n{}  handler: {{kind: url, destinationId: casework}}\n", " ".repeat(field_indent), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2))
+        format!("{}hooks:\n{}- id: casework-lifecycle-v1\n{}  phase: after\n{}  trigger: request_lifecycle\n{}  projection: [{event_field}]\n{}  handler: {{kind: url, destinationId: casework}}\n", " ".repeat(field_indent), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2))
     };
     Ok(insert_at_line(&lines, insertion, &block))
 }
 
-fn insert_access_profile(text: &str, entity_id: &str, projection: &[String]) -> Result<String> {
-    let fields = serde_json::to_string(&reader_fields(projection))?;
+fn insert_access_profile(text: &str, entity_id: &str, reader: &ReaderGrant) -> Result<String> {
+    let fields = serde_json::to_string(&reader.fields)?;
     let block = format!("  - id: {READER_CLIENT_ID}\n    default: false\n    principalClaim: {READER_PRINCIPAL_CLAIM}\n    requiredScopes: [{READER_SCOPE}]\n    requiredPurposes: [{READER_PURPOSE}]\n    permissions:\n      - entity: {entity_id}\n        operations: [get, list]\n        readableFields: {fields}\n        readableRequestFields: [review_state]\n        rowBoundaries: []\n");
     insert_yaml_collection_items(text, "accessProfiles", "[]", &block)
 }
@@ -2155,7 +2196,7 @@ mod tests {
     #[test]
     fn candidate_adds_only_exact_hook_and_reader() {
         let mut root = json!({"entities":[{"id":"request"}],"accessProfiles":[]});
-        apply_breg_candidate(&mut root, "request", &[]).unwrap();
+        apply_breg_candidate(&mut root, "request", &record_reader(&[])).unwrap();
         assert_eq!(
             root["entities"][0]["hooks"][0]["trigger"],
             "request_lifecycle"
@@ -2168,7 +2209,7 @@ mod tests {
             root["accessProfiles"][0]["permissions"][0]["readableRequestFields"],
             json!(["review_state"])
         );
-        apply_breg_candidate(&mut root, "request", &[]).unwrap();
+        apply_breg_candidate(&mut root, "request", &record_reader(&[])).unwrap();
         assert_eq!(root["entities"][0]["hooks"].as_array().unwrap().len(), 1);
     }
 
@@ -2191,12 +2232,12 @@ mod tests {
         let input = "# keep authored context\nentities:\n  - id: request\n    route: requests\naccessProfiles: [] # keep the profile context\n";
         let mut expected =
             json!({"entities":[{"id":"request","route":"requests"}],"accessProfiles":[]});
-        apply_breg_candidate(&mut expected, "request", &projection).unwrap();
+        apply_breg_candidate(&mut expected, "request", &record_reader(&projection)).unwrap();
         let rendered = render_candidate_preserving_authored_text(
             input.as_bytes(),
             "request",
             &expected,
-            &projection,
+            &record_reader(&projection),
         )
         .unwrap();
         assert!(rendered.contains("# keep authored context"));
@@ -2216,20 +2257,85 @@ mod tests {
         assert!(source_projection(project.path(), "professional", &metadata).is_err());
     }
 
+    fn target(binding: Value) -> Value {
+        json!({"target":{"entity":"farmer","binding":binding}})
+    }
+
+    /// The reader grant for a request whose target record field is `record`.
+    fn record_reader(projection: &[String]) -> ReaderGrant {
+        let metadata = json!({"effects":[target(json!({"kind":"existing","fromField":{"field":"record","apiName":"record"}}))]});
+        reader_grant(&metadata, projection).unwrap()
+    }
+
+    #[test]
+    fn reader_grant_reads_the_request_target_field_whatever_its_name() {
+        let metadata = json!({
+            "effects":[target(json!({"kind":"existing","fromField":{"field":"farmer-ref","apiName":"farmerRef"}}))],
+            "planner":{"kind":"declarative"}
+        });
+        let grant = reader_grant(&metadata, &["region".to_owned()]).unwrap();
+        assert_eq!(grant.fields, ["farmer-ref", "region"]);
+        assert_eq!(grant.event_field, "farmer-ref");
+
+        let planned = json!({
+            "effects":[],
+            "planner":{"kind":"rhai","possibleWrites":[{"target":{"kind":"existing","entity":"farmer","fromField":{"field":"farmer-ref","apiName":"farmerRef"}}}]}
+        });
+        let grant = reader_grant(&planned, &[]).unwrap();
+        assert_eq!(grant.fields, ["farmer-ref"]);
+        assert_eq!(grant.event_field, "farmer-ref");
+    }
+
+    #[test]
+    fn reader_grant_for_a_create_request_carries_a_projected_field() {
+        let metadata = json!({
+            "effects":[target(json!({"kind":"reserved_create","effect":"register"}))],
+            "planner":{"kind":"declarative"}
+        });
+        let grant = reader_grant(&metadata, &["region".to_owned(), "district".to_owned()]).unwrap();
+        assert_eq!(grant.fields, ["district", "region"]);
+        assert_eq!(grant.event_field, "region");
+        let input = "entities:\n  - id: request\n    route: requests\naccessProfiles: []\n";
+        let mut expected: Value = serde_norway::from_str(input).unwrap();
+        apply_breg_candidate(&mut expected, "request", &grant).unwrap();
+        let rendered = render_candidate_preserving_authored_text(
+            input.as_bytes(),
+            "request",
+            &expected,
+            &grant,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_norway::from_str::<Value>(&rendered).unwrap(),
+            expected
+        );
+        assert_eq!(
+            expected["entities"][0]["hooks"][0]["projection"],
+            json!(["region"])
+        );
+        assert!(!rendered.contains("record"));
+        let error = reader_grant(&metadata, &[]).err().unwrap();
+        assert!(format!("{error:#}").contains("projection"));
+    }
+
     #[test]
     fn candidate_refuses_conflicting_existing_grant() {
         let mut root = json!({"entities":[{"id":"request"}],"accessProfiles":[{"id":"casework-reader","permissions":[]}]});
-        assert!(apply_breg_candidate(&mut root, "request", &[]).is_err());
+        assert!(apply_breg_candidate(&mut root, "request", &record_reader(&[])).is_err());
     }
 
     #[test]
     fn narrow_yaml_patch_preserves_comments() {
         let input = "# useful\nentities:\n  - id: request\n    route: requests\naccessProfiles:\n  - id: reader\n    # keep this\n    permissions: []\n";
         let mut expected: Value = serde_norway::from_str(input).unwrap();
-        apply_breg_candidate(&mut expected, "request", &[]).unwrap();
-        let patched =
-            render_candidate_preserving_authored_text(input.as_bytes(), "request", &expected, &[])
-                .unwrap();
+        apply_breg_candidate(&mut expected, "request", &record_reader(&[])).unwrap();
+        let patched = render_candidate_preserving_authored_text(
+            input.as_bytes(),
+            "request",
+            &expected,
+            &record_reader(&[]),
+        )
+        .unwrap();
         assert!(patched.contains("# useful"));
         assert!(patched.contains("# keep this"));
         assert_eq!(serde_norway::from_str::<Value>(&patched).unwrap(), expected);

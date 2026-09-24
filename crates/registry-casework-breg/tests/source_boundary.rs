@@ -353,6 +353,25 @@ async fn reader_diagnostic_proves_exact_get_list_projection_on_an_empty_registry
 }
 
 #[tokio::test]
+async fn reader_diagnostic_does_not_require_a_target_record_field() {
+    // A create request has no target record, and a patch request may name its
+    // target field anything; the adapter reads neither.
+    let server = MockServer::start().await;
+    mount_reader_diagnostic(
+        &server,
+        diagnostic_metadata(&["get", "list"], &[("region", "region")]),
+        200,
+        true,
+    )
+    .await;
+
+    adapter(&server.uri())
+        .verify_reader_readiness()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn reader_diagnostic_refuses_missing_get_or_routing_projection_grants() {
     let server = MockServer::start().await;
     mount_reader_diagnostic(
