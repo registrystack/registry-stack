@@ -11,6 +11,7 @@ use registry_breg::fixtures::{
     execute_schema_test, validate_fixture_journeys, FixtureError, SchemaTestCredentialBinding,
     SchemaTestCredentialBindings, SchemaTestRuntimeSetupError,
 };
+use registry_breg::postgres::{MigrationRehearsalError, SuccessorMigrationRehearsal};
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 use registry_breg::startup;
 use serde::Deserialize;
@@ -61,6 +62,7 @@ pub(crate) enum TestLifecycleError {
     Candidate,
     CandidateBinding { path: &'static str },
     ReviewFingerprint,
+    Rehearsal(Box<MigrationRehearsalError>),
     Journeys { message: String },
     JourneySyntax { path: String, message: &'static str },
     JourneyStep { path: String, message: String },
@@ -192,10 +194,24 @@ pub(crate) fn run(
     {
         return Err(TestLifecycleError::ReviewFingerprint);
     }
+    let rehearsal_baseline = request.candidate.rehearsal_baseline.clone();
     let prepared = request
         .candidate
         .prepare(schema_fingerprint.clone())
         .map_err(|_| TestLifecycleError::Candidate)?;
+    if let Some(baseline) = &rehearsal_baseline {
+        runtime
+            .block_on(startup::rehearse_successor_migration(
+                &config,
+                SuccessorMigrationRehearsal {
+                    predecessor: &baseline.registry,
+                    predecessor_schema_fingerprint: &baseline.schema_fingerprint,
+                    candidate: &prepared,
+                },
+            ))
+            .map_err(schema_preparation_error)?
+            .map_err(|error| TestLifecycleError::Rehearsal(Box::new(error)))?;
+    }
     let signing_input_sha256 = sha256(prepared.canonical_signed_bytes());
     let package_revision = prepared.package_revision().to_owned();
     let receipt = runtime.block_on(async {
@@ -854,6 +870,52 @@ mod tests {
             "expected HTTP 409, received HTTP 412"
         );
         assert!(!report.to_string().contains("recreate"));
+    }
+
+    #[test]
+    fn a_refused_rehearsal_step_names_the_step_and_postgres_class_only() {
+        use registry_breg::postgres::PostgresFailure;
+
+        let error = TestLifecycleError::Rehearsal(Box::new(MigrationRehearsalError::Step {
+            migration_id: "rank-backfill".into(),
+            step_id: "backfill-rank".into(),
+            failure: PostgresFailure {
+                sqlstate: Some("23502".into()),
+                table: Some("entity_record".into()),
+                column: Some("rank".into()),
+                constraint: None,
+            },
+        }));
+        let report = serde_json::to_value(crate::test_lifecycle_failure(error))
+            .expect("rehearsal failure report serializes");
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(diagnostic["code"], "migration.rehearsal.step_failed");
+        assert_eq!(
+            diagnostic["path"],
+            "reviewedMigrations[rank-backfill].steps[backfill-rank]"
+        );
+        let message = diagnostic["message"].as_str().unwrap();
+        assert!(message.contains("SQLSTATE 23502"), "{message}");
+        assert!(
+            message.contains("integrity constraint violation"),
+            "{message}"
+        );
+        assert!(message.contains("table entity_record"), "{message}");
+        assert!(message.contains("column rank"), "{message}");
+        assert!(message.contains("apply would refuse"), "{message}");
+    }
+
+    #[test]
+    fn a_rehearsal_that_misses_the_candidate_schema_is_a_migration_refusal() {
+        let report = serde_json::to_value(crate::test_lifecycle_failure(
+            TestLifecycleError::Rehearsal(Box::new(MigrationRehearsalError::FinalSchemaMismatch)),
+        ))
+        .expect("rehearsal failure report serializes");
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "migration.rehearsal.schema_mismatch"
+        );
+        assert_eq!(report["diagnostics"][0]["path"], "reviewedMigrations");
     }
 
     #[test]

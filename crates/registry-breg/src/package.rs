@@ -992,6 +992,13 @@ impl PreparedPackage {
         &self.files
     }
 
+    /// The reviewed migration plan this candidate carries, validated again
+    /// from its captured files exactly as package loading validates it.
+    #[cfg(feature = "tooling")]
+    pub fn reviewed_migration_plan(&self) -> Result<Option<ValidatedReviewedMigrationPlan>> {
+        rederive_reviewed_migration_plan(&self.manifest, &self.files, &self.registry)
+    }
+
     pub fn envelope(&self, signatures: Vec<PackageSignature>) -> Result<PackageEnvelope> {
         validate_publication_signatures(&self.manifest, &signatures)?;
         Ok(PackageEnvelope {
@@ -3821,6 +3828,29 @@ pub fn load_predecessor_package(
     root: &Path,
     context: &PredecessorPackageContext<'_>,
 ) -> Result<VerifiedPredecessorPackage> {
+    load_predecessor_closure(root, context).map(|(package, _)| package)
+}
+
+/// Verify the active predecessor package exactly as
+/// [`load_predecessor_package`] does, then compile its signed sources with the
+/// current compiler so a successor can be rehearsed over the predecessor's
+/// schema. The historical generated artifacts are still not compared: the
+/// rehearsal instead holds the installed schema to the signed predecessor
+/// fingerprint, and refuses when the current compiler cannot reproduce it.
+#[cfg(feature = "tooling")]
+pub fn load_predecessor_rehearsal_baseline(
+    root: &Path,
+    context: &PredecessorPackageContext<'_>,
+) -> Result<(VerifiedPredecessorPackage, CompiledRegistry)> {
+    let (package, loaded) = load_predecessor_closure(root, context)?;
+    let registry = compile_signed_sources(&package.manifest, &loaded)?;
+    Ok((package, registry))
+}
+
+fn load_predecessor_closure(
+    root: &Path,
+    context: &PredecessorPackageContext<'_>,
+) -> Result<(VerifiedPredecessorPackage, BTreeMap<String, Vec<u8>>)> {
     validate_root(root)?;
     let production = context.database_initialization_environment != "local";
     if production {
@@ -3869,11 +3899,14 @@ pub fn load_predecessor_package(
     let history_schema_descriptor =
         governed.history_schema_descriptor(&envelope.signed.package_revision)?;
 
-    Ok(VerifiedPredecessorPackage {
-        manifest: envelope.signed,
-        migration_baseline,
-        history_schema_descriptor,
-    })
+    Ok((
+        VerifiedPredecessorPackage {
+            manifest: envelope.signed,
+            migration_baseline,
+            history_schema_descriptor,
+        },
+        loaded,
+    ))
 }
 
 /// Rederive a closed package and verify its configured deployment bindings and
@@ -4821,10 +4854,12 @@ fn load_closure(
     Ok(loaded)
 }
 
-fn rederive(
+/// Compile the signed sources of one verified package closure. The caller
+/// decides whether generated artifacts must also match byte for byte.
+fn compile_signed_sources(
     manifest: &PackageManifest,
     loaded: &BTreeMap<String, Vec<u8>>,
-) -> Result<(CompiledRegistry, Option<ValidatedReviewedMigrationPlan>)> {
+) -> Result<CompiledRegistry> {
     validate_source_inventory(manifest)?;
     let fixture_journeys = loaded
         .get(&manifest.sources.fixture_journeys)
@@ -4887,7 +4922,14 @@ fn rederive(
     if compiled.registry_id() != manifest.package_id {
         return Err(PackageError::Derivation);
     }
+    Ok(compiled)
+}
 
+fn rederive(
+    manifest: &PackageManifest,
+    loaded: &BTreeMap<String, Vec<u8>>,
+) -> Result<(CompiledRegistry, Option<ValidatedReviewedMigrationPlan>)> {
+    let compiled = compile_signed_sources(manifest, loaded)?;
     let expected_artifacts = expected_artifact_bytes(manifest, &compiled)?;
     let packaged_artifacts = manifest
         .files

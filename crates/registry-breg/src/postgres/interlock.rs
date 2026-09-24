@@ -704,42 +704,9 @@ impl DedicatedApplyConnection {
         lock_timeout: Duration,
         statement_timeout: Duration,
     ) -> Result<()> {
-        // These two schemas are a closed compiler-owned boundary. Reviewed
-        // column changes may require their dependent views to be removed
-        // first; exact package DDL recreates every candidate view afterward.
         let transaction = self.client.transaction().await?;
         set_local_duration_timeouts(&transaction, lock_timeout, statement_timeout).await?;
-        let rows = transaction
-            .query(
-                "SELECT schemaname, viewname
-                   FROM pg_catalog.pg_views
-                  WHERE schemaname IN ('registry_derived', 'registry_source')
-                  ORDER BY CASE schemaname WHEN 'registry_derived' THEN 0 ELSE 1 END,
-                           viewname",
-                &[],
-            )
-            .await?;
-        for row in rows {
-            let schema = row
-                .try_get::<_, String>(0)
-                .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
-            let view = row
-                .try_get::<_, String>(1)
-                .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
-            if !matches!(schema.as_str(), "registry_derived" | "registry_source") {
-                return Err(PostgresKernelError::RegistryUnavailable);
-            }
-            let schema = SqlIdentifier::parse(&schema)?;
-            let view = SqlIdentifier::parse(&view)?;
-            transaction
-                .batch_execute(&format!(
-                    "DROP VIEW {}.{} RESTRICT",
-                    schema.quoted(),
-                    view.quoted()
-                ))
-                .await
-                .map_err(|_| PostgresKernelError::Connection)?;
-        }
+        drop_managed_read_view_set(&transaction).await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -2368,7 +2335,48 @@ async fn verify_retained_webhook_delivery_bindings(
     Ok(())
 }
 
-fn compiler_statement_runs_after_reviewed_steps(statement: &PackageDdlStatement<'_>) -> bool {
+/// Drop every view in the two compiler-owned read schemas.
+pub(super) async fn drop_managed_read_view_set(client: &impl GenericClient) -> Result<()> {
+    // These two schemas are a closed compiler-owned boundary. Reviewed
+    // column changes may require their dependent views to be removed
+    // first; exact package DDL recreates every candidate view afterward.
+    let rows = client
+        .query(
+            "SELECT schemaname, viewname
+               FROM pg_catalog.pg_views
+              WHERE schemaname IN ('registry_derived', 'registry_source')
+              ORDER BY CASE schemaname WHEN 'registry_derived' THEN 0 ELSE 1 END,
+                       viewname",
+            &[],
+        )
+        .await?;
+    for row in rows {
+        let schema = row
+            .try_get::<_, String>(0)
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        let view = row
+            .try_get::<_, String>(1)
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        if !matches!(schema.as_str(), "registry_derived" | "registry_source") {
+            return Err(PostgresKernelError::RegistryUnavailable);
+        }
+        let schema = SqlIdentifier::parse(&schema)?;
+        let view = SqlIdentifier::parse(&view)?;
+        client
+            .batch_execute(&format!(
+                "DROP VIEW {}.{} RESTRICT",
+                schema.quoted(),
+                view.quoted()
+            ))
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
+    }
+    Ok(())
+}
+
+pub(super) fn compiler_statement_runs_after_reviewed_steps(
+    statement: &PackageDdlStatement<'_>,
+) -> bool {
     if is_spatial_candidate_view_drop_sql(statement.sql) {
         return false;
     }
