@@ -1,0 +1,85 @@
+# A Casework project that pairs both change-request entities of the BReg
+# public-organizations starter (products/breg/starters/public-organizations).
+# check-checkpoint.sh drives the real caseworkctl and bregctl binaries over
+# this fixture to prove that pairing two request entities of one registry
+# leaves a project bregctl check accepts, with its own lifecycle hook per
+# entity: BReg refuses two hooks sharing one identifier as
+# event.id.registry_duplicate.
+apiVersion: registry.registrystack.org/casework/v1alpha1
+kind: CaseworkProject
+casework:
+  id: public-organizations-review
+  version: "1"
+accessProfiles:
+  - id: staff
+    principalClaim: registry_principal
+    requiredScopes: [casework:staff]
+    role: staff
+  - id: supervisor
+    principalClaim: registry_principal
+    requiredScopes: [casework:supervisor]
+    role: supervisor
+  - id: administrator
+    principalClaim: registry_principal
+    requiredScopes: [casework:admin]
+    role: administrator
+  - id: integration-requester
+    principalClaim: registry_principal
+    requiredScopes: [casework:reviews:request]
+    role: requester
+sources:
+  - id: public-organizations
+    adapter: breg
+    description: sources/public-organizations.json
+    requests:
+      - entity: name-correction
+        queue: corrections
+      - entity: relationship-correction
+        queue: corrections
+queues:
+  - id: corrections
+    label: Corrections
+reviewKinds:
+  - id: name-correction
+    version: "1"
+    purpose: approval
+    contextStrategy: source
+    stages:
+      - id: review
+        queue: corrections
+        decidingProfiles: [staff]
+        excludeInitiator: true
+        requiredApprovals: 1
+    retention:
+      terminalDays: 30
+      accountabilityDays: 365
+    displaySchema:
+      type: object
+      additionalProperties: false
+      properties: {}
+  - id: relationship-correction
+    version: "1"
+    purpose: approval
+    contextStrategy: source
+    stages:
+      - id: review
+        queue: corrections
+        decidingProfiles: [staff]
+        excludeInitiator: true
+        requiredApprovals: 1
+    retention:
+      terminalDays: 30
+      accountabilityDays: 365
+    displaySchema:
+      type: object
+      additionalProperties: false
+      properties: {}
+reviewProducers:
+  - id: registry-breg
+    profile: integration-requester
+    issuer: http://127.0.0.1:8091
+    subject: public-organizations-breg
+    trustedInitiatorIssuer: http://127.0.0.1:8091
+    sourceNamespaces: [public-organizations]
+    kinds: [name-correction, relationship-correction]
+    recoveryDays: 7

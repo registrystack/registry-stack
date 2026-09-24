@@ -50,5 +50,4 @@ uuid = { workspace = true, features = ["serde"] }
 zeroize.workspace = true
 
 [dev-dependencies]
-registry-bregctl.workspace = true
 tokio-postgres.workspace = true
