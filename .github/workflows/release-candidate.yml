@@ -370,6 +370,14 @@ jobs:
             test "$("dist/bin/bregctl-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
               "bregctl ${{ needs.validate.outputs.version }}"
           fi
+          if (( release_major > 0 || release_minor >= 35 )); then
+            for breg_service in breg-mcp breg-review; do
+              test "$("dist/bin/${breg_service}-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
+                "${breg_service} ${{ needs.validate.outputs.version }}"
+              test "$("dist/image-bin/${breg_service}" --version)" = \
+                "${breg_service} ${{ needs.validate.outputs.version }}"
+            done
+          fi
           if (( release_major > 0 || release_minor >= 30 )); then
             test "$("dist/bin/casework-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
               "casework ${{ needs.validate.outputs.version }}"
@@ -529,6 +537,16 @@ jobs:
               -p registry-bregctl \
               --target "${{ matrix.target }}"
           fi
+          include_breg_services=0
+          if (( release_major > 0 || release_minor >= 35 )); then
+            include_breg_services=1
+            cargo build --release --locked \
+              -p registry-breg-mcp --bin breg-mcp \
+              --target "${{ matrix.target }}"
+            cargo build --release --locked \
+              -p registry-breg-review --bin breg-review \
+              --target "${{ matrix.target }}"
+          fi
           include_casework=0
           if (( release_major > 0 || release_minor >= 30 )); then
             include_casework=1
@@ -559,6 +577,16 @@ jobs:
               chmod 0755 "platform/${asset}"
               test "$("platform/${asset}" --version)" = \
                 "${breg_binary} ${{ needs.validate.outputs.version }}"
+            done
+          fi
+          if [[ "${include_breg_services}" -eq 1 ]]; then
+            for breg_service in breg-mcp breg-review; do
+              asset="${breg_service}-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
+              cp "target/${{ matrix.target }}/release/${breg_service}" \
+                "platform/${asset}"
+              chmod 0755 "platform/${asset}"
+              test "$("platform/${asset}" --version)" = \
+                "${breg_service} ${{ needs.validate.outputs.version }}"
             done
           fi
           if [[ "${include_casework}" -eq 1 ]]; then

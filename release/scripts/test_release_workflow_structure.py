@@ -408,6 +408,23 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             },
             module._candidate_image_names("0.33.0"),
         )
+        self.assertEqual(
+            module._candidate_image_names("0.33.0"),
+            module._candidate_image_names("0.34.0"),
+        )
+        self.assertEqual(
+            {
+                "breg",
+                "breg-mcp",
+                "breg-review",
+                "casework",
+                "discovery",
+                "evidence",
+                "relay",
+                "scheduling",
+            },
+            module._candidate_image_names("0.35.0"),
+        )
         self.assertFalse(
             any(
                 "registry-notary" in name
@@ -570,6 +587,13 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             native.get("env"),
             {"REGISTRY_RELEASE_TAG": "${{ needs.validate.outputs.tag }}"},
         )
+        for fragment in (
+            "-p registry-breg-mcp --bin breg-mcp",
+            "-p registry-breg-review --bin breg-review",
+            'if [[ "${include_breg_services}" -eq 1 ]]; then',
+            'asset="${breg_service}-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"',
+        ):
+            self.assertIn(fragment, native["run"])
         # The canonical Linux shard builder carries the same marker through
         # build-release-binaries.sh rather than a step-level environment.
         canonical = step_run(
@@ -634,6 +658,13 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             '--builder-image "${RELEASE_BUILDER_IMAGE}"',
         ):
             self.assertIn(binding, merge)
+        self.assertIn("if (( release_major > 0 || release_minor >= 35 )); then", merge)
+        self.assertIn("for breg_service in breg-mcp breg-review; do", merge)
+        self.assertIn(
+            'dist/bin/${breg_service}-${{ needs.validate.outputs.tag }}-linux-amd64',
+            merge,
+        )
+        self.assertIn('dist/image-bin/${breg_service}" --version', merge)
         assemble_download = next(
             step
             for step in document["jobs"]["assemble"]["steps"]
@@ -2095,6 +2126,24 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 "relay",
                 "scheduling",
             ],
+            "v0.34.0": [
+                "breg",
+                "casework",
+                "discovery",
+                "evidence",
+                "relay",
+                "scheduling",
+            ],
+            "v0.35.0": [
+                "breg",
+                "breg-mcp",
+                "breg-review",
+                "casework",
+                "discovery",
+                "evidence",
+                "relay",
+                "scheduling",
+            ],
         }
         manifests = {}
         for tag, image_names in cases.items():
@@ -2163,11 +2212,30 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         )
         self.assertNotEqual(0, rejected.returncode)
 
+        for service in ("breg-mcp", "breg-review"):
+            with self.subTest(missing=service):
+                missing_service = dict(manifests["v0.35.0"])
+                missing_service["images"] = [
+                    image
+                    for image in missing_service["images"]
+                    if image["name"] != service
+                ]
+                rejected = subprocess.run(
+                    ["jq", "-e", "--arg", "tag", "v0.35.0", jq_filter],
+                    input=json.dumps(missing_service),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(0, rejected.returncode)
+
         self.assertIn(
-            "breg|casework|discovery|evidence|mint|relay|scheduling)", verify
+            "breg|breg-mcp|breg-review|casework|discovery|evidence|mint|relay|scheduling)",
+            verify,
         )
         self.assertIn("`casework` from\n`v0.30.0`", verify)
         self.assertIn("Registry Scheduling joins at `v0.33.0`", verify)
+        self.assertIn("Base Registry Engine, join at `v0.35.0`", verify)
 
     def test_operator_docs_match_the_latest_non_prerelease_contract(self) -> None:
         operations = (ROOT / "release/OPERATIONS.md").read_text(encoding="utf-8")
