@@ -371,6 +371,116 @@ fn apply_refuses_an_older_package_and_points_at_the_roll_forward_procedure() {
 }
 
 #[test]
+fn apply_reports_an_unchanged_successor_as_nothing_to_apply() {
+    let baseline = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    let inspected = registry_breg::package::inspect_package_integrity(&baseline.package).unwrap();
+    let envelope: registry_breg::package::PackageEnvelope =
+        serde_json::from_slice(&fs::read(baseline.package.join("package.json")).unwrap()).unwrap();
+    let key_id = envelope.signed.signature_policy.key_ids[0].clone();
+    let module_bytes = package_module_bytes();
+    let module = parse_module_json(&module_bytes).unwrap();
+    let mut source: Value =
+        serde_json::from_slice(&package_project_bytes(&module_digest(&module))).unwrap();
+    source["package"]["sequence"] = json!(2);
+    let project_bytes = canonicalize_json(&source).unwrap();
+    let project = TestProject::from_registry_source(&project_bytes);
+    let predecessor = load_predecessor_package(
+        &baseline.package,
+        &PredecessorPackageContext {
+            environment: "production",
+            instance_id: PACKAGE_INSTANCE,
+            database_id: PACKAGE_DATABASE,
+            database_initialization_environment: "production",
+            trust_anchor: Some(&baseline.anchor),
+            expected_package_revision: inspected.package_revision(),
+            expected_sequence: 1,
+        },
+    )
+    .unwrap();
+    let prepared = prepare_package(PackageBuildRequest {
+        environment: "production".into(),
+        instance_id: PACKAGE_INSTANCE.into(),
+        database_id: PACKAGE_DATABASE.into(),
+        sequence: 2,
+        prior_revision: Some(inspected.package_revision().into()),
+        compiler_source_revision: PACKAGE_SOURCE_REVISION.into(),
+        schema_fingerprint: inspected.schema_fingerprint().into(),
+        signature_policy: SignaturePolicy {
+            threshold: 1,
+            key_ids: vec![key_id.clone()],
+        },
+        project: PackageSourceFile {
+            path: "source/registry.yaml".into(),
+            bytes: project_bytes,
+        },
+        modules: vec![PackageModuleSource {
+            id: "core".into(),
+            path: "source/modules/core/module.yaml".into(),
+            bytes: module_bytes,
+            assets: vec![],
+        }],
+        fixture_journeys: PackageSourceFile {
+            path: FIXTURE_JOURNEYS_PATH.into(),
+            bytes: PACKAGE_FIXTURE_JOURNEYS.to_vec(),
+        },
+        migration_plan: PackageMigrationPlanInput::SuccessorFromBaseline {
+            prior_baseline: Box::new(predecessor.migration_baseline().clone()),
+        },
+    })
+    .unwrap();
+    let package = project.path().join("successor-package");
+    let signature = sign(prepared.canonical_signed_bytes(), &baseline.signing).unwrap();
+    prepared
+        .publish_to_directory(
+            &package,
+            vec![PackageSignature {
+                key_id,
+                signature_hex: hex(&signature),
+            }],
+        )
+        .unwrap();
+
+    // The refusal precedes any connection, so the migration URL names a
+    // closed port.
+    let output = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .args([
+            "--format",
+            "json",
+            "apply",
+            "--runtime-config",
+            path(&baseline.runtime_config),
+            "--package",
+            path(&package),
+        ])
+        .env(
+            "VERIFY_MIGRATION_DATABASE_SECRET_IS_NOT_OPENED",
+            "postgresql://registry_migration@127.0.0.1:1/breg",
+        )
+        .output()
+        .expect("bregctl starts");
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let report = json_stdout(&output);
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "apply.package.empty_plan");
+    assert_eq!(diagnostic["path"], "package");
+    let message = diagnostic["message"].as_str().expect("message is text");
+    assert!(message.contains("nothing to apply"), "{message}");
+    assert!(message.contains("Nothing was changed"), "{message}");
+    assert_tool_diagnostic(diagnostic, "verified_package", "correct_package_build");
+    let rendered = String::from_utf8(output.stdout).expect("apply refusal is UTF-8");
+    for forbidden in [
+        path(&baseline.runtime_config),
+        path(&package),
+        prepared.package_revision(),
+        "VERIFY_MIGRATION_DATABASE_SECRET_IS_NOT_OPENED",
+    ] {
+        assert!(!rendered.contains(forbidden), "{rendered}");
+    }
+}
+
+#[test]
 fn migration_explain_names_every_bound_a_reviewed_migration_carries() {
     let fixture = ReviewFixture::create();
     let runtime_config = fixture.publish_successor_as_active();

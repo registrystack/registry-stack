@@ -18,6 +18,15 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+- `bregctl apply` reports a successor package with nothing to apply as
+  `apply.package.empty_plan`, with the suggested action
+  `correct_package_build`, instead of a package binding refusal. See
+  [review and apply changes](../operate/breg-changes/#troubleshooting).
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, apply_lifecycle_failure() and
+    apply_reports_an_empty_successor_plan_as_nothing_to_apply;
+    crates/registry-bregctl/tests/cli/reviewed_migrations.rs, apply_reports_an_unchanged_successor_as_nothing_to_apply. */}
+
 - BReg no longer fails an accepted review that the review authority still
   reports as pending. A `202` from the result resource no longer spends the
   result-poll attempt budget and clears an earlier `result-lookup-uncertain`,
