@@ -167,6 +167,21 @@ pub struct ImportAuthorityCloseRequest<'a> {
     pub reason: &'a str,
 }
 
+impl ImportAuthorityOpenRequest<'_> {
+    /// Check the request's bounds without opening any dependency, so a
+    /// caller can refuse a malformed request before it connects.
+    pub fn validate(&self) -> Result<(), ImportAuthorityError> {
+        validate_open(self)
+    }
+}
+
+impl ImportAuthorityCloseRequest<'_> {
+    /// Check the request's bounds without opening any dependency.
+    pub fn validate(&self) -> Result<(), ImportAuthorityError> {
+        validate_close(self)
+    }
+}
+
 /// KERNEL INTERNAL SCHEMA MIGRATION (import authorities): creates
 /// `registry_internal.registry_import_authorities` and its runtime grants.
 /// The ingestion-run half of the same migration lives in
