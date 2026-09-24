@@ -27,7 +27,9 @@ use crate::history_maintenance::{
     append_maintenance_entries, begin_maintenance_request, profile_is_keyed, set_local_timeouts,
     verify_ready_identity, HistoryMaintenanceError,
 };
-use crate::history_migration::{verify_live_rows_match_journal_heads, HistoryMigrationError};
+use crate::history_migration::{
+    verify_every_live_row_matches_its_journal_head, HistoryMigrationError,
+};
 use crate::model::CompiledRegistry;
 use crate::postgres::{
     set_force_row_security, verify_migration_role, ConnectionConfig, ExpectedRegistryIdentity,
@@ -35,11 +37,6 @@ use crate::postgres::{
 };
 
 pub use crate::history_maintenance::HistoryMaintenanceTimeouts as HistoryRebaselineTimeouts;
-
-/// The number of live rows one rebaseline verifies inside its single
-/// transaction. Verification reads every live row and its journal head at once,
-/// so the bound the existing-data migration enforces is the bound here too.
-pub use crate::history_migration::MAX_HISTORY_MIGRATION_COMMIT_MEMBERS as MAX_REBASELINE_LIVE_ROWS;
 
 const MAX_OPERATOR_REFERENCE_BYTES: usize = 512;
 const AUDIT_OPERATION_ID: &str = "history-rebaseline-maintenance";
@@ -81,8 +78,6 @@ pub enum HistoryRebaselineError {
     UnindexedRevisions,
     #[error("history rebaseline requires the retained journal head to reproduce every live row")]
     LiveHistoryMismatch,
-    #[error("history rebaseline exceeds the supported live-row budget")]
-    LiveRowBudgetExceeded,
     #[error("history rebaseline storage is unavailable")]
     Unavailable,
 }
@@ -120,7 +115,6 @@ impl From<HistoryMigrationError> for HistoryRebaselineError {
     fn from(error: HistoryMigrationError) -> Self {
         match error {
             HistoryMigrationError::UnexpectedRowShape => Self::LiveHistoryMismatch,
-            HistoryMigrationError::BaselineBudgetExceeded => Self::LiveRowBudgetExceeded,
             HistoryMigrationError::UnsupportedObject => Self::InvalidInput,
             _ => Self::Unavailable,
         }
@@ -206,23 +200,29 @@ pub(crate) async fn rebaseline_history_coverage_in_transaction(
         return Err(HistoryRebaselineError::UnindexedRevisions);
     }
 
-    // Reuse the migration baseline check: it proves the retained journal head
-    // of every live row still reproduces that row, so the new baseline vouches
-    // only for state the journal already holds. A live registry's journal
-    // legitimately spans several package revisions, so no single revision is
-    // required of the heads.
+    // Prove the retained journal head of every live row still reproduces that
+    // row, so the new baseline vouches only for state the journal already
+    // holds. A live registry's journal legitimately spans several package
+    // revisions, so no single revision is required of the heads. The check
+    // reads the live rows page by page, so it bounds memory, not the number of
+    // live rows.
     //
     // Entity tables force row-level security on their owner, so the check reads
     // nothing until the migration authority lifts that force for this
     // transaction, exactly as an existing-data migration baseline does. Every
     // other role keeps its policies, and the force is restored before the
-    // transaction commits.
+    // transaction commits. Lifting it is an ALTER TABLE, so every entity table
+    // is held in ACCESS EXCLUSIVE mode from here until the transaction ends:
+    // reads wait as well as writes for the whole verification. The migration
+    // role holds no BYPASSRLS authority, which is what would let it read
+    // without that lock, and it keeps none.
     let tables = entity_tables(request.registry);
     set_force_row_security(transaction, &tables, false).await?;
     let verified =
-        verify_live_rows_match_journal_heads(transaction, request.registry.entities(), None).await;
+        verify_every_live_row_matches_its_journal_head(transaction, request.registry.entities())
+            .await;
     set_force_row_security(transaction, &tables, true).await?;
-    let members = verified?;
+    let verified_record_count = verified?;
 
     // Every retained journal head is already indexed, which the refusal above
     // proved, so the baseline commit carries no member of its own. It is the
@@ -255,8 +255,7 @@ pub(crate) async fn rebaseline_history_coverage_in_transaction(
         baseline_position: committed.position,
         verified_entity_count: u64::try_from(request.registry.entities().len())
             .map_err(|_| HistoryRebaselineError::Unavailable)?,
-        verified_record_count: u64::try_from(members.len())
-            .map_err(|_| HistoryRebaselineError::Unavailable)?,
+        verified_record_count,
         previous_coverage_baseline_position: head.coverage_baseline_position,
         previous_unavailable_after_position: head.unavailable_after_position,
     };

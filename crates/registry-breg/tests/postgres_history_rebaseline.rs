@@ -547,6 +547,335 @@ async fn rebaseline_restores_coverage_when_a_migration_baseline_indexed_only_jou
     database.cleanup().await;
 }
 
+/// Live rows beyond what one history commit may index, so the rebaseline
+/// verifies them page by page.
+const MANY_RECORDS: usize = 1_201;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rebaseline_verifies_more_live_rows_than_one_commit_indexes() {
+    let database = TestDatabase::create(4).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let registry = compiled_registry();
+    let expected = install_ready_history_registry(&database, &mut migration, &registry).await;
+    let lock_key = RegistryLockKey::derive(&expected.package_id).expect("lock key derives");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x86; 32].into())
+        .expect("test owns a keyed audit profile");
+    let many = seed_many_records(&database.admin, &mut migration, &registry).await;
+    erase_one_superseded_revision(
+        &database,
+        &mut migration,
+        &registry,
+        &expected,
+        lock_key,
+        &audit_profile,
+    )
+    .await;
+
+    let outcome = rebaseline(
+        &mut migration,
+        &database,
+        &expected,
+        lock_key,
+        &audit_profile,
+        &registry,
+    )
+    .await
+    .expect("a registry larger than one commit is rebaselined");
+    assert_eq!(
+        outcome.verified_record_count,
+        u64::try_from(many.len() + 2).unwrap()
+    );
+    let transaction = migration.transaction().await.expect("transaction begins");
+    let restored = capture_latest_snapshot_reference(&transaction)
+        .await
+        .expect("a fresh reference resolves after the rebaseline");
+    assert_eq!(
+        reconstruct_records(&transaction, restored.position)
+            .await
+            .len(),
+        many.len() + 2
+    );
+    transaction.commit().await.expect("read commits");
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rebaseline_refuses_a_mismatch_on_a_later_page() {
+    let database = TestDatabase::create(4).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let registry = compiled_registry();
+    let expected = install_ready_history_registry(&database, &mut migration, &registry).await;
+    let lock_key = RegistryLockKey::derive(&expected.package_id).expect("lock key derives");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x87; 32].into())
+        .expect("test owns a keyed audit profile");
+    let many = seed_many_records(&database.admin, &mut migration, &registry).await;
+    erase_one_superseded_revision(
+        &database,
+        &mut migration,
+        &registry,
+        &expected,
+        lock_key,
+        &audit_profile,
+    )
+    .await;
+    // The greatest record identifier is verified on the last page.
+    let last = *many.iter().max().expect("records were seeded");
+    let entity = &registry.entities()[ENTITY];
+    database
+        .admin
+        .execute(
+            &format!(
+                "UPDATE registry_data.{} SET {} = 'changed-outside-history' WHERE record_id = $1",
+                quote(&entity.physical_table),
+                quote(&entity.fields["household"].physical_name)
+            ),
+            &[&last],
+        )
+        .await
+        .expect("fixture diverges one live row from its journal head");
+
+    assert_eq!(
+        rebaseline(
+            &mut migration,
+            &database,
+            &expected,
+            lock_key,
+            &audit_profile,
+            &registry
+        )
+        .await
+        .err(),
+        Some(HistoryRebaselineError::LiveHistoryMismatch),
+        "a live row on a later page that its journal head does not reproduce is refused"
+    );
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rebaseline_refuses_a_journal_head_with_no_live_row() {
+    assert_a_journal_head_with_no_live_row_is_refused(0x88, Uuid::new_v4()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rebaseline_refuses_a_journal_head_before_the_first_live_row() {
+    assert_a_journal_head_with_no_live_row_is_refused(
+        0x89,
+        Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap(),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rebaseline_refuses_a_journal_head_past_the_last_live_row() {
+    assert_a_journal_head_with_no_live_row_is_refused(
+        0x8a,
+        Uuid::parse_str("ffffffff-ffff-4fff-bfff-ffffffffffff").unwrap(),
+    )
+    .await;
+}
+
+/// Seed more live rows than one verification page, add an indexed journal head
+/// for `orphan` with no live row, and require the rebaseline to refuse it.
+async fn assert_a_journal_head_with_no_live_row_is_refused(audit_byte: u8, orphan: Uuid) {
+    let database = TestDatabase::create(4).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let registry = compiled_registry();
+    let expected = install_ready_history_registry(&database, &mut migration, &registry).await;
+    let lock_key = RegistryLockKey::derive(&expected.package_id).expect("lock key derives");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![audit_byte; 32].into())
+        .expect("test owns a keyed audit profile");
+    seed_many_records(&database.admin, &mut migration, &registry).await;
+    erase_one_superseded_revision(
+        &database,
+        &mut migration,
+        &registry,
+        &expected,
+        lock_key,
+        &audit_profile,
+    )
+    .await;
+    let transaction = migration.transaction().await.expect("transaction begins");
+    insert_revision(&transaction, orphan, 1, CURRENT_PACKAGE, "create").await;
+    allocate_revision_commit(
+        &transaction,
+        CommitAllocation {
+            package_revision: CURRENT_PACKAGE,
+            origin: CommitOrigin::Mutation {
+                actor_reference: "actor:hash",
+                request_reference: "request:hash",
+            },
+            change_context: None,
+            members: &[RevisionCommitMember {
+                entity_id: ENTITY,
+                record_id: orphan,
+                record_revision: 1,
+            }],
+        },
+    )
+    .await
+    .expect("the orphan journal head is indexed");
+    transaction.commit().await.expect("fixture commits");
+
+    assert_eq!(
+        rebaseline(
+            &mut migration,
+            &database,
+            &expected,
+            lock_key,
+            &audit_profile,
+            &registry
+        )
+        .await
+        .err(),
+        Some(HistoryRebaselineError::LiveHistoryMismatch),
+        "a retained journal head whose live row is gone cannot be vouched for"
+    );
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+async fn rebaseline(
+    migration: &mut tokio_postgres::Client,
+    database: &TestDatabase,
+    expected: &ExpectedRegistryIdentity,
+    lock_key: RegistryLockKey,
+    audit_profile: &AuditProfile,
+    registry: &registry_breg::CompiledRegistry,
+) -> Result<registry_breg::history_rebaseline::HistoryRebaselineOutcome, HistoryRebaselineError> {
+    rebaseline_history_coverage(
+        migration,
+        HistoryRebaselineRequest {
+            expected,
+            migration_role: &database.migration_role,
+            lock_key,
+            timeouts: HistoryRebaselineTimeouts::new(
+                Duration::from_secs(5),
+                Duration::from_secs(30),
+            )
+            .unwrap(),
+            audit: &database.audit(audit_profile.clone()),
+            operator_reference: OPERATOR_CANARY,
+            registry,
+        },
+    )
+    .await
+}
+
+/// Seed the kept and erased records, then erase the erased record's
+/// superseded first revision so coverage needs a rebaseline.
+async fn erase_one_superseded_revision(
+    database: &TestDatabase,
+    migration: &mut tokio_postgres::Client,
+    registry: &registry_breg::CompiledRegistry,
+    expected: &ExpectedRegistryIdentity,
+    lock_key: RegistryLockKey,
+    audit_profile: &AuditProfile,
+) {
+    let kept = Uuid::parse_str(KEPT_RECORD).unwrap();
+    let erased = Uuid::parse_str(ERASED_RECORD).unwrap();
+    seed_two_records(&database.admin, migration, registry, kept, erased).await;
+    erase_record_history(
+        migration,
+        HistoryErasureRequest {
+            expected,
+            migration_role: &database.migration_role,
+            lock_key,
+            timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
+                .unwrap(),
+            audit: &database.audit(audit_profile.clone()),
+            operator_reference: "operator-run-1",
+            reason: "approved retention request",
+            target: RecordHistoryErasureTarget::new(ENTITY, erased, 1),
+        },
+    )
+    .await
+    .expect("targeted erasure succeeds");
+}
+
+/// Seed `MANY_RECORDS` live rows whose first revision is their journal head,
+/// indexed by as many commits as the per-commit member cap requires.
+async fn seed_many_records(
+    admin: &tokio_postgres::Client,
+    migration: &mut tokio_postgres::Client,
+    registry: &registry_breg::CompiledRegistry,
+) -> Vec<Uuid> {
+    let ids = (0..MANY_RECORDS)
+        .map(|_| Uuid::new_v4())
+        .collect::<Vec<_>>();
+    let snapshot = canonicalize_json(&snapshot_json(1)).expect("snapshot canonicalizes");
+    let references = ids
+        .iter()
+        .map(|id| format!("{ENTITY}:{id}"))
+        .collect::<Vec<_>>();
+    let transaction = migration.transaction().await.expect("transaction begins");
+    transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_revisions
+                 (entity_id, record_id, record_reference, record_revision,
+                  predecessor_revision, record_lifecycle, package_revision, operation_id,
+                  mutation_kind, principal_reference, request_reference, snapshot)
+             SELECT $1, seeded.record_id, seeded.record_reference, 1, NULL, 'active', $2,
+                    'op-1', 'create', 'actor:hash', 'request:hash', $3
+               FROM unnest($4::uuid[], $5::text[]) AS seeded(record_id, record_reference)",
+            &[&ENTITY, &OLD_PACKAGE, &snapshot, &ids, &references],
+        )
+        .await
+        .expect("seeded revisions insert");
+    for page in ids.chunks(1_000) {
+        let members = page
+            .iter()
+            .map(|record_id| RevisionCommitMember {
+                entity_id: ENTITY,
+                record_id: *record_id,
+                record_revision: 1,
+            })
+            .collect::<Vec<_>>();
+        allocate_revision_commit(
+            &transaction,
+            CommitAllocation {
+                package_revision: OLD_PACKAGE,
+                origin: CommitOrigin::Mutation {
+                    actor_reference: "actor:hash",
+                    request_reference: "request:hash",
+                },
+                change_context: None,
+                members: &members,
+            },
+        )
+        .await
+        .expect("seeded revisions are indexed");
+    }
+    transaction.commit().await.expect("fixture commits");
+    let entity = &registry.entities()[ENTITY];
+    admin
+        .execute(
+            &format!(
+                "INSERT INTO registry_data.{}
+                     (record_id, record_revision, record_lifecycle, active_package_revision,
+                      {}, {}, {})
+                 SELECT seeded, 1, 'active', $2, $3, 'household-1', DATE '2026-06-01'
+                   FROM unnest($1::uuid[]) AS seeded",
+                quote(&entity.physical_table),
+                quote(&entity.fields["person"].physical_name),
+                quote(&entity.fields["household"].physical_name),
+                quote(&entity.fields["valid-from"].physical_name),
+            ),
+            &[
+                &ids,
+                &OLD_PACKAGE,
+                &Uuid::parse_str("00000000-0000-4000-8000-000000000010").unwrap(),
+            ],
+        )
+        .await
+        .expect("seeded live rows insert");
+    ids
+}
+
 async fn seed_two_records(
     admin: &tokio_postgres::Client,
     migration: &mut tokio_postgres::Client,
