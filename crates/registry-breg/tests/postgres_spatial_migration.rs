@@ -31,7 +31,8 @@ use registry_breg::package::{
 use registry_breg::postgres::{
     begin_record_transaction, install_compiled_schema, managed_schema_fingerprint,
     provision_postgis_prerequisites, verify_catalog_identity_for_catalog, verify_postgis,
-    ClaimContext, ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey, SqlIdentifier,
+    ClaimContext, ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresFailure,
+    RegistryLockKey, SqlIdentifier,
 };
 use registry_breg::startup::{prepare_startup, StartupError};
 use registry_breg::CompiledRegistry;
@@ -254,7 +255,15 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
         &backup_evidence,
     )
     .await;
-    assert_value_free(destructive_failure.err(), MigrationError::ApplyFailed);
+    // The recovery fault drops the column the first step already dropped, so
+    // the refusal carries PostgreSQL's undefined-column SQLSTATE.
+    assert_value_free(
+        destructive_failure.err(),
+        MigrationError::StatementFailed(PostgresFailure {
+            sqlstate: Some("42703".to_owned()),
+            ..PostgresFailure::default()
+        }),
+    );
     assert_non_ready_target(
         &database,
         &spatial_active,
