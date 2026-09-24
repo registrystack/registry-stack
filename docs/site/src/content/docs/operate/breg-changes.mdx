@@ -45,11 +45,21 @@ as widening or narrowing, and mixed changes are marked for review. A change to c
 recipients, or a consent-issuing action carries a `reason` when it alters who holds an existing
 consent, such as a client added to a recipient organization or a gated profile widened in place.
 The `reason` is a review aid in the diff output, not a runtime guarantee: the successor enforces
-exactly what its package declares. Set `package.sequence` in
+exactly what its package declares.
+
+Removing a field or an entity is not erasure. The successor drops the live column or table, but
+every revision snapshot recorded before it still holds the removed values in
+`registry_internal.registry_revisions`, and so does every database backup. The diff reports each
+removal as `diff.history.removed_values_retained` so the reviewer sees this before signing. When
+the removal is for data minimization or a legal reason, erase the retained revisions of each
+affected record with [`history erase`](../breg-retention/#erase-retained-history) as well; there is
+no command that removes one field from history and keeps the rest of each snapshot.
+
+Set `package.sequence` in
 `registry.yaml` to the next sequence. `registry.version` is bound to the database for its
 lifetime: a package that changes it can only initialize a new database.
 
-{/* Evidence: crates/registry-bregctl/src/lib.rs, DiffArgs;
+{/* Evidence: crates/registry-bregctl/src/lib.rs, DiffArgs and removed_value_findings();
     crates/registry-breg/src/tooling.rs, AccessChangeDirection and GATED_SCOPE_WIDENED;
     crates/registry-breg/src/migration.rs, apply_verified_package(). */}
 

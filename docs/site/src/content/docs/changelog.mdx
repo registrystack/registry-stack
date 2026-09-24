@@ -158,6 +158,17 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-evidencectl/src/source_cli.rs, diff_and_apply_refuse_a_next_fact_schema_that_drops_a_fact_a_derivation_reads;
     products/breg/evidence/tests/verify-composition.py, verify(). */}
 
+- `bregctl diff` reports every removed field or entity as
+  `diff.history.removed_values_retained`. Removing one from the package drops
+  the live column or table, but the values stay in every revision snapshot
+  recorded before the change and in every database backup; only
+  `bregctl history erase` removes them, whole revisions of one record at a
+  time. See
+  [review and apply changes](../operate/breg-changes/#compare-the-candidate-with-the-active-package).
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, removed_value_findings();
+    crates/registry-bregctl/tests/diff.rs, a_removed_field_is_reported_as_retained_in_history_not_erased. */}
+
 - BREAKING: a reviewed `chunked_backfill` step now appends one history
   revision for every row each chunk changes, in the same commit as the chunk,
   so snapshot and as-of reads agree with the backfilled rows. Its `chunkSize`

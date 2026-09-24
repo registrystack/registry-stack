@@ -37,6 +37,11 @@ file, and the others only read. A saved export or a snapshot reference is not a 
 an erased revision is gone from the registry, and a snapshot reference that named it can no longer
 be served.
 
+A package change removes nothing from history either. A successor that drops a field or an entity
+leaves the removed values in every revision snapshot recorded before it, and `bregctl diff`
+reports each such removal as `diff.history.removed_values_retained`. `history erase` is the only
+command that removes them, and it removes whole revisions of one record, not one field.
+
 Every command on this page reads the runtime file and connects to PostgreSQL directly with the
 migration credential, and the erasures, the rebaseline, and the prune take the exclusive registry
 lock, so run them from the operator host while no activation is in progress. When the database
