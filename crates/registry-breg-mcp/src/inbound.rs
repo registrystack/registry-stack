@@ -23,7 +23,8 @@ use registry_platform_audit::AuditKeyHasher;
 use registry_platform_authcommon::{parse_bearer_token, BearerParseError};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
-    JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier, TokenVerifierConfig, VerifiedToken,
+    access_token_typ_set, JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier,
+    TokenVerifierConfig, VerifiedToken,
 };
 use registry_platform_ratelimit::token_bucket::{
     TokenBucketConfig, TokenBucketError, TokenBucketLimiter,
@@ -36,9 +37,6 @@ use crate::{
     config::{RateLimitsConfig, ResourceServerConfig},
     server::problem,
 };
-
-/// The two spellings RFC 9068 permits for a JWT access token.
-const ACCESS_TOKEN_TYPES: [&str; 2] = ["at+jwt", "application/at+jwt"];
 
 /// The audit reference class of a citizen's pseudonym.
 const PRINCIPAL_CLASS: &str = "breg-mcp-principal-v1";
@@ -413,14 +411,11 @@ pub(crate) fn verifier_config(config: &ResourceServerConfig) -> TokenVerifierCon
             .iter()
             .map(|algorithm| algorithm.jsonwebtoken())
             .collect(),
-        ACCESS_TOKEN_TYPES
-            .iter()
-            .map(|typ| (*typ).to_owned())
-            .collect(),
+        // The two spellings RFC 9068 permits for a JWT access token.
+        access_token_typ_set("at+jwt"),
     )
     .with_scope_claim(config.scope_claim.clone())
     .with_allowed_clients(config.allowed_clients.clone())
-    .with_denied_kids(HashSet::new())
     .with_max_token_lifetime(Some(Duration::from_secs(config.max_token_lifetime_seconds)))
 }
 
@@ -791,6 +786,19 @@ mod tests {
         let third =
             authorization.issue_access_token(CHAT_HOST, "citizen-c", RESOURCE, SCOPE, now() + 300);
         assert_eq!(call(&router, Some(&third)).await.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn inbound_tokens_are_verified_under_both_rfc_9068_type_spellings() {
+        let config = config(
+            "https://login.example.test",
+            "https://login.example.test/jwks",
+        );
+        let verifier = verifier_config(&config);
+        assert!(registry_platform_oidc::is_access_token_typ_pair(
+            &verifier.allowed_typ
+        ));
+        assert_eq!(verifier.audiences, vec![RESOURCE.to_owned()]);
     }
 
     /// Every refusal is an RFC 9457 problem document with a kebab-case code;

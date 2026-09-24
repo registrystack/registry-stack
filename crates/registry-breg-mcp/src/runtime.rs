@@ -18,7 +18,7 @@ use zeroize::Zeroizing;
 
 use crate::{
     audit::ToolAuditLog,
-    config::{describe_secret_failure, JwksSource, RuntimeConfig},
+    config::{describe_secret_failure, JwksSource, RuntimeConfig, RuntimeConfigError},
     contract::ContractSpec,
     gateway::{Gateway, ServiceDescription},
     inbound::{uri_fetcher, verifier, ResourceServer, ResourceServerError},
@@ -29,6 +29,8 @@ use crate::{
 /// Why the gateway could not start. No variant carries a secret value.
 #[derive(Debug, thiserror::Error)]
 pub enum StartupError {
+    #[error("the runtime configuration is not valid: {0}")]
+    Configuration(#[source] RuntimeConfigError),
     #[error("{0}")]
     Secret(String),
     #[error("the secret configured at {0} is not a usable key")]
@@ -152,9 +154,7 @@ fn assemble(config: &RuntimeConfig) -> Result<Parts, StartupError> {
 /// Validate the configuration and resolve every secret without opening a
 /// socket or writing the audit log.
 pub fn check(config: &RuntimeConfig) -> Result<(), StartupError> {
-    config
-        .check()
-        .map_err(|error| StartupError::ResourceServer(error.to_string()))?;
+    config.check().map_err(StartupError::Configuration)?;
     assemble(config).map(|_| ())
 }
 
@@ -214,4 +214,30 @@ where
         .with_graceful_shutdown(shutdown)
         .await
         .map_err(StartupError::Serve)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::tests::document;
+
+    /// A document that no longer passes its own checks is reported as a
+    /// configuration failure, not as a failure of one of the halves.
+    #[test]
+    fn an_invalid_document_is_a_configuration_failure() {
+        let mut config = RuntimeConfig::from_slice(document().as_bytes()).expect("document loads");
+        config.registry.scopes.clear();
+        let error = check(&config).expect_err("an empty scope list is refused");
+        assert!(
+            matches!(
+                error,
+                StartupError::Configuration(RuntimeConfigError::Empty("registry.scopes"))
+            ),
+            "{error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            "the runtime configuration is not valid: registry.scopes must not be empty"
+        );
+    }
 }
