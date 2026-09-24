@@ -10,6 +10,10 @@
 //! the action it rendered. It has no authority of its own: every read and
 //! every submit is the registry's decision about the signed-in person.
 
+// A handler step that refuses answers with the rendered refusal page itself,
+// so its error is an HTTP response, carried to the handler once and returned.
+#![allow(clippy::result_large_err)]
+
 mod config;
 mod journal;
 mod pages;
@@ -263,7 +267,7 @@ impl Problem {
             ),
             Self::Internal => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "internal",
+                "unexpected",
                 "Something went wrong",
                 "This page could not answer. Try again later.",
             ),
@@ -290,7 +294,11 @@ impl App {
             Ok(body) => html(status, body),
             Err(error) => {
                 tracing::error!(%error, "the error page could not be rendered");
-                (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "the page could not answer",
+                )
+                    .into_response()
             }
         }
     }
