@@ -788,8 +788,8 @@ impl ReviewAuthorityRegistry {
                 unavailable_lookups += 1;
                 continue;
             };
-            let outcome = match authority.token_provider.bearer_token().await {
-                Ok(token) => {
+            let (outcome, outage_code) = match authority.token_provider.bearer_token().await {
+                Ok(token) => (
                     poll_one_result(
                         client,
                         &authority.authority,
@@ -798,9 +798,10 @@ impl ReviewAuthorityRegistry {
                         &token,
                         authority.lease_seconds,
                     )
-                    .await
-                }
-                Err(_) => Err(MutationError::Unavailable),
+                    .await,
+                    "result-lookup-uncertain",
+                ),
+                Err(_) => (Err(MutationError::Unavailable), "token-unavailable"),
             };
             match outcome {
                 Ok(true) => {
@@ -822,14 +823,20 @@ impl ReviewAuthorityRegistry {
                 Err(_) => {
                     authority_unavailable = true;
                     unavailable_lookups += 1;
+                    // An authority-wide failure, such as a credential outage,
+                    // records operator attention on every due row but spends
+                    // no poll budget: a healed outage resumes polling, and a
+                    // later pending answer or reconciled result clears the
+                    // code.
                     client
                         .execute(
                             "UPDATE registry_internal.registry_request_review_submissions
                                 SET next_result_poll_at=transaction_timestamp()+interval '5 seconds',
+                                    last_error_code=$2,
                                     updated_at=transaction_timestamp()
                               WHERE authority=$1 AND state='accepted'
                                 AND next_result_poll_at <= transaction_timestamp()",
-                            &[&authority.authority],
+                            &[&authority.authority, &outage_code],
                         )
                         .await
                         .map_err(|_| MutationError::Unavailable)?;
