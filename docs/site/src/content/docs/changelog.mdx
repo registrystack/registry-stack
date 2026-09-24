@@ -25,11 +25,16 @@ relevant product pages on this site rather than duplicating release notes.
   was changed, so the message says to retry the same apply once the database
   is reachable rather than to reconcile. The same holds when confirming an
   already-active package. A failure after maintenance began still reports
-  `apply.migration.failed`. See
+  `apply.migration.failed`. A reachable database that has never been
+  activated, such as a first apply run without `--initial`, is not
+  unavailable: it reports `apply.package.active_mismatch`, whose message now
+  names `--initial`. See
   [review and apply changes](../operate/breg-changes/#troubleshooting).
 
 {/* Evidence: crates/registry-breg/src/migration.rs, MigrationError::DatabaseUnavailable and refusal_before_maintenance();
+    crates/registry-breg/src/postgres/interlock.rs, maintenance_snapshot();
     crates/registry-breg/tests/postgres_migration.rs, real_postgres_reports_an_unavailable_database_before_maintenance_as_unchanged;
+    crates/registry-breg/tests/postgres_migration.rs, real_postgres_refuses_a_never_activated_database_as_an_active_package_mismatch;
     crates/registry-bregctl/src/lib.rs, apply_reports_an_unavailable_database_before_maintenance_as_retryable. */}
 
 - `bregctl apply` treats the already-active package as a no-op, so a repeated
