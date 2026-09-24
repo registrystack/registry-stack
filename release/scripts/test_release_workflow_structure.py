@@ -2125,6 +2125,23 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 "relay",
                 "scheduling",
             ],
+            "v0.34.0": [
+                "breg",
+                "casework",
+                "discovery",
+                "evidence",
+                "relay",
+                "scheduling",
+            ],
+            "v0.35.0": [
+                "breg",
+                "casework",
+                "discovery",
+                "evidence",
+                "messaging",
+                "relay",
+                "scheduling",
+            ],
         }
         manifests = {}
         for tag, image_names in cases.items():
@@ -2193,11 +2210,28 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         )
         self.assertNotEqual(0, rejected.returncode)
 
+        missing_messaging = dict(manifests["v0.35.0"])
+        missing_messaging["images"] = [
+            image
+            for image in missing_messaging["images"]
+            if image["name"] != "messaging"
+        ]
+        rejected = subprocess.run(
+            ["jq", "-e", "--arg", "tag", "v0.35.0", jq_filter],
+            input=json.dumps(missing_messaging),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(0, rejected.returncode)
+
         self.assertIn(
-            "breg|casework|discovery|evidence|mint|relay|scheduling)", verify
+            "breg|casework|discovery|evidence|messaging|mint|relay|scheduling)",
+            verify,
         )
         self.assertIn("`casework` from\n`v0.30.0`", verify)
         self.assertIn("Registry Scheduling joins at `v0.33.0`", verify)
+        self.assertIn("Registry Messaging joins at `v0.35.0`", verify)
 
     def test_operator_docs_match_the_latest_non_prerelease_contract(self) -> None:
         operations = (ROOT / "release/OPERATIONS.md").read_text(encoding="utf-8")

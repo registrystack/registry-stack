@@ -53,9 +53,9 @@ Complete new-image onboarding outside the release clock, in this order:
    token on the command line:
 
 ```sh
-package="${PACKAGE:?set PACKAGE to relay, evidence, discovery, breg, casework, or scheduling}"
+package="${PACKAGE:?set PACKAGE to relay, evidence, discovery, breg, casework, scheduling, or messaging}"
 case "${package}" in
-  relay|evidence|discovery|breg|casework|scheduling) ;;
+  relay|evidence|discovery|breg|casework|scheduling|messaging) ;;
   *) echo "unsupported release image package: ${package}" >&2; exit 1 ;;
 esac
 
@@ -112,7 +112,8 @@ printf '%s' "${GHCR_BOOTSTRAP_TOKEN:?set a classic PAT with write:packages}" \
 Starting with `v0.21.0`, the release requires public `relay`, `evidence`, and
 `mint` packages, joined by `discovery` from `v0.24.0`, `breg` from
 `v0.26.0`, and `casework` from `v0.30.0`. Mint is retired from `v0.31.0`;
-`scheduling` joins from `v0.33.0`. The published `v0.32.0` and older release
+`scheduling` joins from `v0.33.0` and `messaging` from `v0.35.0`. The
+published `v0.32.0` and older release
 inventories remain unchanged. After selecting
 the candidate version, derive its exact image roster and verify each final
 destination:
@@ -167,6 +168,14 @@ bootstrapped private `scheduling-candidate` package in scheduled cleanup.
 Verify both identities have the visibility and Actions access documented above,
 and require a reviewed Scheduling advisory baseline before requesting a
 `v0.33.0` or later candidate.
+
+Selecting `v0.35.0` or later also includes Messaging in both checks. The
+release source deny-lists the public `messaging` package, but the commands do
+not establish that `messaging` or `messaging-candidate` has already been
+provisioned. Complete the onboarding steps above, add `messaging-candidate` to
+the cleanup allowlist only after its private package exists, and merge the
+reviewed `release/security/messaging-advisory-baseline.json` before requesting
+a `v0.35.0` or later candidate.
 
 The daily cleanup tolerates one delete failure: GitHub's 400 stating that
 publicly visible package versions with more than 5000 downloads cannot be
@@ -621,7 +630,7 @@ published historical exception and must not be modified after publication.
 Every release promises a forward state path from its immediate predecessor.
 The release PR adds its manifest under `release/manifests/`, which starts
 `release-upgrade-rehearsal.yml` on that PR. The workflow builds BReg, Casework,
-and Evidence from the PR and runs `release/scripts/rehearse-upgrade.py`. The
+Evidence, and Messaging from the PR and runs `release/scripts/rehearse-upgrade.py`. The
 script downloads the previous published release's binaries for those products,
 authenticates `SHA256SUMS` with its protected-main Sigstore identity, and checks
 each asset against it as `release/VERIFY.md` describes. It writes a signed
@@ -641,6 +650,18 @@ gh workflow run release-upgrade-rehearsal.yml \
 The promise starts at `v0.33.0`. v0.32 to v0.33 has no forward state path,
 because no adopter ran v0.32, so the script refuses to start from any earlier
 release rather than skipping the check. Scheduling state is not rehearsed.
+
+Messaging joins the rehearsal from `v0.35.0`, its first release. The old
+binaries apply the `messagingctl init` starter package, then submit scheduled
+email and SMS messages whose delivery window starts a day later, so no provider
+is contacted, and cancel one of them. After the upgrade the new binaries must
+report the same active package, serve every captured message view unchanged,
+answer an idempotent resubmission with its original receipt, and accept a new
+submission and a cancellation. A default run from a release that did not ship
+Messaging omits it and records the reason under `omitted` in the report;
+naming it with `--product messaging` from such a release is refused. Messaging
+publishes Linux amd64 binaries only, so a macOS rehearsal that downloads the
+previous release omits it the same way.
 
 Schema and migration code refuses when it would drop rows; it never drops them
 silently. When the rehearsal reports a row loss, fix the migration so that it
@@ -740,7 +761,7 @@ evidence with the scanner versions pinned in the candidate workflow:
 ```sh
 run_id=<failed-run-id>
 run_attempt=<failed-run-attempt>
-name=relay # or evidence, discovery, breg, casework, or scheduling
+name=relay # or evidence, discovery, breg, casework, scheduling, or messaging
 candidate_tag="ghcr.io/registrystack/${name}-candidate:candidate-${run_id}-${run_attempt}"
 digest="$(crane digest "${candidate_tag}")"
 candidate_ref="ghcr.io/registrystack/${name}-candidate@${digest}"
@@ -770,7 +791,7 @@ prefix of the candidate's authoritative uncompressed DiffIDs:
 
 ```sh
 baseline=products/relay-v2/security/advisory-baseline.json
-# BReg, Casework, Discovery, and Evidence use release/security/<name>-advisory-baseline.json.
+# BReg, Casework, Discovery, Evidence, and Messaging use release/security/<name>-advisory-baseline.json.
 jq --slurpfile baseline "${baseline}" -e '
   .rootfs.diff_ids[0:($baseline[0].runtime.layer_ids | length)]
     == $baseline[0].runtime.layer_ids
