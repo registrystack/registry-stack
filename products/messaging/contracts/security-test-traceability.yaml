@@ -24,12 +24,17 @@ entries:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_submission_naming_an_unknown_member_is_refused_and_records_nothing}
   - id: MESSAGING-SEC-03
     tests:
+      - {path: crates/registry-messaging/src/providers/tests.rs, name: an_activated_provider_resolving_to_loopback_is_refused_before_connecting}
       - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_production_provider_name_resolving_to_loopback_is_refused_before_connecting}
       - {path: crates/registry-messaging/src/http_provider/tests.rs, name: metadata_private_and_loopback_provider_addresses_are_refused_without_an_allowlist}
       - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_private_network_allowance_must_be_an_exact_cidr_for_an_https_provider}
       - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_provider_url_with_credentials_a_query_or_plain_http_to_a_remote_host_is_refused}
       - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_script_target_outside_the_base_path_or_origin_is_refused}
       - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_refused_connection_is_not_sent_and_transient}
+      - {path: crates/registry-messaging/src/smtp/tests.rs, name: a_private_answer_is_refused_before_connecting}
+      - {path: crates/registry-messaging/src/smtp/tests.rs, name: a_private_literal_host_is_refused_before_connecting}
+      - {path: crates/registry-messaging/src/smtp/tests.rs, name: loopback_is_refused_in_a_tls_mode_with_real_resolution}
+      - {path: crates/registry-messaging/src/smtp/tests.rs, name: development_plaintext_refuses_an_answer_that_is_not_loopback}
   - id: MESSAGING-SEC-04
     tests:
       - {path: crates/registry-messaging-core/src/visibility.rs, name: another_caller_is_told_the_message_is_not_visible}
@@ -52,6 +57,11 @@ entries:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_cancellation_racing_a_claim_has_one_winner}
   - id: MESSAGING-SEC-06
     tests:
+      - {path: crates/registry-messaging/src/providers/tests.rs, name: an_activated_provider_cut_off_after_the_message_left_is_maybe_sent}
+      - {path: crates/registry-messaging/src/smtp/tests.rs, name: a_drop_after_the_end_of_data_marker_is_maybe_sent}
+      - {path: crates/registry-messaging/src/smtp/tests.rs, name: a_timeout_after_the_end_of_data_marker_is_maybe_sent}
+      - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_connection_dropped_after_the_request_is_maybe_sent}
+      - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_response_slower_than_the_timeout_is_maybe_sent}
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_hanging_send_is_cut_off_and_held_as_unknown}
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_killed_worker_leaves_its_message_unknown_and_unsent_again}
       - {path: crates/registry-messaging/src/dispatch.rs, name: a_transport_timeout_outside_one_to_sixty_seconds_is_refused}

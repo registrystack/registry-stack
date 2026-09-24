@@ -2,16 +2,18 @@
 
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use registry_messaging_core::{verify_callback, CallbackRequest, Channel, RenderedParts};
 use registry_platform_testing::MockHttpUpstream;
 use serde_json::{json, Value};
 use tempfile::TempDir;
+use tokio::io::AsyncReadExt as _;
 use uuid::Uuid;
 
 use super::*;
 use crate::config::tests::{package_value, runtime_value, write_project};
-use crate::smtp::stub::{Script, Stub};
+use crate::smtp::stub::{Act, Script, Stub};
 
 const MESSAGE_ID: &str = "0192f1d6-7c1a-7b4e-9a51-3f0c2e8d4b10";
 const RECIPIENT_EMAIL: &str = "resident.4471@citizen.example";
@@ -70,9 +72,16 @@ fn smtp_connection(stub: &Stub) -> Value {
 }
 
 fn http_connection(upstream: &MockHttpUpstream, authentication: Value) -> Value {
+    http_connection_to(
+        &format!("{}/v1/", upstream.url().trim_end_matches('/')),
+        authentication,
+    )
+}
+
+fn http_connection_to(base_url: &str, authentication: Value) -> Value {
     json!({
         "kind": "http",
-        "baseUrl": format!("{}/v1/", upstream.url().trim_end_matches('/')),
+        "baseUrl": base_url,
         "timeoutMilliseconds": 3000,
         "maximumResponseBytes": 65536,
         "concurrencyLimit": 4,
@@ -373,4 +382,101 @@ async fn a_provider_with_a_registered_transport_is_refused() {
     .expect_err("second activation");
     assert_eq!(error.provider, "mail-relay");
     assert!(error.to_string().contains("already registered"), "{error}");
+}
+
+/// A listener that counts connections and closes each one after reading what
+/// the client first writes, so a request that reached it has no answer.
+async fn silent_listener() -> (u16, Arc<AtomicUsize>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let port = listener.local_addr().expect("address").port();
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&accepted);
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let mut buffer = [0_u8; 4096];
+            let _read = stream.read(&mut buffer).await;
+            drop(stream);
+        }
+    });
+    (port, accepted)
+}
+
+#[tokio::test]
+async fn an_activated_provider_resolving_to_loopback_is_refused_before_connecting() {
+    let stub = Stub::start(Script::default()).await;
+    let (port, accepted) = silent_listener().await;
+    let mut relay = smtp_connection(&stub);
+    relay["host"] = json!("localhost");
+    relay["tls"] = json!("starttls");
+    let gateway = http_connection_to(
+        &format!("https://localhost:{port}/v1/"),
+        json!({"kind": "static-authorization", "tokenRef": "secret:file/gateway-token"}),
+    );
+    let project = project(
+        json!({"mail-relay": relay, "sms-gateway": gateway}),
+        |_| {},
+        &[
+            ("callback-token", CALLBACK_TOKEN),
+            ("gateway-token", b"gateway-token-value"),
+        ],
+    );
+    let mut transports = Transports::new();
+    activate_providers(
+        &project.config,
+        &project.loaded,
+        &project.secrets,
+        &mut transports,
+    )
+    .expect("providers activate");
+
+    // Both kinds refuse the resolved loopback address before any byte
+    // leaves, and the attempt is not sent, so the worker may retry it.
+    let not_sent = SendOutcome::Transient { retry_after: None };
+    let relay = transports.get("mail-relay").expect("smtp transport");
+    assert_eq!(relay.send(&email()).await, not_sent);
+    assert_eq!(stub.recorded().connections, 0);
+    let gateway = transports.get("sms-gateway").expect("http transport");
+    assert_eq!(gateway.send(&sms()).await, not_sent);
+    assert_eq!(accepted.load(Ordering::SeqCst), 0, "no connection was made");
+}
+
+#[tokio::test]
+async fn an_activated_provider_cut_off_after_the_message_left_is_maybe_sent() {
+    let stub = Stub::start(Script {
+        end_of_data: Act::Drop,
+        ..Script::default()
+    })
+    .await;
+    let (port, accepted) = silent_listener().await;
+    let project = project(
+        json!({
+            "mail-relay": smtp_connection(&stub),
+            "sms-gateway": http_connection_to(
+                &format!("http://127.0.0.1:{port}/v1/"),
+                json!({"kind": "none"}),
+            )
+        }),
+        |_| {},
+        &[("callback-token", CALLBACK_TOKEN)],
+    );
+    let mut transports = Transports::new();
+    activate_providers(
+        &project.config,
+        &project.loaded,
+        &project.secrets,
+        &mut transports,
+    )
+    .expect("providers activate");
+
+    // Each kind reports a send that may have reached the provider as
+    // maybe-sent, which the dispatcher holds as unknown.
+    let relay = transports.get("mail-relay").expect("smtp transport");
+    assert_eq!(relay.send(&email()).await, SendOutcome::MaybeSent);
+    assert!(stub.recorded().content.is_some(), "the message was written");
+    let gateway = transports.get("sms-gateway").expect("http transport");
+    assert_eq!(gateway.send(&sms()).await, SendOutcome::MaybeSent);
+    assert_eq!(accepted.load(Ordering::SeqCst), 1);
 }

@@ -89,8 +89,8 @@ Threat: a file edited under `package.root` changes what a running or
 restarted deployment sends without anyone recording the change, or a
 deployment runs a package other than the one reviewed.
 
-The package digest covers every file under `templates/` and
-`messaging.yaml`, each by its own SHA-256 and size, in a canonical JSON
+The package digest covers `messaging.yaml` and every file under
+`templates/` and `providers/`, each by its own SHA-256 and size, in a canonical JSON
 listing. The loader refuses symbolic links anywhere in the package, bounds the
 entry count, each file, and the total, and reads nothing outside
 `package.root`. A pinned `package.expectedDigest` must equal the digest read,
@@ -216,16 +216,18 @@ MESSAGING-SEC-05, enforced. The worker runs on
 names the lease and the generation, so a stale worker's write is refused
 and changes nothing. An operator requeue starts a new generation.
 
-MESSAGING-SEC-06, partial. A transport must finish within the attempt's
+MESSAGING-SEC-06, enforced. A transport must finish within the attempt's
 budget; the worker stops waiting when it is spent and records the attempt as
 maybe sent (MESSAGING-DEC-10). A maybe-sent attempt, or a lease that lapsed
 mid-attempt, stops the message as `unknown` unless the sender profile set
 `onUncertain: retry`, which the package accepts only over a provider that
 declares `idempotentSubmit` or a profile that sets `acceptDuplicates`. A
 retry then carries the same provider idempotency key, derived from the
-message, its generation, and a digest of its content (MESSAGING-DEC-11). The
-row stays partial because the provider kinds, not the worker, decide
-whether a failure happened after the request was written.
+message, its generation, and a digest of its content (MESSAGING-DEC-11).
+Each provider kind decides whether a failure happened after the message
+left: an `smtp` drop, timeout, or unreadable reply once the end-of-data
+marker was written, and an `http` failure after the request was written,
+is maybe-sent; a failure before either is not sent and transient.
 
 A cancel takes the job row's lock, so it and a claim serialize: a message is
 either cancelled before any attempt or refused `409 message.dispatch-started`
@@ -250,7 +252,7 @@ the message's status in the same transaction that changes it, refuses with
 submitter's subject. `messagingctl` reaches the database only through the
 runtime configuration's credential references.
 
-## HTTP provider egress (MESSAGING-SEC-03 partial)
+## HTTP provider egress (MESSAGING-SEC-03)
 
 Threat: a provider package or its connection sends a message, or a
 credential, to an address other than the provider the operator configured:
@@ -303,9 +305,9 @@ between resolutions. Scripts run on the async runtime thread within the send
 deadline. The OAuth token decoder is closed: it accepts `access_token`,
 `token_type` compared case-insensitively to `Bearer`, `expires_in` unless the
 connection sets `assumedLifetimeSeconds`, and an optional string `scope`, and
-refuses any other member, so the send is transient. The configuration loader that activates providers,
-and the adapter that registers them as the worker's transport, are not wired
-yet.
+refuses any other member, so the send is transient. A plain `http` base URL
+to a loopback host is accepted by every build, unlike SMTP's
+`development-loopback`, which only a test build accepts.
 
 Tests: MESSAGING-SEC-03 in `contracts/security-test-traceability.yaml`, and
 the `http_provider/tests.rs` suite, including
@@ -313,15 +315,99 @@ the `http_provider/tests.rs` suite, including
 `a_script_header_outside_the_declared_allowlist_is_refused`, and
 `a_script_referring_to_anything_outside_its_arguments_fails`.
 
+## SMTP provider egress (MESSAGING-SEC-03)
+
+Threat: a message, or the relay credential, reaches a host other than the
+relay the operator configured, travels in plaintext, or is accepted by a
+relay presenting a certificate for another name; or a header line is
+injected from template data.
+
+The `smtp` provider kind connects to one configured `host`. Each attempt
+resolves it once, refuses the whole answer set when any address is loopback,
+private, shared, unique-local, link-local, or metadata, unless it falls in an
+exact `allowedPrivateCidrs` entry (RFC 1918, CGNAT, or unique-local only),
+and connects only to a checked address. The attempt is then not sent and
+transient. TLS modes:
+
+- `starttls` (default port 587) requires the relay to offer `STARTTLS`
+  and upgrades before authentication or any envelope command; a relay that
+  does not offer it gets no credential and no message.
+- `implicit` (default port 465) is TLS from the first byte.
+- `development-loopback` is plaintext to a loopback literal or `localhost`
+  on an explicit port that is neither 587 nor 465, refuses every resolved
+  answer that is not loopback, and admits no trusted root or private
+  network. Like `database.testOnlyPlaintext`, only a build carrying a test
+  feature accepts it (`postgres-test` or `smtp-test`); a release build
+  refuses it at `messagingctl check` and at startup.
+
+Both TLS modes verify the relay's certificate against the configured host
+name, not the connected address, over the public web roots plus an optional
+`trustedRootCertificateRef` PEM bundle. The session uses lettre's low-level
+connection (`lettre` 0.11, `rustls`, no default features), driven step by
+step so each stage is classified: authentication only over `PLAIN` or
+`LOGIN`, and in a TLS mode only after TLS (`development-loopback` may
+authenticate in plaintext to its loopback relay), `SMTPUTF8` and `8BITMIME` only when the relay
+advertises them, and a permanent refusal otherwise. Addresses are parsed by
+lettre before any connection; a subject strips newlines and lettre encodes
+headers, so no value can open a header line. The `Message-ID` is
+`<message id@sender domain>`, so a duplicate after an unknown outcome is
+recognisable downstream. The EHLO name is lettre's default address literal;
+an `ehloName` setting is not offered.
+
+Credentials are `secret:` references resolved at activation into lettre
+`Credentials`. No log line, attempt detail, or error carries an address, a
+subject, a body, a credential, or a relay reply's text: the detail is a
+stage, a reply code, and a failure class, and `Debug` output of the settings
+and the provider redacts every reference and credential.
+
+Residual risks: lettre's `Credentials` holds the username and password as
+plain `String` values that are not zeroized when dropped, unlike the
+runtime's own `ProtectedSecret`; they live for the life of the process. The
+EHLO name `[127.0.0.1]` may be refused by a relay that checks it.
+
+Tests: the `smtp/tests.rs` suite, including
+`starttls_refuses_a_certificate_for_another_name`,
+`a_relay_without_starttls_gets_no_credential_and_no_message`,
+`a_subject_cannot_inject_a_header`, and
+`no_log_line_carries_an_address_content_or_credential`; the
+`smtp/settings.rs` tests, including
+`plaintext_is_refused_by_a_build_without_a_test_feature`; and MESSAGING-SEC-03
+and -06 in `contracts/security-test-traceability.yaml`.
+
+## Provider activation
+
+Threat: a provider starts half-configured, a startup failure prints a
+credential, or a message is sent through a connection the package did not
+declare.
+
+`providers` in the runtime document gives each provider `messaging.yaml`
+declares its connection, keyed by the same id and with the same `kind`; a
+connection the package does not declare, or declares with another kind, is
+refused by `messagingctl check` and at startup. Every credential, trust
+bundle (`tlsTrustProfiles.<name>.bundleRef`), and callback verifier secret is
+a `secret:` reference, checked offline for its grammar and enabled provider,
+and resolved once at startup before either listener binds. A provider that
+cannot be activated stops the runtime with an error naming the provider and
+the member or reference, never a value. A declared provider given no
+connection is not activated: startup logs a warning, and its messages fail
+`provider-unconfigured` without a send (MESSAGING-DEC-12).
+
+The HTTP transport passes the idempotency key to the prepare script only
+when the package declares `idempotentSubmit` for the provider. Channel,
+sender, and provider come from the persisted message, so a later package
+cannot redirect a retry; the SMS segment bound comes from the active
+package's sender profile.
+
+Tests: `providers/tests.rs`, including
+`a_provider_that_cannot_be_activated_names_itself_and_never_a_secret`, and the
+`config.rs` provider connection tests.
+
 ## Open questions
 
 - The specification's `dispatch` member of the message view is not served.
 - A payload may be erased `retention.payloadDays` after acceptance even when
   the message still waits in a retry; MESSAGING-SEC-10 and the sweep must
   decide how the two interact.
-- The `messaging` binary registers no transport, so every claimed message
-  fails `provider-unconfigured` until the SMTP and HTTP provider kinds are
-  wired in.
 
 ## Callbacks (pending, slice S5)
 
