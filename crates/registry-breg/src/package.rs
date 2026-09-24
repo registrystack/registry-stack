@@ -38,8 +38,8 @@ use crate::history_schema::{
 #[cfg(feature = "tooling")]
 use crate::migration_plan::{
     prepare_reviewed_migration_plan, validate_reviewed_migration_plan,
-    PreparedReviewedMigrationPlan, ReviewedMigrationRecovery, ReviewedMigrationSource,
-    ReviewedMigrationStepDescriptor, ReviewedPlanBindings,
+    PreparedReviewedMigrationPlan, ReviewedMigrationError, ReviewedMigrationRecovery,
+    ReviewedMigrationSource, ReviewedMigrationStepDescriptor, ReviewedPlanBindings,
 };
 use crate::migration_plan::{
     reviewed_artifact_kind, ReviewedArtifactKind, ValidatedReviewedMigrationPlan,
@@ -817,6 +817,10 @@ pub enum PackageError {
     Integrity,
     #[error("the package deployment binding is invalid")]
     Binding,
+    /// The package's sequence is below the active package's. Packages apply
+    /// forward only, so a rollback is a new successor, never an older package.
+    #[error("the package is older than the active package")]
+    OlderThanActive,
     #[error("the package signature policy failed")]
     Signature,
     #[error("the package compiler derivation failed")]
@@ -825,6 +829,13 @@ pub enum PackageError {
     MigrationPlan,
     #[error("the package permissions are unsafe")]
     Permissions,
+    #[error("the package trust anchor is not canonical JSON")]
+    TrustAnchorNotCanonical,
+    // The wrapped reason is one of `ReviewedMigrationError`'s own fixed,
+    // value-free messages, so it carries no source value either.
+    #[cfg(feature = "tooling")]
+    #[error("the reviewed migration plan was refused: {0}")]
+    ReviewedMigration(ReviewedMigrationError),
 }
 
 pub type Result<T> = std::result::Result<T, PackageError>;
@@ -2285,7 +2296,7 @@ fn reviewed_successor_migration_plan(
                 .cloned(),
         );
     }
-    statements.extend(reviewed_immediate_action_policy_delta(baseline, candidate));
+    statements.extend(reviewed_successor_managed_policy_delta(baseline, candidate));
     Ok(MigrationPlan {
         from_revision: Some(change_set.from_revision.clone()),
         prior_baseline: Some(baseline.clone()),
@@ -2296,7 +2307,7 @@ fn reviewed_successor_migration_plan(
     })
 }
 
-fn reviewed_immediate_action_policy_delta(
+fn reviewed_successor_managed_policy_delta(
     baseline: &CompiledRegistryMigrationBaseline,
     candidate: &CompiledRegistry,
 ) -> Vec<DdlStatement> {
@@ -2332,8 +2343,8 @@ fn reviewed_immediate_action_policy_delta(
         if previous_table.physical_name != candidate_table.physical_name {
             continue;
         }
-        let previous_policies = immediate_action_policies(previous_table);
-        let candidate_policies = immediate_action_policies(candidate_table);
+        let previous_policies = reviewed_successor_managed_policies(previous_table);
+        let candidate_policies = reviewed_successor_managed_policies(candidate_table);
         for (name, previous_policy) in &previous_policies {
             if candidate_policies.get(name) != Some(previous_policy) {
                 statements.push(drop_policy_statement(entity_id, previous_table, name));
@@ -2352,13 +2363,16 @@ fn reviewed_immediate_action_policy_delta(
     statements
 }
 
-fn immediate_action_policies(table: &DdlTable) -> BTreeMap<&str, &DdlPolicy> {
+fn reviewed_successor_managed_policies(table: &DdlTable) -> BTreeMap<&str, &DdlPolicy> {
     table
         .policies
         .iter()
         .filter(|policy| {
             policy.name.starts_with("registry_action_rls_")
                 || policy.name.starts_with("registry_action_link_rls_")
+                || policy.name.starts_with("registry_cr_rls_")
+                || policy.name.starts_with("registry_cr_presence_rls_")
+                || policy.name.starts_with("registry_cr_action_rls_")
         })
         .map(|policy| (policy.name.as_str(), policy))
         .collect()
@@ -2760,7 +2774,7 @@ fn reviewed_successor_inputs(
             candidate_physical_names: compiled.physical_names(),
         },
     )
-    .map_err(|_| PackageError::MigrationPlan)?;
+    .map_err(PackageError::ReviewedMigration)?;
     let PreparedReviewedMigrationPlan {
         descriptor_paths,
         files,
@@ -3756,7 +3770,10 @@ fn validate_bindings(manifest: &PackageManifest, context: &PackageLoadContext<'_
             active_revision,
             active_sequence,
         } => {
-            if manifest.sequence <= active_sequence
+            if manifest.sequence < active_sequence {
+                return Err(PackageError::OlderThanActive);
+            }
+            if manifest.sequence == active_sequence
                 || manifest.prior_revision.as_deref() != Some(active_revision)
                 || manifest.migration_plan.from_revision.as_deref() != Some(active_revision)
             {
@@ -4319,7 +4336,7 @@ fn verify_signatures(
     let anchor_path = context.trust_anchor.ok_or(PackageError::Signature)?;
     reject_symlink_components(anchor_path)?;
     let anchor_bytes = read_bounded_regular(anchor_path, MAX_MANIFEST_BYTES, true)?;
-    let anchor: PackageTrustAnchor = parse_canonical(&anchor_bytes)?;
+    let anchor: PackageTrustAnchor = parse_canonical_trust_anchor(&anchor_bytes)?;
     if anchor.api_version != TRUST_ANCHOR_API_VERSION
         || anchor.environment != context.database_initialization_environment
         || anchor.instance_id != context.instance_id
@@ -4925,6 +4942,19 @@ fn parse_canonical<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T> {
     let canonical = canonicalize_json(&value).map_err(|_| PackageError::CanonicalJson)?;
     if canonical != bytes {
         return Err(PackageError::CanonicalJson);
+    }
+    serde_json::from_value(value).map_err(|_| PackageError::CanonicalJson)
+}
+
+// The trust anchor is an operator-maintained file, not a signed package
+// artifact, so a well-formed but non-canonically-formatted anchor is refused
+// with its own cause instead of the generic `CanonicalJson` a malformed or
+// mis-shaped anchor still gets.
+fn parse_canonical_trust_anchor(bytes: &[u8]) -> Result<PackageTrustAnchor> {
+    let value = parse_json_strict(bytes).map_err(|_| PackageError::CanonicalJson)?;
+    let canonical = canonicalize_json(&value).map_err(|_| PackageError::CanonicalJson)?;
+    if canonical != bytes {
+        return Err(PackageError::TrustAnchorNotCanonical);
     }
     serde_json::from_value(value).map_err(|_| PackageError::CanonicalJson)
 }

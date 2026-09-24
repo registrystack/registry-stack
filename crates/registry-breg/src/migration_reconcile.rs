@@ -396,6 +396,9 @@ fn classify(
 }
 
 fn unresolvable_reason(progress: Option<ReviewedMigrationProgress>) -> &'static str {
+    // Once every step closed, only the catalog stands between the target and
+    // completion: an operator who removes the unmanaged difference can then
+    // complete it, so the reason must name the catalog, not the steps.
     if progress.is_some_and(|progress| progress.durable_step_progress && !progress.closed) {
         UNRESOLVABLE_STEPS_COMMITTED
     } else {
@@ -555,6 +558,31 @@ mod tests {
         assert_eq!(
             unresolvable_reason(Some(committed)),
             UNRESOLVABLE_STEPS_COMMITTED
+        );
+    }
+
+    #[test]
+    fn a_reviewed_plan_closed_with_committed_steps_names_the_catalog() {
+        // Every step closed and committed rows, but the live catalog still
+        // differs from the target, for example by an object an administrator
+        // left behind. The steps are finished; the catalog is what the
+        // operator must correct before the target can complete.
+        let closed_with_committed_steps = ReviewedMigrationProgress {
+            closed: true,
+            durable_step_progress: true,
+        };
+        let unmatched_target = report(Some("differs"), Some("differs"));
+        assert_eq!(
+            classify(
+                &unmatched_target,
+                Some(closed_with_committed_steps),
+                &snapshot("failed", Some("rev-2")),
+            ),
+            ReconcileOutcome::Unresolvable
+        );
+        assert_eq!(
+            unresolvable_reason(Some(closed_with_committed_steps)),
+            UNRESOLVABLE_CATALOG_UNMATCHED
         );
     }
 

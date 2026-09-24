@@ -25,6 +25,7 @@ wire contract.
 | Command | `kind` | Schema |
 |---|---|---|
 | `attempt settle` | `AttemptSettlementReport` | `AttemptSettlementReport.schema.json` |
+| `attempt mark-uncertain` | `AttemptUncertainMarkingReport` | `AttemptUncertainMarkingReport.schema.json` |
 | `check` | `CheckReport` | `CheckReport.schema.json` |
 | `db migrate` | `DatabaseMigrationReport` | `DatabaseMigrationReport.schema.json` |
 | `doctor` | `DoctorReport` | `DoctorReport.schema.json` |
@@ -64,7 +65,8 @@ or unconstrained JSON value. These nodes pass through a type owned by the
 Casework engine, a source adapter, or another product. Their interior is not a
 promise made by this CLI contract:
 
-- `AttemptSettlementReport.report` and `RetentionEraseReport.report`
+- `AttemptSettlementReport.report`, `AttemptUncertainMarkingReport.report`,
+  and `RetentionEraseReport.report`
 - `CheckReport.effective`
 - `DoctorReport.secretFileChecks` and `DoctorReport.sourceChecks`
 - the policy arrays in `ExplainReport`

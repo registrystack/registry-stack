@@ -411,6 +411,81 @@ fn package_refuses_a_local_target_without_publishing_or_exposing_values() {
 }
 
 #[test]
+fn package_refuses_a_bundle_directory_that_does_not_resolve_to_the_output() {
+    for format in ["human", "json"] {
+        let fixture = Fixture::new();
+
+        let output = fixture.package(format);
+
+        assert_failed(&output, "stale bundle directory");
+        assert!(!fixture.output.exists());
+        assert!(fixture.invocations().is_empty());
+        assert_value_free(&output);
+        let expected_bundle = fixture.output.join("bundle").display().to_string();
+        match format {
+            "human" => {
+                assert!(output.stdout.is_empty());
+                let message = stderr(&output);
+                assert!(message.contains("evidence.package.bundle-directory-mismatch"));
+                assert!(message.contains("runtime.yaml:/bundleDirectory"));
+                assert!(message.contains("/srv/evidence/candidate/bundle"));
+                assert!(message.contains(&expected_bundle));
+            }
+            "json" => {
+                assert!(output.stderr.is_empty());
+                let report: serde_json::Value =
+                    serde_json::from_slice(&output.stdout).expect("JSON refusal report");
+                assert_eq!(report["status"], "domain-refusal");
+                assert_eq!(
+                    report["diagnostics"][0]["code"],
+                    "evidence.package.bundle-directory-mismatch"
+                );
+                assert_eq!(
+                    report["diagnostics"][0]["path"],
+                    "runtime.yaml:/bundleDirectory"
+                );
+                let message = report["diagnostics"][0]["message"]
+                    .as_str()
+                    .expect("diagnostic message");
+                assert!(message.contains("/srv/evidence/candidate/bundle"));
+                assert!(message.contains(&expected_bundle));
+            }
+            _ => unreachable!(),
+        }
+        fixture.assert_no_staging_residue();
+    }
+}
+
+#[test]
+fn package_accepts_a_bundle_directory_that_resolves_to_the_output() {
+    let fixture = Fixture::new();
+    let matching_bundle_directory = fixture.output.join("bundle").display().to_string();
+    fs::write(
+        &fixture.runtime,
+        TARGET_RUNTIME.replacen(
+            "bundleDirectory: /srv/evidence/candidate/bundle",
+            &format!("bundleDirectory: {matching_bundle_directory}"),
+            1,
+        ),
+    )
+    .expect("self-consistent target runtime");
+
+    let output = fixture.package("human");
+
+    assert_success(&output, "self-consistent package");
+    assert!(fixture.output.join("bundle").is_dir());
+    assert_eq!(
+        fs::read_to_string(fixture.output.join("runtime.yaml")).unwrap(),
+        TARGET_RUNTIME.replacen(
+            "bundleDirectory: /srv/evidence/candidate/bundle",
+            &format!("bundleDirectory: {matching_bundle_directory}"),
+            1,
+        )
+    );
+    fixture.assert_no_staging_residue();
+}
+
+#[test]
 fn sqlite_extract_build_copies_the_statement_without_http_only_artifacts() {
     let fixture = Fixture::new();
     fixture.use_sqlite_source();
@@ -591,6 +666,95 @@ fn unresolved_review_markers_and_unknown_target_fields_fail_closed() {
     assert!(unknown.invocations().is_empty());
     assert!(!unknown.output.exists());
     unknown.assert_no_staging_residue();
+}
+
+#[test]
+fn package_names_the_file_and_rule_of_an_unresolved_review_marker() {
+    for format in ["human", "json"] {
+        let fixture = Fixture::new();
+        let matching_bundle_directory = fixture.output.join("bundle").display().to_string();
+        fs::write(
+            &fixture.runtime,
+            TARGET_RUNTIME.replacen(
+                "bundleDirectory: /srv/evidence/candidate/bundle",
+                &format!("bundleDirectory: {matching_bundle_directory}"),
+                1,
+            ),
+        )
+        .expect("self-consistent target runtime");
+        fs::write(
+            fixture.project.join("fixtures/answer.yaml"),
+            "fixture: TODO(evidencectl)\n",
+        )
+        .expect("review marker");
+
+        let output = fixture.package(format);
+
+        assert_failed(&output, "review marker");
+        assert!(!fixture.output.exists());
+        assert!(fixture.invocations().is_empty());
+        assert_value_free(&output);
+        match format {
+            "human" => {
+                assert!(output.stdout.is_empty());
+                let message = stderr(&output);
+                assert!(message.contains("evidence.package.review-marker"));
+                assert!(message.contains("bundle/fixtures/answer.yaml"));
+                assert!(message.contains("TODO(evidencectl)"));
+            }
+            "json" => {
+                assert!(output.stderr.is_empty());
+                let report: serde_json::Value =
+                    serde_json::from_slice(&output.stdout).expect("JSON refusal report");
+                assert_eq!(report["status"], "domain-refusal");
+                assert_eq!(
+                    report["diagnostics"][0]["code"],
+                    "evidence.package.review-marker"
+                );
+                assert_eq!(
+                    report["diagnostics"][0]["path"],
+                    "bundle/fixtures/answer.yaml"
+                );
+                let message = report["diagnostics"][0]["message"]
+                    .as_str()
+                    .expect("diagnostic message");
+                assert!(message.contains("TODO(evidencectl)"));
+            }
+            _ => unreachable!(),
+        }
+        fixture.assert_no_staging_residue();
+    }
+}
+
+#[test]
+fn check_production_reports_the_same_review_marker_package_would_refuse() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.project.join("evidence-project.yaml"),
+        "version: 1\nproject: evidence-authoring\n",
+    )
+    .expect("project marker");
+    fs::write(
+        fixture.project.join("fixtures/answer.yaml"),
+        "fixture: TODO(evidencectl)\n",
+    )
+    .expect("review marker");
+
+    let output = fixture.check_production("json");
+
+    assert_failed(&output, "check --production review marker");
+    assert!(fixture.invocations().is_empty());
+    assert_value_free(&output);
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("JSON check report");
+    let findings = report["findings"].as_array().expect("findings array");
+    assert!(
+        findings.iter().any(
+            |finding| finding["code"] == "evidence.package.review-marker"
+                && finding["path"] == "bundle/fixtures/answer.yaml"
+        ),
+        "{report}"
+    );
 }
 
 #[test]
@@ -872,6 +1036,24 @@ impl Fixture {
             )
             .output()
             .expect("evidencectl package starts")
+    }
+
+    fn check_production(&self, format: &str) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+            .args(["--format", format, "check"])
+            .arg(&self.project)
+            .arg("--target")
+            .arg(&self.target)
+            .arg("--production")
+            .arg("--deny-findings")
+            .env("EVIDENCE_BIN", &self.evidence)
+            .env("FAKE_EVIDENCE_LOG", &self.log)
+            .env(
+                "FAKE_EVIDENCE_VERSION",
+                registry_platform_buildinfo::DISPLAY_VERSION,
+            )
+            .output()
+            .expect("evidencectl check starts")
     }
 
     fn build_with(&self, project: &Path, target: &Path, output: &Path) -> Output {

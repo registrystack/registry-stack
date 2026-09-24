@@ -152,7 +152,7 @@ pub fn build_adapter(
         .as_deref()
         .map(|reference| resolve_secret(secrets, reference))
         .transpose()?;
-    let generation = binding_generation(binding, source, &client_id, &description_bytes)?;
+    let generation = binding_generation(binding, source, &description_bytes)?;
 
     let request_timeout = Duration::from_millis(binding.request_timeout_milliseconds);
     let connect_timeout = Duration::from_millis(binding.connect_timeout_milliseconds);
@@ -509,51 +509,22 @@ fn string_field<'a>(
         .ok_or(SourceAdapterError::Invalid)
 }
 
+/// The binding generation names what the source means, not how Casework
+/// reaches it: the source id, the BReg instance that emits its events, and the
+/// imported source description. Work observed under one generation is
+/// superseded when the generation changes, so credential rotation, transport
+/// tuning, and presentation settings stay outside it.
 fn binding_generation(
     binding: &BregBinding,
     source: &SourcePolicy,
-    client_id: &str,
     description: &[u8],
 ) -> Result<String, SourceAdapterError> {
-    let mut identity = json!({
+    let identity = serde_json::to_vec(&json!({
         "sourceId": source.id,
-        "baseUrl": binding.base_url,
-        "readerProfile": binding.reader_profile,
-        "tokenEndpoint": binding.token_endpoint,
-        "clientIdRef": binding.client_id_ref,
-        "clientIdSha256": sha256_uri(client_id.as_bytes()),
-        "clientAssertionKeyRef": binding.client_assertion_key_ref,
-        "webhookSecretRef": binding.webhook_secret_ref,
         "eventSource": binding.event_source,
-        "eventType": binding.event_type,
-        "trustedRootCertificatesRef": binding.trusted_root_certificates_ref,
-        "requestTimeoutMilliseconds": binding.request_timeout_milliseconds,
-        "connectTimeoutMilliseconds": binding.connect_timeout_milliseconds,
         "descriptionSha256": sha256_uri(description),
-    });
-    if let Some(audience) = &binding.client_assertion_audience {
-        identity["clientAssertionAudience"] = json!(audience);
-    }
-    if let Some(resource) = &binding.resource {
-        identity["resource"] = json!(resource);
-    }
-    if let Some(scopes) = &binding.scopes {
-        identity["scopes"] = json!(scopes);
-    }
-    if let Some(display_reference) = source
-        .requests
-        .first()
-        .and_then(|request| request.display_reference.as_ref())
-    {
-        identity["displayReference"] =
-            serde_json::to_value(display_reference).map_err(|_| SourceAdapterError::Invalid)?;
-    }
-    if let Some(request) = source.requests.first() {
-        if !request.context_projection.is_empty() {
-            identity["contextProjection"] = json!(request.context_projection);
-        }
-    }
-    let identity = serde_json::to_vec(&identity).map_err(|_| SourceAdapterError::Invalid)?;
+    }))
+    .map_err(|_| SourceAdapterError::Invalid)?;
     Ok(sha256_uri(&identity))
 }
 
@@ -793,63 +764,152 @@ mod tests {
         assert!(validate_description(&source, &description("correction")).is_err());
     }
 
+    fn generation(binding: &BregBinding, source: &SourcePolicy) -> String {
+        binding_generation(binding, source, &description("correction")).unwrap()
+    }
+
     #[test]
-    fn generation_changes_with_description_or_resolved_client_identity() {
-        let source = source();
-        let first = binding_generation(
-            &binding(),
-            &source,
-            "casework-client",
-            &description("correction"),
-        )
-        .unwrap();
-        let changed_client = binding_generation(
-            &binding(),
-            &source,
-            "replacement-client",
-            &description("correction"),
-        )
-        .unwrap();
+    fn generation_changes_with_source_id_event_source_or_description() {
+        let first = generation(&binding(), &source());
+
         let mut changed_description = description("correction");
         changed_description.push(b'\n');
         let changed_import =
-            binding_generation(&binding(), &source, "casework-client", &changed_description)
-                .unwrap();
-        assert_ne!(first, changed_client);
+            binding_generation(&binding(), &source(), &changed_description).unwrap();
         assert_ne!(first, changed_import);
 
-        let mut source_with_reference = source;
-        source_with_reference.requests[0].display_reference =
+        let mut renamed = source();
+        renamed.id = "licence-register".to_owned();
+        assert_ne!(first, generation(&binding(), &renamed));
+
+        let mut other_instance = binding();
+        other_instance.event_source = "urn:registrystack:registry:package:instance:other".into();
+        assert_ne!(first, generation(&other_instance, &source()));
+    }
+
+    /// The resolved client id is not an input to the formula, so rotating the
+    /// credential behind `clientIdRef` cannot reach the generation either.
+    #[test]
+    fn generation_ignores_credentials_transport_and_presentation_settings() {
+        let first = generation(&binding(), &source());
+        let operational: Vec<(&str, BregBinding)> = vec![
+            (
+                "baseUrl",
+                BregBinding {
+                    base_url: "https://registry-2.example".into(),
+                    ..binding()
+                },
+            ),
+            (
+                "readerProfile",
+                BregBinding {
+                    reader_profile: "casework-reader-2".into(),
+                    ..binding()
+                },
+            ),
+            (
+                "tokenEndpoint",
+                BregBinding {
+                    token_endpoint: "https://issuer-2.example/token".into(),
+                    ..binding()
+                },
+            ),
+            (
+                "clientAssertionAudience",
+                BregBinding {
+                    client_assertion_audience: Some("https://issuer.example".into()),
+                    ..binding()
+                },
+            ),
+            (
+                "resource",
+                BregBinding {
+                    resource: Some("urn:breg:example".into()),
+                    ..binding()
+                },
+            ),
+            (
+                "scopes",
+                BregBinding {
+                    scopes: Some(vec!["casework:source-reader".into()]),
+                    ..binding()
+                },
+            ),
+            (
+                "clientIdRef",
+                BregBinding {
+                    client_id_ref: "secret:file/client-id-2".into(),
+                    ..binding()
+                },
+            ),
+            (
+                "clientAssertionKeyRef",
+                BregBinding {
+                    client_assertion_key_ref: "secret:file/client-key-2.jwk".into(),
+                    ..binding()
+                },
+            ),
+            (
+                "webhookSecretRef",
+                BregBinding {
+                    webhook_secret_ref: "secret:env/CASEWORK_WEBHOOK_2".into(),
+                    ..binding()
+                },
+            ),
+            (
+                "eventType",
+                BregBinding {
+                    event_type: "casework-lifecycle-v1-staging".into(),
+                    ..binding()
+                },
+            ),
+            (
+                "trustedRootCertificatesRef",
+                BregBinding {
+                    trusted_root_certificates_ref: Some("secret:file/roots.pem".into()),
+                    ..binding()
+                },
+            ),
+            (
+                "requestTimeoutMilliseconds",
+                BregBinding {
+                    request_timeout_milliseconds: 45_000,
+                    ..binding()
+                },
+            ),
+            (
+                "connectTimeoutMilliseconds",
+                BregBinding {
+                    connect_timeout_milliseconds: 5_000,
+                    ..binding()
+                },
+            ),
+        ];
+        for (field, changed) in &operational {
+            assert!(validate_binding(changed).is_ok(), "{field}");
+            assert_eq!(first, generation(changed, &source()), "{field}");
+        }
+
+        let mut presented = source();
+        presented.requests[0].display_reference =
             Some(registry_casework_core::DisplayReferencePolicy {
                 field: "region".to_owned(),
             });
-        let changed_reference = binding_generation(
-            &binding(),
-            &source_with_reference,
-            "casework-client",
-            &description("correction"),
-        )
-        .unwrap();
-        assert_ne!(first, changed_reference);
+        presented.requests[0].context_projection = vec!["region".to_owned()];
+        assert_eq!(first, generation(&binding(), &presented));
     }
+
     #[test]
     fn generation_ignores_reconciliation_cadence() {
         let source = source();
         let binding = binding();
-        let first = binding_generation(
-            &binding,
-            &source,
-            "casework-client",
-            &description("correction"),
-        )
-        .unwrap();
+        let first = binding_generation(&binding, &source, &description("correction")).unwrap();
         let changed_cadence = binding_generation(
             &BregBinding {
                 reconciliation_interval_milliseconds: 120_000,
                 ..binding
             },
             &source,
-            "casework-client",
             &description("correction"),
         )
         .unwrap();
@@ -858,20 +918,12 @@ mod tests {
     }
 
     #[test]
-    fn source_token_authority_is_explicit_bounded_and_part_of_generation() {
-        let baseline =
-            binding_generation(&binding(), &source(), "reader", &description("correction"))
-                .unwrap();
+    fn source_token_authority_is_explicit_and_bounded() {
         let mut configured = binding();
         configured.client_assertion_audience = Some("https://issuer.example".into());
         configured.resource = Some("urn:breg:example".into());
         configured.scopes = Some(vec!["casework:source-reader".into()]);
         assert!(validate_binding(&configured).is_ok());
-        assert_ne!(
-            baseline,
-            binding_generation(&configured, &source(), "reader", &description("correction"))
-                .unwrap()
-        );
         configured.scopes = Some(vec![]);
         assert!(validate_binding(&configured).is_err());
         configured.scopes = Some(vec![

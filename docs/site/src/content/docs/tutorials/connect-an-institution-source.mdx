@@ -239,8 +239,8 @@ creates one private local generation, and runs the real `evidence check` gate be
 missing artifact, unresolved draft marker, invalid secret reference, unbounded schema, or
 inconsistent selector binding stops the generation.
 
-`--detach` returns once both services answer on loopback, so the pair keeps running after the
-command exits. Stop it when you are finished:
+`dev start` returns once both services answer on loopback; the retained pair keeps running after
+the command exits. Stop it when you are finished:
 
 ```sh
 evidencectl dev stop

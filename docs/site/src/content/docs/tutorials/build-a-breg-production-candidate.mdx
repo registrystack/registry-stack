@@ -280,9 +280,12 @@ EOF
 ```
 
 The journeys authenticate with bearer tokens. This script issues one, signed by the issuer key, that
-carries the claims a step declares: the principal, the scope, the purpose, and for the reader the
-`registry_record_status` claim its row boundary compares. Then it issues the operator's and the
-reader's tokens:
+carries the claims a step declares: the principal, the actor kind, the scope, the purpose, and for
+the reader the `registry_record_status` claim its row boundary compares. Base Registry Engine (BReg)
+refuses a token whose `registry_actor_kind` claim is missing or is not exactly `human`, `agent`, or
+`service`; these tokens
+authenticate automated journeys, so the script marks both of them `service`. Then it issues the
+operator's and the reader's tokens:
 
 ```sh
 cat > tutorial-work/candidate/issue-token.sh <<'EOF'
@@ -292,7 +295,7 @@ set -euo pipefail
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 now=$(date +%s)
 header=$(printf '{"alg":"EdDSA","kid":"candidate-issuer","typ":"at+jwt"}' | b64url)
-claims=$(printf '{"iss":"https://issuer.example.invalid","aud":"generic-registry","client_id":"generic-registry-client","sub":"%s","registry_principal":"%s","scope":"%s","registry_purpose":"%s","iat":%s,"exp":%s%s}' \
+claims=$(printf '{"iss":"https://issuer.example.invalid","aud":"generic-registry","client_id":"generic-registry-client","sub":"%s","registry_principal":"%s","registry_actor_kind":"service","scope":"%s","registry_purpose":"%s","iat":%s,"exp":%s%s}' \
   "$1" "$1" "$2" "$3" "$now" "$((now + 3600))" "${5:+,$5}" | b64url)
 signing_input=$(mktemp)
 printf '%s.%s' "$header" "$claims" > "$signing_input"

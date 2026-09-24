@@ -220,6 +220,15 @@ fn package_digest(
     Ok(sha256_bytes(&canonical))
 }
 
+fn valid_policy_digest(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
 fn sha256_bytes(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     format!(
@@ -521,6 +530,11 @@ pub struct TaskAuthorityConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimePackageConfig {
     pub root: PathBuf,
+    /// The `policyDigest` of the one reviewed package this runtime may load.
+    /// When set, a package whose manifest names any other digest, or a
+    /// directory with no manifest, is refused before the runtime starts.
+    #[serde(default)]
+    pub expected_policy_digest: Option<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -770,6 +784,17 @@ impl RuntimeConfig {
         {
             return Err(RuntimeConfigError::ProductionPolicyPackageRequired);
         }
+        if let Some(expected) = &self.package.expected_policy_digest {
+            if !valid_policy_digest(expected) {
+                return Err(RuntimeConfigError::InvalidExpectedPolicyDigest);
+            }
+            if package_digest.as_deref() != Some(expected.as_str()) {
+                return Err(RuntimeConfigError::PolicyDigestMismatch {
+                    expected: expected.clone(),
+                    actual: package_digest,
+                });
+            }
+        }
         validate_project_source_inputs(&policy_path, &project)?;
         let declared_sources = project
             .sources
@@ -1012,9 +1037,22 @@ impl RuntimeConfig {
     /// sees the refusal without the runtime ever starting.
     fn validate_source_bindings(&self) -> Result<(), RuntimeConfigError> {
         for (source_id, binding) in &self.sources {
+            let path = format!("sources.{source_id}");
+            // Named ahead of the adapter's own check so the common mistake of
+            // leaving connectTimeoutMilliseconds at its default while lowering
+            // requestTimeoutMilliseconds below it is refused with the rule
+            // that failed, not a bare "not a valid source binding".
+            if binding.connect_timeout_milliseconds > binding.request_timeout_milliseconds {
+                return Err(RuntimeConfigError::InvalidSourceBinding {
+                    path,
+                    reason:
+                        "requestTimeoutMilliseconds must be at least connectTimeoutMilliseconds",
+                });
+            }
             registry_casework_breg::validate_binding_input(binding).map_err(|_| {
                 RuntimeConfigError::InvalidSourceBinding {
-                    path: format!("sources.{source_id}"),
+                    path: path.clone(),
+                    reason: "the binding does not meet the source adapter's accepted range",
                 }
             })?;
         }
@@ -1702,6 +1740,91 @@ reviewProducers:
     }
 
     #[test]
+    fn an_expected_policy_digest_admits_only_the_package_it_names() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        let manifest = write_package(&package);
+        let operator = root.path().join("operator.yaml");
+        let write = |expected: &str| {
+            let mut document = operator_value(&package, "operator-controlled-upstream");
+            document["package"]["expectedPolicyDigest"] = serde_json::json!(expected);
+            std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
+        };
+
+        write(&manifest.policy_digest);
+        let config = RuntimeConfig::load(&operator).expect("the pinned package is admitted");
+        assert_eq!(
+            config.package.expected_policy_digest.as_deref(),
+            Some(manifest.policy_digest.as_str())
+        );
+
+        let pinned = format!("sha256:{}", "0".repeat(64));
+        write(&pinned);
+        let error = RuntimeConfig::load(&operator).expect_err("a different package is refused");
+        assert!(matches!(
+            &error,
+            RuntimeConfigError::PolicyDigestMismatch { expected, actual }
+                if expected == &pinned && actual.as_deref() == Some(manifest.policy_digest.as_str())
+        ));
+        assert_eq!(error.path(), "package.expectedPolicyDigest");
+        let message = error.to_string();
+        assert!(message.contains(&pinned), "{message}");
+        assert!(message.contains(&manifest.policy_digest), "{message}");
+    }
+
+    #[test]
+    fn an_expected_policy_digest_refuses_an_unpackaged_project() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        let manifest = write_package(&package);
+        std::fs::remove_file(package.join(POLICY_PACKAGE_MANIFEST_FILE)).unwrap();
+        let operator = root.path().join("operator.yaml");
+        let mut document = operator_value(&package, "development-loopback");
+        document["package"]["expectedPolicyDigest"] = serde_json::json!(manifest.policy_digest);
+        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
+
+        let error = RuntimeConfig::load(&operator).expect_err("an unpackaged project is refused");
+        assert!(matches!(
+            &error,
+            RuntimeConfigError::PolicyDigestMismatch { expected, actual: None }
+                if expected == &manifest.policy_digest
+        ));
+        assert_eq!(error.path(), "package.expectedPolicyDigest");
+        assert!(error.to_string().contains(&manifest.policy_digest));
+    }
+
+    #[test]
+    fn a_malformed_expected_policy_digest_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        let manifest = write_package(&package);
+        let operator = root.path().join("operator.yaml");
+        for malformed in [
+            String::new(),
+            manifest.policy_digest.to_uppercase(),
+            manifest
+                .policy_digest
+                .trim_start_matches("sha256:")
+                .to_owned(),
+            format!("{}0", manifest.policy_digest),
+            format!("sha512:{}", "0".repeat(64)),
+        ] {
+            let mut document = operator_value(&package, "operator-controlled-upstream");
+            document["package"]["expectedPolicyDigest"] = serde_json::json!(malformed);
+            std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
+            let error = RuntimeConfig::load(&operator).expect_err("a malformed digest is refused");
+            assert!(
+                matches!(error, RuntimeConfigError::InvalidExpectedPolicyDigest),
+                "{malformed}: {error:?}"
+            );
+            assert_eq!(error.path(), "package.expectedPolicyDigest");
+        }
+    }
+
+    #[test]
     fn source_context_review_namespaces_require_activated_adapters() {
         let root = tempfile::tempdir().unwrap();
         let package = root.path().join("source-context");
@@ -1961,10 +2084,34 @@ reviewProducers:
         let error = RuntimeConfig::load(&operator).unwrap_err();
         assert!(matches!(
             &error,
-            RuntimeConfigError::InvalidSourceBinding { path }
+            RuntimeConfigError::InvalidSourceBinding { path, .. }
                 if path == "sources.professional"
         ));
         assert_eq!(error.path(), "sources.professional");
+    }
+
+    #[test]
+    fn a_request_timeout_shorter_than_the_connect_timeout_names_that_rule() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let operator = root.path().join("runtime.yaml");
+        let mut document = operator_value(&package, "development-loopback");
+        document["sources"]["professional"]["requestTimeoutMilliseconds"] =
+            serde_json::json!(9_000);
+        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
+        let error = RuntimeConfig::load(&operator).unwrap_err();
+        assert!(matches!(
+            &error,
+            RuntimeConfigError::InvalidSourceBinding { path, .. }
+                if path == "sources.professional"
+        ));
+        assert!(
+            error.to_string().contains("requestTimeoutMilliseconds")
+                && error.to_string().contains("connectTimeoutMilliseconds"),
+            "the refusal does not name the timeout ordering rule: {error}"
+        );
     }
 
     #[test]
@@ -2163,6 +2310,21 @@ pub enum RuntimeConfigError {
     PolicyPackage(#[source] PolicyPackageError),
     #[error("operator-controlled production requires a verified Casework policy package")]
     ProductionPolicyPackageRequired,
+    #[error(
+        "package.expectedPolicyDigest must be sha256: followed by 64 lowercase hexadecimal digits"
+    )]
+    InvalidExpectedPolicyDigest,
+    #[error(
+        "package.expectedPolicyDigest is {expected}, but package.root holds {}",
+        actual.as_deref().map_or_else(
+            || "no casework.package.json".to_owned(),
+            |actual| format!("the package with policy digest {actual}"),
+        )
+    )]
+    PolicyDigestMismatch {
+        expected: String,
+        actual: Option<String>,
+    },
     #[error("an imported source description does not match the exact configured source policy")]
     SourceDescription,
     #[error("the Casework runtime configuration is invalid")]
@@ -2183,8 +2345,8 @@ pub enum RuntimeConfigError {
         "each source namespace admitted for source-context review work must have an activated source adapter"
     )]
     InactiveReviewSourceNamespace,
-    #[error("{path} is not a valid Casework source binding")]
-    InvalidSourceBinding { path: String },
+    #[error("{path} is not a valid Casework source binding: {reason}")]
+    InvalidSourceBinding { path: String, reason: &'static str },
     #[error(
         "{path} must name exactly one completion secret, in a header the runtime does not reserve"
     )]
@@ -2209,8 +2371,8 @@ impl RuntimeConfigError {
             Self::InvalidSecretProviders => "secretProviders",
             Self::InvalidSecretReference { path }
             | Self::SecretProviderRequired { path }
-            | Self::InvalidSourceBinding { path }
             | Self::InvalidReviewCompletionAuth { path } => path,
+            Self::InvalidSourceBinding { path, .. } => path,
             Self::RemovedPrincipalClaim => "authentication.oidc.principalClaim",
             Self::InvalidOidc | Self::Oidc => "authentication.oidc",
             Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",
@@ -2221,6 +2383,9 @@ impl RuntimeConfigError {
             Self::InactiveReviewSourceNamespace => "package.root/casework.yaml",
             Self::Project(_) => "package.root/casework.yaml",
             Self::PolicyPackage(_) | Self::ProductionPolicyPackageRequired => "package.root",
+            Self::InvalidExpectedPolicyDigest | Self::PolicyDigestMismatch { .. } => {
+                "package.expectedPolicyDigest"
+            }
             Self::Invalid => "/",
         }
     }

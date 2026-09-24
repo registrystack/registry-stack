@@ -470,6 +470,7 @@ pub(crate) fn compile_target_project(
     }
     validate_deployment_inputs(&project_root, &inputs, production)?;
     let plan = compile_plan(inputs, CompileProfile::Production(governed_bundle))?;
+    check_target_signing_validity(&plan)?;
     if production {
         reject_local_production_values(&plan.bundle)?;
         validate_production_sources(&plan.bundle)?;
@@ -552,6 +553,13 @@ pub(crate) fn compile_check_project(
     })
 }
 
+/// Raise the synthetic check bundle's signing maximum to cover every authored
+/// requirement validity, never below the local 300 second baseline.
+///
+/// A project-only `check` has no deployment target, and the signing maximum
+/// that caps a requirement validity belongs to the target that eventually
+/// signs it. The bundle grammar still bounds each validity, and
+/// `check_target_signing_validity` applies the cap wherever a target is known.
 fn expand_check_signing_validity(bundle: &mut Value) {
     let maximum = bundle["requirements"]
         .as_array()
@@ -562,6 +570,39 @@ fn expand_check_signing_validity(bundle: &mut Value) {
         .unwrap_or(300)
         .max(300);
     bundle["signing"]["maximumAssertionValiditySeconds"] = json!(maximum);
+}
+
+/// Refuse a requirement validity the selected deployment target cannot sign.
+///
+/// The target's governance states `signing.maximumAssertionValiditySeconds`,
+/// and the runtime refuses any requirement whose validity exceeds it.
+/// Reporting it here, against the question that declares it, names the field
+/// to change before the bundle reaches the runtime, which reports it only as a
+/// generic refusal of the whole configuration. A target that states no integer
+/// maximum is left to the runtime's own validation of the target shape.
+fn check_target_signing_validity(plan: &CompilePlan) -> Result<()> {
+    let Some(maximum) = plan.bundle["signing"]["maximumAssertionValiditySeconds"].as_u64() else {
+        return Ok(());
+    };
+    for question in &plan.questions {
+        let Some(validity) = question.requirement["validitySeconds"].as_u64() else {
+            continue;
+        };
+        if validity > maximum {
+            return Err(AuthoredDiagnostic {
+                code: "evidence.question.validity-exceeds-signing-maximum".to_owned(),
+                path: format!(
+                    "questions/{}.yaml:/governance/validitySeconds",
+                    question.question_id
+                ),
+                message: format!(
+                    "requirement validity of {validity} seconds exceeds the deployment target's {maximum} second signing maximum at governance.yaml:/signing/maximumAssertionValiditySeconds"
+                ),
+            }
+            .into());
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn compile_fixture_project_with_connections(
@@ -6550,6 +6591,8 @@ factSchema: schemas/source-facts.schema.yaml
 
     /// Author the referenced-people project shape the two baseline tests use:
     /// one governed question with stable deployment governance and a fixture.
+    /// Its validity stays within the generated local baseline's 300 second
+    /// signing maximum, which a target compile enforces.
     fn write_governed_referenced_people_project(fixture: &Fixture, authentication: &str) {
         let question = write_referenced_people_project(fixture, authentication);
         let mut question: Value = serde_norway::from_str(&question).unwrap();
@@ -6557,7 +6600,7 @@ factSchema: schemas/source-facts.schema.yaml
         question["governance"] = json!({
             "requirement": "urn:authority:requirement:adult-status:v1", "kind":"criterion",
             "referenceFrameworks":["urn:authority:framework:adult-status:v1"],
-            "evidenceType":"urn:authority:evidence-type:adult-status:v1", "validitySeconds":900,
+            "evidenceType":"urn:authority:evidence-type:adult-status:v1", "validitySeconds":300,
             "observationTimezone":"Asia/Bangkok", "fixtures":"fixtures/adult-status.yaml",
             "disclosureFamilies":["urn:authority:disclosure-family:adult-status:v1"]
         });
@@ -6584,7 +6627,7 @@ factSchema: schemas/source-facts.schema.yaml
             "requirement": "urn:authority:requirement:age-bracket:v1",
             "kind": "information-requirement",
             "referenceFrameworks": ["urn:authority:framework:age-bracket:v1"],
-            "evidenceType": "urn:authority:evidence-type:age-bracket:v1", "validitySeconds": 900,
+            "evidenceType": "urn:authority:evidence-type:age-bracket:v1", "validitySeconds": 300,
             "observationTimezone": "Asia/Bangkok", "fixtures": "fixtures/age-bracket.yaml",
             "disclosureFamilies": ["urn:authority:disclosure-family:age-bracket:v1"]
         });
@@ -8758,6 +8801,40 @@ factSchema: schemas/family-facts.schema.yaml
         );
     }
 
+    fn minimal_question_plan(question_id: &str, validity_seconds: u64) -> QuestionPlan {
+        QuestionPlan {
+            question_id: question_id.to_owned(),
+            source_artifact_id: String::new(),
+            authored_source_artifacts: None,
+            derivation_artifact: String::new(),
+            fixture_artifact: None,
+            purpose: String::new(),
+            requirement_uri: String::new(),
+            response_formats: Vec::new(),
+            concepts: Vec::new(),
+            subjects: Vec::new(),
+            source_id: String::new(),
+            source_value: json!({}),
+            grants: Vec::new(),
+            requirement: json!({"validitySeconds": validity_seconds}),
+            response_schema: json!({}),
+            fact_schema: json!({}),
+            adapter_parameters_schema: json!({}),
+            prepare_script: String::new(),
+            extract_script: String::new(),
+            derivation_script: String::new(),
+        }
+    }
+
+    fn plan_with_validity(validity_seconds: u64, signing: Value) -> CompilePlan {
+        CompilePlan {
+            questions: vec![minimal_question_plan("record-status", validity_seconds)],
+            access_policies: Vec::new(),
+            bundle: json!({ "signing": signing }),
+            local_public_jwk: None,
+        }
+    }
+
     #[test]
     fn check_only_signing_ceiling_covers_authored_validity_without_lowering_baseline() {
         let mut long = json!({
@@ -8773,5 +8850,44 @@ factSchema: schemas/family-facts.schema.yaml
         });
         expand_check_signing_validity(&mut short);
         assert_eq!(short["signing"]["maximumAssertionValiditySeconds"], 300);
+    }
+
+    #[test]
+    fn target_signing_validity_passes_a_requirement_at_the_target_signing_maximum() {
+        check_target_signing_validity(&plan_with_validity(
+            900,
+            json!({"maximumAssertionValiditySeconds": 900}),
+        ))
+        .expect("a requirement at the target's own maximum is covered");
+    }
+
+    #[test]
+    fn target_signing_validity_refuses_a_requirement_past_the_target_signing_maximum() {
+        let error = check_target_signing_validity(&plan_with_validity(
+            900,
+            json!({"maximumAssertionValiditySeconds": 300}),
+        ))
+        .expect_err("900 seconds exceeds a target signing maximum of 300 seconds");
+        let diagnostic = error
+            .downcast_ref::<AuthoredDiagnostic>()
+            .expect("a signing validity refusal is an authored diagnostic");
+        assert_eq!(
+            diagnostic.code,
+            "evidence.question.validity-exceeds-signing-maximum"
+        );
+        assert_eq!(
+            diagnostic.path,
+            "questions/record-status.yaml:/governance/validitySeconds"
+        );
+        assert_eq!(
+            diagnostic.message,
+            "requirement validity of 900 seconds exceeds the deployment target's 300 second signing maximum at governance.yaml:/signing/maximumAssertionValiditySeconds"
+        );
+    }
+
+    #[test]
+    fn target_signing_validity_leaves_an_unstated_target_maximum_to_the_runtime() {
+        check_target_signing_validity(&plan_with_validity(900, json!({})))
+            .expect("a target stating no maximum is validated by the runtime, not assumed");
     }
 }

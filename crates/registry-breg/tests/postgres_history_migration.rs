@@ -20,6 +20,10 @@ use registry_breg::api::{
 use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_json, parse_project_yaml};
 use registry_breg::cursor::CursorCodec;
+use registry_breg::history_erasure::{
+    erase_record_history, HistoryErasureOutcome, HistoryErasureRequest, HistoryErasureTimeouts,
+    RecordHistoryErasureTarget,
+};
 use registry_breg::history_schema::HistorySchemaDescriptor;
 use registry_breg::migration::{
     apply_verified_package, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
@@ -335,6 +339,227 @@ async fn bounded_update_refuses_when_table_exceeds_declared_budget_before_data_c
     database.cleanup().await;
 }
 
+/// A standalone erasure of history recorded after the coverage baseline only
+/// narrows snapshot coverage. The erasure records itself in the audit journal,
+/// so the next package must still apply over it without a rebaseline.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn recorded_post_baseline_erasure_does_not_freeze_the_next_package() {
+    let database = TestDatabase::create(1).await;
+    let (candidate, activated) = activate_reviewed_successor(&database).await;
+    let erased = create_asset(&database, &candidate, &activated, "B1").await;
+
+    let outcome = erase_first_revision(&database, &activated, erased).await;
+    assert!(outcome.coverage_ready);
+    assert_eq!(outcome.unavailable_after_position, Some(1));
+    assert_eq!(commit_head(&database).await, (true, Some(1)));
+
+    let successor = compiled_successor(&activated, &candidate);
+    let upgraded = apply_verified_package(request(
+        &database,
+        &successor,
+        ApplyPrecondition::Successor {
+            current: &activated,
+        },
+    ))
+    .await
+    .expect("a recorded erasure after the baseline leaves the next package applicable");
+    assert_eq!(upgraded.package_sequence, 3);
+    assert_eq!(
+        upgraded.package_revision,
+        successor.manifest().package_revision
+    );
+    assert_eq!(
+        commit_head(&database).await,
+        (true, Some(1)),
+        "activation neither restores nor widens the erased coverage"
+    );
+    database.cleanup().await;
+}
+
+/// A ready head whose unavailable-after position no erasure in the audit
+/// journal recorded is an arbitrary coverage gap, even beside a recorded
+/// erasure at another position, and a successor package still refuses it
+/// before any maintenance state changes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unrecorded_coverage_gap_still_freezes_the_next_package() {
+    let database = TestDatabase::create(1).await;
+    let (candidate, activated) = activate_reviewed_successor(&database).await;
+    create_asset(&database, &candidate, &activated, "B1").await;
+    let erased = create_asset(&database, &candidate, &activated, "B2").await;
+    let outcome = erase_first_revision(&database, &activated, erased).await;
+    assert_eq!(outcome.unavailable_after_position, Some(2));
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_commit_head
+                SET unavailable_after_position = 1
+              WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("administrator narrows coverage without an erasure");
+
+    let successor = compiled_successor(&activated, &candidate);
+    let refused = apply_verified_package(request(
+        &database,
+        &successor,
+        ApplyPrecondition::Successor {
+            current: &activated,
+        },
+    ))
+    .await;
+    assert_value_free(refused.err(), MigrationError::ApplyFailed);
+    let untouched = database
+        .admin
+        .query_one(
+            "SELECT maintenance_status = 'ready'
+                    AND maintenance_target_revision IS NULL
+                    AND active_package_revision = $1
+               FROM registry_internal.registry_state
+              WHERE singleton",
+            &[&activated.package_revision],
+        )
+        .await
+        .expect("administrator reads maintenance state")
+        .get::<_, bool>(0);
+    assert!(
+        untouched,
+        "the refused successor changed no maintenance state"
+    );
+    database.cleanup().await;
+}
+
+async fn activate_reviewed_successor(
+    database: &TestDatabase,
+) -> (CompiledRegistry, ExpectedRegistryIdentity) {
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs required extension");
+    let base = compile_registry(Variant::Base, 1);
+    let current = install_old_active_database(
+        database,
+        &base,
+        &[SeedRow {
+            id: Uuid::from_u128(1),
+            code: "A1",
+            status: "old",
+        }],
+    )
+    .await;
+    let candidate = compile_registry(Variant::StatusRestricted, 2);
+    let package = reviewed_package(&current, &base, &candidate, 1);
+    let descriptor =
+        HistorySchemaDescriptor::from_compiled_registry(&base, &current.package_revision);
+    let activated = apply_with_descriptor(database, &package, &current, &descriptor)
+        .await
+        .expect("reviewed successor establishes the coverage baseline");
+    (candidate, activated)
+}
+
+async fn create_asset(
+    database: &TestDatabase,
+    registry: &CompiledRegistry,
+    identity: &ExpectedRegistryIdentity,
+    code: &str,
+) -> Uuid {
+    let app = mutation_revision_router(
+        database
+            .runtime_config
+            .build_pool()
+            .expect("runtime pool builds"),
+        Arc::new(registry.clone()),
+        identity.clone(),
+    );
+    let created = send(
+        &app,
+        Method::POST,
+        "/v1/records/assets",
+        Some(history_claims()),
+        &[
+            ("idempotency-key", &format!("erasure-create-{code}")),
+            ("content-type", "application/json"),
+        ],
+        format!(r#"{{"data":{{"code":"{code}","status":"new"}}}}"#).into_bytes(),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = body_json(created).await;
+    Uuid::parse_str(
+        created["data"]["recordIdentifier"]
+            .as_str()
+            .expect("create response id"),
+    )
+    .expect("create response id is a UUID")
+}
+
+async fn erase_first_revision(
+    database: &TestDatabase,
+    identity: &ExpectedRegistryIdentity,
+    record_id: Uuid,
+) -> HistoryErasureOutcome {
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x6d; 32].into())
+        .expect("test audit profile is keyed");
+    let outcome = erase_record_history(
+        &mut migration,
+        HistoryErasureRequest {
+            expected: identity,
+            migration_role: &database.migration_role,
+            lock_key: RegistryLockKey::derive(PACKAGE_ID).expect("lock identity is bounded"),
+            timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
+                .expect("erasure timeouts are bounded"),
+            audit_profile: &audit_profile,
+            operator_reference: "approved-maintenance-001",
+            reason: "approved retention request",
+            target: RecordHistoryErasureTarget::new("asset", record_id, 1),
+        },
+    )
+    .await
+    .expect("standalone erasure succeeds");
+    migration_task.abort();
+    outcome
+}
+
+fn compiled_successor(
+    current: &ExpectedRegistryIdentity,
+    prior: &CompiledRegistry,
+) -> VerifiedPackage {
+    let package = prepare_package(build_request(
+        Variant::Base,
+        3,
+        Some(&current.package_revision),
+        &current.schema_fingerprint,
+        PackageMigrationPlanInput::Successor {
+            prior_registry: Box::new(prior.clone()),
+        },
+    ))
+    .expect("compiled successor prepares");
+    publish_and_load(
+        package,
+        PackageIntent::Activation {
+            active_revision: &current.package_revision,
+            active_sequence: u64::try_from(current.package_sequence)
+                .expect("active sequence is positive"),
+        },
+    )
+}
+
+async fn commit_head(database: &TestDatabase) -> (bool, Option<i64>) {
+    let row = database
+        .admin
+        .query_one(
+            "SELECT coverage_ready, unavailable_after_position
+               FROM registry_internal.registry_commit_head
+              WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("administrator reads the commit head");
+    (row.get(0), row.get(1))
+}
+
 #[derive(Clone, Copy)]
 enum Variant {
     Base,
@@ -435,6 +660,7 @@ fn reviewed_package(
 ) -> VerifiedPackage {
     let source = reviewed_update_source(current, prior, candidate, max_rows);
     let package = prepare_package(build_request(
+        Variant::StatusRestricted,
         2,
         Some(&current.package_revision),
         &current.schema_fingerprint,
@@ -721,16 +947,13 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
 }
 
 fn build_request(
+    variant: Variant,
     sequence: u64,
     prior_revision: Option<&str>,
     schema_fingerprint: &str,
     migration_plan: PackageMigrationPlanInput,
 ) -> PackageBuildRequest {
-    let module_bytes = module_bytes(if sequence == 1 {
-        Variant::Base
-    } else {
-        Variant::StatusRestricted
-    });
+    let module_bytes = module_bytes(variant);
     let module = parse_module_json(&module_bytes).expect("package module parses");
     PackageBuildRequest {
         environment: "local".to_owned(),

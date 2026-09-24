@@ -1751,6 +1751,8 @@ impl From<StoreError> for HttpError {
             StoreError::Configuration
             | StoreError::SecretConfiguration(_)
             | StoreError::Corrupt
+            | StoreError::SchemaNewer { .. }
+            | StoreError::HostedWorkWouldBeDropped { .. }
             | StoreError::Json(_) => Self::Internal,
         }
     }
@@ -1818,7 +1820,12 @@ impl From<ReviewRuntimeError> for HttpError {
             ReviewRuntimeError::InitiatorRequired => Self::ReviewInitiatorRequired,
             ReviewRuntimeError::SourceProfileRequired => Self::SourceProfileRequired,
             ReviewRuntimeError::SourceProfileNotApplicable => Self::SourceProfileNotApplicable,
-            ReviewRuntimeError::SourceUnavailable => Self::ServiceUnavailable,
+            ReviewRuntimeError::SourceUnavailable => {
+                tracing::warn!(
+                    "Casework review preflight timed out waiting on a bound source read"
+                );
+                Self::SourceUnavailable(None)
+            }
             ReviewRuntimeError::SourceInvalid => Self::SourceBadGateway,
             ReviewRuntimeError::RevisionConflict => Self::PreconditionFailed,
             ReviewRuntimeError::IdempotencyConflict => Self::IdempotencyKeyReused,
@@ -1996,8 +2003,9 @@ fn review_validation_reason(reason: ReviewValidationReason) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use axum::body::{to_bytes, Body};
     use axum::extract::{Path, State};
@@ -2055,6 +2063,59 @@ mod tests {
         ));
         assert_eq!(malformed.problem(), ProblemCode::SourceBadGateway);
         assert_eq!(malformed.problem().status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[derive(Clone, Default)]
+    struct CapturedOperationalLogs(Arc<Mutex<Vec<u8>>>);
+
+    impl CapturedOperationalLogs {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().expect("operational log buffer").clone())
+                .expect("operational logs are UTF-8")
+        }
+    }
+
+    impl io::Write for CapturedOperationalLogs {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .map_err(|_| io::Error::other("operational log buffer poisoned"))?
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for CapturedOperationalLogs {
+        type Writer = Self;
+
+        fn make_writer(&'writer self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    #[test]
+    fn a_review_source_timeout_is_reported_as_source_unavailable_and_logged() {
+        let writer = CapturedOperationalLogs::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(writer.clone())
+            .finish();
+        let mapped = tracing::subscriber::with_default(subscriber, || {
+            HttpError::from(ReviewRuntimeError::SourceUnavailable)
+        });
+
+        assert_eq!(mapped.problem(), ProblemCode::WorkItemSourceUnavailable);
+        assert_eq!(mapped.problem().status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let output = writer.text();
+        let logged: serde_json::Value =
+            serde_json::from_str(output.lines().next().expect("a log line was written"))
+                .expect("captured log line is JSON");
+        assert_eq!(logged["level"], "WARN");
     }
 
     #[tokio::test]

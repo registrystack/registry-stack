@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use registry_breg::compiler::module_digest_with_assets;
 use registry_breg::contract::{FieldTypeSource, ModuleAssetSource, ModuleLockSource};
-use registry_breg::migration_plan::ReviewedMigrationRecovery;
+use registry_breg::migration_plan::{ReviewedMigrationError, ReviewedMigrationRecovery};
 use registry_breg::package::{
     inspect_package_integrity, CompiledRegistryChangeClass, MigrationInspectionPlanKind,
     MigrationInspectionSummary, PackageBuildRequest, PackageError, PackageMigrationPlanInput,
@@ -922,6 +922,13 @@ struct HistoryEraseArgs {
     /// bits, because it names the records the erasure covers.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     request_file: PathBuf,
+
+    /// Acknowledge that erasure cannot be undone.
+    ///
+    /// Without this flag the command is refused before any file is read or
+    /// any database connection is opened.
+    #[arg(long)]
+    acknowledge_irreversible: bool,
 }
 
 #[derive(Debug, Args)]
@@ -2274,6 +2281,21 @@ fn audit_failure(command: &'static str, error: AuditCliError) -> FailureReport {
 }
 
 fn history_erase(args: &HistoryEraseArgs) -> Result<HistoryEraseSuccessReport, FailureReport> {
+    if !args.acknowledge_irreversible {
+        return Err(FailureReport {
+            ok: false,
+            command: "history erase",
+            diagnostics: vec![tool_diagnostic(
+                diagnostic(
+                    "history.erase.acknowledgement.required",
+                    "acknowledgeIrreversible",
+                    "history erasure is irreversible: no command restores erased revisions; pass --acknowledge-irreversible to proceed",
+                ),
+                DiagnosticArtifact::CommandArguments,
+                SuggestedAction::CorrectCommandUsage,
+            )],
+        });
+    }
     let outcome = history_erasure_lifecycle::run(HistoryErasureLifecycleRequest {
         runtime_config: &args.runtime_config,
         request_file: &args.request_file,
@@ -2658,7 +2680,7 @@ fn field_encryption_preflight_failure(
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
                 PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
                 PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+                PackageError::Binding | PackageError::OlderThanActive => SuggestedAction::VerifyPackageBinding,
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
@@ -3614,10 +3636,31 @@ fn capture_candidate(
         prevalidation_schema_fingerprint,
     };
     if args.reviewed_migrations.is_some() {
-        candidate.prevalidate().map_err(|_| {
+        candidate.prevalidate().map_err(|error| {
+            // The generic code is the fallback for a structural precondition
+            // (sequence, prior revision, baseline binding) that never reaches
+            // `ReviewedMigrationError`; a reviewed plan refusal names its kind.
+            let code = match error {
+                PackageError::ReviewedMigration(ReviewedMigrationError::Descriptor) => {
+                    "migration.review.descriptor_refused"
+                }
+                PackageError::ReviewedMigration(ReviewedMigrationError::Coverage) => {
+                    "migration.review.coverage_refused"
+                }
+                PackageError::ReviewedMigration(ReviewedMigrationError::Sql) => {
+                    "migration.review.sql_refused"
+                }
+                PackageError::ReviewedMigration(ReviewedMigrationError::Evidence) => {
+                    "migration.review.evidence_refused"
+                }
+                PackageError::ReviewedMigration(ReviewedMigrationError::Closure) => {
+                    "migration.review.closure_refused"
+                }
+                _ => "migration.review.refused",
+            };
             candidate_failure(
                 command,
-                "migration.review.refused",
+                code,
                 "reviewedMigrations",
                 &format!(
                     "the reviewed plan was refused; it has to cover exactly these changes: {reviewed_changes}. Check change coverage, canonical JSON, artifact hashes, prior package and schema bindings, and target fingerprint. Use the same reviewed directory for test and package"
@@ -3999,6 +4042,13 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
             DiagnosticArtifact::VerifiedPackage,
             SuggestedAction::VerifyPackagePath,
         ),
+        ApplyLifecycleError::TargetPackage(PackageError::OlderThanActive) => (
+            "apply.package.older_than_active",
+            "package",
+            "the target package is older than the active package, and packages apply forward only; to undo a change, build and apply a successor that reverts it, or restore the pre-activation backup: https://docs.registrystack.org/operate/breg-changes/#roll-back-by-rolling-forward",
+            DiagnosticArtifact::VerifiedPackage,
+            SuggestedAction::CorrectPackageBuild,
+        ),
         ApplyLifecycleError::CurrentPackage(error) | ApplyLifecycleError::TargetPackage(error) => {
             let action = match error {
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
@@ -4284,6 +4334,34 @@ fn migration_reconcile(
         execute: args.execute,
     })
     .map_err(reconcile_lifecycle_failure)?;
+    migration_reconcile_report(outcome)
+}
+
+fn migration_reconcile_report(
+    outcome: ReconcileLifecycleOutcome,
+) -> Result<MigrationReconcileSuccessReport, FailureReport> {
+    // Assessment always returns Ok from `reconcile_lifecycle::run`, even when
+    // the outcome is unresolvable: only `--execute` routes that outcome
+    // through `ReconcileError::NotExecutable`. Reporting it here too keeps an
+    // unresolvable assessment a refusal instead of a scriptable `ok: true`.
+    // The assessed findings are fixed, value-free catalog and plan names, and
+    // they are what an operator weighs before restoring a backup, so the
+    // refusal carries them instead of dropping them with the success report.
+    if outcome.outcome == ReconcileOutcome::Unresolvable.as_str() {
+        let mut failure = reconcile_lifecycle_failure(ReconcileLifecycleError::Reconcile(
+            ReconcileError::NotExecutable(ReconcileOutcome::Unresolvable),
+        ));
+        if let Some(diagnostic) = failure.diagnostics.first_mut() {
+            diagnostic.message = format!(
+                "{}; unresolvable reason: {}; target catalog finding: {}; active catalog finding: {}",
+                diagnostic.message,
+                optional(outcome.unresolvable_reason),
+                optional(outcome.target_catalog_finding),
+                optional(outcome.active_catalog_finding),
+            );
+        }
+        return Err(failure);
+    }
     Ok(MigrationReconcileSuccessReport {
         ok: true,
         command: "migration reconcile",
@@ -4328,7 +4406,7 @@ fn reconcile_lifecycle_failure(error: ReconcileLifecycleError) -> FailureReport 
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
                 PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
                 PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+                PackageError::Binding | PackageError::OlderThanActive => SuggestedAction::VerifyPackageBinding,
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
@@ -4450,12 +4528,19 @@ fn inspection_failure(
                 PackageError::Signature => {
                     ("signature_refused", SuggestedAction::VerifyPackageTrust)
                 }
-                PackageError::Binding => ("binding_refused", SuggestedAction::VerifyPackageBinding),
+                PackageError::Binding | PackageError::OlderThanActive => {
+                    ("binding_refused", SuggestedAction::VerifyPackageBinding)
+                }
+                PackageError::TrustAnchorNotCanonical => (
+                    "anchor_not_canonical",
+                    SuggestedAction::VerifyPackageIntegrity,
+                ),
                 PackageError::Closure
                 | PackageError::Integrity
                 | PackageError::CanonicalJson
                 | PackageError::Derivation
-                | PackageError::MigrationPlan => {
+                | PackageError::MigrationPlan
+                | PackageError::ReviewedMigration(_) => {
                     ("integrity_refused", SuggestedAction::VerifyPackageIntegrity)
                 }
                 PackageError::Bounds | PackageError::Read => {
@@ -4533,15 +4618,20 @@ fn package_diff_failure(error: PackageError) -> FailureReport {
             "diff.baseline.signature_refused",
             SuggestedAction::VerifyPackageTrust,
         ),
-        PackageError::Binding => (
+        PackageError::Binding | PackageError::OlderThanActive => (
             "diff.baseline.binding_refused",
             SuggestedAction::VerifyPackageBinding,
+        ),
+        PackageError::TrustAnchorNotCanonical => (
+            "diff.baseline.anchor_not_canonical",
+            SuggestedAction::VerifyPackageIntegrity,
         ),
         PackageError::Closure
         | PackageError::Integrity
         | PackageError::CanonicalJson
         | PackageError::Derivation
-        | PackageError::MigrationPlan => (
+        | PackageError::MigrationPlan
+        | PackageError::ReviewedMigration(_) => (
             "diff.baseline.integrity_refused",
             SuggestedAction::VerifyPackageIntegrity,
         ),
@@ -11314,6 +11404,71 @@ fn write_failure(
 mod tests {
     use super::*;
 
+    fn reconcile_lifecycle_outcome(outcome: &'static str) -> ReconcileLifecycleOutcome {
+        ReconcileLifecycleOutcome {
+            outcome,
+            executed: false,
+            maintenance_status: Some("failed".to_owned()),
+            maintenance_target_revision: Some("rev-2".to_owned()),
+            active_package_revision: Some("rev-1".to_owned()),
+            target_package_revision: "rev-2".to_owned(),
+            target_catalog_finding: None,
+            active_catalog_finding: None,
+            unresolvable_reason: None,
+            plan_kind: "compiled_additive",
+            migration_step_count: 0,
+            reviewed_plan_closed: None,
+            durable_step_progress: None,
+        }
+    }
+
+    #[test]
+    fn migration_reconcile_reports_an_unresolvable_outcome_as_a_refusal() {
+        match migration_reconcile_report(reconcile_lifecycle_outcome("unresolvable")) {
+            Ok(_) => panic!("an unresolvable outcome must not be reported as ok: true"),
+            Err(report) => {
+                assert!(!report.ok);
+                assert_eq!(
+                    report.diagnostics[0].code,
+                    "migration.reconcile.outcome.unresolvable"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn migration_reconcile_refusal_keeps_the_assessed_findings() {
+        let mut outcome = reconcile_lifecycle_outcome("unresolvable");
+        outcome.target_catalog_finding = Some("target_finding_canary");
+        outcome.active_catalog_finding = Some("active_finding_canary");
+        outcome.unresolvable_reason = Some("reason_canary");
+        let Err(report) = migration_reconcile_report(outcome) else {
+            panic!("an unresolvable outcome must be refused");
+        };
+        let message = &report.diagnostics[0].message;
+        for finding in [
+            "target_finding_canary",
+            "active_finding_canary",
+            "reason_canary",
+        ] {
+            assert!(
+                message.contains(finding),
+                "the refusal must keep {finding}: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn migration_reconcile_reports_a_completable_outcome_as_success() {
+        match migration_reconcile_report(reconcile_lifecycle_outcome("completable")) {
+            Ok(report) => {
+                assert!(report.ok);
+                assert_eq!(report.outcome.outcome, "completable");
+            }
+            Err(_) => panic!("a completable outcome is an ordinary assessment success"),
+        }
+    }
+
     #[test]
     fn data_import_success_names_the_ingestion_run_it_drove() {
         let report = DataImportSuccessReport {
@@ -12542,6 +12697,7 @@ mod tests {
             "/tmp/runtime.yaml",
             "--request-file",
             "/tmp/request.json",
+            "--acknowledge-irreversible",
         ])
         .expect("history erase parses");
         let Command::History(args) = parsed.command else {
@@ -12552,6 +12708,7 @@ mod tests {
         };
         assert_eq!(args.runtime_config, PathBuf::from("/tmp/runtime.yaml"));
         assert_eq!(args.request_file, PathBuf::from("/tmp/request.json"));
+        assert!(args.acknowledge_irreversible);
         assert!(Cli::try_parse_from([
             "bregctl",
             "history",

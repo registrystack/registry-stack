@@ -68,6 +68,9 @@ evidence verify \
 After the provider begins signing with the new key, verify a synthetic response through the same
 procedure. Confirm that an unknown key still fails and that the candidate changes only the key set,
 not issuer, provider, audience, purpose, requirement, concept, or configuration expectations.
+A provider's planned rotation or emergency key revocation leaves every requirement's
+`configurationRevision` unchanged, so a revision that moves during either is a separate change to
+review, not part of the key change.
 
 Approve and atomically activate the candidate through your normal configuration process. Keep the
 previous trust file and approval record for rollback and audit.

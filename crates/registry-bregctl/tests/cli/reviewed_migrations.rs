@@ -292,40 +292,88 @@ fn reviewed_successor_is_shared_by_test_and_package_without_placeholder_fingerpr
     );
 }
 
+impl ReviewFixture {
+    /// Sign and publish the sequence 2 successor, and return a runtime file
+    /// that names it as the active package.
+    fn publish_successor_as_active(&self) -> PathBuf {
+        let package = self.project.path().join("successor-package");
+        let signature = sign(
+            self.prepared.canonical_signed_bytes(),
+            &self.baseline.signing,
+        )
+        .expect("the successor package canonical bytes sign");
+        self.prepared
+            .publish_to_directory(
+                &package,
+                vec![PackageSignature {
+                    key_id: self.key_id.clone(),
+                    signature_hex: hex(&signature),
+                }],
+            )
+            .expect("the successor package publishes");
+        let runtime_parent = self.project.path().join("successor-runtime");
+        fs::create_dir_all(&runtime_parent).expect("the successor runtime directory creates");
+        let runtime_config = write_runtime_config(
+            &runtime_parent,
+            &package,
+            &self.baseline.anchor,
+            self.prepared.package_revision(),
+            "127.0.0.1:1".parse().unwrap(),
+        );
+        let bound = fs::read_to_string(&runtime_config).expect("the runtime config reads");
+        fs::write(
+            &runtime_config,
+            bound.replace("activeSequence: 1", "activeSequence: 2"),
+        )
+        .expect("the runtime config binds the successor sequence");
+        runtime_config
+    }
+}
+
+#[test]
+fn apply_refuses_an_older_package_and_points_at_the_roll_forward_procedure() {
+    let fixture = ReviewFixture::create();
+    let runtime_config = fixture.publish_successor_as_active();
+
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "apply",
+        "--runtime-config",
+        path(&runtime_config),
+        "--package",
+        path(&fixture.baseline.package),
+    ]);
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let report = json_stdout(&output);
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "apply.package.older_than_active");
+    assert_eq!(diagnostic["path"], "package");
+    let message = diagnostic["message"].as_str().expect("message is text");
+    assert!(
+        message.contains(
+            "https://docs.registrystack.org/operate/breg-changes/#roll-back-by-rolling-forward"
+        ),
+        "{message}"
+    );
+    assert_tool_diagnostic(diagnostic, "verified_package", "correct_package_build");
+    let rendered = String::from_utf8(output.stdout).expect("apply refusal is UTF-8");
+    for forbidden in [
+        path(&runtime_config),
+        path(&fixture.baseline.package),
+        fixture.prepared.package_revision(),
+        "VERIFY_MIGRATION_DATABASE_SECRET_IS_NOT_OPENED",
+    ] {
+        assert!(!rendered.contains(forbidden), "{rendered}");
+    }
+}
+
 #[test]
 fn migration_explain_names_every_bound_a_reviewed_migration_carries() {
     let fixture = ReviewFixture::create();
-    let package = fixture.project.path().join("successor-package");
-    let signature = sign(
-        fixture.prepared.canonical_signed_bytes(),
-        &fixture.baseline.signing,
-    )
-    .expect("the successor package canonical bytes sign");
-    fixture
-        .prepared
-        .publish_to_directory(
-            &package,
-            vec![PackageSignature {
-                key_id: fixture.key_id.clone(),
-                signature_hex: hex(&signature),
-            }],
-        )
-        .expect("the successor package publishes");
-    let runtime_parent = fixture.project.path().join("successor-runtime");
-    fs::create_dir_all(&runtime_parent).expect("the successor runtime directory creates");
-    let runtime_config = write_runtime_config(
-        &runtime_parent,
-        &package,
-        &fixture.baseline.anchor,
-        fixture.prepared.package_revision(),
-        "127.0.0.1:1".parse().unwrap(),
-    );
-    let bound = fs::read_to_string(&runtime_config).expect("the runtime config reads");
-    fs::write(
-        &runtime_config,
-        bound.replace("activeSequence: 1", "activeSequence: 2"),
-    )
-    .expect("the runtime config binds the successor sequence");
+    let runtime_config = fixture.publish_successor_as_active();
 
     let explained = bregctl(&[
         "migration",
@@ -464,11 +512,18 @@ fn reviewed_successor_refuses_mismatched_baseline_database_before_receipt_valida
 
 #[test]
 fn reviewed_successor_refuses_unbound_evidence_and_uncovered_changes_before_io() {
-    for field in [
-        "priorRevision",
-        "priorSchemaFingerprint",
-        "planSha256",
-        "finalSchemaFingerprint",
+    for (field, code) in [
+        ("priorRevision", "migration.review.evidence_refused"),
+        (
+            "priorSchemaFingerprint",
+            "migration.review.evidence_refused",
+        ),
+        ("planSha256", "migration.review.evidence_refused"),
+        // The receipt's final schema fingerprint is also the candidate's own
+        // declared fingerprint, so mutating it away from a valid digest trips
+        // the request's digest-format precondition before reviewed migration
+        // content is ever validated, and keeps the generic fallback code.
+        ("finalSchemaFingerprint", "migration.review.refused"),
     ] {
         let fixture = ReviewFixture::create();
         fixture.mutate_json("rehearsal.json", |value| {
@@ -479,7 +534,7 @@ fn reviewed_successor_refuses_unbound_evidence_and_uncovered_changes_before_io()
             assert!(!output.status.success());
             assert_eq!(
                 json_stdout(&output)["diagnostics"][0]["code"],
-                "migration.review.refused",
+                code,
                 "{field}: {output:?}"
             );
             assert!(
@@ -494,7 +549,7 @@ fn reviewed_successor_refuses_unbound_evidence_and_uncovered_changes_before_io()
     let output = fixture.run("test", true);
     assert_eq!(
         json_stdout(&output)["diagnostics"][0]["code"],
-        "migration.review.refused"
+        "migration.review.descriptor_refused"
     );
 }
 
@@ -509,7 +564,7 @@ fn reviewed_successor_refuses_duplicate_keys_noncanonical_bytes_and_extra_artifa
         let output = fixture.run("test", true);
         assert_eq!(
             json_stdout(&output)["diagnostics"][0]["code"],
-            "migration.review.refused"
+            "migration.review.descriptor_refused"
         );
         assert!(!String::from_utf8_lossy(&output.stdout).contains("private-review-value-canary"));
     }
@@ -523,7 +578,7 @@ fn reviewed_successor_refuses_duplicate_keys_noncanonical_bytes_and_extra_artifa
     let output = fixture.run("test", true);
     assert_eq!(
         json_stdout(&output)["diagnostics"][0]["code"],
-        "migration.review.refused"
+        "migration.review.coverage_refused"
     );
     assert!(!String::from_utf8_lossy(&output.stdout).contains("private-review-value-canary"));
 }
@@ -671,7 +726,7 @@ fn a_refused_review_names_the_changes_it_has_to_cover() {
     fixture.mutate_json("descriptor.json", |value| value["covers"] = json!([]));
     let output = fixture.run("package", true);
     let diagnostic = json_stdout(&output)["diagnostics"][0].clone();
-    assert_eq!(diagnostic["code"], "migration.review.refused");
+    assert_eq!(diagnostic["code"], "migration.review.descriptor_refused");
     let message = diagnostic["message"].as_str().unwrap().to_owned();
     assert!(message.contains("access_profile_changed"), "{message}");
     assert!(message.contains("at record.reader"), "{message}");

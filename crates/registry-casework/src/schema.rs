@@ -10,6 +10,7 @@ use crate::{RuntimeConfig, RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND};
 pub const RUNTIME_CONFIG_SCHEMA_FILE: &str = "runtime.schema.json";
 pub const RUNTIME_CONFIG_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/casework/runtime/runtime.v1alpha1.schema.json";
+const POLICY_DIGEST_SCHEMA_PATTERN: &str = "^sha256:[0-9a-f]{64}$";
 const SECRET_REFERENCE_SCHEMA_PATTERN: &str =
     "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$";
 
@@ -74,6 +75,13 @@ fn install_runtime_constraints(schema: &mut Value) {
             Value::String("^secret:(?:env|file)/".to_owned()),
         );
     }
+    set_definition_property(
+        schema,
+        "RuntimePackageConfig",
+        "expectedPolicyDigest",
+        "pattern",
+        Value::String(POLICY_DIGEST_SCHEMA_PATTERN.to_owned()),
+    );
     set_jwks_document_reference_constraints(schema);
     if let Some(providers) = schema
         .get_mut("$defs")
@@ -603,6 +611,29 @@ mod tests {
 
         assert!(schema.is_valid(&runtime_instance("secret:env/CASEWORK_JWKS", "environment")));
         assert!(schema.is_valid(&runtime_instance("secret:file/jwks.json", "file")));
+    }
+
+    #[test]
+    fn expected_policy_digest_schema_matches_runtime_validation() {
+        let schema = runtime_schema();
+        let with = |digest: &str| {
+            let mut instance = runtime_instance("secret:env/CASEWORK_JWKS", "environment");
+            instance["package"]["expectedPolicyDigest"] = Value::String(digest.to_owned());
+            instance
+        };
+        assert!(schema.is_valid(&with(&format!("sha256:{}", "0a".repeat(32)))));
+        for digest in [
+            String::new(),
+            format!("sha256:{}", "0A".repeat(32)),
+            "0a".repeat(32),
+            format!("sha256:{}0", "0a".repeat(32)),
+            format!("sha512:{}", "0a".repeat(32)),
+        ] {
+            assert!(
+                !schema.is_valid(&with(&digest)),
+                "{digest}: the schema accepted a digest the runtime refuses"
+            );
+        }
     }
 
     #[test]

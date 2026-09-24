@@ -575,23 +575,12 @@ output directory. The report's `state` becomes published and `packageRevision` n
 The package directory is `build-1/package`.
 
 The trust anchor the runtime file names lists the public keys and the threshold the deployment
-accepts, bound to the same identity:
+accepts, bound to the same identity. The loader requires the file's bytes to already be RFC 8785
+canonical JSON: sorted object keys and no inserted whitespace. A pretty-printed copy of the same
+values is refused as an integrity failure, so write it compact, for example with `jq -cS`:
 
 ```json
-{
-  "apiVersion": "registry.registrystack.org/package-trust/v1",
-  "environment": "production",
-  "instanceId": "civil-registry-1",
-  "databaseId": "civil-registry-db-1",
-  "threshold": 1,
-  "keys": [
-    {
-      "keyId": "registry-signer-2026",
-      "jwk": {"kty": "OKP", "crv": "Ed25519", "alg": "EdDSA",
-              "kid": "registry-signer-2026", "x": "<base64url public key>"}
-    }
-  ]
-}
+{"apiVersion":"registry.registrystack.org/package-trust/v1","databaseId":"civil-registry-db-1","environment":"production","instanceId":"civil-registry-1","keys":[{"jwk":{"alg":"EdDSA","crv":"Ed25519","kid":"registry-signer-2026","kty":"OKP","x":"<base64url public key>"},"keyId":"registry-signer-2026"}],"threshold":1}
 ```
 
 `--signature-threshold 0` builds an unsigned package. Production activation refuses it; the
@@ -629,13 +618,14 @@ trust anchor and identity, and reports the registry id, version, and revision pl
 counts. It does not say whether the database is on that package; the `apply` report and readiness
 do. `doctor` opens every startup dependency without binding the listener: the runtime file, the
 package, the database connection and its readiness, the audit key, the cursor key, the OIDC
-verifier's key material, the event destination bindings, and the authentication profile, the claim
-mapping, the accepted algorithms, and the audience against the package this runtime serves. It
+verifier's key material, the event destination bindings, the retained review authority and
+executor bindings, the authentication profile's claim mapping, accepted algorithms, and audience
+against the package this runtime serves, and the field-encryption provider and its stored key. It
 names the first dependency that refuses and stops there; a run that reaches the end lists every
 dependency it checked:
 
 ```text
-8 dependency checks passed.
+10 dependency checks passed.
   runtimeConfig        pass
   package              pass
   database             pass
@@ -643,7 +633,9 @@ dependency it checked:
   cursor               pass
   authentication.oidc  pass
   eventDestinations    pass
+  reviewBindings       pass
   authentication       pass
+  fieldEncryption      pass
 ```
 
 ```json
@@ -658,7 +650,9 @@ dependency it checked:
     "cursor",
     "authentication.oidc",
     "eventDestinations",
-    "authentication"
+    "reviewBindings",
+    "authentication",
+    "fieldEncryption"
   ]
 }
 ```

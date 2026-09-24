@@ -501,6 +501,7 @@ fn client_error(error: BaseRegistryClientError) -> NapiError {
             status,
             failure,
             trace_id,
+            ..
         } => json!({
             "kind": "protocol",
             "status": status,

@@ -556,6 +556,18 @@ records an `attempt_settled` history event with the attempt, binding reference,
 operation, outcome, reason, and decider, and no actor, in the same transaction
 as the state change. The command makes no BReg call.
 
+Only the actor who started a pending attempt can recover it. When that actor
+cannot, `caseworkctl attempt mark-uncertain PROJECT [--runtime-config FILE]
+--attempt-id UUID --reason TEXT --decided-by TEXT` previews marking the attempt
+uncertain under the same migration database authority, and `--apply` records
+it. Only a pending attempt whose execution lease has expired can be marked.
+Apply rotates the execution token to fence the original executor, leaves the
+work item synchronizing, and records an `attempt_uncertain` history event with
+no actor whose detail carries the attempt, binding reference, operation,
+`operatorReason`, `decidedBy`, `originalActor`, and `originalProfileId`. The
+marking decides no source outcome and makes no BReg call; settle the attempt
+afterwards.
+
 A validated refusal from the first BReg action attempt keeps its source class.
 Invalid action input returns `request.source-rejected`; a missing bound record
 returns `source.record-missing`; and a refused reviewer binding returns
@@ -595,7 +607,7 @@ The following operator-supplied variables select the maintained suites:
 
 | Variable | Suite | Database |
 |---|---|---|
-| `CASEWORK_TEST_DATABASE_URL` | `--test postgres_transactions` | Its own: the suite resets `public` |
+| `CASEWORK_TEST_DATABASE_URL` | `--test postgres_transactions`, and `-p registry-caseworkctl --lib` | Its own: the suite resets `public`; the `caseworkctl` test creates a unique schema beside it |
 | `CASEWORK_VISIBILITY_TEST_DATABASE_URL` | `--test service_visibility` | Its own: the suite resets `public` |
 | `CASEWORK_SOURCE_RETENTION_TEST_DATABASE_URL` | `--test source_retention_postgres` | Its own: the suite resets `public` |
 | `CASEWORK_CLOCK_TEST_DATABASE_URL` | `--lib clocks::tests::source_clocks_survive_restart_and_preserve_subject_budget` | Its own: the test resets `public` |
@@ -624,6 +636,8 @@ export CASEWORK_ASSIGNMENT_TEST_DATABASE_URL=postgresql://localhost/casework_rev
 export CASEWORK_ROUTING_TEST_DATABASE_URL=postgresql://localhost/casework_review_test
 export CASEWORK_INBOX_TEST_DATABASE_URL=postgresql://localhost/casework_inbox_ordering_test
 cargo test -p registry-casework --features postgres-test --test postgres_transactions --locked
+cargo test -p registry-caseworkctl --features postgres-test --lib --locked \
+  -- --exact cli_contract_tests::db_migrate_reports_a_schema_newer_than_this_binary_with_its_own_refusal
 cargo test -p registry-casework --features postgres-test --test service_visibility --locked
 cargo test -p registry-casework --features postgres-test --test source_retention_postgres --locked
 cargo test -p registry-casework --features postgres-test --lib --locked \

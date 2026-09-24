@@ -413,6 +413,15 @@
     "RuntimePackageConfig": {
       "additionalProperties": false,
       "properties": {
+        "expectedPolicyDigest": {
+          "default": null,
+          "description": "The `policyDigest` of the one reviewed package this runtime may load.\nWhen set, a package whose manifest names any other digest, or a\ndirectory with no manifest, is refused before the runtime starts.",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "root": {
           "pattern": "^/",
           "type": "string"

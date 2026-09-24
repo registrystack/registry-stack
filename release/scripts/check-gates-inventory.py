@@ -66,6 +66,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Release rehearsal workflow change classification",
         '".github/workflows/release-rehearsal.yml": frozenset(',
     ),
+    (
+        "Release upgrade rehearsal workflow change classification",
+        '".github/workflows/release-upgrade-rehearsal.yml": frozenset(',
+    ),
     ("actionlint version pin", 'ACTIONLINT_VERSION: "1.7.12"'),
     (
         "actionlint archive checksum",
@@ -535,6 +539,7 @@ RELEASE_SECURITY_POLICY_PATHS = (
     ".github/workflows/release-repeatability.yml",
     ".github/workflows/release-candidate-cleanup.yml",
     ".github/workflows/release-rehearsal.yml",
+    ".github/workflows/release-upgrade-rehearsal.yml",
     ".github/workflows/scorecard.yml",
     "release/scripts/release_candidate.py",
     "release/scripts/cleanup-release-candidates.py",
@@ -576,6 +581,9 @@ REQUIRED_SECURITY_WORKFLOW_SELECTIONS: dict[str, frozenset[str]] = {
         {"release_source_proof", "release_tool"}
     ),
     ".github/workflows/release-rehearsal.yml": frozenset(
+        {"release_source_proof", "release_tool"}
+    ),
+    ".github/workflows/release-upgrade-rehearsal.yml": frozenset(
         {"release_source_proof", "release_tool"}
     ),
     ".github/workflows/scorecard.yml": frozenset({"release_tool"}),
@@ -1169,6 +1177,20 @@ FORBIDDEN_RELEASE_SECURITY_GATES = (
             "oras ",
             "crane ",
             "release/scripts/rehearse-release",
+        ),
+    ),
+    (
+        "Upgrade rehearsal cannot write public state or bypass asset provenance",
+        ".github/workflows/release-upgrade-rehearsal.yml",
+        (
+            "contents: write",
+            "packages: write",
+            "id-token: write",
+            "attestations: write",
+            "git push",
+            "gh release create",
+            "gh release upload",
+            "--from-bin-dir",
         ),
     ),
 )

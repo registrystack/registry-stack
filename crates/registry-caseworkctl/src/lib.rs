@@ -10,7 +10,8 @@ use anyhow::{Context, Result};
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use registry_casework::{AttemptSettlementError, RuntimeConfigError, StoreError};
 use registry_casework_core::{
-    AttemptSettlement, AttemptSettlementOutcome, ConfigError, ConfigLoadError,
+    AttemptSettlement, AttemptSettlementOutcome, AttemptUncertainMarking, ConfigError,
+    ConfigLoadError,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -59,7 +60,7 @@ enum Command {
     Db(DbArgs),
     /// Preview or erase retained local payload copies for one source request.
     Retention(RetentionArgs),
-    /// Preview or record an operator settlement of one uncertain source attempt.
+    /// Preview or record an operator decision about one source attempt whose lease has expired.
     Attempt(AttemptArgs),
     /// Start, stop and inspect this project's retained local Casework runtime.
     Dev(Box<dev::DevArgs>),
@@ -228,6 +229,33 @@ enum AttemptCommand {
     /// settled. Apply changes the attempt and its work item and records the
     /// decision in the work item's history in one transaction.
     Settle(AttemptSettleArgs),
+    /// Preview or record an operator marking of one pending source attempt as uncertain.
+    ///
+    /// Only a pending attempt whose execution lease has expired can be marked,
+    /// for an attempt the actor who started it cannot recover. The command
+    /// connects with the migration database credential. Apply changes the
+    /// attempt and its work item and records the decision, naming the decider
+    /// and the attempt's original actor, in the work item's history in one
+    /// transaction; settle the attempt afterwards.
+    MarkUncertain(AttemptMarkUncertainArgs),
+}
+
+#[derive(Debug, Args)]
+struct AttemptMarkUncertainArgs {
+    #[command(flatten)]
+    operator: OperatorArgs,
+    /// Pending source attempt to mark uncertain.
+    #[arg(long, value_name = "UUID")]
+    attempt_id: Uuid,
+    /// Why the attempt is marked uncertain; recorded in the work item's history.
+    #[arg(long)]
+    reason: String,
+    /// Who made the decision; recorded in the work item's history.
+    #[arg(long)]
+    decided_by: String,
+    /// Apply the reviewed marking. Omit to preview.
+    #[arg(long)]
+    apply: bool,
 }
 
 #[derive(Debug, Args)]
@@ -421,7 +449,10 @@ fn machine_report(format: OutputFormat, kind: &'static str, report: Value) -> Va
 
 fn cli_report_kind(command: &Command) -> &'static str {
     match command {
-        Command::Attempt(_) => "AttemptSettlementReport",
+        Command::Attempt(args) => match args.command {
+            AttemptCommand::Settle(_) => "AttemptSettlementReport",
+            AttemptCommand::MarkUncertain(_) => "AttemptUncertainMarkingReport",
+        },
         Command::Check(_) => "CheckReport",
         Command::Db(_) => "DatabaseMigrationReport",
         Command::Doctor(_) => "DoctorReport",
@@ -444,19 +475,24 @@ enum CommandKind {
     Operational,
     Retention,
     AttemptSettlement,
+    AttemptUncertainMarking,
+    Migration,
 }
 
 fn command_kind(command: &Command) -> CommandKind {
     if matches!(command, Command::Retention(_)) {
         return CommandKind::Retention;
     }
-    if matches!(command, Command::Attempt(_)) {
-        return CommandKind::AttemptSettlement;
+    if matches!(command, Command::Db(_)) {
+        return CommandKind::Migration;
     }
-    if matches!(
-        command,
-        Command::Doctor(_) | Command::Db(_) | Command::Dev(_)
-    ) {
+    if let Command::Attempt(args) = command {
+        return match args.command {
+            AttemptCommand::Settle(_) => CommandKind::AttemptSettlement,
+            AttemptCommand::MarkUncertain(_) => CommandKind::AttemptUncertainMarking,
+        };
+    }
+    if matches!(command, Command::Doctor(_) | Command::Dev(_)) {
         CommandKind::Operational
     } else {
         CommandKind::Authoring
@@ -597,11 +633,72 @@ fn operator_refusal(kind: CommandKind, error: &anyhow::Error) -> Option<Value> {
             ) {
                 return None;
             }
+            // A pending attempt is moved to uncertain only by the recover route,
+            // which the actor who started it calls once the lease expires.
+            let action = if matches!(settlement, AttemptSettlementError::NotUncertain("pending")) {
+                "After the attempt's execution lease expires, the actor who started it calls \
+                 POST /v1/work-items/{itemId}/attempts/{attemptId}/recover while the source is \
+                 reachable; settle the attempt only if recovery leaves it uncertain. If that actor \
+                 cannot recover it, mark it uncertain with caseworkctl attempt mark-uncertain."
+            } else {
+                "Confirm the attempt and source outcome, then preview the settlement again."
+            };
             (
                 "casework.attempt-settlement.refused",
                 "attempt",
                 settlement.to_string(),
-                "Confirm the attempt and source outcome, then preview the settlement again.",
+                action,
+            )
+        }
+        CommandKind::AttemptUncertainMarking => {
+            let marking = error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<AttemptSettlementError>())?;
+            if !matches!(
+                marking,
+                AttemptSettlementError::NotFound
+                    | AttemptSettlementError::NotPending(_)
+                    | AttemptSettlementError::LeaseLive
+                    | AttemptSettlementError::ItemNotSynchronizing(_)
+                    | AttemptSettlementError::Invalid { .. }
+            ) {
+                return None;
+            }
+            let action = if matches!(marking, AttemptSettlementError::NotPending("uncertain")) {
+                "The attempt is already uncertain; settle it with caseworkctl attempt settle once \
+                 the source owner confirms its outcome."
+            } else {
+                "Confirm the attempt, then preview the marking again."
+            };
+            (
+                "casework.attempt-mark-uncertain.refused",
+                "attempt",
+                marking.to_string(),
+                action,
+            )
+        }
+        CommandKind::Migration => {
+            // Only the refusals `casework migrate` names are passed through; a
+            // database that cannot be reached stays an operational failure.
+            let store = error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<StoreError>())?;
+            let action = match store {
+                StoreError::SchemaNewer { .. } => {
+                    "Run the casework release that migrated this database or a later one; \
+                     Casework does not migrate a schema down."
+                }
+                StoreError::HostedWorkWouldBeDropped { .. } => {
+                    "Keep this database with the release that wrote it until its hosted work \
+                     is exported, then migrate a fresh Casework database."
+                }
+                _ => return None,
+            };
+            (
+                "casework.migration.refused",
+                "database",
+                store.to_string(),
+                action,
             )
         }
         CommandKind::Authoring | CommandKind::Operational => return None,
@@ -868,6 +965,16 @@ fn run(cli: Cli) -> Result<Value> {
                 AttemptSettlement {
                     attempt_id: args.attempt_id,
                     outcome: args.outcome.into(),
+                    reason: args.reason,
+                    decided_by: args.decided_by,
+                },
+                args.apply,
+            ),
+            AttemptCommand::MarkUncertain(args) => project::attempt_mark_uncertain(
+                &args.operator.project,
+                args.operator.runtime_config.as_deref(),
+                AttemptUncertainMarking {
+                    attempt_id: args.attempt_id,
                     reason: args.reason,
                     decided_by: args.decided_by,
                 },
@@ -1453,6 +1560,102 @@ mod tests {
     }
 
     #[test]
+    fn db_migrate_passes_migration_refusals_through_and_keeps_database_failures_generic() {
+        let kind = command_kind(
+            &Cli::try_parse_from(["caseworkctl", "db", "migrate", "."])
+                .unwrap()
+                .command,
+        );
+
+        let newer = anyhow::Error::new(StoreError::SchemaNewer {
+            found: 17,
+            supported: 16,
+        })
+        .context("applying Casework database migrations");
+        let (exit, diagnostic) = classify_failure(kind, &newer);
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(diagnostic["code"], "casework.migration.refused");
+        assert_eq!(diagnostic["artifact"], "operator_action");
+        assert_eq!(diagnostic["path"], "database");
+        assert_eq!(
+            diagnostic["message"],
+            "the Casework database schema version 17 is newer than this binary supports (16); run a casework release that supports it"
+        );
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            "Run the casework release that migrated this database or a later one; Casework does not migrate a schema down."
+        );
+
+        let hosted = anyhow::Error::new(StoreError::HostedWorkWouldBeDropped {
+            version: 15,
+            tables: vec![("casework_hosted_items", 1)],
+        })
+        .context("applying Casework database migrations");
+        let (exit, diagnostic) = classify_failure(kind, &hosted);
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(diagnostic["code"], "casework.migration.refused");
+        assert_eq!(
+            diagnostic["message"],
+            StoreError::HostedWorkWouldBeDropped {
+                version: 15,
+                tables: vec![("casework_hosted_items", 1)],
+            }
+            .to_string()
+        );
+        assert!(
+            diagnostic["message"]
+                .as_str()
+                .unwrap()
+                .contains("casework_hosted_items (1 row)"),
+            "{diagnostic:#}"
+        );
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            "Keep this database with the release that wrote it until its hosted work is exported, then migrate a fresh Casework database."
+        );
+
+        for failure in [StoreError::Unavailable, StoreError::Corrupt] {
+            let failure =
+                anyhow::Error::new(failure).context("applying Casework database migrations");
+            let (exit, diagnostic) = classify_failure(kind, &failure);
+            assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
+            assert_eq!(diagnostic["code"], "caseworkctl.operational-failure");
+            assert_eq!(
+                diagnostic["message"],
+                "A Casework runtime dependency check failed."
+            );
+        }
+    }
+
+    #[test]
+    fn a_pending_attempt_settlement_refusal_names_the_recovery_step() {
+        let pending = anyhow::Error::new(AttemptSettlementError::NotUncertain("pending"))
+            .context("settling the Casework source attempt");
+        let (exit, diagnostic) = classify_failure(CommandKind::AttemptSettlement, &pending);
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(diagnostic["code"], "casework.attempt-settlement.refused");
+        assert_eq!(
+            diagnostic["message"],
+            "the source attempt is pending; only an uncertain attempt can be settled"
+        );
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            "After the attempt's execution lease expires, the actor who started it calls \
+             POST /v1/work-items/{itemId}/attempts/{attemptId}/recover while the source is \
+             reachable; settle the attempt only if recovery leaves it uncertain. If that actor \
+             cannot recover it, mark it uncertain with caseworkctl attempt mark-uncertain."
+        );
+
+        let completed = anyhow::Error::new(AttemptSettlementError::NotUncertain("completed"))
+            .context("settling the Casework source attempt");
+        let (_, diagnostic) = classify_failure(CommandKind::AttemptSettlement, &completed);
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            "Confirm the attempt and source outcome, then preview the settlement again."
+        );
+    }
+
+    #[test]
     fn human_reports_distinguish_incomplete_authoring_from_offline_fixture_proof() {
         let finding = json!({
             "severity":"finding",
@@ -1604,6 +1807,137 @@ mod tests {
         ] {
             assert!(help.contains(expected), "missing help text: {expected}");
         }
+    }
+
+    fn attempt_mark_uncertain_arguments() -> Vec<&'static str> {
+        vec![
+            "caseworkctl",
+            "attempt",
+            "mark-uncertain",
+            "/tmp/casework-project",
+            "--attempt-id",
+            ATTEMPT_ID,
+            "--reason",
+            "The officer who started the attempt has left.",
+            "--decided-by",
+            "Registrar duty officer",
+        ]
+    }
+
+    fn parse_attempt_mark_uncertain(arguments: Vec<&str>) -> AttemptMarkUncertainArgs {
+        let Command::Attempt(AttemptArgs {
+            command: AttemptCommand::MarkUncertain(args),
+        }) = Cli::try_parse_from(arguments).unwrap().command
+        else {
+            panic!("expected attempt mark-uncertain");
+        };
+        args
+    }
+
+    #[test]
+    fn attempt_mark_uncertain_previews_unless_apply_is_explicit() {
+        let preview = parse_attempt_mark_uncertain(attempt_mark_uncertain_arguments());
+        assert!(!preview.apply);
+        assert_eq!(preview.attempt_id.to_string(), ATTEMPT_ID);
+        assert_eq!(
+            preview.reason,
+            "The officer who started the attempt has left."
+        );
+        assert_eq!(preview.decided_by, "Registrar duty officer");
+        assert_eq!(
+            preview.operator.project,
+            PathBuf::from("/tmp/casework-project")
+        );
+
+        let mut arguments = attempt_mark_uncertain_arguments();
+        arguments.push("--apply");
+        assert!(parse_attempt_mark_uncertain(arguments).apply);
+    }
+
+    #[test]
+    fn attempt_mark_uncertain_requires_every_decision_argument() {
+        for flag in ["--attempt-id", "--reason", "--decided-by"] {
+            let mut arguments = attempt_mark_uncertain_arguments();
+            let position = arguments.iter().position(|value| *value == flag).unwrap();
+            arguments.drain(position..=position + 1);
+            let error = Cli::try_parse_from(arguments).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::MissingRequiredArgument,
+                "{flag} must be required"
+            );
+        }
+        let malformed_id =
+            replace_argument(attempt_mark_uncertain_arguments(), "--attempt-id", "a-1");
+        assert_eq!(
+            Cli::try_parse_from(malformed_id).unwrap_err().kind(),
+            clap::error::ErrorKind::ValueValidation
+        );
+    }
+
+    #[test]
+    fn attempt_mark_uncertain_help_names_expired_leases_and_explicit_apply() {
+        let error = Cli::try_parse_from(["caseworkctl", "attempt", "mark-uncertain", "--help"])
+            .unwrap_err();
+        let help = error.to_string();
+        for expected in [
+            "--attempt-id",
+            "--reason",
+            "--decided-by",
+            "--apply",
+            "Omit to preview",
+            "pending",
+            "lease has expired",
+            "migration database",
+        ] {
+            assert!(help.contains(expected), "missing help text: {expected}");
+        }
+    }
+
+    #[test]
+    fn attempt_mark_uncertain_reports_its_own_kind() {
+        let cli = Cli::try_parse_from(attempt_mark_uncertain_arguments()).unwrap();
+        assert_eq!(
+            cli_report_kind(&cli.command),
+            "AttemptUncertainMarkingReport"
+        );
+        let cli = Cli::try_parse_from(attempt_settle_arguments()).unwrap();
+        assert_eq!(cli_report_kind(&cli.command), "AttemptSettlementReport");
+    }
+
+    #[test]
+    fn an_uncertainty_marking_refusal_names_the_next_step() {
+        let uncertain = anyhow::Error::new(AttemptSettlementError::NotPending("uncertain"))
+            .context("marking the Casework source attempt uncertain");
+        let (exit, diagnostic) = classify_failure(CommandKind::AttemptUncertainMarking, &uncertain);
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(
+            diagnostic["code"],
+            "casework.attempt-mark-uncertain.refused"
+        );
+        assert_eq!(diagnostic["path"], "attempt");
+        assert_eq!(
+            diagnostic["message"],
+            "the source attempt is uncertain; only a pending attempt can be marked uncertain"
+        );
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            "The attempt is already uncertain; settle it with caseworkctl attempt settle once \
+             the source owner confirms its outcome."
+        );
+
+        let lease = anyhow::Error::new(AttemptSettlementError::LeaseLive)
+            .context("marking the Casework source attempt uncertain");
+        let (exit, diagnostic) = classify_failure(CommandKind::AttemptUncertainMarking, &lease);
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(
+            diagnostic["code"],
+            "casework.attempt-mark-uncertain.refused"
+        );
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            "Confirm the attempt, then preview the marking again."
+        );
     }
 
     #[test]

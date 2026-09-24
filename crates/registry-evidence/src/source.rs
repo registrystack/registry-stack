@@ -2111,6 +2111,18 @@ fn encode_path_prior_fact(value: &JsonValue) -> Result<String, SourceError> {
     encode_path_text(&text, false)
 }
 
+/// Whether one value can be carried as exactly one request path segment.
+///
+/// Selector resolution applies the same rule to every selector-bound path
+/// segment, so a value refused here is a caller input error found before any
+/// source attempt; the check inside the source stage remains the floor.
+pub(crate) fn path_segment_is_admissible(text: &str) -> bool {
+    !(text.is_empty()
+        || matches!(text, "." | "..")
+        || text.chars().any(char::is_control)
+        || text.contains(['/', '\\', '%']))
+}
+
 fn encode_path_text(text: &str, invalid_selectors: bool) -> Result<String, SourceError> {
     let error = || {
         if invalid_selectors {
@@ -2119,11 +2131,7 @@ fn encode_path_text(text: &str, invalid_selectors: bool) -> Result<String, Sourc
             SourceError::InvalidPlan
         }
     };
-    if text.is_empty()
-        || matches!(text, "." | "..")
-        || text.chars().any(char::is_control)
-        || text.contains(['/', '\\', '%'])
-    {
+    if !path_segment_is_admissible(text) {
         return Err(error());
     }
     let mut encoded = String::with_capacity(text.len());

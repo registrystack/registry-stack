@@ -53,8 +53,12 @@ fn write_project(root: &Path, fixture_paths: &[&str]) -> PathBuf {
 ///   the real binary promises when `$FAIL_CASE` is set, with
 ///   `$FAIL_EXPECTED`/`$FAIL_OBSERVED` as the two classes and no parenthetical
 ///   when they are unset;
-/// - prints the real `evidence evaluate` summary line, with `$CASES` cases,
-///   when `$CASES` is set and the step is an evaluation.
+/// - when the invocation asked for `--explain-format json`, prints the trace
+///   document with `evaluatedCases` set to `$CASES` (or `null` when unset),
+///   whether or not the step is the one named by `$FAIL_STEP`, mirroring the
+///   real binary's own trace, which is emitted on both outcomes;
+/// - otherwise prints the real `evidence evaluate` summary line, with `$CASES`
+///   cases, when `$CASES` is set and the step is an evaluation.
 fn write_stub_evidence(dir: &Path) -> PathBuf {
     let path = dir.join("evidence");
     let script = format!(
@@ -97,7 +101,15 @@ if [ -n "$fixture" ]; then
   step="evaluate:$fixture"
 fi
 
+cases_json="null"
+if [ -n "${{CASES:-}}" ]; then
+  cases_json="$CASES"
+fi
+
 if [ "$step" = "${{FAIL_STEP:-}}" ]; then
+  if [ "$explain_json" = "true" ]; then
+    printf '{{"passed":false,"evaluatedCases":%s,"cases":[]}}\n' "$cases_json"
+  fi
   printf 'stub failure for %s\n' "$step" >&2
   if [ -n "${{FAIL_CASE:-}}" ]; then
     if [ -n "${{FAIL_EXPECTED:-}}" ]; then
@@ -111,7 +123,7 @@ if [ "$step" = "${{FAIL_STEP:-}}" ]; then
 fi
 
 if [ "$explain_json" = "true" ]; then
-  printf '{{"passed":true,"evaluatedCases":%s,"cases":[]}}\n' "${{CASES:-0}}"
+  printf '{{"passed":true,"evaluatedCases":%s,"cases":[]}}\n' "$cases_json"
   exit 0
 fi
 
@@ -177,14 +189,20 @@ fn happy_path_runs_check_then_each_fixture_and_reports_pass() {
                 runtime_path,
                 "evaluate",
                 "--fixture",
-                "fixtures/a.yaml"
+                "fixtures/a.yaml",
+                "--explain",
+                "--explain-format",
+                "json"
             ],
             vec![
                 "--runtime",
                 runtime_path,
                 "evaluate",
                 "--fixture",
-                "fixtures/b.yaml"
+                "fixtures/b.yaml",
+                "--explain",
+                "--explain-format",
+                "json"
             ],
         ],
         "unexpected evidence invocations"
@@ -235,6 +253,9 @@ fn fixture_selection_runs_only_one_exact_referenced_fixture() {
                 "fixtures/a.yaml",
                 "--case",
                 "positive",
+                "--explain",
+                "--explain-format",
+                "json",
             ],
         ]
     );
@@ -321,7 +342,13 @@ fn editable_sqlite_starter_compiles_and_runs_through_bundle_only_seams() {
     assert_eq!(invocations[2][1], "--bundle");
     assert_eq!(
         invocations[2][3..],
-        ["--fixture", "fixtures/record-status.yaml"]
+        [
+            "--fixture",
+            "fixtures/record-status.yaml",
+            "--explain",
+            "--explain-format",
+            "json"
+        ]
     );
 }
 
@@ -443,8 +470,8 @@ fn a_failing_fixture_carries_the_case_and_classes_the_binary_named() {
         }),
         "the report must carry what the binary said, not a second opinion"
     );
-    // Naming a case is not counting one: a failed fixture still reports no
-    // evaluated-case figure of its own.
+    // This binary never reported a count for the failing step (`$CASES` is
+    // unset), so naming the case must not make the driver invent one.
     assert!(
         fixtures[0].get("evaluated_cases").is_none(),
         "a named failing case fabricated a count: {}",
@@ -617,8 +644,8 @@ fn the_summary_totals_the_cases_each_fixture_evaluated() {
         "{stdout}"
     );
 
-    // A failing fixture evaluated nothing this run can count, so the total
-    // reports what actually ran rather than an estimate of what would have.
+    // A failing fixture still reports how many cases it reached, so the total
+    // is not short just because one fixture failed.
     let output = evidencectl()
         .args(["fixtures", "run", "--project"])
         .arg(&project)
@@ -634,12 +661,13 @@ fn the_summary_totals_the_cases_each_fixture_evaluated() {
     assert!(!output.status.success());
     let report: serde_json::Value =
         serde_json::from_str(stdout_of(&output).trim()).expect("parse JSON report");
-    assert_eq!(report["evaluated_cases"], serde_json::json!(7));
+    assert_eq!(report["evaluated_cases"], serde_json::json!(14));
     let fixtures = report["fixtures"].as_array().expect("fixtures array");
     assert_eq!(fixtures[0]["evaluated_cases"], serde_json::json!(7));
-    assert!(
-        fixtures[1].get("evaluated_cases").is_none(),
-        "a failed fixture reports no count: {}",
+    assert_eq!(
+        fixtures[1]["evaluated_cases"],
+        serde_json::json!(7),
+        "a failed fixture must still report the count evidence gave it: {}",
         fixtures[1]
     );
 }

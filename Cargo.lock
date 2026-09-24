@@ -5170,6 +5170,7 @@ dependencies = [
  "signal-hook",
  "tempfile",
  "tokio",
+ "tokio-postgres",
  "uuid",
  "zeroize",
 ]

@@ -365,10 +365,12 @@ mod tests {
             PackageError::Closure,
             PackageError::Integrity,
             PackageError::Binding,
+            PackageError::OlderThanActive,
             PackageError::Signature,
             PackageError::Derivation,
             PackageError::MigrationPlan,
             PackageError::Permissions,
+            PackageError::TrustAnchorNotCanonical,
         ];
         let mut messages = HashSet::new();
         for cause in causes {

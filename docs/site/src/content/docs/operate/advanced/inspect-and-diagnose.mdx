@@ -22,8 +22,8 @@ ambiguity, or audit-write failure without collecting source rows or secret value
 
 - Use the protected operator network and a least-privilege posture or API credential.
 - Know the active product and instance for Relay: its runtime file path, bound source path, and
-  package `packageRevision` digest. Know the deployment revision for Evidence Gateway and
-  Evidence Gateway.
+  package `packageRevision` digest. Know the deployment revision for Evidence Gateway: its runtime
+  file path and bundle revision.
 - Keep public problem responses, operator diagnostics, and protected audit records in separate
   access classes.
 - Reproduce with synthetic identifiers unless separate authority permits another probe.
@@ -249,8 +249,7 @@ Retain:
 - Evidence Gateway's `traceId` from a problem response or the W3C `traceparent`
   response header, and the output of `evidence verify-audit` when a signing or
   audit failure is suspected. The public trace is not the internal audit
-  operation identifier.
-  when a token-decision audit failure is suspected. Do not retain the assertion or access token.
+  operation identifier. Do not retain the assertion or access token.
 - Redacted audit correlation ids and the tested synthetic canary outcome.
 - The traffic-admission or escalation decision.
 

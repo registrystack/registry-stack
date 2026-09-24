@@ -50,7 +50,7 @@ All responses use `Cache-Control: no-store`.
 | Code | Status | Title | Detail | Recovery |
 | --- | --- | --- | --- | --- |
 | `evidence.invalid_request` | 400 | Evidence request is invalid | the Evidence request is invalid | Correct the request body or headers. |
-| `request.selector_invalid` | 400 | Selector is invalid | selector does not match an available request profile | Fetch authenticated definitions and use an available selector profile. |
+| `request.selector_invalid` | 400 | Selector is invalid | selector does not match an available request profile | Fetch authenticated definitions and use an available selector profile. A value the deployment places in a source request path must also fit one path segment: not empty, not `.` or `..`, and free of `/`, `\`, `%`, and control characters. This code is returned before any source is contacted, never as `source.unavailable`. |
 | `auth.invalid_credential` | 401 | Bearer access token is invalid | bearer access token validation failed | Supply one valid Bearer access token. The response also carries `WWW-Authenticate: Bearer realm="registry-evidence"`. |
 | `evidence.denied` | 403 | Evidence request is not permitted | the Evidence request is not permitted | Obtain an appropriate entitlement. The response does not identify the failed authorization condition. |
 | `resource.not_found` | 404 | Requested resource was not found | the requested resource was not found | Check the route and HTTP method. Unknown paths and unsupported methods use this code. |

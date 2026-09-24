@@ -1,6 +1,6 @@
 ---
 title: Change an active registry
-description: Compare an edited project with the active package, test and sign the successor against the active baseline, activate it with reviewed migration evidence, and recover a registry that a failed activation pinned.
+description: Compare an edited project with the active package, test and sign the successor against the active baseline, activate it with reviewed migration evidence, recover a registry that a failed activation pinned, and undo a change by rolling forward or restoring a backup.
 status: current
 owner: registry-docs
 source_repos:
@@ -53,7 +53,9 @@ lifetime: a package that changes it can only initialize a new database.
 
 Pass the active runtime file as `--baseline-runtime-config` to both `test` and `package`, so the
 receipt and the package bind to the baseline they will succeed. A change the migration planner
-classifies as additive, such as a new optional field or a widened grant, needs no further evidence.
+classifies as compatible additive, such as a new optional field, needs no further evidence. A
+widened grant is an access change: the planner accepts it as metadata-only, but it still needs a
+reviewed migration descriptor and rehearsal evidence, as the metadata-only case below describes.
 When `test` or `package` reports `migration.review.required`, prepare a reviewed migration
 directory and pass it to both commands as `--reviewed-migrations`:
 
@@ -95,8 +97,10 @@ bregctl --format json test ./my-registry \
 Package and sign as [deploy a registry](../breg/) describes, with the same
 `--baseline-runtime-config` and `--reviewed-migrations` arguments. If any source, reviewed
 artifact, baseline, or signature-policy input changes afterwards, repeat the test and the signing.
-A refusal names its cause: for `migration.review.refused`, check the change coverage and the
-artifact hashes; for `migration.review.fingerprint_mismatch`, rehearse the exact candidate again.
+A refusal names its cause. A code ending in `_refused` names the part of the reviewed directory
+that failed (the troubleshooting table below lists each); `migration.review.refused` means a
+precondition such as the prior revision or the baseline binding failed first; for
+`migration.review.fingerprint_mismatch`, rehearse the exact candidate again.
 Reviewed artifacts cannot authorize a change the planner classifies as unsupported.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, PackageCandidateArgs;
@@ -115,7 +119,7 @@ descriptor path:
 bregctl --format json apply \
   --runtime-config /etc/breg/runtime.yaml \
   --package /srv/registry/build-2/package \
-  --backup modules/core/migrations/0002/backup.json=/srv/registry/backups/0002.dump
+  --backup modules/core/migrations/retire-legacy-field/backup.json=/srv/registry/backups/retire-legacy-field.dump
 ```
 
 :::caution[A failed activation pins its target]
@@ -130,9 +134,12 @@ hand or edit migration state. Take a backup before every `apply`.
 
 A successful report carries the activated revision, sequence, and schema fingerprint. Update the
 runtime file to the successor's package directory, revision, and sequence, run
-`bregctl verify --runtime-config /etc/breg/runtime.yaml`, and restart the server. Editing the
-runtime file does not change the active process: until the restart, the process keeps serving the
-package it started with.
+`bregctl verify --runtime-config /etc/breg/runtime.yaml`, and restart the server promptly. Editing
+the runtime file does not change the active process, but the still-running old process does not
+keep serving the package it started with either: its readiness check re-verifies the database's
+active identity on every poll, and once the successor's `apply` moves that identity forward, the
+check fails. `GET /ready` and record reads return 503 and the process logs repeated claim
+refusals until you restart it onto the successor package.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, ApplyArgs;
     crates/registry-bregctl/src/apply_lifecycle.rs;
@@ -162,7 +169,7 @@ outcome:
 | `in_progress` | Another session holds the migration lock. | Wait for that activation to finish, then assess again. |
 | `completable` | Every durable step of the pinned target succeeded and the catalog is exactly the target's. Only the activation transition is missing. | Rerun with `--execute` to finish the activation. |
 | `revertible` | The pinned target reached no durable step and the catalog is still exactly the active package's. | Rerun with `--execute` to abandon the target. |
-| `unresolvable` | The catalog matches neither package, or a reviewed migration committed steps only the same target can finish. | Restore the pre-activation backup. The report names the catalog invariant that differs. |
+| `unresolvable` | The catalog matches neither package, or a reviewed migration committed steps only the same target can finish. | Restore the pre-activation backup. The assessment exits as a refusal, `migration.reconcile.outcome.unresolvable`, whose message names the reason and the catalog finding for each package. |
 
 `--execute` performs only the transition the assessment named, refuses every other outcome, and
 records the transition in the audit chain inside that transition's own transaction. Completing an
@@ -176,6 +183,51 @@ its failed ledger row, so a later attempt needs a newly built package revision.
     crates/registry-breg/src/migration_reconcile.rs;
     crates/registry-bregctl/src/reconcile_lifecycle.rs;
     crates/registry-breg/src/postgres/interlock.rs. */}
+
+## Roll back by rolling forward
+
+Packages apply forward only. A target package must carry a higher `package.sequence` than the
+active package and name the active revision as its prior, so `apply` refuses an older package
+with `apply.package.older_than_active` before it opens a database connection. There are two ways
+back, and which one fits depends on whether the data must return too.
+
+**Roll forward to undo a model change.** When the activated model is wrong but the data it holds
+is sound, build a successor that reverts the change:
+
+1. Restore the earlier project sources, for example from version control, and set
+   `package.sequence` in `registry.yaml` to the sequence after the active one. `registry.version`
+   stays as it is.
+2. Run `diff` against the active runtime file. The planner classifies the revert like any other
+   change: undoing an added field is a field removal, which is destructive and needs a reviewed
+   migration and its backup artifact; undoing a widened grant is an access change that needs
+   reviewed evidence.
+3. Test, package, sign, and apply the successor with `--baseline-runtime-config` as the sections
+   above describe, then update the runtime file and restart.
+
+The revert is a new revision with its own ledger row, audit record, and history baseline. Records
+written under the undone model stay, reshaped by the revert's own migration.
+
+**Restore the pre-activation backup** when the data itself must go back: `migration reconcile`
+reported `unresolvable`, or a reviewed migration changed rows in a way no successor can undo.
+
+1. Stop the server, and export the audit journal with
+   [`audit export`](../breg-retention/#keep-the-audit-journal) so the records written
+   after the backup are kept outside the database.
+2. Restore the database from the backup you took before the `apply`, with your PostgreSQL tooling.
+3. Point the runtime file at the package that was active when the backup was taken, with its
+   directory, revision, and sequence, run `bregctl verify`, and start the server.
+
+A restore discards every write, activation, and audit record committed after the backup, and it
+brings back history that a later `history erase` removed: repeat those erasures before the
+registry serves traffic again. Webhook deliveries and exports already sent are not recalled. The
+next successor needs a sequence above the restored active package, not above the discarded one.
+
+{/* Evidence: crates/registry-breg/src/package.rs, validate_bindings() and PackageError::OlderThanActive;
+    crates/registry-bregctl/src/lib.rs, apply_lifecycle_failure();
+    crates/registry-breg/src/package.rs, CompiledRegistryChangeCode::FieldRemoved;
+    crates/registry-breg/tests/postgres_package.rs, activation_refuses_an_older_package_as_a_rollback;
+    crates/registry-bregctl/tests/cli/reviewed_migrations.rs,
+    apply_refuses_an_older_package_and_points_at_the_roll_forward_procedure. */}
 
 ## Inspect the migration plan
 
@@ -195,9 +247,15 @@ server binary, and earlier packages keep verifying under their recorded rules.
 | --- | --- |
 | `diff` reports the baseline as `integrity_only` | You passed `--package`. That is the signer's view; pass `--runtime-config` for the comparison against the activated package and its trust. |
 | `test` or `package` reports `migration.review.required` | The planner classified a change as needing review. Rehearse it, write the reviewed migration directory, and pass `--reviewed-migrations` to both commands. |
-| `test` or `package` reports `migration.review.refused` | The directory does not cover every reviewed change, or an artifact hash does not match its descriptor. Check the change coverage and the hashes. |
+| `test` or `package` reports `migration.review.descriptor_refused` | A descriptor is malformed, for example an empty or duplicate `covers` entry, a missing or unknown field-encryption history choice, a chunk size beyond the commit budget, or a plaintext drop ordered before its sealing backfill. Fix the descriptor, then repeat test and package. |
+| `test` or `package` reports `migration.review.coverage_refused` | The directory does not cover exactly the reviewed changes: a change is uncovered, a cover names a change the candidate does not make or the wrong change class, a fixture is not bound to any step, or the change is one reviewed artifacts cannot authorize. |
+| `test` or `package` reports `migration.review.sql_refused` | A step or assertion uses SQL outside the reviewed subset, for example more than one statement, transaction or role control, an unqualified or undeclared object, or DML without affected-row bounds. |
+| `test` or `package` reports `migration.review.evidence_refused` | The rehearsal receipt, external backup binding, or fixture bytes do not match this candidate, baseline, and database. Rehearse again and copy the new receipt. |
+| `test` or `package` reports `migration.review.closure_refused` | The set of files does not close: a descriptor the directory names is missing, a path appears twice, or there are too many artifacts. |
+| `test` or `package` reports `migration.review.refused` | A precondition failed before the reviewed directory was read, such as the prior revision or the baseline binding. Check the baseline arguments and the fingerprints in the rehearsal receipt. |
 | `test` or `package` reports `migration.review.fingerprint_mismatch` | The rehearsal receipt was taken for a different candidate or baseline. Rehearse the exact candidate again. |
 | `apply` fails after maintenance begins | Read the report, fix the cause, and retry the same target. If that is not available, run `migration reconcile` to assess the pinned target, execute the transition it names, and restore the pre-activation backup only when it reports `unresolvable`. |
+| `apply` reports `apply.package.older_than_active` | The target package is older than the active one, and packages apply forward only. Build a successor that reverts the change, or restore the pre-activation backup, as [roll back by rolling forward](#roll-back-by-rolling-forward) describes. Nothing was changed. |
 | `migration reconcile` reports `in_progress` | Another session holds the migration lock. Wait for it to finish, then assess again. |
 | The process still serves the old package after `apply` | Activation changes the database, not the process. Update the runtime file and restart the server. |
 

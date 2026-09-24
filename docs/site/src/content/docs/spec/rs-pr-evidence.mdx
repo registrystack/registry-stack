@@ -762,6 +762,9 @@ authenticated definition discovery, in the forms fixed by
 `products/evidence/contracts/evidence.schema.yaml`, and
 `products/evidence/contracts/audit-event.schema.yaml`
 (`products/evidence/contracts/cccev-field-mapping.yaml`).
+That closure MUST exclude the active and published public signing keys and the revoked signing key
+identifiers, whose trust the JWKS and the verification policy's denylist carry, and the revoked
+caller token key identifiers, which decide who may call rather than what an assertion means.
 
 ## 11. Assurance profiles
 

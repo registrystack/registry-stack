@@ -354,8 +354,13 @@ not need to appear in process arguments:
 ```bash
 bregctl history erase \
   --runtime-config /absolute/path/runtime.yaml \
-  --request-file /absolute/path/erasure.json
+  --request-file /absolute/path/erasure.json \
+  --acknowledge-irreversible
 ```
+
+The command refuses without `--acknowledge-irreversible`, before it reads any
+file or opens any connection, because erasure cannot be undone and no command
+restores the erased revisions.
 
 One transaction erases at most 10,000 retained revisions, scrubs affected shared
 correction context and retained outbox payloads, and replaces affected cached
@@ -370,6 +375,13 @@ snapshot coverage unavailable. Earlier complete snapshots may remain usable;
 the command never silently re-baselines the registry, and `history rebaseline`
 below is the separate command that does it explicitly. Live writes and
 separately authorized maintenance remain available.
+
+A successor package remains applicable after an erasure of revisions committed
+after the coverage baseline: the apply interlock admits a ready commit head
+whose unavailable-after position matches a committed terminal erasure audit
+record carrying no lifecycle reference. Erasing baseline data, a lifecycle
+erasure, a pruned erasure record, and any gap the journal does not record as an
+erasure still refuse successors until `history rebaseline` restores coverage.
 
 Operators remain responsible for current records, saved exports, copies already
 delivered to external consumers, and backup expiry. Change-request proposals and

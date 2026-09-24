@@ -492,6 +492,9 @@ SECURITY_WORKFLOW_GATES: dict[str, frozenset[str]] = {
     ".github/workflows/release-rehearsal.yml": frozenset(
         {"release_source_proof", "release_tool"}
     ),
+    ".github/workflows/release-upgrade-rehearsal.yml": frozenset(
+        {"release_source_proof", "release_tool"}
+    ),
     ".github/workflows/scorecard.yml": frozenset({"release_tool"}),
 }
 REPO_ROOT = Path(__file__).resolve().parents[2]

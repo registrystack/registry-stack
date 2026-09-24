@@ -75,12 +75,12 @@ pub(crate) struct TargetGovernance {
 pub(crate) struct TargetDocumentDiagnostic {
     pub(crate) code: &'static str,
     pub(crate) path: String,
-    pub(crate) message: &'static str,
+    pub(crate) message: String,
 }
 
 impl std::fmt::Display for TargetDocumentDiagnostic {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.message)
+        formatter.write_str(&self.message)
     }
 }
 
@@ -92,7 +92,7 @@ impl TargetGovernance {
             return Err(TargetDocumentDiagnostic {
                 code: "evidence.target.governance-version",
                 path: "governance.yaml:/version".to_owned(),
-                message: "deployment governance version must be 1",
+                message: "deployment governance version must be 1".to_owned(),
             }
             .into());
         }
@@ -103,7 +103,8 @@ impl TargetGovernance {
             return Err(TargetDocumentDiagnostic {
                 code: "evidence.target.assurance-profile",
                 path: "governance.yaml:/assuranceProfile".to_owned(),
-                message: "deployment governance assuranceProfile must be local, production, or evidence-grade",
+                message: "deployment governance assuranceProfile must be local, production, or evidence-grade"
+                    .to_owned(),
             }
             .into());
         }
@@ -115,7 +116,7 @@ impl TargetGovernance {
             return Err(TargetDocumentDiagnostic {
                 code: "evidence.target.authority-profiles",
                 path: "governance.yaml:/authorityProfiles".to_owned(),
-                message: "deployment governance requires at least one authority profile",
+                message: "deployment governance requires at least one authority profile".to_owned(),
             }
             .into());
         }
@@ -189,9 +190,13 @@ fn run_inner(
             code: "evidence.package.production-profile-required",
             path: "governance.yaml:/assuranceProfile".to_owned(),
             message:
-                "evidencectl package requires a production or evidence-grade deployment target",
+                "evidencectl package requires a production or evidence-grade deployment target"
+                    .to_owned(),
         }
         .into());
+    }
+    if require_deployable_assurance {
+        verify_bundle_directory_matches_candidate(&target.runtime, &candidate)?;
     }
     let evidence_bin = crate::evidence_binary::resolve_matching(None)?;
 
@@ -395,7 +400,8 @@ pub(crate) fn read_target_documents(target: &Path) -> Result<TargetDocuments> {
             TargetDocumentDiagnostic {
                 code: "evidence.target.governance-shape",
                 path: target_member_path("governance.yaml", &error.path().to_string()),
-                message: "deployment governance does not match the closed Version 1 target shape",
+                message: "deployment governance does not match the closed Version 1 target shape"
+                    .to_owned(),
             }
         })?;
     Ok(TargetDocuments {
@@ -457,7 +463,7 @@ fn prepare_candidate(
     let compiled = compile_with_target(project, target, staging_root, evidence_bin)?;
     interruption.check()?;
     reject_review_markers(&compiled.bundle_path)?;
-    reject_review_markers_in_bytes(&target.runtime, "deployment runtime")?;
+    reject_review_markers_in_bytes(&target.runtime, "runtime.yaml")?;
     let runtime_path = staging_root.join("runtime.yaml");
     write_new_file(&runtime_path, &target.runtime, 0o600)?;
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o400))
@@ -476,6 +482,38 @@ fn prepare_candidate(
         )?;
     }
     Ok((revision, secret_references))
+}
+
+/// Refuse a packaged candidate whose deployment runtime would load a bundle
+/// left behind by a different `package` invocation. `bundleDirectory` is the
+/// one path the running process trusts at startup, so a candidate that copies
+/// a `runtime.yaml` naming another directory would report this build's bundle
+/// revision while quietly serving whatever bundle already sits at that other
+/// path. This check only compares the value against the candidate this
+/// invocation is producing; it leaves full runtime shape validation to
+/// `evidencectl doctor --runtime-config` and the `evidence` binary itself, so
+/// a runtime document that is otherwise malformed is still caught there
+/// rather than reported twice.
+fn verify_bundle_directory_matches_candidate(runtime_bytes: &[u8], candidate: &Path) -> Result<()> {
+    let Ok(document) = serde_norway::from_slice::<Value>(runtime_bytes) else {
+        return Ok(());
+    };
+    let Some(bundle_directory) = document.get("bundleDirectory").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    let expected = candidate.join("bundle");
+    if Path::new(bundle_directory) == expected {
+        return Ok(());
+    }
+    Err(TargetDocumentDiagnostic {
+        code: "evidence.package.bundle-directory-mismatch",
+        path: "runtime.yaml:/bundleDirectory".to_owned(),
+        message: format!(
+            "deployment runtime bundleDirectory {bundle_directory} does not resolve to this candidate's own bundle path {}",
+            expected.display()
+        ),
+    }
+    .into())
 }
 
 fn run_bundle_check(
@@ -755,26 +793,39 @@ fn valid_secret_name(name: &str) -> bool {
         })
 }
 
-fn reject_review_markers(bundle: &Path) -> Result<()> {
+/// Refuse a compiled bundle that still carries an authoring review marker,
+/// naming the offending file and the marker rule it matched so the refusal
+/// is actionable from `check` and `package` alike, instead of the generic
+/// message each command's `safe_command` wrapper falls back to for an
+/// unnamed cause.
+pub(crate) fn reject_review_markers(bundle: &Path) -> Result<()> {
     for path in bundle_files(bundle)? {
         let bytes = fs::read(&path).context("reading one generated bundle artifact")?;
-        reject_review_markers_in_bytes(&bytes, "deployment bundle")?;
+        let relative = path.strip_prefix(bundle).unwrap_or(&path);
+        reject_review_markers_in_bytes(&bytes, &format!("bundle/{}", relative.display()))?;
     }
     Ok(())
 }
 
-fn reject_review_markers_in_bytes(bytes: &[u8], description: &str) -> Result<()> {
-    if [
-        b"TODO(evidencectl)".as_slice(),
-        b"review-required",
-        b"placeholder_fact",
-    ]
-    .iter()
-    .any(|marker| bytes.windows(marker.len()).any(|window| window == *marker))
-    {
-        bail!("the {description} contains an unresolved authoring review marker");
+fn reject_review_markers_in_bytes(bytes: &[u8], artifact_path: &str) -> Result<()> {
+    let marker = ["TODO(evidencectl)", "review-required", "placeholder_fact"]
+        .into_iter()
+        .find(|marker| {
+            bytes
+                .windows(marker.len())
+                .any(|window| window == marker.as_bytes())
+        });
+    let Some(marker) = marker else {
+        return Ok(());
+    };
+    Err(TargetDocumentDiagnostic {
+        code: "evidence.package.review-marker",
+        path: artifact_path.to_owned(),
+        message: format!(
+            "{artifact_path} still contains the unresolved authoring review marker {marker}"
+        ),
     }
-    Ok(())
+    .into())
 }
 
 fn bundle_files(root: &Path) -> Result<Vec<PathBuf>> {
@@ -1178,12 +1229,19 @@ authorityProfiles:
     }
 
     #[test]
-    fn review_markers_are_rejected_without_repeating_authored_values() {
+    fn review_markers_are_named_by_rule_and_path_without_repeating_surrounding_content() {
         for marker in ["TODO(evidencectl)", "review-required", "placeholder_fact"] {
-            let error = reject_review_markers_in_bytes(marker.as_bytes(), "production runtime")
-                .expect_err("review marker rejected")
-                .to_string();
-            assert!(!error.contains(marker));
+            let surrounded = format!("before {marker} after-authored-suffix");
+            let error = reject_review_markers_in_bytes(
+                surrounded.as_bytes(),
+                "schemas/example.schema.yaml",
+            )
+            .expect_err("review marker rejected")
+            .to_string();
+            assert!(error.contains(marker), "{error}");
+            assert!(error.contains("schemas/example.schema.yaml"), "{error}");
+            assert!(!error.contains("before"), "{error}");
+            assert!(!error.contains("after-authored-suffix"), "{error}");
         }
     }
 

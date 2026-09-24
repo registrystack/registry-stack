@@ -103,7 +103,8 @@ struct FixtureReport {
     passed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     stderr: Option<String>,
-    /// Absent when the fixture failed, or when `evidence` reported no count.
+    /// Absent only when `evidence` itself reported no count, whether or not
+    /// the fixture passed.
     #[serde(skip_serializing_if = "Option::is_none")]
     evaluated_cases: Option<usize>,
     /// The case the binary named on stderr when this fixture failed, parsed
@@ -337,15 +338,19 @@ impl FixtureTarget {
         case: Option<&str>,
         explain: bool,
     ) -> StepOutcome {
-        match self {
+        // The structured trace is always requested, whether or not the caller
+        // asked to see it: it is the only shape that still carries an
+        // evaluated-case count when the fixture fails, and a passing or
+        // failing run's stage-by-stage detail is dropped below rather than
+        // left out of the request, so a failed fixture is never reported as
+        // having evaluated nothing.
+        let mut outcome = match self {
             Self::Deployment { runtime_path, .. } => {
                 let mut args = vec!["evaluate", "--fixture", fixture];
                 if let Some(case) = case {
                     args.extend(["--case", case]);
                 }
-                if explain {
-                    args.extend(["--explain", "--explain-format", "json"]);
-                }
+                args.extend(["--explain", "--explain-format", "json"]);
                 run_evidence_step(evidence_bin, &["--runtime"], Some(runtime_path), &args)
             }
             Self::Editable { compilation, .. } => {
@@ -353,9 +358,7 @@ impl FixtureTarget {
                 if let Some(case) = case {
                     args.extend(["--case", case]);
                 }
-                if explain {
-                    args.extend(["--explain", "--explain-format", "json"]);
-                }
+                args.extend(["--explain", "--explain-format", "json"]);
                 run_evidence_step(
                     evidence_bin,
                     &["bundle-evaluate", "--bundle"],
@@ -368,9 +371,7 @@ impl FixtureTarget {
                 if let Some(case) = case {
                     args.extend(["--case", case]);
                 }
-                if explain {
-                    args.extend(["--explain", "--explain-format", "json"]);
-                }
+                args.extend(["--explain", "--explain-format", "json"]);
                 run_evidence_step(
                     evidence_bin,
                     &["bundle-evaluate", "--bundle"],
@@ -378,7 +379,11 @@ impl FixtureTarget {
                     &args,
                 )
             }
+        };
+        if !explain {
+            outcome.trace = None;
         }
+        outcome
     }
 }
 

@@ -219,6 +219,7 @@ async fn erase_record_history_scoped(
         head.unavailable_after_position,
         summary.has_unindexed_revisions,
         affected_positions.first().copied(),
+        lifecycle_reference.is_some(),
     )?;
 
     let scrubbed_cached_response_count = tombstone_erased_cached_responses(
@@ -458,8 +459,11 @@ fn coverage_update_for_erasure(
     current_unavailable_after_position: Option<i64>,
     has_unindexed_revisions: bool,
     earliest_affected_position: Option<i64>,
+    lifecycle_scoped: bool,
 ) -> Result<CoverageUpdate, HistoryErasureError> {
-    if !current_ready || has_unindexed_revisions {
+    // A lifecycle erasure is never a recorded standalone erasure, so it must
+    // not leave coverage ready for the successor interlock to admit.
+    if !current_ready || has_unindexed_revisions || lifecycle_scoped {
         return Ok(CoverageUpdate {
             coverage_ready: false,
             unavailable_after_position: current_unavailable_after_position,
@@ -610,4 +614,71 @@ fn validate_request(request: &HistoryErasureRequest<'_>) -> Result<(), HistoryEr
         return Err(HistoryErasureError::InvalidInput);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const STANDALONE: bool = false;
+    const LIFECYCLE: bool = true;
+
+    #[test]
+    fn standalone_erasure_after_the_baseline_narrows_ready_coverage() {
+        assert_eq!(
+            coverage_update_for_erasure(true, 0, None, false, Some(2), STANDALONE)
+                .expect("coverage update"),
+            CoverageUpdate {
+                coverage_ready: true,
+                unavailable_after_position: Some(1),
+            }
+        );
+        assert_eq!(
+            coverage_update_for_erasure(true, 0, Some(1), false, Some(5), STANDALONE)
+                .expect("coverage update"),
+            CoverageUpdate {
+                coverage_ready: true,
+                unavailable_after_position: Some(1),
+            },
+            "an earlier boundary is never widened"
+        );
+    }
+
+    #[test]
+    fn erasure_at_or_before_the_baseline_leaves_coverage_not_ready() {
+        assert_eq!(
+            coverage_update_for_erasure(true, 3, None, false, Some(3), STANDALONE)
+                .expect("coverage update"),
+            CoverageUpdate {
+                coverage_ready: false,
+                unavailable_after_position: None,
+            }
+        );
+    }
+
+    #[test]
+    fn not_ready_coverage_or_unindexed_revisions_stay_not_ready() {
+        for (ready, unindexed) in [(false, false), (true, true)] {
+            assert_eq!(
+                coverage_update_for_erasure(ready, 0, Some(4), unindexed, Some(6), STANDALONE)
+                    .expect("coverage update"),
+                CoverageUpdate {
+                    coverage_ready: false,
+                    unavailable_after_position: Some(4),
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn lifecycle_erasure_never_leaves_coverage_ready() {
+        assert_eq!(
+            coverage_update_for_erasure(true, 0, Some(4), false, Some(2), LIFECYCLE)
+                .expect("coverage update"),
+            CoverageUpdate {
+                coverage_ready: false,
+                unavailable_after_position: Some(4),
+            }
+        );
+    }
 }

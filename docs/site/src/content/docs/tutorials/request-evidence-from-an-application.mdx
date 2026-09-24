@@ -349,7 +349,8 @@ document = json.dumps(
         "provided_by": published["providedBy"],
         # Published per requirement, so it is read from this definition. It
         # covers only what this requirement depends on: an unrelated bundle edit
-        # leaves it unchanged, and this procedure keeps verifying.
+        # or a signing-key rotation or revocation leaves it unchanged, and
+        # this procedure keeps verifying.
         "configuration_revision": definition["configurationRevision"],
         "expected_assurance_profile": published["assuranceProfile"],
         "audience": AUDIENCE,

@@ -30,6 +30,9 @@ use sha2::{Digest, Sha256};
 
 static TEMPORARY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[path = "cli/history_erase.rs"]
+mod history_erase_tests;
+
 #[path = "cli/history_rebaseline.rs"]
 mod history_rebaseline_tests;
 
@@ -5650,6 +5653,41 @@ fn runtime_bound_package_refusals_are_exact_and_value_free_for_both_commands() {
                 ],
             );
         }
+    }
+}
+
+#[test]
+fn noncanonical_trust_anchor_is_refused_with_a_distinct_code() {
+    let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+
+    let canonical = fs::read(&fixture.anchor).expect("trust anchor reads");
+    let value: Value = serde_json::from_slice(&canonical).expect("trust anchor parses");
+    let pretty = serde_json::to_vec_pretty(&value).expect("trust anchor re-serializes");
+    assert_ne!(
+        pretty, canonical,
+        "pretty-printed trust anchor must differ from the canonical bytes"
+    );
+    fs::write(&fixture.anchor, pretty).expect("trust anchor is replaced with pretty-printed bytes");
+
+    for (prefix, command) in [
+        ("verify", vec!["verify"]),
+        ("migration.explain", vec!["migration", "explain"]),
+    ] {
+        let mut arguments = vec!["--format", "json"];
+        arguments.extend(command);
+        arguments.extend(["--runtime-config", path(&fixture.runtime_config)]);
+        assert_inspection_refusal(
+            &arguments,
+            &format!("{prefix}.package.anchor_not_canonical"),
+            "verified_package",
+            "verify_package_integrity",
+            &[
+                PACKAGE_VALUE_CANARY,
+                path(&fixture.runtime_config),
+                path(&fixture.package),
+                path(&fixture.anchor),
+            ],
+        );
     }
 }
 

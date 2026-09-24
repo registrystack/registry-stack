@@ -1084,6 +1084,37 @@ fn package_binding_refuses_wrong_environment_instance_database_sequence_and_prio
 }
 
 #[test]
+fn activation_refuses_an_older_package_as_a_rollback() {
+    let older = PackageFixture::build(
+        "local",
+        2,
+        Some("expected-prior"),
+        fingerprint(1),
+        PlanChoice::Schema,
+        None,
+    );
+    let newer_active = local_context(PackageIntent::Activation {
+        active_revision: "expected-prior",
+        active_sequence: 3,
+    });
+    assert_eq!(
+        load_error(older.root.path(), &newer_active),
+        PackageError::OlderThanActive
+    );
+
+    // The deployment binding is checked first, so another deployment's older
+    // package is still refused as a binding mismatch.
+    let other_database = PackageLoadContext {
+        database_id: "another-database",
+        ..newer_active
+    };
+    assert_eq!(
+        load_error(older.root.path(), &other_database),
+        PackageError::Binding
+    );
+}
+
+#[test]
 fn predecessor_package_binds_to_exact_active_database_identity() {
     let fixture = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
     let revision = read_envelope(fixture.root.path()).signed.package_revision;

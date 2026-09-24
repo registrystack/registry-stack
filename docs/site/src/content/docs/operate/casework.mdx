@@ -38,14 +38,16 @@ the package directory and ends at a serving deployment.
 - **Secrets the process can read.** Every credential in the runtime file is a reference:
   `secret:file/<name>` names an owner-only file under one file provider root, and
   `secret:env/<NAME>` names an environment variable.
-- **Durable storage for the audit file.** The runtime appends a keyed hash chain to one JSONL file
-  and holds a process-lifetime lock on a sentinel file beside it, so exactly one process writes
-  one chain.
+- **Durable storage for the audit file.** The runtime appends a keyed hash chain to one JSONL file,
+  seals it under an eight-digit numeric suffix once it reaches 10 MiB, and deletes no sealed file.
+  It holds a process-lifetime lock on a sentinel file beside it, so exactly one process writes one
+  chain. The directory must belong to the runtime user with mode `0700`.
 - **A host for one process, or a place to run the container image.**
 
 {/* Evidence: crates/registry-casework/src/{config,runtime,store,auth}.rs;
     crates/registry-casework/migrations;
-    crates/registry-platform-audit/src/lib.rs, MIN_AUDIT_SECRET_BYTES and JsonlFileSink;
+    crates/registry-platform-audit/src/lib.rs, MIN_AUDIT_SECRET_BYTES;
+    crates/registry-platform-audit/src/segmented_jsonl.rs, DurableSegmentedJsonlSink;
     .github/workflows/ci.yml; products/casework/README.md. */}
 
 ### What it does not need
@@ -84,7 +86,9 @@ The container image is `ghcr.io/registrystack/casework:v0.30.0`, built on a dist
 for `linux/amd64`. Its entrypoint is `/usr/local/bin/casework`, its default arguments are
 `--runtime-config /etc/registry-casework/runtime.yaml serve`, and it exposes port 8100. It carries the
 runtime binary and its license and nothing else: no shell, no healthcheck command, and no
-`caseworkctl`, so migration and `doctor` run from a separate operator host. One directory is
+`caseworkctl`. `migrate` is a `casework` subcommand, so the same image runs it, given the
+migration credential instead of the runtime one; `doctor` belongs to `caseworkctl`, so it still
+runs from a separate operator host that has that binary installed. One directory is
 writable, `/var/lib/registry-casework/audit`, owned by UID and GID 65532 with mode `0700`, for the
 audit chain; mount the runtime file, the policy package, and the secret root read-only. The
 release manifest published beside the binaries records the promoted digest of the image; pin that
@@ -93,6 +97,52 @@ digest rather than the movable tag.
 {/* Evidence: crates/registry-casework/install.sh; release/docker/Dockerfile.casework;
     release/scripts/release_candidate.py, CASEWORK_RUNTIME_IMAGE_NAMES and
     CASEWORK_RELEASE_MINIMUM_VERSION; release/scripts/build-release-image.sh. */}
+
+## Provision PostgreSQL
+
+Create two login roles: a migration role that owns the schema and applies migrations, and a
+runtime role the serving process and background workers use. Keep the migration credential off the
+serving host when no migration is in progress.
+
+```sql
+CREATE ROLE casework_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+  NOINHERIT NOBYPASSRLS PASSWORD '<migration-password>';
+CREATE ROLE casework_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+  NOINHERIT NOBYPASSRLS PASSWORD '<runtime-password>';
+CREATE DATABASE casework;
+```
+
+Casework's migrations create ordinary tables in the database's default `public` schema and declare
+no extension and no other schema, so the migration role owns that one schema and the runtime role
+only reads and writes through it. As an administrator, in the `casework` database:
+
+```sql
+REVOKE ALL ON DATABASE casework FROM PUBLIC;
+GRANT CONNECT ON DATABASE casework TO casework_migration, casework_runtime;
+ALTER SCHEMA public OWNER TO casework_migration;
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
+GRANT USAGE ON SCHEMA public TO casework_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE casework_migration IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO casework_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE casework_migration IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO casework_runtime;
+```
+
+Those default privileges cover every table and sequence [`migrate`](#migrate-and-serve) creates
+afterwards, because it always runs as the migration role. After the first `migrate`, or when
+reusing a database an earlier session already migrated, grant the runtime role the same privileges
+on the objects that already exist:
+
+```sql
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO casework_runtime;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO casework_runtime;
+```
+
+Casework creates no extension, no schema, and no role of its own, so a missing grant here surfaces
+as a permission-denied database error at `serve` rather than at `migrate`.
+
+{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, database provisioning and grants();
+    crates/registry-casework/migrations. */}
 
 ## Write the runtime file
 
@@ -106,6 +156,8 @@ kind: CaseworkRuntimeConfig
 package:
   # The selected package always contains the policy at casework.yaml.
   root: /etc/registry-casework/package
+  # Optional: the policyDigest of the package you reviewed; any other package is refused.
+  expectedPolicyDigest: sha256:0000000000000000000000000000000000000000000000000000000000000000
 listener:
   # The proxy in front of this private listener terminates TLS.
   bind: 10.42.0.7:8100
@@ -149,7 +201,7 @@ sources:
 
 | Section | What it binds |
 | --- | --- |
-| `package` | The absolute root of the package containing `casework.yaml`, its manifest, and exact source descriptions. |
+| `package` | The absolute root of the package containing `casework.yaml`, its manifest, and exact source descriptions, and optionally the one policy digest the runtime may load from it. |
 | `listener` | The listener address and the transport boundary the deployment declares for it. |
 | `secretProviders` | The explicitly enabled file and environment secret providers. |
 | `database` | Secret references for the runtime and migration connection URLs, and an optional trusted root certificate for the PostgreSQL connection. |
@@ -200,10 +252,17 @@ Each source binding also accepts `eventType`, which defaults to `casework-lifecy
 accept at most 300000, and are refused when the connect timeout is the larger of the two, and
 `reconciliationIntervalMilliseconds`, how often the runtime re-reads the source for work the
 source's own notifications did not deliver, which defaults to 60000 and accepts 1000 to 3600000.
-The interval changes scheduling only. Changing it does not invalidate displayed source bindings or
-durable attempts because it does not change source authority or saved source state. If one pass
-outlasts the interval, Casework skips missed ticks instead of replaying them back-to-back against the
-source.
+If one pass outlasts the interval, Casework skips missed ticks instead of replaying them
+back-to-back against the source.
+
+Every source-backed work item, task grant, and saved attempt carries the source's binding
+generation, computed from the source id, the binding's `eventSource`, and the digest of the
+imported source description. Changing one of those three supersedes the source's open work items
+and opens fresh ones on the next observation, because the source now means something else. Every
+other binding field is operational: rotating a client key, moving `tokenEndpoint` or `baseUrl`,
+changing `resource`, `scopes`, `readerProfile`, `eventType`, the trusted root, a timeout, the
+interval, `displayReference`, or `contextProjection` keeps the generation, and with it every
+in-flight work item, claim, and durable attempt.
 
 :::caution[A static key set ages out of date on its own]
 A pinned document keeps accepting the keys it holds and refusing every other one, so an issuer
@@ -216,6 +275,7 @@ before they become the anchor for verification.
     ListenerNetworkExposure, OidcConfig, HumanIdentityConfig, OidcJwksSource, valid_listener(),
     and parse_static_jwks();
     crates/registry-casework-breg/src/config.rs, BregBinding, binding_generation(),
+    generation_ignores_credentials_transport_and_presentation_settings(),
     DEFAULT_EVENT_TYPE, DEFAULT_REQUEST_TIMEOUT_MILLISECONDS, and MAXIMUM_TIMEOUT_MILLISECONDS;
     crates/registry-casework/src/http.rs; products/casework/README.md. */}
 
@@ -267,24 +327,34 @@ not declare or any symbolic link. A start that verifies the package records the 
 the runtime log before anything else happens.
 
 With `tlsTermination: operator-controlled-upstream`, an absent manifest is a refusal rather than a
-fallback to the authored project. Each of these refusals is one run's entire output on standard
-error, written before the listener binds, and each exits non-zero:
+fallback to the authored project.
+
+A verified package proves its files match its own manifest, not that it is the package you
+reviewed. Set `package.expectedPolicyDigest` to the `policyDigest` that `caseworkctl package`
+reported for the reviewed package, and the runtime starts only on that package: a package naming
+another digest, or a directory with no manifest, is refused with both digests named, so a
+replaced package directory cannot change the policy a restart loads.
+
+Each of these refusals is one run's entire output on standard error, written before the listener
+binds, and each exits non-zero:
 
 ```text
 casework: operator-controlled production requires a verified Casework policy package
 casework: the Casework policy package is invalid
+casework: package.expectedPolicyDigest is sha256:4f0c…, but package.root holds the package with policy digest sha256:9b2e…
 casework: the Casework runtime configuration is not valid YAML
 casework: the Casework runtime configuration is invalid
 casework: the Casework secret-provider configuration is invalid; secretProviders.file.root must be an absolute path
 ```
 
 The first line reports a production configuration with no manifest. The second reports a manifest
-whose digests, byte counts, or file set do not match the directory. The third and fourth report the
-runtime file itself: unparseable YAML, and a configuration the checks refuse, which covers an
-invalid listener boundary, an empty issuer or claim name, a human-identity claim equal to the scope
-claim, an access profile using the human-identity claim as its principal claim, and a `sources` map
-that does not match the declared source ids exactly. The fifth reports a secret provider root the
-resolver cannot use.
+whose digests, byte counts, or file set do not match the directory. The third reports a verified
+package other than the one `package.expectedPolicyDigest` names, shown here with both digests
+shortened. The fourth and fifth report the runtime file itself: unparseable YAML, and a
+configuration the checks refuse, which covers an invalid listener boundary, an empty issuer or
+claim name, a human-identity claim equal to the scope claim, an access profile using the
+human-identity claim as its principal claim, and a `sources` map that does not match the declared
+source ids exactly. The sixth reports a secret provider root the resolver cannot use.
 
 {/* Evidence: crates/registry-casework/src/config.rs, verify_policy_package(),
     PolicyPackageManifest, RuntimeConfig::check(), and RuntimeConfigError;
@@ -304,13 +374,70 @@ lock, and applies every unapplied migration in order under its ledger, so a seco
 same database waits rather than racing it. Run it before the first `serve` and before rolling out a
 release that adds migrations.
 
-The unified review schema arrives in a single migration that drops the experimental hosted-item
-tables from the earlier Casework release. No data is carried over, and this release has
-no in-place legacy conversion command. Do not delete rows, edit the migration ledger, or run
-migration SQL by hand. For a disposable local session, use `caseworkctl dev stop PROJECT --remove`
-and start it again. For an operated database, retain the old deployment long enough to export
-required work, take the normal backup, and provision a fresh Casework database for the unified
-review package.
+The unified review schema arrives in a single migration that replaces the experimental hosted-item
+tables of Casework 0.32.0 and earlier. No data is carried over, and this release has
+no in-place legacy conversion command. When those tables are empty, `migrate` replaces them. When
+any of them still holds a row, such as an in-flight hosted item or a retained accountability
+record, `migrate` refuses before applying anything and writes nothing. The refusal begins `the Casework database
+holds hosted work that schema migration 15 would drop`, then names each table that holds rows with
+its row count, such as `casework_hosted_items (1 row)`.
+
+Keep that database with the release that wrote it long enough to export the work it holds, take
+the normal backup, and provision a fresh Casework database for the unified review package. Do not
+delete rows, edit the migration ledger, or run migration SQL by hand to get past the refusal. For a
+disposable local session, use `caseworkctl dev stop PROJECT --remove` and start it again.
+
+{/* Evidence: crates/registry-casework/src/store.rs, refuse_to_drop_hosted_work(),
+    HOSTED_WORK_TABLES, and StoreError::HostedWorkWouldBeDropped;
+    crates/registry-casework/migrations/0015_unified_reviews.sql;
+    crates/registry-casework/tests/postgres_transactions.rs,
+    migration_refuses_to_drop_retained_hosted_work_and_writes_nothing() and
+    migration_replaces_empty_hosted_tables_through_the_ledger_head(). */}
+
+Upgrading from Casework 0.33.0 or earlier supersedes the open work items of BReg sources once.
+That release also computed the source binding generation from the credential, transport, and
+presentation fields, so the generation stored with each work item differs from the one this release
+computes, and each source's next observation opens fresh work items beside the superseded ones.
+Claims, drafts, and pending attempts on the superseded items do not carry over. Finish or settle
+source-backed work before upgrading.
+
+{/* Evidence: crates/registry-casework-breg/src/config.rs, binding_generation();
+    crates/registry-casework/src/runtime.rs, serve_from_path();
+    crates/registry-casework/tests/postgres_transactions.rs,
+    returning_to_an_earlier_binding_generation_opens_a_fresh_occurrence(). */}
+
+### Upgrade from a release that rotated the audit file
+
+Casework 0.33.0 and earlier rotated the audit file: a full file became `casework.ndjson.1`, older
+files moved up to `casework.ndjson.49`, and the oldest was deleted. This release seals a full file
+as `casework.ndjson.00000001` and keeps every sealed file, and it continues only a chain whose
+first retained record is the chain's first. Before the first `serve` of this release:
+
+1. Stop every earlier `casework` process. While one still holds the lock beside the audit file,
+   the new process refuses to start with `another process holds the single-writer lock`.
+2. List the audit directory. If no numbered file such as `casework.ndjson.1` sits beside the audit
+   file, the file never reached 10 MiB, and the new release continues its chain as it is. If one
+   does, move the audit file and every numbered file beside it into an archive directory outside
+   the audit directory:
+
+   ```sh
+   install -d -m 0700 /var/lib/registry-casework/audit-archive
+   cd /var/lib/registry-casework/audit
+   mv casework.ndjson casework.ndjson.[0-9]* /var/lib/registry-casework/audit-archive/
+   ```
+
+   The new process then starts a fresh chain at the configured path. The archive stays keyed with
+   the same audit key, so keep both for as long as your retention policy requires. An event the
+   earlier process appended but never marked published appears again at the start of the fresh
+   chain. Without the move, the new process refuses to start and names the numbered file it found.
+3. Make the audit directory mode `0700`, and the audit file and its `.lock` file mode `0600`, all
+   owned by the runtime user. The earlier release accepted a group-readable directory; this one
+   refuses it with `audit directory must be owner-only`.
+
+{/* Evidence: crates/registry-casework/src/runtime.rs, open_audit_journal(),
+    refuse_rotated_audit_layout(), and describe_audit_journal_failure();
+    crates/registry-platform-audit/src/lib.rs, JsonlFileSink::rotate();
+    crates/registry-platform-audit/src/segmented_jsonl.rs, DurableSegmentedJsonlSink. */}
 
 :::caution[Keep the migration credential off the serving host]
 The migration credential owns the schema, and the serving process never needs it. Supply it only
@@ -323,6 +450,13 @@ Then run the service:
 ```sh
 casework --runtime-config /etc/registry-casework/runtime.yaml serve
 ```
+
+Set `CASEWORK_LOG` to choose the operational log level: `error`, `warn`, or `info`, which is the
+default when the variable is unset. Any other value, including a tracing filter directive that
+would enable a dependency's own debug or trace logging, refuses to start. `serve` writes structured
+JSON to standard output at every level, so redirecting it to a file never carries colour codes, and
+the level applies to Casework's own logging only; the ambient `RUST_LOG` variable has no effect on
+this process.
 
 A restart of this same version against the same package, runtime file, and database is the normal
 recovery path after process or host interruption. It reloads the verified package and resumes the
@@ -365,7 +499,8 @@ approval, and caseload move apply. A caseload move preview is refused as a whole
 is among the items it reads.
 
 {/* Evidence: crates/registry-casework/src/runtime.rs, migrate_from_path(), serve_from_path(),
-    serve_until_worker_stops(), supervise(), and AuditPublicationFailure;
+    serve_until_worker_stops(), supervise(), operational_log_level(), and AuditPublicationFailure;
+    crates/registry-casework/src/main.rs, initialize_logging();
     crates/registry-casework/src/store.rs, migrate();
     crates/registry-casework/src/http.rs, health() and ready();
     crates/registry-casework/src/service.rs, ready() and assemble_caller_visible_item();
@@ -455,7 +590,11 @@ either product's database directly.
 The runtime verifies and loads the package once, at startup. Install the reviewed successor into a
 new directory beside the current one, point `package.root` at the new directory, and
 restart or roll out the process. Keep the previous package directory until the new one serves, so a
-rollback is a configuration change rather than a rebuild.
+rollback is a configuration change rather than a rebuild. A package or source binding change that
+alters the source binding generation supersedes the source's open work items. Rolling that change
+back does not reopen the work items it superseded: they stay superseded, and the source's next
+observation opens fresh work items beside them. A change to operational binding fields alone keeps
+the generation and the work items.
 
 :::caution[Editing a package in place changes nothing the process is serving]
 A running process keeps the policy it verified at startup, so files replaced under it leave the
@@ -474,7 +613,12 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 
 {/* Evidence: products/casework/README.md;
     products/casework/generated/registry-casework.openapi.json;
-    crates/registry-casework/src/config.rs, verify_policy_package(). */}
+    crates/registry-casework/src/config.rs, verify_policy_package();
+    crates/registry-casework/migrations/0016_occurrence_identity_excludes_superseded.sql;
+    crates/registry-casework/tests/postgres_transactions.rs,
+    returning_to_an_earlier_binding_generation_opens_a_fresh_occurrence;
+    crates/registry-casework-breg/src/config.rs,
+    generation_changes_with_source_id_event_source_or_description. */}
 
 ## Troubleshooting
 
@@ -486,6 +630,10 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 | A secret reference is refused | The named file must be a regular file owned by the running user, mode `0400` or `0600`, one link, no symbolic link, non-empty, and free of NUL bytes. |
 | Startup refuses the database or `doctor` stops at it | Check the resolved URL's user and database name, TLS on the server, and the trusted root reference when the server uses a private authority. |
 | Startup refuses the OIDC issuer | Check discovery reachability from the Casework host, or the pinned JWKS document's keys and their distinct `kid` values. |
+| `the Casework database schema version N is newer than this binary supports (M)` | A newer release already migrated this database. Run that release or a later one; Casework does not migrate a schema down. |
+| `the Casework database holds hosted work that schema migration 15 would drop` | The database still holds hosted work from Casework 0.32.0 or earlier. Keep it with that release until its work is exported, then migrate a fresh database as [Migrate and serve](#migrate-and-serve) describes. |
+| `the Casework audit journal could not be initialized` naming a numbered file `rotated by an earlier Casework release`, or saying the file `does not begin at the first record of its chain` | The audit directory still holds the layout of Casework 0.33.0 or earlier. Archive it as [the upgrade steps](#upgrade-from-a-release-that-rotated-the-audit-file) describe. |
+| `the Casework audit journal could not be initialized: audit directory must be owner-only` | Set the audit directory to mode `0700`, owned by the runtime user. |
 | `GET /ready` returns `503` while `GET /health` returns `200` | Audit publication or PostgreSQL is failing. Read the runtime log for the failed audit stage, and check the audit file, its lock, and the database. |
 | `profile.not-human` on a token you believe is human | The issuer did not add the configured human-identity claim to that session. Check the claim name and value against the issuer's mapping for interactive sessions. |
 | Work items report a source outage | The bound source is unreachable or refusing the reader. Run `caseworkctl doctor`, which names the failing source, read the runtime log's `Casework source reader request to BReg failed` entry for the cause, then check that binding's base URL, token endpoint, and reader grants. |

@@ -155,6 +155,21 @@ fn every_public_json_report_matches_its_schema() {
             ],
         ),
         (
+            "attempt mark-uncertain",
+            "AttemptUncertainMarkingReport",
+            vec![
+                "attempt",
+                "mark-uncertain",
+                missing.to_str().unwrap(),
+                "--attempt-id",
+                "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+                "--reason",
+                "contract fixture",
+                "--decided-by",
+                "contract test",
+            ],
+        ),
+        (
             "db migrate",
             "DatabaseMigrationReport",
             vec!["db", "migrate", missing.to_str().unwrap()],
@@ -232,8 +247,115 @@ fn every_public_json_report_matches_its_schema() {
     assert_eq!(exit, ExitCode::from(2));
     reports.push(("usage", "UsageReport", usage));
 
-    assert_eq!(reports.len(), 18);
+    assert_eq!(reports.len(), 19);
     for (label, kind, report) in reports {
         assert_matches_contract(label, kind, &report);
     }
+}
+
+/// Runs statements against the dedicated test database at `url`.
+#[cfg(feature = "postgres-test")]
+fn execute_in_test_database(url: &str, statements: &str) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime");
+    runtime.block_on(async {
+        let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls)
+            .await
+            .expect("connect dedicated test database");
+        let connection = tokio::spawn(connection);
+        client
+            .batch_execute(statements)
+            .await
+            .expect("test database statements");
+        drop(client);
+        connection
+            .await
+            .expect("test connection task")
+            .expect("test connection");
+    });
+}
+
+#[cfg(feature = "postgres-test")]
+#[test]
+fn db_migrate_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
+    let base = std::env::var("CASEWORK_TEST_DATABASE_URL")
+        .expect("CASEWORK_TEST_DATABASE_URL is required for the real PostgreSQL test");
+    // A schema of its own, so this test never races a suite that resets the
+    // public schema of the same database.
+    let schema = format!("caseworkctl_newer_{}", Uuid::new_v4().simple());
+    let separator = if base.contains('?') { '&' } else { '?' };
+    let scoped = format!("{base}{separator}options=-csearch_path%3D{schema}");
+    execute_in_test_database(&base, &format!("CREATE SCHEMA {schema}"));
+    let secret = format!("CASEWORKCTL_TEST_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
+    std::env::set_var(&secret, &scoped);
+
+    let root = tempfile::tempdir().expect("temporary project root");
+    let project = root.path().join("standalone");
+    let (exit, _) = invoke(vec![
+        OsString::from("init"),
+        project.as_os_str().to_owned(),
+        OsString::from("--template"),
+        OsString::from("standalone-decision"),
+    ]);
+    assert_eq!(exit, ExitCode::SUCCESS);
+    std::fs::create_dir(project.join("secrets")).expect("secret root");
+    let mut runtime: Value = serde_norway::from_slice(
+        &std::fs::read(project.join("runtime.example.yaml")).expect("runtime example reads"),
+    )
+    .expect("runtime example parses");
+    runtime["secretProviders"]["environment"] = json!({});
+    runtime["database"] = json!({
+        "runtimeUrlRef": format!("secret:env/{secret}"),
+        "migrationUrlRef": format!("secret:env/{secret}"),
+        "testOnlyPlaintext": true,
+    });
+    std::fs::write(
+        project.join("runtime.yaml"),
+        serde_norway::to_string(&runtime).expect("runtime config renders"),
+    )
+    .expect("runtime config writes");
+    let migrate = vec![
+        OsString::from("db"),
+        OsString::from("migrate"),
+        project.as_os_str().to_owned(),
+    ];
+
+    let (exit, migrated) = invoke(migrate.clone());
+    assert_eq!(exit, ExitCode::SUCCESS, "{migrated:#?}");
+    assert_eq!(migrated["status"], "migrated");
+    execute_in_test_database(
+        &scoped,
+        "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(17,now())",
+    );
+
+    let refusal = "the Casework database schema version 17 is newer than this binary supports (16); run a casework release that supports it";
+    let (exit, report) = invoke(migrate.clone());
+    assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report:#?}");
+    assert_eq!(report["ok"], false);
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "casework.migration.refused"
+    );
+    assert_eq!(report["diagnostics"][0]["path"], "database");
+    assert_eq!(report["diagnostics"][0]["message"], refusal);
+    assert_matches_contract("db migrate refusal", "DatabaseMigrationReport", &report);
+
+    let mut human = vec![OsString::from("caseworkctl")];
+    human.extend(migrate);
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let exit = main_entry_from(human, &mut stdout, &mut stderr);
+    let stderr = String::from_utf8(stderr).expect("stderr is UTF-8");
+    assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{stderr}");
+    assert!(
+        stderr.starts_with(&format!(
+            "error[casework.migration.refused] database: {refusal}\n  next: "
+        )),
+        "{stderr}"
+    );
+
+    std::env::remove_var(&secret);
+    execute_in_test_database(&base, &format!("DROP SCHEMA {schema} CASCADE"));
 }

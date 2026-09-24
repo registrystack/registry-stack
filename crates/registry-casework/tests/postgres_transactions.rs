@@ -5,9 +5,10 @@ use std::sync::Arc;
 use registry_casework::{AttemptSettlementError, DatabaseConfig, PostgresStore, StoreError};
 use registry_casework_core::{
     ActorContext, AttemptSettlement, AttemptSettlementOutcome, AttemptState,
-    AuthoritativeObservation, BootstrapDirectoryRequest, CaseworkRole, HistoryKind,
-    IssuerPrincipal, OccurrenceKind, OccurrenceState, OperationName, PreparedSourceAttempt,
-    RecoveryEvidence, SourceBinding, SourceReceipt, SubjectRef, TransitionHint,
+    AttemptUncertainMarking, AuthoritativeObservation, BootstrapDirectoryRequest, CaseworkRole,
+    HistoryKind, IssuerPrincipal, OccurrenceKind, OccurrenceState, OperationName,
+    PreparedSourceAttempt, RecoveryEvidence, SourceBinding, SourceReceipt, SubjectRef,
+    TransitionHint,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 
@@ -972,7 +973,7 @@ async fn repeated_migration_is_a_ledger_no_op_and_never_drops_the_occurrence_ind
     let (store, client, schema) = isolated_schema("migrate").await;
     store.migrate().await.expect("first migration");
     let applied = applied_versions(&client).await;
-    assert_eq!(applied, (1..=15).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=16).collect::<Vec<i64>>());
     let index = occurrence_index(&client, &schema).await;
     assert!(index.1, "the occurrence identity index is unique");
 
@@ -986,6 +987,354 @@ async fn repeated_migration_is_a_ledger_no_op_and_never_drops_the_occurrence_ind
         index,
         "the second migration leaves the occurrence identity index in place"
     );
+}
+
+async fn items_by_state(client: &tokio_postgres::Client) -> Vec<(String, String, uuid::Uuid)> {
+    client
+        .query(
+            "SELECT occurrence_key,state,item_id FROM casework_items WHERE source_id='source-a' ORDER BY first_observed_at,item_id",
+            &[],
+        )
+        .await
+        .expect("read occurrence items")
+        .into_iter()
+        .map(|row| (row.get(0), row.get(1), row.get(2)))
+        .collect()
+}
+
+/// Bind the subject to `generation` and observe it open there, the way a
+/// restart onto a package or source binding and the next reconciliation do.
+async fn observe_open_in_generation(store: &PostgresStore, generation: &str) -> uuid::Uuid {
+    store
+        .register_source_generation("source-a", generation)
+        .await
+        .expect("rebind the source generation");
+    store
+        .apply_observation(
+            &observation_generation(
+                1,
+                "proposal-1",
+                OccurrenceKind::Review,
+                OccurrenceState::Open,
+                generation,
+            ),
+            "default",
+            None,
+        )
+        .await
+        .expect("the observation in the returned-to generation applies")
+        .expect("the observation opens an item")
+        .item_id
+}
+
+#[tokio::test]
+async fn returning_to_an_earlier_binding_generation_opens_a_fresh_occurrence() {
+    let (store, client, _schema) = isolated_schema("generation_return").await;
+    store.migrate().await.expect("migrate");
+
+    let first_a = observe_open_in_generation(&store, "binding-a").await;
+    let b = observe_open_in_generation(&store, "binding-b").await;
+    let second_a = observe_open_in_generation(&store, "binding-a").await;
+
+    assert_ne!(
+        second_a, first_a,
+        "a superseded occurrence stays terminal; the returned-to binding opens a fresh item"
+    );
+    let key_a = "Review:proposal-1:binding-a".to_owned();
+    let key_b = "Review:proposal-1:binding-b".to_owned();
+    assert_eq!(
+        items_by_state(&client).await,
+        [
+            (key_a.clone(), "superseded".to_owned(), first_a),
+            (key_b, "superseded".to_owned(), b),
+            (key_a, "open".to_owned(), second_a),
+        ]
+    );
+}
+
+async fn item_reference_revision_and_history(
+    client: &tokio_postgres::Client,
+    item_id: uuid::Uuid,
+) -> (Option<String>, i64, i64) {
+    let row = client
+        .query_one(
+            "SELECT i.display_reference,i.revision,(SELECT count(*) FROM casework_history h WHERE h.item_id=i.item_id) FROM casework_items i WHERE i.item_id=$1",
+            &[&item_id],
+        )
+        .await
+        .expect("read the stored item");
+    (row.get(0), row.get(1), row.get(2))
+}
+
+#[tokio::test]
+async fn an_unchanged_source_revision_refreshes_the_stored_display_reference() {
+    let (store, client, _schema) = isolated_schema("display_reference").await;
+    store.migrate().await.expect("migrate");
+    store
+        .register_source_generation("source-a", "binding-a")
+        .await
+        .expect("bind the source generation");
+    let mut observed = observation(
+        1,
+        "proposal-1",
+        OccurrenceKind::Review,
+        OccurrenceState::Open,
+    );
+    observed.display_reference = Some("REF-FIRST".to_owned());
+    let item_id = store
+        .apply_observation(&observed, "default", None)
+        .await
+        .expect("the first observation applies")
+        .expect("the first observation opens an item")
+        .item_id;
+    let (reference, revision, history) =
+        item_reference_revision_and_history(&client, item_id).await;
+    assert_eq!(reference.as_deref(), Some("REF-FIRST"));
+
+    // The same source revision and representation, read through a binding
+    // whose displayReference now names another field.
+    observed.display_reference = Some("REF-SECOND".to_owned());
+    assert!(store
+        .apply_observation(&observed, "default", None)
+        .await
+        .expect("the unchanged revision applies")
+        .is_none());
+    assert_eq!(
+        item_reference_revision_and_history(&client, item_id).await,
+        (Some("REF-SECOND".to_owned()), revision, history),
+        "the stored reference follows the source while the item revision and history stay put"
+    );
+
+    observed.display_reference = None;
+    store
+        .apply_observation(&observed, "default", None)
+        .await
+        .expect("the unchanged revision without a reference applies");
+    assert_eq!(
+        item_reference_revision_and_history(&client, item_id).await,
+        (None, revision, history),
+        "a reference the source no longer discloses is not kept"
+    );
+    let applied: i64 = client
+        .query_one(
+            "SELECT applied_revision FROM casework_subjects WHERE source_id='source-a' AND subject_kind='request-a' AND subject_id='subject-a'",
+            &[],
+        )
+        .await
+        .expect("read the subject ledger")
+        .get(0);
+    assert_eq!(applied, 1);
+}
+
+#[tokio::test]
+async fn a_database_failure_names_the_violated_constraint_without_row_data() {
+    let (store, client, _schema) = isolated_schema("constraint_name").await;
+    store.migrate().await.expect("migrate");
+    let violation = client
+        .execute(
+            "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(1,now())",
+            &[],
+        )
+        .await
+        .expect_err("a repeated ledger version is refused");
+    assert!(violation
+        .as_db_error()
+        .and_then(|error| error.detail())
+        .is_some_and(|detail| detail.contains("(version)=(1)")));
+
+    assert_eq!(
+        StoreError::Postgres(violation).to_string(),
+        "the Casework database operation failed (constraint casework_schema_migrations_pkey)"
+    );
+}
+
+#[tokio::test]
+async fn migration_16_releases_superseded_identities_in_a_database_that_holds_them() {
+    let (store, client, _schema) = isolated_schema("occurrence_identity_upgrade").await;
+    store.migrate().await.expect("establish current schema");
+    client
+        .batch_execute(
+            "DROP INDEX casework_items_occurrence_idx; \
+             CREATE UNIQUE INDEX casework_items_occurrence_idx \
+                 ON casework_items(source_id, subject_kind, subject_id, occurrence_key); \
+             DELETE FROM casework_schema_migrations WHERE version=16;",
+        )
+        .await
+        .expect("simulate the schema before migration 16");
+    let first_a = observe_open_in_generation(&store, "binding-a").await;
+    let b = observe_open_in_generation(&store, "binding-b").await;
+
+    store
+        .migrate()
+        .await
+        .expect("migration 16 applies over superseded rows");
+
+    assert_eq!(
+        applied_versions(&client).await,
+        (1..=16).collect::<Vec<_>>()
+    );
+    let second_a = observe_open_in_generation(&store, "binding-a").await;
+    let states: Vec<(uuid::Uuid, String)> = items_by_state(&client)
+        .await
+        .into_iter()
+        .map(|(_, state, item_id)| (item_id, state))
+        .collect();
+    assert_eq!(
+        states,
+        [
+            (first_a, "superseded".to_owned()),
+            (b, "superseded".to_owned()),
+            (second_a, "open".to_owned()),
+        ]
+    );
+    let duplicate_active = client
+        .execute(
+            "INSERT INTO casework_items(item_id,source_id,subject_kind,subject_id,occurrence_kind,occurrence_key,stage,binding,state,queue_id,revision,first_observed_at,updated_at) SELECT $1,source_id,subject_kind,subject_id,occurrence_kind,occurrence_key,stage,binding,'open',queue_id,1,now(),now() FROM casework_items WHERE item_id=$2",
+            &[&uuid::Uuid::new_v4(), &second_a],
+        )
+        .await
+        .expect_err("a second live item for one occurrence identity is refused");
+    assert_eq!(
+        duplicate_active
+            .as_db_error()
+            .and_then(|error| error.constraint()),
+        Some("casework_items_occurrence_idx")
+    );
+}
+
+/// The schema Casework v0.32.0 migrated to: versions 1 through 14, the last
+/// release whose ledger still held the hosted-item tables migration 15 drops.
+const V0_32_MIGRATIONS: [&str; 14] = [
+    include_str!("../migrations/0001_casework.sql"),
+    include_str!("../migrations/0002_hosted_casework.sql"),
+    include_str!("../migrations/0003_assignment.sql"),
+    include_str!("../migrations/0004_clocks.sql"),
+    include_str!("../migrations/0005_source_retention.sql"),
+    include_str!("../migrations/0006_source_history.sql"),
+    include_str!("../migrations/0007_directory_targets.sql"),
+    include_str!("../migrations/0008_retention_and_inbox_indexes.sql"),
+    include_str!("../migrations/0009_directory_display_names.sql"),
+    include_str!("../migrations/0010_reference_lookup_and_sort.sql"),
+    include_str!("../migrations/0011_source_reconciliation_progress.sql"),
+    include_str!("../migrations/0012_absence_cursors.sql"),
+    include_str!("../migrations/0013_sync_claim_indexes.sql"),
+    include_str!("../migrations/0014_task_grants.sql"),
+];
+
+async fn establish_v0_32_schema(client: &tokio_postgres::Client) {
+    client
+        .batch_execute(
+            "CREATE TABLE casework_schema_migrations (\
+             version bigint PRIMARY KEY CHECK (version > 0),\
+             applied_at timestamptz NOT NULL)",
+        )
+        .await
+        .expect("create the migration ledger");
+    for (version, migration) in (1_i64..).zip(V0_32_MIGRATIONS) {
+        client
+            .batch_execute(migration)
+            .await
+            .unwrap_or_else(|error| panic!("apply migration {version}: {error}"));
+        client
+            .execute(
+                "INSERT INTO casework_schema_migrations(version,applied_at) VALUES($1,now())",
+                &[&version],
+            )
+            .await
+            .unwrap_or_else(|error| panic!("record migration {version}: {error}"));
+    }
+}
+
+async fn row_count(client: &tokio_postgres::Client, table: &str) -> i64 {
+    client
+        .query_one(&format!("SELECT count(*) FROM {table}"), &[])
+        .await
+        .unwrap_or_else(|error| panic!("count {table}: {error}"))
+        .get(0)
+}
+
+#[tokio::test]
+async fn migration_refuses_to_drop_retained_hosted_work_and_writes_nothing() {
+    let (store, client, _schema) = isolated_schema("hosted_work_upgrade").await;
+    establish_v0_32_schema(&client).await;
+    // One claimed hosted item still in flight, and the accountability record
+    // an earlier decision retains for a year.
+    client
+        .batch_execute(
+            "INSERT INTO casework_hosted_items(item_id,kind_id,kind_version,kind_policy_digest,kind_policy,queue_id,state,holder_issuer,holder_subject,revision,created_at,updated_at) \
+                 VALUES('00000000-0000-4000-8000-0000000000a1','payment-review','1','sha256:policy','{}','review','claimed','https://issuer.test','officer-one',2,now(),now()); \
+             INSERT INTO casework_hosted_actor_references(actor_ref,issuer,subject) \
+                 VALUES('actor-1','https://issuer.test','officer-one'); \
+             INSERT INTO casework_hosted_accountability(event_id,item_id,actor_ref,actor_issuer,actor_subject,profile_id,queue_id,outcome,occurred_at,retained_until) \
+                 VALUES('00000000-0000-4000-8000-0000000000b1','00000000-0000-4000-8000-0000000000a2','actor-1','https://issuer.test','officer-one','staff','review','approved',now(),now()+interval '365 days');",
+        )
+        .await
+        .expect("seed hosted work the way v0.32.0 retained it");
+
+    let refusal = store
+        .migrate()
+        .await
+        .expect_err("migration must not drop retained hosted work");
+    assert!(
+        matches!(refusal, StoreError::HostedWorkWouldBeDropped { .. }),
+        "{refusal:?}"
+    );
+    assert_eq!(
+        refusal.to_string(),
+        "the Casework database holds hosted work that schema migration 15 would drop: \
+         casework_hosted_accountability (1 row), casework_hosted_items (1 row), \
+         casework_hosted_actor_references (1 row); nothing was changed. This release does not \
+         carry hosted work forward: keep this database with the release that wrote it until \
+         the work it holds is exported, then migrate a fresh Casework database for this release"
+    );
+    assert_eq!(
+        applied_versions(&client).await,
+        (1..=14).collect::<Vec<_>>()
+    );
+    assert_eq!(row_count(&client, "casework_hosted_items").await, 1);
+    assert_eq!(
+        row_count(&client, "casework_hosted_accountability").await,
+        1
+    );
+    assert_eq!(
+        row_count(&client, "casework_hosted_actor_references").await,
+        1
+    );
+    let review_tables: bool = client
+        .query_one(
+            "SELECT to_regclass('casework_review_requests') IS NULL",
+            &[],
+        )
+        .await
+        .expect("inspect the review schema")
+        .get(0);
+    assert!(review_tables, "migration 15 was not applied");
+}
+
+#[tokio::test]
+async fn migration_replaces_empty_hosted_tables_through_the_ledger_head() {
+    let (store, client, _schema) = isolated_schema("hosted_empty_upgrade").await;
+    establish_v0_32_schema(&client).await;
+
+    store
+        .migrate()
+        .await
+        .expect("empty hosted tables hold nothing to drop");
+
+    assert_eq!(
+        applied_versions(&client).await,
+        (1..=16).collect::<Vec<_>>()
+    );
+    let hosted_tables_remaining: bool = client
+        .query_one(
+            "SELECT to_regclass('casework_hosted_items') IS NOT NULL",
+            &[],
+        )
+        .await
+        .expect("inspect the hosted schema")
+        .get(0);
+    assert!(!hosted_tables_remaining);
+    store.ready().await.expect("the migrated schema is current");
 }
 
 #[tokio::test]
@@ -1005,7 +1354,7 @@ async fn migration_13_adds_sync_claim_indexes_to_an_existing_schema() {
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=15).collect::<Vec<_>>()
+        (1..=16).collect::<Vec<_>>()
     );
     let indexes: Vec<String> = client
         .query(
@@ -1087,10 +1436,57 @@ async fn readiness_rejects_an_unsupported_migration_version() {
         .await
         .expect("simulate a schema created by a newer runtime");
 
+    let refusal = store
+        .ready()
+        .await
+        .expect_err("a schema newer than this binary must fail readiness");
     assert!(
-        matches!(store.ready().await, Err(StoreError::Corrupt)),
-        "an unsupported migration version must fail readiness"
+        matches!(
+            refusal,
+            StoreError::SchemaNewer {
+                found: 17,
+                supported: 16
+            }
+        ),
+        "a newer schema is not reported as corrupt data: {refusal:?}"
     );
+    assert_eq!(
+        refusal.to_string(),
+        "the Casework database schema version 17 is newer than this binary supports (16); run a casework release that supports it"
+    );
+}
+
+#[tokio::test]
+async fn migration_refuses_a_schema_newer_than_this_binary_and_writes_nothing() {
+    let (store, client, _schema) = isolated_schema("migrate_newer").await;
+    store
+        .migrate()
+        .await
+        .expect("migrate to the current schema");
+    client
+        .execute(
+            "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(17,now())",
+            &[],
+        )
+        .await
+        .expect("simulate a schema created by a newer runtime");
+    let before = applied_versions(&client).await;
+
+    let refusal = store
+        .migrate()
+        .await
+        .expect_err("an older binary must not report a newer schema as migrated");
+    assert!(
+        matches!(
+            refusal,
+            StoreError::SchemaNewer {
+                found: 17,
+                supported: 16
+            }
+        ),
+        "{refusal:?}"
+    );
+    assert_eq!(applied_versions(&client).await, before);
 }
 
 #[tokio::test]
@@ -1184,6 +1580,8 @@ async fn retrying_an_audit_publication_preserves_its_original_timestamp() {
 const SETTLEMENT_REASON: &str =
     "The source refused the saved evidence version; the registrar confirmed no change was made.";
 const SETTLEMENT_DECIDED_BY: &str = "Registrar duty officer, ticket OPS-4411";
+const MARKING_REASON: &str =
+    "The officer who started the attempt has left; the source call outcome is unknown.";
 
 /// One claimed item whose only attempt is left live by its executor, the way
 /// a saved-evidence version the binary refuses leaves it.
@@ -1193,6 +1591,7 @@ struct SettlementFixture {
     holder: ActorContext,
     item_id: uuid::Uuid,
     attempt_id: uuid::Uuid,
+    execution_token: uuid::Uuid,
     binding_reference: String,
 }
 
@@ -1274,6 +1673,7 @@ async fn settlement_fixture(prefix: &str, mark_uncertain: bool) -> SettlementFix
         holder,
         item_id: claimed.item_id,
         attempt_id: attempt.attempt_id,
+        execution_token,
         binding_reference: claimed.binding_reference,
     }
 }
@@ -1284,6 +1684,14 @@ impl SettlementFixture {
             attempt_id: self.attempt_id,
             outcome,
             reason: SETTLEMENT_REASON.to_owned(),
+            decided_by: SETTLEMENT_DECIDED_BY.to_owned(),
+        }
+    }
+
+    fn marking(&self) -> AttemptUncertainMarking {
+        AttemptUncertainMarking {
+            attempt_id: self.attempt_id,
+            reason: MARKING_REASON.to_owned(),
             decided_by: SETTLEMENT_DECIDED_BY.to_owned(),
         }
     }
@@ -1702,6 +2110,291 @@ async fn a_settlement_needs_the_item_to_await_the_source_outcome() {
                 .settle_attempt(&fixture.settlement(outcome))
                 .await,
             Err(AttemptSettlementError::ItemNotSynchronizing("superseded"))
+        ));
+    }
+    assert_eq!(fixture.snapshot().await, before);
+}
+
+#[tokio::test]
+async fn an_operator_marks_an_expired_pending_attempt_uncertain_naming_both_parties() {
+    let fixture = settlement_fixture("mark_uncertain", false).await;
+    fixture.lapse_execution_lease().await;
+    let before = fixture
+        .store
+        .item(fixture.item_id)
+        .await
+        .expect("wedged item");
+    assert_eq!(before.state, OccurrenceState::Synchronizing);
+
+    let report = fixture
+        .store
+        .mark_expired_attempt_uncertain(&fixture.marking())
+        .await
+        .expect("a pending attempt with a lapsed lease is marked uncertain");
+    assert!(report.applied);
+    assert_eq!(report.attempt_id, fixture.attempt_id);
+    assert_eq!(report.item_id, fixture.item_id);
+    assert_eq!(report.operation.as_str(), "approve");
+    assert_eq!(report.binding_reference, fixture.binding_reference);
+    assert_eq!(report.original_actor, fixture.holder.principal);
+    assert_eq!(report.original_profile_id, "staff");
+    assert_eq!(report.reason, MARKING_REASON);
+    assert_eq!(report.decided_by, SETTLEMENT_DECIDED_BY);
+    assert_eq!(report.attempt_state, AttemptState::Uncertain);
+    assert_eq!(report.item_state, OccurrenceState::Synchronizing);
+
+    assert_eq!(fixture.attempt_row().await, ("uncertain".to_owned(), None));
+    let after = fixture
+        .store
+        .item(fixture.item_id)
+        .await
+        .expect("marked item");
+    assert_eq!(after.state, OccurrenceState::Synchronizing);
+    assert_eq!(after.revision, before.revision + 1);
+
+    let history = fixture
+        .store
+        .history(&fixture.holder, fixture.item_id, 100)
+        .await
+        .expect("history");
+    let marked: Vec<_> = history
+        .iter()
+        .filter(|event| event.kind == HistoryKind::AttemptUncertain)
+        .collect();
+    assert_eq!(marked.len(), 1, "one uncertainty event");
+    let marked = marked[0];
+    assert_eq!(marked.actor, None, "an operator decision has no actor");
+    assert_eq!(marked.profile_id, "system:operator");
+    assert_eq!(marked.item_revision, after.revision);
+    assert_eq!(
+        marked.detail,
+        serde_json::json!({
+            "attemptId": fixture.attempt_id,
+            "bindingReference": fixture.binding_reference,
+            "operation": "approve",
+            "operatorReason": MARKING_REASON,
+            "decidedBy": SETTLEMENT_DECIDED_BY,
+            "originalActor": {
+                "issuer": fixture.holder.principal.issuer,
+                "subject": fixture.holder.principal.subject,
+            },
+            "originalProfileId": "staff",
+        })
+    );
+    let durable = fixture
+        .client
+        .query_one(
+            "SELECT e.event_kind,e.detail,a.audit_record FROM casework_events e JOIN casework_audit_outbox a USING(event_id) WHERE e.event_id=$1",
+            &[&marked.event_id],
+        )
+        .await
+        .expect("the decision is a durable event with an audit record");
+    assert_eq!(durable.get::<_, String>(0), "attempt_uncertain");
+    assert_eq!(durable.get::<_, serde_json::Value>(1), marked.detail);
+    let audit: serde_json::Value = durable.get(2);
+    assert_eq!(audit["event"], "casework.attempt_uncertain");
+    assert_eq!(audit["itemRevision"], after.revision);
+    assert_eq!(audit["profileId"], "system:operator");
+    assert!(audit["actor"].is_null());
+
+    // The executor that held the lapsed lease can no longer finish the attempt.
+    let receipt = SourceReceipt {
+        source_revision: "2".to_owned(),
+        resulting_state: "approved".to_owned(),
+        binding: after.binding.clone(),
+        actor_reference: None,
+        metadata: BTreeMap::new(),
+    };
+    assert!(matches!(
+        fixture
+            .store
+            .complete_attempt(
+                &fixture.holder,
+                fixture.attempt_id,
+                fixture.execution_token,
+                &receipt
+            )
+            .await,
+        Err(StoreError::AttemptPending)
+    ));
+
+    // The attempt is now one the operator can settle.
+    fixture
+        .store
+        .settle_attempt(&fixture.settlement(AttemptSettlementOutcome::NotApplied))
+        .await
+        .expect("the uncertain attempt settles");
+}
+
+#[tokio::test]
+async fn an_unexpired_lease_refuses_marking_uncertain_and_writes_nothing() {
+    let fixture = settlement_fixture("mark_live_lease", false).await;
+    let before = fixture.snapshot().await;
+    assert!(matches!(
+        fixture
+            .store
+            .preview_attempt_uncertain_marking(&fixture.marking())
+            .await,
+        Err(AttemptSettlementError::LeaseLive)
+    ));
+    assert!(matches!(
+        fixture
+            .store
+            .mark_expired_attempt_uncertain(&fixture.marking())
+            .await,
+        Err(AttemptSettlementError::LeaseLive)
+    ));
+    assert_eq!(fixture.snapshot().await, before);
+}
+
+#[tokio::test]
+async fn only_a_pending_attempt_can_be_marked_uncertain() {
+    let uncertain = settlement_fixture("mark_uncertain_twice", true).await;
+    let before = uncertain.snapshot().await;
+    for result in [
+        uncertain
+            .store
+            .preview_attempt_uncertain_marking(&uncertain.marking())
+            .await,
+        uncertain
+            .store
+            .mark_expired_attempt_uncertain(&uncertain.marking())
+            .await,
+    ] {
+        assert!(matches!(
+            result,
+            Err(AttemptSettlementError::NotPending("uncertain"))
+        ));
+    }
+    assert_eq!(uncertain.snapshot().await, before);
+
+    uncertain
+        .store
+        .settle_attempt(&uncertain.settlement(AttemptSettlementOutcome::Applied))
+        .await
+        .expect("settlement");
+    let before = uncertain.snapshot().await;
+    assert!(matches!(
+        uncertain
+            .store
+            .mark_expired_attempt_uncertain(&uncertain.marking())
+            .await,
+        Err(AttemptSettlementError::NotPending("completed"))
+    ));
+    assert_eq!(uncertain.snapshot().await, before);
+
+    let unknown = AttemptUncertainMarking {
+        attempt_id: uuid::Uuid::new_v4(),
+        ..uncertain.marking()
+    };
+    assert!(matches!(
+        uncertain
+            .store
+            .mark_expired_attempt_uncertain(&unknown)
+            .await,
+        Err(AttemptSettlementError::NotFound)
+    ));
+    assert!(matches!(
+        uncertain
+            .store
+            .preview_attempt_uncertain_marking(&unknown)
+            .await,
+        Err(AttemptSettlementError::NotFound)
+    ));
+}
+
+#[tokio::test]
+async fn an_uncertainty_marking_preview_names_both_parties_and_writes_nothing() {
+    let fixture = settlement_fixture("mark_preview", false).await;
+    fixture.lapse_execution_lease().await;
+    let before = fixture.snapshot().await;
+    let preview = fixture
+        .store
+        .preview_attempt_uncertain_marking(&fixture.marking())
+        .await
+        .expect("preview");
+    assert!(!preview.applied);
+    assert_eq!(preview.original_actor, fixture.holder.principal);
+    assert_eq!(preview.original_profile_id, "staff");
+    assert_eq!(preview.decided_by, SETTLEMENT_DECIDED_BY);
+    assert_eq!(preview.attempt_state, AttemptState::Uncertain);
+    assert_eq!(preview.item_state, OccurrenceState::Synchronizing);
+    assert_eq!(fixture.snapshot().await, before);
+}
+
+#[tokio::test]
+async fn an_uncertainty_marking_needs_a_bounded_reason_and_decider() {
+    let fixture = settlement_fixture("mark_bounds", false).await;
+    fixture.lapse_execution_lease().await;
+    let before = fixture.snapshot().await;
+    let base = fixture.marking();
+    for (marking, field) in [
+        (
+            AttemptUncertainMarking {
+                reason: "   ".to_owned(),
+                ..base.clone()
+            },
+            "reason",
+        ),
+        (
+            AttemptUncertainMarking {
+                reason: "x".repeat(2_001),
+                ..base.clone()
+            },
+            "reason",
+        ),
+        (
+            AttemptUncertainMarking {
+                decided_by: "duty\nofficer".to_owned(),
+                ..base.clone()
+            },
+            "decided-by",
+        ),
+        (
+            AttemptUncertainMarking {
+                decided_by: "x".repeat(257),
+                ..base.clone()
+            },
+            "decided-by",
+        ),
+    ] {
+        for result in [
+            fixture
+                .store
+                .preview_attempt_uncertain_marking(&marking)
+                .await,
+            fixture.store.mark_expired_attempt_uncertain(&marking).await,
+        ] {
+            match result {
+                Err(AttemptSettlementError::Invalid { field: refused, .. }) => {
+                    assert_eq!(refused, field);
+                }
+                other => panic!("expected an invalid {field}, got {other:?}"),
+            }
+        }
+    }
+    assert_eq!(fixture.snapshot().await, before);
+}
+
+/// The HTTP recover route is the only non-operator path out of a pending
+/// attempt, and it stays bound to the actor who started the attempt.
+#[tokio::test]
+async fn no_caller_but_the_original_actor_can_recover_an_expired_pending_attempt() {
+    let fixture = settlement_fixture("mark_recovery_binding", false).await;
+    fixture.lapse_execution_lease().await;
+    let before = fixture.snapshot().await;
+    for caller in [
+        actor("supervisor", CaseworkRole::Supervisor, "supervisor"),
+        actor("officer-2", CaseworkRole::Staff, "staff"),
+        actor("admin", CaseworkRole::Administrator, "administrator"),
+        actor("officer-1", CaseworkRole::Supervisor, "supervisor"),
+    ] {
+        assert!(matches!(
+            fixture
+                .store
+                .acquire_recovery_execution(&caller, fixture.attempt_id)
+                .await,
+            Err(StoreError::AttemptPending)
         ));
     }
     assert_eq!(fixture.snapshot().await, before);

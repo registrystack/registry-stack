@@ -44,6 +44,75 @@
 - The BReg source adapter refuses a source request reported as `superseded`,
   a state BReg no longer defines. A BReg draft still projects as a superseded
   application occurrence.
+- Add `package.expectedPolicyDigest` to the Casework runtime configuration.
+  When set, `casework` refuses to start unless the package under
+  `package.root` is a package with exactly that policy digest. The refusal
+  names the expected digest and the digest it found, or that it found no
+  package. Set it to the digest `caseworkctl
+  package` reported for the reviewed package. The field is optional; a runtime
+  configuration without it starts as before.
+- Add `caseworkctl attempt mark-uncertain` for a pending source attempt the
+  actor who started it can no longer recover. Only that actor may call the
+  recover route, so such an attempt used to stay pending and hold its work item
+  in synchronizing with no way to settle it. The command connects with the
+  migration database credential, previews by default, and refuses an attempt
+  whose execution lease is still live or that is not pending. Apply moves the
+  attempt to uncertain, fences the original executor with a fresh execution
+  token, and records an `attempt_uncertain` history event naming the operator's
+  `decidedBy`, `operatorReason`, and the attempt's `originalActor` and
+  `originalProfileId`. Settle the attempt afterwards with `caseworkctl attempt
+  settle`. Its JSON report kind is `AttemptUncertainMarkingReport`.
+- BREAKING: fix credential rotation and transport tuning superseding
+  in-flight human work. The BReg source binding generation hashed the base
+  URL, reader profile, token authority, client credentials, trust reference,
+  timeouts, and presentation settings, so changing any of them re-keyed every
+  source-backed work item. The generation now covers only the source id, the
+  binding's `eventSource`, and the imported source description digest.
+  Upgrading from v0.33.0 or earlier supersedes open work items from BReg
+  sources once, because their stored generation differs from the new formula;
+  claims, drafts, and pending attempts on them do not carry over. Finish or
+  settle source-backed work before upgrading.
+- Fix inbox reference lookup missing a work item after the binding's
+  `displayReference` changed. Changing it keeps the binding generation, so the
+  item kept the reference stored when it was first observed and a lookup by
+  the reference the source now discloses did not find it. Reconciliation now
+  refreshes the stored reference of open work items even when the source
+  revision is unchanged, without changing the item revision or history.
+- Fix `casework migrate` silently dropping hosted work. Migration 15, which
+  replaces the hosted work tables with unified reviews, dropped them even
+  when they still held in-flight items or retained accountability records.
+  `migrate` now refuses before applying anything, names each hosted table
+  that holds rows with its row count, and writes nothing. Keep that database
+  with the release that wrote it until its work is exported, then migrate a
+  fresh Casework database. Empty hosted tables are still replaced.
+- Fix reconciliation failing on every pass after a package or source binding
+  was rolled back to a value the deployment had already used (A, then B, then
+  A). The returned-to binding derives the occurrence key of the item it left
+  behind, and that superseded item still held the key's uniqueness, so every
+  pass stopped on a duplicate key. Migration
+  `0016_occurrence_identity_excludes_superseded.sql` limits the occurrence
+  identity index to items that are not superseded: the superseded item stays
+  terminal and readable, and the observation opens a fresh item beside it. Two
+  live items for one occurrence are still refused. A failed database operation
+  now names the constraint it violated, and nothing from the row.
+- Fix an older `casework` binary against a database a newer release migrated.
+  `casework migrate` used to report success without changing anything, and
+  `casework serve` refused to start with a corruption error. Both now refuse
+  with `the Casework database schema version N is newer than this binary
+  supports (M); run a casework release that supports it`, and `migrate` writes
+  nothing.
+- Fix `caseworkctl db migrate` reducing a migration refusal to `A Casework
+  runtime dependency check failed.` The schema-newer-than-binary refusal and
+  the refusal to drop retained hosted work now reach the operator with the
+  message `casework migrate` prints, under the code
+  `casework.migration.refused`, the path `database`, and exit status 1. A
+  database that cannot be reached is still reported as an operational failure
+  with exit status 3.
+- `caseworkctl attempt settle` now names the recovery step when it refuses a
+  pending attempt: once the execution lease expires, the actor who started the
+  attempt calls `POST /v1/work-items/{itemId}/attempts/{attemptId}/recover`
+  while the source is reachable, and the attempt is settled only if recovery
+  leaves it uncertain. Who may recover or settle is unchanged.
 - Fix the professional-review starter hiding every source-backed review task.
   Its `scope-correction` `displaySchema` described `record` as an object, but
   the professional-licences source discloses it as a UUID string, so every

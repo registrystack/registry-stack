@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-20"
+last_reviewed: "2026-09-24"
 doc_type: how-to
 persona:
   - operator
@@ -16,7 +16,7 @@ standards_referenced: []
 You operate a running Registry Casework deployment, hold its migration database credential, and
 need to account for what the deployment keeps, remove the local payload copies a source owner has
 authorized you to remove, or close out a source attempt whose outcome Casework could not observe.
-Casework expires unified review state on its policy clocks and keeps source-backed work until you act. The two
+Casework expires unified review state on its policy clocks and keeps source-backed work until you act. The
 operator commands here each change one exact selection, take no copy first, and write nothing until
 you repeat them with `--apply`.
 
@@ -34,7 +34,7 @@ erases it for one exact source request.
 | The request's producer and initiator identities | Raw until `terminalDays`, then a request-bound sha256 tombstone (not keyed with a secret) until the accountability deadline, so the same producer or initiator still learns the result expired | The runtime retention pass |
 | Review-create and mutation replay responses | Until request payload expiry, then a payload-free tombstone until the accountability deadline | The runtime retention pass, after which the key is free again |
 | Source-backed subjects, work items, private drafts, attempts, receipts, history, and durable events | No expiry; they stay for the life of the database | `caseworkctl retention erase --apply` |
-| The keyed audit JSONL file and its rotated siblings | Your retention policy alone | No Casework command |
+| The keyed audit JSONL file and its sealed segments | Your retention policy alone | No Casework command |
 
 Each review kind declares `terminalDays` and `accountabilityDays` in the project, and the project
 is refused unless `terminalDays` is at least 1, `accountabilityDays` is at least `terminalDays`,
@@ -77,14 +77,14 @@ the key may be reused.
     IDEMPOTENCY_KEY_REUSED_PROBLEM;
     crates/registry-casework/src/problem.rs, IdempotencyExpired. */}
 
-## Before you run either command
+## Before you run these commands
 
-Run both commands on the operator host, where the secret root and the migration database
+Run these commands on the operator host, where the secret root and the migration database
 credential are readable. Each one loads `runtime.yaml` in the project directory unless you pass
 `--runtime-config`. That file's `package.root` selects the authored `casework.yaml`; inspect it
 before applying a command. Each connects with the migration credential, not the runtime credential.
 
-Both commands preview by default and write nothing until you repeat the exact invocation with
+Each command previews by default and writes nothing until you repeat the exact invocation with
 `--apply`. These examples use `--format json` so you can compare the exact selector, counts, and
 `applied` state in the preview and apply reports. A successful run
 exits 0. A refusal puts `{"ok": false}` with a diagnostic on standard output and exits 1 for an
@@ -247,25 +247,80 @@ Four refusals cover the cases worth planning for. `the source attempt still hold
 lease; wait for it to expire` means a client acquired the attempt within the last 330 seconds and
 may still be completing it; wait, then preview again. `the source attempt is completed` (or
 `refused`, or `pending`) means only an uncertain attempt can be settled, and a terminal attempt
-already has its outcome. `no source attempt has this identifier` means the UUID names nothing in
+already has its outcome. Recover a pending attempt first: once its execution lease expires, the
+actor who started it calls `POST /v1/work-items/{itemId}/attempts/{attemptId}/recover` while the
+source is reachable. Recovery completes or refuses the attempt from the source's answer, and leaves
+it uncertain only when the source cannot give one; settle it only then. When that actor cannot
+recover it, [mark it uncertain](#mark-a-stranded-pending-attempt-uncertain) first. `no source attempt has this identifier` means the UUID names nothing in
 this database. `the work item is claimed` (or another state) means the item is no longer awaiting
 its source outcome, so recovery or readback has already resolved it and no settlement is needed.
 
 {/* Evidence: crates/registry-casework/src/store.rs, AttemptSettlementError and
-    settle_uncertain_attempt();
+    settle_uncertain_attempt() and acquire_recovery_execution();
+    crates/registry-casework/src/service.rs, recover();
     crates/registry-casework-core/src/model.rs, AttemptState and OccurrenceState. */}
+
+### Mark a stranded pending attempt uncertain
+
+Only the actor who started a pending attempt can recover it: the recover route is bound to that
+actor's issuer, subject, and Casework profile, and no Supervisor or Administrator can recover it in
+their place. When that actor cannot, because they left or their client is gone, the attempt stays
+pending and its work item stays synchronizing. Once the attempt's 330-second execution lease has
+expired, mark it uncertain and then settle it as above:
+
+```sh
+caseworkctl --format json attempt mark-uncertain /etc/registry-casework/package \
+  --runtime-config /etc/registry-casework/runtime.yaml \
+  --attempt-id "<attempt-id>" \
+  --reason "<why the actor who started it cannot recover it>" \
+  --decided-by "<who decided>"
+```
+
+The preview takes the same locks and runs the same checks as the marking, then rolls back. It
+reports `attemptId`, `itemId`, `operation`, `bindingReference`, the `originalActor` issuer and
+subject with their `originalProfileId`, your `reason` and `decidedBy`, and the `attemptState` and
+`itemState` the marking would produce, with `applied` still `false`. `--reason` and `--decided-by`
+carry the same limits as a settlement and land in the same work item history, so write them for
+the Staff members and Supervisors serving that queue.
+
+Repeat the run with `--apply`. One transaction moves the attempt to uncertain, writes a fresh
+execution token that fences the original executor out, leaves the work item synchronizing, and
+appends one `attempt_uncertain` history event with no actor. Its detail carries the attempt,
+binding reference, and operation, your text as `operatorReason` and `decidedBy`, and the
+`originalActor` and `originalProfileId`, so the history names both the operator's decider and the
+person whose attempt it was. The marking decides nothing about the source outcome and reaches no
+BReg instance: settle the attempt once the source owner confirms what the source did.
+
+`the source attempt still holds a live execution lease` means the lease has not expired yet; wait,
+then preview again. `the source attempt is uncertain; only a pending attempt can be marked
+uncertain` means the marking is not needed; settle the attempt. `completed` or `refused` in its
+place means the attempt already has its outcome. `the work item is claimed` (or another state)
+means the item no longer awaits its source outcome, so nothing is stranded.
+
+{/* Evidence: crates/registry-casework/src/store.rs, mark_expired_attempt_uncertain(),
+    preview_attempt_uncertain_marking(), and acquire_recovery_execution();
+    crates/registry-casework-core/src/attempt_settlement.rs, AttemptUncertainMarkingReport;
+    crates/registry-caseworkctl/src/project.rs, attempt_mark_uncertain(). */}
 
 ## Keep the audit file
 
 Casework appends every audited event to a keyed hash-chained JSONL file through a single-writer
-sink that rotates at 10 MiB and retains 50 files. That file is yours to hold: its lifetime, its
-off-host copies, and its disposal are your retention policy alone, and no Casework command prunes,
-exports, or erases it, including the two here. Ship it off host when completeness matters outside
-one machine's disk.
+sink. Once the active file reaches 10 MiB, the sink seals it under an ascending numeric suffix
+(`casework.jsonl.00000001`, `casework.jsonl.00000002`, and so on) and opens a fresh active file at
+the configured path; no sealed segment is ever deleted. Every segment is yours to hold: its
+lifetime, its off-host copies, and its disposal are your retention policy alone, and no Casework
+command prunes, exports, or erases any of them, including the two here. Ship segments off host when
+completeness matters outside one machine's disk.
 
-{/* Evidence: crates/registry-casework/src/runtime.rs, serve_from_path();
-    crates/registry-platform-audit/src/lib.rs, JsonlFileSink, DEFAULT_MAX_SIZE_BYTES, and
-    DEFAULT_MAX_FILES. */}
+Casework 0.33.0 and earlier rotated the file instead, to `.1` through `.49`, and deleted the
+oldest. This release neither reads nor continues that layout: before its first start, move the
+audit file and its numbered siblings into an archive directory, and keep that archive under the
+same policy and the same audit key. [Upgrade from a release that rotated the audit
+file](../casework/#upgrade-from-a-release-that-rotated-the-audit-file) gives the steps.
+
+{/* Evidence: crates/registry-casework/src/runtime.rs, serve_from_path() and
+    MAXIMUM_AUDIT_SEGMENT_BYTES;
+    crates/registry-platform-audit/src/segmented_jsonl.rs, DurableSegmentedJsonlSink. */}
 
 The chain is keyed with the audit secret named by the runtime file's `audit.hashKeyRef`, which
 authenticates the retained file against a writer that cannot read the deployment secret. Provide at
@@ -310,7 +365,8 @@ sentinel lock beside the file.
 | `retention erase` refuses with `the requested resource was not found` | No local subject matches all three selector values. Confirm the source identifier, request kind, and request identifier with the source owner. |
 | A command inspects an unexpected Casework package | Check `package.root` in the selected runtime configuration and pass the intended `--runtime-config` file. |
 | `attempt settle` refuses with `the source attempt still holds a live execution lease` | A client acquired the attempt within the last 330 seconds. Wait for the lease to expire, then preview again. |
-| `attempt settle` refuses with `only an uncertain attempt can be settled` | The attempt is pending, completed, or refused. A terminal attempt already carries its outcome; a pending one is still recoverable by its holder. |
+| `attempt settle` refuses with `only an uncertain attempt can be settled` | The attempt is pending, completed, or refused. A terminal attempt already carries its outcome. Recover a pending one first: once its 330-second execution lease expires, the actor who started it calls `POST /v1/work-items/{itemId}/attempts/{attemptId}/recover` while the source is reachable. Settle only if recovery leaves it uncertain. If that actor cannot recover it, mark it uncertain with `attempt mark-uncertain`, then settle it. |
+| `attempt mark-uncertain` refuses with `only a pending attempt can be marked uncertain` | An uncertain attempt needs no marking; settle it. A completed or refused attempt already carries its outcome. |
 | `attempt settle` refuses with `only a work item awaiting its source outcome can be settled` | Recovery or source readback already moved the item out of synchronizing. No settlement is needed. |
 | A review request disappeared from producer polling and the result feed | Its `terminalDays` period closed. The accountability record may still exist; an authorized Supervisor can resolve one event until `accountabilityDays` closes too. |
 | An exact retry returns `idempotency.expired` with HTTP 410 | The item payload expired and only a payload-free tombstone remains. Reconcile the original operation before choosing a new key. |

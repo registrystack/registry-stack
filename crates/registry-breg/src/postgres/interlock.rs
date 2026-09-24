@@ -2219,45 +2219,90 @@ impl DedicatedApplyConnection {
     }
 }
 
+/// Refuse a successor unless history coverage is complete or narrowed only by
+/// a recorded standalone erasure. An absent commit head is refused here; only
+/// the begin check admits it.
 async fn verify_complete_history_coverage(
     client: &impl tokio_postgres::GenericClient,
 ) -> Result<()> {
-    let complete = client
-        .query_opt(
-            "SELECT coverage_ready AND unavailable_after_position IS NULL
-               FROM registry_internal.registry_commit_head
-              WHERE singleton
-              FOR UPDATE",
-            &[],
-        )
+    if !history_coverage_admits_successor(client)
         .await?
-        .is_some_and(|row| row.get::<_, bool>(0));
-    if !complete {
+        .unwrap_or(false)
+    {
         return Err(PostgresKernelError::RegistryUnavailable);
     }
     Ok(())
 }
 
 /// Permit a legacy registry with no commit head to enter the successor path
-/// that establishes its first baseline. Once a head exists, incomplete
-/// coverage means an erase lifecycle is active and must freeze successors.
+/// that establishes its first baseline. Once a head exists, coverage that is
+/// not ready means an erase lifecycle may be active and must freeze successors.
 async fn verify_history_coverage_can_begin_successor(
     client: &impl tokio_postgres::GenericClient,
 ) -> Result<()> {
-    let complete = client
+    if !history_coverage_admits_successor(client)
+        .await?
+        .unwrap_or(true)
+    {
+        return Err(PostgresKernelError::RegistryUnavailable);
+    }
+    Ok(())
+}
+
+/// Whether the locked commit head admits a successor package, or `None` when
+/// the registry has no commit head yet.
+///
+/// Complete coverage admits it. So does coverage that a standalone erasure
+/// narrowed after the baseline: that erasure leaves the head ready with an
+/// unavailable-after position, and its terminal audit record carries the same
+/// position and no lifecycle reference. A lifecycle erasure, an erasure at or
+/// before the baseline, and every other gap leave the head not ready or
+/// unrecorded, and still freeze successors until a rebaseline. A pruned
+/// erasure record also freezes them, so the check fails closed.
+async fn history_coverage_admits_successor(
+    client: &impl tokio_postgres::GenericClient,
+) -> Result<Option<bool>> {
+    let Some(head) = client
         .query_opt(
-            "SELECT coverage_ready AND unavailable_after_position IS NULL
+            "SELECT coverage_ready, unavailable_after_position
                FROM registry_internal.registry_commit_head
               WHERE singleton
               FOR UPDATE",
             &[],
         )
         .await?
-        .is_none_or(|row| row.get::<_, bool>(0));
-    if !complete {
-        return Err(PostgresKernelError::RegistryUnavailable);
+    else {
+        return Ok(None);
+    };
+    let coverage_ready: bool = head.get(0);
+    let unavailable_after_position: Option<i64> = head.get(1);
+    let Some(unavailable_after_position) = unavailable_after_position else {
+        return Ok(Some(coverage_ready));
+    };
+    if !coverage_ready {
+        return Ok(Some(false));
     }
-    Ok(())
+    let recorded = client
+        .query_one(
+            "WITH audited AS (
+                 SELECT convert_from(envelope, 'UTF8')::jsonb -> 'record' AS record
+                   FROM registry_internal.registry_audit
+             )
+             SELECT EXISTS (
+                 SELECT 1
+                   FROM audited
+                  WHERE record ->> 'schema' = 'breg-history-erasure-audit/v1'
+                    AND record ->> 'phase' = 'terminal'
+                    AND record ->> 'outcome' = 'committed'
+                    AND record -> 'coverageReady' = 'true'::jsonb
+                    AND record -> 'unavailableAfterPosition' = to_jsonb($1::bigint)
+                    AND NOT record ? 'lifecycleReference'
+             )",
+            &[&unavailable_after_position],
+        )
+        .await?
+        .get::<_, bool>(0);
+    Ok(Some(recorded))
 }
 
 /// Refuse a successor before changing maintenance state when its activated

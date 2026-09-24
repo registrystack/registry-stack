@@ -616,6 +616,42 @@ an asynchronous publication smoke rather than a candidate-build gate.
 Release documentation also resumes with `0.19.1`. Version `0.19.0` remains a
 published historical exception and must not be modified after publication.
 
+### Rehearse the upgrade from the previous release
+
+Every release promises a forward state path from its immediate predecessor.
+The release PR adds its manifest under `release/manifests/`, which starts
+`release-upgrade-rehearsal.yml` on that PR. The workflow builds BReg, Casework,
+and Evidence from the PR and runs `release/scripts/rehearse-upgrade.py`. The
+script downloads the previous published release's binaries for those products,
+authenticates `SHA256SUMS` with its protected-main Sigstore identity, and checks
+each asset against it as `release/VERIFY.md` describes. It writes a signed
+registry package with records and revisions, a Casework queue with answered
+and in-flight work, and an Evidence audit chain with the old binaries, using a
+disposable loopback PostgreSQL container. It then runs the documented upgrade
+steps with the PR's binaries and fails when any captured view is served
+differently or any table holds fewer rows. Require that run to succeed before
+merging the release PR. To rehearse without a release PR, dispatch it by hand:
+
+```sh
+gh workflow run release-upgrade-rehearsal.yml \
+  --repo registrystack/registry-stack \
+  --ref <branch>
+```
+
+The promise starts at `v0.33.0`. v0.32 to v0.33 has no forward state path,
+because no adopter ran v0.32, so the script refuses to start from any earlier
+release rather than skipping the check. Scheduling state is not rehearsed.
+
+Schema and migration code refuses when it would drop rows; it never drops them
+silently. When the rehearsal reports a row loss, fix the migration so that it
+refuses with an error naming what it would lose, or keeps the rows. Do not
+accept the loss or narrow the comparison to make the run pass.
+
+This control guards against a release that loses or stops serving state its
+predecessor wrote. The release operator owns it for each release. Remove it
+only when every product with persisted state carries its own predecessor
+upgrade test over equivalent state.
+
 ## Request and verify one candidate
 
 Resolve current protected `main` and request the candidate:
@@ -959,6 +995,18 @@ PyPI wheels immediately before each write. If the release is already
 published, the command runs `verify-public`, reports the release complete, and
 does not recommend a retry. It never approves environments or dispatches a
 workflow, and it adds no release gate.
+
+### Open the next development version
+
+Once `verify-public` passes, open one PR against protected `main` that bumps
+`workspace.package.version` in `Cargo.toml` to the next planned version,
+refreshes `Cargo.lock`, and moves any other version surface the protected
+checks hold equal to it. Until it merges, source on `main` still claims the
+released number: its crates carry the released version, and a development
+build reports `<version>-dev`, which SemVer orders before the release it
+follows. Do not wait for the next release PR to make this change.
+The release manifest, notes, changelogs, and documentation archive stay with
+that release PR.
 
 ## Failure handling
 

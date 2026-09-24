@@ -15,10 +15,12 @@ use crate::{
     },
     bundle::{Bundle, Codelist},
     config::{
-        AuthorityKind, GrantedSubject, ResponseFormat, SelectorField as ConfiguredField,
-        SelectorProfile, SubjectBindingMode, ValueOrigin, MAX_SAFE_INTEGER,
+        AuthorityKind, GrantedSubject, PathBindingConfig, ResponseFormat,
+        SelectorField as ConfiguredField, SelectorProfile, SourceConfig, SubjectBindingMode,
+        ValueOrigin, MAX_SAFE_INTEGER,
     },
     model::{EvidenceRequest, RequestedSubject, SelectorValue},
+    source::path_segment_is_admissible,
 };
 
 const MAX_CANONICAL_BYTES: usize = 64 * 1024;
@@ -539,6 +541,7 @@ pub fn resolve_selectors(
         &request.subjects,
         context,
     )?;
+    validate_path_bound_selectors(bundle, requirement, &subjects)?;
     let uses_authenticated_grant = matched
         .subjects
         .iter()
@@ -556,6 +559,61 @@ pub fn resolve_selectors(
         subject_scope,
         subjects,
     })
+}
+
+/// Refuse a resolved selector value that a source of this requirement would
+/// have to carry as a request path segment but cannot.
+///
+/// The value is rendered exactly as the source request renders it and judged
+/// by the same segment rule, so the refusal is a selector error found before
+/// any source attempt is audited or any source is contacted.
+fn validate_path_bound_selectors(
+    bundle: &Bundle,
+    requirement: &crate::config::RequirementConfig,
+    subjects: &[ResolvedSubject],
+) -> Result<(), AuthorizationError> {
+    let sources = requirement
+        .acquisition
+        .source_ids()
+        .into_iter()
+        .filter_map(|source_id| bundle.config.sources.get(source_id));
+    for source in sources {
+        let SourceConfig::HttpJson { request, .. } = source else {
+            continue;
+        };
+        for (_, binding) in request.path_bindings.iter() {
+            let PathBindingConfig::Selector {
+                role,
+                profile,
+                field,
+            } = binding
+            else {
+                continue;
+            };
+            let Some(value) = subjects
+                .iter()
+                .find(|subject| &subject.role == role && &subject.selector_profile == profile)
+                .and_then(|subject| subject.fields.iter().find(|value| &value.name == field))
+            else {
+                continue;
+            };
+            let admissible = match &value.value {
+                ResolvedSelectorValue::String(text)
+                | ResolvedSelectorValue::Date(text)
+                | ResolvedSelectorValue::ControlledCode(text) => path_segment_is_admissible(text),
+                ResolvedSelectorValue::Integer(number) => {
+                    path_segment_is_admissible(&number.to_string())
+                }
+                ResolvedSelectorValue::Boolean(flag) => {
+                    path_segment_is_admissible(&flag.to_string())
+                }
+            };
+            if !admissible {
+                return Err(AuthorizationError::Selector);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Derive the one scope every subject binding of this resolution is computed

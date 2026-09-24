@@ -18,6 +18,15 @@ kind: CaseworkRuntimeConfig
 also contain a matching `casework.package.json`. Development loopback may
 select an authored project directory without that manifest.
 
+`package.expectedPolicyDigest` is optional. When set, it is `sha256:` followed
+by 64 lowercase hexadecimal digits, and the runtime starts only on the verified
+package whose manifest names that `policyDigest`. A package naming any other
+digest, or a directory without `casework.package.json`, is refused before the
+runtime starts, and the refusal names the expected digest and the one found.
+Set it to the digest printed by `caseworkctl package` for the package you
+reviewed, so that replacing the files under `package.root` cannot change the
+policy a restart loads.
+
 `listener` is required. `listener.bind` is one numeric socket address, including
 bracketed IPv6 forms, and defaults to `127.0.0.1:8100` when omitted from the
 listener block. `listener.tlsTermination` is required. Use
@@ -53,13 +62,23 @@ selected policy; missing, extra, or empty ids are refused. Source access remains
 bound to each source's configured reader profile and does not grant a caller a
 Casework access profile.
 
+The BReg source binding generation keys every source-backed work item, task
+grant, and saved attempt. It is computed from the source id, the binding's
+`eventSource`, and the SHA-256 digest of the imported source description, and
+from nothing else. Changing one of those three means the source now says
+something different, so the next observation supersedes the work items opened
+under the earlier generation and opens fresh ones. Every other binding field is
+operational: `baseUrl`, `readerProfile`, `tokenEndpoint`,
+`clientAssertionAudience`, `resource`, `scopes`, the client and key references,
+`eventType`, `trustedRootCertificatesRef`, both timeouts, `displayReference`,
+`contextProjection`, and `reconciliationIntervalMilliseconds`. Rotating a
+credential, moving the token endpoint, or tuning a timeout keeps the generation,
+the in-flight work items, their claims, and their durable attempts.
+
 `sources.<id>.reconciliationIntervalMilliseconds` controls only how often
-Casework schedules source readback. It is deliberately excluded from the BReg
-source binding generation because changing polling cadence changes neither
-source authority nor saved source state. A cadence change therefore does not
-invalidate displayed bindings or durable attempts. When a readback pass lasts
-longer than the interval, Casework skips missed ticks instead of replaying them
-back-to-back against the source.
+Casework schedules source readback. When a readback pass lasts longer than the
+interval, Casework skips missed ticks instead of replaying them back-to-back
+against the source.
 
 For a BREG source, `tokenEndpoint` selects the reader's OAuth endpoint.
 `clientAssertionAudience` explicitly overrides the JWT client assertion audience;
@@ -69,8 +88,8 @@ list. Omission preserves an existing issuer's default behavior. Stock ThunderID
 1.0.1 deployments must configure all three: its issuer URL as the assertion
 audience, the exact BREG resource, and the registered reader scopes. Use the
 actual deployment or `bregctl dev export-client` values, not a guessed resource
-based on the project directory name. Changing these fields changes the source
-binding generation and invalidates stale source-bound authority.
+based on the project directory name. Changing these fields keeps the source
+binding generation.
 
 `reviewCompletionDestinations` is keyed by the logical destination ids a
 producer's `completion` block names. Each destination has one `url` and exactly

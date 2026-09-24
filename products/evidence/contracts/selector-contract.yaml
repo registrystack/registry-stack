@@ -47,6 +47,7 @@ validation:
     - configured valueClaims are exact and complete for context or grant origin and absent for request origin
     - authenticated-grant id, source issuer, requester client, purpose, and requirement bound bind exactly one matched profile and entitlement
     - exact field set, scalar type, lexical form, individual bound, and aggregate bound pass
+    - every value a source of the requirement binds to a request path segment can be carried as exactly one segment under the source path encoding rule
   prohibited_core_behavior:
     - semantic normalization
     - case folding

@@ -14,11 +14,11 @@ use registry_breg_client::{
     ingestion_chunk_digest, ingestion_prefix_digest, BRegBatchBuilder, BRegBatchError,
     BRegBatchOperation, BRegCreateRequest, BRegDirectWrite, BRegEtag, BRegIdempotencyKey,
     BRegIngestionChunk, BRegIngestionRunListQuery, BRegIngestionRunRequest, BRegIngestionRunStatus,
-    BRegLifecycleOperation, BRegMetadataSelectionErrorKind, BRegPatchRequest, BRegPlanRefusal,
-    BRegProblemCode, BRegProtocolFailure, BRegRecordFormat, BRegRecordOptions, BRegRefusalCode,
-    BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError,
-    RegistryRecordRepresentation, RegistryRecordResponse, BREG_INGESTION_CHUNK_ALGORITHM_VERSION,
-    REGISTRY_RECORD_CONTEXT_IDENTIFIER,
+    BRegLifecycleOperation, BRegMetadataErrorKind, BRegMetadataSelectionErrorKind,
+    BRegPatchRequest, BRegPlanRefusal, BRegProblemCode, BRegProtocolFailure, BRegRecordFormat,
+    BRegRecordOptions, BRegRefusalCode, BaseRegistryClient, BaseRegistryClientConfig,
+    BaseRegistryClientError, RegistryRecordRepresentation, RegistryRecordResponse,
+    BREG_INGESTION_CHUNK_ALGORITHM_VERSION, REGISTRY_RECORD_CONTEXT_IDENTIFIER,
 };
 use registry_platform_httputil::client::{BearerToken, TokenError, TokenProvider};
 use serde_json::{json, Map, Value};
@@ -540,6 +540,32 @@ fn patch_binding(
         panic!("PATCH binding expected")
     };
     binding
+}
+
+#[tokio::test]
+async fn registry_contract_keeps_the_metadata_decode_reason_instead_of_discarding_it() {
+    let mut fixture = metadata_fixture();
+    fixture["entities"] = json!("not-an-array");
+    let response = MockResponse::json(StatusCode::OK, fixture);
+    let fixture = test_client(vec![response]).await;
+
+    let error = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .expect_err("malformed registry metadata is refused");
+
+    assert!(matches!(
+        error,
+        BaseRegistryClientError::Protocol {
+            failure: BRegProtocolFailure::Body,
+            ..
+        }
+    ));
+    assert_eq!(
+        error.metadata_error_kind(),
+        Some(BRegMetadataErrorKind::Shape)
+    );
 }
 
 #[tokio::test]

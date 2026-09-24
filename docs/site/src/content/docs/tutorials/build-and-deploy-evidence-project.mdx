@@ -230,7 +230,9 @@ curl --fail --silent --show-error \
 ```
 
 Verify the retained response with an independently prepared production verification policy and
-trusted public keys, then verify the audit chain:
+trusted public keys. Then drain traffic and stop Evidence Gateway before verifying the audit chain:
+a running writer holds the active segment, so `verify-audit` would prove only sealed history and
+skip the record this request just wrote.
 
 ```sh
 evidence verify \
