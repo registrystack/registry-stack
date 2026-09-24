@@ -2557,7 +2557,11 @@ fn authorize_direct_route_base<'a>(
     }
     if matches!(
         route.operation,
-        Operation::Create | Operation::Patch | Operation::Tombstone | Operation::Batch
+        Operation::Create
+            | Operation::Patch
+            | Operation::Tombstone
+            | Operation::Batch
+            | Operation::Import
     ) && profile.anonymous
     {
         return None;
@@ -2742,7 +2746,9 @@ fn is_request_operation(operation: Operation) -> bool {
 
 fn served_operation(service: &HttpService, route: &CompiledRoute) -> bool {
     match route.operation {
-        Operation::Invoke => false,
+        // The ingestion-run surface serves an import grant; the route itself
+        // is never mounted and never listed as an operation.
+        Operation::Invoke | Operation::Import => false,
         Operation::Get | Operation::List => true,
         Operation::Lookup => true,
         Operation::Create => service.mutations.is_some(),
@@ -4712,6 +4718,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::CancelRequest => "cancel_request",
         Operation::ApplyRequest => "apply_request",
         Operation::Snapshot => "snapshot",
+        Operation::Import => "import",
     }
 }
 

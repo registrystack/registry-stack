@@ -1892,7 +1892,10 @@ pub(crate) fn expand_project_access(
                     .iter()
                     .any(|operation| match operation {
                         Operation::Create | Operation::Patch => !governed_request_draft,
-                        Operation::Tombstone | Operation::Batch | Operation::Invoke => true,
+                        Operation::Tombstone
+                        | Operation::Batch
+                        | Operation::Import
+                        | Operation::Invoke => true,
                         _ => false,
                     })
             }) {
@@ -3356,6 +3359,47 @@ fn reaches<'a>(
         .any(|(_, next)| reaches(next, target, edges, visited))
 }
 
+/// An `import` grant creates records only through a durable ingestion run,
+/// so it needs the entity's chunk bounds, a creator the run can be scoped to,
+/// and no raw batch grant beside it on the entity: a batch grant would write
+/// the same records outside any import authority, leaving the authority
+/// bounding nothing.
+fn validate_import_grant(
+    entity: &EntitySource,
+    access: &AccessProfileSource,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let path = format!(
+        "entities[id={}].accessProfiles[id={}].operations",
+        entity.id, access.id
+    );
+    if entity.batch.is_none() {
+        errors.push(Diagnostic::error(
+            "import.batch_bounds.required",
+            path.clone(),
+            "an import grant loads records in chunks, so the entity must declare batch maximumItems and maximumBytes",
+        ));
+    }
+    if access.anonymous || access.principal_claim.as_deref().is_none_or(str::is_empty) {
+        errors.push(Diagnostic::error(
+            "import.principal.required",
+            path.clone(),
+            "an import run belongs to the principal that created it, so an import grant needs an authenticated profile with a principal claim",
+        ));
+    }
+    if entity
+        .access_profiles
+        .iter()
+        .any(|profile| profile.operations.contains(&Operation::Batch))
+    {
+        errors.push(Diagnostic::error(
+            "import.batch.redundant",
+            path,
+            "a batch grant on the same entity writes records outside any import authority; remove batch and load through import",
+        ));
+    }
+}
+
 fn validate_profiles(
     entity: &EntitySource,
     entities: &BTreeMap<String, EntitySource>,
@@ -3404,6 +3448,7 @@ fn validate_profiles(
                 && matches!(operation, Operation::Patch | Operation::Tombstone))
                 || (*operation == Operation::Tombstone && !entity.tombstone)
                 || (is_request_operation(*operation) && entity.change_request.is_none())
+                || (*operation == Operation::Import && entity.change_request.is_some())
                 || *operation == Operation::Invoke
             {
                 errors.push(Diagnostic::error(
@@ -3412,6 +3457,9 @@ fn validate_profiles(
                     "an access profile grants an operation the entity does not expose",
                 ));
             }
+        }
+        if access.operations.contains(&Operation::Import) {
+            validate_import_grant(entity, access, errors);
         }
         if access.operations.contains(&Operation::Batch)
             && !access
@@ -5549,7 +5597,7 @@ fn compile_routes_and_access(
     let mut errors = Vec::new();
     for entity in entities.values() {
         for operation in routed_operations() {
-            if operation == Operation::Batch && entity.batch.is_none() {
+            if matches!(operation, Operation::Batch | Operation::Import) && entity.batch.is_none() {
                 continue;
             }
             let profiles: Vec<&AccessProfileSource> = entity
@@ -6606,6 +6654,9 @@ fn route_shape(entity: &CompiledEntity, operation: Operation) -> (HttpMethod, St
         Operation::Batch => (HttpMethod::Post, format!("{base}:batch")),
         Operation::Revisions => (HttpMethod::Get, format!("{base}/{{record_id}}/revisions")),
         Operation::Snapshot => (HttpMethod::Get, format!("{base}:snapshot")),
+        // The ingestion-run surface is the only place an import grant is
+        // exercised; the HTTP router never mounts this route directly.
+        Operation::Import => (HttpMethod::Post, format!("{base}/ingestion-runs")),
         Operation::SubmitRequest
         | Operation::ReviseRequest
         | Operation::CancelRequest
@@ -6616,7 +6667,7 @@ fn route_shape(entity: &CompiledEntity, operation: Operation) -> (HttpMethod, St
     }
 }
 
-fn routed_operations() -> [Operation; 9] {
+fn routed_operations() -> [Operation; 10] {
     [
         Operation::Create,
         Operation::Get,
@@ -6627,10 +6678,11 @@ fn routed_operations() -> [Operation; 9] {
         Operation::Batch,
         Operation::Revisions,
         Operation::Snapshot,
+        Operation::Import,
     ]
 }
 
-fn all_operations() -> [Operation; 14] {
+fn all_operations() -> [Operation; 15] {
     [
         Operation::Create,
         Operation::Get,
@@ -6646,6 +6698,7 @@ fn all_operations() -> [Operation; 14] {
         Operation::CancelRequest,
         Operation::ApplyRequest,
         Operation::Invoke,
+        Operation::Import,
     ]
 }
 
@@ -6675,6 +6728,7 @@ pub(crate) fn operation_id(operation: Operation) -> &'static str {
         Operation::CancelRequest => "cancel_request",
         Operation::ApplyRequest => "apply_request",
         Operation::Invoke => "invoke",
+        Operation::Import => "import",
     }
 }
 
