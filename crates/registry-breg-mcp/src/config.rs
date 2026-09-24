@@ -12,6 +12,7 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use registry_platform_config::{SecretError, SecretReference, MAX_SECRET_BYTES};
+use registry_platform_httputil::{valid_resource_uri, valid_scope_token};
 use serde::Deserialize;
 use thiserror::Error;
 use url::{Host, Url};
@@ -25,6 +26,7 @@ pub const MCP_PATH: &str = "/mcp";
 
 const MAXIMUM_SERVICE_TEXT_BYTES: usize = 4096;
 const MAXIMUM_NAME_BYTES: usize = 128;
+const MAXIMUM_TOKEN_BYTES: usize = 512;
 const DEFAULT_AUDIT_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const DEFAULT_REQUEST_BODY_BYTES: usize = 64 * 1024;
 const MAXIMUM_REQUEST_BODY_BYTES: usize = 1024 * 1024;
@@ -316,6 +318,10 @@ pub enum RuntimeConfigError {
     TooLong(&'static str),
     #[error("{0} holds a value that is not a single token")]
     InvalidToken(&'static str),
+    #[error("{0} holds a value that is not an RFC 6749 scope token")]
+    InvalidScope(&'static str),
+    #[error("{0} must be an absolute URI without a fragment or credentials")]
+    InvalidResource(&'static str),
     #[error("the gateway's own exchange client may not be an accepted inbound client")]
     ExchangeClientAdmittedInbound,
     #[error("the registry audience must differ from the gateway's own resource")]
@@ -434,7 +440,7 @@ impl RuntimeConfig {
             return Err(RuntimeConfigError::Empty("resourceServer.algorithms"));
         }
         tokens(&server.allowed_clients, "resourceServer.allowedClients")?;
-        tokens(&server.required_scopes, "resourceServer.requiredScopes")?;
+        scopes(&server.required_scopes, "resourceServer.requiredScopes")?;
         token(&server.scope_claim, "resourceServer.scopeClaim")?;
         if server.max_token_lifetime_seconds == 0 {
             return Err(RuntimeConfigError::Zero(
@@ -452,8 +458,8 @@ impl RuntimeConfig {
         service_url(&self.registry.base_url, development)
             .ok_or(RuntimeConfigError::InvalidUrl("registry.baseUrl"))?;
         token(&self.registry.access_profile, "registry.accessProfile")?;
-        token(&self.registry.audience, "registry.audience")?;
-        tokens(&self.registry.scopes, "registry.scopes")?;
+        resource_uri(&self.registry.audience, "registry.audience")?;
+        scopes(&self.registry.scopes, "registry.scopes")?;
         if self.registry.request_timeout_milliseconds == 0 {
             return Err(RuntimeConfigError::Zero(
                 "registry.requestTimeoutMilliseconds",
@@ -550,7 +556,7 @@ fn token(value: &str, field: &'static str) -> Result<(), RuntimeConfigError> {
     if value.is_empty() {
         return Err(RuntimeConfigError::Empty(field));
     }
-    if value.len() > MAXIMUM_SERVICE_TEXT_BYTES.min(512) {
+    if value.len() > MAXIMUM_TOKEN_BYTES {
         return Err(RuntimeConfigError::TooLong(field));
     }
     if value
@@ -570,6 +576,41 @@ fn tokens(values: &[String], field: &'static str) -> Result<(), RuntimeConfigErr
         return Err(RuntimeConfigError::TooLong(field));
     }
     values.iter().try_for_each(|value| token(value, field))
+}
+
+/// A bounded, non-empty list of RFC 6749 scope tokens, checked with the
+/// platform's own scope grammar.
+fn scopes(values: &[String], field: &'static str) -> Result<(), RuntimeConfigError> {
+    if values.is_empty() {
+        return Err(RuntimeConfigError::Empty(field));
+    }
+    if values.len() > MAXIMUM_NAME_BYTES {
+        return Err(RuntimeConfigError::TooLong(field));
+    }
+    values.iter().try_for_each(|value| {
+        if value.len() > MAXIMUM_TOKEN_BYTES {
+            return Err(RuntimeConfigError::TooLong(field));
+        }
+        if !valid_scope_token(value) {
+            return Err(RuntimeConfigError::InvalidScope(field));
+        }
+        Ok(())
+    })
+}
+
+/// An RFC 8707 resource indicator, checked with the platform's own
+/// resource grammar.
+fn resource_uri(value: &str, field: &'static str) -> Result<(), RuntimeConfigError> {
+    if value.is_empty() {
+        return Err(RuntimeConfigError::Empty(field));
+    }
+    if value.len() > MAXIMUM_TOKEN_BYTES {
+        return Err(RuntimeConfigError::TooLong(field));
+    }
+    if !valid_resource_uri(value) {
+        return Err(RuntimeConfigError::InvalidResource(field));
+    }
+    Ok(())
 }
 
 /// Parse a service endpoint: https, or plain http on a loopback host under
@@ -883,6 +924,60 @@ rateLimits:
             load(&text),
             Err(RuntimeConfigError::ExchangeClientAdmittedInbound)
         ));
+    }
+
+    /// Scopes are RFC 6749 scope tokens, checked as every platform client
+    /// checks them: a byte outside the grammar is refused at load, not at
+    /// the first exchange.
+    #[test]
+    fn a_scope_outside_the_rfc_6749_grammar_is_refused() {
+        for (from, to, field) in [
+            (
+                "requiredScopes: [address-correction:self]",
+                "requiredScopes: [address-correction:selfé]",
+                "resourceServer.requiredScopes",
+            ),
+            (
+                "requiredScopes: [address-correction:self]",
+                r#"requiredScopes: ['address-correction:"self"']"#,
+                "resourceServer.requiredScopes",
+            ),
+            (
+                "scopes: [address-correction:self]",
+                r"scopes: ['address-correction\self']",
+                "registry.scopes",
+            ),
+        ] {
+            let text = document().replacen(from, to, 1);
+            assert_ne!(text, document(), "{to}");
+            assert!(
+                matches!(load(&text), Err(RuntimeConfigError::InvalidScope(refused)) if refused == field),
+                "{to}"
+            );
+        }
+    }
+
+    /// The registry audience is the RFC 8707 resource of every exchange, so
+    /// it must be an absolute URI without a fragment or credentials.
+    #[test]
+    fn the_registry_audience_is_an_absolute_resource_uri() {
+        for audience in [
+            "citizen-address-correction",
+            "https://registry.example.test/#fragment",
+            "https://user@registry.example.test/",
+        ] {
+            let text = document().replace(
+                "audience: urn:breg:citizen-address-correction",
+                &format!("audience: '{audience}'"),
+            );
+            assert!(
+                matches!(
+                    load(&text),
+                    Err(RuntimeConfigError::InvalidResource("registry.audience"))
+                ),
+                "{audience}"
+            );
+        }
     }
 
     #[test]
