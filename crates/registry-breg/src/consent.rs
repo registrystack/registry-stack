@@ -406,6 +406,7 @@ fn validate_record(
     for profile in &entity.access_profiles {
         if profile.operations.contains(&Operation::Create)
             || profile.operations.contains(&Operation::Batch)
+            || profile.operations.contains(&Operation::Import)
         {
             errors.push(Diagnostic::error(
                 "consent.record.direct_write",
@@ -413,7 +414,7 @@ fn validate_record(
                     "entities[id={}].accessProfiles[id={}].operations",
                     entity.id, profile.id
                 ),
-                "consent rows are created only by actions that declare consentIssuer; no profile grants create or batch",
+                "consent rows are created only by actions that declare consentIssuer; no profile grants create, batch, or import",
             ));
         }
     }

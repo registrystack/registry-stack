@@ -3664,23 +3664,32 @@
       ]
     },
     "Operation": {
-      "enum": [
-        "create",
-        "get",
-        "lookup",
-        "list",
-        "patch",
-        "tombstone",
-        "batch",
-        "revisions",
-        "snapshot",
-        "submit_request",
-        "revise_request",
-        "cancel_request",
-        "apply_request",
-        "invoke"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "create",
+            "get",
+            "lookup",
+            "list",
+            "patch",
+            "tombstone",
+            "batch",
+            "revisions",
+            "snapshot",
+            "submit_request",
+            "revise_request",
+            "cancel_request",
+            "apply_request",
+            "invoke"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "import",
+          "description": "Create records through a durable ingestion run, and nothing else. The\ngrant is enabled only while an operator-opened import authority is open\nfor the entity and profile. It declares no item route and no raw batch\nroute, and change control does not count it as a direct write.",
+          "type": "string"
+        }
+      ]
     },
     "PackageIdentitySource": {
       "additionalProperties": false,

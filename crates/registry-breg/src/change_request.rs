@@ -641,6 +641,7 @@ pub(crate) fn compile_change_requests(
                     })
                     && !profile.anonymous
                     && !profile.operations.contains(&Operation::Batch)
+                    && !profile.operations.contains(&Operation::Import)
             });
             if !valid {
                 errors.push(Diagnostic::error(
@@ -747,7 +748,7 @@ fn validate_change_controlled_direct_writes(
                     errors.push(Diagnostic::error(
                         "change_control.direct_write_grant",
                         format!("{}.operations", profile_path(&entity.id, &profile.id)),
-                        "a controlled mutation operation cannot remain directly granted",
+                        "a controlled mutation operation cannot remain directly granted; to load new records under change control, grant `import` in place of `batch` or `create`",
                     ));
                 }
             }

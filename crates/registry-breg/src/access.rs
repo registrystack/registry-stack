@@ -182,7 +182,7 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                 findings.push(Diagnostic::finding("access.profile.anonymous_collection", format!("{path}.operations"),
                     "`list` is granted to unauthenticated callers, so every row this profile can read is world-readable and no claim can narrow it. Confirm the whole collection is meant to be public"));
             }
-            let write_operations = [Operation::Create, Operation::Patch]
+            let write_operations = [Operation::Create, Operation::Patch, Operation::Import]
                 .into_iter()
                 .filter(|operation| profile.operations.contains(operation))
                 .map(|operation| format!("`{}`", operation_id(operation)))
@@ -195,7 +195,8 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
             // the caller's claim, so a permission that creates must keep the field
             // writable. The record id is never a writable field, so a boundary on it
             // is outside that advice.
-            let creates = profile.operations.contains(&Operation::Create);
+            let creates = profile.operations.contains(&Operation::Create)
+                || profile.operations.contains(&Operation::Import);
             let patches = profile.operations.contains(&Operation::Patch);
             let boundary_fields = profile
                 .row_boundaries
