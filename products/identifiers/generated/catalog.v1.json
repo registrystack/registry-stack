@@ -2813,11 +2813,11 @@
       "description": "Registry Casework runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-casework/src/schema.rs",
-        "sha256": "511bc69b378df1bb9cc14f348facdd88b1350dbba0f465788836214b79da408c"
+        "sha256": "0917963cbe609c32a44c84631dbf482ea6955eeea56a3bddc3129f0166dfed37"
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "57f95c1f0b8b4c89f5ee40b824303465582d28f9c40a90d93dc73e5c5728f37b",
+        "sha256": "1d1060566a9c574c002581f58b754ebbe37f9708afc8fbcbf86e474d4d3569e2",
         "mediaType": "application/schema+json"
       }
     },
