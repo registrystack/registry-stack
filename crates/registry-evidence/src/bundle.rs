@@ -45,6 +45,9 @@ const PROJECTION_PATH: &str = "evidence.yaml#requirement";
 /// Projected member holding the bundle's declared acquisition capabilities.
 const ACQUISITION_CAPABILITIES: &str = "acquisitionCapabilities";
 const PROVIDER_PUBLICATION: &str = "publication";
+const SIGNING: &str = "signing";
+const ACTIVE_PUBLIC_JWK_FILE: &str = "activePublicJwkFile";
+const PUBLISHED_PUBLIC_JWK_FILES: &str = "publishedPublicJwkFiles";
 const MAX_CA_BUNDLE_BYTES: u64 = 1024 * 1024;
 /// Bytes folded into an extract's digest per read. An extract is sized by the
 /// register it holds rather than by a byte cap, so it is digested in chunks of
@@ -2751,9 +2754,9 @@ fn compute_requirement_revisions(
 /// one requirement: its own derivation script, fixtures, concept codelists,
 /// reviewed schemas and bucket codelists, the artifacts of every source its
 /// bounded acquisition names, and the codelists of the selector profiles its subject roles and
-/// grants use. The active and published public signing keys are deployment-wide
-/// and stay in every requirement's closure, so this narrows nothing beyond
-/// separating one requirement from another.
+/// grants use. The active and published public signing keys are not in any
+/// requirement's closure: they are trust a relying party takes from the JWKS,
+/// and the bundle revision still covers them.
 fn requirement_artifact_paths(
     config: &EvidenceConfig,
     requirement: &RequirementConfig,
@@ -2791,10 +2794,6 @@ fn requirement_artifact_paths(
                 paths.insert(codelist.as_str().to_owned());
             }
         }
-    }
-    paths.insert(config.signing.active_public_jwk_file.as_str().to_owned());
-    for path in &config.signing.published_public_jwk_files {
-        paths.insert(path.as_str().to_owned());
     }
     paths.extend(reviewed_schema_paths(requirement.concepts.iter(), files)?);
     paths.extend(reviewed_bucket_codelist_paths(
@@ -2839,7 +2838,9 @@ fn requirement_selector_profiles(
 /// acquisition names, the selector profiles it can be served through, and the authority
 /// grants that offer it. Provider-publication metadata is deliberately removed:
 /// it changes catalog search, not the assertion semantics a relying party pins.
-/// Every other member is kept exactly as configured, so a configuration member
+/// So are the signing member's active and published key files, see
+/// [`remove_signing_key_files`]. Every other member is kept exactly as
+/// configured, so a configuration member
 /// added later is covered without revisiting this projection.
 ///
 /// Starting from the parsed configuration rather than the file bytes is what
@@ -2857,6 +2858,7 @@ fn canonical_projection(
         .as_object_mut()
         .ok_or_else(|| invalid_artifact("the configuration does not project as a mapping"))?;
     members.remove(PROVIDER_PUBLICATION);
+    remove_signing_key_files(members)?;
     let requirement_value = serde_json::to_value(requirement)
         .map_err(|_| invalid_artifact("the requirement does not project"))?;
     members.insert(
@@ -2899,6 +2901,25 @@ fn canonical_projection(
     // a sequence first, so canonicalization cannot erase that distinction.
     canonicalize_json(&document)
         .map_err(|_| invalid_artifact("the projection does not canonicalize"))
+}
+
+/// Remove the active and published public key files from the signing member.
+///
+/// Which keys the deployment publishes, and which of them signs, is trust a
+/// relying party takes from the JWKS, where rotation is meant to be carried.
+/// Covering the key files here would move every requirement revision at each
+/// step of a rotation that leaves the assertions unchanged, and break every
+/// pinned policy with it. The other signing members stay covered.
+fn remove_signing_key_files(members: &mut JsonMap<String, JsonValue>) -> Result<(), BundleError> {
+    let signing = members
+        .get_mut(SIGNING)
+        .and_then(JsonValue::as_object_mut)
+        .ok_or_else(|| {
+            invalid_artifact("the signing configuration does not project as a mapping")
+        })?;
+    signing.remove(ACTIVE_PUBLIC_JWK_FILE);
+    signing.remove(PUBLISHED_PUBLIC_JWK_FILES);
+    Ok(())
 }
 
 /// Keep only the acquisition capability this requirement's own form needs.
@@ -3448,6 +3469,79 @@ mod tests {
         }
     }
 
+    /// Signing-key rotation moves trust through the published key set, which a
+    /// relying party takes from the JWKS, not through the revision it pins.
+    /// Every step of a planned rotation (publish the next key, activate it,
+    /// retire the previous one) therefore leaves each requirement revision
+    /// alone, while the bundle revision still records every step.
+    #[cfg(unix)]
+    #[test]
+    fn a_planned_signing_key_rotation_leaves_every_requirement_revision_alone() {
+        const PREVIOUS: &str = "public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json";
+        const NEXT: &str = "public-keys/-RNgdUjduVCNV-y15KSAVZnF2gNjGb_02KQ2-MoMu4U.jwk.json";
+        let next_key = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../products/evidence/reference/deployment-targets/environments/local/evidence",
+        );
+
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        copy_acceptance_bundle("all-definitions", directory.path());
+        let edit_signing = |from: &str, to: &str| {
+            let path = directory.path().join(CONFIG_FILE);
+            let text = fs::read_to_string(&path).expect("the configuration reads");
+            assert_eq!(text.matches(from).count(), 1, "`{from}` is configured once");
+            fs::write(&path, text.replace(from, to)).expect("the configuration writes");
+        };
+        let observe = || {
+            set_tree_mode(directory.path(), 0o555, 0o444);
+            let bundle = Bundle::load(directory.path()).expect("the rotated bundle loads");
+            let revisions = requirement_revisions(directory.path());
+            set_tree_mode(directory.path(), 0o755, 0o644);
+            (bundle.revision().to_owned(), revisions)
+        };
+        let (initial_bundle, initial) = observe();
+
+        fs::copy(next_key.join(NEXT), directory.path().join(NEXT))
+            .expect("the next public key is published");
+        edit_signing(
+            "publishedPublicJwkFiles: []",
+            &format!("publishedPublicJwkFiles: [{NEXT}]"),
+        );
+        let (published_bundle, published) = observe();
+
+        edit_signing(
+            &format!("activePublicJwkFile: {PREVIOUS}"),
+            &format!("activePublicJwkFile: {NEXT}"),
+        );
+        edit_signing(
+            &format!("publishedPublicJwkFiles: [{NEXT}]"),
+            &format!("publishedPublicJwkFiles: [{PREVIOUS}]"),
+        );
+        let (activated_bundle, activated) = observe();
+
+        edit_signing(
+            &format!("publishedPublicJwkFiles: [{PREVIOUS}]"),
+            "publishedPublicJwkFiles: []",
+        );
+        fs::remove_file(directory.path().join(PREVIOUS)).expect("the previous key is retired");
+        let (retired_bundle, retired) = observe();
+
+        assert_eq!(initial.len(), 4);
+        assert_eq!(published, initial, "publishing a key keeps every revision");
+        assert_eq!(activated, initial, "activating a key keeps every revision");
+        assert_eq!(retired, initial, "retiring a key keeps every revision");
+        let bundle_revisions = BTreeSet::from([
+            initial_bundle,
+            published_bundle,
+            activated_bundle,
+            retired_bundle,
+        ]);
+        assert_eq!(
+            bundle_revisions.len(),
+            4,
+            "the bundle revision still records every rotation step"
+        );
+    }
+
     /// The projection keeps every assertion-semantic configuration member. A member it dropped
     /// would stop being covered by any revision, which is a silently narrower
     /// tripwire rather than a visible failure, so the member list is asserted
@@ -3485,6 +3579,26 @@ mod tests {
         assert_eq!(projected["requirements"].as_array().map(Vec::len), Some(1));
         assert_eq!(projected["sources"].as_object().map(JsonMap::len), Some(1));
         assert!(projected["sources"].get("source-a").is_some());
+        // The signing member loses only its key files, which the JWKS carries.
+        let configured_signing = configured["signing"]
+            .as_object()
+            .expect("the signing configuration is a mapping");
+        let projected_signing = projected["signing"]
+            .as_object()
+            .expect("the projected signing configuration is a mapping");
+        assert_eq!(
+            projected_signing.keys().collect::<BTreeSet<_>>(),
+            configured_signing
+                .keys()
+                .filter(|key| {
+                    !matches!(
+                        key.as_str(),
+                        ACTIVE_PUBLIC_JWK_FILE | PUBLISHED_PUBLIC_JWK_FILES
+                    )
+                })
+                .collect::<BTreeSet<_>>()
+        );
+        assert!(projected_signing.contains_key("revokedKeyIds"));
     }
 
     /// A revision must depend on the configuration alone. Canonical JSON is

@@ -1000,6 +1000,10 @@ At minimum, pin these acceptance and negative cases:
     negatives prove source, authorization, credential, signing, audit, and
     internal deployment fields are absent. Publication-only changes move the
     bundle revision but not any assertion-semantic requirement revision.
+28b. Each step of a planned signing-key rotation, publishing the next public
+    key, activating it, and retiring the previous one, moves the bundle
+    revision but not any requirement revision, because key trust travels in
+    the JWKS rather than in the revision a relying party pins.
 29. Every declared Supported Value form rejects wrong scalar types, unknown
     codes, invalid entity references, excessive precision, oversized strings,
     oversized lists, duplicate values where prohibited, and wrong

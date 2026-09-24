@@ -756,7 +756,8 @@ trust domain, issuer governance boundary, bundle lifecycle, signer, and audit bo
 REQ-PR-EVIDENCE-056: The bundle revision MUST be a digest over the complete atomic bundle bytes and
 layout manifest and MUST be carried in every native audit event.
 Every assertion MUST instead carry the configuration revision for its requirement, computed over
-that requirement's configuration and artifact closure and published with the requirement through
+that requirement's configuration and artifact closure, which excludes the active and published
+public signing keys whose trust the JWKS carries, and published with the requirement through
 authenticated definition discovery, in the forms fixed by
 `products/evidence/contracts/definitions.schema.yaml`,
 `products/evidence/contracts/evidence.schema.yaml`, and

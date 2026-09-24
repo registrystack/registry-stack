@@ -127,7 +127,10 @@ runtime is target-specific; its revision and bound private-CA bytes are not the
 bundle revision, and signed assertions continue to carry only a configuration
 revision as `configurationRevision`. That value is scoped to the one requirement
 the assertion answers, not to the whole deployment, so it is neither the runtime
-revision nor the bundle revision.
+revision nor the bundle revision. The public signing keys are outside it:
+publishing, activating, or retiring a key changes the bundle revision and the
+JWKS but no `configurationRevision`, while adding a key identifier to
+`signing.revokedKeyIds` changes every requirement's `configurationRevision`.
 
 Run the following grouped handoff after provisioning and whenever candidate
 bytes, runtime bindings, trust files, or secrets change:
