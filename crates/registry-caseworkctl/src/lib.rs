@@ -1687,6 +1687,33 @@ mod tests {
             "source registry did not answer the reader readiness check"
         );
 
+        // A BReg engine from another release is named with the lock-step
+        // action instead of the generic connection advice.
+        let mismatch = project::source_readiness_failure(
+            "registry",
+            Some("BReg source registry runs engine version 0.0.1 and this Casework runs 0.0.2. Casework and BReg run in lock-step, so upgrade both to the same release".to_owned()),
+            anyhow::Error::new(registry_casework_core::SourceAdapterError::Unavailable),
+        );
+        let (exit, diagnostic) = classify_failure(doctor, &mismatch);
+        assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
+        assert_eq!(diagnostic["path"], "doctor:/checks/sourceConnections");
+        assert!(diagnostic["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("0.0.1") && message.contains("0.0.2")));
+        assert!(diagnostic["suggestedAction"]
+            .as_str()
+            .is_some_and(|action| action.contains("same release")));
+        let unmatched = project::source_readiness_failure(
+            "registry",
+            None,
+            anyhow::Error::new(registry_casework_core::SourceAdapterError::Unavailable),
+        );
+        let (_, diagnostic) = classify_failure(doctor, &unmatched);
+        assert_eq!(
+            diagnostic["message"],
+            "source registry did not pass the reader readiness check: the source is temporarily unavailable"
+        );
+
         // A typed configuration refusal keeps its precise location.
         let typed = project::doctor_dependency_failure(
             "configuration",

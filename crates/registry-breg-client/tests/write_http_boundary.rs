@@ -569,6 +569,63 @@ async fn registry_contract_keeps_the_metadata_decode_reason_instead_of_discardin
 }
 
 #[tokio::test]
+async fn registry_contract_reports_the_engine_version_even_when_the_document_fails_to_decode() {
+    let mut malformed = metadata_fixture();
+    malformed["entities"] = json!("not-an-array");
+    let fixture = test_client(vec![
+        metadata_response().with_header("registry-engine-version", "0.34.0"),
+        MockResponse::json(StatusCode::OK, malformed)
+            .with_header("registry-engine-version", "0.33.0"),
+    ])
+    .await;
+
+    let (version, contract) = fixture
+        .client
+        .registry_contract_and_engine_version(Some("company-writer"))
+        .await;
+    assert_eq!(version.as_deref(), Some("0.34.0"));
+    let contract = contract.expect("registry metadata decodes");
+    assert_eq!(contract.metadata.engine_version(), Some("0.34.0"));
+
+    let (version, contract) = fixture
+        .client
+        .registry_contract_and_engine_version(Some("company-writer"))
+        .await;
+    assert_eq!(version.as_deref(), Some("0.33.0"));
+    assert_eq!(
+        contract
+            .expect_err("malformed registry metadata is refused")
+            .metadata_error_kind(),
+        Some(BRegMetadataErrorKind::Shape)
+    );
+}
+
+#[tokio::test]
+async fn registry_contract_reports_no_engine_version_for_an_absent_or_malformed_header() {
+    let fixture = test_client(vec![
+        metadata_response(),
+        metadata_response().with_header("registry-engine-version", "0.34.0 (linux)"),
+        metadata_response().with_header("registry-engine-version", &"9".repeat(65)),
+    ])
+    .await;
+
+    for _ in 0..3 {
+        let (version, contract) = fixture
+            .client
+            .registry_contract_and_engine_version(Some("company-writer"))
+            .await;
+        assert_eq!(version, None);
+        assert_eq!(
+            contract
+                .expect("metadata decodes")
+                .metadata
+                .engine_version(),
+            None
+        );
+    }
+}
+
+#[tokio::test]
 async fn metadata_selected_create_and_patch_use_the_exact_http_contract() {
     let fixture = test_client(vec![
         metadata_response(),

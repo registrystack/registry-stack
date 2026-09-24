@@ -272,3 +272,9 @@ servers, but a missing executable request contract returns an unsupported
 selection error. Older strict clients may reject added metadata members, so
 upgrade clients and servers together. These descriptors expose existing runtime
 capabilities without changing permissions, history retention, or database schema.
+
+A successful `GET /v1/registry` response carries a `Registry-Engine-Version`
+header naming the engine release that served it, the same value `breg --version`
+prints. It grants nothing and is absent from the concealed 404. Peers that run
+in lock-step with the engine, such as a Casework source adapter, compare it with
+their own release and refuse another release by name.

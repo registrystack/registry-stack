@@ -965,6 +965,29 @@ pub(crate) fn doctor_dependency_failure(
     })
 }
 
+/// Name a source that failed the reader readiness check. A BReg engine from
+/// another release is named with both versions and the lock-step action, since
+/// no connection or grant change would repair it.
+pub(crate) fn source_readiness_failure(
+    source_id: &str,
+    peer_version_mismatch: Option<String>,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    match peer_version_mismatch {
+        Some(message) => anyhow::Error::new(DoctorCheckFailure {
+            check: "sourceConnections",
+            message,
+            action: DOCTOR_PEER_VERSION_ACTION,
+        }),
+        None => doctor_dependency_failure(
+            "sourceConnections",
+            format!("source {source_id} did not pass the reader readiness check"),
+            DOCTOR_SOURCE_ACTION,
+            error,
+        ),
+    }
+}
+
 /// Name the doctor check an authored-input check failed. Its refusal text is
 /// written by caseworkctl from the operator's own files, so it is kept whole.
 fn doctor_check_failure(
@@ -996,6 +1019,7 @@ fn carries_typed_configuration_error(error: &anyhow::Error) -> bool {
 const DOCTOR_CONFIGURATION_ACTION: &str =
     "Correct the operator source bindings named by the refusal so they match casework.yaml, then retry.";
 const DOCTOR_SOURCE_ACTION: &str = "Check that the source runtime is reachable and ready, and that the configured reader profile holds exact get and list access to every declared request projection, then retry.";
+const DOCTOR_PEER_VERSION_ACTION: &str = "Run Casework and every BReg source it reads from the same release: upgrade the one that is behind, then retry. Casework resumes source reads once the versions match, without a restart.";
 const DOCTOR_DATABASE_ACTION: &str = "Restore the Casework database named by database.runtimeUrlRef; if its schema is not current, apply the migrations with casework migrate or caseworkctl db migrate, then retry.";
 const DOCTOR_DIRECTORY_ACTION: &str =
     "Authenticate as an Administrator and give every declared queue a serving team, then retry.";
@@ -1075,10 +1099,11 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
         runtime
             .block_on(adapter.verify_reader_readiness())
             .map_err(|error| {
-                doctor_dependency_failure(
-                    "sourceConnections",
-                    format!("source {source_id} did not pass the reader readiness check"),
-                    DOCTOR_SOURCE_ACTION,
+                source_readiness_failure(
+                    source_id,
+                    adapter
+                        .peer_version_mismatch()
+                        .map(|mismatch| mismatch.to_string()),
                     error.into(),
                 )
             })?;

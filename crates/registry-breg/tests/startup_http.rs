@@ -835,6 +835,14 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
         .await
         .expect("provenance response");
     assert_eq!(provenance.status(), StatusCode::OK);
+    assert_eq!(
+        provenance
+            .headers()
+            .get("registry-engine-version")
+            .and_then(|value| value.to_str().ok()),
+        Some(registry_platform_buildinfo::DISPLAY_VERSION),
+        "the contract document names the engine release a peer must match"
+    );
     let provenance: Value = serde_json::from_slice(
         &to_bytes(provenance.into_body(), 1024 * 1024)
             .await

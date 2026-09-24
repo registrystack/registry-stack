@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- BREAKING: Casework and its BReg sources run in lock-step. BReg now names its
+  release in a `Registry-Engine-Version` header on `GET /v1/registry`, and the
+  Casework BReg adapter refuses a source whose engine reports another release,
+  or no release, as a source outage. The runtime log names the source and both
+  versions, and `caseworkctl doctor` refuses at `sourceConnections` with the
+  same message and the upgrade step. Upgrade each BReg source first, then
+  Casework, to the same release; reads resume on the next matching contract
+  read. The adapter logs the engine version once when it first reads it, and
+  a caller's read of a registry contract that does not decode is now logged
+  with its route and metadata error kind instead of passing silently.
 - BREAKING: the runtime refuses to activate a policy package that would strand
   in-flight work pinned under an earlier package, and names each conflict with
   its counts: a queue or access profile that pinned reviews or open work items

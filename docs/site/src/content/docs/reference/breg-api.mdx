@@ -73,6 +73,15 @@ same concealed 404 as an unauthorized request.
     crates/registry-breg/src/compiler.rs, route_shape() and query_kind_id();
     crates/registry-breg/src/model.rs, MAX_REVISION_HISTORY_RECORDS. */}
 
+A successful `GET /v1/registry` response carries a `Registry-Engine-Version` header with the
+engine release that served it, the value `breg --version` prints. It grants nothing, and the
+concealed 404 does not carry it. Casework reads it to hold its BReg sources to its own release, as
+[Upgrade Casework and BReg in lock-step](../../operate/casework/#upgrade-casework-and-breg-in-lock-step)
+describes.
+
+{/* Evidence: crates/registry-breg/src/api/mod.rs, registry_metadata();
+    crates/registry-breg/tests/startup_http.rs. */}
+
 ## Record envelope
 
 Reads, creates, patches, tombstones, revisions, and snapshots return one shape, the Registry
