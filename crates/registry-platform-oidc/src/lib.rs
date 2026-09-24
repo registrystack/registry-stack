@@ -23,7 +23,9 @@ use base64::Engine;
 use jsonwebtoken::errors::ErrorKind as JwtErrorKind;
 use jsonwebtoken::jwk::{AlgorithmParameters, EllipticCurve, Jwk, JwkSet, KeyAlgorithm};
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
-use registry_platform_httputil::{read_bounded, FetchUrlError, FetchUrlPolicy};
+use registry_platform_httputil::{
+    read_bounded, FetchUrlError, FetchUrlPolicy, DEFAULT_VALIDATED_FETCH_TIMEOUT,
+};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -207,6 +209,7 @@ enum JwksSource {
     Http {
         jwks_uri: String,
         fetch_url_policy: FetchUrlPolicy,
+        additional_roots: Vec<reqwest::Certificate>,
     },
     Static(JwkSet),
 }
@@ -249,10 +252,27 @@ impl JwksFetcher {
         config: JwksFetcherConfig,
         fetch_url_policy: FetchUrlPolicy,
     ) -> Self {
+        Self::new_trusting_additional_roots(jwks_uri, config, fetch_url_policy, Vec::new())
+    }
+
+    /// Build a fetcher whose key-set requests also trust `additional_roots`,
+    /// beside the platform roots.
+    ///
+    /// For an issuer whose key set is served under a private certificate
+    /// authority the deployment names explicitly. The roots are added, never
+    /// substituted, and certificate verification stays on.
+    #[must_use]
+    pub fn new_trusting_additional_roots(
+        jwks_uri: String,
+        config: JwksFetcherConfig,
+        fetch_url_policy: FetchUrlPolicy,
+        additional_roots: Vec<reqwest::Certificate>,
+    ) -> Self {
         Self {
             source: JwksSource::Http {
                 jwks_uri,
                 fetch_url_policy,
+                additional_roots,
             },
             config,
             state: RwLock::new(JwksState::default()),
@@ -618,13 +638,17 @@ impl JwksFetcher {
             JwksSource::Http {
                 jwks_uri,
                 fetch_url_policy,
+                additional_roots,
             } => {
                 let url = Url::parse(jwks_uri).map_err(|_| OidcError::InvalidUrl)?;
                 let validated_url = fetch_url_policy
                     .validate_for_immediate_fetch_with_timeout(&url, self.config.request_timeout)
                     .await?;
                 let resp = validated_url
-                    .immediate_get()?
+                    .immediate_get_with_additional_roots(
+                        DEFAULT_VALIDATED_FETCH_TIMEOUT,
+                        additional_roots,
+                    )?
                     .timeout(self.config.request_timeout)
                     .send()
                     .await

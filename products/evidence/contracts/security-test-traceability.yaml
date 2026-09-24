@@ -245,6 +245,11 @@ entries:
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: private_ca_plan_rejects_unbound_missing_and_malformed_captures}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: runtime_ca_capture_rejects_symlink_malformed_and_mutable_files}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: ambient_proxy_variables_are_ignored_in_an_isolated_process}
+      - {file: crates/registry-evidence/tests/cli.rs, name: dependency_check_trusts_a_private_ca_issuer_only_through_its_named_profile}
+      - {file: crates/registry-evidence/tests/cli.rs, name: dependency_check_refuses_an_issuer_the_named_profile_does_not_vouch_for}
+      - {file: crates/registry-evidence/tests/cli.rs, name: dependency_check_refuses_an_issuer_profile_that_is_not_a_certificate_bundle}
+      - {file: crates/registry-evidence/src/config.rs, name: an_issuer_trust_profile_is_a_local_id_for_an_https_key_set_only}
+      - {file: crates/registry-evidence/src/bundle.rs, name: the_issuer_trust_profile_is_bound_exactly_like_a_source_profile}
   - id: sec-subject-array-order-nonsemantic
     tests:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: multi_role_request_order_is_not_semantic_and_output_uses_declaration_order}

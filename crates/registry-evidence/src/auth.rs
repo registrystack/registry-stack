@@ -255,7 +255,16 @@ const CONFIRMATION_CLAIM: &str = "cnf";
 
 impl Authenticator {
     /// Build the one strict resource-server profile from the loaded bundle.
-    pub fn from_config(config: &AuthenticationConfig, assurance_profile: AssuranceProfile) -> Self {
+    ///
+    /// `issuer_roots` are the private certificate authorities the runtime
+    /// file binds to the bundle's `tlsTrustProfile`. They are trusted beside
+    /// the system roots for the `jwksUri` connection alone, and are empty
+    /// when the bundle names no profile.
+    pub fn from_config(
+        config: &AuthenticationConfig,
+        assurance_profile: AssuranceProfile,
+        issuer_roots: Vec<reqwest::Certificate>,
+    ) -> Self {
         let algorithms = config
             .algorithms
             .iter()
@@ -285,10 +294,11 @@ impl Authenticator {
         )))
         .with_allowed_clients(config.allowed_clients.clone().unwrap_or_default())
         .with_assertion_issuers(config.assertion_issuers.clone().unwrap_or_default());
-        let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
+        let fetcher = Arc::new(JwksFetcher::new_trusting_additional_roots(
             config.jwks_uri.clone(),
             JwksFetcherConfig::defaults(),
             jwks_fetch_policy(config, assurance_profile),
+            issuer_roots,
         ));
         let verifier = Arc::new(TokenVerifier::new(verifier_config, fetcher));
         let claims = AuthenticationClaimsConfig {

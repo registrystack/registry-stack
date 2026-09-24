@@ -1738,6 +1738,11 @@ pub struct AuthenticationConfig {
     pub required_scopes: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_claim: Option<String>,
+    /// Logical name of the private certificate authority the runtime file
+    /// binds for the `jwks_uri` connection, trusted beside the system roots
+    /// for that connection alone. Absent trusts the system roots only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_trust_profile: Option<String>,
 }
 
 impl AuthenticationConfig {
@@ -1770,9 +1775,21 @@ impl AuthenticationConfig {
                     "local authentication JWKS URI must use the exact issuer origin, an absolute path, and no query or fragment",
                 );
             }
+            if self.tls_trust_profile.is_some() {
+                return invalid(
+                    "a local HTTP authentication JWKS URI cannot use a TLS trust profile",
+                );
+            }
         } else {
             validate_https_issuer(&self.issuer)?;
             validate_https_url(&self.jwks_uri, false)?;
+        }
+        if self
+            .tls_trust_profile
+            .as_deref()
+            .is_some_and(|profile| !valid_local_id(profile))
+        {
+            return invalid("authentication TLS trust profile identifier is invalid");
         }
         validate_unique_strings(&self.audiences, 1, 16, 1, 512, "authentication audiences")?;
         validate_unique(&self.token_types, 1, 4, "authentication tokenTypes")?;
@@ -6146,6 +6163,46 @@ mod tests {
                 "{profile:?} inherited the local HTTP exception"
             );
         }
+    }
+
+    /// The issuer's trust profile is a logical id the runtime file binds, and
+    /// it has nothing to trust on the supervised local HTTP issuer, where no
+    /// certificate is presented.
+    #[test]
+    fn an_issuer_trust_profile_is_a_local_id_for_an_https_key_set_only() {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("strict fixture validates");
+        config.authentication.tls_trust_profile = Some("issuer-pki".to_owned());
+        config
+            .validate()
+            .expect("an HTTPS key set accepts a named trust profile");
+
+        for invalid in ["", "Issuer-PKI", "issuer pki", "../issuer"] {
+            let mut candidate = config.clone();
+            candidate.authentication.tls_trust_profile = Some(invalid.to_owned());
+            assert!(
+                matches!(
+                    candidate.validate(),
+                    Err(ConfigError::Invalid(
+                        "authentication TLS trust profile identifier is invalid"
+                    ))
+                ),
+                "accepted trust profile {invalid:?}"
+            );
+        }
+
+        let mut local = config.clone();
+        local.assurance_profile = AssuranceProfile::Local;
+        local.authentication.issuer = "http://127.0.0.1:8081".to_owned();
+        local.authentication.jwks_uri = "http://127.0.0.1:8081/.well-known/jwks.json".to_owned();
+        assert!(matches!(
+            local.validate(),
+            Err(ConfigError::Invalid(
+                "a local HTTP authentication JWKS URI cannot use a TLS trust profile"
+            ))
+        ));
     }
 
     /// The admission fields are optional, but a present list must be a

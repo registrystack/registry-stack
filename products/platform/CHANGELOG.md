@@ -55,6 +55,11 @@
   a key version above `latest_version`, a key version below
   `min_encryption_version`, a public key mismatch, or a failed self-test. The
   causes carry no path, provider response, or key material.
+- Add `ValidatedFetchUrl::immediate_get_with_additional_roots` and
+  `JwksFetcher::new_trusting_additional_roots`, so a key set served under a
+  private certificate authority is fetched with that authority trusted beside
+  the system roots for that connection alone, without a process-wide trust
+  store change.
 
 ## v0.34.0 - 2026-09-25
 
