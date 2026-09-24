@@ -10,11 +10,13 @@
 //!
 //! - a projected field the closed schema does not declare, where no
 //!   `patternProperties` entry could admit it;
-//! - a declared property whose `type` shares no JSON type with the source
+//! - a declared property, or a `patternProperties` entry proven to match the
+//!   disclosed name, whose `type` shares no JSON type with the source
 //!   field's;
 //! - a value the source schema itself enumerates (an `enum` or `const`
 //!   member, `null`, or a Boolean, alone or as the item of an array) that the
-//!   source schema admits and the declared property rejects.
+//!   source schema admits and the declared property, or a matching
+//!   `patternProperties` entry, rejects.
 //!
 //! Every reported value is validated against the source schema first, so a
 //! refusal names a value the source can really hold. Constraints that need an
@@ -99,9 +101,12 @@ fn display_mismatches(display: &Value, request: &Value, projection: &[String]) -
     let properties = display.get("properties").and_then(Value::as_object);
     // additionalProperties is evaluated against its sibling properties and
     // patternProperties only, so an undeclared name is refused whatever other
-    // keywords the root carries, unless a pattern could still admit it.
-    let closed = display.get("additionalProperties") == Some(&Value::Bool(false))
-        && display.get("patternProperties").is_none();
+    // keywords the root carries, unless some patternProperties entry admits
+    // it, or might: JSON Schema applies every patternProperties schema whose
+    // pattern matches a name alongside the properties schema, so a name no
+    // pattern can be proven to match is still refused, and a name a pattern
+    // does match is checked against that pattern's schema too.
+    let closed = display.get("additionalProperties") == Some(&Value::Bool(false));
     let mut mismatches = Vec::new();
     for logical in projection {
         let Some(field) = fields.iter().find(|field| field["field"] == *logical) else {
@@ -110,23 +115,72 @@ fn display_mismatches(display: &Value, request: &Value, projection: &[String]) -
         let (Some(api_name), source) = (field["apiName"].as_str(), &field["schema"]) else {
             continue;
         };
-        match properties.and_then(|properties| properties.get(api_name)) {
-            None if closed => mismatches.push(format!(
+        let declared = properties.and_then(|properties| properties.get(api_name));
+        let patterns = pattern_matches(display, api_name);
+        if declared.is_none() && closed && !patterns.admits {
+            mismatches.push(format!(
                 "property {api_name} (source field {logical}) is not declared, and additionalProperties: false rejects every disclosure that carries it; the source describes it as {source}"
-            )),
-            None => {}
-            Some(property) => {
-                if let Some(mismatch) = property_mismatch(api_name, logical, property, source) {
-                    mismatches.push(mismatch);
-                }
+            ));
+            continue;
+        }
+        if let Some(property) = declared {
+            let label = format!("property {api_name}");
+            if let Some(mismatch) = property_mismatch(&label, logical, property, source) {
+                mismatches.push(mismatch);
+            }
+        }
+        for (pattern, schema) in patterns.definite {
+            let label = format!("patternProperties pattern {pattern} matching property {api_name}");
+            if let Some(mismatch) = property_mismatch(&label, logical, schema, source) {
+                mismatches.push(mismatch);
             }
         }
     }
     mismatches
 }
 
+/// The `patternProperties` entries that bear on one disclosed API name.
+struct PatternMatches<'a> {
+    /// Whether some entry admits the name, or might: a pattern this crate's
+    /// regex engine cannot compile is not disproved, so it counts here even
+    /// though its schema is left to the runtime check, never applied by
+    /// `definite`.
+    admits: bool,
+    /// The entries proven to match the name, each with its schema, so both
+    /// can be checked the same way a declared property is.
+    definite: Vec<(&'a str, &'a Value)>,
+}
+
+/// `patternProperties` patterns are ECMA-262 and matched unanchored (a
+/// substring match is a match). This crate checks them with the `regex`
+/// crate, which is not the same engine: syntax such as a lookaround
+/// assertion is valid ECMA-262 but fails to compile here. A pattern this
+/// engine cannot compile is not proof it cannot match, so it is treated as
+/// possibly matching and left to the runtime check rather than false-refused
+/// or force-applied.
+fn pattern_matches<'a>(display: &'a Value, api_name: &str) -> PatternMatches<'a> {
+    let mut admits = false;
+    let mut definite = Vec::new();
+    for (pattern, schema) in display
+        .get("patternProperties")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+    {
+        match regex::Regex::new(pattern) {
+            Ok(regex) if regex.is_match(api_name) => {
+                admits = true;
+                definite.push((pattern.as_str(), schema));
+            }
+            Ok(_) => {}
+            Err(_) => admits = true,
+        }
+    }
+    PatternMatches { admits, definite }
+}
+
 fn property_mismatch(
-    api_name: &str,
+    label: &str,
     logical: &str,
     property: &Value,
     source: &Value,
@@ -137,9 +191,7 @@ fn property_mismatch(
     let displayed = compile(property)?;
     let admitted = compile(source)?;
     if property == &Value::Bool(false) {
-        return Some(format!(
-            "property {api_name} (source field {logical}) admits no value"
-        ));
+        return Some(format!("{label} (source field {logical}) admits no value"));
     }
     if let (Some(displayed_types), Some(source_types)) =
         (json_types(property), source_json_types(source, 0))
@@ -150,7 +202,7 @@ fn property_mismatch(
                 .any(|shown| types_overlap(source, shown))
         }) {
             return Some(format!(
-                "property {api_name} accepts type {}, but source field {logical} is {}",
+                "{label} accepts type {}, but source field {logical} is {}",
                 render_types(&displayed_types),
                 render_types(&source_types),
             ));
@@ -158,20 +210,20 @@ fn property_mismatch(
     }
     let maximum_bytes = source.get("x-registry-maxBytes").and_then(Value::as_u64);
     let mut rejected = Vec::new();
-    for (value, label) in witnesses(source, 0) {
+    for (value, witness_label) in witnesses(source, 0) {
         if admitted.is_valid(&value)
             && maximum_bytes.is_none_or(|maximum| encoded_len(&value) <= maximum)
             && !displayed.is_valid(&value)
-            && !rejected.contains(&label)
+            && !rejected.contains(&witness_label)
         {
-            rejected.push(label);
+            rejected.push(witness_label);
         }
     }
     if rejected.is_empty() {
         return None;
     }
     Some(format!(
-        "property {api_name} rejects {} that source field {logical} admits",
+        "{label} rejects {} that source field {logical} admits",
         rejected
             .iter()
             .map(Value::to_string)

@@ -2390,6 +2390,83 @@ mod tests {
         check_source_descriptions(&project).unwrap();
     }
 
+    #[test]
+    fn check_refuses_an_undeclared_field_when_pattern_properties_is_empty() {
+        // An empty patternProperties admits nothing, so it must not disable
+        // the additionalProperties: false refusal the way a mere presence
+        // check once did.
+        let yaml = CASEWORK_YAML.replace(
+            "        supportingReference: {type: string, minLength: 1, maxLength: 500}\n",
+            "      patternProperties: {}\n",
+        );
+        assert_ne!(yaml, CASEWORK_YAML);
+        let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
+
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(error.contains("supportingReference"), "{error}");
+        assert!(error.contains("supporting-reference"), "{error}");
+        assert!(error.contains("additionalProperties"), "{error}");
+    }
+
+    #[test]
+    fn check_refuses_an_undeclared_field_a_pattern_does_not_match() {
+        // A patternProperties entry that cannot match the disclosed name
+        // proves nothing about it, so the additionalProperties: false
+        // refusal still applies.
+        let yaml = CASEWORK_YAML.replace(
+            "        supportingReference: {type: string, minLength: 1, maxLength: 500}\n",
+            "      patternProperties:\n        \"^other\": {type: string}\n",
+        );
+        assert_ne!(yaml, CASEWORK_YAML);
+        let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
+
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(error.contains("supportingReference"), "{error}");
+        assert!(error.contains("supporting-reference"), "{error}");
+        assert!(error.contains("additionalProperties"), "{error}");
+    }
+
+    #[test]
+    fn check_refuses_a_matching_pattern_property_whose_type_the_source_never_produces() {
+        // The pattern matches supportingReference, so its schema applies
+        // alongside additionalProperties: false, and a type conflict there
+        // must be refused just like a declared property's would be.
+        let yaml = CASEWORK_YAML.replace(
+            "        supportingReference: {type: string, minLength: 1, maxLength: 500}\n",
+            "      patternProperties:\n        \"^supporting\": {type: number}\n",
+        );
+        assert_ne!(yaml, CASEWORK_YAML);
+        let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
+
+        let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(error.contains("supportingReference"), "{error}");
+        assert!(error.contains("patternProperties"), "{error}");
+        assert!(error.contains("^supporting"), "{error}");
+        assert!(error.contains("number"), "{error}");
+        assert!(error.contains("string"), "{error}");
+    }
+
+    #[test]
+    fn check_accepts_a_field_an_uncompilable_pattern_might_match() {
+        // "^(?=x)" is valid ECMA-262 (a lookahead assertion) but this crate's
+        // regex engine cannot compile it. A pattern the engine cannot analyze
+        // might still match under the runtime's own engine, so the check must
+        // neither refuse supportingReference as undeclared nor apply this
+        // pattern's conflicting number schema to it: both would be refusals
+        // this check cannot prove.
+        let yaml = CASEWORK_YAML.replace(
+            "        supportingReference: {type: string, minLength: 1, maxLength: 500}\n",
+            "      patternProperties:\n        \"^(?=x)\": {type: number}\n",
+        );
+        assert_ne!(yaml, CASEWORK_YAML);
+        let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
+
+        check_source_descriptions(&project).unwrap();
+    }
+
     // A second reviewKinds entry, structurally identical to scope-correction's,
     // so a producer's `kinds` can reference a real declared kind that is not
     // the pinned policy id. registry-casework-core's own checks require every

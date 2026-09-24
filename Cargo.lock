@@ -5153,6 +5153,7 @@ dependencies = [
  "jsonschema",
  "p256",
  "rcgen",
+ "regex",
  "registry-casework",
  "registry-casework-breg",
  "registry-casework-core",
