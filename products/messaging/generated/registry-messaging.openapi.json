@@ -74,6 +74,19 @@
           }
         ]
       },
+      "MessageDispatch": {
+        "description": "What the dispatch worker did. submitted means the provider accepted the message, never that it was delivered.",
+        "enum": [
+          "queued",
+          "sending",
+          "submitted",
+          "failed",
+          "unknown",
+          "cancelled",
+          "expired"
+        ],
+        "type": "string"
+      },
       "MessageLinks": {
         "additionalProperties": false,
         "properties": {
@@ -111,7 +124,19 @@
         ],
         "type": "object"
       },
+      "MessageReport": {
+        "description": "What the provider's delivery receipts reported. It only moves forward, none then sent then delivered or undelivered, and a final report is never replaced. unavailable: the message's provider reports no delivery receipts, so submitted is the last status.",
+        "enum": [
+          "none",
+          "sent",
+          "delivered",
+          "undelivered",
+          "unavailable"
+        ],
+        "type": "string"
+      },
       "MessageStatus": {
+        "description": "Derived from dispatch and report: the dispatch state, except that a submitted message whose report is delivered is delivered, and one whose report is undelivered is failed.",
         "enum": [
           "queued",
           "sending",
@@ -148,6 +173,9 @@
           "correlationId": {
             "type": "string"
           },
+          "dispatch": {
+            "$ref": "#/components/schemas/MessageDispatch"
+          },
           "expiresAt": {
             "format": "date-time",
             "type": "string"
@@ -164,9 +192,11 @@
             "type": "string"
           },
           "report": {
-            "enum": [
-              "unavailable"
-            ],
+            "$ref": "#/components/schemas/MessageReport"
+          },
+          "reportedAt": {
+            "description": "When the report last moved. Absent while it is none or unavailable.",
+            "format": "date-time",
             "type": "string"
           },
           "senderProfile": {
@@ -189,6 +219,7 @@
         "required": [
           "id",
           "status",
+          "dispatch",
           "report",
           "channel",
           "senderProfile",

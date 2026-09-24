@@ -2,19 +2,23 @@
 
 use std::fmt;
 
-use registry_messaging_core::{type_uri, ProblemCode, HEALTH_PATH, READY_PATH};
+use registry_messaging_core::{
+    type_uri, MessageView, ProblemCode, HEALTH_PATH, MESSAGE_PATH, READY_PATH,
+};
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
-    build_client, read_failure_kind, send_failure_kind, OutboundOptions, ServiceBaseUrl,
+    build_client, read_failure_kind, send_failure_kind, BearerToken, OutboundOptions,
+    ServiceBaseUrl,
 };
 use registry_platform_httputil::{
     read_bounded, url::append_path_segments, validate_response_headers,
 };
-use reqwest::header::CONTENT_TYPE;
+use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Response, StatusCode, Url};
 
 use crate::{MessagingClientConfig, MessagingClientError, MessagingProtocolFailure};
 
+const JSON_MEDIA_TYPE: &str = "application/json";
 const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 const MAXIMUM_PROBLEM_BYTES: u64 = 8 * 1024;
 
@@ -73,6 +77,34 @@ impl MessagingClient {
         self.get_empty(READY_PATH).await
     }
 
+    /// One message as the caller may see it: its derived status, the
+    /// dispatch state and delivery report that status is derived from, and
+    /// its attempt summaries. A message the caller may not see answers the
+    /// typed `ProblemCode::MessageNotVisible`, exactly as one that does not
+    /// exist.
+    ///
+    /// `message_id` is the identifier the runtime answered on acceptance,
+    /// in its lowercase hyphenated form; any other value is refused before
+    /// a request is sent.
+    pub async fn message(
+        &self,
+        token: &BearerToken,
+        message_id: &str,
+    ) -> Result<MessagingComplete<MessageView>, MessagingClientError> {
+        if !is_message_id(message_id) {
+            return Err(MessagingClientError::invalid_request(
+                "the message identifier is not a lowercase hyphenated UUID",
+            ));
+        }
+        let path = MESSAGE_PATH.replace("{message_id}", message_id);
+        let request = self
+            .http
+            .get(self.url_from_constant(&path)?)
+            .header(AUTHORIZATION, token.authorization_header_value())
+            .header(ACCEPT, JSON_MEDIA_TYPE);
+        self.get_view(request).await
+    }
+
     fn url_from_constant(&self, path: &str) -> Result<Url, MessagingClientError> {
         let segments = path.trim_start_matches('/').split('/').collect::<Vec<_>>();
         append_path_segments(self.base_url.as_url(), &segments)
@@ -104,6 +136,38 @@ impl MessagingClient {
             value: (),
             trace_id,
         })
+    }
+
+    async fn get_view(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<MessagingComplete<MessageView>, MessagingClientError> {
+        let response = self.send(request).await?;
+        let status = response.status();
+        if status != StatusCode::OK {
+            return Err(self.problem_or_status(response).await);
+        }
+        let trace_id = response_trace(status, response.headers())?;
+        if !exact_media_type(response.headers(), JSON_MEDIA_TYPE) {
+            return Err(protocol(
+                status,
+                MessagingProtocolFailure::MediaType,
+                Some(trace_id),
+            ));
+        }
+        let body = read_bounded(response, self.max_response_bytes)
+            .await
+            .map_err(|error| MessagingClientError::Transport {
+                kind: read_failure_kind(&error),
+            })?;
+        let value = serde_json::from_slice(&body).map_err(|_| {
+            protocol(
+                status,
+                MessagingProtocolFailure::Body,
+                Some(trace_id.clone()),
+            )
+        })?;
+        Ok(MessagingComplete { value, trace_id })
     }
 
     async fn send(
@@ -182,6 +246,16 @@ pub(crate) fn domain_problem(
         code,
         trace_id,
     }
+}
+
+/// Whether `value` is a UUID in the lowercase hyphenated form the runtime
+/// answers message identifiers in.
+fn is_message_id(value: &str) -> bool {
+    value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| match index {
+            8 | 13 | 18 | 23 => byte == b'-',
+            _ => byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte),
+        })
 }
 
 fn response_trace(

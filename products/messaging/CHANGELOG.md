@@ -80,6 +80,16 @@
   in `messaging_provider_callbacks_total`.
 - Add the problems `callback.unverified` (403) and `callback.unreadable`
   (422).
-- Add `registry-messaging-client` with health and readiness.
+- Serve the message view's `dispatch` member (`queued`, `sending`,
+  `submitted`, `failed`, `unknown`, `cancelled`, `expired`) beside the
+  delivery `report` (`none`, `sent`, `delivered`, `undelivered`, or
+  `unavailable` when the provider records no receipts) and `reportedAt`.
+  `status` is derived from the two: a submitted message is `delivered` or
+  `failed` once its report is final. `messagingctl messages list --status`
+  filters on the derived status, list and show print the dispatch state, and
+  `retry`, `settle`, and `cancel` decide eligibility from it.
+- Add `registry-messaging-client` with health, readiness, and
+  `MessagingClient::message`, which reads one message's view under a bearer
+  token.
 - Publish the security invariant matrix, the recorded decisions, and the
   problem catalog under `https://id.registrystack.org/problems/registry-messaging/`.

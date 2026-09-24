@@ -126,6 +126,7 @@ async fn list_and_show_report_messages_with_the_contact_masked() {
     assert_eq!(report["messages"].as_array().unwrap().len(), 1);
     assert_eq!(report["messages"][0]["id"], failed.to_string());
     assert_eq!(report["messages"][0]["channel"], "sms");
+    assert_eq!(report["messages"][0]["dispatch"], "failed");
 
     let (code, report) = json(&runtime, &["messages", "list", "--limit", "1"]);
     assert_eq!(code, 0);
@@ -136,6 +137,9 @@ async fn list_and_show_report_messages_with_the_contact_masked() {
     assert_eq!(code, 0, "{report}");
     assert_eq!(report["message"]["id"], unknown.to_string());
     assert_eq!(report["message"]["status"], "unknown");
+    assert_eq!(report["message"]["dispatch"], "unknown");
+    // The email went through an SMTP provider, which records no receipts.
+    assert_eq!(report["message"]["report"], "unavailable");
     assert_eq!(
         report["message"]["to"],
         serde_json::json!({"email": "redacted"})
@@ -146,9 +150,20 @@ async fn list_and_show_report_messages_with_the_contact_masked() {
 
     let (code, stdout, _) = messagingctl(&runtime, &["messages", "list"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains(&format!("{failed} failed sms")), "{stdout}");
+    assert!(
+        stdout.contains(&format!("{failed} failed (dispatch failed) sms")),
+        "{stdout}"
+    );
+    let (code, report) = json(&runtime, &["messages", "show", &failed.to_string()]);
+    assert_eq!(code, 0, "{report}");
+    // The SMS provider declares receipts; none arrived.
+    assert_eq!(report["message"]["report"], "none");
     let (code, stdout, _) = messagingctl(&runtime, &["messages", "show", &failed.to_string()]);
     assert_eq!(code, 0);
+    assert!(
+        stdout.contains("status: failed (dispatch failed, report none)"),
+        "{stdout}"
+    );
     assert!(stdout.contains("to: phone (redacted)"), "{stdout}");
     assert!(stdout.contains("attempt 1.1: permanent"), "{stdout}");
 
@@ -185,6 +200,12 @@ async fn actions_preview_by_default_and_change_the_message_only_with_apply() {
     let (code, report) = json(&runtime, &["messages", "retry", &queued_id, "--apply"]);
     assert_eq!(code, 1);
     assert_eq!(report["diagnostics"][0]["code"], "message.not-eligible");
+    let refusal = report["diagnostics"][0]["message"].as_str().unwrap();
+    assert!(
+        refusal.contains("has dispatch state queued")
+            && refusal.contains("whose dispatch state is failed"),
+        "{refusal}"
+    );
     assert_eq!(harness.state(queued).await, "pending");
 
     let (code, report) = json(

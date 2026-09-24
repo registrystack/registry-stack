@@ -11,6 +11,7 @@ use crate::content::DirectContent;
 use crate::naming::{MAXIMUM_CORRELATION_ID_BYTES, MESSAGES_PATH};
 use crate::package::{valid_e164, valid_email_sender, Channel, TemplateReference};
 use crate::problem::{type_uri, ProblemCode};
+use crate::receipt::DeliveryReport;
 
 /// Where one message goes: exactly one email address or one E.164 phone
 /// number, written `{"email": ...}` or `{"phone": ...}`.
@@ -150,7 +151,8 @@ impl SubmitMessageRequest {
     }
 }
 
-/// The public status of one message.
+/// The public status of one message, derived from its dispatch state and
+/// its delivery report by [`derive_status`].
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MessageStatus {
@@ -180,13 +182,102 @@ impl MessageStatus {
     }
 }
 
-/// What delivery receipts said about a submitted message.
+/// What the dispatch worker did with one message (spec 6.2). `submitted`
+/// means the provider accepted the message, never that it was delivered.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MessageDispatch {
+    Queued,
+    Sending,
+    Submitted,
+    Failed,
+    Unknown,
+    Cancelled,
+    Expired,
+}
+
+impl MessageDispatch {
+    /// Every dispatch state.
+    pub const ALL: [Self; 7] = [
+        Self::Queued,
+        Self::Sending,
+        Self::Submitted,
+        Self::Failed,
+        Self::Unknown,
+        Self::Cancelled,
+        Self::Expired,
+    ];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Sending => "sending",
+            Self::Submitted => "submitted",
+            Self::Failed => "failed",
+            Self::Unknown => "unknown",
+            Self::Cancelled => "cancelled",
+            Self::Expired => "expired",
+        }
+    }
+
+    /// The public status of a message in this dispatch state that no
+    /// final delivery report has settled.
+    #[must_use]
+    pub const fn status(self) -> MessageStatus {
+        match self {
+            Self::Queued => MessageStatus::Queued,
+            Self::Sending => MessageStatus::Sending,
+            Self::Submitted => MessageStatus::Submitted,
+            Self::Failed => MessageStatus::Failed,
+            Self::Unknown => MessageStatus::Unknown,
+            Self::Cancelled => MessageStatus::Cancelled,
+            Self::Expired => MessageStatus::Expired,
+        }
+    }
+}
+
+/// What delivery receipts said about a message (spec 6.2). The report moves
+/// only forward, `none` then `sent` then `delivered` or `undelivered`, and a
+/// final report is never replaced.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MessageReport {
-    /// The runtime records no delivery receipts for this message, so
-    /// `submitted` is the last status it will report.
+    /// The message's provider records delivery receipts and none has
+    /// reported on this message yet.
+    None,
+    /// The provider reports the message handed on towards the recipient.
+    Sent,
+    /// The provider reports the message delivered. Final.
+    Delivered,
+    /// The provider reports the message could not be delivered. Final.
+    Undelivered,
+    /// The runtime records no delivery receipts for this message's
+    /// provider, so `submitted` is the last status it will report.
     Unavailable,
+}
+
+impl From<DeliveryReport> for MessageReport {
+    fn from(report: DeliveryReport) -> Self {
+        match report {
+            DeliveryReport::Sent => Self::Sent,
+            DeliveryReport::Delivered => Self::Delivered,
+            DeliveryReport::Undelivered => Self::Undelivered,
+        }
+    }
+}
+
+/// The public status of a message (spec 6.2): its dispatch state, except
+/// that a submitted message a final report settled is `delivered` or, when
+/// the report is `undelivered`, `failed`. A report reaches only a message
+/// its provider accepted, so no other dispatch state is ever settled by one.
+#[must_use]
+pub const fn derive_status(dispatch: MessageDispatch, report: MessageReport) -> MessageStatus {
+    match (dispatch, report) {
+        (MessageDispatch::Submitted, MessageReport::Delivered) => MessageStatus::Delivered,
+        (MessageDispatch::Submitted, MessageReport::Undelivered) => MessageStatus::Failed,
+        _ => dispatch.status(),
+    }
 }
 
 /// The links a message answer carries.
@@ -247,14 +338,22 @@ pub struct AttemptSummary {
     pub provider_reference: bool,
 }
 
-/// The answer to `GET /v1/messages/{id}`: metadata, a masked recipient, and
-/// attempt summaries. The body and the template data are never returned.
+/// The answer to `GET /v1/messages/{id}`: the derived status, the dispatch
+/// state and delivery report it is derived from, metadata, a masked
+/// recipient, and attempt summaries. The body and the template data are
+/// never returned.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MessageView {
     pub id: String,
+    /// [`derive_status`] of `dispatch` and `report`.
     pub status: MessageStatus,
+    pub dispatch: MessageDispatch,
     pub report: MessageReport,
+    /// When the stored report last moved. Absent while the report is `none`
+    /// or `unavailable`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_at: Option<String>,
     pub channel: Channel,
     pub sender_profile: String,
     /// The recipient's kind with its contact masked.
@@ -440,6 +539,114 @@ mod tests {
             serde_json::to_value(AttemptOutcome::MaybeSent).unwrap(),
             json!("maybe-sent")
         );
+    }
+
+    #[test]
+    fn the_dispatch_state_and_the_report_are_spelled_as_the_specification_names_them() {
+        for (dispatch, spelled) in [
+            (MessageDispatch::Queued, "queued"),
+            (MessageDispatch::Sending, "sending"),
+            (MessageDispatch::Submitted, "submitted"),
+            (MessageDispatch::Failed, "failed"),
+            (MessageDispatch::Unknown, "unknown"),
+            (MessageDispatch::Cancelled, "cancelled"),
+            (MessageDispatch::Expired, "expired"),
+        ] {
+            assert_eq!(serde_json::to_value(dispatch).unwrap(), json!(spelled));
+            assert_eq!(dispatch.as_str(), spelled);
+        }
+        assert_eq!(MessageDispatch::ALL.len(), 7);
+        for (report, spelled) in [
+            (MessageReport::None, "none"),
+            (MessageReport::Sent, "sent"),
+            (MessageReport::Delivered, "delivered"),
+            (MessageReport::Undelivered, "undelivered"),
+            (MessageReport::Unavailable, "unavailable"),
+        ] {
+            assert_eq!(serde_json::to_value(report).unwrap(), json!(spelled));
+        }
+        for (stored, served) in [
+            (DeliveryReport::Sent, MessageReport::Sent),
+            (DeliveryReport::Delivered, MessageReport::Delivered),
+            (DeliveryReport::Undelivered, MessageReport::Undelivered),
+        ] {
+            assert_eq!(MessageReport::from(stored), served);
+        }
+    }
+
+    #[test]
+    fn the_status_is_the_dispatch_state_until_a_final_report_settles_a_submitted_message() {
+        for dispatch in MessageDispatch::ALL {
+            for report in [
+                MessageReport::None,
+                MessageReport::Sent,
+                MessageReport::Unavailable,
+            ] {
+                assert_eq!(
+                    derive_status(dispatch, report),
+                    dispatch.status(),
+                    "{dispatch:?} {report:?}"
+                );
+            }
+        }
+        assert_eq!(
+            MessageDispatch::Submitted.status(),
+            MessageStatus::Submitted
+        );
+        assert_eq!(
+            derive_status(MessageDispatch::Submitted, MessageReport::Delivered),
+            MessageStatus::Delivered
+        );
+        assert_eq!(
+            derive_status(MessageDispatch::Submitted, MessageReport::Undelivered),
+            MessageStatus::Failed
+        );
+        // A report reaches only a submitted message; anywhere else the
+        // dispatch state stands.
+        for dispatch in MessageDispatch::ALL
+            .into_iter()
+            .filter(|dispatch| *dispatch != MessageDispatch::Submitted)
+        {
+            for report in [MessageReport::Delivered, MessageReport::Undelivered] {
+                assert_eq!(derive_status(dispatch, report), dispatch.status());
+            }
+        }
+    }
+
+    #[test]
+    fn a_message_view_serves_the_derived_status_the_dispatch_state_and_the_report() {
+        let view = MessageView {
+            id: "0b5c".to_owned(),
+            status: MessageStatus::Delivered,
+            dispatch: MessageDispatch::Submitted,
+            report: MessageReport::Delivered,
+            reported_at: Some("2026-09-25T10:00:05Z".to_owned()),
+            channel: Channel::Sms,
+            sender_profile: "sms-default".to_owned(),
+            to: Recipient::Phone("***".to_owned()),
+            template: None,
+            correlation_id: None,
+            accepted_at: "2026-09-25T10:00:00Z".to_owned(),
+            not_before: None,
+            expires_at: "2026-09-26T10:00:00Z".to_owned(),
+            updated_at: "2026-09-25T10:00:01Z".to_owned(),
+            attempts: Vec::new(),
+            links: MessageLinks::for_message("0b5c"),
+        };
+        let value = serde_json::to_value(&view).unwrap();
+        assert_eq!(value["status"], json!("delivered"));
+        assert_eq!(value["dispatch"], json!("submitted"));
+        assert_eq!(value["report"], json!("delivered"));
+        assert_eq!(value["reportedAt"], json!("2026-09-25T10:00:05Z"));
+        assert_eq!(serde_json::from_value::<MessageView>(value).unwrap(), view);
+
+        let unreported = MessageView {
+            reported_at: None,
+            report: MessageReport::Unavailable,
+            ..view
+        };
+        let value = serde_json::to_value(&unreported).unwrap();
+        assert!(value.get("reportedAt").is_none(), "{value}");
     }
 
     #[test]

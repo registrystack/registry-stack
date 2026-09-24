@@ -23,10 +23,10 @@ use std::collections::BTreeMap;
 use serde_json::{json, Map, Value};
 
 use registry_messaging_core::{
-    type_uri, MessageStatus, ProblemCode, IDEMPOTENCY_KEY_HEADER, MAXIMUM_CALLBACK_HEADER_BYTES,
-    MAXIMUM_CALLBACK_URL_BYTES, MAXIMUM_CORRELATION_ID_BYTES, MAXIMUM_IDEMPOTENCY_KEY_BYTES,
-    MAXIMUM_SENDER_BYTES, MESSAGING_RUNTIME_API_VERSION, MESSAGING_RUNTIME_KIND,
-    MESSAGING_RUNTIME_SCHEMA_ID, RUNTIME_SCHEMA_FILE,
+    type_uri, MessageDispatch, MessageStatus, ProblemCode, IDEMPOTENCY_KEY_HEADER,
+    MAXIMUM_CALLBACK_HEADER_BYTES, MAXIMUM_CALLBACK_URL_BYTES, MAXIMUM_CORRELATION_ID_BYTES,
+    MAXIMUM_IDEMPOTENCY_KEY_BYTES, MAXIMUM_SENDER_BYTES, MESSAGING_RUNTIME_API_VERSION,
+    MESSAGING_RUNTIME_KIND, MESSAGING_RUNTIME_SCHEMA_ID, RUNTIME_SCHEMA_FILE,
 };
 
 use crate::config::{
@@ -196,6 +196,10 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
     .iter()
     .map(|status| status.as_str())
     .collect();
+    let dispatch_states: Vec<&str> = MessageDispatch::ALL
+        .iter()
+        .map(|dispatch| dispatch.as_str())
+        .collect();
     let outcomes = [
         "in-progress",
         "accepted",
@@ -204,7 +208,67 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
         "maybe-sent",
         "interrupted",
     ];
-    let document = json!({
+    // The message view and its state vocabularies are built apart from the
+    // document, which would otherwise exceed the `json!` macro's recursion
+    // limit.
+    let message_status = json!({
+        "type": "string",
+        "enum": statuses,
+        "description": "Derived from dispatch and report: the dispatch state, except that a \
+                        submitted message whose report is delivered is delivered, and one \
+                        whose report is undelivered is failed."
+    });
+    let message_dispatch = json!({
+        "type": "string",
+        "enum": dispatch_states,
+        "description": "What the dispatch worker did. submitted means the provider accepted \
+                        the message, never that it was delivered."
+    });
+    let message_report = json!({
+        "type": "string",
+        "enum": ["none", "sent", "delivered", "undelivered", "unavailable"],
+        "description": "What the provider's delivery receipts reported. It only moves \
+                        forward, none then sent then delivered or undelivered, and a final \
+                        report is never replaced. unavailable: the message's provider \
+                        reports no delivery receipts, so submitted is the last status."
+    });
+    let message_view = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "description": "A message's status and metadata. The recipient is masked, \
+                        and no part or template data is returned.",
+        "required": [
+            "id", "status", "dispatch", "report", "channel", "senderProfile",
+            "to", "acceptedAt", "expiresAt", "updatedAt", "attempts", "links"
+        ],
+        "properties": {
+            "id": {"type": "string", "format": "uuid"},
+            "status": {"$ref": "#/components/schemas/MessageStatus"},
+            "dispatch": {"$ref": "#/components/schemas/MessageDispatch"},
+            "report": {"$ref": "#/components/schemas/MessageReport"},
+            "reportedAt": {
+                "type": "string",
+                "format": "date-time",
+                "description": "When the report last moved. Absent while it is \
+                                none or unavailable."
+            },
+            "channel": {"type": "string", "enum": ["email", "sms"]},
+            "senderProfile": {"type": "string"},
+            "to": {"$ref": "#/components/schemas/MaskedRecipient"},
+            "template": {"$ref": "#/components/schemas/TemplateReference"},
+            "correlationId": {"type": "string"},
+            "acceptedAt": {"type": "string", "format": "date-time"},
+            "notBefore": {"type": "string", "format": "date-time"},
+            "expiresAt": {"type": "string", "format": "date-time"},
+            "updatedAt": {"type": "string", "format": "date-time"},
+            "attempts": {
+                "type": "array",
+                "items": {"$ref": "#/components/schemas/AttemptSummary"}
+            },
+            "links": {"$ref": "#/components/schemas/MessageLinks"}
+        }
+    });
+    let mut document = json!({
         "openapi": "3.1.0",
         "info": {
             "title": "Registry Messaging API",
@@ -332,7 +396,7 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
                         }
                     }
                 },
-                "MessageStatus": {"type": "string", "enum": statuses},
+                "MessageStatus": message_status,
                 "MessageLinks": {
                     "type": "object",
                     "additionalProperties": false,
@@ -369,35 +433,7 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
                         }
                     }
                 },
-                "MessageView": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "description": "A message's status and metadata. The recipient is masked, \
-                                    and no part or template data is returned.",
-                    "required": [
-                        "id", "status", "report", "channel", "senderProfile", "to",
-                        "acceptedAt", "expiresAt", "updatedAt", "attempts", "links"
-                    ],
-                    "properties": {
-                        "id": {"type": "string", "format": "uuid"},
-                        "status": {"$ref": "#/components/schemas/MessageStatus"},
-                        "report": {"type": "string", "enum": ["unavailable"]},
-                        "channel": {"type": "string", "enum": ["email", "sms"]},
-                        "senderProfile": {"type": "string"},
-                        "to": {"$ref": "#/components/schemas/MaskedRecipient"},
-                        "template": {"$ref": "#/components/schemas/TemplateReference"},
-                        "correlationId": {"type": "string"},
-                        "acceptedAt": {"type": "string", "format": "date-time"},
-                        "notBefore": {"type": "string", "format": "date-time"},
-                        "expiresAt": {"type": "string", "format": "date-time"},
-                        "updatedAt": {"type": "string", "format": "date-time"},
-                        "attempts": {
-                            "type": "array",
-                            "items": {"$ref": "#/components/schemas/AttemptSummary"}
-                        },
-                        "links": {"$ref": "#/components/schemas/MessageLinks"}
-                    }
-                },
+                "MessageView": message_view,
                 "TemplatePreviewRequest": {
                     "type": "object",
                     "additionalProperties": false,
@@ -456,6 +492,11 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
             }
         }
     });
+    let schemas = document["components"]["schemas"]
+        .as_object_mut()
+        .expect("the components hold a schema map");
+    schemas.insert("MessageDispatch".to_owned(), message_dispatch);
+    schemas.insert("MessageReport".to_owned(), message_report);
     Ok([(OPENAPI_FILE, render(&document)?)].into())
 }
 
@@ -936,8 +977,8 @@ mod tests {
     #[test]
     fn the_published_message_schemas_name_exactly_the_serialized_members() {
         use registry_messaging_core::{
-            AttemptOutcome, AttemptSummary, Channel, MessageLinks, MessageReceipt, MessageReport,
-            MessageView, Recipient, SubmitMessageRequest, TemplateReference,
+            AttemptOutcome, AttemptSummary, Channel, DeliveryReport, MessageLinks, MessageReceipt,
+            MessageReport, MessageView, Recipient, SubmitMessageRequest, TemplateReference,
         };
         let documents = openapi_documents().unwrap();
         let document: Value = serde_json::from_str(&documents[OPENAPI_FILE]).unwrap();
@@ -965,8 +1006,10 @@ mod tests {
         );
         let view = MessageView {
             id: "m".to_owned(),
-            status: MessageStatus::Queued,
-            report: MessageReport::Unavailable,
+            status: MessageStatus::Delivered,
+            dispatch: MessageDispatch::Submitted,
+            report: MessageReport::Delivered,
+            reported_at: Some("r".to_owned()),
             channel: Channel::Email,
             sender_profile: "p".to_owned(),
             to: Recipient::Email(MASKED_CONTACT.to_owned()),
@@ -1004,6 +1047,16 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&serialized["attempts"][0]["outcome"]));
+        let published_reports: Vec<Value> = [MessageReport::None, MessageReport::Unavailable]
+            .into_iter()
+            .chain(DeliveryReport::ALL.into_iter().map(MessageReport::from))
+            .map(|report| serde_json::to_value(report).unwrap())
+            .collect();
+        let mut enumerated = schemas["MessageReport"]["enum"].as_array().unwrap().clone();
+        let mut expected = published_reports;
+        enumerated.sort_by_key(ToString::to_string);
+        expected.sort_by_key(ToString::to_string);
+        assert_eq!(enumerated, expected);
         let receipt = MessageReceipt {
             id: "m".to_owned(),
             status: MessageStatus::Queued,

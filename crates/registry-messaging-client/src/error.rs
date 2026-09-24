@@ -27,8 +27,11 @@ pub enum MessagingProtocolFailure {
     HeaderBounds,
     /// The response carries no single canonical W3C Trace Context field.
     TraceContext,
-    /// The body was not empty where emptiness was required.
+    /// The body was not empty where emptiness was required, or was not
+    /// exactly the pinned JSON answer.
     Body,
+    /// A JSON answer was not exactly `application/json`.
+    MediaType,
     /// The problem document did not match the closed problem definition its
     /// code names, or named no code in the closed vocabulary.
     Problem,
@@ -42,6 +45,8 @@ pub enum MessagingProtocolFailure {
 pub enum MessagingClientError {
     #[error("Registry Messaging client configuration is invalid: {reason}")]
     Configuration { reason: &'static str },
+    #[error("Registry Messaging client request is invalid: {reason}")]
+    InvalidRequest { reason: &'static str },
     #[error("Registry Messaging exchange did not complete: {kind}")]
     Transport { kind: TransportKind },
     #[error(
@@ -64,6 +69,10 @@ pub enum MessagingClientError {
 impl MessagingClientError {
     pub(crate) fn configuration(reason: &'static str) -> Self {
         Self::Configuration { reason }
+    }
+
+    pub(crate) fn invalid_request(reason: &'static str) -> Self {
+        Self::InvalidRequest { reason }
     }
 }
 

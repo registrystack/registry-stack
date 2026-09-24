@@ -230,19 +230,16 @@ impl Harness {
                 .await
                 .expect("the audit journal"),
         );
+        let loaded = config.load_package().expect("the package");
         let service = Arc::new(MessageService::new(
             messages,
             Arc::clone(&audit),
             config.retention,
+            loaded.receipt_providers(),
         ));
         let mut transports = Transports::new();
-        let callbacks = activate_providers(
-            &config,
-            &config.load_package().expect("the package"),
-            &secrets,
-            &mut transports,
-        )
-        .expect("activate the configured providers");
+        let callbacks = activate_providers(&config, &loaded, &secrets, &mut transports)
+            .expect("activate the configured providers");
         let transports = Arc::new(transports);
         let metrics = Arc::new(Metrics::default());
         let authenticator = Arc::new(MessagingAuthenticator::new(

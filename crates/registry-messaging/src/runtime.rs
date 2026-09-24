@@ -306,6 +306,7 @@ pub async fn assemble(
         MessageStore::new(store.clone(), dispatcher),
         Arc::clone(&audit),
         config.retention,
+        loaded.receipt_providers(),
     );
     audit
         .append(RuntimeStarted::new(

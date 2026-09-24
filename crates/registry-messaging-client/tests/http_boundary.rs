@@ -11,13 +11,16 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 use registry_messaging_client::{
-    type_uri, MessagingClient, MessagingClientConfig, MessagingClientError,
-    MessagingProtocolFailure, ProblemCode, TransportKind, HEALTH_PATH, READY_PATH,
+    type_uri, BearerToken, MessageDispatch, MessageReport, MessageStatus, MessagingClient,
+    MessagingClientConfig, MessagingClientError, MessagingProtocolFailure, ProblemCode,
+    TransportKind, HEALTH_PATH, MESSAGE_PATH, READY_PATH,
 };
 use url::Url;
 
 const TRACEPARENT: &str = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
 const TRACE_ID: &str = "0123456789abcdef0123456789abcdef";
+const MESSAGE_ID: &str = "0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d";
+const TOKEN: &str = "fixture-bearer-token";
 
 /// One route's canned answer, plus the record of every request it received.
 #[derive(Clone)]
@@ -58,6 +61,22 @@ impl Fixture {
     }
 }
 
+/// A message view as the runtime serves it: a submitted SMS the provider
+/// reported delivered.
+fn message_view() -> String {
+    format!(
+        r#"{{"id":"{MESSAGE_ID}","status":"delivered","dispatch":"submitted","report":"delivered","reportedAt":"2026-09-25T10:00:02Z","channel":"sms","senderProfile":"reminders-sms","to":{{"phone":"redacted"}},"acceptedAt":"2026-09-25T10:00:00Z","expiresAt":"2026-09-26T10:00:00Z","updatedAt":"2026-09-25T10:00:01Z","attempts":[{{"generation":1,"attempt":1,"outcome":"accepted","startedAt":"2026-09-25T10:00:00Z","finishedAt":"2026-09-25T10:00:01Z","providerReference":true}}],"links":{{"self":"/v1/messages/{MESSAGE_ID}","cancel":"/v1/messages/{MESSAGE_ID}/cancel"}}}}"#
+    )
+}
+
+fn message_route(prefix: &str) -> String {
+    format!("{prefix}{MESSAGE_PATH}").replace("{message_id}", "{id}")
+}
+
+fn token() -> BearerToken {
+    BearerToken::new(TOKEN).expect("fixture token")
+}
+
 fn problem_body(code: &str, status: u16) -> String {
     let pinned = ProblemCode::from_code(code);
     format!(
@@ -88,6 +107,7 @@ async fn serve(prefix: &str, fixture: &Fixture) -> (MessagingClient, tokio::task
     let app = Router::new()
         .route(&format!("{prefix}{HEALTH_PATH}"), get(answer))
         .route(&format!("{prefix}{READY_PATH}"), get(answer))
+        .route(&message_route(prefix), get(answer))
         .with_state(fixture.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -119,6 +139,106 @@ async fn health_and_ready_answer_with_the_trace_and_send_no_credential() {
     assert!(seen
         .iter()
         .all(|(_, headers)| !headers.contains_key("authorization")));
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_message_is_read_with_its_derived_status_dispatch_state_and_report() {
+    let fixture = Fixture::new(StatusCode::OK, Some("application/json"), &message_view());
+    let (client, server) = serve("/messaging", &fixture).await;
+
+    let read = client
+        .message(&token(), MESSAGE_ID)
+        .await
+        .expect("the message view");
+    assert_eq!(read.trace_id, TRACE_ID);
+    assert_eq!(read.value.id, MESSAGE_ID);
+    assert_eq!(read.value.status, MessageStatus::Delivered);
+    assert_eq!(read.value.dispatch, MessageDispatch::Submitted);
+    assert_eq!(read.value.report, MessageReport::Delivered);
+    assert_eq!(
+        read.value.reported_at.as_deref(),
+        Some("2026-09-25T10:00:02Z")
+    );
+    assert_eq!(read.value.attempts.len(), 1);
+
+    let seen = fixture.seen.lock().expect("observations");
+    assert_eq!(seen[0].0, format!("/messaging/v1/messages/{MESSAGE_ID}"));
+    assert_eq!(
+        seen[0].1["authorization"],
+        format!("Bearer {TOKEN}").as_str()
+    );
+    assert_eq!(seen[0].1["accept"], "application/json");
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_message_the_caller_may_not_see_is_the_typed_not_visible_problem() {
+    let (client, server) = serve("", &Fixture::problem(ProblemCode::MessageNotVisible)).await;
+    assert!(matches!(
+        client.message(&token(), MESSAGE_ID).await,
+        Err(MessagingClientError::Problem {
+            status: 404,
+            code: ProblemCode::MessageNotVisible,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_message_view_outside_the_pinned_shape_is_a_protocol_failure() {
+    let unknown_member = message_view().replacen('{', r#"{"provider":"sms-gateway","#, 1);
+    let unknown_report = message_view().replace(r#""report":"delivered""#, r#""report":"read""#);
+    for body in [unknown_member, unknown_report, "{}".to_owned()] {
+        let fixture = Fixture::new(StatusCode::OK, Some("application/json"), &body);
+        let (client, server) = serve("", &fixture).await;
+        assert!(
+            matches!(
+                client.message(&token(), MESSAGE_ID).await,
+                Err(MessagingClientError::Protocol {
+                    status: 200,
+                    failure: MessagingProtocolFailure::Body,
+                    ..
+                })
+            ),
+            "{body}"
+        );
+        server.abort();
+    }
+    let fixture = Fixture::new(StatusCode::OK, Some("text/plain"), &message_view());
+    let (client, server) = serve("", &fixture).await;
+    assert!(matches!(
+        client.message(&token(), MESSAGE_ID).await,
+        Err(MessagingClientError::Protocol {
+            status: 200,
+            failure: MessagingProtocolFailure::MediaType,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_message_id_that_is_not_a_message_identifier_is_refused_before_any_request() {
+    let fixture = Fixture::new(StatusCode::OK, Some("application/json"), &message_view());
+    let (client, server) = serve("", &fixture).await;
+    for id in [
+        "",
+        "../ready",
+        "0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d/cancel",
+        "0F8C2A51-6D3E-4B7A-9C10-2E5F7A8B9C0D",
+        "0f8c2a516d3e4b7a9c102e5f7a8b9c0d",
+    ] {
+        assert!(
+            matches!(
+                client.message(&token(), id).await,
+                Err(MessagingClientError::InvalidRequest { .. })
+            ),
+            "{id}"
+        );
+    }
+    assert!(fixture.seen.lock().expect("observations").is_empty());
     server.abort();
 }
 

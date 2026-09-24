@@ -37,7 +37,7 @@ Pre-1.0 and under construction. This version is the product skeleton:
   forward;
 - `messagingctl init`, `check`, `preview`, `apply`, and `messages list`,
   `show`, `retry`, `settle`, and `cancel`;
-- the Rust client for health and readiness;
+- the Rust client for health, readiness, and reading one message's status;
 - the security invariant matrix, the problem catalog, and the generated
   OpenAPI and runtime schema.
 
@@ -101,9 +101,12 @@ not be reached. `MESSAGING_LOG` accepts `error`, `warn`, or
 `info` and nothing else.
 
 `messagingctl messages list` and `show` report messages with the recipient
-masked. `retry` requeues a failed message as a new generation,
+masked, each with its derived status and its dispatch state. `retry`
+requeues a message whose dispatch failed as a new generation,
 `settle --outcome sent|not-sent` resolves a message whose outcome is
-unknown, and `cancel` cancels a queued one. Each action previews without
+unknown, and `cancel` cancels a queued one; each is decided on the dispatch
+state, so a submitted message the provider reported undelivered is not
+retried. Each action previews without
 `--apply`, and an applied action writes its audit record into the outbox the
 running runtime publishes. `RUNTIME-CONFIG.md` documents every key.
 
@@ -117,7 +120,7 @@ never hand-edited.
 | `GET /health` | none | `200` with an empty body while the process serves |
 | `GET /ready` | none | `200` when the database carries every expected migration, `503 service.unavailable` otherwise |
 | `POST /v1/messages` | bearer, an access profile listing the sender profile and template, and an `Idempotency-Key` header | `202` with the message receipt; the same key and request answer the stored receipt again |
-| `GET /v1/messages/{message_id}` | bearer, the submitting profile or an operator | `200` with the status, the masked recipient, and the attempts; `404 message.not-visible` for any other message |
+| `GET /v1/messages/{message_id}` | bearer, the submitting profile or an operator | `200` with the status derived from the dispatch state and the delivery report, both of those, the masked recipient, and the attempts; `404 message.not-visible` for any other message |
 | `POST /v1/messages/{message_id}/cancel` | bearer, the submitting profile or an operator | `200` with the cancelled status; `409 message.dispatch-started` once dispatch started, `409 message.terminal` once it is final |
 | `POST /v1/templates/{template_id}/versions/{version}/preview` | bearer, a sender profile listing the template | `200` with the rendered parts and the SMS segment count; persists nothing |
 | `GET /metrics` | metrics listener only | Prometheus text; never served on the public listener |

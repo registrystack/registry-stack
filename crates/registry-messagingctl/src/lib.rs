@@ -37,7 +37,9 @@ use registry_messaging::messages::{
 };
 use registry_messaging::package::{load_package, LoadedPackage};
 use registry_messaging::runtime::{apply_package, message_store, PackageChange, RuntimeError};
-use registry_messaging_core::{ContentRefusal, MessageStatus, TemplatePreviewRequest};
+use registry_messaging_core::{
+    ContentRefusal, MessageDispatch, MessageStatus, TemplatePreviewRequest,
+};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -650,7 +652,7 @@ fn messages(command: &MessagesCommand) -> Outcome {
         };
         match command {
             MessagesCommand::List(args) => list(&store, args).await,
-            MessagesCommand::Show(args) => show(&store, args.message).await,
+            MessagesCommand::Show(args) => show(&config, &store, args.message).await,
             MessagesCommand::Retry(args) => {
                 act(&store, &args.target, OperatorAction::Retry, args.apply).await
             }
@@ -699,18 +701,28 @@ async fn list(store: &MessageStore, args: &ListArgs) -> Outcome {
     }
 }
 
-async fn show(store: &MessageStore, message: Uuid) -> Outcome {
+/// Show one message as the runtime serves it: the configured package decides
+/// whether a message still without a report is one whose provider records
+/// none.
+async fn show(config: &RuntimeConfig, store: &MessageStore, message: Uuid) -> Outcome {
+    let receipt_providers = match config.load_package() {
+        Ok(loaded) => loaded.receipt_providers(),
+        Err(error) => return config_refusal(&error),
+    };
     match store.read(message).await {
-        Ok(Some(stored)) => Outcome::new(
-            json!({
+        Ok(Some(mut stored)) => {
+            stored.settle_report_capability(&receipt_providers);
+            Outcome::new(
+                json!({
                 "ok": true,
                 "message": stored.view,
                 "accessProfile": stored.access_profile,
                 "generation": stored.generation,
                 "attempt": stored.attempt,
-            }),
-            View::MessageShow,
-        ),
+                }),
+                View::MessageShow,
+            )
+        }
         Ok(None) => message_not_found(message),
         Err(error) => database_unavailable(&error),
     }
@@ -748,23 +760,26 @@ async fn act(
             "message.not-eligible",
             "MESSAGE_ID",
             format!(
-                "message {} is {}; {} applies only to a {} message",
+                "message {} has dispatch state {}; {} applies only to a message whose \
+                 dispatch state is {}",
                 target.message,
-                report.status.as_str(),
+                report.dispatch.as_str(),
                 action.as_str(),
-                eligible_status(action).as_str()
+                eligible_dispatch(action).as_str()
             ),
         );
     }
     action_outcome(&report)
 }
 
-/// The one status an action applies to, as `messages show` reports it.
-const fn eligible_status(action: OperatorAction) -> MessageStatus {
+/// The one dispatch state an action applies to, as `messages show` reports
+/// it. The derived status is not enough: a submitted message the provider
+/// reported undelivered is failed, and retrying it would send it again.
+const fn eligible_dispatch(action: OperatorAction) -> MessageDispatch {
     match action {
-        OperatorAction::Retry => MessageStatus::Failed,
-        OperatorAction::Settle(_) => MessageStatus::Unknown,
-        OperatorAction::Cancel => MessageStatus::Queued,
+        OperatorAction::Retry => MessageDispatch::Failed,
+        OperatorAction::Settle(_) => MessageDispatch::Unknown,
+        OperatorAction::Cancel => MessageDispatch::Queued,
     }
 }
 
@@ -973,9 +988,10 @@ fn render_message_list(report: &Value, stdout: &mut dyn io::Write) -> io::Result
     for message in messages {
         writeln!(
             stdout,
-            "{} {} {} {} generation {} attempt {} accepted {} updated {}",
+            "{} {} (dispatch {}) {} {} generation {} attempt {} accepted {} updated {}",
             text(&message["id"]),
             text(&message["status"]),
+            text(&message["dispatch"]),
             text(&message["channel"]),
             text(&message["senderProfile"]),
             message["generation"],
@@ -992,10 +1008,14 @@ fn render_message_show(report: &Value, stdout: &mut dyn io::Write) -> io::Result
     writeln!(stdout, "message: {}", text(&message["id"]))?;
     writeln!(
         stdout,
-        "status: {} (report {})",
+        "status: {} (dispatch {}, report {})",
         text(&message["status"]),
+        text(&message["dispatch"]),
         text(&message["report"])
     )?;
+    if let Some(reported) = message["reportedAt"].as_str() {
+        writeln!(stdout, "reported: {reported}")?;
+    }
     writeln!(
         stdout,
         "channel: {} via {}",

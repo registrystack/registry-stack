@@ -42,7 +42,7 @@ use thiserror::Error;
 use crate::config::{redact_refused_values, refused_yaml};
 use crate::http_provider::{
     compile_scripts, HttpProviderError, HttpProviderPackage, HttpProviderScripts,
-    MAXIMUM_SCRIPT_SOURCE_BYTES,
+    ReceiptCapability, MAXIMUM_SCRIPT_SOURCE_BYTES,
 };
 
 /// The directory under the package root holding every template version.
@@ -90,6 +90,22 @@ pub struct LoadedPackage {
     pub package: Package,
     pub providers: BTreeMap<String, HttpProviderSource>,
     pub files: Vec<PackageFile>,
+}
+
+impl LoadedPackage {
+    /// The providers whose package half declares `receipts: callback`: the
+    /// ones whose delivery receipts the runtime records. Every other
+    /// provider's messages report `unavailable`.
+    #[must_use]
+    pub fn receipt_providers(&self) -> BTreeSet<String> {
+        self.providers
+            .iter()
+            .filter(|(_, source)| {
+                source.package.capabilities.receipts == ReceiptCapability::Callback
+            })
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
 }
 
 /// One HTTP provider's package half as read from `providers/<id>/`: its
@@ -935,6 +951,11 @@ pub(crate) mod tests {
         assert!(scripts.prepare.contains("fn prepare"));
         assert!(scripts.interpret.is_some());
         assert!(scripts.receipt.is_some());
+        // The SMTP relay records no receipts; the gateway declares callbacks.
+        assert_eq!(
+            loaded.receipt_providers(),
+            BTreeSet::from(["sms-gateway".to_owned()])
+        );
 
         let digest = loaded.package.digest().to_owned();
         let script = root.path().join(GATEWAY).join("scripts/prepare.rhai");

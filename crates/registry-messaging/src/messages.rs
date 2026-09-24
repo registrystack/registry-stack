@@ -23,15 +23,17 @@
 //! The status view and every operator report name the recipient's kind
 //! only, with the contact masked, and never return a part or template data.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use registry_messaging_core::{
-    AttemptOutcome, AttemptSummary, Caller, CallerIdentity, Channel, ContentRefusal, ContentSource,
-    MessageLinks, MessageReceipt, MessageReport, MessageStatus, MessageView, Package,
-    PreparedContent, ProblemCode, Recipient, SenderProfile, SubmissionContent,
-    SubmitMessageRequest, TemplateMessageRequest, TemplateReference, MAXIMUM_IDEMPOTENCY_KEY_BYTES,
+    derive_status, AttemptOutcome, AttemptSummary, Caller, CallerIdentity, Channel, ContentRefusal,
+    ContentSource, DeliveryReport, MessageDispatch, MessageLinks, MessageReceipt, MessageReport,
+    MessageStatus, MessageView, Package, PreparedContent, ProblemCode, Recipient, SenderProfile,
+    SubmissionContent, SubmitMessageRequest, TemplateMessageRequest, TemplateReference,
+    MAXIMUM_IDEMPOTENCY_KEY_BYTES,
 };
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_dispatch::postgres::{enqueue, CancelOutcome, JobKey, JobState};
@@ -209,15 +211,32 @@ impl From<DispatchError> for MessageStoreError {
     }
 }
 
-/// One stored message: its submitter, dispatch state, and view.
+/// One stored message: its submitter, provider, dispatch state, and view.
+///
+/// The store reads a message whose report no receipt has moved as `none`;
+/// [`Self::settle_report_capability`] turns that into `unavailable` for a
+/// provider that records no delivery receipts.
 #[derive(Clone, Debug)]
 pub struct StoredMessage {
     pub submitter: CallerIdentity,
     pub access_profile: String,
+    pub provider: String,
     pub state: JobState,
     pub generation: i64,
     pub attempt: i16,
     pub view: MessageView,
+}
+
+impl StoredMessage {
+    /// Settle the view's report against whether the message's provider
+    /// records delivery receipts: without them, a report no receipt has
+    /// moved is `unavailable`, never `none`, so a caller does not wait for a
+    /// receipt that will not come. A stored report is served as stored.
+    pub fn settle_report_capability(&mut self, receipt_providers: &BTreeSet<String>) {
+        if self.view.report == MessageReport::None && !receipt_providers.contains(&self.provider) {
+            self.view.report = MessageReport::Unavailable;
+        }
+    }
 }
 
 /// One row of an operator listing.
@@ -226,6 +245,7 @@ pub struct StoredMessage {
 pub struct MessageSummary {
     pub id: String,
     pub status: MessageStatus,
+    pub dispatch: MessageDispatch,
     pub channel: Channel,
     pub sender_profile: String,
     pub generation: i64,
@@ -282,8 +302,10 @@ pub struct OperatorActionReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<SettleOutcome>,
     pub status: MessageStatus,
+    pub dispatch: MessageDispatch,
     pub generation: i64,
-    /// Whether the message is in the one state the action applies to.
+    /// Whether the message is in the one dispatch state the action applies
+    /// to.
     pub eligible: bool,
     pub applied: bool,
     /// The status the action leaves, or would leave, the message in.
@@ -325,7 +347,7 @@ const VIEW_SELECT: &str = "SELECT message.message_id, message.submitter_issuer, 
          message.sender_profile, message.recipient_kind, message.template_id, \
          message.template_version, message.correlation_id, message.accepted_at, \
          message.not_before, message.expires_at, job.state, job.generation, job.attempt, \
-         job.updated_at \
+         job.updated_at, message.provider, message.report, message.report_at \
     FROM messaging_messages AS message \
     JOIN messaging_dispatch_jobs AS job \
       ON job.message_id = message.message_id AND job.part = 'message'";
@@ -381,7 +403,8 @@ impl MessageStore {
         decode_message(&row, attempts).map(Some)
     }
 
-    /// List messages, newest first, optionally only those with `status`.
+    /// List messages, newest first, optionally only those whose derived
+    /// status is `status`.
     ///
     /// # Errors
     ///
@@ -391,34 +414,32 @@ impl MessageStore {
         status: Option<MessageStatus>,
         limit: i64,
     ) -> Result<Vec<MessageSummary>, MessageStoreError> {
-        let state = match status {
-            Some(status) => match state_of(status) {
-                Some(state) => Some(state.as_str()),
-                // No stored message carries a status only receipts report.
-                None => return Ok(Vec::new()),
-            },
-            None => None,
-        };
         let client = self.store.client().await?;
         let rows = client
             .query(
-                "SELECT message.message_id, job.state, message.channel, message.sender_profile, \
-                        job.generation, job.attempt, message.accepted_at, job.updated_at \
-                   FROM messaging_messages AS message \
-                   JOIN messaging_dispatch_jobs AS job \
-                     ON job.message_id = message.message_id AND job.part = 'message' \
-                  WHERE $1::text IS NULL OR job.state = $1 \
-                  ORDER BY message.accepted_at DESC, message.message_id \
-                  LIMIT $2",
-                &[&state, &limit],
+                &format!(
+                    "SELECT message.message_id, job.state, message.channel, \
+                            message.sender_profile, job.generation, job.attempt, \
+                            message.accepted_at, job.updated_at, message.report \
+                       FROM messaging_messages AS message \
+                       JOIN messaging_dispatch_jobs AS job \
+                         ON job.message_id = message.message_id AND job.part = 'message' \
+                      WHERE {} \
+                      ORDER BY message.accepted_at DESC, message.message_id \
+                      LIMIT $1",
+                    status_condition(status)
+                ),
+                &[&limit],
             )
             .await?;
         rows.iter()
             .map(|row| {
-                let state = decode_state(row, 1)?;
+                let dispatch = dispatch_of(decode_state(row, 1)?);
+                let report = decode_report(row, 8)?;
                 Ok(MessageSummary {
                     id: row.try_get::<_, Uuid>(0)?.to_string(),
-                    status: status_of(state),
+                    status: derive_status(dispatch, report),
+                    dispatch,
                     channel: decode_channel(row, 2)?,
                     sender_profile: row.try_get(3)?,
                     generation: row.try_get(4)?,
@@ -485,6 +506,7 @@ impl MessageStore {
                 OperatorAction::Retry | OperatorAction::Cancel => None,
             },
             status: message.view.status,
+            dispatch: message.view.dispatch,
             generation: message.generation,
             eligible,
             applied: false,
@@ -575,31 +597,51 @@ fn job_key(message_id: Uuid) -> Result<JobKey, MessageStoreError> {
     JobKey::new(message_id, MESSAGE_PART).map_err(|_| MessageStoreError::Refused)
 }
 
-/// The public status of a dispatch state. Delivery receipts are not
-/// recorded, so an accepted send reports `submitted`.
+/// The public dispatch state of a dispatch job state. The job's
+/// `delivered` means the provider accepted the message, so it is the
+/// message's `submitted`.
 #[must_use]
-pub const fn status_of(state: JobState) -> MessageStatus {
+pub const fn dispatch_of(state: JobState) -> MessageDispatch {
     match state {
-        JobState::Pending => MessageStatus::Queued,
-        JobState::Leased => MessageStatus::Sending,
-        JobState::Delivered => MessageStatus::Submitted,
-        JobState::DeadLettered => MessageStatus::Failed,
-        JobState::Expired => MessageStatus::Expired,
-        JobState::Unknown => MessageStatus::Unknown,
-        JobState::Cancelled => MessageStatus::Cancelled,
+        JobState::Pending => MessageDispatch::Queued,
+        JobState::Leased => MessageDispatch::Sending,
+        JobState::Delivered => MessageDispatch::Submitted,
+        JobState::DeadLettered => MessageDispatch::Failed,
+        JobState::Expired => MessageDispatch::Expired,
+        JobState::Unknown => MessageDispatch::Unknown,
+        JobState::Cancelled => MessageDispatch::Cancelled,
     }
 }
 
-const fn state_of(status: MessageStatus) -> Option<JobState> {
+/// The listing condition that holds for a message exactly when
+/// [`derive_status`] of its dispatch state and stored report is `status`.
+/// The text is built from the dispatch and report names only; nothing a
+/// caller sends reaches it.
+fn status_condition(status: Option<MessageStatus>) -> String {
+    let state = |state: JobState| format!("job.state = '{}'", state.as_str());
+    let report = |report: DeliveryReport| format!("message.report = '{}'", report.as_str());
+    let submitted = state(JobState::Delivered);
     match status {
-        MessageStatus::Queued => Some(JobState::Pending),
-        MessageStatus::Sending => Some(JobState::Leased),
-        MessageStatus::Submitted => Some(JobState::Delivered),
-        MessageStatus::Failed => Some(JobState::DeadLettered),
-        MessageStatus::Expired => Some(JobState::Expired),
-        MessageStatus::Unknown => Some(JobState::Unknown),
-        MessageStatus::Cancelled => Some(JobState::Cancelled),
-        MessageStatus::Delivered => None,
+        None => "true".to_owned(),
+        Some(MessageStatus::Queued) => state(JobState::Pending),
+        Some(MessageStatus::Sending) => state(JobState::Leased),
+        Some(MessageStatus::Submitted) => format!(
+            "{submitted} AND message.report IS DISTINCT FROM '{}' \
+             AND message.report IS DISTINCT FROM '{}'",
+            DeliveryReport::Delivered.as_str(),
+            DeliveryReport::Undelivered.as_str()
+        ),
+        Some(MessageStatus::Delivered) => {
+            format!("{submitted} AND {}", report(DeliveryReport::Delivered))
+        }
+        Some(MessageStatus::Failed) => format!(
+            "({} OR ({submitted} AND {}))",
+            state(JobState::DeadLettered),
+            report(DeliveryReport::Undelivered)
+        ),
+        Some(MessageStatus::Expired) => state(JobState::Expired),
+        Some(MessageStatus::Unknown) => state(JobState::Unknown),
+        Some(MessageStatus::Cancelled) => state(JobState::Cancelled),
     }
 }
 
@@ -609,6 +651,16 @@ fn refused<T>() -> Result<T, MessageStoreError> {
 
 fn decode_state(row: &Row, index: usize) -> Result<JobState, MessageStoreError> {
     JobState::parse(&row.try_get::<_, String>(index)?).map_or_else(refused, Ok)
+}
+
+/// The stored report, or `none` when no receipt has moved it.
+fn decode_report(row: &Row, index: usize) -> Result<MessageReport, MessageStoreError> {
+    match row.try_get::<_, Option<String>>(index)? {
+        None => Ok(MessageReport::None),
+        Some(stored) => DeliveryReport::parse(&stored)
+            .map(MessageReport::from)
+            .map_or_else(refused, Ok),
+    }
 }
 
 fn decode_channel(row: &Row, index: usize) -> Result<Channel, MessageStoreError> {
@@ -657,18 +709,25 @@ fn decode_message(
         _ => None,
     };
     let state = decode_state(row, 13)?;
+    let dispatch = dispatch_of(state);
+    let report = decode_report(row, 18)?;
     Ok(StoredMessage {
         submitter: CallerIdentity {
             issuer: row.try_get(1)?,
             subject: row.try_get(2)?,
         },
         access_profile: row.try_get(3)?,
+        provider: row.try_get(17)?,
         state,
         generation: row.try_get(14)?,
         attempt: row.try_get(15)?,
         view: MessageView {
-            status: status_of(state),
-            report: MessageReport::Unavailable,
+            status: derive_status(dispatch, report),
+            dispatch,
+            report,
+            reported_at: row
+                .try_get::<_, Option<SystemTime>>(19)?
+                .map(format_instant),
             channel: decode_channel(row, 4)?,
             sender_profile: row.try_get(5)?,
             to,
@@ -694,6 +753,8 @@ pub struct MessageService {
     messages: MessageStore,
     audit: Arc<AuditJournal>,
     retention: RetentionConfig,
+    /// The providers whose delivery receipts this runtime records.
+    receipt_providers: BTreeSet<String>,
 }
 
 impl std::fmt::Debug for MessageService {
@@ -714,16 +775,21 @@ struct StoredKey {
 }
 
 impl MessageService {
+    /// A service over `messages`, reporting delivery receipts for the
+    /// messages of `receipt_providers` and `unavailable` for every other
+    /// provider's.
     #[must_use]
     pub fn new(
         messages: MessageStore,
         audit: Arc<AuditJournal>,
         retention: RetentionConfig,
+        receipt_providers: BTreeSet<String>,
     ) -> Self {
         Self {
             messages,
             audit,
             retention,
+            receipt_providers,
         }
     }
 
@@ -877,7 +943,9 @@ impl MessageService {
             caller,
             message.as_ref().map(|message| &message.submitter),
         )?;
-        message.ok_or(ProblemCode::MessageNotVisible)
+        let mut message = message.ok_or(ProblemCode::MessageNotVisible)?;
+        message.settle_report_capability(&self.receipt_providers);
+        Ok(message)
     }
 
     /// Cancel one message for `caller`, after the visibility check.
@@ -1173,8 +1241,8 @@ mod tests {
     }
 
     #[test]
-    fn every_dispatch_state_has_one_status_and_back() {
-        for state in [
+    fn every_job_state_is_one_dispatch_state() {
+        let states = [
             JobState::Pending,
             JobState::Leased,
             JobState::Delivered,
@@ -1182,10 +1250,76 @@ mod tests {
             JobState::Expired,
             JobState::Unknown,
             JobState::Cancelled,
-        ] {
-            assert_eq!(state_of(status_of(state)), Some(state));
-        }
-        assert_eq!(state_of(MessageStatus::Delivered), None);
+        ];
+        let dispatched: BTreeSet<&str> = states
+            .into_iter()
+            .map(|state| dispatch_of(state).as_str())
+            .collect();
+        assert_eq!(dispatched.len(), MessageDispatch::ALL.len());
+        assert_eq!(dispatch_of(JobState::Delivered), MessageDispatch::Submitted);
+        assert_eq!(dispatch_of(JobState::DeadLettered), MessageDispatch::Failed);
+    }
+
+    #[test]
+    fn a_status_filter_names_only_stored_state_and_report_names() {
+        assert_eq!(status_condition(None), "true");
+        assert_eq!(
+            status_condition(Some(MessageStatus::Failed)),
+            "(job.state = 'dead_lettered' OR (job.state = 'delivered' AND message.report = \
+             'undelivered'))"
+        );
+        assert_eq!(
+            status_condition(Some(MessageStatus::Delivered)),
+            "job.state = 'delivered' AND message.report = 'delivered'"
+        );
+    }
+
+    #[test]
+    fn a_report_no_receipt_moved_is_unavailable_only_without_receipts() {
+        let mut message = StoredMessage {
+            submitter: CallerIdentity {
+                issuer: "https://issuer.example".to_owned(),
+                subject: "caller".to_owned(),
+            },
+            access_profile: "sender".to_owned(),
+            provider: "mail-relay".to_owned(),
+            state: JobState::Delivered,
+            generation: 1,
+            attempt: 1,
+            view: MessageView {
+                id: "0b5c".to_owned(),
+                status: MessageStatus::Submitted,
+                dispatch: MessageDispatch::Submitted,
+                report: MessageReport::None,
+                reported_at: None,
+                channel: Channel::Email,
+                sender_profile: "email-default".to_owned(),
+                to: Recipient::Email(MASKED_CONTACT.to_owned()),
+                template: None,
+                correlation_id: None,
+                accepted_at: "2026-09-25T10:00:00Z".to_owned(),
+                not_before: None,
+                expires_at: "2026-09-26T10:00:00Z".to_owned(),
+                updated_at: "2026-09-25T10:00:01Z".to_owned(),
+                attempts: Vec::new(),
+                links: MessageLinks::for_message("0b5c"),
+            },
+        };
+        let receipts = BTreeSet::from(["sms-gateway".to_owned()]);
+        let mut receiving = message.clone();
+        receiving.provider = "sms-gateway".to_owned();
+        receiving.settle_report_capability(&receipts);
+        assert_eq!(receiving.view.report, MessageReport::None);
+
+        let mut reported = receiving.clone();
+        reported.view.report = MessageReport::Delivered;
+        reported.provider = "mail-relay".to_owned();
+        reported.settle_report_capability(&receipts);
+        assert_eq!(reported.view.report, MessageReport::Delivered);
+
+        message.settle_report_capability(&receipts);
+        assert_eq!(message.view.report, MessageReport::Unavailable);
+        assert_eq!(message.view.status, MessageStatus::Submitted);
     }
 
     #[test]

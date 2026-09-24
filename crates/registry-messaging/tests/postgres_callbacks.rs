@@ -27,9 +27,12 @@ use axum::http::{Request, StatusCode};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use registry_messaging::dispatch::{dispatcher, MessageDispatcher, MessageSender};
 use registry_messaging::receipts::{MAXIMUM_STORED_RECEIPTS, RECEIPT_RECORDED_EVENT};
+use registry_messaging_core::MessageStatus;
 use registry_platform_dispatch::postgres::DispatchOutcome;
 use serde_json::{json, Value};
-use support::{assert_absent, assert_logs_clean, captured_logs, sms_submission, Harness};
+use support::{
+    assert_absent, assert_logs_clean, captured_logs, sender_token, sms_submission, Harness,
+};
 use uuid::Uuid;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request as GatewayRequest, ResponseTemplate};
@@ -306,6 +309,33 @@ impl Deployment {
             .collect()
     }
 
+    /// The message as its submitter reads it over the public route.
+    async fn view(&self, message_id: Uuid) -> Value {
+        let (status, view) = self
+            .harness
+            .call(
+                "GET",
+                &format!("/v1/messages/{message_id}"),
+                Some(&sender_token()),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{view}");
+        view
+    }
+
+    /// The ids the operator listing names for `status`.
+    async fn listed(&self, status: MessageStatus) -> Vec<String> {
+        self.harness
+            .service
+            .messages()
+            .list(Some(status), 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|summary| summary.id)
+            .collect()
+    }
+
     /// The receipt records in the outbox.
     async fn receipt_records(&self) -> Vec<Value> {
         self.harness
@@ -361,6 +391,12 @@ async fn a_verified_callback_is_applied_and_a_forged_one_changes_nothing(verifie
     let deployment = deployment(verifier).await;
     let id = deployment.sent().await;
     let reference = reference_for(id);
+    let view = deployment.view(id).await;
+    assert_eq!(
+        (&view["status"], &view["dispatch"], &view["report"]),
+        (&json!("submitted"), &json!("submitted"), &json!("none"))
+    );
+    assert!(view.get("reportedAt").is_none(), "{view}");
     let (status, body) = deployment
         .harness
         .send(deployment.callback(&reference, "delivered", None, true))
@@ -392,6 +428,24 @@ async fn a_verified_callback_is_applied_and_a_forged_one_changes_nothing(verifie
     assert_eq!(records[0]["from"], Value::Null);
     assert_eq!(records[0]["disposition"], "delivered");
     assert_eq!(deployment.counted("applied"), 1);
+
+    // The submitter now reads the message as delivered, and the operator
+    // listing files it there and no longer under submitted.
+    let view = deployment.view(id).await;
+    assert_eq!(
+        (&view["status"], &view["dispatch"], &view["report"]),
+        (
+            &json!("delivered"),
+            &json!("submitted"),
+            &json!("delivered")
+        )
+    );
+    assert!(view["reportedAt"].is_string(), "{view}");
+    assert_eq!(
+        deployment.listed(MessageStatus::Delivered).await,
+        vec![id.to_string()]
+    );
+    assert!(deployment.listed(MessageStatus::Submitted).await.is_empty());
 
     deployment.harness.publish().await;
     assert!(deployment
@@ -498,6 +552,18 @@ async fn a_final_undelivered_report_is_not_replaced_by_a_late_delivered_one() {
             ("sent".to_owned(), None, false),
         ]
     );
+    // A submitted message the provider could not deliver has failed.
+    let view = deployment.view(id).await;
+    assert_eq!(
+        (&view["status"], &view["dispatch"], &view["report"]),
+        (&json!("failed"), &json!("submitted"), &json!("undelivered"))
+    );
+    assert_eq!(
+        deployment.listed(MessageStatus::Failed).await,
+        vec![id.to_string()]
+    );
+    assert!(deployment.listed(MessageStatus::Delivered).await.is_empty());
+    assert!(deployment.listed(MessageStatus::Submitted).await.is_empty());
 }
 
 #[tokio::test]

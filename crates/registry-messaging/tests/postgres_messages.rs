@@ -297,6 +297,10 @@ async fn a_message_is_visible_to_its_submitter_and_an_operator_only() {
     assert_eq!(status, StatusCode::OK, "{view}");
     assert_eq!(view["id"], id.to_string());
     assert_eq!(view["status"], "queued");
+    assert_eq!(view["dispatch"], "queued");
+    // The email goes through an SMTP provider, which records no receipts.
+    assert_eq!(view["report"], "unavailable");
+    assert!(view.get("reportedAt").is_none(), "{view}");
     assert_eq!(view["to"], json!({"email": "redacted"}));
     assert_eq!(
         view["template"],
@@ -309,6 +313,22 @@ async fn a_message_is_visible_to_its_submitter_and_an_operator_only() {
         assert!(view.get(absent).is_none(), "{absent} in {view}");
     }
     support::assert_absent("the message view", &view);
+
+    // The SMS goes through an HTTP provider that declares receipts, so no
+    // report has arrived yet.
+    let sms = harness.accepted(&sms_submission()).await;
+    let (status, sms_view) = harness
+        .call("GET", &format!("/v1/messages/{sms}"), Some(&sender_token()))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{sms_view}");
+    assert_eq!(
+        (
+            &sms_view["status"],
+            &sms_view["dispatch"],
+            &sms_view["report"]
+        ),
+        (&json!("queued"), &json!("queued"), &json!("none"))
+    );
 
     let (status, operator_view) = harness.call("GET", &uri, Some(&operator_token())).await;
     assert_eq!(status, StatusCode::OK);

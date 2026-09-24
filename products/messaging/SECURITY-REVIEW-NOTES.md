@@ -411,7 +411,6 @@ Tests: `providers/tests.rs`, including
 
 ## Open questions
 
-- The specification's `dispatch` member of the message view is not served.
 - A payload may be erased `retention.payloadDays` after acceptance even when
   the message still waits in a retry; MESSAGING-SEC-10 and the sweep must
   decide how the two interact.
@@ -467,6 +466,19 @@ the message id, provider, report, the provider's code, whether it applied,
 and the report before and after. The record, the history row, and the logs
 never carry the reference, the recipient, a part, or the callback's body,
 form, or headers.
+
+`GET /v1/messages/{message_id}` serves the stored report, when it last moved
+(`reportedAt`), the dispatch state, and the status derived from the two: a
+submitted message is `delivered` once its report is `delivered` and `failed`
+once it is `undelivered`; every other status is the dispatch state. The view
+never carries the provider, the reference, the provider's code, or the
+receipt history. A message whose provider the active package does not declare
+`receipts: callback` for, and that holds no report, reads `unavailable`; the
+flag is computed at read time, so a package change that adds or removes the
+declaration changes what a report-less message reads as, never the stored
+report. `messagingctl messages retry`, `settle`, and `cancel` decide
+eligibility from the dispatch state, not the derived status, so a submitted
+message the provider reported undelivered is never sent again by a retry.
 
 There is no replay window: none of the three verifier kinds signs a
 timestamp, so a window could not be enforced for them. A replayed genuine
