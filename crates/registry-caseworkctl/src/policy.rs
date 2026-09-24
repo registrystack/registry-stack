@@ -209,7 +209,13 @@ fn metadata_for_request(
     description: &Value,
     request: &SourceRequestPolicy,
 ) -> Result<RoutingSourceMetadata> {
-    let described = &description["request"];
+    let described = match description.get("requests").and_then(Value::as_array) {
+        Some(requests) => requests
+            .iter()
+            .find(|described| described["requestEntity"] == request.entity)
+            .context("source description does not describe a request entity in casework.yaml")?,
+        None => &description["request"],
+    };
     if described["requestEntity"] != request.entity {
         bail!("source description request entity does not match casework.yaml");
     }
@@ -248,8 +254,12 @@ fn load_source_description(project: &Path, source: &SourcePolicy) -> Result<Valu
     }
     let description: Value =
         serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))?;
-    if description["apiVersion"]
-        != "registry.registrystack.org/casework-source-description/v1alpha1"
+    let request_member = match description["apiVersion"].as_str() {
+        Some("registry.registrystack.org/casework-source-description/v1alpha1") => "request",
+        Some("registry.registrystack.org/casework-source-description/v1alpha2") => "requests",
+        _ => bail!("source description is not bound to the declared source"),
+    };
+    if description.get(request_member).is_none()
         || description["kind"] != "BRegCaseworkSourceDescription"
         || description["sourceId"] != source.id
         || description["authority"] != "none"
@@ -356,6 +366,33 @@ fn validate_expectations(expect: &SimulationExpectation, report: &Value) -> Resu
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn a_requests_description_supplies_each_declared_entity_its_own_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join("sources")).unwrap();
+        fs::write(
+            directory.path().join("sources/farmers.json"),
+            r#"{"apiVersion":"registry.registrystack.org/casework-source-description/v1alpha2","kind":"BRegCaseworkSourceDescription","sourceId":"farmers","authority":"none","requests":[{"requestEntity":"correction","stages":[{"id":"technical"}],"fields":[]},{"requestEntity":"renewal","stages":[{"id":"renewal-review"}],"fields":[]}]}"#,
+        )
+        .unwrap();
+        let source: SourcePolicy = serde_norway::from_str(
+            "id: farmers\nadapter: breg\ndescription: sources/farmers.json\nrequests:\n  - {entity: correction, queue: triage}\n  - {entity: renewal, queue: triage}\n",
+        )
+        .unwrap();
+        let description = load_source_description(directory.path(), &source).unwrap();
+
+        let stages = source
+            .requests
+            .iter()
+            .map(|request| metadata_for_request(&description, request).unwrap().stages)
+            .collect::<Vec<_>>();
+        assert_eq!(stages, [vec!["technical"], vec!["renewal-review"]]);
+
+        let mut undeclared = source.requests[0].clone();
+        undeclared.entity = "transfer".to_owned();
+        assert!(metadata_for_request(&description, &undeclared).is_err());
+    }
 
     #[test]
     fn uc2_uc4_uc5_fixture_compiles_and_uses_the_runtime_evaluators() {

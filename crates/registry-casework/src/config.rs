@@ -307,12 +307,15 @@ pub enum PolicyPackageError {
 }
 
 /// Validate one imported BReg description through the adapter's owning strict
-/// decoder without resolving runtime bindings or secrets.
+/// decoder without resolving runtime bindings or secrets. Returns each request
+/// entity's routing metadata, keyed by entity.
 pub fn validate_breg_source_description(
     source: &registry_casework_core::SourcePolicy,
     bytes: &[u8],
-) -> Result<registry_casework_core::RoutingSourceMetadata, registry_casework_core::SourceAdapterError>
-{
+) -> Result<
+    BTreeMap<String, registry_casework_core::RoutingSourceMetadata>,
+    registry_casework_core::SourceAdapterError,
+> {
     registry_casework_breg::validate_description_input(source, bytes)
 }
 
@@ -1143,7 +1146,10 @@ fn validate_project_source_inputs(
         .map(|queue| queue.id.clone())
         .collect::<BTreeSet<_>>();
     for source in &project.sources {
-        if source.adapter != "breg" || source.requests.len() != 1 {
+        if source.adapter != "breg"
+            || source.requests.is_empty()
+            || source.requests.len() > registry_casework_breg::MAXIMUM_REQUEST_ENTITIES
+        {
             return Err(RuntimeConfigError::SourceDescription);
         }
         let relative = normalized_relative_path(&source.description)
@@ -1158,7 +1164,11 @@ fn validate_project_source_inputs(
                 &request.projection,
                 &request.routing,
                 &queues,
-                Some(&metadata),
+                Some(
+                    metadata
+                        .get(&request.entity)
+                        .ok_or(RuntimeConfigError::SourceDescription)?,
+                ),
             )
             .map_err(|_| RuntimeConfigError::SourceDescription)?;
         }

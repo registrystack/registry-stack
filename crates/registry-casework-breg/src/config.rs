@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Closed operator binding and offline construction of the BReg adapter.
 
-use crate::{valid_source_identifier, BregAdapter, BregSourceConfig};
+use crate::{
+    valid_source_identifier, BregAdapter, BregRequestConfig, BregSourceConfig,
+    MAXIMUM_REQUEST_ENTITIES,
+};
 use registry_breg_client::{
     decode_exact_json, BaseRegistryClient, BaseRegistryClientConfig, PrivateKeyJwt,
     PrivateKeyJwtConfig,
 };
 use registry_casework_core::{
     RoutingFieldDescriptor, RoutingSourceMetadata, SourceAdapterError, SourcePolicy,
+    SourceRequestPolicy,
 };
 use registry_platform_config::{sha256_uri, SecretResolver};
 use registry_platform_crypto::PrivateJwk;
@@ -22,8 +26,12 @@ use std::{
 };
 use url::Url;
 
+/// A description of one request entity, carried as `request`.
 const DESCRIPTION_API_VERSION: &str =
     "registry.registrystack.org/casework-source-description/v1alpha1";
+/// A description of every paired request entity, carried as `requests`.
+const DESCRIPTION_API_VERSION_REQUESTS: &str =
+    "registry.registrystack.org/casework-source-description/v1alpha2";
 const DESCRIPTION_KIND: &str = "BRegCaseworkSourceDescription";
 const DESCRIPTION_ORIGIN: &str = "bregctl explain change-requests";
 const DEFAULT_EVENT_TYPE: &str = "casework-lifecycle-v1";
@@ -35,14 +43,9 @@ const MINIMUM_RECONCILIATION_INTERVAL_MILLISECONDS: u64 = 1_000;
 const MAXIMUM_RECONCILIATION_INTERVAL_MILLISECONDS: u64 = 3_600_000;
 const MAXIMUM_DESCRIPTION_BYTES: usize = 8 * 1024 * 1024;
 
-type ValidatedDescription = (
-    String,
-    String,
-    RoutingSourceMetadata,
-    Vec<RoutingFieldDescriptor>,
-    Option<RoutingFieldDescriptor>,
-    String,
-);
+/// Each policy request's imported entry, in policy order, and the registry
+/// revision the description was exported from.
+type ValidatedDescription = (Vec<BregRequestConfig>, String);
 
 /// Launcher-owned BReg connection material for one authored Casework source.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -123,18 +126,14 @@ pub fn build_adapter(
     secrets: &SecretResolver,
 ) -> Result<BregAdapter, SourceAdapterError> {
     validate_binding(binding)?;
-    if source.adapter != "breg" || source.requests.len() != 1 {
+    if source.adapter != "breg"
+        || source.requests.is_empty()
+        || source.requests.len() > MAXIMUM_REQUEST_ENTITIES
+    {
         return Err(SourceAdapterError::Invalid);
     }
     let description_bytes = read_description(project_root, &source.description)?;
-    let (
-        entity,
-        route,
-        routing_metadata,
-        context_projection,
-        display_reference,
-        expected_registry_revision,
-    ) = validate_description(source, &description_bytes)?;
+    let (requests, expected_registry_revision) = validate_description(source, &description_bytes)?;
 
     let client_id_secret = resolve_secret(secrets, &binding.client_id_ref)?;
     let client_id = std::str::from_utf8(client_id_secret.expose_secret())
@@ -174,11 +173,7 @@ pub fn build_adapter(
     BregAdapter::new(
         BregSourceConfig {
             source_id: source.id.clone(),
-            entity,
-            route,
-            routing_metadata,
-            context_projection,
-            display_reference,
+            requests,
             expected_registry_revision,
             binding_generation: generation,
             reader_profile: binding.reader_profile.clone(),
@@ -314,18 +309,22 @@ fn validate_description(
 ) -> Result<ValidatedDescription, SourceAdapterError> {
     let root = decode_exact_json(bytes).map_err(|_| SourceAdapterError::Invalid)?;
     let object = root.as_object().ok_or(SourceAdapterError::Invalid)?;
+    let requests_key = match root["apiVersion"].as_str() {
+        Some(DESCRIPTION_API_VERSION) => "request",
+        Some(DESCRIPTION_API_VERSION_REQUESTS) => "requests",
+        _ => return Err(SourceAdapterError::Invalid),
+    };
     let expected = [
         "apiVersion",
         "authority",
         "kind",
         "origin",
-        "request",
+        requests_key,
         "sourceId",
         "sourceRevision",
     ];
     if object.len() != expected.len()
         || expected.iter().any(|key| !object.contains_key(*key))
-        || root["apiVersion"] != DESCRIPTION_API_VERSION
         || root["kind"] != DESCRIPTION_KIND
         || root["authority"] != "none"
         || root["origin"] != DESCRIPTION_ORIGIN
@@ -341,15 +340,46 @@ fn validate_description(
         .as_str()
         .ok_or(SourceAdapterError::Invalid)?
         .to_owned();
-    let request = root["request"]
-        .as_object()
-        .ok_or(SourceAdapterError::Invalid)?;
+    let described = match &root[requests_key] {
+        Value::Object(request) if requests_key == "request" => vec![request],
+        Value::Array(requests) if requests_key == "requests" => requests
+            .iter()
+            .map(|request| request.as_object().ok_or(SourceAdapterError::Invalid))
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => return Err(SourceAdapterError::Invalid),
+    };
+    // The description and the policy pair exactly the same request entities:
+    // an undeclared description entry is as much drift as a missing one.
+    if described.len() != source.requests.len() {
+        return Err(SourceAdapterError::Invalid);
+    }
+    let mut by_entity = BTreeMap::new();
+    for request in described {
+        let entity = string_field(request, "requestEntity")?;
+        if by_entity.insert(entity, request).is_some() {
+            return Err(SourceAdapterError::Invalid);
+        }
+    }
+    let requests = source
+        .requests
+        .iter()
+        .map(|policy| {
+            let request = by_entity
+                .get(policy.entity.as_str())
+                .ok_or(SourceAdapterError::Invalid)?;
+            validate_description_request(policy, request)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((requests, expected_registry_revision))
+}
+
+fn validate_description_request(
+    policy: &SourceRequestPolicy,
+    request: &serde_json::Map<String, Value>,
+) -> Result<BregRequestConfig, SourceAdapterError> {
     let entity = string_field(request, "requestEntity")?;
     let route = string_field(request, "requestRoute")?;
     string_field(request, "contractFingerprint")?;
-    if entity != source.requests[0].entity {
-        return Err(SourceAdapterError::Invalid);
-    }
     validate_review_requirement(request.get("review").ok_or(SourceAdapterError::Invalid)?)?;
     validate_on_approved(
         request
@@ -360,9 +390,8 @@ fn validate_description(
         .get("application")
         .and_then(Value::as_object)
         .ok_or(SourceAdapterError::Invalid)?;
-    let (routing_metadata, fields_by_name) =
-        routing_metadata(request, &source.requests[0].projection)?;
-    let context_projection = source.requests[0]
+    let (routing_metadata, fields_by_name) = routing_metadata(request, &policy.projection)?;
+    let context_projection = policy
         .context_projection
         .iter()
         .map(|field| {
@@ -372,7 +401,7 @@ fn validate_description(
                 .ok_or(SourceAdapterError::Invalid)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let display_reference = source.requests[0]
+    let display_reference = policy
         .display_reference
         .as_ref()
         .map(|configured| {
@@ -390,24 +419,28 @@ fn validate_description(
             Ok(descriptor)
         })
         .transpose()?;
-    Ok((
-        entity.to_owned(),
-        route.to_owned(),
+    Ok(BregRequestConfig {
+        entity: entity.to_owned(),
+        route: route.to_owned(),
         routing_metadata,
         context_projection,
         display_reference,
-        expected_registry_revision,
-    ))
+    })
 }
 
 /// Validate an imported description with the same strict decoder used by
 /// adapter construction, without loading operator bindings or secrets.
+///
+/// Returns each request entity's routing metadata, keyed by entity.
 pub fn validate_description_input(
     source: &SourcePolicy,
     bytes: &[u8],
-) -> Result<RoutingSourceMetadata, SourceAdapterError> {
-    let (_, _, routing_metadata, _, _, _) = validate_description(source, bytes)?;
-    Ok(routing_metadata)
+) -> Result<BTreeMap<String, RoutingSourceMetadata>, SourceAdapterError> {
+    let (requests, _) = validate_description(source, bytes)?;
+    Ok(requests
+        .into_iter()
+        .map(|request| (request.entity, request.routing_metadata))
+        .collect())
 }
 
 fn validate_review_requirement(value: &Value) -> Result<(), SourceAdapterError> {
@@ -710,8 +743,8 @@ mod tests {
     fn imported_description_maps_only_the_configured_routing_projection() {
         let mut source = source();
         source.requests[0].projection = vec!["region".to_owned()];
-        let (_, _, metadata, _, _, _) =
-            validate_description(&source, &description("correction")).unwrap();
+        let (requests, _) = validate_description(&source, &description("correction")).unwrap();
+        let metadata = &requests[0].routing_metadata;
         assert!(metadata.stages.is_empty());
         assert_eq!(metadata.fields.len(), 1);
         assert_eq!(metadata.fields[0].field, "region");
@@ -740,9 +773,11 @@ mod tests {
             Some(registry_casework_core::DisplayReferencePolicy {
                 field: "region".to_owned(),
             });
-        let (_, _, _, _, reference, _) =
-            validate_description(&source, &description("correction")).unwrap();
-        let reference = reference.expect("configured reference");
+        let (requests, _) = validate_description(&source, &description("correction")).unwrap();
+        let reference = requests[0]
+            .display_reference
+            .clone()
+            .expect("configured reference");
         assert_eq!(reference.field, "region");
         assert_eq!(reference.api_name, "serviceRegion");
 
@@ -754,8 +789,8 @@ mod tests {
     fn context_projection_is_an_explicit_imported_allowlist() {
         let mut source = source();
         source.requests[0].context_projection = vec!["region".to_owned()];
-        let (_, _, _, context, _, _) =
-            validate_description(&source, &description("correction")).unwrap();
+        let (requests, _) = validate_description(&source, &description("correction")).unwrap();
+        let context = &requests[0].context_projection;
         assert_eq!(context.len(), 1);
         assert_eq!(context[0].field, "region");
         assert_eq!(context[0].api_name, "serviceRegion");
@@ -766,6 +801,132 @@ mod tests {
 
     fn generation(binding: &BregBinding, source: &SourcePolicy) -> String {
         binding_generation(binding, source, &description("correction")).unwrap()
+    }
+
+    /// A source pairing `correction` and `renewal`, described by `v1alpha2`.
+    fn two_entity_source() -> SourcePolicy {
+        let mut source = source();
+        let mut renewal = source.requests[0].clone();
+        renewal.entity = "renewal".to_owned();
+        source.requests.push(renewal);
+        source
+    }
+
+    fn requests_description(entities: &[(&str, &str)]) -> Value {
+        let single: Value = serde_json::from_slice(&description("correction")).unwrap();
+        let mut value = single.clone();
+        let object = value.as_object_mut().unwrap();
+        object.remove("request");
+        object.insert(
+            "apiVersion".to_owned(),
+            json!(DESCRIPTION_API_VERSION_REQUESTS),
+        );
+        object.insert(
+            "requests".to_owned(),
+            entities
+                .iter()
+                .map(|(entity, route)| {
+                    let mut request = single["request"].clone();
+                    request["requestEntity"] = json!(entity);
+                    request["requestRoute"] = json!(route);
+                    request
+                })
+                .collect(),
+        );
+        value
+    }
+
+    #[test]
+    fn a_requests_description_pairs_every_declared_entity_in_policy_order() {
+        let described =
+            requests_description(&[("renewal", "renewals"), ("correction", "corrections")]);
+        let (requests, revision) = validate_description(
+            &two_entity_source(),
+            &serde_json::to_vec(&described).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(revision, "sha256:source");
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| (request.entity.as_str(), request.route.as_str()))
+                .collect::<Vec<_>>(),
+            [("correction", "corrections"), ("renewal", "renewals")]
+        );
+        let metadata = validate_description_input(
+            &two_entity_source(),
+            &serde_json::to_vec(&described).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            metadata.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["correction", "renewal"]
+        );
+    }
+
+    #[test]
+    fn a_requests_description_must_describe_exactly_the_declared_entities() {
+        let source = two_entity_source();
+        for described in [
+            requests_description(&[("correction", "corrections")]),
+            requests_description(&[("correction", "corrections"), ("licence", "licences")]),
+            requests_description(&[("correction", "corrections"), ("correction", "renewals")]),
+            requests_description(&[
+                ("correction", "corrections"),
+                ("renewal", "renewals"),
+                ("licence", "licences"),
+            ]),
+        ] {
+            assert!(
+                validate_description(&source, &serde_json::to_vec(&described).unwrap()).is_err(),
+                "{described}"
+            );
+        }
+        // The single-request form cannot describe a two-entity source.
+        assert!(validate_description(&source, &description("correction")).is_err());
+    }
+
+    #[test]
+    fn each_description_version_carries_only_its_own_request_member() {
+        let mut single: Value = serde_json::from_slice(&description("correction")).unwrap();
+        single["apiVersion"] = json!(DESCRIPTION_API_VERSION_REQUESTS);
+        assert!(validate_description(&source(), &serde_json::to_vec(&single).unwrap()).is_err());
+
+        let mut several = requests_description(&[("correction", "corrections")]);
+        assert!(validate_description(&source(), &serde_json::to_vec(&several).unwrap()).is_ok());
+        several["apiVersion"] = json!(DESCRIPTION_API_VERSION);
+        assert!(validate_description(&source(), &serde_json::to_vec(&several).unwrap()).is_err());
+    }
+
+    #[test]
+    fn generation_covers_every_paired_entity_description_but_not_its_presentation() {
+        let described =
+            requests_description(&[("correction", "corrections"), ("renewal", "renewals")]);
+        let bytes = serde_json::to_vec(&described).unwrap();
+        let source = two_entity_source();
+        let first = binding_generation(&binding(), &source, &bytes).unwrap();
+
+        let mut presented = source.clone();
+        presented.requests[1].context_projection = vec!["region".to_owned()];
+        assert_eq!(
+            first,
+            binding_generation(&binding(), &presented, &bytes).unwrap()
+        );
+
+        let mut redescribed = described.clone();
+        redescribed["requests"][1]["fields"]
+            .as_array_mut()
+            .unwrap()
+            .pop();
+        assert_ne!(
+            first,
+            binding_generation(
+                &binding(),
+                &source,
+                &serde_json::to_vec(&redescribed).unwrap()
+            )
+            .unwrap()
+        );
     }
 
     #[test]

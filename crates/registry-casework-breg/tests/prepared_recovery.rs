@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use registry_breg_client::{BaseRegistryClient, BaseRegistryClientConfig, StaticToken};
-use registry_casework_breg::{BregAdapter, BregSourceConfig};
+use registry_casework_breg::{BregAdapter, BregRequestConfig, BregSourceConfig};
 use registry_casework_core::*;
 use serde_json::{json, Value};
 use wiremock::{
@@ -22,14 +22,16 @@ fn adapter(base: &str) -> BregAdapter {
     BregAdapter::new(
         BregSourceConfig {
             source_id: "source".into(),
-            entity: "company".into(),
-            route: "companies".into(),
-            routing_metadata: RoutingSourceMetadata {
-                stages: vec![],
-                fields: vec![],
-            },
-            context_projection: Vec::new(),
-            display_reference: None,
+            requests: vec![BregRequestConfig {
+                entity: "company".into(),
+                route: "companies".into(),
+                routing_metadata: RoutingSourceMetadata {
+                    stages: vec![],
+                    fields: vec![],
+                },
+                context_projection: Vec::new(),
+                display_reference: None,
+            }],
             expected_registry_revision: REVISION.into(),
             binding_generation: "generation-1".into(),
             reader_profile: "reader".into(),

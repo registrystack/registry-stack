@@ -111,7 +111,7 @@ impl CaseworkService {
                     continue;
                 }
                 let metadata = registered[&source.id]
-                    .routing_metadata()
+                    .routing_metadata(&request.entity)
                     .ok_or(ServiceError::Configuration)?;
                 registry_casework_core::check_routing_policy(
                     &request.queue,
@@ -1844,7 +1844,7 @@ impl CaseworkService {
         }
         let metadata = self
             .adapter(&observation.subject.source_id)?
-            .routing_metadata()
+            .routing_metadata(&observation.subject.kind)
             .ok_or(SourceAdapterError::Invalid)?;
         let context = observation
             .routing_context

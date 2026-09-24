@@ -217,9 +217,10 @@ pub trait SourceAdapter: Send + Sync {
     fn source_id(&self) -> &str;
     fn binding_generation(&self) -> &str;
 
-    /// Imported source metadata used to validate and evaluate routing policy.
-    /// Implementations must not treat this descriptive metadata as authority.
-    fn routing_metadata(&self) -> Option<&RoutingSourceMetadata> {
+    /// Imported source metadata for one request entity, used to validate and
+    /// evaluate that entity's routing policy. Implementations must not treat
+    /// this descriptive metadata as authority.
+    fn routing_metadata(&self, _entity: &str) -> Option<&RoutingSourceMetadata> {
         None
     }
 

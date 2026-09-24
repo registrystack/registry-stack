@@ -41,7 +41,7 @@ impl SourceAdapter for RoutingSource {
         GENERATION
     }
 
-    fn routing_metadata(&self) -> Option<&RoutingSourceMetadata> {
+    fn routing_metadata(&self, _entity: &str) -> Option<&RoutingSourceMetadata> {
         Some(&self.metadata)
     }
 
