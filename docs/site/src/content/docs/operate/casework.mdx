@@ -252,10 +252,17 @@ Each source binding also accepts `eventType`, which defaults to `casework-lifecy
 accept at most 300000, and are refused when the connect timeout is the larger of the two, and
 `reconciliationIntervalMilliseconds`, how often the runtime re-reads the source for work the
 source's own notifications did not deliver, which defaults to 60000 and accepts 1000 to 3600000.
-The interval changes scheduling only. Changing it does not invalidate displayed source bindings or
-durable attempts because it does not change source authority or saved source state. If one pass
-outlasts the interval, Casework skips missed ticks instead of replaying them back-to-back against the
-source.
+If one pass outlasts the interval, Casework skips missed ticks instead of replaying them
+back-to-back against the source.
+
+Every source-backed work item, task grant, and saved attempt carries the source's binding
+generation, computed from the source id, the binding's `eventSource`, and the digest of the
+imported source description. Changing one of those three supersedes the source's open work items
+and opens fresh ones on the next observation, because the source now means something else. Every
+other binding field is operational: rotating a client key, moving `tokenEndpoint` or `baseUrl`,
+changing `resource`, `scopes`, `readerProfile`, `eventType`, the trusted root, a timeout, the
+interval, `displayReference`, or `contextProjection` keeps the generation, and with it every
+in-flight work item, claim, and durable attempt.
 
 :::caution[A static key set ages out of date on its own]
 A pinned document keeps accepting the keys it holds and refusing every other one, so an issuer
@@ -268,6 +275,7 @@ before they become the anchor for verification.
     ListenerNetworkExposure, OidcConfig, HumanIdentityConfig, OidcJwksSource, valid_listener(),
     and parse_static_jwks();
     crates/registry-casework-breg/src/config.rs, BregBinding, binding_generation(),
+    generation_ignores_credentials_transport_and_presentation_settings(),
     DEFAULT_EVENT_TYPE, DEFAULT_REQUEST_TIMEOUT_MILLISECONDS, and MAXIMUM_TIMEOUT_MILLISECONDS;
     crates/registry-casework/src/http.rs; products/casework/README.md. */}
 
@@ -366,13 +374,48 @@ lock, and applies every unapplied migration in order under its ledger, so a seco
 same database waits rather than racing it. Run it before the first `serve` and before rolling out a
 release that adds migrations.
 
-The unified review schema arrives in a single migration that drops the experimental hosted-item
-tables from the earlier Casework release. No data is carried over, and this release has
-no in-place legacy conversion command. Do not delete rows, edit the migration ledger, or run
-migration SQL by hand. For a disposable local session, use `caseworkctl dev stop PROJECT --remove`
-and start it again. For an operated database, retain the old deployment long enough to export
-required work, take the normal backup, and provision a fresh Casework database for the unified
-review package.
+The unified review schema arrives in a single migration that replaces the experimental hosted-item
+tables of Casework 0.32.0 and earlier. No data is carried over, and this release has
+no in-place legacy conversion command. When those tables are empty, `migrate` replaces them. When
+any of them still holds a row, such as an in-flight hosted item or a retained accountability
+record, `migrate` refuses before applying anything and writes nothing. The refusal begins `the Casework database
+holds hosted work that schema migration 15 would drop`, then names each table that holds rows with
+its row count, such as `casework_hosted_items (1 row)`.
+
+Keep that database with the release that wrote it long enough to export the work it holds, take
+the normal backup, and provision a fresh Casework database for the unified review package. Do not
+delete rows, edit the migration ledger, or run migration SQL by hand to get past the refusal. For a
+disposable local session, use `caseworkctl dev stop PROJECT --remove` and start it again.
+
+{/* Evidence: crates/registry-casework/src/store.rs, refuse_to_drop_hosted_work(),
+    HOSTED_WORK_TABLES, and StoreError::HostedWorkWouldBeDropped;
+    crates/registry-casework/migrations/0015_unified_reviews.sql;
+    crates/registry-casework/tests/postgres_transactions.rs,
+    migration_refuses_to_drop_retained_hosted_work_and_writes_nothing() and
+    migration_replaces_empty_hosted_tables_through_the_ledger_head(). */}
+
+### Keep source work across the upgrade
+
+Casework 0.33.0 and earlier also computed the source binding generation from the credential,
+transport, and presentation fields, so its work items carry a generation this release does not
+compute. On the first `serve` of this release, a source whose database still holds reconciliation
+progress or subjects under the generation that release would have computed from the same binding
+keeps running under that stored generation, and nothing is superseded. The runtime records the
+choice once, and later operational changes keep it.
+
+Upgrade with the runtime file unchanged, and make operational changes such as a credential rotation
+after the first `serve` of this release. An upgrade that also changes an operational field no longer
+matches the stored generation, so that source's open work items are superseded once and reopened
+fresh on the next observation.
+
+{/* Evidence: crates/registry-casework-breg/src/config.rs, legacy_binding_generation() and
+    legacy_generation_is_the_released_formula();
+    crates/registry-casework/src/store.rs, adopt_source_generation();
+    crates/registry-casework/src/runtime.rs, serve_from_path();
+    crates/registry-casework/migrations/0017_source_generation_adoptions.sql;
+    crates/registry-casework/tests/postgres_transactions.rs,
+    an_upgrade_keeps_work_stored_under_the_legacy_generation_formula() and
+    an_upgrade_combined_with_an_operational_change_cannot_recognise_legacy_work(). */}
 
 ### Upgrade from a release that rotated the audit file
 
@@ -558,9 +601,11 @@ either product's database directly.
 The runtime verifies and loads the package once, at startup. Install the reviewed successor into a
 new directory beside the current one, point `package.root` at the new directory, and
 restart or roll out the process. Keep the previous package directory until the new one serves, so a
-rollback is a configuration change rather than a rebuild. A rollback to an earlier package or source
-binding does not reopen the work items that binding left behind: they stay superseded, and the
-source's next observation opens fresh work items beside them.
+rollback is a configuration change rather than a rebuild. A package or source binding change that
+alters the source binding generation supersedes the source's open work items. Rolling that change
+back does not reopen the work items it superseded: they stay superseded, and the source's next
+observation opens fresh work items beside them. A change to operational binding fields alone keeps
+the generation and the work items.
 
 :::caution[Editing a package in place changes nothing the process is serving]
 A running process keeps the policy it verified at startup, so files replaced under it leave the
@@ -582,7 +627,9 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
     crates/registry-casework/src/config.rs, verify_policy_package();
     crates/registry-casework/migrations/0016_occurrence_identity_excludes_superseded.sql;
     crates/registry-casework/tests/postgres_transactions.rs,
-    returning_to_an_earlier_binding_generation_opens_a_fresh_occurrence. */}
+    returning_to_an_earlier_binding_generation_opens_a_fresh_occurrence;
+    crates/registry-casework-breg/src/config.rs,
+    generation_changes_with_source_id_event_source_or_description. */}
 
 ## Troubleshooting
 
@@ -595,6 +642,7 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 | Startup refuses the database or `doctor` stops at it | Check the resolved URL's user and database name, TLS on the server, and the trusted root reference when the server uses a private authority. |
 | Startup refuses the OIDC issuer | Check discovery reachability from the Casework host, or the pinned JWKS document's keys and their distinct `kid` values. |
 | `the Casework database schema version N is newer than this binary supports (M)` | A newer release already migrated this database. Run that release or a later one; Casework does not migrate a schema down. |
+| `the Casework database holds hosted work that schema migration 15 would drop` | The database still holds hosted work from Casework 0.32.0 or earlier. Keep it with that release until its work is exported, then migrate a fresh database as [Migrate and serve](#migrate-and-serve) describes. |
 | `the Casework audit journal could not be initialized` naming a numbered file `rotated by an earlier Casework release`, or saying the file `does not begin at the first record of its chain` | The audit directory still holds the layout of Casework 0.33.0 or earlier. Archive it as [the upgrade steps](#upgrade-from-a-release-that-rotated-the-audit-file) describe. |
 | `the Casework audit journal could not be initialized: audit directory must be owner-only` | Set the audit directory to mode `0700`, owned by the runtime user. |
 | `GET /ready` returns `503` while `GET /health` returns `200` | Audit publication or PostgreSQL is failing. Read the runtime log for the failed audit stage, and check the audit file, its lock, and the database. |

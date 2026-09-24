@@ -62,13 +62,34 @@ selected policy; missing, extra, or empty ids are refused. Source access remains
 bound to each source's configured reader profile and does not grant a caller a
 Casework access profile.
 
+The BReg source binding generation keys every source-backed work item, task
+grant, and saved attempt. It is computed from the source id, the binding's
+`eventSource`, and the SHA-256 digest of the imported source description, and
+from nothing else. Changing one of those three means the source now says
+something different, so the next observation supersedes the work items opened
+under the earlier generation and opens fresh ones. Every other binding field is
+operational: `baseUrl`, `readerProfile`, `tokenEndpoint`,
+`clientAssertionAudience`, `resource`, `scopes`, the client and key references,
+`eventType`, `trustedRootCertificatesRef`, both timeouts, `displayReference`,
+`contextProjection`, and `reconciliationIntervalMilliseconds`. Rotating a
+credential, moving the token endpoint, or tuning a timeout keeps the generation,
+the in-flight work items, their claims, and their durable attempts.
+
+A database last served by Casework 0.33.0 or earlier holds its work under the
+generation formula of that release, which also covered the operational fields.
+On the first start of this release, a source whose database still holds
+progress or subjects under that earlier generation keeps running under it,
+recorded once in `casework_source_generation_adoptions`, so an upgrade
+supersedes nothing. The earlier generation is recognised only from the
+binding as that release would have computed it: upgrade first with the
+runtime file unchanged, and make operational changes afterwards. An upgrade
+that changes an operational field at the same time supersedes that source's
+in-flight work items once.
+
 `sources.<id>.reconciliationIntervalMilliseconds` controls only how often
-Casework schedules source readback. It is deliberately excluded from the BReg
-source binding generation because changing polling cadence changes neither
-source authority nor saved source state. A cadence change therefore does not
-invalidate displayed bindings or durable attempts. When a readback pass lasts
-longer than the interval, Casework skips missed ticks instead of replaying them
-back-to-back against the source.
+Casework schedules source readback. When a readback pass lasts longer than the
+interval, Casework skips missed ticks instead of replaying them back-to-back
+against the source.
 
 For a BREG source, `tokenEndpoint` selects the reader's OAuth endpoint.
 `clientAssertionAudience` explicitly overrides the JWT client assertion audience;
@@ -78,8 +99,8 @@ list. Omission preserves an existing issuer's default behavior. Stock ThunderID
 1.0.1 deployments must configure all three: its issuer URL as the assertion
 audience, the exact BREG resource, and the registered reader scopes. Use the
 actual deployment or `bregctl dev export-client` values, not a guessed resource
-based on the project directory name. Changing these fields changes the source
-binding generation and invalidates stale source-bound authority.
+based on the project directory name. Changing these fields keeps the source
+binding generation.
 
 `reviewCompletionDestinations` is keyed by the logical destination ids a
 producer's `completion` block names. Each destination has one `url` and exactly
