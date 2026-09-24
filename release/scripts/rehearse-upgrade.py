@@ -73,6 +73,13 @@ POSTGRES_IMAGE = (
     "postgres:17.11@sha256:"
     "67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675"
 )
+# The server key must be owned by postgres with mode 0600, which a bind mount
+# cannot guarantee, so the container copies it before starting the server.
+POSTGRES_TLS_ENTRYPOINT = (
+    "install -o postgres -m 0600 /tls/server.key.source /tmp/server.key && "
+    "exec docker-entrypoint.sh postgres -c ssl=on "
+    "-c ssl_cert_file=/tls/server.pem -c ssl_key_file=/tmp/server.key"
+)
 COMMAND_TIMEOUT_SECONDS = 600
 READY_TIMEOUT_SECONDS = 90
 HTTP_TIMEOUT_SECONDS = 30
@@ -469,6 +476,8 @@ class Service:
                     if response.status == 200:
                         return
             except (urllib.error.URLError, OSError):
+                # Not listening yet is the expected state while the service
+                # starts; the deadline below reports it with the log tail.
                 pass
             time.sleep(0.5)
         self.stop()
@@ -501,10 +510,7 @@ class Postgres:
              "-e", "POSTGRES_PASSWORD=" + secrets.token_hex(16),
              "-v", f"{tls / 'server.pem'}:/tls/server.pem:ro",
              "-v", f"{tls / 'server.key'}:/tls/server.key.source:ro",
-             "--entrypoint", "bash", POSTGRES_IMAGE, "-c",
-             "install -o postgres -m 0600 /tls/server.key.source /tmp/server.key && "
-             "exec docker-entrypoint.sh postgres -c ssl=on "
-             "-c ssl_cert_file=/tls/server.pem -c ssl_key_file=/tmp/server.key"])
+             "--entrypoint", "bash", POSTGRES_IMAGE, "-c", POSTGRES_TLS_ENTRYPOINT])
         mapped = run(["docker", "port", name, "5432/tcp"]).stdout.strip().splitlines()[0]
         self.port = int(mapped.rsplit(":", 1)[1])
         deadline = time.monotonic() + READY_TIMEOUT_SECONDS
