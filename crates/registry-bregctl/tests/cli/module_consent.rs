@@ -134,7 +134,12 @@ fn module_add_consent_human_output_has_no_trailing_json_block() {
     assert!(rendered.contains("consent-person"), "{rendered}");
     assert!(rendered.contains("Compiles:"), "{rendered}");
     // A dumped JSON document quotes every key; the folded report never does.
-    for needle in ["\"subject\"", "\"module\"", "\"compiles\"", "\"requireConsent\""] {
+    for needle in [
+        "\"subject\"",
+        "\"module\"",
+        "\"compiles\"",
+        "\"requireConsent\"",
+    ] {
         assert!(!rendered.contains(needle), "{rendered}");
     }
 }
