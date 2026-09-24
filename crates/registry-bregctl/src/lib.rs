@@ -3274,12 +3274,15 @@ fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
         classify_registry_diff(baseline.registry(), &candidate, baseline.package_revision());
     let mut compiler_findings = candidate.findings().to_vec();
     compiler_findings.extend(unsupported_diff_findings(&compiled_diff));
+    compiler_findings.extend(removed_value_findings(&compiled_diff));
     compiler_findings.sort();
     compiler_findings.dedup();
     let findings = compiler_findings
         .into_iter()
         .map(|diagnostic| {
-            let (artifact, action) = if diagnostic.code == "diff.classification.unsupported" {
+            let (artifact, action) = if diagnostic.code == "diff.classification.unsupported"
+                || diagnostic.code == REMOVED_VALUES_RETAINED_CODE
+            {
                 (
                     DiagnosticArtifact::CompiledDiff,
                     SuggestedAction::ReviewCompiledDiff,
@@ -4817,6 +4820,34 @@ fn unsupported_diff_findings(diff: &CompiledRegistryDiff) -> Vec<Diagnostic> {
             code: "diff.classification.unsupported".to_owned(),
             path: diff_change_path(&change.change),
             message: "the compiled change cannot be classified more precisely".to_owned(),
+        })
+        .collect()
+}
+
+const REMOVED_VALUES_RETAINED_CODE: &str = "diff.history.removed_values_retained";
+
+/// Removing a field or an entity drops its live column or table, but every
+/// revision snapshot recorded before the change still holds the values in the
+/// retained history. Each removal says so, so an operator does not mistake a
+/// package change for erasure.
+fn removed_value_findings(diff: &CompiledRegistryDiff) -> Vec<Diagnostic> {
+    diff.changes
+        .iter()
+        .filter(|change| {
+            matches!(
+                change.change.code,
+                registry_breg::package::CompiledRegistryChangeCode::FieldRemoved
+                    | registry_breg::package::CompiledRegistryChangeCode::EntityRemoved
+            )
+        })
+        .map(|change| Diagnostic {
+            severity: DiagnosticSeverity::Finding,
+            code: REMOVED_VALUES_RETAINED_CODE.to_owned(),
+            path: diff_change_path(&change.change),
+            message: "removing this from the package is not erasure: the values stay in every \
+                      revision snapshot recorded before the change; only `bregctl history erase` \
+                      removes them, one record's revisions at a time"
+                .to_owned(),
         })
         .collect()
 }

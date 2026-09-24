@@ -166,6 +166,67 @@ fn diff_inventory_is_deterministic_and_classification_direction_is_exact() {
 }
 
 #[test]
+fn a_removed_field_is_reported_as_retained_in_history_not_erased() {
+    let directory = TestDirectory::create();
+    let baseline = publish_package(&directory.path, "baseline", "local", "internal", None);
+    let module = String::from_utf8(module_bytes("internal"))
+        .expect("module is UTF-8")
+        .replacen(r#""id":"code""#, r#""id":"label""#, 1)
+        .replacen(
+            r#""readableFields":["code"]"#,
+            r#""readableFields":["label"]"#,
+            1,
+        );
+    let removal =
+        write_project_with_module(&directory.path, "removal", "local", module.into_bytes());
+
+    let output = run(&[
+        "--format",
+        "json",
+        "diff",
+        path(&removal),
+        "--package",
+        path(&baseline.package),
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    let report = json_stdout(&output);
+    assert!(report["changes"]
+        .as_array()
+        .expect("changes array")
+        .iter()
+        .any(|change| change["change"]["code"] == "field_removed"));
+    let retained: Vec<&Value> = report["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|finding| finding["code"] == "diff.history.removed_values_retained")
+        .collect();
+    assert_eq!(retained.len(), 1, "{report}");
+    assert_eq!(retained[0]["path"], "changes.record.code");
+    assert_eq!(retained[0]["artifact"], "compiled_diff");
+    assert_eq!(retained[0]["suggestedAction"], "review_compiled_diff");
+    let message = retained[0]["message"].as_str().expect("message is text");
+    assert!(message.contains("not erasure"), "{message}");
+    assert!(message.contains("bregctl history erase"), "{message}");
+
+    let unchanged = write_project(&directory.path, "unchanged", "local", "internal");
+    let quiet = run(&[
+        "--format",
+        "json",
+        "diff",
+        path(&unchanged),
+        "--package",
+        path(&baseline.package),
+    ]);
+    assert!(quiet.status.success(), "{quiet:?}");
+    assert!(!json_stdout(&quiet)["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .any(|finding| finding["code"] == "diff.history.removed_values_retained"));
+}
+
+#[test]
 fn package_closure_and_path_disclosure_threats_are_enforced_by_value_free_negatives() {
     let directory = TestDirectory::create();
     let baseline = publish_package(&directory.path, "baseline", "local", "internal", None);
@@ -526,8 +587,16 @@ fn publish_package(
 }
 
 fn write_project(parent: &Path, name: &str, environment: &str, classification: &str) -> PathBuf {
+    write_project_with_module(parent, name, environment, module_bytes(classification))
+}
+
+fn write_project_with_module(
+    parent: &Path,
+    name: &str,
+    environment: &str,
+    module: Vec<u8>,
+) -> PathBuf {
     let root = parent.join(name);
-    let module = module_bytes(classification);
     let parsed = parse_module_json(&module).expect("candidate module parses");
     fs::create_dir_all(root.join("modules/core")).expect("candidate directories create");
     fs::write(
