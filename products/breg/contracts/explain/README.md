@@ -35,7 +35,9 @@ each consent-gated permission with its record, `on` key, scope, purposes,
 `maxDuration`, probe function, index names, readable-field classifications,
 admitted clients and issuing actions, plus the recipient set of every client
 with each group expanded. `recipients` is the recipient set of the scenario's
-`requesterClient`.
+`requesterClient`. The same version's `LifecycleExplanation` lists four request
+states, without the unreachable `superseded`, and a twenty-first enforcement
+layer, `review_outcome`, for the `revise` and `rebase` events.
 
 | Subject | `--scenario` | `kind` | Schema |
 |---|---|---|---|
