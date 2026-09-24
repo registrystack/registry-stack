@@ -316,6 +316,71 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-linkml/publicschema/starters/household.yaml;
     products/breg/evidence/organization-selection.yaml. */}
 
+- `breg-mcp` is a new supporting service beside BReg: an MCP gateway a chat
+  host uses to act for one verified citizen. It reads the citizen's own
+  record and creates or patches change-request drafts for it, and has no
+  code path to submit, revise, cancel, or apply one. It verifies the chat
+  host's token as an OAuth protected resource and, for every tool call,
+  exchanges it (RFC 8693) for a registry token with the gateway as actor,
+  so the chat host's token never reaches BReg. It takes a draft's target
+  from the citizen's own linked record, never from a tool argument.
+  `breg-mcp check` validates the runtime configuration and `breg-mcp serve`
+  runs the gateway.
+
+{/* Evidence: crates/registry-breg-mcp/src/cli.rs, Command;
+    crates/registry-breg-mcp/src/tools.rs;
+    crates/registry-breg-mcp/src/inbound.rs;
+    crates/registry-breg-mcp/src/outbound.rs;
+    crates/registry-breg-mcp/clippy.toml;
+    products/breg/MCP-GATEWAY.md. */}
+
+- `breg-review` is a new server-rendered review page beside the gateway. The
+  citizen signs in with an authorization code and PKCE, reads the draft BReg
+  holds under their own token, and submits it; the page holds no authority
+  of its own. `breg-review check` validates the runtime configuration and
+  resolves its secrets without opening a socket, and `breg-review serve`
+  listens on `127.0.0.1:8115` by default and stops cleanly on SIGINT or
+  SIGTERM. Its hash-chained journal records the action, the
+  `changeRequestId`, keyed `principalPseudonym` and `clientPseudonym`
+  values, and the outcome, never a field value or token.
+
+{/* Evidence: crates/registry-breg-review/src/lib.rs, command, check, and serve;
+    crates/registry-breg-review/src/config.rs, default_listener_bind;
+    crates/registry-breg-review/src/signin.rs;
+    crates/registry-breg-review/src/journal.rs, record;
+    crates/registry-breg-review/tests/binary.rs;
+    products/breg/MCP-GATEWAY.md. */}
+
+- `registry-platform-ratelimit` is a new shared crate with two in-memory
+  keyed limiters, `TokenBucketLimiter` and `FixedWindowCounter`, each capped
+  at a fixed number of tracked keys. Evidence now uses it for its request
+  budget and failed-selector counter with no change in behavior: the same
+  refill, key cap, pruning, and refusals. The gateway and the review page
+  use it for their limits.
+
+{/* Evidence: crates/registry-platform-ratelimit/src/lib.rs, MAX_TRACKED_KEYS;
+    crates/registry-platform-ratelimit/src/token_bucket.rs, TokenBucketLimiter;
+    crates/registry-platform-ratelimit/src/fixed_window.rs, FixedWindowCounter;
+    crates/registry-evidence/src/rate_limit.rs. */}
+
+- Platform crates gain what the gateway and the review page need.
+  `ExchangeAuthorization::upstream` sends an optional actor token with an
+  RFC 8693 exchange. `PrivateKeyJwt::redeem_authorization_code` redeems an
+  authorization code with PKCE and the configured resource, and returns any
+  ID token unverified. `CspBuilder::deny_by_default` starts a policy from
+  `default-src 'none'`, and `with_form_action` and `with_style_src` add
+  directives to it. `AuthorizationAuditEvent::without_purpose` builds an
+  allowed or denied event for a product that records no purpose. The
+  `test-authorization-server` feature of `registry-platform-testing` adds a
+  local authorization server for authorization code, client credentials,
+  and token exchange tests.
+
+{/* Evidence: crates/registry-platform-httputil/src/client/exchange_authorization.rs, ExchangeAuthorization::upstream;
+    crates/registry-platform-httputil/src/client/private_key_jwt.rs, redeem_authorization_code and RedeemedAuthorizationCode;
+    crates/registry-platform-httpsec/src/server.rs, CspBuilder;
+    crates/registry-platform-audit/src/authorization.rs, AuthorizationAuditEvent::without_purpose;
+    crates/registry-platform-testing/src/authorization_server.rs, TestAuthorizationServer. */}
+
 ## v0.33.0 beta-45
 
 - Registry Scheduling joins the release with published openings, exact-time
