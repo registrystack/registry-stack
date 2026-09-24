@@ -381,8 +381,10 @@ pub(crate) fn pattern_field_for_constraint<'a>(
         })
 }
 
-/// Only the compiler-resolved field address survives the PostgreSQL boundary.
-/// Expressions, row values, and physical names never enter the returned error.
+/// A pattern failure keeps only the compiler-resolved field address. Any other
+/// server refusal keeps only its SQLSTATE and the object names the server
+/// reported. Expressions, messages, and row values never enter the returned
+/// error.
 pub(crate) fn map_pattern_database_error(
     error: tokio_postgres::Error,
     pattern_field: Option<(&str, &str)>,
@@ -401,7 +403,7 @@ pub(crate) fn map_pattern_database_error(
                 field_id: field.to_owned(),
             }
         }
-        _ => PostgresKernelError::Connection,
+        _ => PostgresKernelError::from_statement_error(&error),
     }
 }
 

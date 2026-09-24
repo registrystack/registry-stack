@@ -892,7 +892,7 @@ impl DedicatedApplyConnection {
         let affected = transaction
             .execute(&step.sql, &[&ids])
             .await
-            .map_err(|_| PostgresKernelError::Connection)?;
+            .map_err(|error| map_reviewed_pattern_error(error, registry, step))?;
         if affected != selected {
             return Err(PostgresKernelError::RegistryUnavailable);
         }

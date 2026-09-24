@@ -4459,6 +4459,20 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                 DiagnosticArtifact::DatabaseMigration,
                 SuggestedAction::VerifyMigrationAuthority,
             ),
+            registry_breg::migration::MigrationError::StatementFailed(failure) => {
+                return source_failure(
+                    "apply",
+                    diagnostic(
+                        "apply.migration.statement_failed",
+                        "database",
+                        &format!(
+                            "PostgreSQL refused an apply statement with {failure}. The exact target remains pinned in maintenance: fix the cause the SQLSTATE and the named objects point at and retry the same target, or assess the pinned target with migration reconcile"
+                        ),
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::ReconcileFailedMigration,
+                );
+            }
             registry_breg::migration::MigrationError::ApplyFailed => (
                 "apply.migration.failed",
                 "database",
@@ -14241,6 +14255,41 @@ fn apply_refuses_an_already_active_package_the_database_does_not_run() {
         "migration reconcile",
         "never been activated, apply it with --initial",
         "Nothing was changed",
+    ] {
+        assert!(
+            diagnostic.message.contains(fragment),
+            "{fragment}: {}",
+            diagnostic.message
+        );
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn apply_reports_a_refused_statement_with_its_sqlstate_and_objects() {
+    let report = apply_lifecycle_failure(ApplyLifecycleError::Apply(
+        registry_breg::migration::MigrationError::StatementFailed(
+            registry_breg::postgres::PostgresFailure {
+                sqlstate: Some("23502".to_owned()),
+                table: Some("asset_table".to_owned()),
+                column: Some("rank_column".to_owned()),
+                constraint: None,
+            },
+        ),
+    ));
+    let diagnostic = &report.diagnostics[0];
+    assert_eq!(diagnostic.code, "apply.migration.statement_failed");
+    assert_eq!(diagnostic.path, "database");
+    assert_eq!(diagnostic.artifact, DiagnosticArtifact::DatabaseMigration);
+    assert_eq!(
+        diagnostic.suggested_action,
+        SuggestedAction::ReconcileFailedMigration
+    );
+    for fragment in [
+        "SQLSTATE 23502 (integrity constraint violation), table asset_table, column rank_column",
+        "pinned in maintenance",
+        "retry the same target",
+        "migration reconcile",
     ] {
         assert!(
             diagnostic.message.contains(fragment),

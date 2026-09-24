@@ -25,16 +25,17 @@ use crate::package::{
 use crate::postgres::{
     statement_checksum, ConnectionConfig, ExpectedManagedCatalog, ExpectedRegistryIdentity,
     MaintenanceTransition, MigrationArtifactBinding, MigrationLedgerEntry, MigrationLedgerStep,
-    MigrationLedgerStepKind, MigrationPlanKind, PackageDdlStatement, RegistryLockKey,
-    ReviewedExecutionOutcome, ReviewedFieldEncryptionContext, ReviewedPackageExecutionRequest,
-    SqlIdentifier, VerifiedPackageApplyConnection,
+    MigrationLedgerStepKind, MigrationPlanKind, PackageDdlStatement, PostgresFailure,
+    RegistryLockKey, ReviewedExecutionOutcome, ReviewedFieldEncryptionContext,
+    ReviewedPackageExecutionRequest, SqlIdentifier, VerifiedPackageApplyConnection,
 };
 
 const MAX_LOCK_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_STATEMENT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
-/// Value-free apply failures. Only authored identifiers cross this boundary;
-/// SQL, stored values, and physical database names do not.
+/// Value-free apply failures. Authored identifiers cross this boundary, and
+/// a refused statement adds its SQLSTATE and the object names PostgreSQL
+/// reported; SQL, PostgreSQL messages, and stored values do not.
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
 pub enum MigrationError {
     #[error("the verified package is not a valid activation successor")]
@@ -43,6 +44,10 @@ pub enum MigrationError {
     EmptyPlan,
     #[error("the Registry package apply failed")]
     ApplyFailed,
+    /// PostgreSQL refused a statement after maintenance began. The target
+    /// stays pinned in maintenance, as for [`Self::ApplyFailed`].
+    #[error("PostgreSQL refused an apply statement: {0}")]
+    StatementFailed(PostgresFailure),
     /// The database, read under the exclusive apply lock, does not record the
     /// presented package as its active package with maintenance ready.
     #[error("the database does not record this package as its active, ready package")]
@@ -882,6 +887,9 @@ async fn fail_with_error_and_release(
             entity_id,
             field_id,
         },
+        crate::postgres::PostgresKernelError::Statement(failure) => {
+            MigrationError::StatementFailed(failure)
+        }
         _ => MigrationError::ApplyFailed,
     })
 }

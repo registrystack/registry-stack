@@ -40,7 +40,7 @@ use registry_breg::package::{
 };
 use registry_breg::postgres::{
     install_compiled_schema, managed_schema_fingerprint, rehearse_successor_migration,
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, MigrationRehearsalError,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, MigrationRehearsalError, PostgresFailure,
     SuccessorMigrationRehearsal,
 };
 use registry_breg::CompiledRegistry;
@@ -430,7 +430,15 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
     )
     .await
     .expect_err("the second reviewed drop deterministically faults after the first committed drop");
-    assert_value_free(Some(destructive_fault), MigrationError::ApplyFailed);
+    // The second drop names the column the first already dropped, so the
+    // refusal carries PostgreSQL's undefined-column SQLSTATE.
+    assert_value_free(
+        Some(destructive_fault),
+        MigrationError::StatementFailed(PostgresFailure {
+            sqlstate: Some("42703".to_owned()),
+            ..PostgresFailure::default()
+        }),
+    );
     assert_non_ready_target(&database, &required_active, &destructive_package, "failed").await;
     assert_eq!(
         step_snapshot(&database, &destructive_package, "drop-legacy")
@@ -520,6 +528,7 @@ async fn real_postgres_backfill_and_destructive_recovery_are_bounded_resumable_a
     false_assertion_refusals_are_closed().await;
     row_count_mismatch_is_closed().await;
     lock_timeout_is_bounded().await;
+    refused_step_reports_its_sqlstate().await;
 }
 
 /// Re-presenting the active package is a no-op only when the database, read
@@ -2187,6 +2196,76 @@ async fn lock_timeout_is_bounded() {
     assert_value_free(refused.err(), MigrationError::ApplyFailed);
     blocker.rollback().await.expect("lock blocker rolls back");
     blocker_task.abort();
+    assert_non_ready_target(&database, &active, &package, "failed").await;
+    database.cleanup().await;
+}
+
+/// A reviewed step PostgreSQL refuses fails `apply` with the SQLSTATE and the
+/// object names the server reported, never its message or a statement value.
+async fn refused_step_reports_its_sqlstate() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs extension");
+    let base = compile_variant(Variant::Base, 1);
+    let fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &fingerprint);
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("refused-step scenario initial package activates");
+    seed_backfill_rows(&database, &base, 1).await;
+    let required = compile_variant(Variant::RankRequired, 2);
+    let target_fingerprint = required_target_fingerprint(&database, &required).await;
+    let entity = &required.entities()["asset"];
+    let canary = "apply-statement-canary";
+    let source = backfill_source_with_steps(
+        BackfillSourceRequest {
+            id: "rank-uncastable",
+            current: &active,
+            prior: &base,
+            candidate: &required,
+            final_fingerprint: &target_fingerprint,
+            pre: AssertionMode::True,
+            post: AssertionMode::True,
+            rehearsed_rows: 1,
+        },
+        Some(format!(
+            "UPDATE registry_data.{} SET {} = '{canary}' WHERE record_id = ANY($1::pg_catalog.uuid[])",
+            entity.physical_table, entity.fields["rank"].physical_name
+        )),
+        true,
+    );
+    let package = prepare_and_load_reviewed(
+        2,
+        &active,
+        &base,
+        Variant::RankRequired,
+        &target_fingerprint,
+        source,
+    );
+    let refused = apply(
+        &database,
+        &package,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await
+    .expect_err("PostgreSQL refuses the reviewed step's constant");
+    let MigrationError::StatementFailed(failure) = &refused else {
+        panic!("the refusal carries the PostgreSQL failure: {refused:?}");
+    };
+    assert_eq!(failure.sqlstate.as_deref(), Some("22P02"));
+    let rendered = format!("{refused} {refused:?}");
+    assert!(
+        rendered.contains("SQLSTATE 22P02 (data exception)"),
+        "the refusal names the SQLSTATE and its class: {rendered}"
+    );
+    assert!(
+        !rendered.contains(canary),
+        "the refusal carries no value from the statement: {rendered}"
+    );
+    assert_value_free(Some(refused.clone()), refused);
     assert_non_ready_target(&database, &active, &package, "failed").await;
     database.cleanup().await;
 }
