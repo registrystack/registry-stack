@@ -88,6 +88,13 @@ entries:
       - {path: crates/registry-messaging-core/src/receipt.rs, name: a_report_never_regresses}
       - {path: crates/registry-messaging-core/src/receipt.rs, name: a_duplicate_report_is_a_no_op}
       - {path: crates/registry-messaging-core/src/receipt.rs, name: a_terminal_state_is_never_displaced_by_the_other_terminal_state}
+  - id: MESSAGING-SEC-08
+    tests:
+      - {path: crates/registry-messaging/tests/postgres_callbacks.rs, name: a_full_journey_leaves_no_payload_value_in_the_journal_log_or_metrics}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: no_contact_content_data_principal_or_credential_reaches_the_journal_or_the_log}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: no_contact_content_data_or_credential_reaches_the_dispatch_journal_or_log}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_retention_run_is_journaled_with_its_counts_only}
+      - {path: crates/registry-messaging/src/http.rs, name: a_preview_answers_the_bytes_the_cli_prints_and_journals_metadata_only}
   - id: MESSAGING-SEC-09
     tests:
       - {path: crates/registry-messaging-core/src/render.rs, name: a_runaway_template_runs_out_of_fuel}

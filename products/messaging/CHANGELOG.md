@@ -115,3 +115,7 @@
   `messaging_limit_refusals_total`, `messaging_retention_runs_total`, and the
   `messaging_dispatch_jobs` gauge, sampled from the database on each scrape,
   each under closed labels only.
+- Enforce MESSAGING-SEC-08: one journey through every audited operation
+  proves the journal, the outbox, the operational log, and the metrics carry
+  no recipient, body, template datum, principal, or credential, and that the
+  journal's keyed chain verifies over it.

@@ -326,6 +326,24 @@ impl Harness {
             .collect()
     }
 
+    /// Verify the journal's keyed hash chain under the deployment's audit
+    /// secret, answering how many records it holds. The journal is read as
+    /// written, one segment, since the harness never rotates it.
+    pub fn verify_journal(&self) -> usize {
+        let profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+            AUDIT_SECRET.as_bytes().to_vec(),
+        ))
+        .expect("the audit profile");
+        let contents =
+            std::fs::read_to_string(&self.config.audit.path).expect("the active journal segment");
+        registry_platform_audit::verify_jsonl_lines_with_hasher(
+            contents.lines().filter(|line| !line.is_empty()),
+            &profile.chain_hasher(),
+        )
+        .expect("the journal's keyed chain verifies")
+        .records
+    }
+
     /// The outbox records, published or not, in the order they were written.
     pub async fn outbox(&self) -> Vec<Value> {
         self.isolated

@@ -22,16 +22,19 @@ use std::sync::Arc;
 
 use aws_lc_rs::hmac;
 use axum::body::Body;
-use axum::http::header::CONTENT_TYPE;
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{Request, StatusCode};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use registry_messaging::dispatch::{dispatcher, MessageDispatcher, MessageSender};
+use registry_messaging::messages::{OperatorAction, SettleOutcome};
 use registry_messaging::receipts::{MAXIMUM_STORED_RECEIPTS, RECEIPT_RECORDED_EVENT};
+use registry_messaging::retention::RetentionSweep;
 use registry_messaging_core::MessageStatus;
 use registry_platform_dispatch::postgres::DispatchOutcome;
 use serde_json::{json, Value};
 use support::{
-    assert_absent, assert_logs_clean, captured_logs, sender_token, sms_submission, Harness,
+    assert_absent, assert_logs_clean, captured_logs, email_submission, sender_token,
+    sms_submission, Harness, NAME, OFFICE, RECIPIENT,
 };
 use uuid::Uuid;
 use wiremock::matchers::{method, path};
@@ -685,4 +688,219 @@ async fn a_verified_callback_the_script_cannot_read_or_does_not_record() {
     assert_eq!(deployment.counted("ignored"), 1);
     assert_eq!(deployment.stored_report(id).await, None);
     assert!(deployment.receipts(id).await.is_empty());
+}
+
+/// MESSAGING-SEC-08: one journey through the audited operations, a
+/// preview, an acceptance, a replay, a refusal, sends that succeed and
+/// fail, a forged and a signed callback, a status read, an interrupted
+/// send an operator settles, an operator's retry, a caller's cancellation,
+/// and a retention sweep, leaves no
+/// recipient, body, template datum, principal, or credential in the
+/// journal, the outbox, the operational log, or the metrics, and the
+/// journal's keyed chain verifies over all of it.
+#[tokio::test]
+async fn a_full_journey_leaves_no_payload_value_in_the_journal_log_or_metrics() {
+    let deployment = deployment(Verifier::Body).await;
+    let harness = &deployment.harness;
+    let sender = sender_token();
+
+    let preview = Request::builder()
+        .method("POST")
+        .uri("/v1/templates/appointment-reminder/versions/1/preview")
+        .header(AUTHORIZATION, format!("Bearer {sender}"))
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "locale": "en",
+                "data": {"name": NAME, "day": "2026-10-01", "office": OFFICE}
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let (status, rendered) = harness.send(preview).await;
+    assert_eq!(status, StatusCode::OK, "{rendered}");
+
+    // An SMS is accepted, replayed under its key, sent, and reported.
+    let (status, receipt) = harness
+        .submit(&sender, "journey-sms", &sms_submission())
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{receipt}");
+    let sms = Uuid::parse_str(receipt["id"].as_str().unwrap()).unwrap();
+    let (status, replayed) = harness
+        .submit(&sender, "journey-sms", &sms_submission())
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(replayed["id"], receipt["id"]);
+    let mut misaddressed = sms_submission();
+    misaddressed["to"] = json!({"email": RECIPIENT});
+    let (status, _) = harness
+        .submit(&sender, "journey-refused", &misaddressed)
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        deployment
+            .dispatcher
+            .dispatch_once(&deployment.sender)
+            .await
+            .unwrap(),
+        DispatchOutcome::Delivered
+    );
+    let (status, _) = harness
+        .send(deployment.callback(&reference_for(sms), "delivered", None, true))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = deployment
+        .report(&reference_for(sms), "delivered", None)
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(deployment.view(sms).await["status"], "delivered");
+
+    // An email for a provider this deployment does not connect fails, an
+    // operator retries it, and it fails again.
+    let email = harness.accepted(&email_submission()).await;
+    assert_eq!(
+        deployment
+            .dispatcher
+            .dispatch_once(&deployment.sender)
+            .await
+            .unwrap(),
+        DispatchOutcome::DeadLettered
+    );
+    assert!(
+        harness
+            .service
+            .messages()
+            .operate(email, OperatorAction::Retry, true)
+            .await
+            .unwrap()
+            .unwrap()
+            .applied
+    );
+    assert_eq!(
+        deployment
+            .dispatcher
+            .dispatch_once(&deployment.sender)
+            .await
+            .unwrap(),
+        DispatchOutcome::DeadLettered
+    );
+
+    // A worker dies mid-send, and an operator settles the unknown outcome.
+    let interrupted = harness.accepted(&sms_submission()).await;
+    let lease = deployment
+        .dispatcher
+        .claim()
+        .await
+        .unwrap()
+        .leased()
+        .unwrap();
+    assert_eq!(lease.key.id(), interrupted);
+    drop(lease);
+    harness
+        .execute(
+            "UPDATE messaging_dispatch_jobs \
+                SET attempt_started_at = now() - interval '2 minutes', \
+                    lease_expires_at = now() - interval '1 minute' \
+              WHERE message_id = $1 AND state = 'leased'",
+            &[&interrupted],
+        )
+        .await;
+    assert_eq!(
+        deployment
+            .dispatcher
+            .dispatch_once(&deployment.sender)
+            .await
+            .unwrap(),
+        DispatchOutcome::Idle
+    );
+    assert!(
+        harness
+            .service
+            .messages()
+            .operate(
+                interrupted,
+                OperatorAction::Settle(SettleOutcome::Sent),
+                true
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .applied
+    );
+
+    // The caller cancels a message still queued.
+    let queued = harness.accepted(&email_submission()).await;
+    let (status, cancelled) = harness
+        .call(
+            "POST",
+            &format!("/v1/messages/{queued}/cancel"),
+            Some(&sender),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{cancelled}");
+
+    // Long after, retention erases every terminal message and its key.
+    harness
+        .execute(
+            "UPDATE messaging_dispatch_jobs SET updated_at = updated_at - interval '4000 days' \
+              WHERE state IN ('delivered', 'dead_lettered', 'expired', 'cancelled')",
+            &[],
+        )
+        .await;
+    harness
+        .execute(
+            "UPDATE messaging_idempotency SET expires_at = now() - interval '1 day'",
+            &[],
+        )
+        .await;
+    let report = RetentionSweep::new(
+        harness.store.clone(),
+        harness.config.retention,
+        Arc::clone(&harness.metrics),
+    )
+    .pass()
+    .await
+    .unwrap();
+    assert_eq!(report.records, 4);
+    let (status, _) = harness
+        .call("GET", &format!("/v1/messages/{sms}"), Some(&sender))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    harness.publish().await;
+    let journal = harness.journal();
+    let events: std::collections::BTreeSet<&str> = journal
+        .iter()
+        .filter_map(|entry| entry["record"]["event"].as_str())
+        .collect();
+    for expected in [
+        "messaging.template.previewed",
+        "messaging.message.accepted",
+        "messaging.message.replayed",
+        "messaging.message.refused",
+        "messaging.attempt.started",
+        "messaging.attempt.finished",
+        "messaging.receipt.recorded",
+        "messaging.message.settled",
+        "messaging.dispatch.transition",
+        "messaging.retention.erased",
+    ] {
+        assert!(
+            events.contains(expected),
+            "{expected} missing from {events:?}"
+        );
+    }
+    assert_eq!(harness.verify_journal(), journal.len());
+    assert_absent("the journal", &Value::Array(journal));
+    let outbox = harness.outbox().await;
+    assert!(
+        !serde_json::to_string(&outbox)
+            .unwrap()
+            .contains(&reference_for(sms)),
+        "the provider reference is kept for receipts, never journaled"
+    );
+    assert_absent("the outbox", &Value::Array(outbox));
+    let scraped = harness.scrape().await;
+    assert_absent("the metrics", &Value::String(scraped));
+    assert_logs_clean();
 }

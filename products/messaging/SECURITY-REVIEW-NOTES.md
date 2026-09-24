@@ -199,14 +199,31 @@ Casework journals only its accountability read, which releases a raw
 reviewer identity. A message view releases no contact, part, or data, so it
 is an ordinary read.
 
-## Data minimization and log and audit absence (pending, slice S6)
+## Data minimization and log and audit absence
 
-MESSAGING-SEC-08. Once messages exist, audit records carry the operation,
-caller pseudonym, sender profile, template reference, correlation, outcome
-class, and a keyed recipient reference, never a body, template data, or a raw
-contact. The full-journey absence test lands with slice S6. `MESSAGING_LOG`
-accepts only `error`, `warn`, or `info`, so no dependency's debug logging can
-be switched on by the environment.
+MESSAGING-SEC-08. Audit records carry the operation, caller pseudonym, sender
+profile, template reference, correlation, outcome class, and a keyed recipient
+reference, never a body, template data, or a raw contact. Log fields never
+carry a payload value, and every metric label is a closed set fixed in code.
+`MESSAGING_LOG` accepts only `error`, `warn`, or `info`, so no dependency's
+debug logging can be switched on by the environment.
+
+The absence is the control, so it is proven by looking. Each suite checks the
+records and log lines its own operations write, and one journey
+(`postgres_callbacks.rs`,
+`a_full_journey_leaves_no_payload_value_in_the_journal_log_or_metrics`) runs
+every audited operation in turn: a preview, an acceptance, a replay, a
+refusal, a delivered send, a dead-lettered send, a forged and a signed
+callback, a status read, an interrupted send an operator settles, an
+operator's retry, a caller's cancellation, and a retention sweep. It then
+searches the journal, the outbox, the captured operational log, and the
+metrics scrape for the recipient, the rendered and template values, the
+principal, and the credentials, finds none, finds no provider reference in the
+outbox, and verifies the journal's keyed chain over every record the journey
+wrote. The journey does not repeat the runtime start and quarantine records:
+`postgres_migrate.rs` proves the start record carries no database URL or audit
+secret, and the dispatch absence test in `postgres_dispatch.rs` covers
+quarantines.
 
 ## Submission and idempotency
 

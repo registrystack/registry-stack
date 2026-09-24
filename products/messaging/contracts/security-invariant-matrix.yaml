@@ -143,22 +143,22 @@ invariants:
       path: crates/registry-messaging/tests/postgres_callbacks.rs
       name: duplicate_and_out_of_order_receipts_never_regress_the_report
   - id: MESSAGING-SEC-08
-    state: pending
-    plannedSlice: S6
+    state: enforced
     threat: >-
       Recipient contacts, message bodies, template data, or credentials reach
-      the operational log or the audit journal.
+      the operational log, the audit journal, or the metrics.
     enforcementPoint: >-
       Audit records carry operation, caller pseudonym, sender profile,
       template reference, correlation, outcome class, and a keyed recipient
-      reference; log fields never carry payload values.
+      reference; log fields never carry payload values; metric labels are
+      closed sets fixed in code.
     refusal: >-
       Nothing to refuse at the caller: the absence is the control, proven over
-      the logs and audit of a full journey.
-    pendingNote: >-
-      Each slice's suites prove the records and log lines its own operations
-      write carry no payload value. The full-journey absence test lands in
-      slice S6, once every audited operation exists.
+      the journal, the outbox, the logs, and the metrics of a full journey
+      whose journal chain still verifies.
+    negativeTest:
+      path: crates/registry-messaging/tests/postgres_callbacks.rs
+      name: a_full_journey_leaves_no_payload_value_in_the_journal_log_or_metrics
   - id: MESSAGING-SEC-09
     state: enforced
     threat: >-
