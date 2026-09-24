@@ -2,12 +2,12 @@
   "version": 4,
   "service": "breg",
   "runtime": {
-    "image": "gcr.io/distroless/cc-debian13:nonroot@sha256:c31ff9abcb1910f3ab25c7957bdaf0bfe12a01eb546e8df2282f1c8f682b606c",
+    "image": "gcr.io/distroless/cc-debian13:nonroot@sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97",
     "layer_ids": [
-      "sha256:50abe06dfc0957e14cb8332ed242e8b884ef2563a9eb202e5172f243f62792f7",
+      "sha256:9486261b5a13f63ca6904b36721527ac8f19df53d300560138d69ae9b4c203de",
       "sha256:621c35e751a51a9a9dc3e80aa0b7fe8be2a93402ea6ccd307d30852cd7776cda",
-      "sha256:c8b007d0206e4b10ed4d3b3d99dfeab47c2648e82011989fd78a5731baf33fc3",
-      "sha256:bec7e6bb35e05d1284f28b10d2150c259717d91c658c4c10c08424bb9466caba",
+      "sha256:763a77745f27b86cf26b97887b6842d83720e63b1c48848c0ba9ee54e351d63a",
+      "sha256:f0d0eff4c2312a7bd6e21797bdfea5eb35f60e76b555ce2b22794424af2cad36",
       "sha256:275a30dd8ce958b21daa9ad962c6fbc09f98306ee2f486b65c9075dc257b1412",
       "sha256:4d049f83d9cf21d1f5cc0e11deaf36df02790d0e60c1a3829538fb4b61685368",
       "sha256:af5aa97ebe6ce1604747ec1e21af7136ded391bcabe4acef882e718a87c86bcc",
@@ -17,7 +17,7 @@
       "sha256:ad51d0769d16ba578106a177987dfe3d2e02c1668c852b795b2f6b024068242a",
       "sha256:187cfc6d1e3e8a40a5e64653bcd3239c140807dcf1c09e48021178705a5a6139",
       "sha256:f2392a9484bf6b18f06beaf705b994e31dbb2716c99cf7d03c9c495cd107f364",
-      "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
+      "sha256:8a3b315d45080ecb38e39d42d28e951303c67c2ce7482bcdbbc3b5424be19013",
       "sha256:ada8421c741188c83c2e6de96450043e65ce6233e7d2a1d84cd789a0ad97f420",
       "sha256:c0e409312adc366898967307565f692bb33d43a439d3de48e27d14b742389725",
       "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
@@ -27,7 +27,7 @@
       "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
     ],
     "application_layer_ids": [
-      "sha256:ebeebcbce25abe5f01d7b2956114d7078697013d47060a3f4e82ad7d737ca0f1",
+      "sha256:7c57fb64e19fd58e23bf4bc2705159afce041225a1afb21155d961ca83c5e949",
       "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     ],
     "config": {
@@ -51,7 +51,7 @@
       ],
       "stop_signal": ""
     },
-    "definition_digest": "sha256:9b54e093fc401fc1a0e222fa1d9942f9c1970ba6a1ee4182b1f264931de5dfdc"
+    "definition_digest": "sha256:18d1ca4c72a1565530a5cf3b69ced3a5ff645f8ba79715a5cc6b4d668d34967c"
   },
   "policies": [
     {
@@ -74,8 +74,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.33.0 Linux AMD64 BReg local reproduction is exact rehearsal run 35758336494 at source 82c1b813a28d61c322d435ce93c9b022455ddb2b. Its executable imports none of the deprecated resolver-printing interfaces, including ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr and fp_nquery. The one review-required address-taken dlsym use is Wasmtime's Intel JIT profiler availability probe and only selects NotifyEvent and Initialize. Ordinary resolver initialization does not enter the vulnerable TSIG diagnostic-printing path. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-22; Debian still records this Trixie version as vulnerable and fixes only forky and sid.",
-      "reviewed_at": "2026-09-22",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.34.0 Linux AMD64 BReg local reproduction is exact rehearsal run 36041004771 at source 926d1aacad0f2f563f5a32086b28e49d9d8804b8, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. That base now ships libc6 2.41-12+deb13u4 itself, and the image's application layer installs the same pinned libc6 2.41-12+deb13u4 over it, so the reviewed loader, libc, libm and libpthread bytes are unchanged from the v0.33.0 review. Its executable imports none of the deprecated resolver-printing interfaces, including ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr and fp_nquery. The one review-required address-taken dlsym use is Wasmtime's Intel JIT profiler availability probe and only selects NotifyEvent and Initialize. Ordinary resolver initialization does not enter the vulnerable TSIG diagnostic-printing path. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-24; Debian still records this Trixie version as vulnerable and fixes only forky and sid.",
+      "reviewed_at": "2026-09-24",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -92,14 +92,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:9b54e093fc401fc1a0e222fa1d9942f9c1970ba6a1ee4182b1f264931de5dfdc",
-      "component_layer_id": "sha256:ebeebcbce25abe5f01d7b2956114d7078697013d47060a3f4e82ad7d737ca0f1",
+      "runtime_definition_digest": "sha256:18d1ca4c72a1565530a5cf3b69ced3a5ff645f8ba79715a5cc6b4d668d34967c",
+      "component_layer_id": "sha256:7c57fb64e19fd58e23bf4bc2705159afce041225a1afb21155d961ca83c5e949",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:e9fcb877af6d0c6b398a00a7a4b8b37535344820ee1590a1e4e209333e35f69d",
-        "reference_source_revision": "82c1b813a28d61c322d435ce93c9b022455ddb2b",
+        "reference_image_digest": "sha256:4dc801680e0bbca53ac011db95c23c6d184ef3f4172ea0fd072d489df8257d83",
+        "reference_source_revision": "926d1aacad0f2f563f5a32086b28e49d9d8804b8",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:9b54e093fc401fc1a0e222fa1d9942f9c1970ba6a1ee4182b1f264931de5dfdc",
+        "runtime_definition_digest": "sha256:18d1ca4c72a1565530a5cf3b69ced3a5ff645f8ba79715a5cc6b4d668d34967c",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -119,10 +119,10 @@
           },
           {
             "path": "/usr/local/bin/breg",
-            "sha256": "sha256:1e951595f1be7c2e2a4ac72de05497d2962066b60c3d8ed58a893efd881e99d3"
+            "sha256": "sha256:43cd88064e0b1e3ad3217436e6e4acb4b320bf493e392d89e2b536016ff12c65"
           }
         ],
-        "definition_digest": "sha256:06bb1eece51a4b8db3d637289dcff4b58399f5bb4f91f19d843f5038b7ddbb6d"
+        "definition_digest": "sha256:fd0d2e58d5b7424223f354acb2800e11b6fdd64ae5578f5264cca7974bcac1f1"
       }
     },
     {
@@ -132,8 +132,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix; Grype reports wont-fix. The reviewed v0.33.0 Linux AMD64 BReg local reproduction is exact rehearsal run 35758336494 at source 82c1b813a28d61c322d435ce93c9b022455ddb2b. Its executable neither imports nor contains strfmon or strfmon_l. The one review-required address-taken dlsym use is Wasmtime's Intel JIT profiler availability probe and only selects NotifyEvent and Initialize. No caller-controlled right-justified monetary-format width path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-22; Debian fixes the issue only in forky and sid.",
-      "reviewed_at": "2026-09-22",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix; Grype reports wont-fix. The reviewed v0.34.0 Linux AMD64 BReg local reproduction is exact rehearsal run 36041004771 at source 926d1aacad0f2f563f5a32086b28e49d9d8804b8, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. That base now ships libc6 2.41-12+deb13u4 itself, and the image's application layer installs the same pinned libc6 2.41-12+deb13u4 over it, so the reviewed loader, libc, libm and libpthread bytes are unchanged from the v0.33.0 review. Its executable neither imports nor contains strfmon or strfmon_l. The one review-required address-taken dlsym use is Wasmtime's Intel JIT profiler availability probe and only selects NotifyEvent and Initialize. No caller-controlled right-justified monetary-format width path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-24; Debian fixes the issue only in forky and sid.",
+      "reviewed_at": "2026-09-24",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -150,14 +150,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:9b54e093fc401fc1a0e222fa1d9942f9c1970ba6a1ee4182b1f264931de5dfdc",
-      "component_layer_id": "sha256:ebeebcbce25abe5f01d7b2956114d7078697013d47060a3f4e82ad7d737ca0f1",
+      "runtime_definition_digest": "sha256:18d1ca4c72a1565530a5cf3b69ced3a5ff645f8ba79715a5cc6b4d668d34967c",
+      "component_layer_id": "sha256:7c57fb64e19fd58e23bf4bc2705159afce041225a1afb21155d961ca83c5e949",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:e9fcb877af6d0c6b398a00a7a4b8b37535344820ee1590a1e4e209333e35f69d",
-        "reference_source_revision": "82c1b813a28d61c322d435ce93c9b022455ddb2b",
+        "reference_image_digest": "sha256:4dc801680e0bbca53ac011db95c23c6d184ef3f4172ea0fd072d489df8257d83",
+        "reference_source_revision": "926d1aacad0f2f563f5a32086b28e49d9d8804b8",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:9b54e093fc401fc1a0e222fa1d9942f9c1970ba6a1ee4182b1f264931de5dfdc",
+        "runtime_definition_digest": "sha256:18d1ca4c72a1565530a5cf3b69ced3a5ff645f8ba79715a5cc6b4d668d34967c",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -177,10 +177,10 @@
           },
           {
             "path": "/usr/local/bin/breg",
-            "sha256": "sha256:1e951595f1be7c2e2a4ac72de05497d2962066b60c3d8ed58a893efd881e99d3"
+            "sha256": "sha256:43cd88064e0b1e3ad3217436e6e4acb4b320bf493e392d89e2b536016ff12c65"
           }
         ],
-        "definition_digest": "sha256:06bb1eece51a4b8db3d637289dcff4b58399f5bb4f91f19d843f5038b7ddbb6d"
+        "definition_digest": "sha256:fd0d2e58d5b7424223f354acb2800e11b6fdd64ae5578f5264cca7974bcac1f1"
       }
     },
     {
@@ -190,8 +190,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The reviewed v0.33.0 Linux AMD64 BReg local reproduction is exact rehearsal run 35758336494 at source 82c1b813a28d61c322d435ce93c9b022455ddb2b. Its executable neither links libz nor contains libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. The one review-required address-taken dlsym use is Wasmtime's Intel JIT profiler availability probe and only selects NotifyEvent and Initialize. No vulnerable stalled gzip-write followed by formatted-output path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-22; Debian still lists no fixed zlib package for Trixie.",
-      "reviewed_at": "2026-09-22",
+      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The reviewed v0.34.0 Linux AMD64 BReg local reproduction is exact rehearsal run 36041004771 at source 926d1aacad0f2f563f5a32086b28e49d9d8804b8, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. zlib1g 1:1.3.dfsg+really1.3.1-1+b1 remains in the same unchanged base layer. Its executable neither links libz nor contains libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. The one review-required address-taken dlsym use is Wasmtime's Intel JIT profiler availability probe and only selects NotifyEvent and Initialize. No vulnerable stalled gzip-write followed by formatted-output path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-09-24; Debian still lists no fixed zlib package for Trixie.",
+      "reviewed_at": "2026-09-24",
       "expires_at": "2026-10-06",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -208,14 +208,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:9b54e093fc401fc1a0e222fa1d9942f9c1970ba6a1ee4182b1f264931de5dfdc",
+      "runtime_definition_digest": "sha256:18d1ca4c72a1565530a5cf3b69ced3a5ff645f8ba79715a5cc6b4d668d34967c",
       "component_layer_id": "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:e9fcb877af6d0c6b398a00a7a4b8b37535344820ee1590a1e4e209333e35f69d",
-        "reference_source_revision": "82c1b813a28d61c322d435ce93c9b022455ddb2b",
+        "reference_image_digest": "sha256:4dc801680e0bbca53ac011db95c23c6d184ef3f4172ea0fd072d489df8257d83",
+        "reference_source_revision": "926d1aacad0f2f563f5a32086b28e49d9d8804b8",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:9b54e093fc401fc1a0e222fa1d9942f9c1970ba6a1ee4182b1f264931de5dfdc",
+        "runtime_definition_digest": "sha256:18d1ca4c72a1565530a5cf3b69ced3a5ff645f8ba79715a5cc6b4d668d34967c",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -235,10 +235,10 @@
           },
           {
             "path": "/usr/local/bin/breg",
-            "sha256": "sha256:1e951595f1be7c2e2a4ac72de05497d2962066b60c3d8ed58a893efd881e99d3"
+            "sha256": "sha256:43cd88064e0b1e3ad3217436e6e4acb4b320bf493e392d89e2b536016ff12c65"
           }
         ],
-        "definition_digest": "sha256:06bb1eece51a4b8db3d637289dcff4b58399f5bb4f91f19d843f5038b7ddbb6d"
+        "definition_digest": "sha256:fd0d2e58d5b7424223f354acb2800e11b6fdd64ae5578f5264cca7974bcac1f1"
       }
     }
   ]
