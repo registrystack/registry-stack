@@ -22,7 +22,7 @@
 ARG SOURCE_DATE_EPOCH=0
 
 # Keep the tag for humans and the digest for reproducible pulls.
-FROM rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3 AS chef
+FROM rust:1.98-trixie@sha256:a8a5f0a1e5fe7dfe1d352591e4a1c7dd2c08fd70475cae872cf3458ba0df0546 AS chef
 RUN cargo install cargo-chef --locked --version 0.1.77
 WORKDIR /workspace
 
@@ -57,7 +57,7 @@ RUN --mount=type=bind,source=release/scripts/install-runtime-libc6.sh,target=/wo
     && chmod 0700 /workspace/runtime-root/var/lib/registry-evidence/audit \
     && find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +
 
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:c31ff9abcb1910f3ab25c7957bdaf0bfe12a01eb546e8df2282f1c8f682b606c AS evidence
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97 AS evidence
 
 COPY --from=evidence-builder /workspace/runtime-root/ /
 COPY --from=evidence-builder /workspace/target/release/evidence /usr/local/bin/evidence
@@ -96,7 +96,7 @@ RUN --mount=type=bind,source=release/scripts/install-runtime-libc6.sh,target=/wo
     && chmod 0700 /workspace/runtime-root/var/lib/registry-casework/audit \
     && find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +
 
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:c31ff9abcb1910f3ab25c7957bdaf0bfe12a01eb546e8df2282f1c8f682b606c AS casework
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97 AS casework
 
 COPY --from=casework-builder /workspace/runtime-root/ /
 COPY --from=casework-builder /workspace/target/release/casework /usr/local/bin/casework

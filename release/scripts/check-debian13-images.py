@@ -12,8 +12,8 @@ ROOT = Path(__file__).resolve().parents[2]
 REMOTE_PACKAGE_SOURCE_RE = re.compile(r"\b(?:https?|ftp)://", re.IGNORECASE)
 
 RUST_BUILDER = (
-    "rust:1.95-trixie@sha256:"
-    "f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3"
+    "rust:1.98-trixie@sha256:"
+    "a8a5f0a1e5fe7dfe1d352591e4a1c7dd2c08fd70475cae872cf3458ba0df0546"
 )
 RUST_BUILDER_SNAPSHOT = "20250810T000000Z"
 RUST_BUILDER_CMAKE = "cmake=3.31.6-2"
@@ -60,13 +60,13 @@ RUNTIME_ROOT_NORMALIZATION = (
 )
 DEBIAN_PREPARATION = (
     "debian:trixie-slim@sha256:"
-    "3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258"
+    "a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a"
 )
 # This index carries libssl3t64 3.5.7-1~deb13u2 on both supported Linux
 # architectures. Earlier bytes fail the release policy on fixable OpenSSL CVEs.
 DISTROLESS_RUNTIME = (
     "gcr.io/distroless/cc-debian13:nonroot@sha256:"
-    "c31ff9abcb1910f3ab25c7957bdaf0bfe12a01eb546e8df2282f1c8f682b606c"
+    "54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97"
 )
 DOCKERFILE_FRONTEND = (
     "docker/dockerfile:1.7@sha256:"
