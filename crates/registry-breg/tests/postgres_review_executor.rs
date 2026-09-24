@@ -483,6 +483,141 @@ async fn serve_available_result_authority(
     (endpoint, state, server)
 }
 
+/// What the scripted result resource answers on its next lookup.
+#[derive(Clone, Copy)]
+enum ScriptedLookup {
+    Failing,
+    Approved,
+}
+
+struct ScriptedResultState {
+    accepted: Value,
+    answer: Mutex<ScriptedLookup>,
+}
+
+impl ScriptedResultState {
+    fn answer(&self, answer: ScriptedLookup) {
+        *self.answer.lock().expect("scripted answer") = answer;
+    }
+}
+
+async fn scripted_review_result(
+    State(state): State<Arc<ScriptedResultState>>,
+    Path(request_id): Path<Uuid>,
+) -> axum::response::Response {
+    assert_eq!(state.accepted["requestId"], request_id.to_string());
+    let answer = *state.answer.lock().expect("scripted answer");
+    match answer {
+        ScriptedLookup::Failing => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [("traceparent", TRACEPARENT)],
+        )
+            .into_response(),
+        ScriptedLookup::Approved => (
+            StatusCode::OK,
+            [("traceparent", TRACEPARENT)],
+            Json(json!({
+                "resultId": Uuid::from_u128(0xb3),
+                "requestId": request_id,
+                "subject": state.accepted["subject"].clone(),
+                "policy": state.accepted["policy"].clone(),
+                "submissionDigest": state.accepted["submissionDigest"].clone(),
+                "status": "approved",
+                "completedAt": "2026-09-20T00:00:00Z",
+                "availableUntil": "2030-09-20T00:00:00Z"
+            })),
+        )
+            .into_response(),
+    }
+}
+
+async fn serve_scripted_result_authority(
+    accepted: Value,
+    answer: ScriptedLookup,
+) -> (
+    reqwest::Url,
+    Arc<ScriptedResultState>,
+    tokio::task::JoinHandle<()>,
+) {
+    let state = Arc::new(ScriptedResultState {
+        accepted,
+        answer: Mutex::new(answer),
+    });
+    let app = Router::new()
+        .route(
+            "/v1/review-requests/{request_id}/result",
+            get(scripted_review_result),
+        )
+        .with_state(Arc::clone(&state));
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+    let endpoint = format!("http://{}/", listener.local_addr().unwrap())
+        .parse()
+        .unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (endpoint, state, server)
+}
+
+/// Releases the lookup lease and makes the next result poll due now, so a
+/// test can drive consecutive polls without waiting out the backoff.
+async fn make_result_poll_due(client: &tokio_postgres::Client, request_id: Uuid) {
+    client
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET lease_until=NULL,next_result_poll_at=transaction_timestamp()
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("make the result poll due");
+}
+
+/// Seeds a submission for `request_id` and has the review authority accept
+/// it, returning the accepted binding BReg retained.
+async fn seed_accepted_submission(
+    database: &TestDatabase,
+    request_id: Uuid,
+    review_request_id: Uuid,
+) -> Value {
+    seed_submission(
+        &database.admin,
+        request_id,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+    let accepting = Arc::new(AuthorityState {
+        producer_id: "producer-a",
+        expected_token: "Bearer token-a",
+        expected_profile: "producer-profile-a",
+        accepted_request_id: review_request_id,
+        requests: AtomicUsize::new(0),
+        gate: None,
+    });
+    let (endpoint, server) = serve_authority(accepting).await;
+    assert!(run_one_submission(
+        &database.admin,
+        "casework-a",
+        &authority_client(endpoint, "producer-profile-a"),
+        "producer-profile-a",
+        &BearerToken::new("token-a").unwrap(),
+        TEST_LEASE_SECONDS,
+    )
+    .await
+    .expect("accept the review submission"));
+    server.abort();
+    database
+        .admin
+        .query_one(
+            "SELECT accepted_binding FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1 AND state='accepted'",
+            &[&request_id],
+        )
+        .await
+        .expect("accepted submission")
+        .get(0)
+}
+
 async fn assert_backend_has_no_transaction_or_row_lock(
     observer: &tokio_postgres::Client,
     backend_pid: i32,
@@ -3690,6 +3825,92 @@ async fn accepted_recovery_expiry_and_poll_exhaustion_become_terminal_preserving
     }
 
     drop(pool);
+    database.cleanup().await;
+}
+
+async fn prepare_review_database() -> TestDatabase {
+    let database = TestDatabase::create(2).await;
+    database
+        .admin
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_request_proposals (
+                request_entity_id text NOT NULL,
+                request_id uuid NOT NULL,
+                proposal_version bigint NOT NULL,
+                PRIMARY KEY (request_entity_id,request_id,proposal_version)
+            );",
+        )
+        .await
+        .expect("proposal parent table");
+    install_review_storage_for_test(&database.admin, &database.runtime_role)
+        .await
+        .expect("review storage");
+    database
+        .admin
+        .batch_execute(&format!(
+            "GRANT USAGE ON SCHEMA registry_internal TO \"{}\";",
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("runtime review schema access");
+    database
+}
+
+async fn poll_scripted_result(
+    database: &mut TestDatabase,
+    endpoint: &reqwest::Url,
+) -> Result<bool, MutationError> {
+    poll_one_result(
+        &mut database.admin,
+        "casework-a",
+        &authority_client(endpoint.clone(), "producer-profile-a"),
+        "producer-profile-a",
+        &BearerToken::new("token-a").unwrap(),
+        TEST_LEASE_SECONDS,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_resolved_result_lookup_failure_leaves_no_error_on_the_reconciled_submission() {
+    let mut database = prepare_review_database().await;
+    let request_id = Uuid::from_u128(0xa3);
+    let accepted = seed_accepted_submission(&database, request_id, Uuid::from_u128(0xa4)).await;
+    let (endpoint, script, server) =
+        serve_scripted_result_authority(accepted, ScriptedLookup::Failing).await;
+
+    make_result_poll_due(&database.admin, request_id).await;
+    assert!(matches!(
+        poll_scripted_result(&mut database, &endpoint).await,
+        Err(MutationError::Unavailable)
+    ));
+    script.answer(ScriptedLookup::Approved);
+    make_result_poll_due(&database.admin, request_id).await;
+    assert!(poll_scripted_result(&mut database, &endpoint)
+        .await
+        .expect("available result reconciles"));
+
+    let row = database
+        .admin
+        .query_one(
+            "SELECT s.state,s.last_error_code,r.status
+               FROM registry_internal.registry_request_review_submissions s
+               JOIN registry_internal.registry_request_review_results r
+                 USING (request_entity_id,request_id,proposal_version)
+              WHERE s.request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("reconciled submission");
+    assert_eq!(row.get::<_, String>(0), "accepted");
+    assert_eq!(
+        row.get::<_, Option<String>>(1),
+        None,
+        "a reconciled result settles the lookup failure it outlived"
+    );
+    assert_eq!(row.get::<_, String>(2), "approved");
+
+    server.abort();
     database.cleanup().await;
 }
 
