@@ -470,6 +470,7 @@ pub(crate) fn compile_target_project(
     }
     validate_deployment_inputs(&project_root, &inputs, production)?;
     let plan = compile_plan(inputs, CompileProfile::Production(governed_bundle))?;
+    check_target_signing_validity(&plan)?;
     if production {
         reject_local_production_values(&plan.bundle)?;
         validate_production_sources(&plan.bundle)?;
@@ -522,7 +523,7 @@ pub(crate) fn compile_check_project(
     validate_private_empty_staging(staging_root)?;
     let inputs = read_inputs(&project_root, false)?;
     validate_production_inputs(&project_root, &inputs)?;
-    let plan = compile_plan_with_connections(
+    let mut plan = compile_plan_with_connections(
         inputs,
         CompileProfile::Local {
             ports: LocalServicePorts::default(),
@@ -533,7 +534,7 @@ pub(crate) fn compile_check_project(
         },
         json!({}),
     )?;
-    check_signing_validity(&plan)?;
+    expand_check_signing_validity(&mut plan.bundle);
     validate_compiled_bundle_shape(&plan.bundle)?;
     let bundle_path = write_bundle(&project_root, None, staging_root, &plan, evidence_bin)?;
     let fixture_paths = plan
@@ -552,17 +553,37 @@ pub(crate) fn compile_check_project(
     })
 }
 
-/// Refuse a requirement validity `test` would also refuse.
+/// Raise the synthetic check bundle's signing maximum to cover every authored
+/// requirement validity, never below the local 300 second baseline.
 ///
-/// `check` renders the same fixed local signing maximum `render_local_bundle`
-/// gives a fixture run, and a real target's own governance carries the same
-/// bound at `package` time. Reporting it here, against the question that
-/// declares it, catches the mismatch at authoring time instead of leaving it
-/// for the generic refusal the runtime raises once a fixture actually runs.
-fn check_signing_validity(plan: &CompilePlan) -> Result<()> {
-    let maximum = plan.bundle["signing"]["maximumAssertionValiditySeconds"]
-        .as_u64()
-        .unwrap_or(300);
+/// A project-only `check` has no deployment target, and the signing maximum
+/// that caps a requirement validity belongs to the target that eventually
+/// signs it. The bundle grammar still bounds each validity, and
+/// `check_target_signing_validity` applies the cap wherever a target is known.
+fn expand_check_signing_validity(bundle: &mut Value) {
+    let maximum = bundle["requirements"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|requirement| requirement["validitySeconds"].as_u64())
+        .max()
+        .unwrap_or(300)
+        .max(300);
+    bundle["signing"]["maximumAssertionValiditySeconds"] = json!(maximum);
+}
+
+/// Refuse a requirement validity the selected deployment target cannot sign.
+///
+/// The target's governance states `signing.maximumAssertionValiditySeconds`,
+/// and the runtime refuses any requirement whose validity exceeds it.
+/// Reporting it here, against the question that declares it, names the field
+/// to change before the bundle reaches the runtime, which reports it only as a
+/// generic refusal of the whole configuration. A target that states no integer
+/// maximum is left to the runtime's own validation of the target shape.
+fn check_target_signing_validity(plan: &CompilePlan) -> Result<()> {
+    let Some(maximum) = plan.bundle["signing"]["maximumAssertionValiditySeconds"].as_u64() else {
+        return Ok(());
+    };
     for question in &plan.questions {
         let Some(validity) = question.requirement["validitySeconds"].as_u64() else {
             continue;
@@ -575,7 +596,7 @@ fn check_signing_validity(plan: &CompilePlan) -> Result<()> {
                     question.question_id
                 ),
                 message: format!(
-                    "requirement validity of {validity} seconds exceeds the {maximum} second signing maximum this offline check assumes"
+                    "requirement validity of {validity} seconds exceeds the deployment target's {maximum} second signing maximum at governance.yaml:/signing/maximumAssertionValiditySeconds"
                 ),
             }
             .into());
@@ -6570,6 +6591,8 @@ factSchema: schemas/source-facts.schema.yaml
 
     /// Author the referenced-people project shape the two baseline tests use:
     /// one governed question with stable deployment governance and a fixture.
+    /// Its validity stays within the generated local baseline's 300 second
+    /// signing maximum, which a target compile enforces.
     fn write_governed_referenced_people_project(fixture: &Fixture, authentication: &str) {
         let question = write_referenced_people_project(fixture, authentication);
         let mut question: Value = serde_norway::from_str(&question).unwrap();
@@ -6577,7 +6600,7 @@ factSchema: schemas/source-facts.schema.yaml
         question["governance"] = json!({
             "requirement": "urn:authority:requirement:adult-status:v1", "kind":"criterion",
             "referenceFrameworks":["urn:authority:framework:adult-status:v1"],
-            "evidenceType":"urn:authority:evidence-type:adult-status:v1", "validitySeconds":900,
+            "evidenceType":"urn:authority:evidence-type:adult-status:v1", "validitySeconds":300,
             "observationTimezone":"Asia/Bangkok", "fixtures":"fixtures/adult-status.yaml",
             "disclosureFamilies":["urn:authority:disclosure-family:adult-status:v1"]
         });
@@ -6604,7 +6627,7 @@ factSchema: schemas/source-facts.schema.yaml
             "requirement": "urn:authority:requirement:age-bracket:v1",
             "kind": "information-requirement",
             "referenceFrameworks": ["urn:authority:framework:age-bracket:v1"],
-            "evidenceType": "urn:authority:evidence-type:age-bracket:v1", "validitySeconds": 900,
+            "evidenceType": "urn:authority:evidence-type:age-bracket:v1", "validitySeconds": 300,
             "observationTimezone": "Asia/Bangkok", "fixtures": "fixtures/age-bracket.yaml",
             "disclosureFamilies": ["urn:authority:disclosure-family:age-bracket:v1"]
         });
@@ -8803,24 +8826,48 @@ factSchema: schemas/family-facts.schema.yaml
         }
     }
 
-    fn plan_with_validity(validity_seconds: u64) -> CompilePlan {
+    fn plan_with_validity(validity_seconds: u64, signing: Value) -> CompilePlan {
         CompilePlan {
             questions: vec![minimal_question_plan("record-status", validity_seconds)],
             access_policies: Vec::new(),
-            bundle: json!({"signing": {"maximumAssertionValiditySeconds": 300}}),
+            bundle: json!({ "signing": signing }),
             local_public_jwk: None,
         }
     }
 
     #[test]
-    fn check_signing_validity_passes_a_requirement_at_the_local_signing_maximum() {
-        check_signing_validity(&plan_with_validity(300)).expect("300 seconds is the local ceiling");
+    fn check_only_signing_ceiling_covers_authored_validity_without_lowering_baseline() {
+        let mut long = json!({
+            "requirements": [{"validitySeconds": 86_400}],
+            "signing": {"maximumAssertionValiditySeconds": 300},
+        });
+        expand_check_signing_validity(&mut long);
+        assert_eq!(long["signing"]["maximumAssertionValiditySeconds"], 86_400);
+
+        let mut short = json!({
+            "requirements": [{"validitySeconds": 60}],
+            "signing": {"maximumAssertionValiditySeconds": 300},
+        });
+        expand_check_signing_validity(&mut short);
+        assert_eq!(short["signing"]["maximumAssertionValiditySeconds"], 300);
     }
 
     #[test]
-    fn check_signing_validity_refuses_a_requirement_past_the_local_signing_maximum() {
-        let error = check_signing_validity(&plan_with_validity(900))
-            .expect_err("900 seconds exceeds the 300 second local signing maximum");
+    fn target_signing_validity_passes_a_requirement_at_the_target_signing_maximum() {
+        check_target_signing_validity(&plan_with_validity(
+            900,
+            json!({"maximumAssertionValiditySeconds": 900}),
+        ))
+        .expect("a requirement at the target's own maximum is covered");
+    }
+
+    #[test]
+    fn target_signing_validity_refuses_a_requirement_past_the_target_signing_maximum() {
+        let error = check_target_signing_validity(&plan_with_validity(
+            900,
+            json!({"maximumAssertionValiditySeconds": 300}),
+        ))
+        .expect_err("900 seconds exceeds a target signing maximum of 300 seconds");
         let diagnostic = error
             .downcast_ref::<AuthoredDiagnostic>()
             .expect("a signing validity refusal is an authored diagnostic");
@@ -8832,5 +8879,15 @@ factSchema: schemas/family-facts.schema.yaml
             diagnostic.path,
             "questions/record-status.yaml:/governance/validitySeconds"
         );
+        assert_eq!(
+            diagnostic.message,
+            "requirement validity of 900 seconds exceeds the deployment target's 300 second signing maximum at governance.yaml:/signing/maximumAssertionValiditySeconds"
+        );
+    }
+
+    #[test]
+    fn target_signing_validity_leaves_an_unstated_target_maximum_to_the_runtime() {
+        check_target_signing_validity(&plan_with_validity(900, json!({})))
+            .expect("a target stating no maximum is validated by the runtime, not assumed");
     }
 }

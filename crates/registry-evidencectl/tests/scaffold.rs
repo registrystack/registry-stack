@@ -214,16 +214,12 @@ fn a_project_from_the_sourceless_shipped_starter_fails_its_offline_test() {
     );
 }
 
-/// `check` renders the same fixed local signing maximum `test` runs a
-/// fixture against, so a requirement validity that `test` would refuse must
-/// already be refused here, named at the question that declares it.
-#[test]
-fn check_refuses_a_requirement_validity_the_local_signing_maximum_cannot_cover() {
-    let workspace = TempDir::new().expect("temporary directory");
-    let project = workspace.path().join("project");
+/// A SQLite starter whose one question declares a requirement validity of
+/// 900 seconds, above the 300 second signing maximum a local target carries.
+fn sqlite_project_with_validity_above_the_local_signing_maximum(project: &Path) {
     let output = evidencectl(&[
         "new",
-        path(&project),
+        path(project),
         "--transport",
         "sqlite-extract",
         "--profile",
@@ -239,6 +235,16 @@ fn check_refuses_a_requirement_validity_the_local_signing_maximum_cannot_cover()
         authored.replace("validitySeconds: 300", "validitySeconds: 900"),
     )
     .expect("raise the authored requirement validity past the local signing maximum");
+}
+
+/// A project-only `check` has no deployment target, and the signing maximum
+/// that caps a requirement validity belongs to the target. Any validity the
+/// bundle grammar allows therefore passes here.
+#[test]
+fn project_only_check_accepts_a_requirement_validity_above_the_local_signing_maximum() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let project = workspace.path().join("project");
+    sqlite_project_with_validity_above_the_local_signing_maximum(&project);
 
     let stub = write_stub_evidence(workspace.path());
     let checked = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
@@ -248,14 +254,81 @@ fn check_refuses_a_requirement_validity_the_local_signing_maximum_cannot_cover()
         .expect("check the project");
 
     assert!(
-        !checked.status.success(),
-        "check must refuse a requirement validity the local signing maximum cannot cover:\n{}",
-        stdout(&checked)
+        checked.status.success(),
+        "a project-only check must not apply a deployment signing maximum:\n{}{}",
+        stdout(&checked),
+        stderr(&checked)
     );
-    let printed = format!("{}{}", stdout(&checked), stderr(&checked));
+}
+
+/// `check --target` knows the target's own signing maximum, so a requirement
+/// validity above it is refused at the question that declares it, and the
+/// same question passes once the target's maximum covers it.
+#[test]
+fn target_check_refuses_a_requirement_validity_above_the_target_signing_maximum() {
+    let workspace = TempDir::new().expect("temporary directory");
+    // A deployment target path must have no symlinked component, and the
+    // platform temporary directory may sit behind one.
+    let root = fs::canonicalize(workspace.path()).expect("canonical temporary directory");
+    let project = root.join("project");
+    sqlite_project_with_validity_above_the_local_signing_maximum(&project);
+    let target = project.join("targets/local");
+    let created = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["target", "new", path(&target), "--project", path(&project)])
+        .arg("--local")
+        .output()
+        .expect("create a local target");
+    assert!(created.status.success(), "{}", stderr(&created));
+    let governance_path = target.join("governance.yaml");
+    let governance = fs::read_to_string(&governance_path).expect("target governance");
+    assert!(
+        governance.contains("maximumAssertionValiditySeconds: 300"),
+        "{governance}"
+    );
+
+    let stub = write_stub_evidence(workspace.path());
+    let check_against_target = || {
+        Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+            .args(["check", path(&project), "--target", path(&target)])
+            .env("EVIDENCE_BIN", &stub)
+            .output()
+            .expect("check the project against its target")
+    };
+
+    let refused = check_against_target();
+    assert!(
+        !refused.status.success(),
+        "check --target must refuse a requirement validity above the target signing maximum:\n{}",
+        stdout(&refused)
+    );
+    let printed = format!("{}{}", stdout(&refused), stderr(&refused));
+    assert!(
+        printed.contains("evidence.question.validity-exceeds-signing-maximum"),
+        "{printed}"
+    );
     assert!(
         printed.contains("questions/record-status.yaml:/governance/validitySeconds"),
         "{printed}"
+    );
+    assert!(
+        printed.contains("the deployment target's 300 second signing maximum"),
+        "{printed}"
+    );
+
+    fs::write(
+        &governance_path,
+        governance.replace(
+            "maximumAssertionValiditySeconds: 300",
+            "maximumAssertionValiditySeconds: 900",
+        ),
+    )
+    .expect("raise the target signing maximum to cover the requirement");
+    let accepted = check_against_target();
+    assert!(
+        accepted.status.success(),
+        "a target whose signing maximum covers the requirement must pass:\n{}{}",
+        stdout(&accepted),
+        stderr(&accepted)
     );
 }
 
