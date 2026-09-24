@@ -675,6 +675,38 @@ fn authority_registry(
     completion_token: &str,
     completion_recipient: &str,
 ) -> Arc<ReviewAuthorityRegistry> {
+    authority_registry_with_token(
+        authority,
+        producer_id,
+        completion_token,
+        completion_recipient,
+        Arc::new(
+            registry_platform_httputil::StaticToken::new("outgoing-token".to_owned())
+                .expect("outgoing token"),
+        ),
+    )
+}
+
+/// A token provider whose credential source is down.
+struct UnavailableToken;
+
+#[async_trait::async_trait]
+impl registry_platform_httputil::TokenProvider for UnavailableToken {
+    async fn bearer_token(
+        &self,
+    ) -> Result<registry_platform_httputil::BearerToken, registry_platform_httputil::TokenError>
+    {
+        Err(registry_platform_httputil::TokenError::Unavailable)
+    }
+}
+
+fn authority_registry_with_token(
+    authority: &str,
+    producer_id: &str,
+    completion_token: &str,
+    completion_recipient: &str,
+    token_provider: Arc<dyn registry_platform_httputil::TokenProvider>,
+) -> Arc<ReviewAuthorityRegistry> {
     let client = ReviewClient::new(ReviewClientConfig::new(
         "http://127.0.0.1:9/".parse().expect("loopback URL"),
     ))
@@ -683,10 +715,7 @@ fn authority_registry(
         ReviewAuthorityClient::new(
             authority.to_owned(),
             client,
-            Arc::new(
-                registry_platform_httputil::StaticToken::new("outgoing-token".to_owned())
-                    .expect("outgoing token"),
-            ),
+            token_provider,
             "producer-profile".to_owned(),
             producer_id.to_owned(),
             7,
@@ -4045,6 +4074,86 @@ async fn a_resolved_result_lookup_failure_leaves_no_error_on_the_reconciled_subm
     );
     assert_eq!(row.get::<_, String>(2), "approved");
 
+    server.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_result_lookup_token_outage_asks_for_attention_without_spending_the_poll_budget() {
+    let mut database = prepare_review_database().await;
+    let request_id = Uuid::from_u128(0xa7);
+    let accepted = seed_accepted_submission(&database, request_id, Uuid::from_u128(0xa8)).await;
+    let attempts_before: i32 = database
+        .admin
+        .query_one(
+            "SELECT result_poll_attempts
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("accepted attempts")
+        .get(0);
+
+    // The authority's credential provider is down when the result poll is due.
+    make_result_poll_due(&database.admin, request_id).await;
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let authorities = authority_registry_with_token(
+        "casework-a",
+        "producer-a",
+        "sender",
+        "registry-a",
+        Arc::new(UnavailableToken),
+    );
+    assert!(matches!(
+        run_review_authority_once_for_test(&pool, &authorities).await,
+        Err(MutationError::Unavailable)
+    ));
+    let outage = database
+        .admin
+        .query_one(
+            "SELECT state,result_poll_attempts,last_error_code,
+                    next_result_poll_at > transaction_timestamp()
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("row after token outage");
+    assert_eq!(outage.get::<_, String>(0), "accepted");
+    assert_eq!(
+        outage.get::<_, i32>(1),
+        attempts_before,
+        "an authority-wide credential outage must not spend the poll budget"
+    );
+    assert_eq!(
+        outage.get::<_, Option<String>>(2).as_deref(),
+        Some("token-unavailable"),
+        "a lasting credential outage must surface as operator attention"
+    );
+    assert!(outage.get::<_, bool>(3));
+
+    // Once credentials recover, a pending answer clears the recorded outage.
+    let (endpoint, _script, server) =
+        serve_scripted_result_authority(accepted, ScriptedLookup::Pending).await;
+    make_result_poll_due(&database.admin, request_id).await;
+    assert!(poll_scripted_result(&mut database, &endpoint)
+        .await
+        .expect("pending result lookup succeeds"));
+    let recovered: Option<String> = database
+        .admin
+        .query_one(
+            "SELECT last_error_code
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("row after recovery")
+        .get(0);
+    assert_eq!(recovered, None);
+
+    drop(pool);
     server.abort();
     database.cleanup().await;
 }
