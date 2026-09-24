@@ -547,6 +547,144 @@ async fn text_length_widening_replaces_the_length_check_and_keeps_existing_rows(
     fresh.cleanup().await;
 }
 
+/// A lowered `string` minimum replaces the inline length check, or drops it
+/// when the minimum falls to zero: stored rows stay, the `varchar` bound and
+/// the field pattern's own check stay in force, and the upgraded catalog
+/// matches a fresh install.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn string_minimum_lowering_replaces_or_drops_the_length_check_and_keeps_existing_rows() {
+    for (lowered, short) in [(2, "ab"), (0, "a")] {
+        let previous = string_length_catalog_registry(5);
+        let candidate = string_length_catalog_registry(lowered);
+        let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
+        assert_eq!(change_set.changes.len(), 1, "{:?}", change_set.changes);
+        assert_change(
+            &change_set,
+            CompiledRegistryChangeClass::CompatibleAdditive,
+            CompiledRegistryChangeCode::FieldLengthWidened,
+        );
+        let plan = change_set_to_applicable_migration_plan(&change_set)
+            .expect("a lowered string minimum is compiler-applicable");
+
+        let entity = &candidate.entities()["entry"];
+        let table = quote_identifier(&entity.physical_table);
+        let note = quote_identifier(&entity.fields["note"].physical_name);
+        let insert = format!(
+            "INSERT INTO registry_data.{table}
+                 (record_id, active_package_revision, {note})
+             VALUES ($1::text::uuid, 'length-package-1', $2)"
+        );
+
+        let upgraded = TestDatabase::create(1).await;
+        let (upgraded_migration, upgraded_task) = upgraded.connect_migration().await;
+        install_compiled_schema(&upgraded_migration, &previous, &upgraded.runtime_role)
+            .await
+            .expect("previous schema installs");
+        // The administrator writes below the row policies: this test observes
+        // the column constraints alone.
+        upgraded
+            .admin
+            .execute(&insert, &[&RECORD_ALPHA, &"abcde"])
+            .await
+            .expect("a value at the previous minimum is stored");
+        assert!(
+            upgraded
+                .admin
+                .execute(&insert, &[&RECORD_BETA, &short])
+                .await
+                .is_err(),
+            "the previous check refuses a value below its minimum"
+        );
+        for statement in &plan.statements {
+            upgraded_migration
+                .batch_execute(&statement.sql)
+                .await
+                .expect("compiler-produced length statement applies");
+        }
+        upgraded
+            .admin
+            .execute(&insert, &[&RECORD_BETA, &short])
+            .await
+            .expect("the relaxed check accepts a value at the lower minimum");
+        let mut refused = vec![
+            (
+                "00000000-0000-0000-0000-000000000203",
+                "seventeen chars x",
+                "the varchar bound still refuses a value above maxLength",
+            ),
+            (
+                "00000000-0000-0000-0000-000000000204",
+                "UPPER",
+                "the field pattern's check stays in force",
+            ),
+        ];
+        if lowered > 0 {
+            refused.push((
+                "00000000-0000-0000-0000-000000000205",
+                "a",
+                "the replaced check still refuses a value below the lower minimum",
+            ));
+        }
+        for (record, value, reason) in refused {
+            assert!(
+                upgraded
+                    .admin
+                    .execute(&insert, &[&record, &value])
+                    .await
+                    .is_err(),
+                "{reason}"
+            );
+        }
+        let kept: Vec<(String, String)> = upgraded
+            .admin
+            .query(
+                &format!(
+                    "SELECT record_id::text, {note} FROM registry_data.{table} ORDER BY record_id"
+                ),
+                &[],
+            )
+            .await
+            .expect("stored rows are readable")
+            .into_iter()
+            .map(|row| (row.get(0), row.get(1)))
+            .collect();
+        assert_eq!(
+            kept,
+            [
+                (RECORD_ALPHA.to_owned(), "abcde".to_owned()),
+                (RECORD_BETA.to_owned(), short.to_owned()),
+            ]
+        );
+        let candidate_catalog = ExpectedManagedCatalog::compiled(&candidate);
+        let upgraded_fingerprint = managed_schema_fingerprint(
+            &upgraded_migration,
+            &upgraded.runtime_role,
+            &candidate_catalog,
+        )
+        .await
+        .expect("upgraded candidate catalog is fingerprinted");
+        upgraded_task.abort();
+
+        let fresh = TestDatabase::create(1).await;
+        let (fresh_migration, fresh_task) = fresh.connect_migration().await;
+        install_compiled_schema(&fresh_migration, &candidate, &fresh.runtime_role)
+            .await
+            .expect("candidate schema installs cleanly");
+        let fresh_fingerprint =
+            managed_schema_fingerprint(&fresh_migration, &fresh.runtime_role, &candidate_catalog)
+                .await
+                .expect("fresh candidate catalog is fingerprinted");
+        fresh_task.abort();
+        assert_eq!(
+            upgraded_fingerprint, fresh_fingerprint,
+            "a lowered minimum of {lowered} leaves the catalog a fresh install gives"
+        );
+
+        upgraded.cleanup().await;
+        fresh.cleanup().await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn vocabulary_code_addition_replaces_the_check_and_keeps_existing_rows() {
     let previous = vocabulary_catalog_registry(&["open", "closed"]);
@@ -1613,6 +1751,44 @@ fn length_catalog_registry(max_length: u32) -> registry_breg::CompiledRegistry {
     let project = parse_project_json(&project_bytes).expect("length catalog fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring)
         .expect("length catalog fixture compiles")
+}
+
+fn string_length_catalog_registry(min_length: u32) -> registry_breg::CompiledRegistry {
+    let project = serde_json::json!({
+        "apiVersion": "registry.registrystack.org/v1alpha1",
+        "kind": "RegistryProject",
+        "registry": {
+            "id": "length-catalog",
+            "version": "1",
+            "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"
+        },
+        "entities": [{
+            "id": "entry",
+            "primaryDataset": "test-dataset",
+            "route": "entries",
+            "mutationMode": "mutable",
+            "fields": [
+                {"id": "note", "type": "string", "minLength": min_length, "maxLength": 16,
+                 "pattern": "^[a-z ]*$", "required": true, "classification": "internal"}
+            ]
+        }],
+        "accessProfiles": [{
+            "id": "writer",
+            "default": true,
+            "principalClaim": "registry_principal",
+            "permissions": [{
+                "entity": "entry",
+                "operations": ["create", "get", "list", "patch"],
+                "readableFields": ["note"],
+                "writableFields": ["note"],
+                "rowBoundaries": []
+            }]
+        }]
+    });
+    let project_bytes = serde_json::to_vec(&project).expect("fixture serializes");
+    let project = parse_project_json(&project_bytes).expect("string length fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("string length fixture compiles")
 }
 
 fn vocabulary_catalog_registry(status_values: &[&str]) -> registry_breg::CompiledRegistry {

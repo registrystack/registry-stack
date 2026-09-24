@@ -322,3 +322,69 @@ fn a_raised_text_limit_on_a_targeted_entity_keeps_the_action_contracts() {
         narrowed.changes
     );
 }
+
+#[test]
+fn a_lowered_string_minimum_on_a_targeted_entity_keeps_the_action_contracts() {
+    const SOURCE_REFERENCE: &str =
+        "{id: source-reference, type: string, maxLength: 255, classification: internal}";
+    let with_minimum = |min_length: u32| {
+        replace_once(
+            CONSENT_MODULE,
+            SOURCE_REFERENCE,
+            &format!(
+                "{SOURCE_REFERENCE}\n  - {{id: review-code, type: string, minLength: {min_length}, maxLength: 64, classification: internal}}"
+            ),
+        )
+    };
+    let before = consent(CONSENT_PROJECT, &with_minimum(8));
+
+    let lowered = compiled_registry_change_set(
+        &before,
+        &consent(CONSENT_PROJECT, &with_minimum(2)),
+        "prior-package",
+    );
+    let changes = lowered
+        .changes
+        .iter()
+        .map(|change| (change.code, change.target.member_id.as_deref()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        changes[0],
+        (
+            CompiledRegistryChangeCode::FieldLengthWidened,
+            Some("review-code")
+        )
+    );
+    for action in [
+        "give-person-consent",
+        "import-person-consent",
+        "invalidate-person-consent",
+        "record-person-consent-assisted",
+        "refuse-person-consent",
+        "withdraw-person-consent",
+    ] {
+        assert_eq!(
+            action_change(&lowered, action),
+            (
+                CompiledRegistryChangeCode::ActionTargetFieldsWidened,
+                CompiledRegistryChangeClass::CompatibleAdditive
+            )
+        );
+    }
+    assert_eq!(changes.len(), 7, "{changes:?}");
+    assert!(change_set_to_applicable_migration_plan(&lowered).is_ok());
+
+    let raised = compiled_registry_change_set(
+        &before,
+        &consent(CONSENT_PROJECT, &with_minimum(16)),
+        "prior-package",
+    );
+    assert!(
+        raised
+            .changes
+            .iter()
+            .any(|change| change.code == CompiledRegistryChangeCode::ActionChanged),
+        "a raised minimum changes the requests an action accepts: {:#?}",
+        raised.changes
+    );
+}

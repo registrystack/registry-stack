@@ -869,11 +869,13 @@ pub(crate) fn replace_vocabulary_check_statement(
     replace_inline_field_check_statement(entity, names, field, "vocabulary")
 }
 
-/// The statement that raises a stored `text` column's length check to the
-/// candidate field's `maxLength`, or `None` for an encrypted column, which
-/// stores envelopes and carries no length check. It replaces the inline check
-/// exactly as [`replace_vocabulary_check_statement`] does, under the same lock
-/// and row validation.
+/// The statement that relaxes a stored column's length check to the candidate
+/// field's bound, or `None` for an encrypted column, which stores envelopes
+/// and carries no length check. A raised `text` `maxLength` or a lowered
+/// nonzero `string` `minLength` replaces the inline check exactly as
+/// [`replace_vocabulary_check_statement`] does, under the same lock and row
+/// validation. A `string` `minLength` lowered to zero drops the check, since
+/// a fresh install of the candidate declares none.
 #[cfg(feature = "runtime")]
 pub(crate) fn replace_length_check_statement(
     entity: &CompiledEntity,
@@ -899,8 +901,16 @@ fn replace_inline_field_check_statement(
     if field.encryption.is_some() {
         return None;
     }
-    let check = field_check(&quote_identifier(&field.physical_name), &field.field_type)?;
     let table = quote_literal(&entity.physical_table);
+    let alter = match field_check(&quote_identifier(&field.physical_name), &field.field_type) {
+        Some(check) => format!(
+            "EXECUTE format('ALTER TABLE registry_data.%I DROP CONSTRAINT %I, ADD CONSTRAINT %I CHECK (%s)', {table}, check_name, check_name, {check});",
+            check = quote_literal(&check),
+        ),
+        None => format!(
+            "EXECUTE format('ALTER TABLE registry_data.%I DROP CONSTRAINT %I', {table}, check_name);"
+        ),
+    };
     let named_constraints = names
         .constraints
         .values()
@@ -933,11 +943,10 @@ fn replace_inline_field_check_statement(
              \x20   WHERE n.nspname = 'registry_data' AND t.relname = {table}\n\
              \x20     AND c.contype = 'c' AND c.conkey = ARRAY[a.attnum]\n\
              \x20     AND c.conname <> ALL (ARRAY[{named_constraints}]::name[]);\n\
-             \x20   EXECUTE format('ALTER TABLE registry_data.%I DROP CONSTRAINT %I, ADD CONSTRAINT %I CHECK (%s)', {table}, check_name, check_name, {check});\n\
+             \x20   {alter}\n\
              END\n\
              $breg_{purpose}$",
             column = quote_literal(&field.physical_name),
-            check = quote_literal(&check),
         ),
     })
 }

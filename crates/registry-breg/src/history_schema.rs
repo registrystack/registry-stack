@@ -461,9 +461,10 @@ impl HistoryFieldDescriptor {
         allow_retained_plaintext: bool,
     ) -> Result<bool, HistorySchemaError> {
         self.validate()?;
-        // A revision recorded under fewer vocabulary codes or a lower text
-        // length limit stays readable: it is decoded against the type it was
-        // recorded under, every value of which the active field still admits.
+        // A revision recorded under fewer vocabulary codes, a lower text
+        // length limit, or a higher string minimum stays readable: it is
+        // decoded against the type it was recorded under, every value of
+        // which the active field still admits.
         if self.id != active.id
             || (self.field_type != *active.field_type
                 && !active.field_type.admits_every_value_of(&self.field_type))
@@ -1174,6 +1175,43 @@ mod tests {
                     max_length: 200,
                 }),
                 "a text field retyped as string is a type change",
+            ),
+        ] {
+            assert_eq!(
+                descriptor
+                    .compatibility_for_fields(&active, &required(&["note"]), &required(&[]))
+                    .expect_err(reason),
+                HistorySchemaError::IncompatibleField
+            );
+        }
+    }
+
+    #[test]
+    fn a_lowered_string_minimum_keeps_recorded_values_readable() {
+        let string = |min_length, max_length| FieldTypeSource::String {
+            min_length,
+            max_length,
+        };
+        let old = with_note_field(string(5, 80));
+        let descriptor = descriptor_for(&old);
+        let lowered = with_note_field(string(0, 80));
+
+        let compatibility = descriptor
+            .compatibility_for_fields(&lowered, &required(&["note"]), &required(&["note"]))
+            .expect("a lowered string minimum keeps every recorded value valid");
+        assert_eq!(
+            compatibility.fields["note"].field_type, old.fields["note"].field_type,
+            "a revision is decoded against the minimum it was recorded under"
+        );
+
+        for (active, reason) in [
+            (
+                with_note_field(string(8, 80)),
+                "a raised minimum could surface a value the active field refuses",
+            ),
+            (
+                with_note_field(string(0, 200)),
+                "a string maxLength is its column type",
             ),
         ] {
             assert_eq!(
