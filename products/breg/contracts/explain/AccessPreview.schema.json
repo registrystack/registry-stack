@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/breg-explain/v1alpha2/AccessPreview.schema.json",
+  "$id": "https://registrystack.org/breg-explain/v1alpha3/AccessPreview.schema.json",
   "title": "AccessPreview",
   "description": "Wire shape of `explanation` for `bregctl explain access --scenario <file>`. The offline synthetic-admission result is a small hand-written struct and is pinned in full, except `effectiveProfile`, which is a passthrough of a compiled access profile and is declared opaque.",
   "type": "object",
@@ -15,11 +15,12 @@
     "credentialsVerified",
     "authorityIssued",
     "rowValuesDisclosed",
-    "effectiveProfile"
+    "effectiveProfile",
+    "recipients"
   ],
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/breg-explain/v1alpha2"
+      "const": "registry.registrystack.org/breg-explain/v1alpha3"
     },
     "kind": {
       "const": "AccessPreview"
@@ -34,6 +35,11 @@
     "effectiveProfile": {
       "type": ["object", "null"],
       "description": "Passthrough of the compiled access profile the scenario resolved to, or null when no profile matched. Shape follows AccessProfileSource and is outside this contract version."
+    },
+    "recipients": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "The consent recipients the scenario's requesterClient acts for: its organization plus every group containing it. Empty for an absent or unmapped client, which fails every consent check closed."
     }
   }
 }

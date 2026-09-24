@@ -11,7 +11,7 @@ whose `explanation` field carries an envelope plus a subject-specific payload:
   "revision": "...",
   "findings": [],
   "explanation": {
-    "apiVersion": "registry.registrystack.org/breg-explain/v1alpha2",
+    "apiVersion": "registry.registrystack.org/breg-explain/v1alpha3",
     "kind": "RoutesExplanation",
     "routes": [ "..." ]
   }
@@ -28,6 +28,14 @@ subject (ten invocations, because `explain access` produces a different
 target. A consumer no longer has to join `permissions[].targets[]` back to the
 action's own `targets[]` to distinguish creates and patches from referenced
 invocation targets.
+
+`v1alpha3` adds `consent` to `AccessExplanation` (null for a project without
+consent configuration) and `recipients` to `AccessPreview`. `consent` states
+each consent-gated permission with its record, `on` key, scope, purposes,
+`maxDuration`, probe function, index names, readable-field classifications,
+admitted clients and issuing actions, plus the recipient set of every client
+with each group expanded. `recipients` is the recipient set of the scenario's
+`requesterClient`.
 
 | Subject | `--scenario` | `kind` | Schema |
 |---|---|---|---|
@@ -96,6 +104,11 @@ grow internal structure that would make a passthrough opaque in practice:
 fields of `AccessExplanation`'s and `AccessPreview`'s own top level, because
 both are small, hand-authored structs whose fields are named directly in
 `registry-breg`.
+
+`AccessExplanation.consent` is pinned in full on the same ground as
+`LifecycleExplanation`, described next: it is a passthrough of
+`registry_breg::access::ConsentExplanation`, a structure that exists only to be
+this payload.
 
 `LifecycleExplanation` is pinned in full for a different reason. It is a
 passthrough by construction (`serde_json::to_value` of a

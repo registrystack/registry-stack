@@ -164,16 +164,7 @@ impl RegistryAuthenticator {
         let audience = verifier_config.audiences[0].clone();
         let scope_claim = verifier_config.scope_claim.clone();
         let issuer = verifier_config.issuer.clone();
-        let consent_decisions = registry
-            .entities()
-            .values()
-            .filter_map(|entity| {
-                entity
-                    .consent_record
-                    .as_ref()
-                    .map(|record| (entity.id.clone(), record.feed_decisions()))
-            })
-            .collect();
+        let consent_decisions = crate::consent::feed_decisions(registry.entities());
         Ok(Self {
             verifier: TokenVerifier::new(verifier_config, key_source),
             last_key_refusal_warning: Mutex::new(None),

@@ -328,3 +328,109 @@ fn a_consent_change_never_classifies_as_unsupported() {
         "{diff:#?}"
     );
 }
+
+fn preview(scenario: Value) -> Result<Value, &'static str> {
+    let registry = compile(&source()).unwrap();
+    let scenario = serde_json::from_value(scenario).unwrap();
+    registry_breg::access_preview::preview_access(&registry, scenario)
+        .map(|preview| serde_json::to_value(preview).unwrap())
+}
+
+fn food_targeting_scenario(claims: Value) -> Value {
+    let mut base = json!({
+        "principalClaim": "principal",
+        "principal": "synthetic-caseworker",
+        "scopes": ["records:read"],
+        "purpose": "food-assistance",
+    });
+    base.as_object_mut()
+        .unwrap()
+        .extend(claims.as_object().unwrap().clone());
+    json!({
+        "entity": "person",
+        "accessProfile": "food-targeting",
+        "operation": "get",
+        "claims": base,
+    })
+}
+
+#[test]
+fn a_preview_admits_a_gated_profile_and_names_the_client_recipients() {
+    let admitted = preview(food_targeting_scenario(json!({
+        "actorKind": "service",
+        "requesterClient": "wfp-scope",
+    })))
+    .unwrap();
+    assert_eq!(admitted["admitted"], true, "{admitted}");
+    assert_eq!(admitted["recipients"], json!(["referral-network", "wfp"]));
+    assert_eq!(admitted["recordAccess"], "not_evaluated");
+
+    for (claims, reason) in [
+        (
+            json!({"requesterClient": "wfp-scope"}),
+            "actor_kind_missing",
+        ),
+        (
+            json!({"actorKind": "human", "requesterClient": "wfp-scope"}),
+            "actor_kind_mismatched",
+        ),
+        (
+            json!({"actorKind": "service"}),
+            "requester_client_missing_or_mismatched",
+        ),
+        (
+            json!({"actorKind": "service", "requesterClient": "steward-console"}),
+            "requester_client_missing_or_mismatched",
+        ),
+    ] {
+        let refused = preview(food_targeting_scenario(claims)).unwrap();
+        assert_eq!(refused["admitted"], false, "{refused}");
+        assert_eq!(refused["reason"], reason, "{refused}");
+    }
+}
+
+#[test]
+fn a_preview_fills_the_recipient_feed_boundary_from_the_requester_client() {
+    let feed = |claims: Value| {
+        preview(json!({
+            "entity": "consent-decision",
+            "accessProfile": "recipient-feed",
+            "operation": "list",
+            "claims": claims,
+        }))
+    };
+    let admitted = feed(json!({
+        "principalClaim": "principal",
+        "principal": "synthetic-feed",
+        "scopes": ["consent:read"],
+        "actorKind": "service",
+        "requesterClient": "ngo-alpha-portal",
+    }))
+    .unwrap();
+    assert_eq!(admitted["admitted"], true, "{admitted}");
+    assert_eq!(
+        admitted["recipients"],
+        json!(["ngo-alpha", "referral-network"])
+    );
+
+    // A scenario cannot supply a reserved claim; the preview derives it from
+    // the requester client the way the runtime derives it from the verified
+    // client.
+    for reserved in [
+        "registry:recipients",
+        "registry:consent-decisions:consent-decision",
+    ] {
+        let refused = feed(json!({
+            "principalClaim": "principal",
+            "principal": "synthetic-feed",
+            "scopes": ["consent:read"],
+            "actorKind": "service",
+            "requesterClient": "ngo-alpha-portal",
+            "directClaims": {reserved: ["wfp"]},
+        }));
+        assert!(
+            refused.is_err_and(|message| message.contains("requesterClient")),
+            "{reserved}"
+        );
+    }
+}

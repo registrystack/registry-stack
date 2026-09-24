@@ -373,6 +373,95 @@ fn explain_access_names_membership_constraints_instead_of_unrestricted_rows() {
 }
 
 #[test]
+fn explain_access_states_consent_gates_recipients_and_the_ungated_client() {
+    let project = TestProject::from_registry_source(include_bytes!(
+        "../../registry-breg/tests/fixtures/consent-access.yaml"
+    ));
+    let path = project.path().to_str().unwrap();
+    let output = bregctl(&["explain", "access", path]);
+    assert!(output.status.success(), "{output:?}");
+    let human = String::from_utf8(output.stdout).unwrap();
+    let aligned = human.split_whitespace().collect::<Vec<_>>().join(" ");
+    for expected in [
+        "access.consent.ungated_client entities[id=person].accessProfiles[id=steward].requesterClients",
+        "consent required (all) [{\"on\":\"id\",\"record\":\"consent-decision\"}]",
+        "Consent:",
+        "permission food-targeting over person",
+        "whose scope is `food-targeting`",
+        "record consent-decision",
+        "scope food-targeting",
+        "max duration P365D",
+        "readable fields district (internal), given-name (restricted)",
+        "issuing actions record-consent (steward)",
+        "client wfp-scope wfp: referral-network, wfp",
+        "group referral-network wfp, ngo-alpha: ngo-alpha-portal, wfp-scope",
+        "organization ngo-beta retired",
+        "consent issuers record-consent (steward)",
+        "retiredConsentScopes",
+    ] {
+        assert!(aligned.contains(expected), "{expected:?} in {human}");
+    }
+
+    let scenario = project.path().join("scenario.json");
+    fs::write(
+        &scenario,
+        serde_json::to_vec(&json!({
+            "entity": "person",
+            "accessProfile": "food-targeting",
+            "operation": "get",
+            "claims": {
+                "principalClaim": "principal",
+                "principal": "synthetic-caseworker",
+                "scopes": ["records:read"],
+                "purpose": "food-assistance",
+                "actorKind": "service",
+                "requesterClient": "wfp-scope"
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let output = bregctl(&[
+        "explain",
+        "access",
+        path,
+        "--scenario",
+        scenario.to_str().unwrap(),
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    let human = String::from_utf8(output.stdout).unwrap();
+    let aligned = human.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        aligned.contains("Synthetic profile admission: allowed"),
+        "{human}"
+    );
+    assert!(
+        aligned.contains("recipients referral-network, wfp"),
+        "{human}"
+    );
+
+    fs::write(&scenario, br#"{"entity":"person","accessProfile":"food-targeting","operation":"get","claims":{"requester":"wfp-scope"}}"#).unwrap();
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "explain",
+        "access",
+        path,
+        "--scenario",
+        scenario.to_str().unwrap(),
+    ]);
+    assert!(!output.status.success());
+    let message = json_stdout(&output)["diagnostics"][0]["message"].clone();
+    assert!(
+        message
+            .as_str()
+            .unwrap()
+            .contains("actorKind, requesterClient"),
+        "{message}"
+    );
+}
+
+#[test]
 fn missing_action_script_identifies_action_and_safe_relative_path() {
     let project = TestProject::from_registry_source(include_bytes!(
         "../../../products/breg/acceptance/person-registration-rhai/registry.yaml"

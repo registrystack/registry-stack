@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::api::{authorize_profile_claims, VerifiedClaimValue, VerifiedRequestClaims};
 use crate::auth::{compiled_authority_field_type, map_authority_claim};
-use crate::contract::{AccessProfileSource, BoundaryOperator, Operation};
+use crate::contract::{AccessProfileSource, ActorKindSource, BoundaryOperator, Operation};
 use crate::model::{CompiledEntity, CompiledRegistry};
 
 #[derive(Deserialize)]
@@ -37,6 +37,13 @@ pub struct ScenarioClaims {
     purpose: Option<String>,
     #[serde(default)]
     direct_claims: BTreeMap<String, Value>,
+    /// The verified actor kind a real token would carry.
+    #[serde(default)]
+    actor_kind: Option<ActorKindSource>,
+    /// The verified OAuth client a real token would carry; it also selects
+    /// the consent recipient set, exactly as at runtime.
+    #[serde(default)]
+    requester_client: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -50,6 +57,9 @@ pub struct AccessPreview {
     pub authority_issued: bool,
     pub row_values_disclosed: bool,
     pub effective_profile: Option<AccessProfileSource>,
+    /// The consent recipients the requester client acts for; empty for an
+    /// unmapped or absent client, which fails every consent check closed.
+    pub recipients: Vec<String>,
 }
 
 /// Reuse the HTTP profile-admission function. A permit is conditional on real
@@ -63,7 +73,7 @@ pub fn preview_access(
         .entities()
         .get(&scenario.entity)
         .and_then(|entity| entity.access_profiles.get(&scenario.access_profile));
-    let claims = synthetic_claims(scenario.claims, entity.zip(profile))?;
+    let claims = synthetic_claims(registry, scenario.claims, entity.zip(profile))?;
     let reason = match profile {
         None => Some("entity_or_profile_not_found"),
         Some(profile) => {
@@ -90,14 +100,30 @@ pub fn preview_access(
         authority_issued: false,
         row_values_disclosed: false,
         effective_profile: profile.cloned(),
+        recipients: claims.recipients().iter().cloned().collect(),
     })
 }
 
 fn synthetic_claims(
+    registry: &CompiledRegistry,
     claims: ScenarioClaims,
     target: Option<(&CompiledEntity, &AccessProfileSource)>,
 ) -> Result<VerifiedRequestClaims, &'static str> {
     let invalid = "use bounded synthetic claims matching the profile's declared row/lookup claim names, field types, and scalar/array shapes; never use a real token or record";
+    if claims
+        .direct_claims
+        .keys()
+        .any(|name| crate::consent::is_reserved_claim(name))
+    {
+        return Err("directClaims cannot name registry:recipients or a registry:consent-decisions: claim; set requesterClient and the preview derives them the way the runtime does from the verified client");
+    }
+    if claims
+        .requester_client
+        .as_ref()
+        .is_some_and(|client| client.is_empty() || client.len() > 512)
+    {
+        return Err(invalid);
+    }
     if claims.scopes.len() > 128
         || claims.direct_claims.len() > 64
         || claims.scopes.iter().any(|s| s.is_empty() || s.len() > 512)
@@ -112,7 +138,9 @@ fn synthetic_claims(
         (None, None)
             if claims.scopes.is_empty()
                 && claims.purpose.is_none()
-                && claims.direct_claims.is_empty() =>
+                && claims.direct_claims.is_empty()
+                && claims.actor_kind.is_none()
+                && claims.requester_client.is_none() =>
         {
             Ok(VerifiedRequestClaims::anonymous())
         }
@@ -182,6 +210,11 @@ fn synthetic_claims(
                 .map_err(|_| invalid)?;
                 direct.insert(name, value);
             }
+            let recipients = claims
+                .requester_client
+                .as_deref()
+                .map(|client| registry.recipients().recipient_set(client))
+                .unwrap_or_default();
             VerifiedRequestClaims::authenticated(
                 name,
                 principal,
@@ -189,6 +222,25 @@ fn synthetic_claims(
                 claims.purpose,
                 direct,
             )
+            .and_then(|verified| {
+                verified.with_contextual_authority(
+                    claims.actor_kind.map(|kind| match kind {
+                        ActorKindSource::Human => registry_platform_oidc::ActorKind::Human,
+                        ActorKindSource::Agent => registry_platform_oidc::ActorKind::Agent,
+                        ActorKindSource::Service => registry_platform_oidc::ActorKind::Service,
+                    }),
+                    claims.requester_client,
+                    None,
+                    None,
+                    BTreeMap::new(),
+                )
+            })
+            .and_then(|verified| {
+                verified.with_consent_claims(
+                    recipients,
+                    &crate::consent::feed_decisions(registry.entities()),
+                )
+            })
             .map_err(|_| invalid)
         }
         _ => Err(invalid),

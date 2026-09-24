@@ -1028,3 +1028,144 @@ fn a_signed_predecessor_carries_its_recipients_into_a_metadata_only_successor() 
         vec![CompiledRegistryChangeCode::RecipientOrganizationChanged]
     );
 }
+
+#[test]
+fn explain_access_states_each_gated_permission_and_its_recipients() {
+    use registry_breg::contract::{Classification, ConsentIssuerSource};
+    let registry = compile(&source()).unwrap();
+    let explanation = registry_breg::access::explain_access(&registry);
+    let consent = explanation.consent.expect("the fixture declares consent");
+    assert!(consent.unmapped_clients.contains("fails closed"));
+    assert!(consent.trust_model.contains("registry.consent_probe"));
+    assert!(consent.ungating.contains("retiredConsentScopes"));
+
+    let beta = consent
+        .organizations
+        .iter()
+        .find(|organization| organization.id == "ngo-beta")
+        .unwrap();
+    assert!(beta.retired && beta.clients.is_empty());
+    let wfp = consent
+        .organizations
+        .iter()
+        .find(|organization| organization.id == "wfp")
+        .unwrap();
+    assert_eq!(wfp.groups, ["referral-network"]);
+    let network = &consent.groups[0];
+    assert_eq!(network.members, ["wfp", "ngo-alpha"]);
+    assert_eq!(network.clients, ["ngo-alpha-portal", "wfp-scope"]);
+    let wfp_scope = consent
+        .clients
+        .iter()
+        .find(|client| client.client == "wfp-scope")
+        .unwrap();
+    assert_eq!(wfp_scope.organization.as_deref(), Some("wfp"));
+    assert_eq!(wfp_scope.recipients, ["referral-network", "wfp"]);
+
+    assert_eq!(consent.records.len(), 1);
+    let record = &consent.records[0];
+    assert_eq!(record.entity, "consent-decision");
+    assert_eq!(record.max_duration, "P365D");
+    assert_eq!(record.scopes, ["food-targeting", "food-targeting-2025"]);
+    assert_eq!(record.indexes.len(), 2);
+    assert!(
+        record.indexes[0].starts_with("breg_consent_key_"),
+        "{record:?}"
+    );
+    assert!(
+        record.indexes[1].starts_with("breg_consent_revoke_"),
+        "{record:?}"
+    );
+
+    assert_eq!(
+        consent
+            .permissions
+            .iter()
+            .map(|permission| (permission.entity.as_str(), permission.on.as_str()))
+            .collect::<Vec<_>>(),
+        [("enrolment", "person"), ("person", "id")]
+    );
+    let person = &consent.permissions[1];
+    assert_eq!(person.profile, "food-targeting");
+    assert_eq!(person.scope, "food-targeting");
+    assert_eq!(person.record, "consent-decision");
+    assert_eq!(person.purposes, ["food-assistance"]);
+    assert_eq!(person.max_duration, "P365D");
+    assert!(person.probe_function.starts_with("consent_"));
+    assert_eq!(person.indexes, record.indexes);
+    assert!(
+        person.condition.contains("`consent-decision`"),
+        "{}",
+        person.condition
+    );
+    assert_eq!(
+        person
+            .readable_fields
+            .iter()
+            .map(|field| (field.field.as_str(), field.classification))
+            .collect::<Vec<_>>(),
+        [
+            ("district", Some(Classification::Internal)),
+            ("given-name", Some(Classification::Restricted)),
+        ]
+    );
+    assert_eq!(
+        person
+            .clients
+            .iter()
+            .map(|client| client.client.as_str())
+            .collect::<Vec<_>>(),
+        ["ngo-alpha-portal", "wfp-scope"]
+    );
+    assert_eq!(person.issuing_actions.len(), 1);
+    assert_eq!(person.issuing_actions[0].action, "record-consent");
+    assert_eq!(
+        person.issuing_actions[0].issuer,
+        ConsentIssuerSource::Steward
+    );
+    assert_eq!(consent.issuers, person.issuing_actions);
+}
+
+#[test]
+fn a_client_reading_a_gated_entity_through_an_ungated_profile_is_a_finding() {
+    let findings = |value: &Value| {
+        compile(value)
+            .unwrap()
+            .findings()
+            .iter()
+            .filter(|finding| finding.code == "access.consent.ungated_client")
+            .map(|finding| (finding.path.clone(), finding.message.clone()))
+            .collect::<Vec<_>>()
+    };
+    // The steward profile admits any client, so it reads both gated entities
+    // without consent.
+    let unrestricted = findings(&source());
+    assert_eq!(
+        unrestricted
+            .iter()
+            .map(|(path, _)| path.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "entities[id=enrolment].accessProfiles[id=steward].requesterClients",
+            "entities[id=person].accessProfiles[id=steward].requesterClients",
+        ]
+    );
+    assert!(unrestricted[0].1.contains("any client"), "{unrestricted:?}");
+    assert!(
+        unrestricted[0].1.contains("food-targeting"),
+        "{unrestricted:?}"
+    );
+
+    let mut shared = source();
+    shared["accessProfiles"][STEWARD]["actorKind"] = json!("service");
+    shared["accessProfiles"][STEWARD]["requesterClients"] = json!(["wfp-scope", "steward-console"]);
+    let shared = findings(&shared);
+    assert_eq!(shared.len(), 2, "{shared:?}");
+    assert!(shared[0].1.contains("wfp-scope"), "{shared:?}");
+    assert!(!shared[0].1.contains("steward-console"), "{shared:?}");
+
+    let mut separate = source();
+    separate["accessProfiles"][STEWARD]["actorKind"] = json!("service");
+    separate["accessProfiles"][STEWARD]["requesterClients"] = json!(["steward-console"]);
+    assert_eq!(findings(&separate), vec![]);
+}

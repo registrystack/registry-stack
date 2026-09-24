@@ -5538,7 +5538,7 @@ fn planner_test_failure(code: &str, path: &str, message: &str) -> FailureReport 
 
 /// `apiVersion` for every `bregctl explain` payload, versioned as a whole: any change
 /// to a pinned object's shape in one of the nine kinds bumps this version.
-const EXPLAIN_API_VERSION: &str = "registry.registrystack.org/breg-explain/v1alpha2";
+const EXPLAIN_API_VERSION: &str = "registry.registrystack.org/breg-explain/v1alpha3";
 
 /// Which `explanation` kind a subject (and, for `access`, whether a scenario ran)
 /// produces. Kept beside `explain_envelope` because the two always travel together.
@@ -5695,7 +5695,7 @@ fn explain(
             read_bounded_source_file(path, "access.scenario.unavailable", "scenario", 65_536)
                 .map_err(explain_usage_error)?;
         let source = parse_json_strict(&bytes).map_err(|_| explain_usage_error(diagnostic("access.scenario.invalid", "scenario", "provide a strict JSON access scenario with synthetic claims; duplicate keys and malformed JSON are refused")))?;
-        let scenario = serde_json::from_value(source).map_err(|_| explain_usage_error(diagnostic("access.scenario.invalid", "scenario", "use entity, accessProfile, operation, optional readPath, and claims; claims accepts principalClaim, principal, scopes, purpose, and directClaims")))?;
+        let scenario = serde_json::from_value(source).map_err(|_| explain_usage_error(diagnostic("access.scenario.invalid", "scenario", "use entity, accessProfile, operation, optional readPath, and claims; claims accepts principalClaim, principal, scopes, purpose, directClaims, actorKind, requesterClient")))?;
         Some(
             registry_breg::access_preview::preview_access(&compiled, scenario).map_err(
                 |message| {
@@ -9695,13 +9695,20 @@ fn push_access_explanation(explanation: &Value, lines: &mut report::Lines) {
             if admitted { "allowed" } else { "refused" },
             admitted,
         );
-        lines.pairs(&[(
+        let mut pairs = vec![(
             "reason",
             explanation["reason"]
                 .as_str()
                 .unwrap_or("unknown")
                 .to_owned(),
-        )]);
+        )];
+        if let Some(recipients) = explanation["recipients"]
+            .as_array()
+            .filter(|recipients| !recipients.is_empty())
+        {
+            pairs.push(("recipients", joined_strings(recipients)));
+        }
+        lines.pairs(&pairs);
         lines.blank();
         lines.prose(
             1,
@@ -9750,6 +9757,179 @@ fn push_access_explanation(explanation: &Value, lines: &mut report::Lines) {
             }
         }
     }
+    if explanation["consent"].is_object() {
+        lines.blank();
+        push_consent_explanation(&explanation["consent"], lines);
+    }
+}
+
+fn joined_strings(values: &[Value]) -> String {
+    values
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn joined_or(values: &Value, empty: &str) -> String {
+    match values.as_array() {
+        Some(values) if !values.is_empty() => joined_strings(values),
+        _ => empty.to_owned(),
+    }
+}
+
+fn consent_issuers(issuers: &Value) -> String {
+    let rendered = issuers
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|issuer| {
+            format!(
+                "{} ({})",
+                issuer["action"].as_str().unwrap_or(""),
+                issuer["issuer"].as_str().unwrap_or("")
+            )
+        })
+        .collect::<Vec<_>>();
+    if rendered.is_empty() {
+        "none".to_owned()
+    } else {
+        rendered.join(", ")
+    }
+}
+
+fn consent_client(client: &Value) -> (String, String) {
+    (
+        format!("client {}", client["client"].as_str().unwrap_or("")),
+        format!(
+            "{}: {}",
+            client["organization"].as_str().unwrap_or("unmapped"),
+            joined_or(&client["recipients"], "none, consent fails closed")
+        ),
+    )
+}
+
+fn push_consent_explanation(consent: &Value, lines: &mut report::Lines) {
+    lines.heading("Consent:");
+    for key in ["condition", "unmappedClients", "trustModel", "ungating"] {
+        let sentence = consent[key].as_str().unwrap_or("");
+        if !sentence.is_empty() {
+            lines.listed(1, sentence);
+        }
+    }
+    for permission in consent["permissions"].as_array().into_iter().flatten() {
+        lines.blank();
+        lines.item_at(
+            1,
+            &format!(
+                "permission {} over {}",
+                permission["profile"].as_str().unwrap_or(""),
+                permission["entity"].as_str().unwrap_or("")
+            ),
+        );
+        lines.prose(2, permission["condition"].as_str().unwrap_or(""));
+        let readable = permission["readableFields"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|field| {
+                format!(
+                    "{} ({})",
+                    field["field"].as_str().unwrap_or(""),
+                    field["classification"].as_str().unwrap_or("unclassified")
+                )
+            })
+            .collect::<Vec<_>>();
+        lines.pairs_at(
+            2,
+            &[
+                (
+                    "record",
+                    permission["record"].as_str().unwrap_or("").to_owned(),
+                ),
+                ("on", permission["on"].as_str().unwrap_or("").to_owned()),
+                (
+                    "scope",
+                    permission["scope"].as_str().unwrap_or("").to_owned(),
+                ),
+                (
+                    "purposes",
+                    joined_or(&permission["purposes"], "unrestricted"),
+                ),
+                (
+                    "max duration",
+                    permission["maxDuration"].as_str().unwrap_or("").to_owned(),
+                ),
+                (
+                    "probe function",
+                    permission["probeFunction"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_owned(),
+                ),
+                ("indexes", joined_or(&permission["indexes"], "none")),
+                (
+                    "readable fields",
+                    if readable.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        readable.join(", ")
+                    },
+                ),
+                (
+                    "issuing actions",
+                    consent_issuers(&permission["issuingActions"]),
+                ),
+            ],
+        );
+        let clients = permission["clients"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(consent_client)
+            .collect::<Vec<_>>();
+        let clients = clients
+            .iter()
+            .map(|(label, value)| (label.as_str(), value.clone()))
+            .collect::<Vec<_>>();
+        lines.pairs_at(2, &clients);
+    }
+    lines.blank();
+    lines.item_at(1, "recipients");
+    let mut pairs = Vec::new();
+    for organization in consent["organizations"].as_array().into_iter().flatten() {
+        let retired = organization["retired"].as_bool() == Some(true);
+        pairs.push((
+            format!("organization {}", organization["id"].as_str().unwrap_or("")),
+            if retired {
+                "retired, no client acts for it".to_owned()
+            } else {
+                joined_or(&organization["clients"], "none")
+            },
+        ));
+    }
+    for group in consent["groups"].as_array().into_iter().flatten() {
+        pairs.push((
+            format!("group {}", group["id"].as_str().unwrap_or("")),
+            format!(
+                "{}: {}",
+                joined_or(&group["members"], "no members"),
+                joined_or(&group["clients"], "no clients")
+            ),
+        ));
+    }
+    for client in consent["clients"].as_array().into_iter().flatten() {
+        pairs.push(consent_client(client));
+    }
+    pairs.push((
+        "consent issuers".to_owned(),
+        consent_issuers(&consent["issuers"]),
+    ));
+    let pairs = pairs
+        .iter()
+        .map(|(label, value)| (label.as_str(), value.clone()))
+        .collect::<Vec<_>>();
+    lines.pairs_at(2, &pairs);
 }
 
 fn push_access_profile(profile: &Value, depth: usize, lines: &mut report::Lines) {
@@ -9795,6 +9975,15 @@ fn push_access_profile(profile: &Value, depth: usize, lines: &mut report::Lines)
         fields.push((
             "membership restrictions (all)",
             profile["membershipBoundaries"].to_string(),
+        ));
+    }
+    if profile["requireConsent"]
+        .as_array()
+        .is_some_and(|requirements| !requirements.is_empty())
+    {
+        fields.push((
+            "consent required (all)",
+            profile["requireConsent"].to_string(),
         ));
     }
     for field in [

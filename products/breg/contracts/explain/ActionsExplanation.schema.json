@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/breg-explain/v1alpha2/ActionsExplanation.schema.json",
+  "$id": "https://registrystack.org/breg-explain/v1alpha3/ActionsExplanation.schema.json",
   "title": "ActionsExplanation",
   "description": "Wire shape of `explanation` for `bregctl explain actions`. Every node is reconstructed field by field by bregctl and is pinned in full, except `fieldType` (a passthrough of the compiled field-type source) and `handler.possibleWrites`/`evidence.capabilities` (both raw passthroughs of compiled-model values), which are declared opaque. No tracked fixture exercises a WASM handler (`handler.kind == \"wasm\"`); that branch is pinned from source but unexercised by the test gate. No tracked fixture exercises a `clear` field mutation; that branch is likewise pinned but unexercised.",
   "type": "object",
@@ -92,7 +92,7 @@
   },
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/breg-explain/v1alpha2"
+      "const": "registry.registrystack.org/breg-explain/v1alpha3"
     },
     "kind": {
       "const": "ActionsExplanation"

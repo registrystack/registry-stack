@@ -55,6 +55,22 @@ pub fn decisions_claim(entity: &str) -> String {
     format!("{DECISIONS_CLAIM_PREFIX}{entity}")
 }
 
+/// The feed decision set of every consent-record entity, keyed by entity id;
+/// each fills its reserved decisions claim.
+pub(crate) fn feed_decisions(
+    entities: &BTreeMap<String, CompiledEntity>,
+) -> BTreeMap<String, BTreeSet<String>> {
+    entities
+        .values()
+        .filter_map(|entity| {
+            entity
+                .consent_record
+                .as_ref()
+                .map(|record| (entity.id.clone(), record.feed_decisions()))
+        })
+        .collect()
+}
+
 /// The compiler-synthesized vocabularies. Each is present only when it has a
 /// value, so a project without consent resolves exactly as before.
 pub(crate) fn synthesized_vocabularies(
