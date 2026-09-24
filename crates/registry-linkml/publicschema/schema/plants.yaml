@@ -44,6 +44,7 @@ classes:
         ce cycle cultural. Remettre une culture en place sur la même terre par la suite constitue
         une mise en culture distincte. Une déclaration relative à une mise en culture constitue un
         enregistrement administratif distinct.
+      featured: true
       source_domain: agri
       bibliography_refs: '["fao-wca-2020-vol1"]'
   CropPlantingComponent:

@@ -9,7 +9,7 @@ regulators, jurisdictions, identifiers and codes are fictional.
 ## Exact mappings and local decisions
 
 The pinned PublicSchema draft is commit
-`bd07bda1fe9cb9eb8582cf7bc1c77367e2455e5b`. Its `work.yaml`
+`e5cfbbc0161e4d2c802d1acd752ec193253f7820`. Its `work.yaml`
 ProfessionalLicense specializes Authorization, which specializes Registration
 in `registry.yaml`. This profile intentionally implements a small selection,
 not the complete draft or a jurisdiction's licensing legislation.

@@ -6,7 +6,7 @@ describes the template for distribution tooling; it grants no runtime authority.
 The project source is authoritative after download.
 
 The starter models use PublicSchema draft vocabulary at
-[`bd07bda1fe9cb9eb8582cf7bc1c77367e2455e5b`](https://github.com/PublicSchema/publicschema.org/tree/bd07bda1fe9cb9eb8582cf7bc1c77367e2455e5b).
+[`e5cfbbc0161e4d2c802d1acd752ec193253f7820`](https://github.com/PublicSchema/publicschema.org/tree/e5cfbbc0161e4d2c802d1acd752ec193253f7820).
 The embedded offline reference catalog is updated with
 `crates/registry-linkml/publicschema/sync-snapshot.sh`, whose pin and license
 remain the attribution source. This is draft alignment, not conformance,

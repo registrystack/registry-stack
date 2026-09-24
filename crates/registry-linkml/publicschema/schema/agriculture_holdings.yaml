@@ -38,6 +38,7 @@ classes:
     - location
     status: bibo:draft
     annotations:
+      featured: true
       source_domain: agri
       label_es: Finca
       label_fr: Exploitation agricole
@@ -82,6 +83,7 @@ classes:
     - valid_to
     status: bibo:draft
     annotations:
+      featured: true
       source_domain: agri
       label_es: Parcela agropecuaria
       label_fr: Parcelle agricole
@@ -167,6 +169,7 @@ classes:
           producer.
     status: bibo:draft
     annotations:
+      featured: true
       source_domain: agri
       label_es: Registro de agricultor
       label_fr: Enregistrement d'agriculteur

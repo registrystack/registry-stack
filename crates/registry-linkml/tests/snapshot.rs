@@ -71,7 +71,7 @@ fn the_snapshot_has_the_pinned_shape() {
         .values()
         .filter(|class| featured(class))
         .count();
-    assert_eq!(featured_count, 21);
+    assert_eq!(featured_count, 29);
     assert_eq!(model.enums["Language"].values.len(), 7_927);
     assert_eq!(model.enums["Occupation"].values.len(), 619);
 }
@@ -180,7 +180,7 @@ fn draft_starter_concepts_preserve_typed_holder_semantics() {
     let model = publicschema::model().expect("the snapshot reads");
     assert_eq!(
         publicschema::pin().unwrap().commit,
-        "bd07bda1fe9cb9eb8582cf7bc1c77367e2455e5b"
+        "e5cfbbc0161e4d2c802d1acd752ec193253f7820"
     );
     assert_eq!(
         model.classes["Farm"].uri,

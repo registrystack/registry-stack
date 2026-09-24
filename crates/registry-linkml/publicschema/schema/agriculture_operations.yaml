@@ -107,6 +107,7 @@ classes:
     see_also:
     - https://www.fao.org/global-record/background/unique-vessel-identifier/en/
     annotations:
+      featured: true
       source_domain: agri
       label_es: Buque pesquero
       label_fr: Navire de pêche
@@ -162,6 +163,7 @@ classes:
     - https://agriculture.ec.europa.eu/common-agricultural-policy/agri-food-supply-chain/producer-and-interbranch-organisations_en
     is_a: Organization
     annotations:
+      featured: true
       source_domain: agri
       label_es: Organización de productores
       label_fr: Organisation de producteurs

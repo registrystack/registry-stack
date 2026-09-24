@@ -70,7 +70,7 @@ Community Services and River and Hill District Offices.
 ## Attribution and adoption
 
 The model maps selected fields and native references to PublicSchema draft
-concepts at commit `bd07bda1fe9cb9eb8582cf7bc1c77367e2455e5b`, under CC BY 4.0.
+concepts at commit `e5cfbbc0161e4d2c802d1acd752ec193253f7820`, under CC BY 4.0.
 See `PUBLICSCHEMA-LICENSE.txt` and the pinned source in `starter-template.json`.
 The local key representation, permissions, review policy, reference target
 narrowing and validation rules are Registry Stack starter decisions. Local
