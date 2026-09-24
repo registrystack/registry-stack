@@ -130,8 +130,19 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
         report["candidateRuntimeBinding"] = serde_norway::from_str(&binding)?;
         return Ok(report);
     }
-    require_absent_or_exact_json(&description_path, &description)?;
-    require_absent_or_exact(&binding_path, binding.as_bytes())?;
+    let retry = format!(
+        "caseworkctl source add {} --project {} --source-id {} --apply",
+        shell_word(&registry.display().to_string()),
+        shell_word(&project.display().to_string()),
+        args.source_id,
+    );
+    require_outputs_absent_or_exact(
+        &description_path,
+        &description,
+        &binding_path,
+        binding.as_bytes(),
+        &retry,
+    )?;
     if fs::read(&registry_yaml).context("re-reading BReg registry.yaml before apply")? != bytes {
         bail!("BReg registry.yaml changed after preview; no files were written, retry source add against its current revision");
     }
@@ -888,7 +899,9 @@ fn apply_breg_candidate(root: &mut Value, entity_id: &str, reader: &ReaderGrant)
         .find(|item| item["id"] == "casework-lifecycle-v1")
     {
         Some(existing) if existing != &hook => {
-            bail!("BReg hook casework-lifecycle-v1 already exists with different content")
+            bail!(
+                "BReg hook casework-lifecycle-v1 on entity {entity_id} in registry.yaml already exists with different content, and nothing was written. source add writes that hook from the request's existing-target fields and the casework.yaml projection, so an earlier caseworkctl, a changed projection, or a hand edit leaves a different one. If you did not write that hook yourself, remove that hook from the hooks of entity {entity_id} in the BReg registry.yaml, and the hooks key itself when that hook is its only entry, then repeat source add --apply; it writes the current hook in its place"
+            )
         }
         None => hooks.push(hook),
         _ => {}
@@ -921,7 +934,7 @@ fn apply_breg_candidate(root: &mut Value, entity_id: &str, reader: &ReaderGrant)
             })?;
             match permissions.iter().find(|item| item["entity"] == entity_id) {
                 Some(existing) if existing != &permission => bail!(
-                    "BReg access profile {READER_CLIENT_ID} already grants {entity_id} with different content"
+                    "BReg access profile {READER_CLIENT_ID} already grants {entity_id} with different content in registry.yaml, and nothing was written. source add writes that permission from the request's existing-target fields and the casework.yaml projection, so an earlier caseworkctl, a changed projection, or a hand edit leaves a different one. If you did not write that permission yourself, remove that permission for entity {entity_id} from access profile {READER_CLIENT_ID} in the BReg registry.yaml, and the whole {READER_CLIENT_ID} profile when that permission is its only one, then repeat source add --apply; it writes the current permission in its place"
                 ),
                 None => permissions.push(permission),
                 _ => {}
@@ -2240,33 +2253,134 @@ fn write_json_atomic(path: &Path, value: &Value) -> Result<()> {
     write_atomic(path, &json_file_bytes(value)?)
 }
 
-fn require_absent_or_exact_json(path: &Path, expected: &Value) -> Result<()> {
+/// Refuse an apply that would replace an existing output with different
+/// content. Both outputs are compared before either refusal is reported, so
+/// one message names every preserved file, why it differs, and the exact
+/// commands that set it aside and repeat the pairing.
+fn require_outputs_absent_or_exact(
+    description_path: &Path,
+    description: &Value,
+    binding_path: &Path,
+    binding: &[u8],
+    retry: &str,
+) -> Result<()> {
+    let conflicts = [
+        description_conflict(description_path, description)?
+            .map(|reason| (description_path, reason)),
+        binding_conflict(binding_path, binding)?.map(|reason| (binding_path, reason)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    if conflicts.is_empty() {
+        return Ok(());
+    }
+    let reasons = conflicts
+        .iter()
+        .map(|(path, reason)| format!("{} {reason}", path.display()))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let mut recovery = conflicts
+        .iter()
+        .map(|(path, _)| {
+            let path = path.display().to_string();
+            format!(
+                "mv {} {}",
+                shell_word(&path),
+                shell_word(&format!("{path}.previous"))
+            )
+        })
+        .collect::<Vec<_>>();
+    recovery.push(retry.to_owned());
+    bail!(
+        "source add preserved existing output that differs from what this run would write, and nothing was written: {reasons}. source add writes these files and never replaces one; to take this run's output, move each aside and repeat the pairing: {}. Then compare each new file with its .previous copy, carry any hand edit you still need into the new runtime binding, and delete the .previous copies",
+        recovery.join(" && ")
+    )
+}
+
+fn description_conflict(path: &Path, expected: &Value) -> Result<Option<String>> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+    };
+    let Ok(actual) = serde_json::from_slice::<Value>(&bytes) else {
+        return Ok(Some("is not valid JSON".to_owned()));
+    };
+    if &actual == expected {
+        return Ok(None);
+    }
+    let (previous, next) = (described_entities(&actual), described_entities(expected));
+    if previous != next {
+        return Ok(Some(format!(
+            "pairs {} ({}), and this run pairs {} ({}) because casework.yaml declares a different set of request entities",
+            entity_list(&previous),
+            description_version(&actual),
+            entity_list(&next),
+            description_version(expected),
+        )));
+    }
+    if actual["sourceRevision"] != expected["sourceRevision"] {
+        return Ok(Some(format!(
+            "pins sourceRevision {}, and bregctl explain change-requests now reports {} because the BReg registry changed since the description was imported",
+            actual["sourceRevision"].as_str().unwrap_or("(none)"),
+            expected["sourceRevision"].as_str().unwrap_or("(none)"),
+        )));
+    }
+    Ok(Some(
+        "differs from the description this run imports from bregctl explain change-requests, for example after a hand edit".to_owned(),
+    ))
+}
+
+fn binding_conflict(path: &Path, expected: &[u8]) -> Result<Option<String>> {
     match fs::read(path) {
-        Ok(bytes) => {
-            let actual: Value = serde_json::from_slice(&bytes)
-                .with_context(|| format!("existing {} is not valid JSON", path.display()))?;
-            if &actual != expected {
-                bail!(
-                    "existing {} has different authored content; it was preserved",
-                    path.display()
-                );
-            }
-            Ok(())
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(actual) if actual == expected => Ok(None),
+        Ok(_) => Ok(Some(
+            "differs from the candidate runtime binding this run would write, after a hand edit or a change to the paired review authorities or executors".to_owned(),
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
     }
 }
 
-fn require_absent_or_exact(path: &Path, expected: &[u8]) -> Result<()> {
-    match fs::read(path) {
-        Ok(actual) if actual == expected => Ok(()),
-        Ok(_) => bail!(
-            "existing {} has different authored content; it was preserved",
-            path.display()
-        ),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
+fn described_entities(description: &Value) -> Vec<&str> {
+    match description.get("requests").and_then(Value::as_array) {
+        Some(requests) => requests
+            .iter()
+            .filter_map(|request| request["requestEntity"].as_str())
+            .collect(),
+        None => description["request"]["requestEntity"]
+            .as_str()
+            .into_iter()
+            .collect(),
+    }
+}
+
+fn entity_list(entities: &[&str]) -> String {
+    match entities {
+        [] => "no request entity".to_owned(),
+        [entity] => format!("request entity {entity}"),
+        several => format!("request entities {}", several.join(", ")),
+    }
+}
+
+fn description_version(description: &Value) -> &str {
+    description["apiVersion"]
+        .as_str()
+        .and_then(|version| version.rsplit('/').next())
+        .unwrap_or("unknown apiVersion")
+}
+
+/// Quote a word for a POSIX shell only when it needs it.
+fn shell_word(word: &str) -> String {
+    if !word.is_empty()
+        && word
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"/._-+:@,=".contains(&byte))
+    {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
     }
 }
 
@@ -2421,6 +2535,140 @@ mod tests {
             "professional-licences",
             &project.join("sources/professional-licences.json"),
             &description,
+        )
+        .unwrap();
+    }
+
+    fn paired_description(revision: &str, entities: &[&str]) -> Value {
+        let requests = entities
+            .iter()
+            .map(|entity| json!({"requestEntity": entity}))
+            .collect::<Vec<_>>();
+        let mut description = json!({"sourceId":"professional-licences","sourceRevision":revision});
+        if let [request] = requests.as_slice() {
+            description["apiVersion"] =
+                json!("registry.registrystack.org/casework-source-description/v1alpha1");
+            description["request"] = request.clone();
+        } else {
+            description["apiVersion"] =
+                json!("registry.registrystack.org/casework-source-description/v1alpha2");
+            description["requests"] = json!(requests);
+        }
+        description
+    }
+
+    const RETRY: &str = "caseworkctl source add /registry --project /casework --source-id professional-licences --apply";
+
+    #[test]
+    fn source_apply_names_every_differing_output_with_its_reason_and_recovery() {
+        let project = tempfile::tempdir().unwrap();
+        let description_path = project.path().join("professional-licences.json");
+        let binding_path = project
+            .path()
+            .join("professional-licences.breg-runtime.yaml");
+        let previous =
+            json_file_bytes(&paired_description("sha256:one", &["scope-correction"])).unwrap();
+        fs::write(&description_path, &previous).unwrap();
+        fs::write(&binding_path, "reviewAuthorities: {edited: true}\n").unwrap();
+
+        let error = require_outputs_absent_or_exact(
+            &description_path,
+            &paired_description("sha256:two", &["scope-correction", "scope-review"]),
+            &binding_path,
+            b"reviewAuthorities: {}\n",
+            RETRY,
+        )
+        .expect_err("differing outputs are preserved, not replaced");
+
+        let error = format!("{error:#}");
+        let description = description_path.display().to_string();
+        let binding = binding_path.display().to_string();
+        assert!(error.contains(&description), "{error}");
+        assert!(error.contains(&binding), "{error}");
+        assert!(
+            error.contains("pairs request entity scope-correction")
+                && error.contains("scope-correction, scope-review")
+                && error.contains("v1alpha2"),
+            "{error}"
+        );
+        assert!(
+            error.contains(&format!("mv {description} {description}.previous")),
+            "{error}"
+        );
+        assert!(
+            error.contains(&format!("mv {binding} {binding}.previous")),
+            "{error}"
+        );
+        assert!(error.contains(RETRY), "{error}");
+        assert!(error.contains("nothing was written"), "{error}");
+        assert_eq!(fs::read(&description_path).unwrap(), previous);
+        assert_eq!(
+            fs::read_to_string(&binding_path).unwrap(),
+            "reviewAuthorities: {edited: true}\n"
+        );
+    }
+
+    #[test]
+    fn source_apply_names_a_moved_source_revision() {
+        let project = tempfile::tempdir().unwrap();
+        let description_path = project.path().join("professional-licences.json");
+        let binding_path = project
+            .path()
+            .join("professional-licences.breg-runtime.yaml");
+        fs::write(
+            &description_path,
+            json_file_bytes(&paired_description("sha256:one", &["scope-correction"])).unwrap(),
+        )
+        .unwrap();
+
+        let error = require_outputs_absent_or_exact(
+            &description_path,
+            &paired_description("sha256:two", &["scope-correction"]),
+            &binding_path,
+            b"reviewAuthorities: {}\n",
+            RETRY,
+        )
+        .unwrap_err();
+
+        let error = format!("{error:#}");
+        assert!(
+            error.contains("sourceRevision sha256:one") && error.contains("sha256:two"),
+            "{error}"
+        );
+        assert!(!error.contains("breg-runtime.yaml"), "{error}");
+        assert!(!binding_path.exists());
+    }
+
+    #[test]
+    fn source_apply_recovery_quotes_paths_a_shell_would_split() {
+        assert_eq!(shell_word("/work/casework"), "/work/casework");
+        assert_eq!(shell_word("/my work/it's"), "'/my work/it'\\''s'");
+    }
+
+    #[test]
+    fn source_apply_accepts_absent_or_identical_outputs() {
+        let project = tempfile::tempdir().unwrap();
+        let description_path = project.path().join("professional-licences.json");
+        let binding_path = project
+            .path()
+            .join("professional-licences.breg-runtime.yaml");
+        let description = paired_description("sha256:one", &["scope-correction"]);
+        require_outputs_absent_or_exact(
+            &description_path,
+            &description,
+            &binding_path,
+            b"reviewAuthorities: {}\n",
+            RETRY,
+        )
+        .unwrap();
+        fs::write(&description_path, json_file_bytes(&description).unwrap()).unwrap();
+        fs::write(&binding_path, "reviewAuthorities: {}\n").unwrap();
+        require_outputs_absent_or_exact(
+            &description_path,
+            &description,
+            &binding_path,
+            b"reviewAuthorities: {}\n",
+            RETRY,
         )
         .unwrap();
     }
@@ -2796,6 +3044,39 @@ mod tests {
     fn candidate_refuses_conflicting_existing_grant() {
         let mut root = json!({"entities":[{"id":"request"}],"accessProfiles":[{"id":"casework-reader","permissions":[]}]});
         assert!(apply_breg_candidate(&mut root, "request", &record_reader(&[])).is_err());
+    }
+
+    #[test]
+    fn a_regenerated_hook_or_grant_conflict_names_the_fragment_to_remove() {
+        let mut root = json!({"entities":[{"id":"request"}],"accessProfiles":[]});
+        apply_breg_candidate(&mut root, "request", &record_reader(&[])).unwrap();
+        let region = record_reader(&["region".to_owned()]);
+
+        let mut hooked = root.clone();
+        hooked["entities"][0]["hooks"][0]["projection"] = json!(["region"]);
+        let error = format!(
+            "{:#}",
+            apply_breg_candidate(&mut hooked, "request", &region).unwrap_err()
+        );
+        assert!(
+            error.contains("hook casework-lifecycle-v1 on entity request")
+                && error.contains("registry.yaml")
+                && error.contains("remove that hook")
+                && error.contains("repeat source add --apply"),
+            "{error}"
+        );
+
+        let error = format!(
+            "{:#}",
+            apply_breg_candidate(&mut root, "request", &region).unwrap_err()
+        );
+        assert!(
+            error.contains("casework-reader already grants request")
+                && error.contains("registry.yaml")
+                && error.contains("remove that permission")
+                && error.contains("repeat source add --apply"),
+            "{error}"
+        );
     }
 
     #[test]

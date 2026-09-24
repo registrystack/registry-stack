@@ -602,6 +602,14 @@ request selects one. Provision the referenced secrets on the BReg side.
 The command writes no secret and activates nothing: its report says `activation: not_performed` and asks you to review the binding, provision its secret, and let each product's normal launcher path activate it.
 Run `caseworkctl check` again, and the source description changes to `checked`.
 
+A repeated `source add --apply` rewrites nothing that already matches, and it never replaces a file that differs from what it would write.
+The source description differs once the BReg registry changes, because it pins `sourceRevision`. It also differs when `casework.yaml` declares a different set of request entities: one entity imports `v1alpha1`, and several import `v1alpha2`.
+The runtime binding differs after a hand edit, or when the paired review authorities or executors change.
+The refusal writes nothing. It names each differing file and the reason, then prints the commands that recover: move each file aside to a `.previous` copy, and repeat the same `source add --apply`.
+Compare each new file with its `.previous` copy, carry any hand edit you still need into the new runtime binding, then delete the copies.
+The lifecycle hook and the `casework-reader` permission in the BReg `registry.yaml` follow the same rule.
+If an earlier `caseworkctl`, a changed projection, or a hand edit left a different one, the refusal names the entity. Unless you wrote that fragment yourself, remove it and repeat `source add --apply`. When the hook is the entity's only hook, remove the `hooks` key as well. When the permission is the only one in the profile, remove the whole `casework-reader` profile.
+
 Connecting a source is authoring, and serving one is deployment.
 Locally, `caseworkctl dev start` serves a connected project only beside a running
 `bregctl dev start` session for the registry it names. Pass
