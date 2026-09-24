@@ -610,7 +610,8 @@ async fn every_call_is_audited_without_values_or_credentials() {
             (START_APPLICATION, "outcome", Some("invalid_arguments")),
         ]
     );
-    assert_eq!(records[0]["citizen"], caller.citizen_pseudonym());
+    assert_eq!(records[0]["principalPseudonym"], caller.citizen_pseudonym());
+    assert_eq!(records[0]["clientPseudonym"], caller.client_pseudonym());
     assert_eq!(records[0]["requestId"], records[1]["requestId"]);
     for forbidden in [CANARY, CITIZEN_A, ADDRESS_A, ADDRESS_B, caller.token()] {
         assert!(!text.contains(forbidden), "audit carries a forbidden value");

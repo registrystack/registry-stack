@@ -36,6 +36,11 @@ use crate::config::{RateLimitsConfig, ResourceServerConfig};
 /// The two spellings RFC 9068 permits for a JWT access token.
 const ACCESS_TOKEN_TYPES: [&str; 2] = ["at+jwt", "application/at+jwt"];
 
+/// The audit reference class of a citizen's pseudonym.
+const PRINCIPAL_CLASS: &str = "breg-mcp-principal-v1";
+/// The audit reference class of a chat-host client's pseudonym.
+const CLIENT_CLASS: &str = "breg-mcp-client-v1";
+
 /// The RFC 9728 well-known prefix.
 pub(crate) const METADATA_PREFIX: &str = "/.well-known/oauth-protected-resource";
 
@@ -132,7 +137,8 @@ pub(crate) enum Refusal {
     KeySource,
     /// A rate limit was exceeded.
     RateLimited { retry_after_seconds: u64 },
-    /// The limiter could not admit the request.
+    /// The limiter could not admit the request, or the caller's pseudonyms
+    /// could not be derived.
     Unavailable,
 }
 
@@ -266,13 +272,18 @@ impl ResourceServer {
             subject: subject.to_owned(),
             token: Zeroizing::new(token.to_owned()),
             expires_at,
-            citizen_pseudonym: self
-                .hasher
-                .hash(&format!("breg-mcp:citizen:v1\n{}\n{subject}", self.issuer)),
-            client_pseudonym: self
-                .hasher
-                .hash(&format!("breg-mcp:client:v1\n{}\n{client}", self.issuer)),
+            citizen_pseudonym: self.pseudonym(PRINCIPAL_CLASS, subject)?,
+            client_pseudonym: self.pseudonym(CLIENT_CLASS, client)?,
         })
+    }
+
+    /// The keyed pseudonym of one party at the configured issuer: the shared
+    /// audit reference hash over `[issuer, value]`, derived exactly as the
+    /// citizen review page derives its own.
+    fn pseudonym(&self, class: &str, value: &str) -> Result<String, Refusal> {
+        self.hasher
+            .audit_reference_hash(class, "", &json!([self.issuer, value]).to_string())
+            .map_err(|_| Refusal::Unavailable)
     }
 
     fn refusal_response(&self, refusal: Refusal) -> Response {
@@ -672,12 +683,28 @@ mod tests {
         // Only the verified caller travels on: the MCP layer behind the
         // middleware never sees the chat host's bearer token.
         assert_eq!(body["authorization"], false);
+        // The pseudonyms are the shared audit reference hashes the review
+        // page derives too, so one citizen reads the same in both journals.
+        let issuer = authorization.issuer();
         assert_eq!(
             body["client"],
-            hasher().hash(&format!(
-                "breg-mcp:client:v1\n{}\n{CHAT_HOST}",
-                authorization.issuer()
-            ))
+            hasher()
+                .audit_reference_hash(
+                    "breg-mcp-client-v1",
+                    "",
+                    &json!([issuer, CHAT_HOST]).to_string()
+                )
+                .expect("client pseudonym")
+        );
+        assert_eq!(
+            body["citizen"],
+            hasher()
+                .audit_reference_hash(
+                    "breg-mcp-principal-v1",
+                    "",
+                    &json!([issuer, "citizen-a"]).to_string()
+                )
+                .expect("principal pseudonym")
         );
         let citizen = body["citizen"].as_str().expect("pseudonym");
         assert!(!citizen.contains("citizen-a"));

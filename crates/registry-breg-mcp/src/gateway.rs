@@ -227,8 +227,8 @@ impl Gateway {
             .record(&ToolAudit {
                 request_id,
                 tool,
-                citizen: caller.citizen_pseudonym(),
-                client: caller.client_pseudonym(),
+                principal_pseudonym: caller.citizen_pseudonym(),
+                client_pseudonym: caller.client_pseudonym(),
                 phase,
                 outcome,
             })

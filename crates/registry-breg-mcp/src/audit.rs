@@ -36,8 +36,11 @@ impl Phase {
 pub(crate) struct ToolAudit<'a> {
     pub(crate) request_id: Uuid,
     pub(crate) tool: &'a str,
-    pub(crate) citizen: &'a str,
-    pub(crate) client: &'a str,
+    /// The citizen's keyed pseudonym, named as BReg's authorization audit
+    /// names a principal.
+    pub(crate) principal_pseudonym: &'a str,
+    /// The chat-host client's keyed pseudonym.
+    pub(crate) client_pseudonym: &'a str,
     pub(crate) phase: Phase,
     /// `ok` or a closed tool error code; absent on an attempt.
     pub(crate) outcome: Option<&'a str>,
@@ -50,8 +53,8 @@ impl ToolAudit<'_> {
             "phase": self.phase.as_str(),
             "requestId": self.request_id.to_string(),
             "tool": self.tool,
-            "citizen": self.citizen,
-            "client": self.client,
+            "principalPseudonym": self.principal_pseudonym,
+            "clientPseudonym": self.client_pseudonym,
         });
         if let Some(outcome) = self.outcome {
             record["outcome"] = serde_json::Value::String(outcome.to_owned());
@@ -108,8 +111,8 @@ mod tests {
         log.record(&ToolAudit {
             request_id,
             tool: "start_application",
-            citizen: "citizen-pseudonym",
-            client: "client-pseudonym",
+            principal_pseudonym: "principal-pseudonym",
+            client_pseudonym: "client-pseudonym",
             phase: Phase::Outcome,
             outcome: Some("ok"),
         })
@@ -129,11 +132,11 @@ mod tests {
         assert_eq!(
             keys,
             [
-                "citizen",
-                "client",
+                "clientPseudonym",
                 "event",
                 "outcome",
                 "phase",
+                "principalPseudonym",
                 "requestId",
                 "tool"
             ]

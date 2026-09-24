@@ -167,9 +167,14 @@ same host on another port is not. `/health` reports the process
 is up; `/ready` reports whether the audit log is writable.
 
 Each tool call is audited twice, before any registry call and after it, to a
-hash-chained JSON Lines log: the request identifier, the tool, keyed
-pseudonyms of the citizen and the chat-host client, and the outcome code. A
-call whose audit record cannot be written fails closed. Argument values,
+hash-chained JSON Lines log: the request identifier (`requestId`), the tool,
+keyed pseudonyms of the citizen (`principalPseudonym`) and the chat-host client
+(`clientPseudonym`), and the outcome code. The pseudonyms are the shared audit
+reference hashes of `[issuer, subject]` and `[issuer, client_id]` under the
+classes `breg-mcp-principal-v1` and `breg-mcp-client-v1`: named as BReg's
+authorization audit names them, and derived as the citizen review page derives
+its own. A call whose audit record
+cannot be written fails closed. Argument values,
 prompts, and tokens are never logged or audited.
 
 Rate limits apply per citizen and per chat-host client; a request over either
