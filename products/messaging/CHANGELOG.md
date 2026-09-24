@@ -127,3 +127,6 @@
   gateway that reports delivery through signed callbacks, and removes its
   containers when it stops, and `messagingctl dev token CLIENT`, which writes
   a one-hour bearer header file for a client an access profile names.
+- Add `products/messaging/scripts/measure-throughput.sh`, which measures SMS
+  dispatch on one replica against a 200 ms mock provider; the README records
+  the measured rates.

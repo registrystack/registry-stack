@@ -218,6 +218,34 @@ template, locale, and data, less the final newline. The audit journal records
 the caller's pseudonym, the template reference, and the outcome of each
 preview, never the data or the rendered text.
 
+## Throughput
+
+`products/messaging/scripts/measure-throughput.sh` measures SMS dispatch on
+one replica against the mock gateway of `messagingctl dev`, which answers
+every request after 200 ms and signs a delivered callback 500 ms later. It
+builds `messagingctl` in release, raises the sender's request rate so
+admission is not the bound, submits 600 SMS from 32 concurrent callers, and
+samples `messaging_provider_attempts_total{outcome="accepted"}` on the
+metrics listener every 50 ms. The steady rate is the one between 10 and 90
+percent of the messages. PostgreSQL runs in Docker on the same machine.
+
+Measured on 2026-09-25 on an Apple M5 Max (18 logical CPUs, macOS,
+PostgreSQL 17 in OrbStack), three runs:
+
+| Run | Submission | All accepted by the provider | Steady dispatch |
+|---|---|---|---|
+| 1 | 600 in 0.56 s | 22.92 s | 26.3 SMS per second |
+| 2 | 600 in 0.44 s | 27.16 s | 21.3 SMS per second |
+| 3 | 600 in 2.00 s | 26.34 s | 23.2 SMS per second |
+
+The worker runs eight lanes, each claiming, sending, and recording one
+message at a time, so a 200 ms provider caps one replica at 40 SMS per
+second. The rest of each lane's cycle, about 100 to 180 ms by the same
+arithmetic, is spent outside the provider call. Every run met the target of
+20 SMS per second per replica, the slowest by a small margin. The numbers
+hold for this machine only; a slower database or a slower provider lowers
+them.
+
 ## Verification
 
 ```bash
