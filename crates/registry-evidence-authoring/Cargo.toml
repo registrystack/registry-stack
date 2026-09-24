@@ -29,7 +29,9 @@ testing = []
 
 [dependencies]
 anyhow.workspace = true
-rhai.workspace = true
+# `internals` exposes the parsed program, so a check can read what a
+# derivation reads without running it. It adds no engine capability.
+rhai = { workspace = true, features = ["internals"] }
 schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true

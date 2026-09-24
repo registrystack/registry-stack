@@ -302,6 +302,14 @@ mod tests {
         }
 
         fn export(&self, name: &str, extract: &str) -> PathBuf {
+            self.export_with_facts(
+                name,
+                extract,
+                "type: object\nproperties: {}\nadditionalProperties: false\n",
+            )
+        }
+
+        fn export_with_facts(&self, name: &str, extract: &str, facts: &str) -> PathBuf {
             let root = self.root.path().join(name);
             let artifacts = [
                 ("sources/lookup.yaml", SOURCE),
@@ -317,10 +325,7 @@ mod tests {
                     "schemas/lookup-response.yaml",
                     "type: object\nproperties: {}\nadditionalProperties: false\n",
                 ),
-                (
-                    "schemas/lookup-facts.yaml",
-                    "type: object\nproperties: {}\nadditionalProperties: false\n",
-                ),
+                ("schemas/lookup-facts.yaml", facts),
                 (
                     "adapters/lookup-prepare.rhai",
                     "fn prepare(selectors, context) { #{query: [], body: ()} }\n",
@@ -385,6 +390,51 @@ mod tests {
             fs::read_to_string(fixture.project.join("adapters/lookup-extract.rhai")).unwrap(),
             EXTRACT_ONE
         );
+    }
+
+    #[test]
+    fn diff_and_apply_refuse_a_next_fact_schema_that_drops_a_fact_a_derivation_reads() {
+        let facts = |name: &str| {
+            format!(
+                "type: object\nrequired: [{name}]\nproperties:\n  {name}: {{type: string}}\nadditionalProperties: false\n"
+            )
+        };
+        let fixture = Fixture::new();
+        let first = fixture.export_with_facts("first", EXTRACT_ONE, &facts("status"));
+        review_with_revisions(fixture.args(first), true, &mut Vec::new(), no_target).unwrap();
+        for (path, text) in [
+            (
+                "questions/record-active.yaml",
+                "id: record-active\nquestion: Is the record active?\npurpose: record-verification\nsubject:\n  role: subject\n  profiles: [record-code]\nsource:\n  ref: lookup\nanswers:\n- concept: active\n  type: boolean\nderivation: derivations/record-active.rhai\ndisclosure:\n  allow: [active]\n",
+            ),
+            (
+                "derivations/record-active.rhai",
+                "fn answer(facts, selectors, context) {\n    let status = required(facts[\"status\"], \"status_missing\");\n    #{active: status == \"active\"}\n}\n",
+            ),
+        ] {
+            fs::create_dir_all(fixture.project.join(path).parent().unwrap()).unwrap();
+            fs::write(fixture.project.join(path), text).unwrap();
+        }
+        let installed = fs::read(fixture.project.join("schemas/lookup-facts.yaml")).unwrap();
+
+        for apply in [false, true] {
+            let renamed =
+                fixture.export_with_facts("renamed", EXTRACT_ONE, &facts("lifecycle_status"));
+            let mut output = Vec::new();
+            let error = review_with_revisions(fixture.args(renamed), apply, &mut output, no_target)
+                .expect_err("a renamed fact the derivation still reads");
+            assert!(
+                format!("{error:#}").contains("reads fact \"status\""),
+                "error was: {error:#}"
+            );
+            let report = parsed(&output);
+            assert_eq!(report["validation"]["status"], "failed");
+            assert_eq!(
+                fs::read(fixture.project.join("schemas/lookup-facts.yaml")).unwrap(),
+                installed
+            );
+            fs::remove_dir_all(fixture.root.path().join("renamed")).unwrap();
+        }
     }
 
     #[test]

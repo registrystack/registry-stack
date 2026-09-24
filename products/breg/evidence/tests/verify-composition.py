@@ -39,6 +39,23 @@ def run(binary: Path, *args: object, environment: dict[str, str]) -> str:
     return result.stdout
 
 
+def run_refused(binary: Path, *args: object, environment: dict[str, str]) -> str:
+    result = subprocess.run(
+        [str(binary), *(str(arg) for arg in args)],
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if not result.returncode:
+        raise RuntimeError(
+            f"{binary.name} {args[0]} unexpectedly succeeded:\n" + result.stdout[-8192:]
+        )
+    return result.stderr + result.stdout
+
+
 def verify(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
     environment = dict(os.environ)
     environment.pop("REGISTRY_EVIDENCE_RUNTIME", None)
@@ -149,6 +166,36 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
     ))
     assert not updated["conflicts"]
     assert all(item["change"] == "changed" for item in updated["questionRevisions"])
+    # A renamed consumed field changes the fact the export produces. Both
+    # starter derivations still read the old fact, so review and update refuse
+    # the export before any file changes, rather than every request failing.
+    field = next(item for item in model["entities"][0]["fields"] if item["id"] == "status")
+    field["id"] = "lifecycle-status"
+    field["apiName"] = "lifecycleStatus"
+    for profile in model["accessProfiles"]:
+        for permission in profile["permissions"]:
+            for key in ("readableFields", "writableFields"):
+                if key in permission:
+                    permission[key] = [
+                        "lifecycle-status" if name == "status" else name
+                        for name in permission[key]
+                    ]
+    model_path.write_text(yaml.safe_dump(model, sort_keys=False))
+    renamed_export = workspace / "renamed-export"
+    renamed_arguments = tuple(
+        "lifecycle-status" if argument == "status" else argument
+        for argument in export_arguments
+    )
+    run(binaries["bregctl"], *renamed_arguments, "--output", renamed_export,
+        environment=environment)
+    installed_facts = (project / source["factSchema"]).read_bytes()
+    for command in ("diff", "update"):
+        refused = run_refused(
+            binaries["evidencectl"], "source", command, renamed_export,
+            "--project", project, "--target", target, environment=environment,
+        )
+        assert 'reads fact "status"' in refused, refused
+        assert (project / source["factSchema"]).read_bytes() == installed_facts
     return {
         "exportArtifacts": len(manifest["artifacts"]),
         "fixtureCases": sum(item["evaluated_cases"] for item in fixtures["fixtures"]),
@@ -158,6 +205,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
         "provenanceOnlyRevisions": "unchanged",
         "consumedChangeRevisions": "both changed",
         "nativeSourceUpdate": "passed",
+        "renamedFactUpdate": "refused",
     }
 
 

@@ -53,6 +53,21 @@ production HTTP sources, source transports with no stated production conditions,
 metadata or fixtures, unresolved review markers, unknown fields, symlink traversal, and references
 outside the allowed project directories. A failed package publishes no candidate.
 
+`check`, `test`, `package`, `source diff`, and `source update`, and the compatibility spellings
+`fixtures run` and `build`, refuse a derivation whose `answer` reads a fact its question's source
+does not declare, with `evidence.authoring.derivation-fact-undeclared` against the derivation
+file. A source declares an inline operation's `source.facts[].name`, or the properties of a
+referenced source's closed `factSchema`. A registry field rename that a derivation still reads
+under its old name therefore fails before `source update` installs anything. The check reads the
+project, not the running registry: a candidate already deployed against a registry whose field is
+then renamed still fails every request that reads it while `/ready` reports ready. Only literal
+reads on the first `answer` parameter, such as `facts["status"]` and `facts.status`, are checked.
+The operands of one `??` fallback are read together, so `facts.new ?? facts.old` passes while
+either name is declared. A computed key such as `facts[key]` is not a literal read and is how a
+derivation reads a fact the check should not see. It, a read inside a helper function, an
+`answer` that rebinds or writes its first parameter, and an open fact schema are left to the
+fixtures.
+
 An ordinary `check` can succeed with `status: incomplete` and visible findings. Add
 `--deny-findings` when any finding must refuse the command. All findings carry `severity`, `code`,
 `artifact`, `path`, `message`, and `suggestedAction`. Human output is the default. Add the global
@@ -67,7 +82,9 @@ they do not change the Evidence Gateway runtime verifier's frozen exit contract.
 {/* Evidence: crates/registry-evidencectl/src/lib.rs, Cli, Command, OutputFormat,
     run_check_command(), and run_explain_command();
     crates/registry-evidencectl/src/check.rs, check() and explain();
-    crates/registry-evidencectl/src/runtime.rs, DoctorArgs and run(). */}
+    crates/registry-evidencectl/src/runtime.rs, DoctorArgs and run();
+    crates/registry-evidencectl/src/authoring.rs, read_inputs() and declared_fact_names();
+    crates/registry-evidence-authoring/src/derivation.rs, validate_answer_fact_reads(). */}
 
 ## Compatibility spellings
 

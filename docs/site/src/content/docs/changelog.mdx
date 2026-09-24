@@ -135,6 +135,29 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-evidencectl/src/runtime.rs, the_lock_free_form_states_its_own_proof_boundary;
     crates/registry-evidence/tests/cli.rs, dependency_check_without_the_audit_lock_passes_beside_a_running_writer. */}
 
+- BREAKING: `evidencectl` refuses a derivation whose `answer` reads a fact
+  its question's source does not declare, as
+  `evidence.authoring.derivation-fact-undeclared` against the derivation
+  file. The declared facts are an inline operation's `source.facts[].name`,
+  or the properties of a referenced source's closed `factSchema`. `check`,
+  `test`, `package`, `source diff`, and `source update` all refuse, as do the
+  compatibility spellings `fixtures run` and `build`, so a Base Registry
+  Engine (BReg) field rename that a derivation still reads under its old name
+  is refused before `source update` installs it or a candidate is packaged.
+  The check reads the project, not the running registry: a field renamed in a
+  registry that already serves a deployed candidate still fails every request
+  that reads it while `/ready` reports ready, so change the registry and
+  deploy the rebuilt candidate together. Only literal reads such as
+  `facts["status"]` and `facts.status` are checked, and a `??` fallback
+  between names passes when any of them is declared. See
+  [evidencectl](../reference/evidencectl/#project-workflow).
+
+{/* Evidence: crates/registry-evidence-authoring/src/derivation.rs, validate_answer_fact_reads();
+    crates/registry-evidencectl/src/authoring.rs, declared_fact_names() and read_inputs();
+    crates/registry-evidence-authoring/tests/derivation_fact_reads.rs;
+    crates/registry-evidencectl/src/source_cli.rs, diff_and_apply_refuse_a_next_fact_schema_that_drops_a_fact_a_derivation_reads;
+    products/breg/evidence/tests/verify-composition.py, verify(). */}
+
 ## v0.34.0 beta-46
 
 - `bregctl apply` reports a migration database it could not reach, or an
