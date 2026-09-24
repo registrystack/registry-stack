@@ -258,6 +258,31 @@ impl ExpectedManagedCatalog {
                 Some((false, false)),
             );
         }
+        for (table, privileges) in crate::import_authority::IMPORT_AUTHORITY_TABLES {
+            let name = format!("registry_internal.{table}");
+            catalog.table(
+                &name,
+                privileges.iter().copied(),
+                std::iter::empty::<&str>(),
+                Some((true, false)),
+            );
+            for column in crate::import_authority::RUNTIME_UPDATE_COLUMNS {
+                catalog.column_privilege(&name, column, "runtime", "UPDATE");
+            }
+            for (policy, command, has_check) in [
+                (crate::import_authority::READ_POLICY, "r", false),
+                (crate::import_authority::ADVANCE_POLICY, "w", true),
+            ] {
+                catalog.policies.insert(ManagedPolicy {
+                    table: name.clone(),
+                    name: policy.to_owned(),
+                    command: command.to_owned(),
+                    role: ManagedPolicyRole::Runtime,
+                    has_using: true,
+                    has_check,
+                });
+            }
+        }
         for (table, privileges) in crate::attachment_store::ATTACHMENT_TABLES {
             catalog.table(
                 &format!("registry_internal.{table}"),

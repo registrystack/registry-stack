@@ -438,6 +438,10 @@ pub async fn install_mutation_schema(
         .await
         .map_err(|_| MutationError::Unavailable)?;
     crate::request_store::install(migration, runtime_role).await?;
+    // The run table references the authority table, so authorities install first.
+    crate::import_authority::install(migration, runtime_role)
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
     crate::ingestion_store::install(migration, runtime_role)
         .await
         .map_err(|_| MutationError::Unavailable)?;

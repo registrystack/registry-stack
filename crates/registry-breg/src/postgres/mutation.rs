@@ -1208,11 +1208,12 @@ impl PostgresRecordMutationService {
         if input.chunk_algorithm_version != crate::data::RUN_CHUNK_ALGORITHM_VERSION {
             return Err(IngestionServiceError::RequestInvalid);
         }
-        if crate::data::ingestion_route(&self.registry, &input.entity_id, &input.profile_id)
-            .is_none()
-        {
+        let Some(route) =
+            crate::data::ingestion_route(&self.registry, &input.entity_id, &input.profile_id)
+        else {
             return Err(IngestionServiceError::RequestInvalid);
-        }
+        };
+        let through_import = route.operation == crate::contract::Operation::Import;
         let entity = self
             .registry
             .entities()
@@ -1254,6 +1255,7 @@ impl PostgresRecordMutationService {
             chunk_algorithm_version: input.chunk_algorithm_version,
             maximum_items: i64::from(batch.maximum_items),
             maximum_bytes: i64::from(batch.maximum_bytes),
+            import_authority_id: None,
         };
         ingestion_store::validate_new_run(&run)
             .map_err(|_| IngestionServiceError::RequestInvalid)?;
@@ -1293,6 +1295,39 @@ impl PostgresRecordMutationService {
         .await
         .map_err(|_| IngestionServiceError::Unavailable)?;
         let tx: &tokio_postgres::Transaction<'_> = transaction.transaction();
+        let mut run = run;
+        let mut authority_records = Vec::new();
+        if through_import {
+            // An `import` run needs an open authority for its entity and
+            // profile that admits its whole volume and pins its input. The
+            // check collects any expiry or supersession it observes, so the
+            // refusal commits those transitions and appends their records
+            // before it answers.
+            run.import_authority_id = crate::import_authority::admit_run(
+                tx,
+                &mut authority_records,
+                &self.expected.package_revision,
+                &run.entity_id,
+                &run.profile_id,
+                run.item_count,
+                &run.input_digest,
+            )
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?;
+            if run.import_authority_id.is_none() {
+                // The run is refused whether or not the observed transitions
+                // commit: no run exists either way. Their records are
+                // appended only once they did commit; a transition whose
+                // commit failed is observed and recorded again by the next
+                // transaction that reads the authority.
+                if transaction.commit().await.is_ok() {
+                    crate::import_authority::append_transitions(&self.audit, authority_records)
+                        .await
+                        .map_err(|_| IngestionServiceError::Unavailable)?;
+                }
+                return Err(IngestionServiceError::PreconditionFailed);
+            }
+        }
         let record = ingestion_store::insert_run(tx, &run)
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?;
@@ -1311,6 +1346,9 @@ impl PostgresRecordMutationService {
         // The run exists once the transaction commits; its answer leaves only
         // after the audit entry is accepted.
         self.fail_before_run_response()?;
+        crate::import_authority::append_transitions(&self.audit, authority_records)
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?;
         ingestion_store::append_run_audit(&self.audit, audit_record)
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?;
