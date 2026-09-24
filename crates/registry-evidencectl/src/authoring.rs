@@ -48,7 +48,7 @@ pub(crate) use registry_evidence_authoring::{
         collection_pointers, question_subjects, valid_local_identifier, validate_access_policy,
         validate_answer_schema_document, validate_question,
     },
-    validate_authored_answer, Finding,
+    validate_answer_fact_reads, validate_authored_answer, Finding,
 };
 
 const LOCAL_URI_PREFIX: &str = "urn:registrystack:evidence:local:";
@@ -1103,6 +1103,12 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
             validate_authored_answer(&derivation),
             &project_relative_path(project_root, &derivation_path),
         )?;
+        if let Some(declared) = declared_fact_names(&question, &sources, &schemas) {
+            first_finding(
+                validate_answer_fact_reads(&derivation, &declared),
+                &project_relative_path(project_root, &derivation_path),
+            )?;
+        }
         questions.push(AuthoredQuestion {
             question,
             derivation,
@@ -1136,6 +1142,49 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
         access_policies: local_access.access_policies,
         active_client_policies: local_access.active_client_policies,
     })
+}
+
+/// The facts a question's derivation may read, when the project names a closed
+/// set of them.
+///
+/// An inline operation declares its facts by name. A referenced source
+/// declares them through its fact schema, and only a closed object schema
+/// (`additionalProperties: false`) names every fact the source can produce; an
+/// open one, or one this project does not hold, names no set, and the
+/// derivation is left to the fixtures.
+fn declared_fact_names(
+    question: &Question,
+    sources: &BTreeMap<String, Value>,
+    schemas: &BTreeMap<String, Value>,
+) -> Option<BTreeSet<String>> {
+    let Some(source_id) = question.source.source_ref.as_deref() else {
+        return Some(
+            question
+                .source
+                .facts
+                .iter()
+                .map(|fact| fact.name.clone())
+                .collect(),
+        );
+    };
+    let schema_key = sources
+        .get(source_id)?
+        .get("factSchema")?
+        .as_str()?
+        .strip_prefix(&format!("{SCHEMAS_DIRECTORY}/"))?
+        .strip_suffix(".yaml")?;
+    let schema = schemas.get(schema_key)?;
+    if schema.get("additionalProperties") != Some(&Value::Bool(false)) {
+        return None;
+    }
+    Some(
+        schema
+            .get("properties")?
+            .as_object()?
+            .keys()
+            .cloned()
+            .collect(),
+    )
 }
 
 fn local_signing_public_jwk(project_root: &Path) -> Result<(String, Vec<u8>)> {
@@ -5595,6 +5644,90 @@ properties:
         );
     }
 
+    fn undeclared_fact(error: &anyhow::Error) -> (&str, &str, &str) {
+        let diagnostic = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<AuthoredDiagnostic>())
+            .expect("authored diagnostic");
+        (&diagnostic.code, &diagnostic.path, &diagnostic.message)
+    }
+
+    #[test]
+    fn a_derivation_reading_a_fact_the_operation_does_not_declare_is_refused() {
+        let renamed = ANSWER.replace("facts.date_of_birth", "facts.birth_date");
+        let fixture = Fixture::new(OPENAPI, QUESTION, &renamed, true);
+
+        let error = read_inputs(&fixture.project, false)
+            .map(drop)
+            .expect_err("undeclared fact");
+        assert_eq!(
+            undeclared_fact(&error),
+            (
+                "evidence.authoring.derivation-fact-undeclared",
+                "derivations/adult-status.rhai",
+                "authored derivation reads fact \"birth_date\", which the question's source does not declare",
+            )
+        );
+        // The structural check `source diff` and `source update` run is the
+        // same one, so a source change that drops a fact is refused there too.
+        let error = validate_source_artifact_graph(&fixture.project).expect_err("structural");
+        assert_eq!(
+            undeclared_fact(&error).0,
+            "evidence.authoring.derivation-fact-undeclared"
+        );
+
+        fs::write(
+            fixture.project.join("derivations/adult-status.rhai"),
+            ANSWER,
+        )
+        .expect("declared derivation");
+        read_inputs(&fixture.project, false).expect("declared fact");
+    }
+
+    #[test]
+    fn a_derivation_reading_a_fact_the_referenced_source_no_longer_produces_is_refused() {
+        let question = QUESTION.replace(
+            "source:\n  operation: getPerson\n  facts:\n    - name: date_of_birth\n      path: /date_of_birth\n      combine: exactly-one\n  collectionBounds: {}\n",
+            "source:\n  ref: people\n",
+        );
+        let fixture = Fixture::new(OPENAPI, &question, ANSWER, true);
+        for directory in ["sources", "schemas"] {
+            fs::create_dir(fixture.project.join(directory)).expect("directory");
+        }
+        fs::write(
+            fixture.project.join("sources/people.yaml"),
+            "transport: http-json\nfactSchema: schemas/people-facts.yaml\n",
+        )
+        .expect("source");
+        let facts = |closed: bool, name: &str| {
+            format!(
+                "type: object\nadditionalProperties: {}\nrequired: [{name}]\nproperties:\n  {name}: {{type: string}}\n",
+                !closed
+            )
+        };
+        let schema = fixture.project.join("schemas/people-facts.yaml");
+
+        fs::write(&schema, facts(true, "birth_date")).expect("renamed facts");
+        let error = read_inputs(&fixture.project, false)
+            .map(drop)
+            .expect_err("renamed fact");
+        assert_eq!(
+            undeclared_fact(&error),
+            (
+                "evidence.authoring.derivation-fact-undeclared",
+                "derivations/adult-status.rhai",
+                "authored derivation reads fact \"date_of_birth\", which the question's source does not declare",
+            )
+        );
+
+        // An open fact schema names no closed set, so nothing is refused.
+        fs::write(&schema, facts(false, "birth_date")).expect("open facts");
+        read_inputs(&fixture.project, false).expect("open fact schema");
+
+        fs::write(&schema, facts(true, "date_of_birth")).expect("declared facts");
+        read_inputs(&fixture.project, false).expect("declared fact");
+    }
+
     #[test]
     fn refuses_an_open_object_answer_schema_naming_the_schema_file() {
         let fixture = Fixture::new(
@@ -6097,7 +6230,7 @@ factSchema: schemas/source-facts.schema.yaml
             ),
             (
                 "schemas/source-facts.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: []\nproperties: {}\n",
+                "type: object\nadditionalProperties: false\nrequired: []\nproperties:\n  date_of_birth: {type: string}\n  dose_count: {type: integer}\n  relationship_confirmed: {type: boolean}\n",
             ),
         ] {
             fs::write(fixture.project.join(path), contents).expect("source artifact");
@@ -7554,7 +7687,7 @@ factSchema: schemas/people-facts.schema.yaml
             ),
             (
                 "schemas/people-facts.schema.yaml",
-                "type: object\nadditionalProperties: false\nrequired: []\nproperties: {}\n",
+                "type: object\nadditionalProperties: false\nrequired: []\nproperties:\n  date_of_birth: {type: string}\n",
             ),
         ] {
             fs::write(fixture.project.join(path), contents).expect("source artifact");

@@ -500,6 +500,29 @@ declares exactly one `answer(facts, selectors, context)` with those three
 parameters. Function discovery reads the parsed syntax tree, so a name inside
 a string or a comment is not an entry point.
 
+The same syntax tree holds the facts `answer` reads. A read of its first
+parameter with a literal key, `facts["status"]` or `facts.status` (the first key
+of a longer chain), must name a fact the question's source declares: a
+`source.facts[].name` for an inline operation, or a property of a referenced
+source's `factSchema` when that schema is a closed object
+(`additionalProperties: false`). A read of any other name is refused as
+`evidence.authoring.derivation-fact-undeclared` against the derivation file, by
+`check`, fixture runs, `build`, `package`, and the structural check `source
+diff` and `source update` run. That is what turns a source rename, such as a
+regenerated export whose fact changed name, into an authoring refusal rather
+than a failure of every request. The operands of one `??` fallback are read
+together: when any of them names a declared fact, none of them is refused, so
+`facts.new ?? facts.old` stays valid while a source moves from one name to the
+other. The check reads only what it can read without running the program: a
+computed key, a read inside another function the facts are passed to, an
+`answer` that rebinds or writes its first parameter (through `let`, `const`, an
+assignment to it or to one of its keys, a `for` loop variable, or a `catch`
+variable), and a referenced source whose fact schema is open are left to the
+fixtures. A computed key such as `facts[key]` is therefore how a derivation
+reads a fact this check should not see. The check reads the project, not the
+running source: a candidate already deployed against a source whose fact is
+then renamed still fails every request that reads it.
+
 ```text
 fn answer(facts, selectors, context) {
     let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));

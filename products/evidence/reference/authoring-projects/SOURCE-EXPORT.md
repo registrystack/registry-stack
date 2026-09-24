@@ -98,7 +98,11 @@ normal compiler/build path to compare actual question revisions under that
 complete target. Without it, the report contains structural impact only.
 Structural validation checks the complete source artifact graph and any
 existing questions without requiring a target, local credentials, or a first
-question. The report identifies its validation kind explicitly. Target
+question. It includes each existing derivation's fact reads, so a next fact
+schema that no longer declares a fact a derivation reads fails structural
+validation with `evidence.authoring.derivation-fact-undeclared`
+([CONFIG.md](CONFIG.md#the-derivation-program)). The report identifies its
+validation kind explicitly. Target
 validation runs the ordinary compiled-bundle and fixture checks. If the current
 project cannot yet compile with that target, as before an initial source
 import, `previousValidation.status` is `unavailable`; the report carries only
