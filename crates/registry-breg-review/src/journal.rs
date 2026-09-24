@@ -89,7 +89,7 @@ impl Journal {
         action: Action,
         outcome: Outcome,
         citizen: Option<&str>,
-        request_id: Option<&str>,
+        change_request_id: Option<&str>,
     ) -> Result<(), AuditError> {
         let mut record = json!({
             "event": "breg-review",
@@ -98,10 +98,10 @@ impl Journal {
             "clientPseudonym": self.client,
         });
         if let Some(citizen) = citizen {
-            record["citizenPseudonym"] = Value::from(citizen);
+            record["principalPseudonym"] = Value::from(citizen);
         }
-        if let Some(request_id) = request_id {
-            record["requestId"] = Value::from(request_id);
+        if let Some(change_request_id) = change_request_id {
+            record["changeRequestId"] = Value::from(change_request_id);
         }
         self.log.append_record(record).await.map(|_| ())
     }

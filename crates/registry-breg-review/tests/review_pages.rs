@@ -788,10 +788,17 @@ async fn the_audit_journal_names_pseudonyms_actions_and_outcomes() {
     let read = find("read", "succeeded");
     find("submit", "attempted");
     let submit = find("submit", "succeeded");
-    assert_eq!(read["requestId"], REQUEST_ID);
-    assert_eq!(submit["requestId"], REQUEST_ID);
-    assert_eq!(signed_in["citizenPseudonym"], read["citizenPseudonym"]);
-    assert!(read["citizenPseudonym"].as_str().unwrap().len() >= 32);
+    // The change request is named `changeRequestId`, so it cannot be joined
+    // with the gateway's per-call `requestId`, and the person is named by the
+    // same `principalPseudonym` key the registry's audit uses.
+    assert_eq!(read["changeRequestId"], REQUEST_ID);
+    assert_eq!(submit["changeRequestId"], REQUEST_ID);
+    assert_eq!(signed_in["principalPseudonym"], read["principalPseudonym"]);
+    assert!(read["principalPseudonym"].as_str().unwrap().len() >= 32);
+    for record in &records {
+        assert!(record.get("requestId").is_none(), "{record}");
+        assert!(record.get("citizenPseudonym").is_none(), "{record}");
+    }
     assert!(read["clientPseudonym"].as_str().unwrap().len() >= 32);
     // Behind a proxy every browser shares one peer address, so the journal
     // does not name it.
