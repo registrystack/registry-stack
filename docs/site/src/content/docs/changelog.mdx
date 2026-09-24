@@ -62,9 +62,9 @@ relevant product pages on this site rather than duplicating release notes.
 
 - BReg no longer contacts the review authority for an apply made under a
   revoked or expired task grant, whether the caller's or the one frozen on
-  the proposal: it checks both grants first. The apply itself was already
-  refused under such a grant, so this closes an early outbound call, not an
-  authorization bypass.
+  the proposal: it checks both grants first and records the refused apply
+  in the audit journal. The apply itself was already refused under such a
+  grant, so this closes an early outbound call, not an authorization bypass.
 
 {/* Evidence: crates/registry-breg/src/postgres/mutation.rs, request_reviewed_apply;
     crates/registry-breg/tests/postgres_task_grants.rs, review_apply_checks_original_task_before_authority_and_before_commit. */}

@@ -617,6 +617,24 @@ async fn counts(db: &TestDatabase) -> Vec<i64> {
     }
     counts
 }
+async fn apply_refusals(db: &TestDatabase) -> usize {
+    db.admin
+        .query(
+            "SELECT convert_from(envelope, 'UTF8') FROM registry_internal.registry_audit",
+            &[],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| serde_json::from_str::<Value>(row.get(0)).unwrap()["record"].clone())
+        .filter(|record| {
+            record["phase"] == "refusal"
+                && record["operationId"]
+                    .as_str()
+                    .is_some_and(|operation| operation.ends_with(".request.apply"))
+        })
+        .count()
+}
 async fn external_review_counts(db: &TestDatabase) -> Vec<i64> {
     let mut counts = Vec::new();
     for table in [
@@ -1380,6 +1398,7 @@ async fn review_apply_checks_original_task_before_authority_and_before_commit() 
             _ => {}
         }
         let before = counts(&db).await;
+        let refusals_before = apply_refusals(&db).await;
         let calls_before = provider.calls();
         let result = perform(&app, &apply, &applier, &format!("{phase}-apply")).await;
         assert!(
@@ -1387,6 +1406,13 @@ async fn review_apply_checks_original_task_before_authority_and_before_commit() 
             "phase {phase}: this review authority never accepts, {}",
             result.body
         );
+        if phase != "live" {
+            assert_eq!(
+                apply_refusals(&db).await,
+                refusals_before + 1,
+                "phase {phase}: a refused task grant journals exactly one apply refusal"
+            );
+        }
         assert_eq!(
             counts(&db).await,
             before,

@@ -643,11 +643,45 @@ impl PostgresRecordMutationService {
         // A guard acquisition is a protected disclosure too. Check both the
         // current actor and the authority frozen at submission before the
         // review authority is contacted.
-        if let Some(grant) = claims.task_grant() {
-            self.coordinator.check_task_authority(grant).await?;
+        let task_authority = async {
+            if let Some(grant) = claims.task_grant() {
+                self.coordinator.check_task_authority(grant).await?;
+            }
+            if let Some(grant) = proposal_authority.as_deref() {
+                self.coordinator.check_task_authority(grant).await?;
+            }
+            Ok::<(), MutationError>(())
         }
-        if let Some(grant) = proposal_authority.as_deref() {
-            self.coordinator.check_task_authority(grant).await?;
+        .await;
+        if let Err(error) = task_authority {
+            // The refusal happens before any journaled attempt, so it is
+            // recorded here, the same as a refused evidence-apply preflight.
+            let client = tokio::time::timeout_at(deadline, self.pool.get())
+                .await
+                .map_err(|_| MutationError::Unavailable)?
+                .map_err(|_| MutationError::Unavailable)?;
+            let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
+            let recorded = tokio::time::timeout_at(
+                deadline,
+                self.coordinator.record_request_boundary_refusal(
+                    guard.client(),
+                    &self.registry,
+                    &input,
+                    claims,
+                ),
+            )
+            .await;
+            match recorded {
+                Ok(recorded) => {
+                    guard.disarm();
+                    recorded?;
+                }
+                Err(_) => {
+                    guard.cancel_and_discard().await;
+                    return Err(MutationError::Unavailable);
+                }
+            }
+            return Err(error);
         }
         let source = self
             .review_result_source
