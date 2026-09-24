@@ -67,7 +67,13 @@ reviewKinds:
     displaySchema:
       # The projected source fields a caller-filtered read may disclose,
       # under their API names. All are optional: the source omits any field
-      # the reading caller cannot see.
+      # the reading caller cannot see. Each property restates the source
+      # schema of the professional-licences starter registry, including its
+      # example licensed-activities vocabulary. For your own registry, copy
+      # each projected field's schema from `bregctl explain change-requests`:
+      # a disclosure this schema rejects hides the review task from every
+      # reviewer, so `caseworkctl check` and `source add` refuse a property,
+      # type, or enum value the imported source description proves it rejects.
       type: object
       additionalProperties: false
       properties:
@@ -76,6 +82,7 @@ reviewKinds:
           type: array
           items:
             type: string
+            # Starter vocabulary: replace with your registry's values.
             enum:
               - example-assessment
               - example-advisory-services

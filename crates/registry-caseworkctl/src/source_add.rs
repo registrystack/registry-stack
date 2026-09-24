@@ -98,6 +98,7 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     findings.extend(dev_clients_plan.findings.iter().cloned());
     let description =
         source_description(&args.source_id, &candidate_requests, &candidate_explanation)?;
+    check_display_schemas(&project, &args.source_id, &description_path, &description)?;
     let binding_path = project
         .join("sources")
         .join(format!("{}.breg-runtime.yaml", args.source_id));
@@ -153,6 +154,24 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     let final_check = invoke(&args.bregctl_bin, &["--format", "json", "check"], &registry)?;
     require_ok("check after apply", &final_check)?;
     Ok(report)
+}
+
+/// Refuse, before preview or apply, a description whose projected fields a
+/// bound source-context review kind cannot display, the same refusal
+/// `caseworkctl check` makes once the description is written.
+fn check_display_schemas(
+    project: &Path,
+    source_id: &str,
+    description_path: &Path,
+    description: &Value,
+) -> Result<()> {
+    let policy = crate::project::load_and_check_policy(project)?;
+    let source = policy
+        .sources
+        .iter()
+        .find(|source| source.id == source_id)
+        .with_context(|| format!("Casework project does not declare source {source_id}"))?;
+    crate::display_schema::check_description(&policy, source, description_path, description)
 }
 
 fn require_distinct_output_paths(description_path: &Path, binding_path: &Path) -> Result<()> {
@@ -2332,6 +2351,78 @@ mod tests {
 
         assert!(format!("{error:#}").contains("must not be the BReg runtime binding path"));
         assert!(!binding.exists());
+    }
+
+    /// The starter's scope-correction description as `bregctl explain
+    /// change-requests` reports it, with the licensed-activities vocabulary
+    /// an adopter's registry would carry instead of the starter's.
+    fn starter_description_with_activities(activities: &[&str]) -> Value {
+        json!({
+            "apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1",
+            "sourceId":"professional-licences",
+            "request":{
+                "requestEntity":"scope-correction",
+                "review":{"authority":"casework","policyId":"scope-correction"},
+                "fields":[
+                    {"field":"record","apiName":"record","schema":{"type":"string","format":"uuid"}},
+                    {"field":"licensed-activities","apiName":"licensedActivities","schema":{
+                        "type":"array","items":{"type":"string","enum":activities},
+                        "minItems":1,"maxItems":3,"uniqueItems":true,"x-registry-maxBytes":512
+                    }},
+                    {"field":"authorization-conditions","apiName":"authorizationConditions","schema":{"type":"string","minLength":0,"maxLength":500}},
+                    {"field":"reason","apiName":"reason","schema":{"type":"string","minLength":1,"maxLength":500}},
+                    {"field":"supporting-reference","apiName":"supportingReference","schema":{"type":"string","minLength":1,"maxLength":500}}
+                ]
+            }
+        })
+    }
+
+    #[test]
+    fn source_add_refuses_a_display_schema_the_imported_request_cannot_satisfy() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        let description_path = project.join("sources/professional-licences.json");
+        let description = starter_description_with_activities(&[
+            "example-assessment",
+            "example-community-nursing",
+            "example-practical-services",
+        ]);
+
+        let error = check_display_schemas(
+            &project,
+            "professional-licences",
+            &description_path,
+            &description,
+        )
+        .expect_err("the starter displaySchema cannot show an adopter's activity");
+
+        let error = format!("{error:#}");
+        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(error.contains("licensedActivities"), "{error}");
+        assert!(error.contains("\"example-community-nursing\""), "{error}");
+        assert!(!error.contains("\"example-assessment\""), "{error}");
+        assert!(!description_path.exists());
+    }
+
+    #[test]
+    fn source_add_accepts_the_starter_description_its_template_was_written_for() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        let description = starter_description_with_activities(&[
+            "example-assessment",
+            "example-advisory-services",
+            "example-practical-services",
+        ]);
+
+        check_display_schemas(
+            &project,
+            "professional-licences",
+            &project.join("sources/professional-licences.json"),
+            &description,
+        )
+        .unwrap();
     }
 
     #[test]
