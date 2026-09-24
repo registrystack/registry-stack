@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.34.0 - 2026-09-25
+
+- Registry Scheduling has no user-visible changes in this release.
+
 ## v0.33.0 - 2026-09-22
 
 - Publish the scheduling MVP: published openings, exact-time offerings over

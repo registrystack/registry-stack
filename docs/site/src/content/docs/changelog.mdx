@@ -18,6 +18,8 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+## v0.34.0 beta-46
+
 - `bregctl apply` reports a migration database it could not reach, or an
   apply lock another session held past the lock timeout, before maintenance
   began as `apply.database.unavailable`, with the suggested action
@@ -103,6 +105,17 @@ relevant product pages on this site rather than duplicating release notes.
 
 {/* Evidence: crates/registry-breg/src/review_store.rs, reconcile_result and read_projection;
     crates/registry-breg/src/review_store.rs, a_reconciled_result_clears_the_lookup_failure_it_outlived_from_the_projection. */}
+
+- BREAKING: `caseworkctl source add --apply` writes one lifecycle hook per
+  paired BReg request entity, `casework-lifecycle-v1-<entity>`, because BReg
+  requires hook ids to be unique across a registry. The Casework BReg source
+  binding no longer accepts `eventType`. Remove `eventType` from each
+  `*.breg-runtime.yaml` binding and every bare `casework-lifecycle-v1` hook
+  from the BReg `registry.yaml`, then repeat `caseworkctl source add --apply`.
+  See [deploy Registry Casework](../operate/casework/#write-the-runtime-file).
+
+{/* Evidence: crates/registry-casework-breg/src/lib.rs, LIFECYCLE_EVENT_TYPE_PREFIX;
+    crates/registry-caseworkctl/src/source_add.rs, LEGACY_LIFECYCLE_HOOK_ID. */}
 
 - BREAKING: Base Registry Engine (BReg) drops the `superseded` change-request
   state, which no transition ever wrote. A request is `draft`, `submitted`, `cancelled`, or

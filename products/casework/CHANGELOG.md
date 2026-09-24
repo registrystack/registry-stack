@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.34.0 - 2026-09-25
+
 - BREAKING: give each paired BReg request entity its own lifecycle hook, so
   a pairing of several request entities in one registry passes `bregctl
   check`. BReg requires a hook id to be unique across the registry, and
@@ -91,6 +93,15 @@
   subject clock still bound to an already-expired round is erased and
   restarted there too, rather than depending on the asynchronous retention
   pass to catch up first.
+- Casework keeps every sealed audit file instead of rotating and deleting the
+  oldest. Before the first `serve` of v0.34.0, stop every earlier `casework`
+  process, and if a numbered file such as `casework.ndjson.1` sits beside the
+  audit file, move the audit file and its numbered siblings to an archive
+  directory, as the Casework operate guide describes. The audit directory must
+  be mode `0700`. Casework refuses to start until both hold.
+- Casework reads its log level from `CASEWORK_LOG` (`error`, `warn`, or `info`,
+  default `info`) and writes structured JSON. `RUST_LOG` no longer has any
+  effect on the `casework` process.
 - The BReg source adapter projects a request whose approval expired before it
   was applied (BReg application state `expired`) as a waiting application
   occurrence instead of refusing the source read. The professional-review

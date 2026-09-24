@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.34.0 - 2026-09-25
+
+- The shared platform crates have no user-visible changes in this release.
+
 ## v0.33.0 - 2026-09-22
 
 - Read a token response that states an empty `scope` as granting no scope
