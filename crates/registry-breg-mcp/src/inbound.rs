@@ -17,7 +17,7 @@ use axum::{
     extract::{Request, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::Response,
 };
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_authcommon::{parse_bearer_token, BearerParseError};
@@ -32,7 +32,10 @@ use serde_json::{json, Value};
 use url::Url;
 use zeroize::Zeroizing;
 
-use crate::config::{RateLimitsConfig, ResourceServerConfig};
+use crate::{
+    config::{RateLimitsConfig, ResourceServerConfig},
+    server::problem,
+};
 
 /// The two spellings RFC 9068 permits for a JWT access token.
 const ACCESS_TOKEN_TYPES: [&str; 2] = ["at+jwt", "application/at+jwt"];
@@ -303,7 +306,7 @@ impl ResourceServer {
             Refusal::KeySource | Refusal::Unavailable => (StatusCode::SERVICE_UNAVAILABLE, None),
             Refusal::RateLimited { .. } => (StatusCode::TOO_MANY_REQUESTS, None),
         };
-        let mut response = (status, axum::Json(json!({ "error": refusal.code() }))).into_response();
+        let mut response = problem(status, refusal.code(), refusal.detail());
         let headers = response.headers_mut();
         if let Some(challenge) = challenge.and_then(|value| HeaderValue::from_str(&value).ok()) {
             headers.insert(header::WWW_AUTHENTICATE, challenge);
@@ -314,7 +317,6 @@ impl ResourceServer {
         {
             headers.insert(header::RETRY_AFTER, HeaderValue::from(retry_after_seconds));
         }
-        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         response
     }
 }
@@ -323,10 +325,22 @@ impl Refusal {
     const fn code(self) -> &'static str {
         match self {
             Self::Missing => "unauthorized",
-            Self::InvalidToken => "invalid_token",
-            Self::InsufficientScope => "insufficient_scope",
-            Self::KeySource | Self::Unavailable => "temporarily_unavailable",
-            Self::RateLimited { .. } => "rate_limited",
+            Self::InvalidToken => "invalid-token",
+            Self::InsufficientScope => "insufficient-scope",
+            Self::KeySource | Self::Unavailable => "temporarily-unavailable",
+            Self::RateLimited { .. } => "rate-limited",
+        }
+    }
+
+    const fn detail(self) -> &'static str {
+        match self {
+            Self::Missing => "A bearer access token is required.",
+            Self::InvalidToken => "The access token is not valid for this resource.",
+            Self::InsufficientScope => "The access token lacks a required scope.",
+            Self::KeySource | Self::Unavailable => {
+                "The gateway cannot verify the request right now."
+            }
+            Self::RateLimited { .. } => "Too many requests; retry after the indicated delay.",
         }
     }
 }
@@ -777,6 +791,94 @@ mod tests {
         let third =
             authorization.issue_access_token(CHAT_HOST, "citizen-c", RESOURCE, SCOPE, now() + 300);
         assert_eq!(call(&router, Some(&third)).await.status(), StatusCode::OK);
+    }
+
+    /// Every refusal is an RFC 9457 problem document with a kebab-case code;
+    /// a 401 keeps its RFC 6750 challenge and a 429 its `Retry-After`.
+    #[tokio::test]
+    async fn every_refusal_is_a_problem_document() {
+        let authorization = authorization_server().await;
+        let config = config(&authorization.issuer(), &authorization.jwks_uri());
+        let fetcher = Arc::new(uri_fetcher(&authorization.jwks_uri(), true));
+        let server = ResourceServer::new(
+            &config,
+            "x",
+            verifier(&config, fetcher),
+            hasher(),
+            limits(10, 10),
+        )
+        .expect("server");
+        let cases = [
+            (Refusal::Missing, 401, "Unauthorized", "unauthorized", true),
+            (
+                Refusal::InvalidToken,
+                401,
+                "Unauthorized",
+                "invalid-token",
+                true,
+            ),
+            (
+                Refusal::InsufficientScope,
+                403,
+                "Forbidden",
+                "insufficient-scope",
+                true,
+            ),
+            (
+                Refusal::KeySource,
+                503,
+                "Service Unavailable",
+                "temporarily-unavailable",
+                false,
+            ),
+            (
+                Refusal::Unavailable,
+                503,
+                "Service Unavailable",
+                "temporarily-unavailable",
+                false,
+            ),
+            (
+                Refusal::RateLimited {
+                    retry_after_seconds: 7,
+                },
+                429,
+                "Too Many Requests",
+                "rate-limited",
+                false,
+            ),
+        ];
+        for (refusal, status, title, code, challenged) in cases {
+            let response = server.refusal_response(refusal);
+            assert_eq!(response.status().as_u16(), status, "{code}");
+            let headers = response.headers();
+            assert_eq!(
+                headers.get(header::CONTENT_TYPE),
+                Some(&HeaderValue::from_static("application/problem+json")),
+                "{code}"
+            );
+            assert_eq!(
+                headers.get(header::CACHE_CONTROL),
+                Some(&HeaderValue::from_static("no-store")),
+                "{code}"
+            );
+            assert_eq!(
+                headers.contains_key(header::WWW_AUTHENTICATE),
+                challenged,
+                "{code}"
+            );
+            assert_eq!(
+                headers.get(header::RETRY_AFTER).is_some(),
+                status == 429,
+                "{code}"
+            );
+            let body = body(response).await;
+            assert_eq!(body["type"], "about:blank", "{code}");
+            assert_eq!(body["title"], title, "{code}");
+            assert_eq!(body["status"], status, "{code}");
+            assert_eq!(body["code"], code, "{code}");
+            assert!(body["detail"].is_string(), "{code}");
+        }
     }
 
     #[tokio::test]

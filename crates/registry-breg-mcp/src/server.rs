@@ -19,7 +19,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use registry_platform_httpsec::{request_body_limit, security_headers, CspBuilder};
+use registry_platform_httpsec::{request_body_limit, security_headers, CspBuilder, Problem};
 use rmcp::transport::streamable_http_server::{
     session::never::NeverSessionManager, StreamableHttpServerConfig, StreamableHttpService,
 };
@@ -172,7 +172,7 @@ pub(crate) fn router(
 }
 
 async fn health() -> Response {
-    no_store((StatusCode::OK, Json(json!({"status": "ok"}))).into_response())
+    no_store((StatusCode::OK, Json(json!({"status": "alive"}))).into_response())
 }
 
 async fn ready(State(gateway): State<Arc<Gateway>>) -> Response {
@@ -192,11 +192,35 @@ async fn metadata(State(server): State<Arc<ResourceServer>>) -> Response {
 }
 
 async fn forbidden() -> Response {
-    no_store((StatusCode::FORBIDDEN, Json(json!({"error": "forbidden"}))).into_response())
+    problem(
+        StatusCode::FORBIDDEN,
+        "forbidden",
+        "The request's host or origin is not accepted.",
+    )
 }
 
 async fn not_found() -> Response {
-    no_store((StatusCode::NOT_FOUND, Json(json!({"error": "not_found"}))).into_response())
+    problem(
+        StatusCode::NOT_FOUND,
+        "not-found",
+        "The gateway serves no such route.",
+    )
+}
+
+/// An RFC 9457 problem document for a refusal outside MCP: no registered
+/// type, the status's own title, fixed client-safe text, and a stable
+/// kebab-case `code`. Never cached.
+pub(crate) fn problem(status: StatusCode, code: &'static str, detail: &'static str) -> Response {
+    no_store(
+        Problem::new(
+            "about:blank",
+            status.canonical_reason().unwrap_or_default(),
+            status,
+        )
+        .detail(detail)
+        .with_extra("code", json!(code))
+        .into_response(),
+    )
 }
 
 fn no_store(mut response: Response) -> Response {

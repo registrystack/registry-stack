@@ -413,6 +413,10 @@ async fn health_readiness_and_unknown_routes() {
     assert!(!health
         .headers()
         .contains_key(header::STRICT_TRANSPORT_SECURITY));
+    assert_eq!(
+        health.json::<Value>().await.expect("health body"),
+        json!({"status": "alive"})
+    );
 
     let ready = reqwest::get(format!("{}/ready", harness.origin))
         .await
@@ -428,8 +432,24 @@ async fn health_readiness_and_unknown_routes() {
         .expect("unknown route answers");
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     assert_eq!(
+        missing.headers().get(header::CONTENT_TYPE),
+        Some(&header::HeaderValue::from_static(
+            "application/problem+json"
+        ))
+    );
+    assert_eq!(
+        missing.headers().get(header::CACHE_CONTROL),
+        Some(&header::HeaderValue::from_static("no-store"))
+    );
+    assert_eq!(
         missing.json::<Value>().await.expect("not found body"),
-        json!({"error": "not_found"})
+        json!({
+            "type": "about:blank",
+            "title": "Not Found",
+            "status": 404,
+            "detail": "The gateway serves no such route.",
+            "code": "not-found",
+        })
     );
 }
 
@@ -508,6 +528,17 @@ async fn a_wrong_host_or_any_origin_is_refused_before_authentication() {
             !response.headers().contains_key(header::WWW_AUTHENTICATE),
             "{name}: {value}"
         );
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&header::HeaderValue::from_static(
+                "application/problem+json"
+            )),
+            "{name}: {value}"
+        );
+        let body = response.json::<Value>().await.expect("problem body");
+        assert_eq!(body["type"], "about:blank", "{name}: {value}");
+        assert_eq!(body["status"], 403, "{name}: {value}");
+        assert_eq!(body["code"], "forbidden", "{name}: {value}");
     }
     assert_eq!(harness.exchanges(), 0);
     assert!(harness.registry.seen().is_empty());

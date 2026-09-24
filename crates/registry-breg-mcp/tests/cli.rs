@@ -200,7 +200,7 @@ fn serve_answers_health_and_stops_on_terminate() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(answer.starts_with("HTTP/1.1 200"), "{answer}\n{logs}");
-    assert!(answer.contains(r#"{"status":"ok"}"#), "{answer}");
+    assert!(answer.contains(r#"{"status":"alive"}"#), "{answer}");
     assert!(output.status.success(), "{logs}");
     assert!(logs.contains("gateway listening"), "{logs}");
     assert!(logs.contains("shutting down"), "{logs}");

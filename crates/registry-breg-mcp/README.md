@@ -167,8 +167,17 @@ request carrying an `Origin` header, are refused with `403` before the token
 is verified or a rate limit is charged. A `Host` that omits the port names the
 scheme's default one, so for `https://gateway.example.test/mcp` both
 `gateway.example.test` and `gateway.example.test:443` are accepted, and the
-same host on another port is not. `/health` reports the process
-is up; `/ready` reports whether the audit log is writable.
+same host on another port is not. `/health` answers
+`{"status":"alive"}` while the process is up; `/ready` reports whether the
+audit log is writable.
+
+A request refused outside MCP gets an RFC 9457 problem document
+(`application/problem+json`, type `about:blank`) with fixed text and a stable
+`code`: `unauthorized` or `invalid-token` with `401`, `insufficient-scope` or
+`forbidden` with `403`, `not-found` with `404`, `rate-limited` with `429`, and
+`temporarily-unavailable` with `503`. A `401` and an `insufficient-scope`
+refusal keep their RFC 6750 `WWW-Authenticate` challenge, whose `error`
+values are the RFC's own `invalid_token` and `insufficient_scope`.
 
 Each tool call is audited twice, before any registry call and after it, to a
 hash-chained JSON Lines log: the request identifier (`requestId`), the tool,
