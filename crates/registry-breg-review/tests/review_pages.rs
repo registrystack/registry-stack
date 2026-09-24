@@ -514,12 +514,12 @@ async fn health_and_ready_answer() {
 #[tokio::test]
 async fn the_session_ends_with_the_access_token() {
     let harness = Harness::start_with(Options {
-        token_lifetime: Duration::from_secs(2),
+        token_lifetime: Duration::from_secs(10),
         ..Options::default()
     })
     .await;
     let (cookie, _) = harness.review().await;
-    tokio::time::sleep(Duration::from_millis(2500)).await;
+    tokio::time::sleep(Duration::from_millis(10_500)).await;
     let calls = harness.environment.registry.total_calls();
 
     let expired = harness.get(&review_path(), Some(&cookie)).await;
@@ -565,14 +565,14 @@ async fn unauthenticated_submit_links_to_sign_in_without_a_registry_call() {
 #[tokio::test]
 async fn an_expired_session_posts_answer_pages_not_redirects() {
     let harness = Harness::start_with(Options {
-        token_lifetime: Duration::from_secs(2),
+        token_lifetime: Duration::from_secs(10),
         ..Options::default()
     })
     .await;
     let (cookie, page) = harness.review().await;
     let csrf = page.input("csrf").unwrap();
     let view = page.input("view").unwrap();
-    tokio::time::sleep(Duration::from_millis(2500)).await;
+    tokio::time::sleep(Duration::from_millis(10_500)).await;
     let calls = harness.environment.registry.total_calls();
 
     let submit = harness
