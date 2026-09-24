@@ -137,12 +137,29 @@ detail becomes a label. `messaging_provider_callbacks_total` counts callbacks
 by a closed outcome label only (`unverified`, `unreadable`, `ignored`,
 `applied`, `unchanged`, `unmatched`, `ambiguous`, `unavailable`); neither the
 provider id nor a path token becomes a label, and the request counters label
-the callback routes by their templates.
+the callback routes by their templates. The rest of the set is closed the
+same way: `messaging_provider_attempts_total` by attempt outcome (`accepted`,
+`transient`, `permanent`, `maybe-sent`), `messaging_limit_refusals_total` by
+limit (`rate`, `daily`, `pacing`), `messaging_retention_runs_total` by sweep
+outcome (`erased`, `idle`, `failed`), and the `messaging_dispatch_jobs` gauge
+by state (`pending`, `leased`, `unknown`). No provider, sender profile,
+access profile, or template becomes a label, so a series never tells which
+caller or which recipient population is active.
+
+The gauge is read from the store on each scrape, one read-only transaction
+of three counts over partial indexes, bounded by a two-second statement
+timeout (MESSAGING-DEC-25). A reader of the metrics listener can therefore
+cause at most one such read per scrape; the listener is private, and a store
+that cannot answer leaves the gauge without samples rather than reporting an
+empty queue.
 
 Tests: `http.rs::the_metrics_listener_serves_counters_and_nothing_else`,
-`metrics.rs::labels_are_closed`, the `config.rs` listener tests, and the
-PostgreSQL suite's served runtime, which checks `/metrics` is absent from the
-public listener.
+`metrics.rs::labels_are_closed`,
+`metrics.rs::every_attempt_limit_and_retention_outcome_is_exposed_from_zero`,
+`metrics.rs::the_dispatch_queue_is_exposed_only_when_it_was_sampled`,
+`postgres_dispatch.rs::the_metrics_sample_the_queue_and_count_attempts_by_outcome`,
+the `config.rs` listener tests, and the PostgreSQL suite's served runtime,
+which checks `/metrics` is absent from the public listener.
 
 ## Audit
 

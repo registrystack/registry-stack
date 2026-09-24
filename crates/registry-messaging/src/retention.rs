@@ -29,6 +29,7 @@
 //! database's clock is refused: retention erases what has expired, never
 //! what will.
 
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
@@ -40,6 +41,7 @@ use tokio_postgres::Transaction;
 use crate::config::RetentionConfig;
 use crate::dispatch::Actor;
 use crate::messages::format_instant;
+use crate::metrics::{Metrics, RetentionRun};
 use crate::outbox;
 use crate::store::{PostgresStore, StoreError};
 
@@ -318,6 +320,7 @@ async fn delete_records(
 pub struct RetentionSweep {
     store: PostgresStore,
     retention: RetentionConfig,
+    metrics: Arc<Metrics>,
 }
 
 impl std::fmt::Debug for RetentionSweep {
@@ -331,24 +334,35 @@ impl std::fmt::Debug for RetentionSweep {
 
 impl RetentionSweep {
     #[must_use]
-    pub fn new(store: PostgresStore, retention: RetentionConfig) -> Self {
-        Self { store, retention }
+    pub fn new(store: PostgresStore, retention: RetentionConfig, metrics: Arc<Metrics>) -> Self {
+        Self {
+            store,
+            retention,
+            metrics,
+        }
     }
 
-    /// One applied run at the database's current time.
+    /// One applied run at the database's current time, counted by its
+    /// outcome.
     ///
     /// # Errors
     ///
     /// As [`erase_expired`].
     pub async fn pass(&self) -> Result<RetentionReport, RetentionError> {
-        erase_expired(
+        let result = erase_expired(
             &self.store,
             self.retention,
             None,
             true,
             RetentionActor::Runtime,
         )
-        .await
+        .await;
+        self.metrics.record_retention_run(match &result {
+            Ok(report) if report.erased_anything() => RetentionRun::Erased,
+            Ok(_) => RetentionRun::Idle,
+            Err(_) => RetentionRun::Failed,
+        });
+        result
     }
 
     /// Run a pass every `interval` until `shutdown` turns true. A failed

@@ -58,6 +58,26 @@ socket and nowhere else; when absent, no metrics are served. The address must
 be a concrete loopback or private address on a non-zero port, and must not be
 the public listener's socket or one a wildcard public listener already covers.
 
+The metrics are Prometheus text, every label closed:
+
+| Series | Type | Labels |
+|---|---|---|
+| `messaging_http_requests_total` | counter | `route` (template), `method`, `status` (class) |
+| `messaging_authentication_refusals_total` | counter | `reason` |
+| `messaging_provider_callbacks_total` | counter | `outcome` |
+| `messaging_provider_attempts_total` | counter | `outcome`: `accepted`, `transient`, `permanent`, `maybe-sent` |
+| `messaging_limit_refusals_total` | counter | `limit`: `rate`, `daily`, `pacing` |
+| `messaging_retention_runs_total` | counter | `outcome`: `erased`, `idle`, `failed` |
+| `messaging_dispatch_jobs` | gauge | `state`: `pending`, `leased`, `unknown` |
+
+Counters are per process and start at zero. `messaging_dispatch_jobs` is read
+from the database on each scrape; the queue depth is `pending` plus `leased`,
+and `unknown` is the number of messages waiting for an operator to settle.
+When the database cannot answer, that scrape has no `messaging_dispatch_jobs`
+samples, and the runtime logs a warning. A `messagingctl retention
+erase-expired` run is a separate process and is recorded in the audit journal,
+not in these counters.
+
 `secretProviders` explicitly enables each accepted reference form. Declare
 `file: {root: ABSOLUTE_DIRECTORY}` before using `secret:file/name`, and
 `environment: {}` before using `secret:env/NAME`. At least one is required,

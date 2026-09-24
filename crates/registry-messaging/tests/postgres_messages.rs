@@ -652,6 +652,20 @@ async fn a_profile_past_its_daily_limit_is_refused_across_a_restart() {
     assert!(refused
         .iter()
         .all(|entry| entry["record"]["event"] == "messaging.message.refused"));
+    // Each process counts its own refusals: the restarted runtime counted
+    // the first, this one the second.
+    assert_eq!(
+        harness
+            .sample("messaging_limit_refusals_total{limit=\"daily\"}")
+            .await,
+        Some(1)
+    );
+    assert_eq!(
+        harness
+            .sample("messaging_limit_refusals_total{limit=\"rate\"}")
+            .await,
+        Some(0)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

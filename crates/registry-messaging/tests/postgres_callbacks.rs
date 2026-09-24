@@ -138,7 +138,11 @@ async fn deployment(verifier: Verifier) -> Deployment {
         Arc::clone(&harness.transports),
     )
     .unwrap();
-    let sender = MessageSender::new(dispatcher.clone(), Arc::clone(&harness.transports));
+    let sender = MessageSender::new(
+        dispatcher.clone(),
+        Arc::clone(&harness.transports),
+        Arc::clone(&harness.metrics),
+    );
     Deployment {
         harness,
         _gateway: gateway,
@@ -347,7 +351,7 @@ impl Deployment {
     }
 
     fn counted(&self, outcome: &str) -> u64 {
-        let rendered = self.harness.metrics.render();
+        let rendered = self.harness.metrics.render(None);
         let prefix = format!("messaging_provider_callbacks_total{{outcome=\"{outcome}\"}} ");
         rendered
             .lines()

@@ -20,3 +20,9 @@ CREATE INDEX messaging_dispatch_jobs_terminal_idx
 -- foreign key, so retention finds it by the message it names.
 CREATE INDEX messaging_idempotency_message_idx
     ON messaging_idempotency (message_id);
+
+-- The metrics listener counts the messages held unknown on every scrape;
+-- pending and leased jobs already have their own partial indexes.
+CREATE INDEX messaging_dispatch_jobs_unknown_idx
+    ON messaging_dispatch_jobs (message_id)
+    WHERE state = 'unknown';

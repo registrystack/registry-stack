@@ -65,7 +65,7 @@ async fn three_messages(harness: &Harness) -> (Uuid, Uuid, Uuid) {
         Arc::clone(&transports),
     )
     .unwrap();
-    let sender = MessageSender::new(dispatcher.clone(), transports);
+    let sender = MessageSender::new(dispatcher.clone(), transports, Arc::clone(&harness.metrics));
 
     let failed = harness.accepted(&sms_submission()).await;
     assert_eq!(

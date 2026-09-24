@@ -67,6 +67,14 @@ pub enum StoreError {
     Pool(#[from] deadpool_postgres::PoolError),
 }
 
+/// The dispatch jobs waiting in each state work waits in.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DispatchDepth {
+    pub pending: i64,
+    pub leased: i64,
+    pub unknown: i64,
+}
+
 #[derive(Clone)]
 pub struct PostgresStore {
     pool: Pool,
@@ -207,6 +215,33 @@ impl PostgresStore {
         } else {
             Err(StoreError::SchemaVersion)
         }
+    }
+
+    /// How many dispatch jobs wait in each state work waits in. Each count
+    /// reads its state's partial index, and the read is bounded so a slow
+    /// store cannot hold a scrape open.
+    pub async fn dispatch_depth(&self) -> Result<DispatchDepth, StoreError> {
+        let mut client = self.client().await?;
+        let transaction = client.build_transaction().read_only(true).start().await?;
+        transaction
+            .batch_execute("SET LOCAL statement_timeout = '2s'")
+            .await?;
+        let row = transaction
+            .query_one(
+                "SELECT \
+                   (SELECT count(*) FROM messaging_dispatch_jobs WHERE state = 'pending'), \
+                   (SELECT count(*) FROM messaging_dispatch_jobs WHERE state = 'leased'), \
+                   (SELECT count(*) FROM messaging_dispatch_jobs WHERE state = 'unknown')",
+                &[],
+            )
+            .await?;
+        let depth = DispatchDepth {
+            pending: row.try_get(0)?,
+            leased: row.try_get(1)?,
+            unknown: row.try_get(2)?,
+        };
+        transaction.commit().await?;
+        Ok(depth)
     }
 
     /// The digest of the package the ledger names active: its latest entry,

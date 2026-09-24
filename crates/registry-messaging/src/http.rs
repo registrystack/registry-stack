@@ -63,7 +63,7 @@ use crate::messages::{
     prepare_submission, valid_idempotency_key, MessageService, SubmissionAnswer, SubmissionRefusal,
     MESSAGE_REFUSED_EVENT, MESSAGE_REPLAYED_EVENT,
 };
-use crate::metrics::{count_requests, serve_metrics, Metrics};
+use crate::metrics::{count_requests, serve_metrics, LimitKind, Metrics, MetricsState};
 use crate::providers::CallbackReceivers;
 use crate::store::PostgresStore;
 
@@ -377,12 +377,13 @@ pub fn router(state: HttpState) -> Router {
     )
 }
 
-/// The operator-private router the metrics listener serves.
-pub fn metrics_router(metrics: Arc<Metrics>) -> Router {
+/// The operator-private router the metrics listener serves: the counters,
+/// and the dispatch queue sampled from `store` when there is one.
+pub fn metrics_router(metrics: Arc<Metrics>, store: Option<PostgresStore>) -> Router {
     http_edge(
         Router::new()
             .route(METRICS_PATH, get(serve_metrics))
-            .with_state(metrics),
+            .with_state(MetricsState { metrics, store }),
     )
 }
 
@@ -465,7 +466,10 @@ async fn submit_message(
     let record = match &result {
         Ok(answer) if !answer.replayed => None,
         Ok(answer) => Some(SubmissionRecord::replayed(&state, &caller, answer)?),
-        Err(refusal) => Some(SubmissionRecord::refused(&state, &caller, refusal.problem)?),
+        Err(refusal) => {
+            count_limit_refusal(&state.metrics, refusal.problem);
+            Some(SubmissionRecord::refused(&state, &caller, refusal.problem)?)
+        }
     };
     if let Some(record) = record {
         if let Err(error) = state.audit.append(record).await {
@@ -482,6 +486,16 @@ async fn submit_message(
         HttpError(ProblemCode::ServiceUnavailable)
     })?;
     Ok((status, Json(answer.receipt)).into_response())
+}
+
+/// Count a refusal by the request rate or the daily limit under the limit
+/// that refused.
+fn count_limit_refusal(metrics: &Metrics, problem: ProblemCode) {
+    match problem {
+        ProblemCode::RateLimitExceeded => metrics.record_limit_refusal(LimitKind::Rate),
+        ProblemCode::QuotaExceeded => metrics.record_limit_refusal(LimitKind::Daily),
+        _ => {}
+    }
 }
 
 /// Every check a submission passes before it is recorded, in the order a
@@ -1089,7 +1103,7 @@ mod tests {
     async fn the_metrics_listener_serves_counters_and_nothing_else() {
         let (app, metrics) = app();
         call(app, "GET", "/v1/messages/m-1", None).await;
-        let metrics_app = metrics_router(metrics);
+        let metrics_app = metrics_router(metrics, None);
         let response = call(metrics_app.clone(), "GET", METRICS_PATH, None).await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
@@ -1550,6 +1564,7 @@ mod tests {
         let (sink, journal_handle) = memory_journal();
         let mut state = state_over(authenticator(), true, journal_handle);
         state.limits = Arc::new(CallerLimits::new(state.package.access_profiles()).unwrap());
+        let metrics = Arc::clone(&state.metrics);
         let app = router(state);
         let sender = token(sender_claims());
         // The starter's `case-notices` profile admits a burst of ten; the
@@ -1583,6 +1598,12 @@ mod tests {
         assert_eq!(refused["event"], MESSAGE_REFUSED_EVENT);
         assert_eq!(refused["accessProfile"], "case-notices");
         assert_no_submission_values(&records);
+        let text = metrics.render(None);
+        assert!(
+            text.contains("messaging_limit_refusals_total{limit=\"rate\"} 1\n"),
+            "{text}"
+        );
+        assert!(text.contains("messaging_limit_refusals_total{limit=\"daily\"} 0\n"));
     }
 
     #[test]
@@ -1833,7 +1854,7 @@ mod tests {
     }
 
     fn callbacks_counted(metrics: &Metrics, outcome: &str, count: u64) {
-        let text = metrics.render();
+        let text = metrics.render(None);
         assert!(
             text.contains(&format!(
                 "messaging_provider_callbacks_total{{outcome=\"{outcome}\"}} {count}\n"
@@ -1904,7 +1925,7 @@ mod tests {
         )
         .await;
         callbacks_counted(&metrics, "unavailable", 1);
-        let text = metrics.render();
+        let text = metrics.render(None);
         assert!(!text.contains("callback-token-4f1b90"), "{text}");
         assert!(text.contains("route=\"/v1/provider-callbacks/{provider_id}/{token}\""));
     }

@@ -335,9 +335,14 @@ pub async fn assemble(
     let transports = Arc::new(transports);
     let dispatcher: MessageDispatcher = dispatcher(store.clone(), &schema, Arc::clone(&transports))
         .map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
+    let metrics = Arc::new(Metrics::default());
     let worker = DispatchWorker::new(
         dispatcher.clone(),
-        Arc::new(MessageSender::new(dispatcher.clone(), transports)),
+        Arc::new(MessageSender::new(
+            dispatcher.clone(),
+            transports,
+            Arc::clone(&metrics),
+        )),
         WorkerConfig {
             concurrency: WORKER_CONCURRENCY,
             idle_poll: WORKER_IDLE_POLL,
@@ -361,7 +366,6 @@ pub async fn assemble(
         CallerLimits::new(loaded.package.access_profiles())
             .map_err(|error| RuntimeError::Limits(error.to_string()))?,
     );
-    let metrics = Arc::new(Metrics::default());
     Ok(Assembled {
         public: router(HttpState {
             authenticator,
@@ -376,10 +380,10 @@ pub async fn assemble(
             messages: Some(Arc::new(messages)),
             callbacks,
         }),
-        metrics: metrics_router(metrics),
+        metrics: metrics_router(Arc::clone(&metrics), Some(store.clone())),
         worker,
         publisher,
-        retention: RetentionSweep::new(store, config.retention),
+        retention: RetentionSweep::new(store, config.retention, metrics),
     })
 }
 

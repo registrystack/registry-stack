@@ -23,7 +23,7 @@ use registry_messaging::audit::AuditJournal;
 use registry_messaging::auth::MessagingAuthenticator;
 use registry_messaging::config::RuntimeConfig;
 use registry_messaging::dispatch::Transports;
-use registry_messaging::http::{router, HttpState, Readiness};
+use registry_messaging::http::{metrics_router, router, HttpState, Readiness};
 use registry_messaging::limits::CallerLimits;
 use registry_messaging::messages::{MessageService, MessageStore};
 use registry_messaging::metrics::Metrics;
@@ -435,6 +435,32 @@ impl Harness {
             request = request.header(AUTHORIZATION, format!("Bearer {bearer}"));
         }
         send(self.app.clone(), request.body(Body::empty()).unwrap()).await
+    }
+
+    /// Scrape the metrics listener the runtime serves beside this app: its
+    /// counters and the dispatch queue sampled from this schema.
+    pub async fn scrape(&self) -> String {
+        let request = Request::builder()
+            .uri("/metrics")
+            .body(Body::empty())
+            .unwrap();
+        let response = metrics_router(Arc::clone(&self.metrics), Some(self.store.clone()))
+            .oneshot(request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 256 * 1024).await.unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    /// The value of one scraped series, named with its labels, or `None`
+    /// when the scrape has no sample for it.
+    pub async fn sample(&self, series: &str) -> Option<i64> {
+        let text = self.scrape().await;
+        let prefix = format!("{series} ");
+        text.lines()
+            .find_map(|line| line.strip_prefix(&prefix))
+            .map(|value| value.parse().unwrap())
     }
 }
 

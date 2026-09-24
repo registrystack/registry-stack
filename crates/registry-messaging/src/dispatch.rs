@@ -98,6 +98,7 @@ use uuid::Uuid;
 
 use crate::http_provider::MAXIMUM_RATE_PER_SECOND;
 use crate::limits::{LimitRefusal, ProviderPacer, PACING_ALLOWANCE};
+use crate::metrics::{AttemptOutcome, LimitKind, Metrics};
 use crate::outbox;
 use crate::store::PostgresStore;
 
@@ -496,13 +497,17 @@ fn decode_record(row: &Row, first: usize) -> Result<MessageJob, DispatchError> {
     })
 }
 
-const fn outcome_class(outcome: &SendOutcome) -> &'static str {
+const fn attempt_outcome(outcome: &SendOutcome) -> AttemptOutcome {
     match outcome {
-        SendOutcome::Accepted { .. } => "accepted",
-        SendOutcome::Transient { .. } => "transient",
-        SendOutcome::Permanent { .. } => "permanent",
-        SendOutcome::MaybeSent => "maybe-sent",
+        SendOutcome::Accepted { .. } => AttemptOutcome::Accepted,
+        SendOutcome::Transient { .. } => AttemptOutcome::Transient,
+        SendOutcome::Permanent { .. } => AttemptOutcome::Permanent,
+        SendOutcome::MaybeSent => AttemptOutcome::MaybeSent,
     }
+}
+
+const fn outcome_class(outcome: &SendOutcome) -> &'static str {
+    attempt_outcome(outcome).as_str()
 }
 
 const fn quarantine_reason(reason: QuarantineReason) -> &'static str {
@@ -867,35 +872,36 @@ const fn transient() -> Sent<()> {
 }
 
 /// The dispatch core's transport: reads a leased message's payload and
-/// hands it to the transport its provider is registered with.
+/// hands it to the transport its provider is registered with, counting
+/// every attempt's outcome and every pacing refusal.
 #[derive(Clone)]
 pub struct MessageSender {
     dispatcher: MessageDispatcher,
     transports: Arc<Transports>,
+    metrics: Arc<Metrics>,
 }
 
 impl MessageSender {
     #[must_use]
-    pub fn new(dispatcher: MessageDispatcher, transports: Arc<Transports>) -> Self {
+    pub fn new(
+        dispatcher: MessageDispatcher,
+        transports: Arc<Transports>,
+        metrics: Arc<Metrics>,
+    ) -> Self {
         Self {
             dispatcher,
             transports,
+            metrics,
         }
     }
-}
 
-#[async_trait]
-impl DispatchTransport for MessageSender {
-    type Job = MessageJob;
-    type Detail = ();
-
-    async fn send(&self, job: &LeasedJob<MessageJob>) -> Result<Sent<()>, DispatchError> {
+    async fn attempt(&self, job: &LeasedJob<MessageJob>) -> Sent<()> {
         let Some(transport) = self.transports.get(&job.job.provider) else {
             tracing::warn!(
                 failure = PROVIDER_UNCONFIGURED,
                 "a Messaging message names a provider with no transport"
             );
-            return Ok(permanent(PROVIDER_UNCONFIGURED));
+            return permanent(PROVIDER_UNCONFIGURED);
         };
         let payload = match self
             .dispatcher
@@ -903,15 +909,15 @@ impl DispatchTransport for MessageSender {
             .await
         {
             Ok(Some(payload)) => payload,
-            Ok(None) => return Ok(permanent(PAYLOAD_ERASED)),
+            Ok(None) => return permanent(PAYLOAD_ERASED),
             // Nothing was sent: the attempt is retried under its policy.
             Err(LeasedReadError::Unavailable | LeasedReadError::Refused(_)) => {
-                return Ok(transient());
+                return transient();
             }
         };
         if let Some(pacer) = self.transports.pacer(&job.job.provider) {
             let Some(budget) = job.remaining_budget(SystemTime::now()) else {
-                return Ok(transient());
+                return transient();
             };
             // The wait is bounded by what the budget holds beyond the send's
             // own timeout, so pacing never shortens the send.
@@ -919,18 +925,19 @@ impl DispatchTransport for MessageSender {
             match pacer.acquire(tokio::time::Instant::now() + wait).await {
                 Ok(()) => {}
                 Err(LimitRefusal::Exceeded { retry_after }) => {
-                    return Ok(Sent {
+                    self.metrics.record_limit_refusal(LimitKind::Pacing);
+                    return Sent {
                         outcome: SendOutcome::Transient {
                             retry_after: Some(retry_after),
                         },
                         detail: (),
-                    });
+                    };
                 }
-                Err(LimitRefusal::Unavailable) => return Ok(transient()),
+                Err(LimitRefusal::Unavailable) => return transient(),
             }
         }
         let Some(budget) = job.remaining_budget(SystemTime::now()) else {
-            return Ok(transient());
+            return transient();
         };
         let budget = budget.min(transport.attempt_timeout());
         let idempotency_key = provider_idempotency_key(job.key.id(), job.generation, &payload);
@@ -952,10 +959,22 @@ impl DispatchTransport for MessageSender {
             // A send cut off mid-flight may have reached the provider.
             Err(_elapsed) => SendOutcome::MaybeSent,
         };
-        Ok(Sent {
+        Sent {
             outcome,
             detail: (),
-        })
+        }
+    }
+}
+
+#[async_trait]
+impl DispatchTransport for MessageSender {
+    type Job = MessageJob;
+    type Detail = ();
+
+    async fn send(&self, job: &LeasedJob<MessageJob>) -> Result<Sent<()>, DispatchError> {
+        let sent = self.attempt(job).await;
+        self.metrics.record_attempt(attempt_outcome(&sent.outcome));
+        Ok(sent)
     }
 }
 

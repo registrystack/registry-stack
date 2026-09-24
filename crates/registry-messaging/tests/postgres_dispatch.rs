@@ -158,7 +158,7 @@ fn worker_over(harness: &Harness, transport: Arc<Scripted>) -> (MessageDispatche
         Arc::clone(&transports),
     )
     .unwrap();
-    let sender = MessageSender::new(dispatcher.clone(), transports);
+    let sender = MessageSender::new(dispatcher.clone(), transports, Arc::clone(&harness.metrics));
     (dispatcher, sender)
 }
 
@@ -474,6 +474,83 @@ async fn a_hanging_send_is_cut_off_and_held_as_unknown() {
         DispatchOutcome::Unknown
     );
     assert_eq!(status(&harness, answered).await, MessageStatus::Unknown);
+}
+
+/// The metrics listener samples the queue from the store on every scrape
+/// and counts every attempt by the outcome its history records.
+#[tokio::test]
+async fn the_metrics_sample_the_queue_and_count_attempts_by_outcome() {
+    let harness = Harness::start().await;
+    let transport = Scripted::new(Script::Accepted);
+    let (dispatcher, sender) = worker_over(&harness, Arc::clone(&transport));
+    for _ in 0..3 {
+        harness.accepted(&email_submission()).await;
+    }
+    let jobs = |state: &str| format!("messaging_dispatch_jobs{{state=\"{state}\"}}");
+    let attempts =
+        |outcome: &str| format!("messaging_provider_attempts_total{{outcome=\"{outcome}\"}}");
+    assert_eq!(harness.sample(&jobs("pending")).await, Some(3));
+    assert_eq!(harness.sample(&jobs("leased")).await, Some(0));
+    assert_eq!(harness.sample(&jobs("unknown")).await, Some(0));
+    assert_eq!(harness.sample(&attempts("accepted")).await, Some(0));
+
+    assert_eq!(
+        dispatcher.dispatch_once(&sender).await.unwrap(),
+        DispatchOutcome::Delivered
+    );
+    let leased = dispatcher.claim().await.unwrap().leased().unwrap();
+    assert_eq!(harness.sample(&jobs("pending")).await, Some(1));
+    assert_eq!(harness.sample(&jobs("leased")).await, Some(1));
+    drop(leased);
+    transport.answer(Script::MaybeSent);
+    assert_eq!(
+        dispatcher.dispatch_once(&sender).await.unwrap(),
+        DispatchOutcome::Unknown
+    );
+    assert_eq!(harness.sample(&jobs("unknown")).await, Some(1));
+    assert_eq!(harness.sample(&attempts("accepted")).await, Some(1));
+    assert_eq!(harness.sample(&attempts("maybe-sent")).await, Some(1));
+    assert_eq!(harness.sample(&attempts("transient")).await, Some(0));
+    let scraped = harness.scrape().await;
+    assert!(!scraped.contains("mail-relay"), "{scraped}");
+    assert!(!scraped.contains(RECIPIENT), "{scraped}");
+}
+
+/// A provider whose send timeout fills the whole attempt timeout leaves
+/// pacing no allowance: an attempt that finds no send slot is counted as a
+/// pacing refusal and waits to be retried, without a send.
+#[tokio::test]
+async fn an_attempt_with_no_pacing_slot_in_its_allowance_is_counted_and_retried() {
+    let harness = Harness::start().await;
+    let transport = Arc::new(Scripted {
+        rate: Some(1),
+        ..Arc::into_inner(Scripted::with_timeout(
+            Script::Accepted,
+            Duration::from_secs(60),
+        ))
+        .unwrap()
+    });
+    let (dispatcher, sender) = worker_over(&harness, Arc::clone(&transport));
+    let first = harness.accepted(&email_submission()).await;
+    let second = harness.accepted(&email_submission()).await;
+    dispatcher.dispatch_once(&sender).await.unwrap();
+    dispatcher.dispatch_once(&sender).await.unwrap();
+    assert_eq!(transport.total(), 1);
+    let mut states = vec![harness.state(first).await, harness.state(second).await];
+    states.sort();
+    assert_eq!(states, ["delivered", "pending"]);
+    assert_eq!(
+        harness
+            .sample("messaging_limit_refusals_total{limit=\"pacing\"}")
+            .await,
+        Some(1)
+    );
+    assert_eq!(
+        harness
+            .sample("messaging_provider_attempts_total{outcome=\"transient\"}")
+            .await,
+        Some(1)
+    );
 }
 
 #[test]

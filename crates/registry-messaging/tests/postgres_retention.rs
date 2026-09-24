@@ -16,6 +16,7 @@
 
 mod support;
 
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use axum::http::StatusCode;
@@ -453,7 +454,11 @@ async fn the_runtime_sweep_erases_on_its_interval() {
     let harness = Harness::start().await;
     let id = harness.accepted(&email_submission()).await;
     settle_as(&harness, id, "cancelled", 8).await;
-    let sweep = RetentionSweep::new(harness.store.clone(), harness.config.retention);
+    let sweep = RetentionSweep::new(
+        harness.store.clone(),
+        harness.config.retention,
+        Arc::clone(&harness.metrics),
+    );
     let (stop, stopped) = watch::channel(false);
     let running = tokio::spawn(sweep.run(Duration::from_millis(50), stopped));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -469,4 +474,17 @@ async fn the_runtime_sweep_erases_on_its_interval() {
         .await
         .expect("the sweep stops when asked")
         .unwrap();
+    // The first pass erased the payload; every later one found nothing.
+    assert_eq!(
+        harness
+            .sample("messaging_retention_runs_total{outcome=\"erased\"}")
+            .await,
+        Some(1)
+    );
+    assert_eq!(
+        harness
+            .sample("messaging_retention_runs_total{outcome=\"failed\"}")
+            .await,
+        Some(0)
+    );
 }

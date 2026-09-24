@@ -111,3 +111,7 @@
   token.
 - Publish the security invariant matrix, the recorded decisions, and the
   problem catalog under `https://id.registrystack.org/problems/registry-messaging/`.
+- Add the metrics `messaging_provider_attempts_total`,
+  `messaging_limit_refusals_total`, `messaging_retention_runs_total`, and the
+  `messaging_dispatch_jobs` gauge, sampled from the database on each scrape,
+  each under closed labels only.
