@@ -12,13 +12,22 @@
 //!
 //! Every step that can refuse a deployment runs before either listener
 //! binds, so a mis-provisioned deployment never answers a request.
+//!
+//! Beside the listeners, `serve` runs the dispatch worker, which sends
+//! accepted messages through the transports registered for their
+//! providers, and the audit publisher, which appends the outbox to the
+//! journal. Either one stopping is a runtime failure, as a listener
+//! stopping is.
 
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::{Arg, Command};
 use registry_platform_audit::{AuditError, AuditProfile};
 use registry_platform_config::{ProtectedSecret, SecretResolver};
+use registry_platform_dispatch::postgres::{DispatchWorker, WorkerConfig};
 use serde::Serialize;
 use thiserror::Error;
 use tracing_subscriber::filter::LevelFilter;
@@ -26,12 +35,24 @@ use tracing_subscriber::filter::LevelFilter;
 use crate::audit::AuditJournal;
 use crate::auth::MessagingAuthenticator;
 use crate::config::{describe_secret_failure, RetentionConfig, RuntimeConfig, RuntimeConfigError};
+use crate::dispatch::{dispatcher, MessageDispatcher, MessageSender, Transports};
 use crate::http::{metrics_router, router, HttpState, Readiness};
+use crate::messages::{MessageService, MessageStore};
 use crate::metrics::Metrics;
+use crate::outbox::Publisher;
 use crate::store::{PostgresStore, StoreError};
 
 /// The event the journal records when a runtime starts serving.
 const RUNTIME_STARTED_EVENT: &str = "messaging.runtime.started";
+
+/// The most sends the worker runs at once.
+const WORKER_CONCURRENCY: NonZeroUsize = NonZeroUsize::new(8).expect("eight is not zero");
+
+/// How long the worker waits after a pass finds no due message.
+const WORKER_IDLE_POLL: Duration = Duration::from_secs(1);
+
+/// How often the publisher appends the audit outbox to the journal.
+const PUBLICATION_INTERVAL: Duration = Duration::from_secs(1);
 
 #[must_use]
 pub fn command() -> Command {
@@ -64,13 +85,15 @@ pub fn operational_log_level(value: Option<&str>) -> Result<LevelFilter, Runtime
     }
 }
 
-pub async fn run(matches: &clap::ArgMatches) -> Result<(), RuntimeError> {
+/// Run the parsed command. `serve` sends through `transports`, the
+/// transport registered for each provider id.
+pub async fn run(matches: &clap::ArgMatches, transports: Transports) -> Result<(), RuntimeError> {
     let path = matches
         .get_one::<String>("runtime-config")
         .ok_or(RuntimeError::Arguments)?;
     match matches.subcommand_name() {
         Some("migrate") => migrate_from_path(path).await,
-        Some("serve") => serve_from_path(path).await,
+        Some("serve") => serve_from_path(path, transports).await,
         _ => Err(RuntimeError::Arguments),
     }
 }
@@ -161,10 +184,34 @@ pub async fn apply_package(
     })
 }
 
-pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
+/// The message store `messagingctl messages` reads and acts on, reached
+/// with the runtime credential. It sends nothing: its dispatcher has no
+/// transport, and every transition it makes writes its audit record into
+/// the outbox the running runtime publishes.
+pub async fn message_store(config: &RuntimeConfig) -> Result<MessageStore, RuntimeError> {
+    let secrets = config.secret_resolver()?;
+    let store = PostgresStore::connect_runtime(&config.database, &secrets)
+        .map_err(database_step("runtime database configuration"))?;
+    store
+        .ready()
+        .await
+        .map_err(database_step("schema readiness check"))?;
+    let schema = store
+        .current_schema()
+        .await
+        .map_err(database_step("schema lookup"))?;
+    let dispatcher = dispatcher(store.clone(), &schema, Arc::new(Transports::new()))
+        .map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
+    Ok(MessageStore::new(store, dispatcher))
+}
+
+pub async fn serve_from_path(
+    path: impl AsRef<Path>,
+    transports: Transports,
+) -> Result<(), RuntimeError> {
     let config = RuntimeConfig::load(path)?;
     let listeners = Listeners::bind(&config).await?;
-    let app = assemble(&config).await?;
+    let app = assemble(&config, transports).await?;
     tracing::info!(
         listener = %config.listener.bind,
         metrics_listener = config.metrics_listener.is_some(),
@@ -173,16 +220,23 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     listeners.serve(app).await
 }
 
-/// The assembled service: the routers both listeners serve.
+/// The assembled service: the routers both listeners serve, and the
+/// dispatch worker and audit publisher that run beside them.
 pub struct Assembled {
     public: axum::Router,
     metrics: axum::Router,
+    worker: DispatchWorker<crate::dispatch::MessageDispatchStore, MessageSender>,
+    publisher: Publisher,
 }
 
 /// Build everything `serve` needs from a checked configuration: the
-/// package the ledger names active, the store, the authenticator, and the
-/// keyed audit journal, then record the start.
-pub async fn assemble(config: &RuntimeConfig) -> Result<Assembled, RuntimeError> {
+/// package the ledger names active, the store, the authenticator, the
+/// keyed audit journal, the dispatcher over `transports`, and the audit
+/// publisher, then record the start.
+pub async fn assemble(
+    config: &RuntimeConfig,
+    transports: Transports,
+) -> Result<Assembled, RuntimeError> {
     let loaded = config.load_package()?;
     let secrets = config.secret_resolver()?;
     let store = PostgresStore::connect_runtime(&config.database, &secrets)
@@ -212,9 +266,36 @@ pub async fn assemble(config: &RuntimeConfig) -> Result<Assembled, RuntimeError>
         audit_secret.expose_secret().to_vec(),
     ))
     .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
-    let audit = AuditJournal::open(&config.audit.path, &audit_profile)
-        .await
+    let audit = Arc::new(
+        AuditJournal::open(&config.audit.path, &audit_profile)
+            .await
+            .map_err(|error| RuntimeError::AuditJournal(describe_audit_failure(&error)))?,
+    );
+    // The publisher reads the journal's last outbox record before anything
+    // else is appended, so a record a crash left unmarked is not appended
+    // twice.
+    let publisher = Publisher::new(store.clone(), Arc::clone(&audit))
         .map_err(|error| RuntimeError::AuditJournal(describe_audit_failure(&error)))?;
+    let schema = store
+        .current_schema()
+        .await
+        .map_err(database_step("schema lookup"))?;
+    let transports = Arc::new(transports);
+    let dispatcher: MessageDispatcher = dispatcher(store.clone(), &schema, Arc::clone(&transports))
+        .map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
+    let worker = DispatchWorker::new(
+        dispatcher.clone(),
+        Arc::new(MessageSender::new(dispatcher.clone(), transports)),
+        WorkerConfig {
+            concurrency: WORKER_CONCURRENCY,
+            idle_poll: WORKER_IDLE_POLL,
+        },
+    );
+    let messages = MessageService::new(
+        MessageStore::new(store.clone(), dispatcher),
+        Arc::clone(&audit),
+        config.retention,
+    );
     audit
         .append(RuntimeStarted::new(
             config.retention,
@@ -230,9 +311,12 @@ pub async fn assemble(config: &RuntimeConfig) -> Result<Assembled, RuntimeError>
             readiness: Readiness::Store(store),
             metrics: Arc::clone(&metrics),
             package: Arc::new(loaded.package),
-            audit: Arc::new(audit),
+            audit,
+            messages: Some(Arc::new(messages)),
         }),
         metrics: metrics_router(metrics),
+        worker,
+        publisher,
     })
 }
 
@@ -264,29 +348,44 @@ impl Listeners {
         Ok(Self { public, metrics })
     }
 
-    /// Serve both listeners until either stops. A listener that stops is a
-    /// failure: a runtime that answers requests but not its operator's
-    /// metrics, or the reverse, is not the deployment that was configured.
+    /// Serve both listeners beside the worker and the publisher until any
+    /// of them stops. Each one stopping is a failure: a runtime that
+    /// answers requests but not its operator's metrics, or accepts messages
+    /// it no longer sends or audits, is not the deployment that was
+    /// configured.
     pub async fn serve(self, app: Assembled) -> Result<(), RuntimeError> {
+        // Nothing turns the signal: the worker and the publisher run for
+        // the life of the process, and the sender is held so they never
+        // observe it closing.
+        let (_shutdown, stopped) = tokio::sync::watch::channel(false);
+        let worker = app.worker.run(stopped.clone());
+        let publisher = app.publisher.run(PUBLICATION_INTERVAL, stopped);
         let public = axum::serve(self.public, app.public);
-        match self.metrics {
-            Some(listener) => {
-                let metrics = axum::serve(listener, app.metrics);
-                tokio::select! {
-                    served = public => served.map_err(|source| RuntimeError::Listen {
-                        listener: "listener",
-                        source,
-                    }),
-                    served = metrics => served.map_err(|source| RuntimeError::Listen {
-                        listener: "metricsListener",
-                        source,
-                    }),
+        let listeners = async move {
+            match self.metrics {
+                Some(listener) => {
+                    let metrics = axum::serve(listener, app.metrics);
+                    tokio::select! {
+                        served = public => served.map_err(|source| RuntimeError::Listen {
+                            listener: "listener",
+                            source,
+                        }),
+                        served = metrics => served.map_err(|source| RuntimeError::Listen {
+                            listener: "metricsListener",
+                            source,
+                        }),
+                    }
                 }
+                None => public.await.map_err(|source| RuntimeError::Listen {
+                    listener: "listener",
+                    source,
+                }),
             }
-            None => public.await.map_err(|source| RuntimeError::Listen {
-                listener: "listener",
-                source,
-            }),
+        };
+        tokio::select! {
+            served = listeners => served,
+            () = worker => Err(RuntimeError::Stopped { task: "dispatch worker" }),
+            () = publisher => Err(RuntimeError::Stopped { task: "audit publisher" }),
         }
     }
 }
@@ -387,6 +486,10 @@ pub enum RuntimeError {
         #[source]
         source: std::io::Error,
     },
+    #[error("the Messaging dispatcher could not be configured: {0}")]
+    Dispatch(String),
+    #[error("the Messaging {task} stopped")]
+    Stopped { task: &'static str },
 }
 
 #[cfg(test)]

@@ -17,6 +17,16 @@
 //! nothing and journals metadata only: the profile, the principal's keyed
 //! pseudonym, the template version and locale the package ships, and the
 //! outcome. Template data and rendered parts never reach the journal.
+//!
+//! The submission route authenticates, requires the sender role and an
+//! `Idempotency-Key`, and hands the body to [`crate::messages`], which
+//! checks the closed shape, authorizes the sender profile and template,
+//! renders at acceptance, and records the message. An acceptance is audited
+//! through the outbox in the transaction that records it; a refusal after
+//! authentication and a replayed receipt are journaled here, by metadata
+//! only. The status and cancel routes answer the submitter and operator
+//! profiles alone, and a message anyone else asks for answers exactly like
+//! one that does not exist.
 
 use std::sync::Arc;
 
@@ -30,9 +40,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use registry_messaging_core::{
-    check_message_visibility, type_uri, Caller, CallerIdentity, ContentRefusal, Package,
-    ProblemCode, TemplatePreview, TemplatePreviewRequest, HEALTH_PATH, MESSAGE_PATH, METRICS_PATH,
-    READY_PATH, TEMPLATE_PREVIEW_PATH,
+    type_uri, AccessRole, Caller, ContentRefusal, MessageView, Package, ProblemCode,
+    TemplatePreview, TemplatePreviewRequest, HEALTH_PATH, IDEMPOTENCY_KEY_HEADER, MESSAGES_PATH,
+    MESSAGE_CANCEL_PATH, MESSAGE_PATH, METRICS_PATH, READY_PATH, TEMPLATE_PREVIEW_PATH,
 };
 use registry_platform_authcommon::parse_bearer_token;
 use registry_platform_httpsec::{
@@ -42,6 +52,10 @@ use serde::Serialize;
 
 use crate::audit::AuditJournal;
 use crate::auth::{AuthenticationError, MessagingAuthenticator};
+use crate::messages::{
+    prepare_submission, valid_idempotency_key, MessageService, SubmissionAnswer,
+    MESSAGE_REFUSED_EVENT, MESSAGE_REPLAYED_EVENT,
+};
 use crate::metrics::{count_requests, serve_metrics, Metrics};
 use crate::store::PostgresStore;
 
@@ -83,6 +97,9 @@ pub struct HttpState {
     /// The package the ledger names active.
     pub package: Arc<Package>,
     pub audit: Arc<AuditJournal>,
+    /// The message store, absent only in tests of the HTTP surface without
+    /// a database, where every route that needs it answers unavailable.
+    pub messages: Option<Arc<MessageService>>,
 }
 
 /// The audited event for every preview an authenticated caller asked for.
@@ -101,6 +118,8 @@ pub struct Operation {
     pub authenticated: bool,
     /// The success status.
     pub success_status: u16,
+    /// Whether the operation requires the `Idempotency-Key` header.
+    pub idempotency_key: bool,
     /// The component schema of the JSON request body, if the operation
     /// takes one.
     pub request_body: Option<&'static str>,
@@ -125,6 +144,7 @@ pub const OPERATIONS: &[Operation] = &[
         summary: "Report that the process is serving.",
         authenticated: false,
         success_status: 200,
+        idempotency_key: false,
         request_body: None,
         response_body: None,
         problems: &[ProblemCode::RequestMethodNotAllowed],
@@ -136,9 +156,43 @@ pub const OPERATIONS: &[Operation] = &[
         summary: "Report that the store answers with the expected schema.",
         authenticated: false,
         success_status: 200,
+        idempotency_key: false,
         request_body: None,
         response_body: None,
         problems: &EDGE_PROBLEMS,
+    },
+    Operation {
+        method: "post",
+        path: MESSAGES_PATH,
+        operation_id: "submitMessage",
+        summary: "Submit one message through a sender profile the caller's access profile lists, \
+                  rendered from a template version at acceptance or, where the profile allows \
+                  it, from direct content. The `Idempotency-Key` header is required: the same \
+                  key and request answer the stored receipt again.",
+        authenticated: true,
+        success_status: 202,
+        idempotency_key: true,
+        request_body: Some("SubmitMessageRequest"),
+        response_body: Some("MessageReceipt"),
+        problems: &[
+            ProblemCode::RequestInvalid,
+            ProblemCode::AuthenticationRefused,
+            ProblemCode::OperationNotAuthorized,
+            ProblemCode::ProfileNotAuthorized,
+            ProblemCode::TemplateNotFound,
+            ProblemCode::RequestMethodNotAllowed,
+            ProblemCode::IdempotencyKeyReused,
+            ProblemCode::IdempotencyExpired,
+            ProblemCode::RequestBodyTooLarge,
+            ProblemCode::RequestUnsupportedMediaType,
+            ProblemCode::ContentInvalid,
+            ProblemCode::ContentTooLarge,
+            ProblemCode::ContentTooManySegments,
+            ProblemCode::TemplateDataInvalid,
+            ProblemCode::TemplateLocaleUnavailable,
+            ProblemCode::TemplateRenderRefused,
+            ProblemCode::ServiceUnavailable,
+        ],
     },
     Operation {
         method: "get",
@@ -146,16 +200,39 @@ pub const OPERATIONS: &[Operation] = &[
         operation_id: "getMessage",
         summary: "Read the status of a message the caller submitted, or any message for an \
                   operator. A message the caller may not see answers exactly like one that does \
-                  not exist.",
+                  not exist. The recipient is masked, and no part or template data is returned.",
         authenticated: true,
         success_status: 200,
+        idempotency_key: false,
         request_body: None,
-        response_body: None,
+        response_body: Some("MessageView"),
         problems: &[
             ProblemCode::AuthenticationRefused,
             ProblemCode::ProfileNotAuthorized,
             ProblemCode::MessageNotVisible,
             ProblemCode::RequestMethodNotAllowed,
+            ProblemCode::ServiceUnavailable,
+        ],
+    },
+    Operation {
+        method: "post",
+        path: MESSAGE_CANCEL_PATH,
+        operation_id: "cancelMessage",
+        summary: "Cancel a queued message, including one waiting for a retry, the caller \
+                  submitted, or any queued message for an operator. A message whose dispatch \
+                  started or that reached a final state is refused.",
+        authenticated: true,
+        success_status: 200,
+        idempotency_key: false,
+        request_body: None,
+        response_body: Some("MessageView"),
+        problems: &[
+            ProblemCode::AuthenticationRefused,
+            ProblemCode::ProfileNotAuthorized,
+            ProblemCode::MessageNotVisible,
+            ProblemCode::RequestMethodNotAllowed,
+            ProblemCode::MessageDispatchStarted,
+            ProblemCode::MessageTerminal,
             ProblemCode::ServiceUnavailable,
         ],
     },
@@ -168,6 +245,7 @@ pub const OPERATIONS: &[Operation] = &[
                   the body is byte-identical to `messagingctl preview --format json`.",
         authenticated: true,
         success_status: 200,
+        idempotency_key: false,
         request_body: Some("TemplatePreviewRequest"),
         response_body: Some("TemplatePreview"),
         problems: &[
@@ -194,7 +272,9 @@ pub fn router(state: HttpState) -> Router {
         Router::new()
             .route(HEALTH_PATH, get(health))
             .route(READY_PATH, get(ready))
+            .route(MESSAGES_PATH, post(submit_message))
             .route(MESSAGE_PATH, get(get_message))
+            .route(MESSAGE_CANCEL_PATH, post(cancel_message))
             .route(TEMPLATE_PREVIEW_PATH, post(preview_template))
             .with_state(state)
             .layer(middleware::from_fn_with_state(metrics, count_requests)),
@@ -279,15 +359,169 @@ async fn ready(State(state): State<HttpState>) -> Result<StatusCode, HttpError> 
     }
 }
 
+async fn submit_message(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, HttpError> {
+    let caller = authenticate(&state, &headers).await?;
+    let result = accept_submission(&state, &caller, &headers, &body).await;
+    let record = match &result {
+        Ok(answer) if !answer.replayed => None,
+        Ok(answer) => Some(SubmissionRecord::replayed(&state, &caller, answer)?),
+        Err(problem) => Some(SubmissionRecord::refused(&state, &caller, *problem)?),
+    };
+    if let Some(record) = record {
+        if let Err(error) = state.audit.append(record).await {
+            tracing::error!(error = %error, "the Messaging audit journal refused a submission record");
+            return Err(HttpError(ProblemCode::ServiceUnavailable));
+        }
+    }
+    let answer = result.map_err(HttpError)?;
+    let status = StatusCode::from_u16(answer.status).map_err(|_| {
+        tracing::error!("a stored Messaging receipt carries an invalid status");
+        HttpError(ProblemCode::ServiceUnavailable)
+    })?;
+    Ok((status, Json(answer.receipt)).into_response())
+}
+
+/// Every check a submission passes before it is recorded, in the order a
+/// caller learns of them: the role, the media type, the idempotency key,
+/// and then the body.
+async fn accept_submission(
+    state: &HttpState,
+    caller: &Caller,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<SubmissionAnswer, ProblemCode> {
+    if caller.role() != AccessRole::Sender {
+        return Err(ProblemCode::OperationNotAuthorized);
+    }
+    if !is_json(headers) {
+        return Err(ProblemCode::RequestUnsupportedMediaType);
+    }
+    let key = headers
+        .get(IDEMPOTENCY_KEY_HEADER)
+        .filter(|key| valid_idempotency_key(key.as_bytes()))
+        .and_then(|key| key.to_str().ok())
+        .ok_or(ProblemCode::RequestInvalid)?;
+    let submission = prepare_submission(&state.package, caller, body)?;
+    message_service(state)?
+        .submit(caller, key, &submission)
+        .await
+}
+
+/// The journal record of a refused or replayed submission. It names the
+/// caller's profile and pseudonym and the outcome only: the body is the
+/// caller's text until the package accepts it, and an acceptance is
+/// recorded through the outbox instead.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SubmissionRecord {
+    event: &'static str,
+    access_profile: String,
+    principal_pseudonym: String,
+    package_digest: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    problem: Option<&'static str>,
+}
+
+impl SubmissionRecord {
+    fn new(state: &HttpState, caller: &Caller, event: &'static str) -> Result<Self, HttpError> {
+        let principal_pseudonym =
+            state
+                .audit
+                .principal_pseudonym(&caller.identity)
+                .map_err(|error| {
+                    tracing::error!(error = %error, "a Messaging principal pseudonym failed");
+                    HttpError(ProblemCode::ServiceUnavailable)
+                })?;
+        Ok(Self {
+            event,
+            access_profile: caller.profile.id.clone(),
+            principal_pseudonym,
+            package_digest: state.package.digest().to_owned(),
+            message_id: None,
+            problem: None,
+        })
+    }
+
+    fn refused(
+        state: &HttpState,
+        caller: &Caller,
+        problem: ProblemCode,
+    ) -> Result<Self, HttpError> {
+        let mut record = Self::new(state, caller, MESSAGE_REFUSED_EVENT)?;
+        record.problem = Some(problem.code());
+        Ok(record)
+    }
+
+    fn replayed(
+        state: &HttpState,
+        caller: &Caller,
+        answer: &SubmissionAnswer,
+    ) -> Result<Self, HttpError> {
+        let mut record = Self::new(state, caller, MESSAGE_REPLAYED_EVENT)?;
+        record.message_id = Some(answer.message_id.to_string());
+        Ok(record)
+    }
+}
+
 async fn get_message(
     State(state): State<HttpState>,
     Path(message_id): Path<String>,
     headers: HeaderMap,
-) -> Result<StatusCode, HttpError> {
+) -> Result<Json<MessageView>, HttpError> {
     let caller = authenticate(&state, &headers).await?;
-    let submitter = submitter_of(&message_id);
-    check_message_visibility(&caller, submitter.as_ref()).map_err(HttpError)?;
-    Ok(StatusCode::OK)
+    let service = visible_service(&state, &message_id)?;
+    let message = service
+        .visible_message(&caller, &message_id)
+        .await
+        .map_err(HttpError)?;
+    Ok(Json(message.view))
+}
+
+async fn cancel_message(
+    State(state): State<HttpState>,
+    Path(message_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<MessageView>, HttpError> {
+    let caller = authenticate(&state, &headers).await?;
+    let service = visible_service(&state, &message_id)?;
+    let view = service
+        .cancel(&caller, &message_id)
+        .await
+        .map_err(HttpError)?;
+    Ok(Json(view))
+}
+
+/// The message service for a route naming `message_id`. An identifier no
+/// message can carry is not visible before the store is consulted.
+fn visible_service<'a>(
+    state: &'a HttpState,
+    message_id: &str,
+) -> Result<&'a MessageService, HttpError> {
+    if uuid::Uuid::parse_str(message_id).is_err() {
+        return Err(HttpError(ProblemCode::MessageNotVisible));
+    }
+    message_service(state).map_err(HttpError)
+}
+
+fn message_service(state: &HttpState) -> Result<&MessageService, ProblemCode> {
+    state
+        .messages
+        .as_deref()
+        .ok_or(ProblemCode::ServiceUnavailable)
+}
+
+fn is_json(headers: &HeaderMap) -> bool {
+    headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"))
 }
 
 /// The bytes of a preview document, shared by the preview route and
@@ -363,12 +597,7 @@ fn preview_request(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<TemplatePreviewRequest, ProblemCode> {
-    let json = headers
-        .get(CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"));
-    if !json {
+    if !is_json(headers) {
         return Err(ProblemCode::RequestUnsupportedMediaType);
     }
     let value: serde_json::Value =
@@ -445,12 +674,6 @@ impl PreviewRecord {
             problem,
         })
     }
-}
-
-/// The identity that submitted a message. This version records no message,
-/// so every lookup finds none and every read answers `message.not-visible`.
-fn submitter_of(_message_id: &str) -> Option<CallerIdentity> {
-    None
 }
 
 async fn authenticate(state: &HttpState, headers: &HeaderMap) -> Result<Caller, HttpError> {
@@ -574,6 +797,7 @@ mod tests {
             metrics: Arc::new(Metrics::default()),
             package: Arc::new(starter_package()),
             audit: Arc::new(audit),
+            messages: None,
         }
     }
 
@@ -1090,6 +1314,268 @@ mod tests {
         )
         .await;
         assert_eq!(headers.get(RETRY_AFTER).unwrap(), "5");
+    }
+
+    fn submission() -> serde_json::Value {
+        json!({
+            "senderProfile": "transactional",
+            "to": {"email": "ada@example.org"},
+            "template": {"id": "appointment-reminder", "version": "1"},
+            "locale": "en",
+            "data": {"name": "Ada Lovelace", "day": "2026-10-01", "office": "Central Registry Office"},
+            "correlationId": "case-42"
+        })
+    }
+
+    async fn submit(
+        app: Router,
+        bearer: &str,
+        key: Option<&str>,
+        content_type: Option<&str>,
+        body: Vec<u8>,
+    ) -> Response {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri(MESSAGES_PATH)
+            .header(AUTHORIZATION, format!("Bearer {bearer}"));
+        if let Some(key) = key {
+            request = request.header(IDEMPOTENCY_KEY_HEADER, key);
+        }
+        if let Some(content_type) = content_type {
+            request = request.header(CONTENT_TYPE, content_type);
+        }
+        app.oneshot(request.body(Body::from(body)).unwrap())
+            .await
+            .unwrap()
+    }
+
+    async fn submit_json(app: Router, bearer: &str, body: &serde_json::Value) -> Response {
+        submit(
+            app,
+            bearer,
+            Some("key-1"),
+            Some("application/json"),
+            serde_json::to_vec(body).unwrap(),
+        )
+        .await
+    }
+
+    /// No refusal record may carry what the caller wrote in the body.
+    fn assert_no_submission_values(records: &[serde_json::Value]) {
+        let written = serde_json::to_string(records).unwrap();
+        for leaked in [
+            "ada@example.org",
+            "Ada Lovelace",
+            "Central Registry Office",
+            "case-42",
+            "case-system-principal",
+            "operator-1",
+        ] {
+            assert!(
+                !written.contains(leaked),
+                "{leaked} reached the journal: {written}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn only_the_sender_role_submits_and_only_through_what_its_profile_lists() {
+        let (app, sink) = preview_app();
+        let sender = token(sender_claims());
+        expect_problem(
+            submit_json(app.clone(), &token(operator_claims()), &submission()).await,
+            ProblemCode::OperationNotAuthorized,
+        )
+        .await;
+        let mut unlisted_profile = submission();
+        unlisted_profile["senderProfile"] = json!("another-program");
+        let mut unlisted_template = submission();
+        unlisted_template["template"] = json!({"id": "unshipped", "version": "1"});
+        let direct = json!({
+            "senderProfile": "transactional",
+            "to": {"email": "ada@example.org"},
+            "content": {"subject": "Hello", "text": "Ada Lovelace"}
+        });
+        for body in [unlisted_profile, unlisted_template, direct] {
+            expect_problem(
+                submit_json(app.clone(), &sender, &body).await,
+                ProblemCode::ProfileNotAuthorized,
+            )
+            .await;
+        }
+        let records = journal(&sink);
+        assert_eq!(records.len(), 4);
+        assert_eq!(records[0]["event"], MESSAGE_REFUSED_EVENT);
+        assert_eq!(records[0]["accessProfile"], "operations");
+        assert_eq!(records[0]["problem"], "operation.not-authorized");
+        for record in &records[1..] {
+            assert_eq!(record["accessProfile"], "case-notices");
+            assert_eq!(record["problem"], "profile.not-authorized");
+        }
+        assert_no_submission_values(&records);
+    }
+
+    /// The idempotency key, the media type, the body, and the expected
+    /// refusal of one malformed submission.
+    type SubmissionCase<'a> = (Option<&'a str>, Option<&'a str>, Vec<u8>, ProblemCode);
+
+    #[tokio::test]
+    async fn a_submission_body_is_closed_and_needs_an_idempotency_key() {
+        let (app, sink) = preview_app();
+        let sender = token(sender_claims());
+        let body = serde_json::to_vec(&submission()).unwrap();
+        let mut provider_chosen = submission();
+        provider_chosen["provider"] = json!("https://attacker.example");
+        let mut credential_chosen = submission();
+        credential_chosen["to"]["passwordRef"] = json!("secret:env/SMTP");
+        let mut wrong_channel = submission();
+        wrong_channel["to"] = json!({"phone": "+15551234567"});
+        let mut bad_instant = submission();
+        bad_instant["expiresAt"] = json!("tomorrow");
+        let long_key = "k".repeat(129);
+        let cases: Vec<SubmissionCase<'_>> = vec![
+            (
+                None,
+                Some("application/json"),
+                body.clone(),
+                ProblemCode::RequestInvalid,
+            ),
+            (
+                Some(""),
+                Some("application/json"),
+                body.clone(),
+                ProblemCode::RequestInvalid,
+            ),
+            (
+                Some("has space"),
+                Some("application/json"),
+                body.clone(),
+                ProblemCode::RequestInvalid,
+            ),
+            (
+                Some(&long_key),
+                Some("application/json"),
+                body.clone(),
+                ProblemCode::RequestInvalid,
+            ),
+            (
+                Some("key-1"),
+                Some("text/plain"),
+                body,
+                ProblemCode::RequestUnsupportedMediaType,
+            ),
+            (
+                Some("key-1"),
+                None,
+                b"{}".to_vec(),
+                ProblemCode::RequestUnsupportedMediaType,
+            ),
+            (
+                Some("key-1"),
+                Some("application/json"),
+                b"{".to_vec(),
+                ProblemCode::RequestInvalid,
+            ),
+            (
+                Some("key-1"),
+                Some("application/json"),
+                br#"{"a": 1, "a": 2}"#.to_vec(),
+                ProblemCode::RequestInvalid,
+            ),
+            (
+                Some("key-1"),
+                Some("application/json"),
+                serde_json::to_vec(&provider_chosen).unwrap(),
+                ProblemCode::RequestInvalid,
+            ),
+            (
+                Some("key-1"),
+                Some("application/json"),
+                serde_json::to_vec(&credential_chosen).unwrap(),
+                ProblemCode::RequestInvalid,
+            ),
+            (
+                Some("key-1"),
+                Some("application/json"),
+                serde_json::to_vec(&wrong_channel).unwrap(),
+                ProblemCode::RequestInvalid,
+            ),
+            (
+                Some("key-1"),
+                Some("application/json"),
+                serde_json::to_vec(&bad_instant).unwrap(),
+                ProblemCode::RequestInvalid,
+            ),
+        ];
+        let count = cases.len();
+        for (key, content_type, body, expected) in cases {
+            expect_problem(
+                submit(app.clone(), &sender, key, content_type, body).await,
+                expected,
+            )
+            .await;
+        }
+        let records = journal(&sink);
+        assert_eq!(records.len(), count);
+        assert_no_submission_values(&records);
+    }
+
+    #[tokio::test]
+    async fn a_submission_that_passes_every_check_needs_the_store() {
+        let (app, sink) = preview_app();
+        let headers = expect_problem(
+            submit_json(app, &token(sender_claims()), &submission()).await,
+            ProblemCode::ServiceUnavailable,
+        )
+        .await;
+        assert_eq!(headers.get(RETRY_AFTER).unwrap(), "5");
+        let records = journal(&sink);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["problem"], "service.unavailable");
+        assert_no_submission_values(&records);
+    }
+
+    #[tokio::test]
+    async fn a_submission_the_journal_cannot_record_is_not_answered() {
+        let (app, sink) = preview_app();
+        sink.refuse.store(true, std::sync::atomic::Ordering::SeqCst);
+        expect_problem(
+            submit_json(app, &token(operator_claims()), &submission()).await,
+            ProblemCode::ServiceUnavailable,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_message_route_reaches_the_store_only_for_an_identifier_a_message_can_carry() {
+        let (app, _) = app();
+        let sender = token(sender_claims());
+        for (method, uri) in [
+            ("GET", "/v1/messages/m-1"),
+            ("POST", "/v1/messages/m-1/cancel"),
+        ] {
+            expect_problem(
+                call(app.clone(), method, uri, Some(&sender)).await,
+                ProblemCode::MessageNotVisible,
+            )
+            .await;
+        }
+        let id = uuid::Uuid::new_v4();
+        for (method, uri) in [
+            ("GET", format!("/v1/messages/{id}")),
+            ("POST", format!("/v1/messages/{id}/cancel")),
+        ] {
+            expect_problem(
+                call(app.clone(), method, &uri, Some(&sender)).await,
+                ProblemCode::ServiceUnavailable,
+            )
+            .await;
+        }
+        expect_problem(
+            call(app, "POST", "/v1/messages/m-1/cancel", None).await,
+            ProblemCode::AuthenticationRefused,
+        )
+        .await;
     }
 
     #[test]

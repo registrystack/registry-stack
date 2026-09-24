@@ -101,13 +101,13 @@ async fn concurrent_migrators_apply_each_version_once_and_both_succeed() {
     a.expect("the first concurrent migration");
     b.expect("the second concurrent migration");
     c.expect("the third concurrent migration");
-    assert_eq!(applied_versions(&isolated).await, [1]);
+    assert_eq!(applied_versions(&isolated).await, [1, 2]);
 
     first
         .migrate()
         .await
         .expect("a repeated migration applies nothing");
-    assert_eq!(applied_versions(&isolated).await, [1]);
+    assert_eq!(applied_versions(&isolated).await, [1, 2]);
 
     let runtime = PostgresStore::connect_runtime(&config, &secrets).expect("a runtime store");
     runtime.ready().await.expect("a migrated store is ready");
@@ -246,7 +246,10 @@ async fn a_served_runtime_is_ready_and_keeps_metrics_on_the_private_listener() {
     apply_package(&config, true)
         .await
         .expect("messagingctl apply --apply");
-    let served = tokio::spawn(serve_from_path(runtime_config.clone()));
+    let served = tokio::spawn(serve_from_path(
+        runtime_config.clone(),
+        registry_messaging::dispatch::Transports::new(),
+    ));
 
     let mut ready = None;
     for _ in 0..100 {

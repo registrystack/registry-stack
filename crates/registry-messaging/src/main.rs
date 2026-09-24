@@ -2,6 +2,7 @@
 
 //! The `messaging` binary entry point.
 
+use registry_messaging::dispatch::Transports;
 use registry_messaging::runtime::{command, operational_log_level, run};
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::prelude::*;
@@ -18,7 +19,7 @@ async fn main() {
     initialize_logging(level);
 
     let matches = command().get_matches();
-    if let Err(error) = run(&matches).await {
+    if let Err(error) = run(&matches, Transports::new()).await {
         eprintln!("messaging: {error}");
         std::process::exit(1);
     }

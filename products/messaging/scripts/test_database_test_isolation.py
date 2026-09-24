@@ -27,6 +27,17 @@ def metadata(features=(), required=("postgres-test",), target="postgres_migrate"
 
 
 class DatabaseTestIsolationTests(unittest.TestCase):
+    def setUp(self):
+        # The fixture graphs declare two suites; the maintained inventory is
+        # checked against the real workspace by the script itself.
+        suites = patch.object(
+            MODULE,
+            "DATABASE_SUITES",
+            {"registry-messaging": {"postgres_migrate", "postgres_package"}},
+        )
+        suites.start()
+        self.addCleanup(suites.stop)
+
     def test_explicit_opt_in_is_not_enabled_by_default(self):
         self.assertEqual(MODULE.violations(metadata()), [])
 

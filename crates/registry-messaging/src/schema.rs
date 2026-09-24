@@ -23,8 +23,9 @@ use std::collections::BTreeMap;
 use serde_json::{json, Map, Value};
 
 use registry_messaging_core::{
-    type_uri, ProblemCode, MESSAGING_RUNTIME_API_VERSION, MESSAGING_RUNTIME_KIND,
-    MESSAGING_RUNTIME_SCHEMA_ID, RUNTIME_SCHEMA_FILE,
+    type_uri, MessageStatus, ProblemCode, IDEMPOTENCY_KEY_HEADER, MAXIMUM_CORRELATION_ID_BYTES,
+    MAXIMUM_IDEMPOTENCY_KEY_BYTES, MAXIMUM_SENDER_BYTES, MESSAGING_RUNTIME_API_VERSION,
+    MESSAGING_RUNTIME_KIND, MESSAGING_RUNTIME_SCHEMA_ID, RUNTIME_SCHEMA_FILE,
 };
 
 use crate::config::{
@@ -33,6 +34,7 @@ use crate::config::{
     MAXIMUM_RECORD_DAYS,
 };
 use crate::http::OPERATIONS;
+use crate::messages::MASKED_CONTACT;
 
 /// File name of the generated OpenAPI document.
 pub const OPENAPI_FILE: &str = "registry-messaging.openapi.json";
@@ -109,7 +111,7 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
             "summary": operation.summary,
             "responses": responses,
         });
-        let parameters: Vec<Value> = path_parameters(operation.path)
+        let mut parameters: Vec<Value> = path_parameters(operation.path)
             .map(|name| {
                 json!({
                     "name": name,
@@ -119,6 +121,21 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
                 })
             })
             .collect();
+        if operation.idempotency_key {
+            parameters.push(json!({
+                "name": IDEMPOTENCY_KEY_HEADER,
+                "in": "header",
+                "required": true,
+                "description": "Scopes a retry to the caller: the same key and request answer \
+                                the stored receipt again.",
+                "schema": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAXIMUM_IDEMPOTENCY_KEY_BYTES,
+                    "pattern": "^[\\x21-\\x7e]+$"
+                }
+            }));
+        }
         if !parameters.is_empty() {
             entry["parameters"] = Value::Array(parameters);
         }
@@ -150,6 +167,27 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
         .iter()
         .map(|problem| problem.code())
         .collect();
+    let statuses: Vec<&str> = [
+        MessageStatus::Queued,
+        MessageStatus::Sending,
+        MessageStatus::Submitted,
+        MessageStatus::Delivered,
+        MessageStatus::Failed,
+        MessageStatus::Expired,
+        MessageStatus::Cancelled,
+        MessageStatus::Unknown,
+    ]
+    .iter()
+    .map(|status| status.as_str())
+    .collect();
+    let outcomes = [
+        "in-progress",
+        "accepted",
+        "transient",
+        "permanent",
+        "maybe-sent",
+        "interrupted",
+    ];
     let document = json!({
         "openapi": "3.1.0",
         "info": {
@@ -176,6 +214,172 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
                         "detail": {"type": "string"},
                         "code": {"type": "string", "enum": codes},
                         "traceId": {"type": "string"}
+                    }
+                },
+                "Recipient": {
+                    "description": "Exactly one contact, typed by the channel that carries it: \
+                                    an email address, or an E.164 phone number.",
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["email"],
+                            "properties": {"email": {"type": "string", "minLength": 3, "maxLength": MAXIMUM_SENDER_BYTES}}
+                        },
+                        {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["phone"],
+                            "properties": {"phone": {"type": "string", "pattern": "^\\+[1-9][0-9]{1,14}$"}}
+                        }
+                    ]
+                },
+                "MaskedRecipient": {
+                    "description": "The recipient's kind, with its contact masked.",
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["email"],
+                            "properties": {"email": {"const": MASKED_CONTACT}}
+                        },
+                        {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["phone"],
+                            "properties": {"phone": {"const": MASKED_CONTACT}}
+                        }
+                    ]
+                },
+                "TemplateReference": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["id", "version"],
+                    "properties": {
+                        "id": {"type": "string"},
+                        "version": {"type": "string"}
+                    }
+                },
+                "SubmitMessageRequest": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "description": "One message: a template version with its locale and data, \
+                                    or direct content where the access profile allows it, never \
+                                    both. Every endpoint, credential, and script is bound by \
+                                    the operator; no member chooses one.",
+                    "required": ["senderProfile", "to"],
+                    "properties": {
+                        "senderProfile": {
+                            "type": "string",
+                            "description": "A sender profile the caller's access profile lists."
+                        },
+                        "to": {"$ref": "#/components/schemas/Recipient"},
+                        "template": {"$ref": "#/components/schemas/TemplateReference"},
+                        "locale": {
+                            "type": "string",
+                            "description": "A locale the template version declares; required \
+                                            with `template`."
+                        },
+                        "data": {
+                            "description": "The template data, validated against the template \
+                                            version's schema; required with `template`. It is \
+                                            rendered at acceptance and never stored."
+                        },
+                        "content": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["text"],
+                            "description": "Direct content, instead of `template`.",
+                            "properties": {
+                                "subject": {"type": "string"},
+                                "text": {"type": "string"}
+                            }
+                        },
+                        "notBefore": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "The earliest instant the message may be sent."
+                        },
+                        "expiresAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "The instant an unsent message expires. It must lie \
+                                            within `retention.payloadDays` of acceptance, and \
+                                            defaults to the sender profile's expiry."
+                        },
+                        "correlationId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": MAXIMUM_CORRELATION_ID_BYTES,
+                            "description": "An opaque caller reference, stored, returned, and \
+                                            audited, never interpreted."
+                        }
+                    }
+                },
+                "MessageStatus": {"type": "string", "enum": statuses},
+                "MessageLinks": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["self", "cancel"],
+                    "properties": {
+                        "self": {"type": "string"},
+                        "cancel": {"type": "string"}
+                    }
+                },
+                "MessageReceipt": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["id", "status", "links"],
+                    "properties": {
+                        "id": {"type": "string", "format": "uuid"},
+                        "status": {"$ref": "#/components/schemas/MessageStatus"},
+                        "links": {"$ref": "#/components/schemas/MessageLinks"}
+                    }
+                },
+                "AttemptSummary": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["generation", "attempt", "outcome", "startedAt", "providerReference"],
+                    "properties": {
+                        "generation": {"type": "integer", "minimum": 1},
+                        "attempt": {"type": "integer", "minimum": 1},
+                        "outcome": {"type": "string", "enum": outcomes},
+                        "startedAt": {"type": "string", "format": "date-time"},
+                        "finishedAt": {"type": "string", "format": "date-time"},
+                        "providerReference": {
+                            "type": "boolean",
+                            "description": "Whether the provider returned a reference. The \
+                                            reference itself is not returned."
+                        }
+                    }
+                },
+                "MessageView": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "description": "A message's status and metadata. The recipient is masked, \
+                                    and no part or template data is returned.",
+                    "required": [
+                        "id", "status", "report", "channel", "senderProfile", "to",
+                        "acceptedAt", "expiresAt", "updatedAt", "attempts", "links"
+                    ],
+                    "properties": {
+                        "id": {"type": "string", "format": "uuid"},
+                        "status": {"$ref": "#/components/schemas/MessageStatus"},
+                        "report": {"type": "string", "enum": ["unavailable"]},
+                        "channel": {"type": "string", "enum": ["email", "sms"]},
+                        "senderProfile": {"type": "string"},
+                        "to": {"$ref": "#/components/schemas/MaskedRecipient"},
+                        "template": {"$ref": "#/components/schemas/TemplateReference"},
+                        "correlationId": {"type": "string"},
+                        "acceptedAt": {"type": "string", "format": "date-time"},
+                        "notBefore": {"type": "string", "format": "date-time"},
+                        "expiresAt": {"type": "string", "format": "date-time"},
+                        "updatedAt": {"type": "string", "format": "date-time"},
+                        "attempts": {
+                            "type": "array",
+                            "items": {"$ref": "#/components/schemas/AttemptSummary"}
+                        },
+                        "links": {"$ref": "#/components/schemas/MessageLinks"}
                     }
                 },
                 "TemplatePreviewRequest": {
@@ -577,6 +781,96 @@ mod tests {
                 .unwrap()
                 .contains(&encoding)
         );
+    }
+
+    /// The message schemas are written out by hand too; this holds them to
+    /// what the core serializes and parses, member for member.
+    #[test]
+    fn the_published_message_schemas_name_exactly_the_serialized_members() {
+        use registry_messaging_core::{
+            AttemptOutcome, AttemptSummary, Channel, MessageLinks, MessageReceipt, MessageReport,
+            MessageView, Recipient, SubmitMessageRequest, TemplateReference,
+        };
+        let documents = openapi_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[OPENAPI_FILE]).unwrap();
+        let schemas = &document["components"]["schemas"];
+        fn members(value: &Value) -> Vec<String> {
+            let mut members: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+            members.sort();
+            members
+        }
+        let request: SubmitMessageRequest = serde_json::from_value(json!({
+            "senderProfile": "p",
+            "to": {"email": "a@example.org"},
+            "template": {"id": "t", "version": "1"},
+            "locale": "en",
+            "data": {},
+            "content": {"subject": "s", "text": "t"},
+            "notBefore": "2026-10-01T00:00:00Z",
+            "expiresAt": "2026-10-02T00:00:00Z",
+            "correlationId": "c"
+        }))
+        .unwrap();
+        assert_eq!(
+            members(&serde_json::to_value(&request).unwrap()),
+            members(&schemas["SubmitMessageRequest"]["properties"])
+        );
+        let view = MessageView {
+            id: "m".to_owned(),
+            status: MessageStatus::Queued,
+            report: MessageReport::Unavailable,
+            channel: Channel::Email,
+            sender_profile: "p".to_owned(),
+            to: Recipient::Email(MASKED_CONTACT.to_owned()),
+            template: Some(TemplateReference {
+                id: "t".to_owned(),
+                version: "1".to_owned(),
+            }),
+            correlation_id: Some("c".to_owned()),
+            accepted_at: "a".to_owned(),
+            not_before: Some("n".to_owned()),
+            expires_at: "e".to_owned(),
+            updated_at: "u".to_owned(),
+            attempts: vec![AttemptSummary {
+                generation: 1,
+                attempt: 1,
+                outcome: AttemptOutcome::MaybeSent,
+                started_at: "s".to_owned(),
+                finished_at: Some("f".to_owned()),
+                provider_reference: false,
+            }],
+            links: MessageLinks::for_message("m"),
+        };
+        let serialized = serde_json::to_value(&view).unwrap();
+        let published = &schemas["MessageView"];
+        assert_eq!(members(&serialized), members(&published["properties"]));
+        assert_eq!(
+            members(&serialized["attempts"][0]),
+            members(&schemas["AttemptSummary"]["properties"])
+        );
+        assert_eq!(
+            members(&serialized["links"]),
+            members(&schemas["MessageLinks"]["properties"])
+        );
+        assert!(schemas["AttemptSummary"]["properties"]["outcome"]["enum"]
+            .as_array()
+            .unwrap()
+            .contains(&serialized["attempts"][0]["outcome"]));
+        let receipt = MessageReceipt {
+            id: "m".to_owned(),
+            status: MessageStatus::Queued,
+            links: MessageLinks::for_message("m"),
+        };
+        assert_eq!(
+            members(&serde_json::to_value(&receipt).unwrap()),
+            members(&schemas["MessageReceipt"]["properties"])
+        );
+        let submit = &document["paths"][registry_messaging_core::MESSAGES_PATH]["post"];
+        assert_eq!(submit["parameters"][0]["name"], IDEMPOTENCY_KEY_HEADER);
+        assert_eq!(submit["parameters"][0]["in"], "header");
+        assert!(submit["responses"]["202"].is_object());
+        assert!(submit["responses"]["409"].is_object());
+        assert!(submit["responses"]["410"].is_object());
     }
 
     #[test]

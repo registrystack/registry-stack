@@ -8,15 +8,16 @@
 //! derives. The journal never carries the subject, a contact, message
 //! content, or template data.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use registry_messaging_core::CallerIdentity;
+use registry_messaging_core::{CallerIdentity, Recipient};
 use registry_platform_audit::{
-    AuditError, AuditKeyHasher, AuditProfile, AuditReferenceHashError, AuditSink, ChainState,
-    DurableSegmentedJsonlSink,
+    segmented_audit_paths, AuditEnvelope, AuditError, AuditKeyHasher, AuditProfile,
+    AuditReferenceHashError, AuditSink, ChainState, DurableSegmentedJsonlSink,
 };
 use serde::Serialize;
+use uuid::Uuid;
 
 /// The largest active audit segment before the sink seals it and opens the
 /// next one.
@@ -25,10 +26,16 @@ const MAXIMUM_AUDIT_SEGMENT_BYTES: u64 = 10 * 1024 * 1024;
 /// The reference class principal pseudonyms are hashed under.
 const PRINCIPAL_PSEUDONYM_CLASS: &str = "messaging-principal-v1";
 
+/// The reference class recipient references are hashed under, scoped by
+/// channel.
+const RECIPIENT_REFERENCE_CLASS: &str = "messaging-recipient-v1";
+
 pub struct AuditJournal {
     sink: Arc<dyn AuditSink>,
     chain: ChainState,
     keys: AuditKeyHasher,
+    /// The journal file, when the journal is durable.
+    path: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for AuditJournal {
@@ -48,12 +55,52 @@ impl AuditJournal {
             MAXIMUM_AUDIT_SEGMENT_BYTES,
         )?);
         let chain = profile.bootstrap_or_start_empty(sink.as_ref()).await?;
-        Ok(Self::new(sink, chain, profile.key_hasher()))
+        let mut journal = Self::new(sink, chain, profile.key_hasher());
+        journal.path = Some(path.to_path_buf());
+        Ok(journal)
     }
 
     #[must_use]
     pub fn new(sink: Arc<dyn AuditSink>, chain: ChainState, keys: AuditKeyHasher) -> Self {
-        Self { sink, chain, keys }
+        Self {
+            sink,
+            chain,
+            keys,
+            path: None,
+        }
+    }
+
+    /// The `eventId` of the journal's most recent outbox record, when the
+    /// journal is durable and holds one. Records the runtime appends
+    /// directly carry no event id and are passed over. The outbox publisher
+    /// marks the id published before appending anything, so a crash between
+    /// an append and its mark never appends one record twice.
+    pub fn last_event_id(&self) -> Result<Option<Uuid>, AuditError> {
+        let Some(path) = &self.path else {
+            return Ok(None);
+        };
+        for candidate in segmented_audit_paths(path)?.into_iter().rev() {
+            let contents = match std::fs::read_to_string(&candidate) {
+                Ok(contents) => contents,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(AuditError::Io(error)),
+            };
+            for line in contents.lines().rev().filter(|line| !line.is_empty()) {
+                let envelope = serde_json::from_str::<AuditEnvelope>(line)
+                    .map_err(|error| AuditError::Io(std::io::Error::other(error)))?;
+                let Some(value) = envelope.record.get("eventId") else {
+                    continue;
+                };
+                let event_id = value
+                    .as_str()
+                    .and_then(|value| Uuid::parse_str(value).ok())
+                    .ok_or_else(|| {
+                        AuditError::Io(std::io::Error::other("audit record eventId is malformed"))
+                    })?;
+                return Ok(Some(event_id));
+            }
+        }
+        Ok(None)
     }
 
     /// Append one record to the chain. The record is durable when this
@@ -75,6 +122,24 @@ impl AuditJournal {
                 .to_string();
         self.keys
             .audit_reference_hash(PRINCIPAL_PSEUDONYM_CLASS, "", &canonical)
+    }
+
+    /// The keyed reference that names `recipient` in the journal, scoped by
+    /// its channel. An email address is compared without letter case, so
+    /// one mailbox written two ways has one reference.
+    pub fn recipient_reference(
+        &self,
+        recipient: &Recipient,
+    ) -> Result<String, AuditReferenceHashError> {
+        let normalized = match recipient {
+            Recipient::Email(address) => address.to_ascii_lowercase(),
+            Recipient::Phone(number) => number.clone(),
+        };
+        self.keys.audit_reference_hash(
+            RECIPIENT_REFERENCE_CLASS,
+            recipient.channel().as_str(),
+            &normalized,
+        )
     }
 }
 
@@ -128,6 +193,34 @@ pub(crate) mod tests {
             AuditKeyHasher::unkeyed_dev_only(),
         );
         (sink, journal)
+    }
+
+    #[tokio::test]
+    async fn the_last_event_id_passes_over_records_appended_directly() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("audit").join("messaging.jsonl");
+        let profile =
+            AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(vec![7u8; 32]))
+                .unwrap();
+        let journal = AuditJournal::open(&path, &profile).await.unwrap();
+        assert_eq!(journal.last_event_id().unwrap(), None);
+        journal
+            .append(serde_json::json!({"event": "direct"}))
+            .await
+            .unwrap();
+        assert_eq!(journal.last_event_id().unwrap(), None);
+        let event_id = Uuid::from_u128(42);
+        journal
+            .append(serde_json::json!({"event": "outbox", "eventId": event_id.to_string()}))
+            .await
+            .unwrap();
+        journal
+            .append(serde_json::json!({"event": "direct"}))
+            .await
+            .unwrap();
+        assert_eq!(journal.last_event_id().unwrap(), Some(event_id));
+        let (_, memory) = memory_journal();
+        assert_eq!(memory.last_event_id().unwrap(), None);
     }
 
     #[test]

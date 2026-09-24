@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use registry_messaging_core::{
     CallbackRequest, CallbackVerifierConfig, Channel, DeliveryReport, Receipt, RenderedParts,
-    SenderProfile,
+    SenderProfile, UncertainPolicy,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_dispatch::{FailureCode, ProviderReference, SendOutcome};
@@ -147,6 +147,10 @@ fn content() -> Content {
             provider: "gateway".to_owned(),
             sender: "Registry".to_owned(),
             maximum_segments: Some(2),
+            retry: None,
+            on_uncertain: UncertainPolicy::Hold,
+            accept_duplicates: false,
+            default_expiry_seconds: None,
         },
         parts: RenderedParts {
             subject: None,

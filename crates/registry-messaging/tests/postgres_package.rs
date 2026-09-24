@@ -213,7 +213,10 @@ impl Deployment {
     async fn serve_error(&self) -> RuntimeError {
         tokio::time::timeout(
             Duration::from_secs(30),
-            serve_from_path(self.runtime_path()),
+            serve_from_path(
+                self.runtime_path(),
+                registry_messaging::dispatch::Transports::new(),
+            ),
         )
         .await
         .expect("a refused start returns instead of serving")

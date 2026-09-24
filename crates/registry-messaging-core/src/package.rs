@@ -457,10 +457,9 @@ fn check_sender_profile(
     if profile.retry.is_some_and(|retry| !retry.is_valid()) {
         return Err(PackageError::InvalidRetry(profile.id.clone()));
     }
-    if profile
-        .default_expiry_seconds
-        .is_some_and(|seconds| !(MINIMUM_EXPIRY_SECONDS..=MAXIMUM_EXPIRY_SECONDS).contains(&seconds))
-    {
+    if profile.default_expiry_seconds.is_some_and(|seconds| {
+        !(MINIMUM_EXPIRY_SECONDS..=MAXIMUM_EXPIRY_SECONDS).contains(&seconds)
+    }) {
         return Err(PackageError::InvalidExpiry(profile.id.clone()));
     }
     // A send that may have reached the provider is sent again only when a

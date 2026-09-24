@@ -24,10 +24,11 @@ use tokio_postgres::Config as PgConfig;
 use crate::config::{describe_secret_failure, DatabaseConfig};
 
 const MESSAGING_MIGRATION: &str = include_str!("../migrations/0001_messaging.sql");
+pub(crate) const MESSAGES_MIGRATION: &str = include_str!("../migrations/0002_messages.sql");
 
 /// Every schema version, in the order it is applied. Readiness requires the
 /// applied set to be exactly this list.
-const MIGRATIONS: [(i64, &str); 1] = [(1, MESSAGING_MIGRATION)];
+const MIGRATIONS: [(i64, &str); 2] = [(1, MESSAGING_MIGRATION), (2, MESSAGES_MIGRATION)];
 
 /// Serializes operator-run migrations on one session lock. A second migrator
 /// waits here instead of racing the migrations table's primary key. The key
@@ -142,8 +143,17 @@ impl PostgresStore {
         Ok(Self { pool })
     }
 
-    async fn client(&self) -> Result<deadpool_postgres::Client, StoreError> {
+    pub(crate) async fn client(&self) -> Result<deadpool_postgres::Client, StoreError> {
         self.pool.get().await.map_err(StoreError::Pool)
+    }
+
+    /// The schema this store's sessions resolve unqualified names in: the
+    /// first schema of the connection's `search_path` that exists.
+    pub async fn current_schema(&self) -> Result<String, StoreError> {
+        let client = self.client().await?;
+        let row = client.query_one("SELECT current_schema()", &[]).await?;
+        row.try_get::<_, Option<String>>(0)?
+            .ok_or(StoreError::Configuration)
     }
 
     /// Apply every schema version not yet applied, under the migration lock.
@@ -312,5 +322,29 @@ fn tls_connector(
         tokio_postgres_rustls::MakeRustlsConnect::with_native_certs()
             .map(|value| value.0)
             .map_err(|_| StoreError::Configuration)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use registry_platform_dispatch::postgres::JobTable;
+
+    fn normalized(sql: &str) -> String {
+        sql.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    #[test]
+    fn the_job_table_migration_is_exactly_the_dispatch_core_shape() {
+        let table =
+            JobTable::new("public", crate::dispatch::JOB_TABLE, "message_id", "part").unwrap();
+        let declared = normalized(&table.create_statements().join("\n").replace("public.", ""));
+        let start = MESSAGES_MIGRATION
+            .find("CREATE TABLE IF NOT EXISTS messaging_dispatch_jobs")
+            .expect("the job table");
+        let end = MESSAGES_MIGRATION
+            .find("ALTER TABLE messaging_dispatch_jobs")
+            .expect("the job table's own constraints");
+        assert_eq!(normalized(&MESSAGES_MIGRATION[start..end]), declared);
     }
 }

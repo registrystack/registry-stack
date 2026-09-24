@@ -148,9 +148,9 @@ impl ProblemCode {
             Self::OperationNotAuthorized | Self::ProfileNotAuthorized => 403,
             Self::MessageNotVisible | Self::RequestNotFound | Self::TemplateNotFound => 404,
             Self::RequestMethodNotAllowed => 405,
-            Self::IdempotencyKeyReused
-            | Self::MessageDispatchStarted
-            | Self::MessageTerminal => 409,
+            Self::IdempotencyKeyReused | Self::MessageDispatchStarted | Self::MessageTerminal => {
+                409
+            }
             Self::IdempotencyExpired => 410,
             Self::RequestBodyTooLarge => 413,
             Self::RequestUnsupportedMediaType => 415,
