@@ -135,6 +135,13 @@ identifiers. `principalPseudonym` then names the person the agent acts for and
 `clientPseudonym` the agent's client. A standing agent carries no grant, so its
 object has no grant, approver, source issuer or deadline. The raw actor
 identifier never reaches the journal. A task-grant token without `act` records
-exactly what it did before. Neither kind of token adds an `authorization`
-object to a pre-I/O attempt record, a read's terminal record, or an immediate
-action's terminal record.
+exactly what it did before.
+
+Both kinds of token also carry the object on a read's terminal record: record
+reads, lists and lookups, revision reads, and history and snapshot reads. An
+immediate action's terminal record carries it whether the action committed,
+replayed a stored receipt, or returned its target conditions. Action admission
+refuses every task-grant token, so on an immediate action only a delegated
+actor appears. A direct token records no `authorization` object anywhere.
+Neither kind of token adds the object to a pre-I/O attempt record or to the
+refusal record a read or revision read writes.

@@ -51,6 +51,7 @@ pub(crate) struct ActionClaimContext {
     access_profile: String,
     purpose: Option<String>,
     result_effects: BTreeSet<String>,
+    grant_audit: Option<crate::audit::GrantAuditContext>,
 }
 
 impl ActionClaimContext {
@@ -67,9 +68,21 @@ impl ActionClaimContext {
             access_profile,
             purpose,
             result_effects,
+            grant_audit: None,
         };
         context.validate()?;
         Ok(context)
+    }
+
+    pub(crate) fn with_grant_audit(
+        mut self,
+        grant: Option<crate::audit::GrantAuditContext>,
+    ) -> Self {
+        self.grant_audit = grant;
+        self
+    }
+    pub(crate) fn grant_audit(&self) -> Option<&crate::audit::GrantAuditContext> {
+        self.grant_audit.as_ref()
     }
 
     #[must_use]

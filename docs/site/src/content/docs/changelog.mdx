@@ -206,6 +206,18 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg/tests/postgres_task_grants.rs;
     products/breg/TASK_GRANTS.md. */}
 
+- BReg's audit journal records delegated authority on reads and immediate
+  actions. A read's terminal record, for records, lists, lookups, revisions,
+  history, and snapshots, now carries the `authorization` object for a
+  task-grant or delegated token, and an immediate action's terminal record
+  carries it for a delegated token. Direct tokens record no such object, as
+  before.
+
+{/* Evidence: crates/registry-breg/src/postgres/read.rs;
+    crates/registry-breg/src/mutation/action.rs;
+    crates/registry-breg/tests/postgres_task_grants.rs;
+    products/breg/TASK_GRANTS.md. */}
+
 - BREAKING: BReg refuses to compile an access profile with a `taskGrant`
   that holds `apply_request`, with
   `access_profile.task_grant.operation_forbidden`. Applying a reviewed

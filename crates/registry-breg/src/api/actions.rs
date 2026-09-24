@@ -200,7 +200,8 @@ fn authorize_action<'a>(
             selected.to_owned(),
             target_authority,
             grant.results.clone(),
-        ),
+        )
+        .with_grant_audit(claims),
     })
 }
 

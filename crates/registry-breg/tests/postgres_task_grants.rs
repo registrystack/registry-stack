@@ -94,6 +94,19 @@ const PROJECT: &str = r#"{
       }
     }
   ],
+  "actions":[
+    {
+      "id":"name-site",
+      "inputs":[
+        {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+        {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
+      ],
+      "effects":[
+        {"id":"site","target":{"entity":"asset-site"},"operation":"create",
+          "set":{"tenant":{"fromField":"tenant"},"name":{"fromField":"name"}}}
+      ]
+    }
+  ],
   "accessProfiles":[
     {
       "id":"steward",
@@ -147,6 +160,12 @@ const PROJECT: &str = r#"{
           "readableFields":["tenant","placement","proposed-site","reason"],
           "writableFields":["tenant","placement","proposed-site","reason"],
           "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
+        },
+        {
+          "action":"name-site",
+          "operations":["invoke"],
+          "targets":[{"entity":"asset-site","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}],
+          "results":["site"]
         }
       ],
       "actorKind":"agent",
@@ -681,6 +700,14 @@ async fn external_review_counts(db: &TestDatabase) -> Vec<i64> {
     counts
 }
 async fn assert_grant_audit(db: &TestDatabase, grant: &str, phase: &str, outcome: &str) {
+    assert_grant_audit_where(db, grant, outcome, |record| record["phase"] == phase).await;
+}
+async fn assert_grant_audit_where(
+    db: &TestDatabase,
+    grant: &str,
+    outcome: &str,
+    matches: impl Fn(&Value) -> bool,
+) {
     let hasher = AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into())
         .unwrap()
         .key_hasher();
@@ -701,9 +728,7 @@ async fn assert_grant_audit(db: &TestDatabase, grant: &str, phase: &str, outcome
         .collect();
     let record = records
         .iter()
-        .find(|record| {
-            record["phase"] == phase && record["authorization"]["grantPseudonym"] == pseudonym
-        })
+        .find(|record| matches(record) && record["authorization"]["grantPseudonym"] == pseudonym)
         .expect("grant-bound write and refusal retain minimized grant audit context");
     let authorization = &record["authorization"];
     let fields: Vec<&str> = authorization
@@ -824,7 +849,7 @@ async fn standing_agent_audit_records_the_delegated_actor_by_pseudonym() {
         "tenant_claim": "tenant-a",
         "act": {"sub": ACTOR, "iss": idp.issuer()}
     }));
-    create(
+    let draft = create(
         &app,
         "/v1/records/correction-requests?accessProfile=standing-agent",
         &agent,
@@ -832,6 +857,31 @@ async fn standing_agent_audit_records_the_delegated_actor_by_pseudonym() {
         json!({"tenant":"tenant-a","placement":id(&placement),"proposedSite":id(&site),"reason":"synthetic correction"}),
     )
     .await;
+    get(&app, &id(&draft), "standing-agent", &agent).await;
+    let invoked = send(
+        &app,
+        Method::POST,
+        "/v1/actions/name-site?accessProfile=standing-agent",
+        &agent,
+        Some("standing-action"),
+        None,
+        json!({"input":{"tenant":"tenant-a","name":"agent-named"}}),
+    )
+    .await;
+    assert_eq!(invoked.status, StatusCode::OK, "{}", invoked.body);
+    // A direct token carries neither a grant nor an actor, so its read and
+    // write terminal records hold no authorization object.
+    let direct_read = send(
+        &app,
+        Method::GET,
+        &format!("/v1/records/sites/{}?accessProfile=steward", id(&site)),
+        &steward,
+        None,
+        None,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(direct_read.status, StatusCode::OK, "{}", direct_read.body);
     let refused = send(
         &app,
         Method::POST,
@@ -853,17 +903,71 @@ async fn standing_agent_audit_records_the_delegated_actor_by_pseudonym() {
             .unwrap()
     };
     let records = audit_records(&db).await;
-    for (phase, outcome) in [("terminal", "allowed"), ("refusal", "denied")] {
-        let record = records
+    let find = |label: &str, matches: &dyn Fn(&Value) -> bool| {
+        records
             .iter()
             .map(|(_, record)| record)
-            .find(|record| {
-                record["phase"] == phase
-                    && record["authorization"]["actorPseudonym"]
-                        == pseudonym("breg-actor-v1", ACTOR)
-            })
-            .unwrap_or_else(|| panic!("a standing agent {phase} records its actor"));
+            .find(|record| matches(record))
+            .unwrap_or_else(|| panic!("the journal holds the {label} record"))
+            .clone()
+    };
+    let agent_record = |method: &'static str| {
+        move |record: &Value| {
+            record["phase"] == "terminal"
+                && record["method"] == method
+                && record["entityId"] == "correction-request"
+                && record["selectedAccessProfile"] == "standing-agent"
+        }
+    };
+    let refusal_record =
+        |record: &Value| record["phase"] == "refusal" && record["method"] == "POST";
+    let action_record = |record: &Value| {
+        record["phase"] == "terminal"
+            && record["actionId"] == "name-site"
+            && record["outcome"] == "committed"
+    };
+    let steward_record = |method: &'static str| {
+        move |record: &Value| {
+            record["phase"] == "terminal"
+                && record["method"] == method
+                && record["selectedAccessProfile"] == "steward"
+        }
+    };
+    for (label, method) in [("steward write", "POST"), ("steward read", "GET")] {
+        let record = find(label, &steward_record(method));
+        assert!(
+            record.get("authorization").is_none(),
+            "a direct {label} records no authorization object"
+        );
+    }
+    for (label, record, outcome) in [
+        (
+            "write",
+            find("standing agent write", &agent_record("POST")),
+            "allowed",
+        ),
+        (
+            "read",
+            find("standing agent read", &agent_record("GET")),
+            "allowed",
+        ),
+        (
+            "immediate action",
+            find("standing agent immediate action", &action_record),
+            "allowed",
+        ),
+        (
+            "refusal",
+            find("standing agent refusal", &refusal_record),
+            "denied",
+        ),
+    ] {
         let authorization = &record["authorization"];
+        assert_eq!(
+            authorization["actorPseudonym"],
+            pseudonym("breg-actor-v1", ACTOR),
+            "a standing agent {label} records its actor"
+        );
         assert_eq!(authorization["actorKind"], "agent");
         assert_eq!(authorization["outcome"], outcome);
         assert_eq!(
@@ -881,6 +985,54 @@ async fn standing_agent_audit_records_the_delegated_actor_by_pseudonym() {
     for (raw, _) in &records {
         assert!(!raw.contains(ACTOR), "audit must not contain the raw actor");
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn task_grant_read_records_the_grant_fields() {
+    let db = TestDatabase::create(8).await;
+    let registry = Arc::new(
+        compile_project(
+            &parse_project_json(PROJECT.as_bytes()).unwrap(),
+            &[],
+            CompileProfile::Authoring,
+        )
+        .unwrap(),
+    );
+    let identity = install(&db, &registry).await;
+    let idp = MockIdp::start().await;
+    let status = Arc::new(Status::default());
+    let app = app(&db, registry.clone(), identity, &idp, status.clone());
+    let steward = human(&idp, "steward", "maintain");
+    let site = create(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        &steward,
+        "site",
+        json!({"tenant":"tenant-a","name":"site"}),
+    )
+    .await;
+    let placement = create(
+        &app,
+        "/v1/records/placements?accessProfile=steward",
+        &steward,
+        "placement",
+        json!({"tenant":"tenant-a","site":id(&site)}),
+    )
+    .await;
+    let (grant, token) = agent(&idp, &status);
+    let draft = create(
+        &app,
+        "/v1/records/correction-requests?accessProfile=submitter",
+        &token,
+        "grant-draft",
+        json!({"tenant":"tenant-a","placement":id(&placement),"proposedSite":id(&site),"reason":"synthetic correction"}),
+    )
+    .await;
+    get(&app, &id(&draft), "submitter", &token).await;
+    assert_grant_audit_where(&db, &grant, "allowed", |record| {
+        record["phase"] == "terminal" && record["method"] == "GET"
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

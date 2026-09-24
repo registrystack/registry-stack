@@ -109,3 +109,4 @@ traceability:
   - {id: BREG-SEC-106, state: enforced, negativeId: BREG-NEG-106, negativeTest: {path: crates/registry-breg/src/api/tests/change_request_action_tests.rs, name: delegated_token_is_admitted_only_by_an_agent_profile}}
   - {id: BREG-SEC-107, state: enforced, negativeId: BREG-NEG-107, negativeTest: {path: crates/registry-breg/src/api/tests/immediate_action_tests.rs, name: delegated_token_invokes_an_action_only_through_an_agent_profile}}
   - {id: BREG-SEC-108, state: enforced, negativeId: BREG-NEG-108, negativeTest: {path: crates/registry-breg/src/audit.rs, name: delegated_actor_is_recorded_as_a_keyed_pseudonym_with_its_kind}}
+  - {id: BREG-SEC-109, state: enforced, negativeId: BREG-NEG-109, negativeTest: {path: crates/registry-breg/tests/postgres_task_grants.rs, name: standing_agent_audit_records_the_delegated_actor_by_pseudonym}}

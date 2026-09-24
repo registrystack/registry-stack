@@ -968,7 +968,7 @@ impl PostgresRecordReadService {
             &request.selected_fields,
         )?;
         Ok(TerminalAudit {
-            grant: None,
+            grant: claims.grant_audit().cloned(),
             outcome,
             method: request.method,
             operation_id: request.operation_id.clone(),
@@ -2252,6 +2252,7 @@ fn strict_claim_context(
         context.purpose().map(str::to_owned),
         row_boundaries,
     )
+    .map(|claims| claims.with_grant_audit(context.grant_audit().cloned()))
     .and_then(|claims| claims.with_api_submitter_targets(registry, context))
     .and_then(|claims| claims.with_recipients(context.recipients().clone()))
     .map_err(|_| ReadServiceError::Unavailable)

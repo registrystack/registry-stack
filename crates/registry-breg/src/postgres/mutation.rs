@@ -2308,6 +2308,7 @@ fn strict_action_context(
         context.purpose().map(str::to_owned),
         context.result_effects().clone(),
     )
+    .map(|claims| claims.with_grant_audit(context.grant_audit().cloned()))
     .map_err(|_| MutationError::InvalidRequest)
 }
 
