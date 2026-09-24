@@ -119,3 +119,6 @@
   proves the journal, the outbox, the operational log, and the metrics carry
   no recipient, body, template datum, principal, or credential, and that the
   journal's keyed chain verifies over it.
+- Accept an SMTP provider's `tls: development-loopback` in a release build
+  when the runtime's own listener is `development-loopback`; behind an
+  `operator-controlled-upstream` listener it is still refused.

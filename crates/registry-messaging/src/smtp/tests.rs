@@ -52,7 +52,7 @@ fn loopback_with(stub: &Stub, adjust: impl FnOnce(&mut SmtpProviderSettings)) ->
     let mut settings = development("127.0.0.1");
     settings.port = Some(stub.address.port());
     adjust(&mut settings);
-    settings.activate(&no_secrets()).expect("activation")
+    settings.activate(&no_secrets(), false).expect("activation")
 }
 
 /// A TLS provider for the public host [`TLS_HOST`], whose checked answers are
@@ -63,7 +63,7 @@ fn scripted(
     answers: &[IpAddr],
     stub: SocketAddr,
 ) -> SmtpProvider {
-    let mut provider = settings.activate(secrets).expect("activation");
+    let mut provider = settings.activate(secrets, false).expect("activation");
     provider.network = Network::Scripted {
         answers: answers.to_vec(),
         connect_to: stub,
@@ -304,7 +304,7 @@ async fn a_refused_connection_is_transient() {
     drop(listener);
     let mut settings = development("127.0.0.1");
     settings.port = Some(port);
-    let sent = send(&settings.activate(&no_secrets()).expect("activation")).await;
+    let sent = send(&settings.activate(&no_secrets(), false).expect("activation")).await;
     assert_eq!(sent.outcome, transient());
     assert_eq!(sent.detail.stage, SmtpStage::Connect);
     assert_eq!(sent.detail.failure, Some(SmtpFailure::Connection));
@@ -455,7 +455,7 @@ async fn a_private_answer_is_refused_before_connecting() {
 async fn a_private_literal_host_is_refused_before_connecting() {
     let mut settings = tls_settings(None, false);
     settings.host = "10.0.0.5".to_owned();
-    let provider = settings.activate(&no_secrets()).expect("activation");
+    let provider = settings.activate(&no_secrets(), false).expect("activation");
     let sent = send(&provider).await;
     assert_eq!(sent.detail.failure, Some(SmtpFailure::DestinationRefused));
 }
@@ -466,7 +466,7 @@ async fn loopback_is_refused_in_a_tls_mode_with_real_resolution() {
     let mut settings = tls_settings(None, false);
     settings.host = "localhost".to_owned();
     settings.port = Some(stub.address.port());
-    let sent = send(&settings.activate(&no_secrets()).expect("activation")).await;
+    let sent = send(&settings.activate(&no_secrets(), false).expect("activation")).await;
     assert_eq!(sent.detail.failure, Some(SmtpFailure::DestinationRefused));
     assert_eq!(stub.recorded().connections, 0);
 }
@@ -493,7 +493,7 @@ async fn development_plaintext_refuses_an_answer_that_is_not_loopback() {
     let stub = Stub::start(Script::default()).await;
     let mut settings = development("localhost");
     settings.port = Some(stub.address.port());
-    let mut provider = settings.activate(&no_secrets()).expect("activation");
+    let mut provider = settings.activate(&no_secrets(), false).expect("activation");
     provider.network = Network::Scripted {
         answers: vec![IpAddr::from([127, 0, 0, 1]), public_answer()],
         connect_to: stub.address,
@@ -841,7 +841,7 @@ fn provider_debug_output_names_no_credential() {
     let authority = Authority::new();
     let (secrets, _directory) = secrets(&authority);
     let settings = tls_settings(credentials(), true);
-    let provider = settings.activate(&secrets).expect("activation");
+    let provider = settings.activate(&secrets, false).expect("activation");
     let debug = format!("{provider:?}");
     assert!(
         !debug.contains(USERNAME) && !debug.contains(PASSWORD),

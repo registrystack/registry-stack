@@ -99,7 +99,8 @@ providers:
     kind: smtp
     host: smtp.example.org
     # `starttls` (port 587) or `implicit` (port 465). `development-loopback`
-    # is plaintext to a loopback relay, and only a test build accepts it.
+    # is plaintext to a loopback relay, accepted only by a test build or
+    # behind a `development-loopback` listener.
     tls: starttls
     authentication:
       usernameRef: secret:file/smtp-username

@@ -1402,6 +1402,53 @@ audit:
         .is_err());
     }
 
+    /// A project whose package declares one SMTP provider and whose runtime
+    /// connects it in plaintext to a loopback relay, behind a listener
+    /// terminating TLS as `tls_termination` says.
+    fn loopback_relay_project(tls_termination: &str) -> (tempfile::TempDir, PathBuf) {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("package")).unwrap();
+        std::fs::write(
+            root.path().join("package/messaging.yaml"),
+            format!("{PACKAGE}providers:\n  - id: mail-relay\n    kind: smtp\n"),
+        )
+        .unwrap();
+        let document = runtime(
+            root.path(),
+            "providers:\n  mail-relay:\n    kind: smtp\n    host: 127.0.0.1\n    \
+             port: 1025\n    tls: development-loopback\n",
+        )
+        .replace(
+            "tlsTermination: development-loopback",
+            &format!("tlsTermination: {tls_termination}"),
+        );
+        let path = root.path().join("runtime.yaml");
+        std::fs::write(&path, document).unwrap();
+        (root, path)
+    }
+
+    #[test]
+    fn a_development_listener_admits_a_plaintext_loopback_relay() {
+        let (_root, path) = loopback_relay_project("development-loopback");
+        let (exit, report) = check_json(&path);
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    }
+
+    // A test feature admits the plaintext relay whatever the listener, so
+    // only a build without one can observe the refusal.
+    #[cfg(not(feature = "postgres-test"))]
+    #[test]
+    fn a_plaintext_loopback_relay_is_refused_behind_a_production_listener() {
+        let (_root, path) = loopback_relay_project("operator-controlled-upstream");
+        let (exit, report) = check_json(&path);
+        assert_eq!(exit, ExitCode::from(REFUSAL_EXIT), "{report}");
+        let message = report["diagnostics"][0]["message"].as_str().unwrap();
+        assert!(
+            message.contains("development-loopback listener"),
+            "{message}"
+        );
+    }
+
     fn starter(root: &Path) -> PathBuf {
         let directory = root.join("starter");
         let (exit, stdout, stderr) = run(&[OsStr::new("init"), directory.as_os_str()]);

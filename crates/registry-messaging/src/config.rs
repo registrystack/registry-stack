@@ -606,7 +606,7 @@ impl RuntimeConfig {
             match connection {
                 ProviderConnection::Smtp(settings) => {
                     settings
-                        .check()
+                        .check(self.listener.tls_termination == TlsTermination::DevelopmentLoopback)
                         .map_err(|error| refused(error.to_string()))?;
                 }
                 ProviderConnection::Http(settings) => {

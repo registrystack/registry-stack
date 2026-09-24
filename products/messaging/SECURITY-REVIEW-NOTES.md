@@ -397,7 +397,8 @@ deadline. The OAuth token decoder is closed: it accepts `access_token`,
 connection sets `assumedLifetimeSeconds`, and an optional string `scope`, and
 refuses any other member, so the send is transient. A plain `http` base URL
 to a loopback host is accepted by every build, unlike SMTP's
-`development-loopback`, which only a test build accepts.
+`development-loopback`, which only a test build or a runtime behind a
+`development-loopback` listener accepts.
 
 Tests: MESSAGING-SEC-03 in `contracts/security-test-traceability.yaml`, and
 the `http_provider/tests.rs` suite, including
@@ -426,9 +427,15 @@ transient. TLS modes:
 - `development-loopback` is plaintext to a loopback literal or `localhost`
   on an explicit port that is neither 587 nor 465, refuses every resolved
   answer that is not loopback, and admits no trusted root or private
-  network. Like `database.testOnlyPlaintext`, only a build carrying a test
-  feature accepts it (`postgres-test` or `smtp-test`); a release build
-  refuses it at `messagingctl check` and at startup.
+  network. A build carrying a test feature (`postgres-test` or
+  `smtp-test`) accepts it; any other build accepts it only when the
+  runtime's own `listener.tlsTermination` is `development-loopback`, which
+  already binds only to loopback, and refuses it behind an
+  `operator-controlled-upstream` listener at `messagingctl check` and at
+  startup (MESSAGING-DEC-26). A production runtime therefore cannot be
+  pointed at a plaintext relay without also giving up its production
+  listener posture, and `messagingctl dev` can run the release binary
+  against a local Mailpit.
 
 Both TLS modes verify the relay's certificate against the configured host
 name, not the connected address, over the public web roots plus an optional

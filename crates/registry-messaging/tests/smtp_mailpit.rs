@@ -51,7 +51,7 @@ fn provider() -> SmtpProvider {
         allowed_private_cidrs: Vec::new(),
     };
     let secrets = SecretResolver::new([SecretProvider::Environment], "/").expect("resolver");
-    settings.activate(&secrets).expect("activation")
+    settings.activate(&secrets, false).expect("activation")
 }
 
 /// Send one message and return Mailpit's full view of it.

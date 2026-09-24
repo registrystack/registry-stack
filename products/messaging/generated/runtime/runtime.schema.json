@@ -777,7 +777,7 @@
         },
         {
           "const": "development-loopback",
-          "description": "Plaintext to a loopback relay, for a local development server only.\nThe host must be a loopback literal or `localhost`, every resolved\naddress must be loopback, and the port must be explicit. Only a test\nbuild accepts it.",
+          "description": "Plaintext to a loopback relay, for a local development server only.\nThe host must be a loopback literal or `localhost`, every resolved\naddress must be loopback, and the port must be explicit. Accepted\nonly by a test build or behind a `development-loopback` listener.",
           "type": "string"
         }
       ]

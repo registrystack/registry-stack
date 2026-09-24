@@ -33,11 +33,12 @@ pub const SMTP_SUBMISSION_PORT: u16 = 587;
 /// The implicit-TLS submission port.
 pub const SMTP_IMPLICIT_TLS_PORT: u16 = 465;
 
-/// Whether this build accepts `tls: development-loopback`. Like
-/// `database.testOnlyPlaintext`, plaintext SMTP is a test-build affordance:
-/// only a build carrying the `postgres-test` or `smtp-test` feature, or a unit
-/// test build, accepts it, so a release binary refuses it at startup and in
-/// `messagingctl check`.
+/// Whether this build accepts `tls: development-loopback` whatever the
+/// runtime's listener: a build carrying the `postgres-test` or `smtp-test`
+/// feature, or a unit test build. Any other build accepts it only from a
+/// runtime whose own listener is `development-loopback`, the local
+/// development posture `messagingctl dev` runs, and refuses it behind a
+/// production listener at startup and in `messagingctl check`.
 const DEVELOPMENT_LOOPBACK_PERMITTED: bool =
     cfg!(any(test, feature = "postgres-test", feature = "smtp-test"));
 
@@ -56,8 +57,8 @@ pub enum SmtpTlsMode {
     Implicit,
     /// Plaintext to a loopback relay, for a local development server only.
     /// The host must be a loopback literal or `localhost`, every resolved
-    /// address must be loopback, and the port must be explicit. Only a test
-    /// build accepts it.
+    /// address must be loopback, and the port must be explicit. Accepted
+    /// only by a test build or behind a `development-loopback` listener.
     DevelopmentLoopback,
 }
 
@@ -144,7 +145,10 @@ pub enum SmtpSettingsError {
     SubmissionPortRequiresStarttls,
     #[error("port 465 requires tls implicit")]
     ImplicitPortRequiresImplicitTls,
-    #[error("tls development-loopback is accepted only by a test build")]
+    #[error(
+        "tls development-loopback is accepted only by a test build or behind a \
+         development-loopback listener"
+    )]
     DevelopmentNotPermitted,
     #[error("tls development-loopback requires a loopback IP literal or localhost as host")]
     DevelopmentRequiresLoopbackHost,
@@ -180,9 +184,10 @@ pub enum SmtpSettingsError {
 }
 
 impl SmtpProviderSettings {
-    /// Check the settings without resolving anything.
-    pub fn check(&self) -> Result<(), SmtpSettingsError> {
-        self.checked().map(|_| ())
+    /// Check the settings without resolving anything. `development_listener`
+    /// says whether the runtime's own listener is `development-loopback`.
+    pub fn check(&self, development_listener: bool) -> Result<(), SmtpSettingsError> {
+        self.checked(development_listener).map(|_| ())
     }
 
     /// Every secret reference these settings name, with the field that names
@@ -207,8 +212,14 @@ impl SmtpProviderSettings {
     }
 
     /// Check the settings, resolve their secrets, and build the provider.
-    pub fn activate(&self, secrets: &SecretResolver) -> Result<SmtpProvider, SmtpSettingsError> {
-        let checked = self.checked()?;
+    /// `development_listener` says whether the runtime's own listener is
+    /// `development-loopback`.
+    pub fn activate(
+        &self,
+        secrets: &SecretResolver,
+        development_listener: bool,
+    ) -> Result<SmtpProvider, SmtpSettingsError> {
+        let checked = self.checked(development_listener)?;
         let transport = match self.tls {
             SmtpTlsMode::DevelopmentLoopback => Transport::DevelopmentLoopback,
             SmtpTlsMode::Starttls => Transport::Starttls(self.tls_parameters(secrets)?),
@@ -267,8 +278,8 @@ impl SmtpProviderSettings {
             .map_err(|_| SmtpSettingsError::TlsClient)
     }
 
-    fn checked(&self) -> Result<Checked, SmtpSettingsError> {
-        self.checked_with(DEVELOPMENT_LOOPBACK_PERMITTED)
+    fn checked(&self, development_listener: bool) -> Result<Checked, SmtpSettingsError> {
+        self.checked_with(DEVELOPMENT_LOOPBACK_PERMITTED || development_listener)
     }
 
     fn checked_with(&self, development_permitted: bool) -> Result<Checked, SmtpSettingsError> {
@@ -413,7 +424,7 @@ pub(super) mod tests {
     #[test]
     fn minimal_starttls_settings_default_to_the_submission_port_and_thirty_seconds() {
         let settings = starttls();
-        let checked = settings.checked().expect("settings check");
+        let checked = settings.checked(false).expect("settings check");
         assert_eq!(checked.port, 587);
         assert_eq!(checked.attempt_timeout, Duration::from_secs(30));
     }
@@ -421,7 +432,7 @@ pub(super) mod tests {
     #[test]
     fn implicit_tls_defaults_to_port_465() {
         let settings = settings("host: smtp.example.org\ntls: implicit\n").expect("parse");
-        assert_eq!(settings.checked().expect("check").port, 465);
+        assert_eq!(settings.checked(false).expect("check").port, 465);
     }
 
     #[test]
@@ -439,11 +450,11 @@ pub(super) mod tests {
     fn the_attempt_timeout_is_bounded_to_sixty_seconds() {
         let mut settings = starttls();
         settings.attempt_timeout_seconds = 60;
-        assert!(settings.check().is_ok());
+        assert!(settings.check(false).is_ok());
         for refused in [0, 61, 3600] {
             settings.attempt_timeout_seconds = refused;
             assert_eq!(
-                settings.check(),
+                settings.check(false),
                 Err(SmtpSettingsError::AttemptTimeoutOutOfRange)
             );
         }
@@ -454,20 +465,20 @@ pub(super) mod tests {
         let mut settings = starttls();
         settings.port = Some(465);
         assert_eq!(
-            settings.check(),
+            settings.check(false),
             Err(SmtpSettingsError::ImplicitPortRequiresImplicitTls)
         );
         settings.tls = SmtpTlsMode::Implicit;
         settings.port = Some(587);
         assert_eq!(
-            settings.check(),
+            settings.check(false),
             Err(SmtpSettingsError::SubmissionPortRequiresStarttls)
         );
         settings.port = Some(0);
-        assert_eq!(settings.check(), Err(SmtpSettingsError::PortZero));
+        assert_eq!(settings.check(false), Err(SmtpSettingsError::PortZero));
         settings.tls = SmtpTlsMode::Starttls;
         settings.port = Some(2525);
-        assert!(settings.check().is_ok());
+        assert!(settings.check(false).is_ok());
     }
 
     #[test]
@@ -485,7 +496,7 @@ pub(super) mod tests {
                 ..development("127.0.0.1")
             };
             assert_eq!(
-                settings.check(),
+                settings.check(false),
                 Err(SmtpSettingsError::DevelopmentRequiresLoopbackHost),
                 "{host}"
             );
@@ -498,7 +509,7 @@ pub(super) mod tests {
             "LOCALHOST",
             "::ffff:127.0.0.1",
         ] {
-            assert!(development(host).check().is_ok(), "{host}");
+            assert!(development(host).check(false).is_ok(), "{host}");
         }
     }
 
@@ -524,7 +535,7 @@ pub(super) mod tests {
         for port in [None, Some(465), Some(587)] {
             settings.port = port;
             assert_eq!(
-                settings.check(),
+                settings.check(false),
                 Err(SmtpSettingsError::DevelopmentRequiresExplicitPort)
             );
         }
@@ -535,13 +546,13 @@ pub(super) mod tests {
         let mut settings = development("127.0.0.1");
         settings.trusted_root_certificate_ref = Some("secret:env/ROOT".to_owned());
         assert_eq!(
-            settings.check(),
+            settings.check(false),
             Err(SmtpSettingsError::DevelopmentTrustedRootDenied)
         );
         let mut settings = development("127.0.0.1");
         settings.allowed_private_cidrs = vec!["10.0.0.0/8".to_owned()];
         assert_eq!(
-            settings.check(),
+            settings.check(false),
             Err(SmtpSettingsError::DevelopmentPrivateCidrsDenied)
         );
     }
@@ -564,7 +575,7 @@ pub(super) mod tests {
             let mut settings = starttls();
             settings.host = host.to_owned();
             assert_eq!(
-                settings.check(),
+                settings.check(false),
                 Err(SmtpSettingsError::InvalidHost),
                 "{host}"
             );
@@ -577,7 +588,7 @@ pub(super) mod tests {
         ] {
             let mut settings = starttls();
             settings.host = host.to_owned();
-            assert!(settings.check().is_ok(), "{host}");
+            assert!(settings.check(false).is_ok(), "{host}");
         }
     }
 
@@ -585,7 +596,7 @@ pub(super) mod tests {
     fn private_networks_are_checked_like_a_production_destination() {
         let mut settings = starttls();
         settings.allowed_private_cidrs = vec!["10.20.0.0/16".to_owned(), "fd00:1::/64".to_owned()];
-        assert!(settings.check().is_ok());
+        assert!(settings.check(false).is_ok());
         for (cidrs, expected) in [
             (vec!["10.20.0.1/16"], SmtpSettingsError::PrivateCidrDenied),
             (vec!["8.8.8.0/24"], SmtpSettingsError::PrivateCidrDenied),
@@ -600,12 +611,12 @@ pub(super) mod tests {
             ),
         ] {
             settings.allowed_private_cidrs = cidrs.iter().map(|cidr| (*cidr).to_owned()).collect();
-            assert_eq!(settings.check(), Err(expected), "{cidrs:?}");
+            assert_eq!(settings.check(false), Err(expected), "{cidrs:?}");
         }
         settings.allowed_private_cidrs =
             (0..17).map(|index| format!("10.{index}.0.0/16")).collect();
         assert_eq!(
-            settings.check(),
+            settings.check(false),
             Err(SmtpSettingsError::TooManyPrivateCidrs)
         );
     }
@@ -617,7 +628,7 @@ pub(super) mod tests {
             username_ref: "secret:env/SMTP_USER".to_owned(),
             password_ref: "hunter2".to_owned(),
         });
-        let error = settings.check().expect_err("literal password refused");
+        let error = settings.check(false).expect_err("literal password refused");
         assert_eq!(
             error,
             SmtpSettingsError::InvalidSecretReference {
@@ -661,7 +672,7 @@ pub(super) mod tests {
             username_ref: "secret:file/relay-user".to_owned(),
             password_ref: "secret:file/relay-password".to_owned(),
         });
-        let provider = settings.activate(&secrets).expect("activation");
+        let provider = settings.activate(&secrets, false).expect("activation");
         assert!(provider.credentials.is_some());
         let debug = format!("{provider:?}");
         assert!(
@@ -671,11 +682,14 @@ pub(super) mod tests {
 
         settings.trusted_root_certificate_ref = Some("secret:file/relay-root".to_owned());
         assert_eq!(
-            settings.activate(&secrets).map(|_| ()),
+            settings.activate(&secrets, false).map(|_| ()),
             Err(SmtpSettingsError::InvalidTrustedRootCertificate)
         );
         settings.trusted_root_certificate_ref = Some("secret:file/absent".to_owned());
-        let error = settings.activate(&secrets).map(|_| ()).expect_err("absent");
+        let error = settings
+            .activate(&secrets, false)
+            .map(|_| ())
+            .expect_err("absent");
         assert!(matches!(error, SmtpSettingsError::Secret(_)), "{error:?}");
     }
 

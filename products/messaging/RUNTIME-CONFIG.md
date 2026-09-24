@@ -158,7 +158,7 @@ An `smtp` connection:
 | Key | Required | Meaning |
 |---|---|---|
 | `host` | yes | The relay's DNS name or IP literal, at most 253 bytes; the name TLS verifies |
-| `tls` | yes | `starttls`, `implicit`, or `development-loopback` (plaintext to a loopback relay, accepted only by a test build) |
+| `tls` | yes | `starttls`, `implicit`, or `development-loopback` (plaintext to a loopback relay, accepted only by a test build or behind a `development-loopback` listener) |
 | `port` | no | Defaults to 587 for `starttls` and 465 for `implicit`; required for `development-loopback` |
 | `authentication` | no | `usernameRef` and `passwordRef` |
 | `attemptTimeoutSeconds` | no | One attempt's whole budget, 1 to 60, default 30 |

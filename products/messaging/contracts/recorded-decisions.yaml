@@ -391,3 +391,26 @@ decisions:
     evidence:
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: the_metrics_sample_the_queue_and_count_attempts_by_outcome}
       - {path: crates/registry-messaging/src/metrics.rs, name: the_dispatch_queue_is_exposed_only_when_it_was_sampled}
+  - id: MESSAGING-DEC-26
+    subject: A plaintext loopback relay is accepted behind a development listener
+    decision: >-
+      SMTP `tls: development-loopback` is accepted by a build carrying a test
+      feature, and by any build whose runtime listener is itself
+      `tlsTermination: development-loopback`. Behind an
+      `operator-controlled-upstream` listener a release build refuses it at
+      `messagingctl check` and at startup. The loopback-only host, the
+      explicit port that is neither 587 nor 465, and the refusal of every
+      non-loopback answer are unchanged.
+    reasoning: >-
+      `messagingctl dev` runs the release `messaging` binary against a local
+      Mailpit, which speaks no TLS, so a test-build-only rule would make the
+      local development path impossible without a second binary. Tying the
+      relaxation to the listener keeps the production posture whole: a
+      runtime that serves callers through an operator TLS edge still cannot
+      reach a plaintext relay, and a development listener is already refused
+      on any non-loopback bind. The HTTP provider accepts a plain `http`
+      loopback base URL in every build; SMTP stays stricter because a relay
+      credential travels on that connection.
+    evidence:
+      - {path: crates/registry-messagingctl/src/lib.rs, name: a_development_listener_admits_a_plaintext_loopback_relay}
+      - {path: crates/registry-messagingctl/src/lib.rs, name: a_plaintext_loopback_relay_is_refused_behind_a_production_listener}
