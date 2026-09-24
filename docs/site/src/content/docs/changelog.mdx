@@ -114,14 +114,19 @@ relevant product pages on this site rather than duplicating release notes.
   `holdingOperator*` fields become `holderFarm` and `holderPerson`,
   `holderOrganization`, or `holderGroup`. A project copied from that starter
   keeps working as written; initialize it again to take the new names, which
-  come without a data migration. The `seed-lots` and `public-organizations`
-  starters align their fields to renamed PublicSchema concepts without
-  changing a field, route, or record. See
+  come without a data migration. The `seed-lots` starter aligns its fields
+  to renamed PublicSchema concepts. PublicSchema retired `public_mandate`, so
+  the `public-organizations` starter aligns its free-text `description`
+  field to PublicSchema's `description` instead. Neither starter changes a
+  field, route, or record. See
   [derive a registry from PublicSchema](../tutorials/derive-a-registry-from-publicschema/).
 
 {/* Evidence: crates/registry-linkml/publicschema/PIN.yaml;
     crates/registry-linkml/tests/snapshot.rs;
     products/breg/starters/agricultural-holdings/core/registry.yaml;
+    products/breg/starters/seed-lots/core/registry.yaml;
+    products/breg/starters/public-organizations/core/registry.yaml;
+    products/breg/starters/public-organizations/core/MODEL.md;
     products/breg/starters/README.md. */}
 
 ## v0.33.0 beta-45

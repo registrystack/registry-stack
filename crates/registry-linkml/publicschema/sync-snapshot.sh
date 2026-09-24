@@ -74,6 +74,15 @@ if [[ -z "${version}" ]]; then
   exit 1
 fi
 
+# Every source is checked before the snapshot is touched, so an older or
+# incomplete checkout fails without leaving a half-replaced snapshot.
+for source in "${files[@]/#/schema/}" LICENSE-VOCABULARY; do
+  if [[ ! -f "${checkout}/${source}" ]]; then
+    printf 'the checkout has no %s; the snapshot is unchanged\n' "${source}" >&2
+    exit 1
+  fi
+done
+
 # A file dropped from the list upstream must not linger in the snapshot.
 for existing in "${here}"/schema/*.yaml; do
   name="${existing##*/}"
