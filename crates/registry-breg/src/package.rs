@@ -27,9 +27,10 @@ use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
 use crate::generated_ddl::{
     add_blind_index_column_statement, add_column_statement, drop_spatial_bbox_function_statement,
     drop_spatial_candidate_view_statement, generate_ddl_with_actions, quote_identifier,
-    replace_vocabulary_check_statement, set_column_not_null_statement,
-    spatial_bbox_function_statement, spatial_projection_fields, spatial_projection_statements,
-    DdlInventory, DdlPolicy, DdlPolicyRole, DdlStatement, DdlStatementKind, DdlTable,
+    replace_length_check_statement, replace_vocabulary_check_statement,
+    set_column_not_null_statement, spatial_bbox_function_statement, spatial_projection_fields,
+    spatial_projection_statements, DdlInventory, DdlPolicy, DdlPolicyRole, DdlStatement,
+    DdlStatementKind, DdlTable,
 };
 use crate::history_schema::{
     serialize_descriptor, HistoryEntityDescriptor, HistoryLifecycleDescriptor,
@@ -286,6 +287,7 @@ pub enum CompiledRegistryChangeCode {
     FieldRemoved,
     FieldTypeChanged,
     FieldVocabularyCodesAdded,
+    FieldLengthWidened,
     FieldPhysicalNameChanged,
     FieldRequirednessChanged,
     FieldPatternAdded,
@@ -319,6 +321,7 @@ pub enum CompiledRegistryChangeCode {
     ActionRemoved,
     ActionChanged,
     ActionVocabularyCodesAdded,
+    ActionTargetFieldsWidened,
     ConsentRecordChanged,
     RecipientOrganizationAdded,
     RecipientOrganizationRemoved,
@@ -1567,6 +1570,22 @@ fn compare_fields(
                     Some(field_id.as_str()),
                 ),
             );
+        } else if candidate_field
+            .field_type
+            .widens_text_length_of(&previous_field.field_type)
+        {
+            // Every stored value is within the higher limit, so the change
+            // only replaces the column's length check.
+            push_change(
+                changes,
+                CompiledRegistryChangeClass::CompatibleAdditive,
+                CompiledRegistryChangeCode::FieldLengthWidened,
+                target(
+                    CompiledRegistryChangeTargetKind::Field,
+                    Some(entity_id),
+                    Some(field_id.as_str()),
+                ),
+            );
         } else if previous_field.field_type != candidate_field.field_type {
             let code = match (&previous_field.field_type, &candidate_field.field_type) {
                 (
@@ -1768,16 +1787,33 @@ fn compare_actions(
             // Every request the previous contract accepted keeps its meaning;
             // the action only accepts codes new to its vocabularies.
             Some(after)
-                if crate::immediate_actions::contract_only_adds_vocabulary_codes(
+                if crate::immediate_actions::contract_only_widens(
                     (before, &previous.actions.input_vocabularies),
                     &previous.entities,
                     (after, &candidate.actions.input_vocabularies),
                     &candidate.entities,
+                    FieldTypeSource::keeps_vocabulary_codes_of,
                 ) =>
             {
                 (
                     CompiledRegistryChangeClass::CompatibleAdditive,
                     CompiledRegistryChangeCode::ActionVocabularyCodesAdded,
+                )
+            }
+            // A target field also raised its `text` length limit, which every
+            // stored and requested value already meets.
+            Some(after)
+                if crate::immediate_actions::contract_only_widens(
+                    (before, &previous.actions.input_vocabularies),
+                    &previous.entities,
+                    (after, &candidate.actions.input_vocabularies),
+                    &candidate.entities,
+                    FieldTypeSource::admits_every_value_of,
+                ) =>
+            {
+                (
+                    CompiledRegistryChangeClass::CompatibleAdditive,
+                    CompiledRegistryChangeCode::ActionTargetFieldsWidened,
                 )
             }
             Some(_) => (
@@ -2265,6 +2301,18 @@ fn additive_migration_plan(
                 {
                     widened_checks.entry(entity_id.clone()).or_default().extend(
                         replace_vocabulary_check_statement(
+                            candidate_entity,
+                            &candidate.physical_names().entities[entity_id],
+                            field,
+                        ),
+                    );
+                }
+                if field
+                    .field_type
+                    .widens_text_length_of(&previous_field.field_type)
+                {
+                    widened_checks.entry(entity_id.clone()).or_default().extend(
+                        replace_length_check_statement(
                             candidate_entity,
                             &candidate.physical_names().entities[entity_id],
                             field,

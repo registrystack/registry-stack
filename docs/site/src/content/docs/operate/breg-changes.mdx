@@ -68,9 +68,13 @@ lifetime: a package that changes it can only initialize a new database.
 Pass the active runtime file as `--baseline-runtime-config` to both `test` and `package`, so the
 receipt and the package bind to the baseline they will succeed. A change the migration planner
 classifies as compatible additive, such as a new optional field or a code added to a vocabulary a
-field uses (`field_vocabulary_codes_added`), needs no further evidence. The diff classifies a field
-code addition as `lock_or_rewrite_risk`, because the migration replaces the column check under an
-exclusive table lock and validates every stored row. A widened grant is an access change: the
+field uses (`field_vocabulary_codes_added`) or a higher `maxLength` on a `text` field
+(`field_length_widened`), needs no further evidence. The diff classifies both as
+`lock_or_rewrite_risk`, because the migration replaces the column check under an exclusive table
+lock and validates every stored row. A `string` field's `maxLength` is its column type, so raising
+it is `field_type_changed` and needs a reviewed migration, as does lowering any `maxLength`. An
+action that sets or requires the entity is reported as `action_target_fields_widened` when a raised
+`text` limit is its only change, and stays additive. A widened grant is an access change: the
 planner accepts it as metadata-only, but it still needs a reviewed migration descriptor and
 rehearsal evidence, as the metadata-only case below describes.
 
@@ -196,7 +200,9 @@ Reviewed artifacts cannot authorize a change the planner classifies as unsupport
 {/* Evidence: crates/registry-bregctl/src/lib.rs, PackageCandidateArgs;
     crates/registry-bregctl/src/reviewed_migrations.rs;
     crates/registry-breg/src/migration_plan.rs;
-    crates/registry-breg/src/immediate_actions.rs, contract_only_adds_vocabulary_codes();
+    crates/registry-breg/src/immediate_actions.rs, contract_only_widens();
+    crates/registry-breg/src/contract.rs, FieldTypeSource::widens_text_length_of();
+    crates/registry-breg/tests/postgres_compiled_schema.rs, text_length_widening_replaces_the_length_check_and_keeps_existing_rows;
     crates/registry-breg/src/tooling.rs, classify_change();
     crates/registry-breg/tests/action_vocabulary_codes.rs;
     crates/registry-bregctl/tests/cli/reviewed_migrations.rs;

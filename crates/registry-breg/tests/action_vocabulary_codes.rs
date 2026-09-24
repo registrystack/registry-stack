@@ -253,3 +253,72 @@ fn a_baseline_without_input_vocabularies_keeps_every_widening_under_review() {
     );
     assert!(change_set_to_applicable_migration_plan(&changes).is_err());
 }
+
+/// A raised `text` limit on a field of the entity the actions target, which
+/// no action input sets, keeps every request they accepted valid, so each
+/// keeps its contract; a lowered limit does not.
+#[test]
+fn a_raised_text_limit_on_a_targeted_entity_keeps_the_action_contracts() {
+    const SOURCE_REFERENCE: &str =
+        "{id: source-reference, type: string, maxLength: 255, classification: internal}";
+    let with_limit = |max_length: u32| {
+        replace_once(
+            CONSENT_MODULE,
+            SOURCE_REFERENCE,
+            &format!(
+                "{SOURCE_REFERENCE}\n  - {{id: review-note, type: text, maxLength: {max_length}, classification: internal}}"
+            ),
+        )
+    };
+    let before = consent(CONSENT_PROJECT, &with_limit(255));
+
+    let widened = compiled_registry_change_set(
+        &before,
+        &consent(CONSENT_PROJECT, &with_limit(1000)),
+        "prior-package",
+    );
+    let changes = widened
+        .changes
+        .iter()
+        .map(|change| (change.code, change.target.member_id.as_deref()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        changes[0],
+        (
+            CompiledRegistryChangeCode::FieldLengthWidened,
+            Some("review-note")
+        )
+    );
+    for action in [
+        "give-person-consent",
+        "import-person-consent",
+        "invalidate-person-consent",
+        "record-person-consent-assisted",
+        "refuse-person-consent",
+        "withdraw-person-consent",
+    ] {
+        assert_eq!(
+            action_change(&widened, action),
+            (
+                CompiledRegistryChangeCode::ActionTargetFieldsWidened,
+                CompiledRegistryChangeClass::CompatibleAdditive
+            )
+        );
+    }
+    assert_eq!(changes.len(), 7, "{changes:?}");
+    assert!(change_set_to_applicable_migration_plan(&widened).is_ok());
+
+    let narrowed = compiled_registry_change_set(
+        &before,
+        &consent(CONSENT_PROJECT, &with_limit(100)),
+        "prior-package",
+    );
+    assert!(
+        narrowed
+            .changes
+            .iter()
+            .any(|change| change.code == CompiledRegistryChangeCode::ActionChanged),
+        "a lowered limit changes the requests an action accepts: {:#?}",
+        narrowed.changes
+    );
+}

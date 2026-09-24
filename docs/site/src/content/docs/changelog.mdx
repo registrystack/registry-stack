@@ -158,6 +158,21 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-evidencectl/src/source_cli.rs, diff_and_apply_refuse_a_next_fact_schema_that_drops_a_fact_a_derivation_reads;
     products/breg/evidence/tests/verify-composition.py, verify(). */}
 
+- Raising a `text` field's `maxLength` is a compatible additive change,
+  `field_length_widened`, applied live: the successor replaces the column's
+  length check and validates the stored rows, with no reviewed migration.
+  Revisions recorded under the lower limit stay readable, and an action over
+  the entity stays additive as `action_target_fields_widened`. A `string`
+  field's `maxLength` is its column type, so raising it still needs a
+  reviewed migration. See
+  [review and apply changes](../operate/breg-changes/#test-and-package-the-successor).
+
+{/* Evidence: crates/registry-breg/src/package.rs, CompiledRegistryChangeCode::FieldLengthWidened;
+    crates/registry-breg/src/generated_ddl.rs, replace_length_check_statement();
+    crates/registry-breg/tests/package_change_plan.rs, text_length_widening_is_additive_and_replaces_the_length_check;
+    crates/registry-breg/tests/action_vocabulary_codes.rs, a_raised_text_limit_on_a_targeted_entity_keeps_the_action_contracts;
+    crates/registry-breg/tests/postgres_compiled_schema.rs, text_length_widening_replaces_the_length_check_and_keeps_existing_rows. */}
+
 - `bregctl diff` reports every removed field or entity as
   `diff.history.removed_values_retained`. Removing one from the package drops
   the live column or table, but the values stay in every revision snapshot
@@ -370,7 +385,7 @@ relevant product pages on this site rather than duplicating release notes.
   See [change an active registry](../operate/breg-changes/).
 
 {/* Evidence: crates/registry-breg/src/package.rs, FieldVocabularyCodesAdded and ActionVocabularyCodesAdded;
-    crates/registry-breg/src/immediate_actions.rs, contract_only_adds_vocabulary_codes();
+    crates/registry-breg/src/immediate_actions.rs, contract_only_widens();
     crates/registry-breg/src/tooling.rs, ACTION_CODES_ADDED. */}
 
 - BREAKING: `bregctl init --from publicschema` and the four BReg starters

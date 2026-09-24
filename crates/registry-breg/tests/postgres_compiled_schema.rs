@@ -420,6 +420,133 @@ async fn optional_field_additive_upgrade_matches_fresh_catalog_fingerprint_despi
     fresh.cleanup().await;
 }
 
+/// A raised `text` limit replaces the inline length check alone: stored
+/// rows stay, the higher limit holds, and the field pattern's own check stays
+/// in force, so the upgraded catalog matches a fresh install.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn text_length_widening_replaces_the_length_check_and_keeps_existing_rows() {
+    let previous = length_catalog_registry(8);
+    let candidate = length_catalog_registry(16);
+    let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
+    assert_eq!(change_set.changes.len(), 1, "{:?}", change_set.changes);
+    assert_change(
+        &change_set,
+        CompiledRegistryChangeClass::CompatibleAdditive,
+        CompiledRegistryChangeCode::FieldLengthWidened,
+    );
+    let plan = change_set_to_applicable_migration_plan(&change_set)
+        .expect("a raised text length limit is compiler-applicable");
+
+    let entity = &candidate.entities()["entry"];
+    let table = quote_identifier(&entity.physical_table);
+    let note = quote_identifier(&entity.fields["note"].physical_name);
+    let insert = format!(
+        "INSERT INTO registry_data.{table}
+             (record_id, active_package_revision, {note})
+         VALUES ($1::text::uuid, 'length-package-1', $2)"
+    );
+
+    let upgraded = TestDatabase::create(1).await;
+    let (upgraded_migration, upgraded_task) = upgraded.connect_migration().await;
+    install_compiled_schema(&upgraded_migration, &previous, &upgraded.runtime_role)
+        .await
+        .expect("previous schema installs");
+    // The administrator writes below the row policies: this test observes
+    // the column constraints alone.
+    upgraded
+        .admin
+        .execute(&insert, &[&RECORD_ALPHA, &"eightchr"])
+        .await
+        .expect("a value at the previous limit is stored");
+    assert!(
+        upgraded
+            .admin
+            .execute(&insert, &[&RECORD_BETA, &"twelve chars"])
+            .await
+            .is_err(),
+        "the previous check refuses a value above its limit"
+    );
+    for statement in &plan.statements {
+        upgraded_migration
+            .batch_execute(&statement.sql)
+            .await
+            .expect("compiler-produced length statement applies");
+    }
+    upgraded
+        .admin
+        .execute(&insert, &[&RECORD_BETA, &"twelve chars"])
+        .await
+        .expect("the replaced check accepts a value under the higher limit");
+    for (record, value, reason) in [
+        (
+            "00000000-0000-0000-0000-000000000203",
+            "seventeen chars x",
+            "the replaced check still refuses a value above the higher limit",
+        ),
+        (
+            "00000000-0000-0000-0000-000000000204",
+            "UPPER",
+            "the field pattern's check stays in force",
+        ),
+    ] {
+        assert!(
+            upgraded
+                .admin
+                .execute(&insert, &[&record, &value])
+                .await
+                .is_err(),
+            "{reason}"
+        );
+    }
+    let kept: Vec<(String, String)> = upgraded
+        .admin
+        .query(
+            &format!(
+                "SELECT record_id::text, {note} FROM registry_data.{table} ORDER BY record_id"
+            ),
+            &[],
+        )
+        .await
+        .expect("stored rows are readable")
+        .into_iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    assert_eq!(
+        kept,
+        [
+            (RECORD_ALPHA.to_owned(), "eightchr".to_owned()),
+            (RECORD_BETA.to_owned(), "twelve chars".to_owned()),
+        ]
+    );
+    let candidate_catalog = ExpectedManagedCatalog::compiled(&candidate);
+    let upgraded_fingerprint = managed_schema_fingerprint(
+        &upgraded_migration,
+        &upgraded.runtime_role,
+        &candidate_catalog,
+    )
+    .await
+    .expect("upgraded candidate catalog is fingerprinted");
+    upgraded_task.abort();
+
+    let fresh = TestDatabase::create(1).await;
+    let (fresh_migration, fresh_task) = fresh.connect_migration().await;
+    install_compiled_schema(&fresh_migration, &candidate, &fresh.runtime_role)
+        .await
+        .expect("candidate schema installs cleanly");
+    let fresh_fingerprint =
+        managed_schema_fingerprint(&fresh_migration, &fresh.runtime_role, &candidate_catalog)
+            .await
+            .expect("fresh candidate catalog is fingerprinted");
+    fresh_task.abort();
+    assert_eq!(
+        upgraded_fingerprint, fresh_fingerprint,
+        "the replaced check keeps the name and definition a fresh install gives it"
+    );
+
+    upgraded.cleanup().await;
+    fresh.cleanup().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn vocabulary_code_addition_replaces_the_check_and_keeps_existing_rows() {
     let previous = vocabulary_catalog_registry(&["open", "closed"]);
@@ -1449,6 +1576,45 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
 
 /// A plain registry with two vocabulary-code fields. Only the `status`
 /// vocabulary varies, so a migration that touched `kind` would show.
+/// One required `text` field with a pattern, bounded by `max_length`.
+fn length_catalog_registry(max_length: u32) -> registry_breg::CompiledRegistry {
+    let project = serde_json::json!({
+        "apiVersion": "registry.registrystack.org/v1alpha1",
+        "kind": "RegistryProject",
+        "registry": {
+            "id": "length-catalog",
+            "version": "1",
+            "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"
+        },
+        "entities": [{
+            "id": "entry",
+            "primaryDataset": "test-dataset",
+            "route": "entries",
+            "mutationMode": "mutable",
+            "fields": [
+                {"id": "note", "type": "text", "maxLength": max_length, "pattern": "^[a-z ]*$",
+                 "required": true, "classification": "internal"}
+            ]
+        }],
+        "accessProfiles": [{
+            "id": "writer",
+            "default": true,
+            "principalClaim": "registry_principal",
+            "permissions": [{
+                "entity": "entry",
+                "operations": ["create", "get", "list", "patch"],
+                "readableFields": ["note"],
+                "writableFields": ["note"],
+                "rowBoundaries": []
+            }]
+        }]
+    });
+    let project_bytes = serde_json::to_vec(&project).expect("fixture serializes");
+    let project = parse_project_json(&project_bytes).expect("length catalog fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("length catalog fixture compiles")
+}
+
 fn vocabulary_catalog_registry(status_values: &[&str]) -> registry_breg::CompiledRegistry {
     vocabulary_catalog_registry_with_constraints(status_values, serde_json::json!([]))
 }
