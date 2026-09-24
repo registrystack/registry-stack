@@ -38,8 +38,9 @@ use registry_breg::package::{
     TRUST_ANCHOR_API_VERSION,
 };
 use registry_breg::postgres::{
-    managed_schema_fingerprint, ExpectedManagedCatalog, ExpectedRegistryIdentity,
-    PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey, SqlIdentifier,
+    managed_schema_fingerprint, reconcile_compiled_runtime_acl_for_test, ExpectedManagedCatalog,
+    ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
+    RegistryLockKey,
 };
 use registry_breg::startup::prepare_startup;
 use registry_breg::CompiledRegistry;
@@ -49,7 +50,6 @@ use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm
 use serde::Serialize;
 use serde_json::{json, Value};
 use tempfile::TempDir;
-use tokio_postgres::GenericClient;
 use tower::Service as _;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -344,6 +344,13 @@ async fn recipient_added_successor_matches_fresh_install_and_refuses_consumed_ke
         statements,
         vec!["entity.consent-decision.field.recipient.vocabulary"],
         "a recipient added to its vocabulary replaces only the recipient check"
+    );
+    // The recipient widens the action contract, whose fingerprint the action
+    // policies embed, so the rehearsal must reconcile policies as activation
+    // does to measure the same catalog as the fresh install.
+    assert_eq!(
+        successor_schema_fingerprint(&database, &successor.package).await,
+        fresh_fingerprint
     );
     let active_successor = apply_package(
         &database,
@@ -660,8 +667,13 @@ async fn successor_schema_fingerprint(
             .await
             .expect("successor DDL rehearses");
     }
-    reconcile_runtime_acl_for_fingerprint(&transaction, package.registry(), &database.runtime_role)
-        .await;
+    reconcile_compiled_runtime_acl_for_test(
+        &transaction,
+        package.registry(),
+        &database.runtime_role,
+    )
+    .await
+    .expect("successor fingerprint reconciles the production runtime ACL");
     let fingerprint = managed_schema_fingerprint(
         &transaction,
         &database.runtime_role,
@@ -692,100 +704,6 @@ async fn assert_exact_catalog(
     .expect("activated schema matches the exact candidate catalog");
     assert_eq!(fingerprint, identity.schema_fingerprint);
     task.abort();
-}
-
-async fn reconcile_runtime_acl_for_fingerprint(
-    client: &impl GenericClient,
-    registry: &CompiledRegistry,
-    runtime_role: &SqlIdentifier,
-) {
-    client
-        .batch_execute(&format!(
-            "REVOKE ALL ON SCHEMA registry_data, registry_source, registry_derived, registry_context FROM PUBLIC, {};
-             GRANT USAGE ON SCHEMA registry_data, registry_source, registry_derived, registry_context TO {};",
-            quote(runtime_role.as_str()),
-            quote(runtime_role.as_str()),
-        ))
-        .await
-        .expect("schema privileges rehearse");
-    for table in &registry.ddl().tables {
-        client
-            .batch_execute(&format!(
-                "REVOKE ALL ON TABLE registry_data.{} FROM PUBLIC, {};",
-                quote(&table.physical_name),
-                quote(runtime_role.as_str()),
-            ))
-            .await
-            .expect("table privileges revoke");
-        if !table.runtime_privileges.is_empty() {
-            let privileges = table
-                .runtime_privileges
-                .iter()
-                .map(|privilege| privilege.as_sql())
-                .collect::<Vec<_>>()
-                .join(", ");
-            client
-                .batch_execute(&format!(
-                    "GRANT {privileges} ON TABLE registry_data.{} TO {};",
-                    quote(&table.physical_name),
-                    quote(runtime_role.as_str()),
-                ))
-                .await
-                .expect("table privileges grant");
-        }
-    }
-    for view in &registry.ddl().views {
-        client
-            .batch_execute(&format!(
-                "REVOKE ALL ON TABLE {}.{} FROM PUBLIC, {};",
-                quote(&view.schema),
-                quote(&view.name),
-                quote(runtime_role.as_str()),
-            ))
-            .await
-            .expect("view privileges revoke");
-        if !view.runtime_privileges.is_empty() {
-            let privileges = view
-                .runtime_privileges
-                .iter()
-                .map(|privilege| privilege.as_sql())
-                .collect::<Vec<_>>()
-                .join(", ");
-            client
-                .batch_execute(&format!(
-                    "GRANT {privileges} ON TABLE {}.{} TO {};",
-                    quote(&view.schema),
-                    quote(&view.name),
-                    quote(runtime_role.as_str()),
-                ))
-                .await
-                .expect("view privileges grant");
-        }
-    }
-    for function in &registry.ddl().functions {
-        client
-            .batch_execute(&format!(
-                "REVOKE ALL ON FUNCTION {}.{}({}) FROM PUBLIC, {};",
-                quote(&function.schema),
-                quote(&function.name),
-                function.arguments,
-                quote(runtime_role.as_str()),
-            ))
-            .await
-            .expect("function privileges revoke");
-        if function.runtime_execute {
-            client
-                .batch_execute(&format!(
-                    "GRANT EXECUTE ON FUNCTION {}.{}({}) TO {};",
-                    quote(&function.schema),
-                    quote(&function.name),
-                    function.arguments,
-                    quote(runtime_role.as_str()),
-                ))
-                .await
-                .expect("function privileges grant");
-        }
-    }
 }
 
 fn metadata_only_source(
