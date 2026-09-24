@@ -18,6 +18,7 @@ pub fn catalog() -> Catalog {
         command_reference(registry_schedulingctl::command(), None, None),
         command_reference(registry_breg::command(), None, None),
         command_reference(registry_breg_mcp::command(), None, None),
+        command_reference(registry_breg_review::command(), None, None),
         command_reference(
             registry_bregctl::command(),
             None,
@@ -86,6 +87,7 @@ mod tests {
             [
                 "breg",
                 "breg-mcp",
+                "breg-review",
                 "bregctl",
                 "casework",
                 "caseworkctl",

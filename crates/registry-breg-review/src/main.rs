@@ -2,27 +2,12 @@
 
 use std::path::PathBuf;
 
-use clap::{value_parser, Arg, Command};
-use registry_breg_review::{router, serve, RuntimeConfig};
+use registry_breg_review::{command, router, serve, RuntimeConfig};
 use tracing::Level;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
 
 const LOG_VARIABLE: &str = "BREG_REVIEW_LOG";
-
-fn command() -> Command {
-    Command::new("breg-review")
-        .version(registry_platform_buildinfo::DISPLAY_VERSION)
-        .about("Serve the citizen review page for Base Registry Engine change requests")
-        .arg(
-            Arg::new("runtime-config")
-                .long("runtime-config")
-                .value_name("FILE")
-                .help("Absolute path to the review page runtime configuration")
-                .required(true)
-                .value_parser(value_parser!(PathBuf)),
-        )
-}
 
 /// The operational log level. The vocabulary is closed so a typo cannot
 /// silently turn logging off or on.

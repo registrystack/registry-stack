@@ -117,6 +117,7 @@ registry-record = { path = "crates/registry-record", version = "0.34.0" }
 registry-render = { path = "crates/registry-render", version = "0.34.0" }
 registry-breg-client = { path = "crates/registry-breg-client", version = "0.34.0" }
 registry-breg-mcp = { path = "crates/registry-breg-mcp", version = "0.34.0" }
+registry-breg-review = { path = "crates/registry-breg-review", version = "0.34.0" }
 registry-breg-client-node = { path = "crates/registry-breg-client-node", version = "0.34.0" }
 registry-breg-client-py = { path = "crates/registry-breg-client-py", version = "0.34.0" }
 registry-relay-http-contract = { path = "crates/registry-relay-http-contract", version = "0.34.0" }

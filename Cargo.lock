@@ -5006,7 +5006,7 @@ dependencies = [
 
 [[package]]
 name = "registry-breg-review"
-version = "0.33.0"
+version = "0.34.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -5286,6 +5286,8 @@ version = "0.34.0"
 dependencies = [
  "clap",
  "registry-breg",
+ "registry-breg-mcp",
+ "registry-breg-review",
  "registry-bregctl",
  "registry-casework",
  "registry-caseworkctl",

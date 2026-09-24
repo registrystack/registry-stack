@@ -25,6 +25,7 @@ mod templates;
 pub use config::{RuntimeConfig, RuntimeConfigError};
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -33,6 +34,7 @@ use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, MethodRouter};
 use axum::Router;
+use clap::{value_parser, Arg, Command};
 use jsonwebtoken::Algorithm;
 use registry_breg_client::{BaseRegistryClient, BaseRegistryClientConfig};
 use registry_platform_audit::{AuditProfile, DurableSegmentedAuditLog};
@@ -70,6 +72,23 @@ const ID_TOKEN_ALGORITHMS: [Algorithm; 5] = [
     Algorithm::RS256,
     Algorithm::PS256,
 ];
+
+/// The complete clap command tree, built so help and the CLI reference can
+/// render it.
+#[must_use]
+pub fn command() -> Command {
+    Command::new("breg-review")
+        .version(registry_platform_buildinfo::DISPLAY_VERSION)
+        .about("Serve the citizen review page for Base Registry Engine change requests")
+        .arg(
+            Arg::new("runtime-config")
+                .long("runtime-config")
+                .value_name("FILE")
+                .help("Absolute path to the review page runtime configuration")
+                .required(true)
+                .value_parser(value_parser!(PathBuf)),
+        )
+}
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
