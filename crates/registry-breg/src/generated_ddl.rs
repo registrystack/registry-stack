@@ -849,7 +849,10 @@ pub(crate) fn set_column_not_null_statement(
 /// finds the one `CHECK` over exactly this column and replaces it under that
 /// same name, which keeps the managed catalog identical to a fresh install.
 /// A tombstone-aware requiredness check also reads `record_lifecycle`, so it
-/// never matches.
+/// never matches. An authored vocabulary constraint on the same field is a
+/// second `CHECK` over exactly this column, so every constraint name the
+/// compiler assigns on the table is excluded; any other match still fails the
+/// `STRICT` lookup instead of replacing the wrong check.
 ///
 /// Replacing the check takes an `ACCESS EXCLUSIVE` lock on the table and
 /// validates every row. Splitting it into `ADD CONSTRAINT ... NOT VALID` and
@@ -860,6 +863,7 @@ pub(crate) fn set_column_not_null_statement(
 #[cfg(feature = "runtime")]
 pub(crate) fn replace_vocabulary_check_statement(
     entity: &CompiledEntity,
+    names: &crate::physical_names::EntityPhysicalNames,
     field: &crate::model::CompiledField,
 ) -> Option<DdlStatement> {
     if field.encryption.is_some() {
@@ -867,6 +871,16 @@ pub(crate) fn replace_vocabulary_check_statement(
     }
     let check = field_check(&quote_identifier(&field.physical_name), &field.field_type)?;
     let table = quote_literal(&entity.physical_table);
+    let named_constraints = names
+        .constraints
+        .values()
+        .cloned()
+        .chain([temporal_order_constraint_name(&entity.id)])
+        .collect::<BTreeSet<_>>()
+        .iter()
+        .map(|name| quote_literal(name))
+        .collect::<Vec<_>>()
+        .join(", ");
     Some(DdlStatement {
         id: format!("entity.{}.field.{}.vocabulary", entity.id, field.id),
         kind: DdlStatementKind::Constraint,
@@ -881,7 +895,8 @@ pub(crate) fn replace_vocabulary_check_statement(
              \x20   JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace\n\
              \x20   JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid AND a.attname = {column}\n\
              \x20   WHERE n.nspname = 'registry_data' AND t.relname = {table}\n\
-             \x20     AND c.contype = 'c' AND c.conkey = ARRAY[a.attnum];\n\
+             \x20     AND c.contype = 'c' AND c.conkey = ARRAY[a.attnum]\n\
+             \x20     AND c.conname <> ALL (ARRAY[{named_constraints}]::name[]);\n\
              \x20   EXECUTE format('ALTER TABLE registry_data.%I DROP CONSTRAINT %I, ADD CONSTRAINT %I CHECK (%s)', {table}, check_name, check_name, {check});\n\
              END\n\
              $breg_vocabulary$",

@@ -547,6 +547,121 @@ async fn vocabulary_code_addition_replaces_the_check_and_keeps_existing_rows() {
     fresh.cleanup().await;
 }
 
+/// An authored vocabulary constraint is a second single-column `CHECK` on the
+/// same column, so widening the field's vocabulary must replace the generated
+/// check alone and leave the authored subset in force.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn vocabulary_code_addition_beside_an_authored_vocabulary_constraint() {
+    let constraints = serde_json::json!([
+        {"id": "status-open-or-closed", "kind": "vocabulary", "field": "status",
+         "values": ["open", "closed"]}
+    ]);
+    let previous = vocabulary_catalog_registry_with_constraints(
+        &["open", "closed", "held"],
+        constraints.clone(),
+    );
+    let candidate = vocabulary_catalog_registry_with_constraints(
+        &["open", "closed", "held", "archived"],
+        constraints,
+    );
+    let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
+    assert_eq!(change_set.changes.len(), 1, "{:?}", change_set.changes);
+    assert_change(
+        &change_set,
+        CompiledRegistryChangeClass::CompatibleAdditive,
+        CompiledRegistryChangeCode::FieldVocabularyCodesAdded,
+    );
+    let plan = change_set_to_applicable_migration_plan(&change_set)
+        .expect("vocabulary code addition is compiler-applicable");
+
+    let entity = &candidate.entities()["entry"];
+    let table = quote_identifier(&entity.physical_table);
+    let status = quote_identifier(&entity.fields["status"].physical_name);
+    let kind = quote_identifier(&entity.fields["kind"].physical_name);
+    let insert = format!(
+        "INSERT INTO registry_data.{table}
+             (record_id, active_package_revision, {status}, {kind})
+         VALUES ($1::text::uuid, 'vocabulary-package-1', $2, $3)"
+    );
+
+    let upgraded = TestDatabase::create(1).await;
+    let (upgraded_migration, upgraded_task) = upgraded.connect_migration().await;
+    install_compiled_schema(&upgraded_migration, &previous, &upgraded.runtime_role)
+        .await
+        .expect("previous schema installs");
+    // The administrator writes below the row policies: this test observes
+    // the column constraints alone.
+    upgraded
+        .admin
+        .execute(&insert, &[&RECORD_ALPHA, &"closed", &"minor"])
+        .await
+        .expect("a row inside the authored subset is stored");
+    for statement in &plan.statements {
+        upgraded_migration
+            .batch_execute(&statement.sql)
+            .await
+            .expect("compiler-produced vocabulary statement applies");
+    }
+    for (record, status_code, reason) in [
+        (
+            RECORD_BETA,
+            "archived",
+            "the authored constraint still refuses the added code outside its subset",
+        ),
+        (
+            "00000000-0000-0000-0000-000000000203",
+            "held",
+            "the authored constraint still refuses a declared code outside its subset",
+        ),
+        (
+            "00000000-0000-0000-0000-000000000204",
+            "unknown",
+            "the replaced check still refuses an undeclared code",
+        ),
+    ] {
+        assert!(
+            upgraded
+                .admin
+                .execute(&insert, &[&record, &status_code, &"minor"])
+                .await
+                .is_err(),
+            "{reason}"
+        );
+    }
+    upgraded
+        .admin
+        .execute(&insert, &[&RECORD_BETA, &"open", &"major"])
+        .await
+        .expect("a code inside the authored subset is still stored");
+    let candidate_catalog = ExpectedManagedCatalog::compiled(&candidate);
+    let upgraded_fingerprint = managed_schema_fingerprint(
+        &upgraded_migration,
+        &upgraded.runtime_role,
+        &candidate_catalog,
+    )
+    .await
+    .expect("upgraded candidate catalog is fingerprinted");
+    upgraded_task.abort();
+
+    let fresh = TestDatabase::create(1).await;
+    let (fresh_migration, fresh_task) = fresh.connect_migration().await;
+    install_compiled_schema(&fresh_migration, &candidate, &fresh.runtime_role)
+        .await
+        .expect("candidate schema installs cleanly");
+    let fresh_fingerprint =
+        managed_schema_fingerprint(&fresh_migration, &fresh.runtime_role, &candidate_catalog)
+            .await
+            .expect("fresh candidate catalog is fingerprinted");
+    fresh_task.abort();
+    assert_eq!(
+        upgraded_fingerprint, fresh_fingerprint,
+        "both checks keep the names and definitions a fresh install gives them"
+    );
+
+    upgraded.cleanup().await;
+    fresh.cleanup().await;
+}
+
 async fn install_derived_view_fixture() {
     let registry = derived_registry();
     let database = TestDatabase::create(1).await;
@@ -1335,6 +1450,14 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
 /// A plain registry with two vocabulary-code fields. Only the `status`
 /// vocabulary varies, so a migration that touched `kind` would show.
 fn vocabulary_catalog_registry(status_values: &[&str]) -> registry_breg::CompiledRegistry {
+    vocabulary_catalog_registry_with_constraints(status_values, serde_json::json!([]))
+}
+
+/// The vocabulary catalog registry with authored entity constraints on `entry`.
+fn vocabulary_catalog_registry_with_constraints(
+    status_values: &[&str],
+    constraints: serde_json::Value,
+) -> registry_breg::CompiledRegistry {
     let project = serde_json::json!({
         "apiVersion": "registry.registrystack.org/v1alpha1",
         "kind": "RegistryProject",
@@ -1357,7 +1480,8 @@ fn vocabulary_catalog_registry(status_values: &[&str]) -> registry_breg::Compile
                  "required": true, "classification": "internal"},
                 {"id": "kind", "type": "vocabulary-code", "vocabulary": "kind",
                  "required": true, "classification": "internal"}
-            ]
+            ],
+            "constraints": constraints
         }],
         "accessProfiles": [{
             "id": "writer",

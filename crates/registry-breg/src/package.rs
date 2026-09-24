@@ -2196,10 +2196,13 @@ fn additive_migration_plan(
                         .field_type
                         .keeps_vocabulary_codes_of(&previous_field.field_type)
                 {
-                    widened_checks
-                        .entry(entity_id.clone())
-                        .or_default()
-                        .extend(replace_vocabulary_check_statement(candidate_entity, field));
+                    widened_checks.entry(entity_id.clone()).or_default().extend(
+                        replace_vocabulary_check_statement(
+                            candidate_entity,
+                            &candidate.physical_names().entities[entity_id],
+                            field,
+                        ),
+                    );
                 }
                 // Turning encryption on swaps the field's storage: the envelope
                 // and blind-index columns arrive nullable, a unique lookup
