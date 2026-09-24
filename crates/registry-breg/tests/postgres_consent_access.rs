@@ -230,7 +230,9 @@ impl Harness {
             "decision": decision.decision,
             "effectiveAt": at(decision.from),
         });
-        input["expiresAt"] = json!(at(decision.until.unwrap_or(time::Duration::days(3650))));
+        if let Some(until) = decision.until {
+            input["expiresAt"] = json!(at(until));
+        }
         let key = format!("decide-{}", IDEMPOTENCY.fetch_add(1, Ordering::Relaxed));
         let (status, body) = send(
             &self.app,

@@ -186,7 +186,6 @@ async fn self_action_answers_an_unknown_subject_like_a_subject_its_link_does_not
             "recipient": "food-agency", "purpose": "food-assistance",
             "scope": "food-targeting", "decision": "given", "channel": "self-service",
             "effectiveAt": "2026-01-01T00:00:00Z",
-            "expiresAt": "2099-12-31T00:00:00Z",
         });
         send(
             app.clone(),

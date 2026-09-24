@@ -122,7 +122,6 @@ journeys:
             decision: given
             channel: self-service
             effectiveAt: "2026-09-01T00:00:00Z"
-            expiresAt: "2099-12-31T00:00:00Z"
         expect: {outcome: success, status: 200}
       - id: lender-a-reads-the-tenure-right
         entity: tenure-right
@@ -161,7 +160,6 @@ journeys:
             decision: given
             channel: self-service
             effectiveAt: "2026-09-01T01:00:00Z"
-            expiresAt: "2099-12-31T00:00:00Z"
         expect: {outcome: success, status: 200}
       - id: lender-b-reads-through-the-consortium
         entity: tenure-right

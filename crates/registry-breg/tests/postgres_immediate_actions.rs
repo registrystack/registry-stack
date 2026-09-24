@@ -516,6 +516,135 @@ async fn create_only_action_requires_no_condition_and_replays_without_crud_grant
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn absent_optional_inputs_are_skipped_on_create_and_patch_while_required_inputs_refuse() {
+    let project = registry_breg::contract::parse_project_yaml(include_bytes!(
+        "fixtures/absent-optional-action-inputs.yaml"
+    ))
+    .expect("absent optional input fixture parses");
+    let registry =
+        compile_project(&project, &[], CompileProfile::Authoring).expect("fixture compiles");
+    let (database, registry, identity) = install_action_registry(registry).await;
+    let app = action_router(&database, registry.clone(), identity);
+    let invoke = |route: &'static str, key: &'static str, body: Value| {
+        let app = app.clone();
+        async move {
+            let mut headers = vec![("content-type", "application/json")];
+            if !key.is_empty() {
+                headers.push(("idempotency-key", key));
+            }
+            response_parts(
+                send(
+                    &app,
+                    Method::POST,
+                    route,
+                    Some(action_claims()),
+                    &headers,
+                    serde_json::to_vec(&body).expect("action body serializes"),
+                )
+                .await,
+            )
+            .await
+        }
+    };
+
+    let created = invoke(
+        "/v1/actions/create-entry",
+        "create-without-note",
+        json!({"input": {"label": "First entry"}}),
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::OK, "{}", created.body);
+    let entry_id = created.body["results"]["created"]["recordId"]
+        .as_str()
+        .expect("create result names the record")
+        .to_owned();
+    assert_eq!(
+        entry_values(&database, &registry, &entry_id).await,
+        ("First entry".to_owned(), None, None, 1),
+        "an absent optional input leaves the created field absent"
+    );
+
+    let noted = invoke(
+        "/v1/actions/create-entry",
+        "create-with-note",
+        json!({"input": {"label": "Second entry", "note": "kept"}}),
+    )
+    .await;
+    assert_eq!(noted.status, StatusCode::OK, "{}", noted.body);
+    let noted_id = noted.body["results"]["created"]["recordId"]
+        .as_str()
+        .expect("create result names the record")
+        .to_owned();
+
+    let condition = invoke(
+        "/v1/actions/update-entry/target-conditions",
+        "",
+        json!({"input": {"entryId": noted_id}}),
+    )
+    .await;
+    assert_eq!(condition.status, StatusCode::OK, "{}", condition.body);
+    let updated = invoke(
+        "/v1/actions/update-entry",
+        "update-without-note",
+        json!({
+            "input": {"entryId": noted_id, "status": "reviewed"},
+            "preconditions": condition.body["preconditions"].clone()
+        }),
+    )
+    .await;
+    assert_eq!(updated.status, StatusCode::OK, "{}", updated.body);
+    assert_eq!(
+        entry_values(&database, &registry, &noted_id).await,
+        (
+            "Second entry".to_owned(),
+            Some("kept".to_owned()),
+            Some("reviewed".to_owned()),
+            2
+        ),
+        "an absent optional input leaves the patched field unchanged"
+    );
+
+    let missing_label = invoke(
+        "/v1/actions/create-entry",
+        "create-without-label",
+        json!({"input": {"note": "no label"}}),
+    )
+    .await;
+    assert_eq!(
+        missing_label.status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        missing_label.body
+    );
+    assert_eq!(missing_label.body["code"], "request.invalid");
+    assert_eq!(entity_count(&database, &registry, "entry").await, 2);
+    database.cleanup().await;
+}
+
+async fn entry_values(
+    database: &TestDatabase,
+    registry: &registry_breg::CompiledRegistry,
+    entry_id: &str,
+) -> (String, Option<String>, Option<String>, i64) {
+    let entry = &registry.entities()["entry"];
+    let row = database
+        .admin
+        .query_one(
+            &format!(
+                "SELECT {label}, {note}, {status}, record_revision FROM registry_data.{table} WHERE record_id = $1",
+                table = q(&entry.physical_table),
+                label = q(&entry.fields["label"].physical_name),
+                note = q(&entry.fields["note"].physical_name),
+                status = q(&entry.fields["status"].physical_name),
+            ),
+            &[&Uuid::parse_str(entry_id).expect("entry UUID")],
+        )
+        .await
+        .expect("administrator reads entry values");
+    (row.get(0), row.get(1), row.get(2), row.get(3))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn action_conditions_and_invocation_refuse_aliases_wrong_records_and_boundary_escapes() {
     let (database, registry, identity) = setup_action_registry().await;
     let app = action_router(&database, registry.clone(), identity);
@@ -1422,9 +1551,38 @@ async fn setup_action_registry() -> (
     Arc<registry_breg::CompiledRegistry>,
     registry_breg::postgres::ExpectedRegistryIdentity,
 ) {
+    let (database, registry, identity) = install_action_registry(compiled_registry()).await;
+    seed_household(
+        &database,
+        &registry,
+        &identity,
+        HOUSEHOLD_ID,
+        "H-001",
+        "zone-a",
+    )
+    .await;
+    seed_household(
+        &database,
+        &registry,
+        &identity,
+        OTHER_HOUSEHOLD_ID,
+        "H-002",
+        "zone-b",
+    )
+    .await;
+    (database, registry, identity)
+}
+
+async fn install_action_registry(
+    registry: registry_breg::CompiledRegistry,
+) -> (
+    TestDatabase,
+    Arc<registry_breg::CompiledRegistry>,
+    registry_breg::postgres::ExpectedRegistryIdentity,
+) {
     let database = TestDatabase::create(10).await;
     let (migration, migration_task) = database.connect_migration().await;
-    let registry = Arc::new(compiled_registry());
+    let registry = Arc::new(registry);
     install_compiled_schema(&migration, &registry, &database.runtime_role)
         .await
         .expect("migration installs action RLS with compiled schema");
@@ -1446,24 +1604,6 @@ async fn setup_action_registry() -> (
     .expect("migration initializes registry identity");
     drop(migration);
     migration_task.abort();
-    seed_household(
-        &database,
-        &registry,
-        &identity,
-        HOUSEHOLD_ID,
-        "H-001",
-        "zone-a",
-    )
-    .await;
-    seed_household(
-        &database,
-        &registry,
-        &identity,
-        OTHER_HOUSEHOLD_ID,
-        "H-002",
-        "zone-b",
-    )
-    .await;
     (database, registry, identity)
 }
 

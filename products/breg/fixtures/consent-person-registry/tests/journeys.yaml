@@ -105,7 +105,6 @@ journeys:
             decision: given
             channel: self-service
             effectiveAt: "2026-09-01T00:00:00Z"
-            expiresAt: "2099-12-31T00:00:00Z"
         expect: {outcome: success, status: 200}
       - id: food-agency-reads-after-consent
         entity: person
@@ -150,7 +149,6 @@ journeys:
             decision: given
             channel: self-service
             effectiveAt: "2026-09-01T00:00:00Z"
-            expiresAt: "2099-12-31T00:00:00Z"
         expect: {outcome: refusal, status: 412, problemCode: precondition.failed}
       - id: food-agency-still-cannot-read-bruno
         entity: person
@@ -199,7 +197,6 @@ journeys:
             decision: given
             channel: self-service
             effectiveAt: "2026-09-01T01:00:00Z"
-            expiresAt: "2099-12-31T00:00:00Z"
         expect: {outcome: success, status: 200}
       - id: backdated-give-stays-ineffective-after-withdrawal
         entity: person
@@ -383,7 +380,6 @@ journeys:
             decision: given
             channel: self-service
             effectiveAt: "2099-01-01T00:00:00Z"
-            expiresAt: "2099-12-31T00:00:00Z"
         expect: {outcome: success, status: 200}
       - id: future-dated-give-is-not-yet-in-force
         entity: person
@@ -545,7 +541,6 @@ journeys:
             decision: given
             channel: self-service
             effectiveAt: "2026-09-01T00:00:00Z"
-            expiresAt: "2099-12-31T00:00:00Z"
         expect: {outcome: success, status: 200}
       - id: food-agency-reads-through-the-group
         entity: person
@@ -586,7 +581,6 @@ journeys:
             decision: given
             channel: self-service
             effectiveAt: "2026-09-01T00:00:00Z"
-            expiresAt: "2099-12-31T00:00:00Z"
         expect: {outcome: refusal, status: 412, problemCode: precondition.failed}
       - id: steward-captures-assisted-consent
         action: record-person-consent-assisted
@@ -606,9 +600,7 @@ journeys:
             decision: given
             channel: assisted
             effectiveAt: "2026-09-01T00:00:00Z"
-            expiresAt: "2099-12-31T00:00:00Z"
             evidence: signed paper form 2026-0042 held at the east district office
-            witness: synthetic-community-worker
         expect: {outcome: success, status: 200}
       - id: food-agency-reads-after-assisted-capture
         entity: person
@@ -634,3 +626,29 @@ journeys:
         claims: *health_ngo_feed_claims
         request: {operation: list}
         expect: {outcome: success, status: 200, count: 4}
+      - id: steward-imports-legacy-consent-without-optional-inputs
+        action: import-person-consent
+        accessProfile: person-consent-steward
+        claims: *steward_claims
+        request:
+          operation: invoke
+          idempotencyKey: hamid-legacy-import
+          input:
+            subject: {recordRef: hamid}
+            recipient: health-ngo
+            purpose: food-assistance
+            scope: food-targeting
+            decision: given
+            channel: import
+            effectiveAt: "2026-09-01T00:00:00Z"
+            sourceReference: legacy-consent-register-row-0042
+        expect: {outcome: success, status: 200}
+      - id: health-ngo-reads-after-import
+        entity: person
+        accessProfile: food-targeting
+        claims: *health_ngo_claims
+        request: {operation: get, recordRef: hamid}
+        expect:
+          outcome: success
+          status: 200
+          fields: {personCode: P-HAMID}
