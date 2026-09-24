@@ -1501,6 +1501,21 @@ class CiChangesTest(unittest.TestCase):
             classify(self.workspace, ("crates/registry-breg-mcp/src/cli.rs",))["docs"]
         )
 
+    def test_review_page_command_change_runs_docs(self) -> None:
+        # `breg-review`'s Clap tree is built in its lib.rs, which the CLI
+        # reference renders, so a change there rebuilds the docs.
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-breg-review/src/lib.rs",),
+        )
+        self.assertTrue(outputs["docs"])
+        self.assertIn("registry-breg-review", outputs["rust_packages"])
+        self.assertFalse(
+            classify(
+                self.workspace, ("crates/registry-breg-review/src/pages.rs",)
+            )["docs"]
+        )
+
     def test_the_python_binding_and_its_sdk_replay_the_tutorial_that_imports_them(
         self,
     ) -> None:
