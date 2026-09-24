@@ -246,21 +246,25 @@ The document must be a JWKS with at least one RSA or elliptic-curve key, each ca
 non-empty `kid`. It is read once, at startup, so a key rotation at the issuer is a replacement of
 that secret and a restart of every serving process.
 
-Each source binding also accepts `eventType`, which defaults to `casework-lifecycle-v1`,
-`trustedRootCertificatesRef` for a private certificate authority in front of the source,
-`requestTimeoutMilliseconds` and `connectTimeoutMilliseconds`, which default to 30000 and 10000,
-accept at most 300000, and are refused when the connect timeout is the larger of the two, and
-`reconciliationIntervalMilliseconds`, how often the runtime re-reads the source for work the
-source's own notifications did not deliver, which defaults to 60000 and accepts 1000 to 3600000.
-If one pass outlasts the interval, Casework skips missed ticks instead of replaying them
-back-to-back against the source.
+Each source binding also accepts `trustedRootCertificatesRef` for a private certificate authority
+in front of the source, `requestTimeoutMilliseconds` and `connectTimeoutMilliseconds`, which
+default to 30000 and 10000, accept at most 300000, and are refused when the connect timeout is the
+larger of the two, and `reconciliationIntervalMilliseconds`, how often the runtime re-reads the
+source for work the source's own notifications did not deliver, which defaults to 60000 and accepts
+1000 to 3600000. If one pass outlasts the interval, Casework skips missed ticks instead of
+replaying them back-to-back against the source.
+
+A binding has no event type to set. Each lifecycle event carries, as its `ce-type`, the id of the
+hook `caseworkctl source add` wrote on the request entity, `casework-lifecycle-v1-<entity>`, and
+Casework refuses an event whose type is not the one derived from the request entity its body
+names. A binding that still carries `eventType` is refused at startup.
 
 Every source-backed work item, task grant, and saved attempt carries the source's binding
 generation, computed from the source id, the binding's `eventSource`, and the digest of the
 imported source description. Changing one of those three supersedes the source's open work items
 and opens fresh ones on the next observation, because the source now means something else. Every
 other binding field is operational: rotating a client key, moving `tokenEndpoint` or `baseUrl`,
-changing `resource`, `scopes`, `readerProfile`, `eventType`, the trusted root, a timeout, the
+changing `resource`, `scopes`, `readerProfile`, the trusted root, a timeout, the
 interval, `displayReference`, or `contextProjection` keeps the generation, and with it every
 in-flight work item, claim, and durable attempt.
 
@@ -276,7 +280,7 @@ before they become the anchor for verification.
     and parse_static_jwks();
     crates/registry-casework-breg/src/config.rs, BregBinding, binding_generation(),
     generation_ignores_credentials_transport_and_presentation_settings(),
-    DEFAULT_EVENT_TYPE, DEFAULT_REQUEST_TIMEOUT_MILLISECONDS, and MAXIMUM_TIMEOUT_MILLISECONDS;
+    DEFAULT_REQUEST_TIMEOUT_MILLISECONDS, and MAXIMUM_TIMEOUT_MILLISECONDS;
     crates/registry-casework/src/http.rs; products/casework/README.md. */}
 
 ### Create the secret files
