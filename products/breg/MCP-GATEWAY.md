@@ -127,9 +127,11 @@ For this exchange to work, the authorization server must support:
   client-credentials grant names the gateway's own resource identifier as
   its `resource`, and the server issues the actor token for that resource,
   never with the registry's audience.
-- A bounded exchanged lifetime: the issued token's validity does not exceed
-  what the gateway's own client is configured to accept, and the gateway
-  clamps it rather than trusting the server to.
+- A bounded exchanged lifetime: the server must keep the issued token's
+  validity short. The gateway exchanges afresh on every call and discards
+  the issued token when the call ends, but it cannot shorten the token
+  itself, so a token that leaked stays valid at the registry until its
+  `exp`.
 
 Both services are identity-provider neutral: each is configured with an
 issuer, a token endpoint, and a JWKS location, not tied to one vendor. The
@@ -169,6 +171,6 @@ operator must configure it there. A request over any limit gets a `429` with
 The review page keeps sign-in and review state in memory only. Restarting it
 discards every open sign-in and every in-progress review; a citizen
 mid-review signs in again and reads the current draft from BReg. The gateway
-is stateless apart from its MCP transport session: restarting it loses
+keeps no session, and its MCP endpoint is stateless: restarting it loses
 nothing a citizen would need recovered, since every draft it wrote already
 lives in BReg.

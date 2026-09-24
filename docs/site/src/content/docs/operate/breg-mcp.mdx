@@ -58,7 +58,7 @@ no-store`. Probe them over HTTP from your platform.
 |---|---|---|
 | `GET /health` | 200 `{"status":"alive"}` | 200 `{"status":"alive"}` |
 | `GET /ready`, journal writable | 200 `{"status":"ready"}` | 200 `{"status":"ready"}` |
-| `GET /ready`, journal not writable | 503 `{"status":"unavailable"}` | 503 `{"status":"not-ready"}` |
+| `GET /ready`, journal not writable | 503 `{"status":"not-ready"}` | 503 `{"status":"not-ready"}` |
 
 Readiness reflects the audit journal alone. Neither route calls the registry or the authorization
 server, so a ready service can still answer a tool call with `registry-unavailable` or a sign-in
@@ -202,11 +202,12 @@ effective limit.
 
 ## Run the release images
 
-The Base Registry Engine release set includes a `breg-mcp` image and a `breg-review` image beside
-the `breg` image. Each carries its binary alone, on a distroless base with no shell. The release manifest
+From v0.35.0, the Base Registry Engine release set includes a `breg-mcp` image and a
+`breg-review` image beside the `breg` image. Each carries its binary alone, on a distroless base with no shell. The release manifest
 records the promoted digest of each image; pin that digest instead of the movable tag.
 
-{/* Reconcile: image names with release wiring */}
+{/* Evidence: release/docker/Dockerfile.breg-mcp; release/docker/Dockerfile.breg-review;
+    release/OPERATIONS.md. */}
 
 Mount the runtime configuration and the secrets read-only, and give the journal a writable
 directory the image user owns. Inside a container, bind the listener on `0.0.0.0`, which requires
@@ -224,9 +225,7 @@ listener:
 A gateway container then looks like this, with the review page following the same pattern on port
 8115:
 
-{/* Reconcile: image names with release wiring; default command, configuration path,
-    journal directory, and image user from release/docker/Dockerfile.breg-mcp and
-    Dockerfile.breg-review. */}
+{/* Evidence: release/docker/Dockerfile.breg-mcp, WORKDIR, EXPOSE, ENTRYPOINT, and CMD. */}
 
 ```sh
 BREG_MCP_IMAGE='ghcr.io/registrystack/breg-mcp@sha256:<digest-from-the-release-manifest>'
@@ -238,8 +237,9 @@ docker run --rm \
   "$BREG_MCP_IMAGE"
 ```
 
-Set `audit.path` to a file under the mounted journal directory, such as
-`/var/lib/breg-mcp/audit/audit.jsonl`. Run `check` in the same image before you serve:
+Set `audit.path` to a file in the mounted journal directory, such as
+`/var/lib/breg-mcp/audit.jsonl`. The image user owns that directory, and the audit journal
+refuses a directory it does not own. Run `check` in the same image before you serve:
 
 ```sh
 docker run --rm \

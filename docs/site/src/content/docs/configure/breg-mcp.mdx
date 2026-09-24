@@ -304,13 +304,13 @@ publishes RFC 9728 protected-resource metadata naming the issuer and the require
 | `disclosure` | What the citizen is told about the data the chat host will see |
 | `details.entity` | The entity holding the citizen's own record |
 | `application.entity` | The change-request entity the gateway drafts |
-| `application.targetField` | The API name of the field referencing the citizen's record |
-| `application.ownerField` | The API name of the field recording the citizen's principal |
+| `application.targetField` | The field identifier of the reference to the citizen's record |
+| `application.ownerField` | The field identifier of the field recording the citizen's principal |
 | `reviewBaseUrl` | The review page's `publicOrigin`; the gateway returns `<reviewBaseUrl>/requests/<id>` |
 
 `name`, `description`, and `disclosure` are each at most 4096 bytes. The two field keys take the
-API name the registry's metadata publishes, such as `newAddressLine` for a field declared as
-`new-address-line`.
+field identifier as the project declares it, such as `new-address-line`, not the API name
+`newAddressLine` the registry's metadata publishes for it.
 
 ### Audit and limits
 
@@ -377,8 +377,8 @@ audit:
 | `registry.entity`, `registry.accessProfile` | The change-request entity and the review access profile |
 | `registry.targetField` | The field identifier of the target reference, such as `address` |
 
-`registry.targetField` takes the field identifier as the project declares it, in lowercase with
-hyphens, while the gateway's `application.targetField` takes the API name.
+`registry.targetField` takes the field identifier as the project declares it, the same form as
+the gateway's `application.targetField`.
 
 In production the page fetches the issuer's discovery document, key set, and token endpoint under
 a strict policy that refuses loopback, private-range, and cloud-metadata addresses, so the
