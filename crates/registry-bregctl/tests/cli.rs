@@ -39,6 +39,9 @@ mod history_rebaseline_tests;
 #[path = "cli/reviewed_migrations.rs"]
 mod reviewed_migration_tests;
 
+#[path = "cli/module_consent.rs"]
+mod module_consent_tests;
+
 fn legacy_project(dataset_id: Option<&str>) -> Vec<u8> {
     let dataset_id = dataset_id
         .map(|id| format!("    id: {id}\n"))

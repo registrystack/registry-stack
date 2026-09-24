@@ -1,0 +1,110 @@
+- id: __SUBJECT__-consent-self
+  principalClaim: __CLAIM__
+  requiredScopes: ['consent:__SUBJECT__:self']
+  permissions:
+  - entity: __SUBJECT__-consent-decision
+    rowBoundaries: []
+    membershipBoundaries:
+    - {field: subject, membershipEntity: __SUBJECT__-consent-link, membershipKeyField: subject, principalField: principal, activeField: active}
+    operations: [get, list]
+    readableFields: [subject, notice, clause, recipient, purpose, scope, decision, effective-at, expires-at, channel]
+  - entity: __SUBJECT__-consent-link
+    rowBoundaries:
+    - {field: principal, claim: __CLAIM__, operator: equals}
+    operations: [get, list]
+    readableFields: [subject, active]
+  - entity: __SUBJECT__-privacy-notice
+    rowBoundaries: []
+    operations: [get, list]
+    readableFields: [notice-version, language, title, text, text-uri, controller-name, controller-contact, jurisdiction, legal-basis, rights-statement, rights-uri, withdrawal-method, published-at]
+  - entity: __SUBJECT__-notice-clause
+    rowBoundaries: []
+    operations: [get, list]
+    readableFields: [notice, recipient, purpose, scope, data-life, description]
+  - action: give-__SUBJECT__-consent
+    operations: [invoke]
+    targets:
+    - {entity: __SUBJECT__-consent-link, rowBoundaries: [{field: principal, claim: __CLAIM__, operator: equals}]}
+    - {entity: __SUBJECT__, rowBoundaries: []}
+    - {entity: __SUBJECT__-notice-clause, rowBoundaries: []}
+    - {entity: __SUBJECT__-consent-decision, rowBoundaries: []}
+    results: [decision]
+  - action: refuse-__SUBJECT__-consent
+    operations: [invoke]
+    targets:
+    - {entity: __SUBJECT__-consent-link, rowBoundaries: [{field: principal, claim: __CLAIM__, operator: equals}]}
+    - {entity: __SUBJECT__, rowBoundaries: []}
+    - {entity: __SUBJECT__-notice-clause, rowBoundaries: []}
+    - {entity: __SUBJECT__-consent-decision, rowBoundaries: []}
+    results: [decision]
+  - action: withdraw-__SUBJECT__-consent
+    operations: [invoke]
+    targets:
+    - {entity: __SUBJECT__-consent-link, rowBoundaries: [{field: principal, claim: __CLAIM__, operator: equals}]}
+    - {entity: __SUBJECT__, rowBoundaries: []}
+    - {entity: __SUBJECT__-notice-clause, rowBoundaries: []}
+    - {entity: __SUBJECT__-consent-decision, rowBoundaries: []}
+    results: [decision]
+- id: __SUBJECT__-consent-assisted-capture
+  principalClaim: __CLAIM__
+  requiredScopes: ['consent:__SUBJECT__:capture']
+  permissions:
+  - entity: __SUBJECT__-notice-clause
+    rowBoundaries: []
+    operations: [get, list]
+    readableFields: [notice, recipient, purpose, scope, data-life, description]
+  - action: record-__SUBJECT__-consent-assisted
+    operations: [invoke]
+    targets:
+    - {entity: __SUBJECT__, rowBoundaries: []}
+    - {entity: __SUBJECT__-notice-clause, rowBoundaries: []}
+    - {entity: __SUBJECT__-consent-decision, rowBoundaries: []}
+    results: [decision]
+- id: __SUBJECT__-consent-steward
+  principalClaim: __CLAIM__
+  requiredScopes: ['consent:__SUBJECT__:steward']
+  permissions:
+  - entity: __SUBJECT__-privacy-notice
+    rowBoundaries: []
+    operations: [create, get, list]
+    readableFields: [notice-version, language, title, text, text-uri, controller-name, controller-contact, jurisdiction, legal-basis, rights-statement, rights-uri, withdrawal-method, published-at]
+    writableFields: [notice-version, language, title, text, text-uri, controller-name, controller-contact, jurisdiction, legal-basis, rights-statement, rights-uri, withdrawal-method, published-at]
+  - entity: __SUBJECT__-notice-clause
+    rowBoundaries: []
+    operations: [create, get, list]
+    readableFields: [notice, recipient, purpose, scope, data-life, description]
+    writableFields: [notice, recipient, purpose, scope, data-life, description]
+  - entity: __SUBJECT__-consent-decision
+    rowBoundaries: []
+    operations: [get, list]
+    readableFields: [subject, link, notice, clause, recipient, purpose, scope, decision, effective-at, expires-at, channel, evidence, witness, invalidation-reason, source-reference]
+  - action: invalidate-__SUBJECT__-consent
+    operations: [invoke]
+    targets:
+    - {entity: __SUBJECT__, rowBoundaries: []}
+    - {entity: __SUBJECT__-consent-decision, rowBoundaries: []}
+    results: [decision]
+  - action: import-__SUBJECT__-consent
+    operations: [invoke]
+    targets:
+    - {entity: __SUBJECT__, rowBoundaries: []}
+    - {entity: __SUBJECT__-consent-decision, rowBoundaries: []}
+    results: [decision]
+- id: __SUBJECT__-consent-link-steward
+  principalClaim: __CLAIM__
+  requiredScopes: ['consent:__SUBJECT__:link']
+  permissions:
+  - entity: __SUBJECT__-consent-link
+    rowBoundaries: []
+    operations: [create, get, list, patch]
+    readableFields: [subject, principal, active]
+    writableFields: [subject, principal, active]
+- id: __SUBJECT__-consent-recipient
+  principalClaim: __CLAIM__
+  requiredScopes: ['consent:__SUBJECT__:read']
+  permissions:
+  - entity: __SUBJECT__-consent-decision
+    rowBoundaries:
+    - {field: recipient, claim: 'registry:recipients', operator: in}
+    operations: [get, list]
+    readableFields: [subject, recipient, purpose, scope, decision, effective-at, expires-at]

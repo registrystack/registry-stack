@@ -41,6 +41,7 @@ use serde_json::{json, Value};
 mod action_handler_test;
 mod apply_lifecycle;
 mod audit_lifecycle;
+mod consent_module;
 mod data_lifecycle;
 mod dev;
 mod doctor;
@@ -135,6 +136,8 @@ enum Command {
     Check(CheckArgs),
     /// Maintain deterministic authoring project metadata.
     Project(ProjectArgs),
+    /// Add generated modules to an authoring project.
+    Module(ModuleArgs),
     /// Write selected compiler artifacts to a new directory.
     Generate(GenerateArgs),
     /// Start or stop this project's retained local development services.
@@ -299,6 +302,43 @@ struct CheckArgs {
     /// Exit unsuccessfully when any authoring finding needs review, including access warnings.
     #[arg(long)]
     deny_findings: bool,
+}
+
+#[derive(Debug, Args)]
+struct ModuleArgs {
+    #[command(subcommand)]
+    command: ModuleCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ModuleCommand {
+    /// Write a generated module into the project and pin it in registry.yaml.
+    Add(ModuleAddArgs),
+}
+
+#[derive(Debug, Args)]
+struct ModuleAddArgs {
+    #[command(subcommand)]
+    module: ModuleAddCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ModuleAddCommand {
+    /// Add consent for one subject entity: the privacy notice, its clauses,
+    /// the principal link, the create-only consent decision, their self and
+    /// steward actions, and five access profiles. Prints the requireConsent
+    /// line that gates a permission on the decision.
+    Consent(ModuleAddConsentArgs),
+}
+
+#[derive(Debug, Args)]
+struct ModuleAddConsentArgs {
+    /// Entity whose rows consent decisions are about.
+    #[arg(long, value_name = "ENTITY")]
+    subject: String,
+    /// Base Registry Engine project directory.
+    #[arg(value_name = "PROJECT")]
+    project: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -1032,9 +1072,10 @@ struct SuccessReport {
     ok: bool,
     command: &'static str,
     profile: ProfileArg,
-    /// Absent only for `explain lifecycle`, the one report no project
-    /// produces. Every other command compiles a project and names its
-    /// revision here.
+    /// Absent for `explain lifecycle`, the one report no project produces,
+    /// and for a `module add consent` whose project compiles only once a
+    /// profile requires consent. Every other command compiles a project and
+    /// names its revision here.
     #[serde(skip_serializing_if = "Option::is_none")]
     revision: Option<String>,
     #[serde(serialize_with = "serialize_findings")]
@@ -1827,6 +1868,13 @@ where
                 Ok(report)
             }
         }),
+        Command::Module(args) => match args.command {
+            ModuleCommand::Add(args) => match args.module {
+                ModuleAddCommand::Consent(args) => {
+                    consent_module::add_consent_module(&args.project, &args.subject)
+                }
+            },
+        },
         Command::Project(args) => match args.command {
             ProjectCommand::Lock(args) => project_lock(&args.project, args.check),
             ProjectCommand::Migrate(args) => {
@@ -9468,6 +9516,10 @@ fn success_lead(report: &SuccessReport) -> String {
             report::counted(artifacts, "artifact")
         ),
         "generate" => format!("Generated {}.", report::counted(artifacts, "artifact")),
+        consent_module::COMMAND => format!(
+            "Added the consent module. {} written.",
+            report::counted(artifacts, "artifact")
+        ),
         // `explain lifecycle` is the one explain that compiles nothing, and
         // the absent revision is how the report says so.
         "explain" if report.revision.is_none() => {
