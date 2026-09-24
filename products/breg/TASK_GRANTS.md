@@ -127,3 +127,14 @@ package revision. The object also records the source issuer and grant deadline.
 It contains no subjects, bounds values or purpose value. BREG continues
 to record purpose presence separately. Later human review remains a separate
 actor, and the retained original grant continues to govern status checks.
+
+A request carrying a verified trusted actor records the same `authorization`
+object on the same records, with `actorKind: agent` and an `actorPseudonym`:
+the keyed pseudonym of `act.sub`, scoped to the package revision like the other
+identifiers. `principalPseudonym` then names the person the agent acts for and
+`clientPseudonym` the agent's client. A standing agent carries no grant, so its
+object has no grant, approver, source issuer or deadline. The raw actor
+identifier never reaches the journal. A task-grant token without `act` records
+exactly what it did before. Neither kind of token adds an `authorization`
+object to a pre-I/O attempt record, a read's terminal record, or an immediate
+action's terminal record.

@@ -18,11 +18,24 @@ use crate::postgres::{
     ExpectedRegistryIdentity, RegistryLockKey,
 };
 
-/// Verified grant context retained only for minimized, keyed audit projection.
+/// Verified task grant or delegated actor retained only for minimized, keyed
+/// audit projection.
 #[derive(Clone, Eq, PartialEq)]
 pub(crate) struct GrantAuditContext {
     actor_kind: registry_platform_oidc::ActorKind,
-    grant: registry_platform_oidc::GrantClaims,
+    authority: AuditedAuthority,
+}
+#[derive(Clone, Eq, PartialEq)]
+enum AuditedAuthority {
+    Grant {
+        grant: registry_platform_oidc::GrantClaims,
+        actor: Option<String>,
+    },
+    Delegated {
+        principal: String,
+        client: String,
+        actor: String,
+    },
 }
 impl std::fmt::Debug for GrantAuditContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -30,10 +43,25 @@ impl std::fmt::Debug for GrantAuditContext {
     }
 }
 impl GrantAuditContext {
+    /// Retains a task grant, a verified trusted actor, or both. A direct token
+    /// carrying neither yields nothing, so its audit is unchanged.
     pub(crate) fn from_claims(claims: &crate::api::VerifiedRequestClaims) -> Option<Self> {
+        let actor = claims.actor_subject().map(str::to_owned);
+        let authority = match (claims.grant(), actor) {
+            (Some(grant), actor) => AuditedAuthority::Grant {
+                grant: grant.clone(),
+                actor,
+            },
+            (None, Some(actor)) => AuditedAuthority::Delegated {
+                principal: claims.principal()?.to_owned(),
+                client: claims.requester_client()?.to_owned(),
+                actor,
+            },
+            (None, None) => return None,
+        };
         Some(Self {
             actor_kind: claims.actor_kind()?,
-            grant: claims.grant()?.clone(),
+            authority,
         })
     }
 
@@ -51,13 +79,38 @@ impl GrantAuditContext {
                 .audit_reference_hash(domain, scope, value)
                 .map_err(|_| RegistryAuditError::InvalidContext)
         };
+        let (principal, client, grant, actor) = match &self.authority {
+            AuditedAuthority::Grant { grant, actor } => (
+                grant.principal(),
+                grant.client(),
+                Some(grant),
+                actor.as_deref(),
+            ),
+            AuditedAuthority::Delegated {
+                principal,
+                client,
+                actor,
+            } => (
+                principal.as_str(),
+                client.as_str(),
+                None,
+                Some(actor.as_str()),
+            ),
+        };
         let event = AuthorizationAuditEvent::new(
             self.actor_kind.as_str(),
-            pseudonym("breg-principal-v1", self.grant.principal())?,
-            pseudonym("breg-client-v1", self.grant.client())?,
-            Some(pseudonym("breg-grant-v1", self.grant.id())?),
-            Some(pseudonym("breg-approver-v1", self.grant.approver())?),
-            self.grant.purpose(),
+            pseudonym("breg-principal-v1", principal)?,
+            pseudonym("breg-client-v1", client)?,
+            grant
+                .map(|grant| pseudonym("breg-grant-v1", grant.id()))
+                .transpose()?,
+            grant
+                .map(|grant| pseudonym("breg-approver-v1", grant.approver()))
+                .transpose()?,
+            // The shared event requires a purpose code. BREG removes it below
+            // and records only purpose presence, so a delegated token without
+            // a grant supplies a fixed code that never reaches the journal.
+            grant.map_or("delegated", |grant| grant.purpose()),
             operation,
             if allowed {
                 AuthorizationOutcome::Allowed
@@ -78,8 +131,14 @@ impl GrantAuditContext {
             .as_object_mut()
             .ok_or(RegistryAuditError::InvalidContext)?
             .remove("purpose");
-        value["sourceIssuer"] = json!(self.grant.source_issuer());
-        value["expiresAt"] = json!(self.grant.exp());
+        if let Some(grant) = grant {
+            value["sourceIssuer"] = json!(grant.source_issuer());
+            value["expiresAt"] = json!(grant.exp());
+        }
+        // The verified caller acting for the principal, never its raw subject.
+        if let Some(actor) = actor {
+            value["actorPseudonym"] = json!(pseudonym("breg-actor-v1", actor)?);
+        }
         Ok(value)
     }
 }
@@ -1037,5 +1096,121 @@ mod action_terminal_tests {
             action_terminal_record(terminal(TerminalAuditOutcome::Committed), "", &profile()),
             Err(RegistryAuditError::InvalidContext)
         );
+    }
+}
+
+#[cfg(test)]
+mod delegated_actor_audit_tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use super::*;
+    use crate::api::VerifiedRequestClaims;
+
+    const ACTOR: &str = "00000000-0000-4000-8000-0000000000aa";
+    const REVISION: &str = "package-revision";
+
+    fn profile() -> AuditProfile {
+        AuditProfile::production_from_secret_bytes(vec![9; 32].into()).unwrap()
+    }
+
+    fn claims(actor: Option<&str>) -> VerifiedRequestClaims {
+        VerifiedRequestClaims::authenticated(
+            "sub",
+            "citizen-subject",
+            BTreeSet::new(),
+            Some("citizen-self-service".to_owned()),
+            BTreeMap::new(),
+        )
+        .unwrap()
+        .with_contextual_authority(
+            Some(registry_platform_oidc::ActorKind::Agent),
+            Some("agent-client".to_owned()),
+            actor.map(str::to_owned),
+            None,
+            BTreeMap::new(),
+        )
+        .unwrap()
+    }
+
+    fn terminal(grant: Option<GrantAuditContext>, outcome: TerminalAuditOutcome) -> TerminalAudit {
+        TerminalAudit {
+            grant,
+            outcome,
+            method: HttpMethod::Post,
+            operation_id: "records.correction-request.create".to_owned(),
+            entity_id: Some("correction-request".to_owned()),
+            action_id: None,
+            package_revision: REVISION.to_owned(),
+            selected_access_profile: "standing-agent".to_owned(),
+            purpose_present: true,
+            principal_reference: None,
+            record_reference: None,
+            record_revision: Some(1),
+            result_count: None,
+            field_set_reference: None,
+            correlation: RequestCorrelation::breg_created(),
+        }
+    }
+
+    #[test]
+    fn delegated_actor_is_recorded_as_a_keyed_pseudonym_with_its_kind() {
+        let profile = profile();
+        let hasher = profile.key_hasher();
+        let context = GrantAuditContext::from_claims(&claims(Some(ACTOR)))
+            .expect("a verified trusted actor is retained for audit");
+        for (outcome, expected) in [
+            (TerminalAuditOutcome::Committed, "allowed"),
+            (TerminalAuditOutcome::Refused, "denied"),
+        ] {
+            let record = terminal_record(terminal(Some(context.clone()), outcome), &profile)
+                .expect("delegated terminal record");
+            let authorization = &record["authorization"];
+            assert_eq!(
+                authorization["actorPseudonym"],
+                hasher
+                    .audit_reference_hash("breg-actor-v1", REVISION, ACTOR)
+                    .unwrap()
+            );
+            assert_eq!(
+                authorization["principalPseudonym"],
+                hasher
+                    .audit_reference_hash("breg-principal-v1", REVISION, "citizen-subject")
+                    .unwrap()
+            );
+            assert_eq!(
+                authorization["clientPseudonym"],
+                hasher
+                    .audit_reference_hash("breg-client-v1", REVISION, "agent-client")
+                    .unwrap()
+            );
+            assert_eq!(authorization["actorKind"], "agent");
+            assert_eq!(authorization["outcome"], expected);
+            for absent in [
+                "grantPseudonym",
+                "approverPseudonym",
+                "sourceIssuer",
+                "expiresAt",
+                "purpose",
+            ] {
+                assert!(authorization.get(absent).is_none(), "{absent} is absent");
+            }
+            let rendered = Value::Object(record).to_string();
+            for raw in [
+                ACTOR,
+                "citizen-subject",
+                "agent-client",
+                "citizen-self-service",
+            ] {
+                assert!(!rendered.contains(raw), "audit must not contain {raw}");
+            }
+        }
+    }
+
+    #[test]
+    fn direct_token_without_grant_or_actor_records_no_authorization() {
+        assert!(GrantAuditContext::from_claims(&claims(None)).is_none());
+        let record = terminal_record(terminal(None, TerminalAuditOutcome::Committed), &profile())
+            .expect("direct terminal record");
+        assert!(!record.contains_key("authorization"));
     }
 }

@@ -195,6 +195,17 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg/src/api/tests/immediate_action_tests.rs;
     products/breg/TASK_GRANTS.md. */}
 
+- BReg's audit journal records the agent behind a delegated request. A
+  request carrying a trusted `act` writes the shared `authorization` object
+  on its refusal, mutation, and request lifecycle records, with actor kind
+  `agent` and a keyed `actorPseudonym` scoped to the package revision beside
+  the principal and client pseudonyms. The raw actor identifier is never
+  stored, and task-grant records without `act` are unchanged.
+
+{/* Evidence: crates/registry-breg/src/audit.rs, GrantAuditContext;
+    crates/registry-breg/tests/postgres_task_grants.rs;
+    products/breg/TASK_GRANTS.md. */}
+
 - BREAKING: BReg refuses to compile an access profile with a `taskGrant`
   that holds `apply_request`, with
   `access_profile.task_grant.operation_forbidden`. Applying a reviewed
