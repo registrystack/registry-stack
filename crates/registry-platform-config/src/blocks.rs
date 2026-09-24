@@ -455,6 +455,10 @@ pub fn is_sha256_label(value: &str) -> bool {
     })
 }
 
+/// The longest `listener.bind` text accepted. A socket address parser accepts
+/// any number of leading zeroes in the port, so the text is bounded first.
+pub const MAX_LISTENER_BIND_CHARACTERS: usize = 128;
+
 /// A listener socket address written `host:port`, with an IP literal host
 /// (`[addr]:port` for IPv6).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -483,12 +487,16 @@ impl FromStr for ListenerBind {
 impl<'de> Deserialize<'de> for ListenerBind {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = String::deserialize(deserializer)?;
-        value.parse().map_err(|_| {
-            serde::de::Error::custom(
-                "listener.bind must be host:port with an IP address host, such as \
+        let bounded = value.chars().count() <= MAX_LISTENER_BIND_CHARACTERS;
+        bounded
+            .then(|| value.parse().ok())
+            .flatten()
+            .ok_or_else(|| {
+                serde::de::Error::custom(
+                    "listener.bind must be host:port with an IP address host, such as \
                  127.0.0.1:8080 or [::1]:8080",
-            )
-        })
+                )
+            })
     }
 }
 
@@ -502,7 +510,8 @@ impl schemars::JsonSchema for ListenerBind {
         schemars::json_schema!({
             "description": "Socket address the runtime listens on, written host:port with an IP address host ([addr]:port for IPv6).",
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": MAX_LISTENER_BIND_CHARACTERS
         })
     }
 }

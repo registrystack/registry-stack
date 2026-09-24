@@ -306,6 +306,7 @@
     },
     "ListenerBind": {
       "description": "Socket address the runtime listens on, written host:port with an IP address host ([addr]:port for IPv6).",
+      "maxLength": 128,
       "minLength": 1,
       "type": "string"
     },
