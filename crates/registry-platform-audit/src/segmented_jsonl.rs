@@ -32,6 +32,10 @@ const MAX_AUDIT_LINE_BYTES: usize = 1024 * 1024;
 pub struct SegmentedAuditSummary {
     pub segments: usize,
     pub records: usize,
+    /// The `prev_hash` the first retained record chains onto: `None` for a
+    /// chain retained from its first record, and the archived head for a
+    /// chain whose earliest sealed segments were moved away.
+    pub start_prev_hash: Option<[u8; 32]>,
     pub last_hash: Option<[u8; 32]>,
     pub first_sequence: Option<u64>,
     pub last_sequence: Option<u64>,
@@ -609,7 +613,9 @@ pub fn segmented_audit_paths(path: &Path) -> Result<Vec<PathBuf>, AuditError> {
 /// Verify all sealed history and, when no writer is running, the active segment.
 ///
 /// A missing sequence inside the retained sealed range is reported distinctly.
-/// An archived prefix is allowed and identified by `first_sequence`.
+/// An archived prefix is allowed and identified by `first_sequence`: the first
+/// retained record then chains onto the archived head, which is reported as
+/// `start_prev_hash` for the caller to compare with the head it holds.
 pub fn verify_segmented_audit_chain(
     path: &Path,
     hasher: &AuditChainHasher,
@@ -635,7 +641,13 @@ pub fn verify_segmented_audit_chain(
         }
     }
 
-    let mut head = None;
+    // Sequence one opens the chain. A later first sequence follows an
+    // archived prefix, so its first record's own link is the starting head.
+    let start_prev_hash = match sealed.first() {
+        Some((sequence, first)) if *sequence > 1 => first_prev_hash(first, hasher)?,
+        _ => None,
+    };
+    let mut head = start_prev_hash;
     let mut records = 0usize;
     let mut segments = 0usize;
     for (_, path) in &sealed {
@@ -659,6 +671,7 @@ pub fn verify_segmented_audit_chain(
     Ok(SegmentedAuditSummary {
         segments,
         records,
+        start_prev_hash,
         last_hash: head,
         first_sequence,
         last_sequence,
@@ -862,6 +875,7 @@ pub fn visit_stopped_segmented_audit_chain(
     Ok(SegmentedAuditSummary {
         segments,
         records,
+        start_prev_hash: None,
         last_hash: head,
         first_sequence: sealed.first().map(|(sequence, _)| *sequence),
         last_sequence: sealed.last().map(|(sequence, _)| *sequence),
@@ -947,6 +961,19 @@ fn current_tail_hash(path: &Path) -> Result<Option<[u8; 32]>, AuditError> {
     };
     let envelope = parse_envelope_strict(line.trim_end_matches('\n'))?;
     Ok(Some(envelope.record_hash))
+}
+
+/// The `prev_hash` of the first record in a sealed segment, read only after
+/// that record verifies under the key.
+fn first_prev_hash(path: &Path, hasher: &AuditChainHasher) -> Result<Option<[u8; 32]>, AuditError> {
+    let mut reader = BufReader::new(open_sealed(path)?);
+    let Some(line) = read_bounded_jsonl_line(&mut reader)? else {
+        return Err(AuditError::Io(io::Error::new(
+            ErrorKind::InvalidData,
+            "sealed audit segment holds no records",
+        )));
+    };
+    Ok(verify_one_line(line.trim_end_matches('\n'), hasher)?.start_prev_hash)
 }
 
 fn verify_one_line(
@@ -1499,6 +1526,40 @@ mod tests {
             verify_segmented_audit_chain(&path, &hasher),
             Err(AuditError::SegmentMissing { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn an_archived_prefix_verifies_from_the_archived_head() {
+        let (_directory, path, hasher) = fixture();
+        {
+            let sink = DurableSegmentedJsonlSink::open(&path, 450).expect("sink opens");
+            let chain = ChainState::bootstrap_or_start_empty(&sink, hasher.clone())
+                .await
+                .expect("chain starts");
+            for index in 0..12 {
+                chain
+                    .append(&sink, json!({"index": index, "padding": "x".repeat(160)}))
+                    .await
+                    .expect("record appends");
+            }
+        }
+        let complete = verify_segmented_audit_chain(&path, &hasher).expect("chain verifies");
+        assert_eq!(complete.start_prev_hash, None);
+        let segments = sealed_segments(&path).expect("segments enumerate");
+        assert!(segments.len() >= 2);
+        let archived = fs::read_to_string(&segments[0].1).expect("first segment reads");
+        let archived_records = archived.lines().count();
+        let archived_head = verify_one_line(archived.lines().last().unwrap(), &hasher)
+            .expect("archived tail verifies")
+            .last_hash;
+        fs::remove_file(&segments[0].1).expect("archive the first segment");
+
+        let summary =
+            verify_segmented_audit_chain(&path, &hasher).expect("retained chain verifies");
+        assert_eq!(summary.first_sequence, Some(2));
+        assert_eq!(summary.start_prev_hash, archived_head);
+        assert_eq!(summary.last_hash, complete.last_hash);
+        assert_eq!(summary.records, complete.records - archived_records);
     }
 
     #[tokio::test]

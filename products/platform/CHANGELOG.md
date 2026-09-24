@@ -19,6 +19,11 @@
   the system roots for that connection alone, without a process-wide trust
   store change.
 
+- Verify a segmented audit chain whose earliest sealed segments were archived
+  from the head it continues, instead of refusing it as a fork. The first
+  retained record's link is reported as `start_prev_hash` so a caller can
+  compare it with the head it retained at archive time.
+
 ## v0.34.0 - 2026-09-25
 
 - The shared platform crates have no user-visible changes in this release.
