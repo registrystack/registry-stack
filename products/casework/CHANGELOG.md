@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- `caseworkctl source add --apply` compares the source description and the
+  runtime binding before refusing either, and the refusal now says how to
+  recover. It names each file that differs from what the run would write and
+  why:
+  - the description pins another `sourceRevision`;
+  - `casework.yaml` pairs a different set of request entities, for example
+    one becoming two, which moves `v1alpha1` to `v1alpha2`;
+  - the binding was hand edited.
+
+  It prints the exact recovery commands: move each file to a `.previous`
+  copy, then repeat the same `source add --apply`. A lifecycle hook or
+  `casework-reader` permission in the BReg `registry.yaml` that differs from
+  the regenerated one is refused with the entity named. The refusal says to
+  remove that fragment and repeat `source add --apply`. Nothing is replaced
+  automatically.
 - `caseworkctl check` and `caseworkctl source add` refuse a source-context
   review kind whose `displaySchema` the imported source description proves
   would reject what the source discloses, which hides the review task from
