@@ -6,9 +6,9 @@ use registry_casework::{
     PolicyPackageManifest, PostgresStore, RuntimeConfig, POLICY_PACKAGE_MANIFEST_FILE,
 };
 use registry_casework_core::{
-    AttemptSettlement, AttemptSettlementReport, CaseworkProject, ReviewContextStrategy,
-    ReviewKindPurpose, SourcePolicy, SourceRequestPolicy, SourceRetentionReport,
-    SourceRetentionSelector,
+    AttemptSettlement, AttemptSettlementReport, AttemptUncertainMarking,
+    AttemptUncertainMarkingReport, CaseworkProject, ReviewContextStrategy, ReviewKindPurpose,
+    SourcePolicy, SourceRequestPolicy, SourceRetentionReport, SourceRetentionSelector,
 };
 use registry_platform_config::{SecretError, SecretProvider, SecretReference, SecretResolver};
 use serde_json::{json, Value};
@@ -1090,6 +1090,45 @@ fn attempt_settlement_output(
     })
 }
 
+pub(super) fn attempt_mark_uncertain(
+    project: &Path,
+    runtime_config: Option<&Path>,
+    marking: AttemptUncertainMarking,
+    apply: bool,
+) -> Result<Value> {
+    let selected = load_runtime(project, runtime_config)?;
+    let config = &selected.config;
+    let resolver = secret_resolver(config).context("configuring Casework secret providers")?;
+    let store = PostgresStore::connect_migration(&config.database, &resolver)
+        .context("the Casework migration database configuration is invalid")?;
+    let runtime = async_runtime()?;
+    let report = if apply {
+        runtime.block_on(store.mark_expired_attempt_uncertain(&marking))
+    } else {
+        runtime.block_on(store.preview_attempt_uncertain_marking(&marking))
+    }
+    .context("marking the Casework source attempt uncertain")?;
+    Ok(attempt_uncertain_marking_output(
+        &selected.workspace,
+        &selected.runtime_config,
+        report,
+    ))
+}
+
+fn attempt_uncertain_marking_output(
+    project: &Path,
+    runtime_config: &Path,
+    report: AttemptUncertainMarkingReport,
+) -> Value {
+    json!({
+        "ok": true,
+        "command": "attempt mark-uncertain",
+        "project": project,
+        "runtimeConfig": runtime_config,
+        "report": report,
+    })
+}
+
 fn runtime_config_path(project: &Path, requested: Option<&Path>) -> PathBuf {
     requested
         .map(Path::to_path_buf)
@@ -1400,6 +1439,103 @@ mod tests {
         assert_eq!(output["report"]["clockOccurrences"], 11);
         assert_eq!(output["report"]["clockPreviews"], 12);
         assert_eq!(output["report"].as_object().unwrap().len(), 14);
+    }
+
+    /// The operator permission is the migration database credential: the
+    /// runtime credential alone reaches no attempt.
+    #[test]
+    fn attempt_mark_uncertain_without_the_migration_credential_refuses_before_the_database() {
+        use std::os::unix::fs::PermissionsExt as _;
+        const RUNTIME_URL: &str = "postgresql://runtime-only@127.0.0.1:1/casework";
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("casework.yaml"), CASEWORK_YAML).unwrap();
+        fs::create_dir(directory.path().join("sources")).unwrap();
+        fs::write(
+            directory.path().join("sources/professional-licences.json"),
+            BREG_SOURCE_DESCRIPTION,
+        )
+        .unwrap();
+        fs::write(
+            directory.path().join("runtime.yaml"),
+            runtime_example(directory.path(), true).unwrap(),
+        )
+        .unwrap();
+        let secrets = directory.path().join("secrets");
+        fs::create_dir(&secrets).unwrap();
+        fs::set_permissions(&secrets, fs::Permissions::from_mode(0o700)).unwrap();
+        let runtime_url = secrets.join("runtime-database-url");
+        fs::write(&runtime_url, RUNTIME_URL).unwrap();
+        fs::set_permissions(&runtime_url, fs::Permissions::from_mode(0o600)).unwrap();
+
+        for apply in [false, true] {
+            let error = attempt_mark_uncertain(
+                directory.path(),
+                None,
+                AttemptUncertainMarking {
+                    attempt_id: "7c9e6679-7425-40de-944b-e07fc1f90ae7".parse().unwrap(),
+                    reason: "The officer who started the attempt has left.".into(),
+                    decided_by: "Registrar duty officer".into(),
+                },
+                apply,
+            )
+            .unwrap_err();
+            let chain = format!("{error:#}");
+            assert!(
+                chain.contains("the Casework migration database configuration is invalid"),
+                "{chain}"
+            );
+            assert!(
+                chain.contains("secret:file/migration-database-url could not be resolved"),
+                "{chain}"
+            );
+            assert!(!chain.contains(RUNTIME_URL), "{chain}");
+        }
+    }
+
+    #[test]
+    fn attempt_uncertain_marking_output_names_both_parties() {
+        let attempt_id: uuid::Uuid = "7c9e6679-7425-40de-944b-e07fc1f90ae7".parse().unwrap();
+        let item_id: uuid::Uuid = "16fd2706-8baf-433b-82eb-8c7fada847da".parse().unwrap();
+        let output = attempt_uncertain_marking_output(
+            Path::new("/casework"),
+            Path::new("/casework/runtime.yaml"),
+            AttemptUncertainMarkingReport {
+                attempt_id,
+                item_id,
+                operation: registry_casework_core::OperationName::parse("approve").unwrap(),
+                binding_reference: "sha256:binding".into(),
+                original_actor: registry_casework_core::IssuerPrincipal {
+                    issuer: "https://issuer.test".into(),
+                    subject: "officer-1".into(),
+                },
+                original_profile_id: "staff".into(),
+                reason: "The officer who started the attempt has left.".into(),
+                decided_by: "Registrar duty officer".into(),
+                attempt_state: registry_casework_core::AttemptState::Uncertain,
+                item_state: registry_casework_core::OccurrenceState::Synchronizing,
+                applied: true,
+            },
+        );
+
+        assert_eq!(output["ok"], true);
+        assert_eq!(output["command"], "attempt mark-uncertain");
+        assert_eq!(output["runtimeConfig"], "/casework/runtime.yaml");
+        assert_eq!(
+            output["report"],
+            json!({
+                "attemptId": attempt_id,
+                "itemId": item_id,
+                "operation": "approve",
+                "bindingReference": "sha256:binding",
+                "originalActor": {"issuer": "https://issuer.test", "subject": "officer-1"},
+                "originalProfileId": "staff",
+                "reason": "The officer who started the attempt has left.",
+                "decidedBy": "Registrar duty officer",
+                "attemptState": "uncertain",
+                "itemState": "synchronizing",
+                "applied": true,
+            })
+        );
     }
 
     #[test]

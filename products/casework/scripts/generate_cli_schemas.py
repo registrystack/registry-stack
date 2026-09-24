@@ -29,6 +29,11 @@ REPORTS = {
         "required": ["project", "runtimeConfig", "report"],
         "properties": {"project": STRING, "runtimeConfig": STRING, "report": OBJECT},
     },
+    "AttemptUncertainMarkingReport": {
+        "command": "attempt mark-uncertain",
+        "required": ["project", "runtimeConfig", "report"],
+        "properties": {"project": STRING, "runtimeConfig": STRING, "report": OBJECT},
+    },
     "CheckReport": {
         "command": "check",
         "required": [

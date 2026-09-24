@@ -155,6 +155,21 @@ fn every_public_json_report_matches_its_schema() {
             ],
         ),
         (
+            "attempt mark-uncertain",
+            "AttemptUncertainMarkingReport",
+            vec![
+                "attempt",
+                "mark-uncertain",
+                missing.to_str().unwrap(),
+                "--attempt-id",
+                "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+                "--reason",
+                "contract fixture",
+                "--decided-by",
+                "contract test",
+            ],
+        ),
+        (
             "db migrate",
             "DatabaseMigrationReport",
             vec!["db", "migrate", missing.to_str().unwrap()],
@@ -232,7 +247,7 @@ fn every_public_json_report_matches_its_schema() {
     assert_eq!(exit, ExitCode::from(2));
     reports.push(("usage", "UsageReport", usage));
 
-    assert_eq!(reports.len(), 18);
+    assert_eq!(reports.len(), 19);
     for (label, kind, report) in reports {
         assert_matches_contract(label, kind, &report);
     }

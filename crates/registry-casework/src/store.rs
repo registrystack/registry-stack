@@ -5,13 +5,14 @@ use chrono::{DateTime, TimeDelta, Utc};
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use registry_casework_core::{
     transition, ActorContext, AssignmentContext, AttemptSettlement, AttemptSettlementOutcome,
-    AttemptSettlementReport, AttemptState, AttemptStatus, AuthoritativeObservation,
-    BootstrapDirectoryRequest, CaseworkRole, CorrectionRoutingCopy, DirectoryMember,
-    DirectoryResponse, DiscoveryCursor, Draft, DurableEvent, HistoryEntry, HistoryKind, InboxSort,
-    InboxView, IssuerPrincipal, OccurrenceEvent, OccurrenceKind, OccurrenceState, OperationName,
-    Page, PageStatus, PreparedSourceAttempt, SourceBinding, SourceReceipt, StaffingDiagnostic,
-    SubjectRef, TeamRecord, TransitionHint, WorkItem, WorkItemRouting,
-    MAXIMUM_SETTLEMENT_DECIDED_BY_BYTES, MAXIMUM_SETTLEMENT_REASON_BYTES,
+    AttemptSettlementReport, AttemptState, AttemptStatus, AttemptUncertainMarking,
+    AttemptUncertainMarkingReport, AuthoritativeObservation, BootstrapDirectoryRequest,
+    CaseworkRole, CorrectionRoutingCopy, DirectoryMember, DirectoryResponse, DiscoveryCursor,
+    Draft, DurableEvent, HistoryEntry, HistoryKind, InboxSort, InboxView, IssuerPrincipal,
+    OccurrenceEvent, OccurrenceKind, OccurrenceState, OperationName, Page, PageStatus,
+    PreparedSourceAttempt, SourceBinding, SourceReceipt, StaffingDiagnostic, SubjectRef,
+    TeamRecord, TransitionHint, WorkItem, WorkItemRouting, MAXIMUM_SETTLEMENT_DECIDED_BY_BYTES,
+    MAXIMUM_SETTLEMENT_REASON_BYTES,
 };
 use registry_platform_config::SecretResolver;
 use serde_json::{json, Value};
@@ -1612,6 +1613,135 @@ impl PostgresStore {
             }
             transaction.execute("UPDATE casework_subjects SET sync_pending=true WHERE source_id=$1 AND subject_kind=$2 AND subject_id=$3", &[&item.subject.source_id,&item.subject.kind,&item.subject.id]).await?;
         }
+        transaction.commit().await?;
+        report.applied = true;
+        Ok(report)
+    }
+
+    /// Preview an operator marking of one pending attempt as uncertain. The
+    /// preview takes the same locks and checks as the marking and writes nothing.
+    pub async fn preview_attempt_uncertain_marking(
+        &self,
+        marking: &AttemptUncertainMarking,
+    ) -> Result<AttemptUncertainMarkingReport, AttemptSettlementError> {
+        self.mark_pending_attempt_uncertain(marking, false).await
+    }
+
+    /// Mark one pending attempt whose execution lease has expired as uncertain
+    /// from an operator decision, for an attempt its original actor cannot
+    /// recover. The attempt, its work item, and the decision's history event,
+    /// which names the operator and the original actor, change in one
+    /// transaction.
+    pub async fn mark_expired_attempt_uncertain(
+        &self,
+        marking: &AttemptUncertainMarking,
+    ) -> Result<AttemptUncertainMarkingReport, AttemptSettlementError> {
+        self.mark_pending_attempt_uncertain(marking, true).await
+    }
+
+    async fn mark_pending_attempt_uncertain(
+        &self,
+        marking: &AttemptUncertainMarking,
+        apply: bool,
+    ) -> Result<AttemptUncertainMarkingReport, AttemptSettlementError> {
+        validate_settlement_text("reason", &marking.reason, MAXIMUM_SETTLEMENT_REASON_BYTES)?;
+        validate_settlement_text(
+            "decided-by",
+            &marking.decided_by,
+            MAXIMUM_SETTLEMENT_DECIDED_BY_BYTES,
+        )?;
+        let attempt_id = marking.attempt_id;
+        let mut client = self.client().await?;
+        let transaction = client.transaction().await?;
+        // The lease is read on the database clock, the clock recovery acquisition reads.
+        let row=transaction.query_opt("SELECT item_id,operation,state,displayed_binding,decision_reason,actor_issuer,actor_subject,casework_profile_id,execution_lease_until<=now() FROM casework_attempts WHERE attempt_id=$1 FOR UPDATE", &[&attempt_id]).await?.ok_or(AttemptSettlementError::NotFound)?;
+        let state = parse_attempt_state(&row.get::<_, String>(2))?;
+        if state != AttemptState::Pending {
+            return Err(AttemptSettlementError::NotPending(attempt_state_name(
+                state,
+            )));
+        }
+        if !row.get::<_, bool>(8) {
+            return Err(AttemptSettlementError::LeaseLive);
+        }
+        let item_id: Uuid = row.get(0);
+        let operation = parse_operation(&row.get::<_, String>(1))?;
+        let item_row = transaction
+            .query_one(
+                "SELECT * FROM casework_items WHERE item_id=$1 FOR UPDATE",
+                &[&item_id],
+            )
+            .await?;
+        let mut item = row_to_item(&item_row)?;
+        let item_state = transition(item.state, OccurrenceEvent::AttemptUncertain)
+            .map_err(|_| AttemptSettlementError::ItemNotSynchronizing(state_name(item.state)))?;
+        let displayed_binding: SourceBinding = serde_json::from_value(row.get(3))?;
+        let mut report = AttemptUncertainMarkingReport {
+            attempt_id,
+            item_id,
+            operation: operation.clone(),
+            binding_reference: binding_reference(&item.subject, &displayed_binding)?,
+            original_actor: IssuerPrincipal {
+                issuer: row.get(5),
+                subject: row.get(6),
+            },
+            original_profile_id: row.get(7),
+            reason: marking.reason.clone(),
+            decided_by: marking.decided_by.clone(),
+            attempt_state: AttemptState::Uncertain,
+            item_state,
+            applied: false,
+        };
+        if !apply {
+            transaction.rollback().await?;
+            return Ok(report);
+        }
+        let now = Utc::now();
+        // A fresh execution token fences any executor still holding the old one.
+        transaction.execute("UPDATE casework_attempts SET state='uncertain',execution_token=$2,execution_lease_until=now(),updated_at=$3 WHERE attempt_id=$1", &[&attempt_id,&Uuid::new_v4(),&now]).await?;
+        let next = item.revision + 1;
+        transaction
+            .execute(
+                "UPDATE casework_items SET state=$2,revision=$3,updated_at=$4 WHERE item_id=$1",
+                &[&item_id, &state_name(item_state), &next, &now],
+            )
+            .await?;
+        item.state = item_state;
+        item.revision = next;
+        item.updated_at = now;
+        transaction
+            .execute(
+                "UPDATE casework_attempts SET item_revision=$2 WHERE attempt_id=$1",
+                &[&attempt_id, &next],
+            )
+            .await?;
+        let mut history_detail = serde_json::Map::from_iter([
+            ("attemptId".to_owned(), json!(attempt_id)),
+            (
+                "bindingReference".to_owned(),
+                json!(report.binding_reference),
+            ),
+            ("operation".to_owned(), json!(operation.as_str())),
+            ("operatorReason".to_owned(), json!(marking.reason)),
+            ("decidedBy".to_owned(), json!(marking.decided_by)),
+            ("originalActor".to_owned(), json!(report.original_actor)),
+            (
+                "originalProfileId".to_owned(),
+                json!(report.original_profile_id),
+            ),
+        ]);
+        if let Some(reason) = row.get::<_, Option<String>>(4) {
+            history_detail.insert("reason".to_owned(), json!(reason));
+        }
+        append_item_event(
+            &transaction,
+            &item,
+            HistoryKind::AttemptUncertain,
+            None,
+            "system:operator",
+            Value::Object(history_detail),
+        )
+        .await?;
         transaction.commit().await?;
         report.applied = true;
         Ok(report)
@@ -3588,13 +3718,15 @@ fn map_unique_conflict(error: tokio_postgres::Error) -> StoreError {
     }
 }
 
-/// Why an operator settlement was refused.
+/// Why an operator settlement or uncertainty marking was refused.
 #[derive(Debug, Error)]
 pub enum AttemptSettlementError {
     #[error("no source attempt has this identifier")]
     NotFound,
     #[error("the source attempt is {0}; only an uncertain attempt can be settled")]
     NotUncertain(&'static str),
+    #[error("the source attempt is {0}; only a pending attempt can be marked uncertain")]
+    NotPending(&'static str),
     #[error("the source attempt still holds a live execution lease; wait for it to expire")]
     LeaseLive,
     #[error("the work item is {0}; only a work item awaiting its source outcome can be settled")]

@@ -5,9 +5,10 @@ use std::sync::Arc;
 use registry_casework::{AttemptSettlementError, DatabaseConfig, PostgresStore, StoreError};
 use registry_casework_core::{
     ActorContext, AttemptSettlement, AttemptSettlementOutcome, AttemptState,
-    AuthoritativeObservation, BootstrapDirectoryRequest, CaseworkRole, HistoryKind,
-    IssuerPrincipal, OccurrenceKind, OccurrenceState, OperationName, PreparedSourceAttempt,
-    RecoveryEvidence, SourceBinding, SourceReceipt, SubjectRef, TransitionHint,
+    AttemptUncertainMarking, AuthoritativeObservation, BootstrapDirectoryRequest, CaseworkRole,
+    HistoryKind, IssuerPrincipal, OccurrenceKind, OccurrenceState, OperationName,
+    PreparedSourceAttempt, RecoveryEvidence, SourceBinding, SourceReceipt, SubjectRef,
+    TransitionHint,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 
@@ -1370,6 +1371,8 @@ async fn retrying_an_audit_publication_preserves_its_original_timestamp() {
 const SETTLEMENT_REASON: &str =
     "The source refused the saved evidence version; the registrar confirmed no change was made.";
 const SETTLEMENT_DECIDED_BY: &str = "Registrar duty officer, ticket OPS-4411";
+const MARKING_REASON: &str =
+    "The officer who started the attempt has left; the source call outcome is unknown.";
 
 /// One claimed item whose only attempt is left live by its executor, the way
 /// a saved-evidence version the binary refuses leaves it.
@@ -1379,6 +1382,7 @@ struct SettlementFixture {
     holder: ActorContext,
     item_id: uuid::Uuid,
     attempt_id: uuid::Uuid,
+    execution_token: uuid::Uuid,
     binding_reference: String,
 }
 
@@ -1460,6 +1464,7 @@ async fn settlement_fixture(prefix: &str, mark_uncertain: bool) -> SettlementFix
         holder,
         item_id: claimed.item_id,
         attempt_id: attempt.attempt_id,
+        execution_token,
         binding_reference: claimed.binding_reference,
     }
 }
@@ -1470,6 +1475,14 @@ impl SettlementFixture {
             attempt_id: self.attempt_id,
             outcome,
             reason: SETTLEMENT_REASON.to_owned(),
+            decided_by: SETTLEMENT_DECIDED_BY.to_owned(),
+        }
+    }
+
+    fn marking(&self) -> AttemptUncertainMarking {
+        AttemptUncertainMarking {
+            attempt_id: self.attempt_id,
+            reason: MARKING_REASON.to_owned(),
             decided_by: SETTLEMENT_DECIDED_BY.to_owned(),
         }
     }
@@ -1888,6 +1901,291 @@ async fn a_settlement_needs_the_item_to_await_the_source_outcome() {
                 .settle_attempt(&fixture.settlement(outcome))
                 .await,
             Err(AttemptSettlementError::ItemNotSynchronizing("superseded"))
+        ));
+    }
+    assert_eq!(fixture.snapshot().await, before);
+}
+
+#[tokio::test]
+async fn an_operator_marks_an_expired_pending_attempt_uncertain_naming_both_parties() {
+    let fixture = settlement_fixture("mark_uncertain", false).await;
+    fixture.lapse_execution_lease().await;
+    let before = fixture
+        .store
+        .item(fixture.item_id)
+        .await
+        .expect("wedged item");
+    assert_eq!(before.state, OccurrenceState::Synchronizing);
+
+    let report = fixture
+        .store
+        .mark_expired_attempt_uncertain(&fixture.marking())
+        .await
+        .expect("a pending attempt with a lapsed lease is marked uncertain");
+    assert!(report.applied);
+    assert_eq!(report.attempt_id, fixture.attempt_id);
+    assert_eq!(report.item_id, fixture.item_id);
+    assert_eq!(report.operation.as_str(), "approve");
+    assert_eq!(report.binding_reference, fixture.binding_reference);
+    assert_eq!(report.original_actor, fixture.holder.principal);
+    assert_eq!(report.original_profile_id, "staff");
+    assert_eq!(report.reason, MARKING_REASON);
+    assert_eq!(report.decided_by, SETTLEMENT_DECIDED_BY);
+    assert_eq!(report.attempt_state, AttemptState::Uncertain);
+    assert_eq!(report.item_state, OccurrenceState::Synchronizing);
+
+    assert_eq!(fixture.attempt_row().await, ("uncertain".to_owned(), None));
+    let after = fixture
+        .store
+        .item(fixture.item_id)
+        .await
+        .expect("marked item");
+    assert_eq!(after.state, OccurrenceState::Synchronizing);
+    assert_eq!(after.revision, before.revision + 1);
+
+    let history = fixture
+        .store
+        .history(&fixture.holder, fixture.item_id, 100)
+        .await
+        .expect("history");
+    let marked: Vec<_> = history
+        .iter()
+        .filter(|event| event.kind == HistoryKind::AttemptUncertain)
+        .collect();
+    assert_eq!(marked.len(), 1, "one uncertainty event");
+    let marked = marked[0];
+    assert_eq!(marked.actor, None, "an operator decision has no actor");
+    assert_eq!(marked.profile_id, "system:operator");
+    assert_eq!(marked.item_revision, after.revision);
+    assert_eq!(
+        marked.detail,
+        serde_json::json!({
+            "attemptId": fixture.attempt_id,
+            "bindingReference": fixture.binding_reference,
+            "operation": "approve",
+            "operatorReason": MARKING_REASON,
+            "decidedBy": SETTLEMENT_DECIDED_BY,
+            "originalActor": {
+                "issuer": fixture.holder.principal.issuer,
+                "subject": fixture.holder.principal.subject,
+            },
+            "originalProfileId": "staff",
+        })
+    );
+    let durable = fixture
+        .client
+        .query_one(
+            "SELECT e.event_kind,e.detail,a.audit_record FROM casework_events e JOIN casework_audit_outbox a USING(event_id) WHERE e.event_id=$1",
+            &[&marked.event_id],
+        )
+        .await
+        .expect("the decision is a durable event with an audit record");
+    assert_eq!(durable.get::<_, String>(0), "attempt_uncertain");
+    assert_eq!(durable.get::<_, serde_json::Value>(1), marked.detail);
+    let audit: serde_json::Value = durable.get(2);
+    assert_eq!(audit["event"], "casework.attempt_uncertain");
+    assert_eq!(audit["itemRevision"], after.revision);
+    assert_eq!(audit["profileId"], "system:operator");
+    assert!(audit["actor"].is_null());
+
+    // The executor that held the lapsed lease can no longer finish the attempt.
+    let receipt = SourceReceipt {
+        source_revision: "2".to_owned(),
+        resulting_state: "approved".to_owned(),
+        binding: after.binding.clone(),
+        actor_reference: None,
+        metadata: BTreeMap::new(),
+    };
+    assert!(matches!(
+        fixture
+            .store
+            .complete_attempt(
+                &fixture.holder,
+                fixture.attempt_id,
+                fixture.execution_token,
+                &receipt
+            )
+            .await,
+        Err(StoreError::AttemptPending)
+    ));
+
+    // The attempt is now one the operator can settle.
+    fixture
+        .store
+        .settle_attempt(&fixture.settlement(AttemptSettlementOutcome::NotApplied))
+        .await
+        .expect("the uncertain attempt settles");
+}
+
+#[tokio::test]
+async fn an_unexpired_lease_refuses_marking_uncertain_and_writes_nothing() {
+    let fixture = settlement_fixture("mark_live_lease", false).await;
+    let before = fixture.snapshot().await;
+    assert!(matches!(
+        fixture
+            .store
+            .preview_attempt_uncertain_marking(&fixture.marking())
+            .await,
+        Err(AttemptSettlementError::LeaseLive)
+    ));
+    assert!(matches!(
+        fixture
+            .store
+            .mark_expired_attempt_uncertain(&fixture.marking())
+            .await,
+        Err(AttemptSettlementError::LeaseLive)
+    ));
+    assert_eq!(fixture.snapshot().await, before);
+}
+
+#[tokio::test]
+async fn only_a_pending_attempt_can_be_marked_uncertain() {
+    let uncertain = settlement_fixture("mark_uncertain_twice", true).await;
+    let before = uncertain.snapshot().await;
+    for result in [
+        uncertain
+            .store
+            .preview_attempt_uncertain_marking(&uncertain.marking())
+            .await,
+        uncertain
+            .store
+            .mark_expired_attempt_uncertain(&uncertain.marking())
+            .await,
+    ] {
+        assert!(matches!(
+            result,
+            Err(AttemptSettlementError::NotPending("uncertain"))
+        ));
+    }
+    assert_eq!(uncertain.snapshot().await, before);
+
+    uncertain
+        .store
+        .settle_attempt(&uncertain.settlement(AttemptSettlementOutcome::Applied))
+        .await
+        .expect("settlement");
+    let before = uncertain.snapshot().await;
+    assert!(matches!(
+        uncertain
+            .store
+            .mark_expired_attempt_uncertain(&uncertain.marking())
+            .await,
+        Err(AttemptSettlementError::NotPending("completed"))
+    ));
+    assert_eq!(uncertain.snapshot().await, before);
+
+    let unknown = AttemptUncertainMarking {
+        attempt_id: uuid::Uuid::new_v4(),
+        ..uncertain.marking()
+    };
+    assert!(matches!(
+        uncertain
+            .store
+            .mark_expired_attempt_uncertain(&unknown)
+            .await,
+        Err(AttemptSettlementError::NotFound)
+    ));
+    assert!(matches!(
+        uncertain
+            .store
+            .preview_attempt_uncertain_marking(&unknown)
+            .await,
+        Err(AttemptSettlementError::NotFound)
+    ));
+}
+
+#[tokio::test]
+async fn an_uncertainty_marking_preview_names_both_parties_and_writes_nothing() {
+    let fixture = settlement_fixture("mark_preview", false).await;
+    fixture.lapse_execution_lease().await;
+    let before = fixture.snapshot().await;
+    let preview = fixture
+        .store
+        .preview_attempt_uncertain_marking(&fixture.marking())
+        .await
+        .expect("preview");
+    assert!(!preview.applied);
+    assert_eq!(preview.original_actor, fixture.holder.principal);
+    assert_eq!(preview.original_profile_id, "staff");
+    assert_eq!(preview.decided_by, SETTLEMENT_DECIDED_BY);
+    assert_eq!(preview.attempt_state, AttemptState::Uncertain);
+    assert_eq!(preview.item_state, OccurrenceState::Synchronizing);
+    assert_eq!(fixture.snapshot().await, before);
+}
+
+#[tokio::test]
+async fn an_uncertainty_marking_needs_a_bounded_reason_and_decider() {
+    let fixture = settlement_fixture("mark_bounds", false).await;
+    fixture.lapse_execution_lease().await;
+    let before = fixture.snapshot().await;
+    let base = fixture.marking();
+    for (marking, field) in [
+        (
+            AttemptUncertainMarking {
+                reason: "   ".to_owned(),
+                ..base.clone()
+            },
+            "reason",
+        ),
+        (
+            AttemptUncertainMarking {
+                reason: "x".repeat(2_001),
+                ..base.clone()
+            },
+            "reason",
+        ),
+        (
+            AttemptUncertainMarking {
+                decided_by: "duty\nofficer".to_owned(),
+                ..base.clone()
+            },
+            "decided-by",
+        ),
+        (
+            AttemptUncertainMarking {
+                decided_by: "x".repeat(257),
+                ..base.clone()
+            },
+            "decided-by",
+        ),
+    ] {
+        for result in [
+            fixture
+                .store
+                .preview_attempt_uncertain_marking(&marking)
+                .await,
+            fixture.store.mark_expired_attempt_uncertain(&marking).await,
+        ] {
+            match result {
+                Err(AttemptSettlementError::Invalid { field: refused, .. }) => {
+                    assert_eq!(refused, field);
+                }
+                other => panic!("expected an invalid {field}, got {other:?}"),
+            }
+        }
+    }
+    assert_eq!(fixture.snapshot().await, before);
+}
+
+/// The HTTP recover route is the only non-operator path out of a pending
+/// attempt, and it stays bound to the actor who started the attempt.
+#[tokio::test]
+async fn no_caller_but_the_original_actor_can_recover_an_expired_pending_attempt() {
+    let fixture = settlement_fixture("mark_recovery_binding", false).await;
+    fixture.lapse_execution_lease().await;
+    let before = fixture.snapshot().await;
+    for caller in [
+        actor("supervisor", CaseworkRole::Supervisor, "supervisor"),
+        actor("officer-2", CaseworkRole::Staff, "staff"),
+        actor("admin", CaseworkRole::Administrator, "administrator"),
+        actor("officer-1", CaseworkRole::Supervisor, "supervisor"),
+    ] {
+        assert!(matches!(
+            fixture
+                .store
+                .acquire_recovery_execution(&caller, fixture.attempt_id)
+                .await,
+            Err(StoreError::AttemptPending)
         ));
     }
     assert_eq!(fixture.snapshot().await, before);

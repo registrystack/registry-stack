@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-20"
+last_reviewed: "2026-09-24"
 doc_type: how-to
 persona:
   - operator
@@ -16,7 +16,7 @@ standards_referenced: []
 You operate a running Registry Casework deployment, hold its migration database credential, and
 need to account for what the deployment keeps, remove the local payload copies a source owner has
 authorized you to remove, or close out a source attempt whose outcome Casework could not observe.
-Casework expires unified review state on its policy clocks and keeps source-backed work until you act. The two
+Casework expires unified review state on its policy clocks and keeps source-backed work until you act. The
 operator commands here each change one exact selection, take no copy first, and write nothing until
 you repeat them with `--apply`.
 
@@ -77,14 +77,14 @@ the key may be reused.
     IDEMPOTENCY_KEY_REUSED_PROBLEM;
     crates/registry-casework/src/problem.rs, IdempotencyExpired. */}
 
-## Before you run either command
+## Before you run these commands
 
-Run both commands on the operator host, where the secret root and the migration database
+Run these commands on the operator host, where the secret root and the migration database
 credential are readable. Each one loads `runtime.yaml` in the project directory unless you pass
 `--runtime-config`. That file's `package.root` selects the authored `casework.yaml`; inspect it
 before applying a command. Each connects with the migration credential, not the runtime credential.
 
-Both commands preview by default and write nothing until you repeat the exact invocation with
+Each command previews by default and writes nothing until you repeat the exact invocation with
 `--apply`. These examples use `--format json` so you can compare the exact selector, counts, and
 `applied` state in the preview and apply reports. A successful run
 exits 0. A refusal puts `{"ok": false}` with a diagnostic on standard output and exits 1 for an
@@ -250,7 +250,8 @@ may still be completing it; wait, then preview again. `the source attempt is com
 already has its outcome. Recover a pending attempt first: once its execution lease expires, the
 actor who started it calls `POST /v1/work-items/{itemId}/attempts/{attemptId}/recover` while the
 source is reachable. Recovery completes or refuses the attempt from the source's answer, and leaves
-it uncertain only when the source cannot give one; settle it only then. `no source attempt has this identifier` means the UUID names nothing in
+it uncertain only when the source cannot give one; settle it only then. When that actor cannot
+recover it, [mark it uncertain](#mark-a-stranded-pending-attempt-uncertain) first. `no source attempt has this identifier` means the UUID names nothing in
 this database. `the work item is claimed` (or another state) means the item is no longer awaiting
 its source outcome, so recovery or readback has already resolved it and no settlement is needed.
 
@@ -258,6 +259,48 @@ its source outcome, so recovery or readback has already resolved it and no settl
     settle_uncertain_attempt() and acquire_recovery_execution();
     crates/registry-casework/src/service.rs, recover();
     crates/registry-casework-core/src/model.rs, AttemptState and OccurrenceState. */}
+
+### Mark a stranded pending attempt uncertain
+
+Only the actor who started a pending attempt can recover it: the recover route is bound to that
+actor's issuer, subject, and Casework profile, and no Supervisor or Administrator can recover it in
+their place. When that actor cannot, because they left or their client is gone, the attempt stays
+pending and its work item stays synchronizing. Once the attempt's 330-second execution lease has
+expired, mark it uncertain and then settle it as above:
+
+```sh
+caseworkctl --format json attempt mark-uncertain /etc/registry-casework/package \
+  --runtime-config /etc/registry-casework/runtime.yaml \
+  --attempt-id "<attempt-id>" \
+  --reason "<why the actor who started it cannot recover it>" \
+  --decided-by "<who decided>"
+```
+
+The preview takes the same locks and runs the same checks as the marking, then rolls back. It
+reports `attemptId`, `itemId`, `operation`, `bindingReference`, the `originalActor` issuer and
+subject with their `originalProfileId`, your `reason` and `decidedBy`, and the `attemptState` and
+`itemState` the marking would produce, with `applied` still `false`. `--reason` and `--decided-by`
+carry the same limits as a settlement and land in the same work item history, so write them for
+the Staff members and Supervisors serving that queue.
+
+Repeat the run with `--apply`. One transaction moves the attempt to uncertain, writes a fresh
+execution token that fences the original executor out, leaves the work item synchronizing, and
+appends one `attempt_uncertain` history event with no actor. Its detail carries the attempt,
+binding reference, and operation, your text as `operatorReason` and `decidedBy`, and the
+`originalActor` and `originalProfileId`, so the history names both the operator's decider and the
+person whose attempt it was. The marking decides nothing about the source outcome and reaches no
+BReg instance: settle the attempt once the source owner confirms what the source did.
+
+`the source attempt still holds a live execution lease` means the lease has not expired yet; wait,
+then preview again. `the source attempt is uncertain; only a pending attempt can be marked
+uncertain` means the marking is not needed; settle the attempt. `completed` or `refused` in its
+place means the attempt already has its outcome. `the work item is claimed` (or another state)
+means the item no longer awaits its source outcome, so nothing is stranded.
+
+{/* Evidence: crates/registry-casework/src/store.rs, mark_expired_attempt_uncertain(),
+    preview_attempt_uncertain_marking(), and acquire_recovery_execution();
+    crates/registry-casework-core/src/attempt_settlement.rs, AttemptUncertainMarkingReport;
+    crates/registry-caseworkctl/src/project.rs, attempt_mark_uncertain(). */}
 
 ## Keep the audit file
 
@@ -322,7 +365,8 @@ sentinel lock beside the file.
 | `retention erase` refuses with `the requested resource was not found` | No local subject matches all three selector values. Confirm the source identifier, request kind, and request identifier with the source owner. |
 | A command inspects an unexpected Casework package | Check `package.root` in the selected runtime configuration and pass the intended `--runtime-config` file. |
 | `attempt settle` refuses with `the source attempt still holds a live execution lease` | A client acquired the attempt within the last 330 seconds. Wait for the lease to expire, then preview again. |
-| `attempt settle` refuses with `only an uncertain attempt can be settled` | The attempt is pending, completed, or refused. A terminal attempt already carries its outcome. Recover a pending one first: once its 330-second execution lease expires, the actor who started it calls `POST /v1/work-items/{itemId}/attempts/{attemptId}/recover` while the source is reachable. Settle only if recovery leaves it uncertain. |
+| `attempt settle` refuses with `only an uncertain attempt can be settled` | The attempt is pending, completed, or refused. A terminal attempt already carries its outcome. Recover a pending one first: once its 330-second execution lease expires, the actor who started it calls `POST /v1/work-items/{itemId}/attempts/{attemptId}/recover` while the source is reachable. Settle only if recovery leaves it uncertain. If that actor cannot recover it, mark it uncertain with `attempt mark-uncertain`, then settle it. |
+| `attempt mark-uncertain` refuses with `only a pending attempt can be marked uncertain` | An uncertain attempt needs no marking; settle it. A completed or refused attempt already carries its outcome. |
 | `attempt settle` refuses with `only a work item awaiting its source outcome can be settled` | Recovery or source readback already moved the item out of synchronizing. No settlement is needed. |
 | A review request disappeared from producer polling and the result feed | Its `terminalDays` period closed. The accountability record may still exist; an authorized Supervisor can resolve one event until `accountabilityDays` closes too. |
 | An exact retry returns `idempotency.expired` with HTTP 410 | The item payload expired and only a payload-free tombstone remains. Reconcile the original operation before choosing a new key. |

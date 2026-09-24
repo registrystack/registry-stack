@@ -556,6 +556,18 @@ records an `attempt_settled` history event with the attempt, binding reference,
 operation, outcome, reason, and decider, and no actor, in the same transaction
 as the state change. The command makes no BReg call.
 
+Only the actor who started a pending attempt can recover it. When that actor
+cannot, `caseworkctl attempt mark-uncertain PROJECT [--runtime-config FILE]
+--attempt-id UUID --reason TEXT --decided-by TEXT` previews marking the attempt
+uncertain under the same migration database authority, and `--apply` records
+it. Only a pending attempt whose execution lease has expired can be marked.
+Apply rotates the execution token to fence the original executor, leaves the
+work item synchronizing, and records an `attempt_uncertain` history event with
+no actor whose detail carries the attempt, binding reference, operation,
+`operatorReason`, `decidedBy`, `originalActor`, and `originalProfileId`. The
+marking decides no source outcome and makes no BReg call; settle the attempt
+afterwards.
+
 A validated refusal from the first BReg action attempt keeps its source class.
 Invalid action input returns `request.source-rejected`; a missing bound record
 returns `source.record-missing`; and a refused reviewer binding returns

@@ -38,7 +38,7 @@ model {
   }
   casework_cli = tool 'caseworkctl' {
     technology 'Authoring and operator CLI'
-    description 'Initializes, checks, explains, simulates, tests and packages projects. It previews and applies BReg source additions, applies Casework database migrations, checks deployed readiness, and previews or applies bounded retention and uncertain-attempt settlements. Its local development runtime can compose with a BReg development session and provides token and task-exchange helpers.'
+    description 'Initializes, checks, explains, simulates, tests and packages projects. It previews and applies BReg source additions, applies Casework database migrations, checks deployed readiness, and previews or applies bounded retention, stranded pending-attempt markings, and uncertain-attempt settlements. Its local development runtime can compose with a BReg development session and provides token and task-exchange helpers.'
     link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-caseworkctl/src/lib.rs 'CLI command surface'
   }
   casework_package = artifact 'Casework policy package' {

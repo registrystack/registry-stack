@@ -44,6 +44,17 @@
 - The BReg source adapter refuses a source request reported as `superseded`,
   a state BReg no longer defines. A BReg draft still projects as a superseded
   application occurrence.
+- Add `caseworkctl attempt mark-uncertain` for a pending source attempt the
+  actor who started it can no longer recover. Only that actor may call the
+  recover route, so such an attempt used to stay pending and hold its work item
+  in synchronizing with no way to settle it. The command connects with the
+  migration database credential, previews by default, and refuses an attempt
+  whose execution lease is still live or that is not pending. Apply moves the
+  attempt to uncertain, fences the original executor with a fresh execution
+  token, and records an `attempt_uncertain` history event naming the operator's
+  `decidedBy`, `operatorReason`, and the attempt's `originalActor` and
+  `originalProfileId`. Settle the attempt afterwards with `caseworkctl attempt
+  settle`. Its JSON report kind is `AttemptUncertainMarkingReport`.
 - Fix reconciliation failing on every pass after a package or source binding
   was rolled back to a value the deployment had already used (A, then B, then
   A). The returned-to binding derives the occurrence key of the item it left
