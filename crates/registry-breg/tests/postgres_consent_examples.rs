@@ -102,10 +102,11 @@ async fn land_registry_consent_journeys_run_through_the_authenticated_postgres_r
     fixture.finish().await;
 }
 
-/// Spec section 12: the self actions carry a subject target with empty row
-/// boundaries, so a self caller could probe whether a subject id exists if an
-/// unknown id answered differently from an existing subject the caller's link
-/// does not cover. Both must produce the same response.
+/// The self actions carry a subject target with empty row boundaries, so a
+/// self caller could probe whether a subject id exists if an unknown id
+/// answered differently from an existing subject the caller's link does not
+/// cover. An unknown subject and an existing subject outside the caller's
+/// link must be indistinguishable: both produce the same response.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn self_action_answers_an_unknown_subject_like_a_subject_its_link_does_not_cover() {
     let fixture = RunningFixture::start("consent-person-registry", &[]).await;
