@@ -15,6 +15,13 @@ entries:
       - {path: crates/registry-messaging-core/src/access.rs, name: a_client_in_two_profiles_is_refused}
       - {path: crates/registry-messaging/src/auth.rs, name: an_admitted_client_without_a_profile_is_not_authorized}
       - {path: crates/registry-messaging/src/http.rs, name: a_client_without_a_profile_or_scope_is_not_authorized}
+      - {path: crates/registry-messaging/src/http.rs, name: only_the_sender_role_submits_and_only_through_what_its_profile_lists}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_submission_outside_the_callers_role_or_profile_is_refused_before_the_store}
+  - id: MESSAGING-SEC-02
+    tests:
+      - {path: crates/registry-messaging-core/src/wire.rs, name: a_submission_is_closed_and_selects_exactly_one_content_source}
+      - {path: crates/registry-messaging/src/http.rs, name: a_submission_body_is_closed_and_needs_an_idempotency_key}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_submission_naming_an_unknown_member_is_refused_and_records_nothing}
   - id: MESSAGING-SEC-03
     tests:
       - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_production_provider_name_resolving_to_loopback_is_refused_before_connecting}
@@ -36,6 +43,19 @@ entries:
       - {path: crates/registry-messaging/src/auth.rs, name: a_client_the_deployment_does_not_admit_is_refused}
       - {path: crates/registry-messaging/src/auth.rs, name: an_exchanged_token_is_refused_when_no_authority_was_declared}
       - {path: crates/registry-messaging/tests/postgres_migrate.rs, name: a_served_runtime_is_ready_and_keeps_metrics_on_the_private_listener}
+      - {path: crates/registry-messaging/src/http.rs, name: a_message_route_reaches_the_store_only_for_an_identifier_a_message_can_carry}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_message_is_visible_to_its_submitter_and_an_operator_only}
+  - id: MESSAGING-SEC-05
+    tests:
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_stale_fence_cannot_finish_a_requeued_message}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: two_workers_never_send_one_message_twice}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_cancellation_racing_a_claim_has_one_winner}
+  - id: MESSAGING-SEC-06
+    tests:
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_hanging_send_is_cut_off_and_held_as_unknown}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_killed_worker_leaves_its_message_unknown_and_unsent_again}
+      - {path: crates/registry-messaging/src/dispatch.rs, name: a_transport_timeout_outside_one_to_sixty_seconds_is_refused}
+      - {path: crates/registry-messaging-core/src/package.rs, name: retrying_an_uncertain_send_needs_provider_deduplication_or_an_explicit_choice}
   - id: MESSAGING-SEC-09
     tests:
       - {path: crates/registry-messaging-core/src/render.rs, name: a_runaway_template_runs_out_of_fuel}

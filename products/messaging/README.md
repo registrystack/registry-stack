@@ -20,17 +20,26 @@ Pre-1.0 and under construction. This version is the product skeleton:
 - the package ledger: the runtime serves only the package digest
   `messagingctl apply` recorded, and a change applies on restart;
 - the unauthenticated `/health` and `/ready` routes, the authenticated
-  message status and template preview routes, and `/metrics` on a separate
-  private listener;
-- `messagingctl init`, `check`, `preview`, and `apply`;
+  message submission, status, cancel, and template preview routes, and
+  `/metrics` on a separate private listener;
+- message submission under a caller-scoped `Idempotency-Key`, rendered from
+  the active package at acceptance and recorded with its dispatch job and
+  acceptance audit in one transaction;
+- the dispatch worker on the platform PostgreSQL dispatch substrate: leased
+  claims whose outcome writes are fenced by the lease, retries bounded by the
+  sender profile's dispatch policy, quarantine of a message whose send may
+  have happened, and audit records written through an outbox the runtime
+  publishes to the journal;
+- `messagingctl init`, `check`, `preview`, `apply`, and `messages list`,
+  `show`, `retry`, `settle`, and `cancel`;
 - the Rust client for health and readiness;
 - the security invariant matrix, the problem catalog, and the generated
   OpenAPI and runtime schema.
 
-Submission, provider delivery, dispatch, callbacks, quotas, and retention
-arrive in later slices. Until the message store lands, the status route
-answers `message.not-visible` to every authenticated caller, which is the
-same answer it gives for a message the caller may not see.
+Provider delivery, provider egress, callbacks, quotas, and the retention
+sweep arrive in later slices. The `messaging` binary registers no provider
+transport yet, so the worker fails every message it claims with the attempt
+failure code `provider-unconfigured`, without a send, and logs a warning.
 
 ## Product boundary
 
@@ -84,7 +93,14 @@ a package change takes effect on restart after `apply --apply`. Every
 `messagingctl` command takes `--format human|json` and exits 0 on success, 1
 on a refusal, 2 on a usage error, and 3 when a file, secret, or database could
 not be reached. `MESSAGING_LOG` accepts `error`, `warn`, or
-`info` and nothing else. `RUNTIME-CONFIG.md` documents every key.
+`info` and nothing else.
+
+`messagingctl messages list` and `show` report messages with the recipient
+masked. `retry` requeues a failed message as a new generation,
+`settle --outcome sent|not-sent` resolves a message whose outcome is
+unknown, and `cancel` cancels a queued one. Each action previews without
+`--apply`, and an applied action writes its audit record into the outbox the
+running runtime publishes. `RUNTIME-CONFIG.md` documents every key.
 
 ## HTTP contract
 
@@ -95,7 +111,9 @@ never hand-edited.
 |---|---|---|
 | `GET /health` | none | `200` with an empty body while the process serves |
 | `GET /ready` | none | `200` when the database carries every expected migration, `503 service.unavailable` otherwise |
-| `GET /v1/messages/{message_id}` | bearer | `404 message.not-visible` |
+| `POST /v1/messages` | bearer, an access profile listing the sender profile and template, and an `Idempotency-Key` header | `202` with the message receipt; the same key and request answer the stored receipt again |
+| `GET /v1/messages/{message_id}` | bearer, the submitting profile or an operator | `200` with the status, the masked recipient, and the attempts; `404 message.not-visible` for any other message |
+| `POST /v1/messages/{message_id}/cancel` | bearer, the submitting profile or an operator | `200` with the cancelled status; `409 message.dispatch-started` once dispatch started, `409 message.terminal` once it is final |
 | `POST /v1/templates/{template_id}/versions/{version}/preview` | bearer, a sender profile listing the template | `200` with the rendered parts and the SMS segment count; persists nothing |
 | `GET /metrics` | metrics listener only | Prometheus text; never served on the public listener |
 
@@ -113,6 +131,8 @@ Every response carries a `traceparent` header. Problems are
 | `request.not-found` | 404 |
 | `request.method-not-allowed` | 405 |
 | `idempotency.key-reused` | 409 |
+| `message.dispatch-started` | 409 |
+| `message.terminal` | 409 |
 | `idempotency.expired` | 410 |
 | `request.body-too-large` | 413 |
 | `request.unsupported-media-type` | 415 |
@@ -142,13 +162,20 @@ MESSAGING_TEST_DATABASE_URL=<disposable database> cargo test --locked \
   -p registry-messaging --features postgres-test --test postgres_migrate
 MESSAGING_TEST_DATABASE_URL=<disposable database> cargo test --locked \
   -p registry-messaging --features postgres-test --test postgres_package
+MESSAGING_TEST_DATABASE_URL=<disposable database> cargo test --locked \
+  -p registry-messaging --features postgres-test --test postgres_messages
+MESSAGING_TEST_DATABASE_URL=<disposable database> cargo test --locked \
+  -p registry-messaging --features postgres-test --test postgres_dispatch
+MESSAGING_TEST_DATABASE_URL=<disposable database> cargo test --locked \
+  -p registry-messagingctl --features postgres-test --test postgres_messages_cli
 ```
 
 The checkpoint runs the database-free checks: dependency direction,
 database-suite isolation, the contract validator and its tests, the generated
 artifact drift test, `messagingctl init` against the published starter,
-`messagingctl check` over the starter, a pinned digest, and five refusals, and
-`messagingctl preview` byte stability. Each PostgreSQL suite works in its own schema inside the database the
+`messagingctl check` over the starter, a pinned digest, and five refusals,
+`messagingctl preview` byte stability, and `messagingctl messages` refusing a
+malformed id and an unreachable database. Each PostgreSQL suite works in its own schema inside the database the
 URL names and fails, rather than skipping, when the URL is absent. A test
 binary that skips because its database is absent is not database
 verification.

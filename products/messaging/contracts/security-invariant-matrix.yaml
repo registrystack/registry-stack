@@ -17,30 +17,26 @@ reviewRule: >-
   specification, no fewer.
 invariants:
   - id: MESSAGING-SEC-01
-    state: partial
+    state: enforced
     threat: >-
       A caller sends through a sender profile or template its access profile
       does not list, so one integration spends another program's sender
       identity or content, or an operator profile submits messages.
     enforcementPoint: >-
       The core's authorize_submission decision over the caller's resolved
-      access profile: the sender profile and the template must each be listed,
-      direct content needs the profile's explicit opt-in, and only the sender
-      role submits.
+      access profile, applied by POST /v1/messages after authentication and
+      before the store is reached: the sender profile and the template must
+      each be listed, direct content needs the profile's explicit opt-in, and
+      only the sender role submits.
     refusal: >-
       Refuse with profile.not-authorized for a sender profile, template, or
       direct content outside the profile, and with operation.not-authorized
       for an operator; accept nothing.
-    partialNote: >-
-      The decision is implemented and tested in the core. No submission route
-      exists yet: slice S3 wires POST /v1/messages to this decision and adds
-      the route-level negative test.
     negativeTest:
-      path: crates/registry-messaging-core/src/access.rs
-      name: a_submission_outside_the_callers_sender_profiles_or_templates_is_refused
+      path: crates/registry-messaging/src/http.rs
+      name: only_the_sender_role_submits_and_only_through_what_its_profile_lists
   - id: MESSAGING-SEC-02
-    state: pending
-    plannedSlice: S3
+    state: enforced
     threat: >-
       A request field chooses a provider endpoint, a credential, or a script,
       so a caller redirects a send or spends an operator credential.
@@ -51,9 +47,9 @@ invariants:
     refusal: >-
       Refuse any unknown request member with request.invalid before
       acceptance.
-    pendingNote: >-
-      No submission route exists until slice S3. The negative test proves the
-      schema is closed and an extra member is refused.
+    negativeTest:
+      path: crates/registry-messaging/tests/postgres_messages.rs
+      name: a_submission_naming_an_unknown_member_is_refused_and_records_nothing
   - id: MESSAGING-SEC-03
     state: partial
     threat: >-
@@ -71,36 +67,29 @@ invariants:
       provider whose name resolves to loopback, or whose address is private,
       shared, or metadata without an exact allowance, is refused at send
       before any connection, and the attempt is classified not sent and
-      transient. The worker that records that attempt lands with the rest of
-      slice S3.
+      transient. The worker records attempts through its transport seam, but
+      no provider kind is registered as a transport yet.
     negativeTest:
       path: crates/registry-messaging/src/http_provider/tests.rs
       name: a_production_provider_name_resolving_to_loopback_is_refused_before_connecting
   - id: MESSAGING-SEC-04
-    state: partial
+    state: enforced
     threat: >-
       A caller reads or cancels another caller's message, or learns whether a
       message identifier exists at all.
     enforcementPoint: >-
-      The core's check_message_visibility decision, applied on the status
-      route after authentication: only the submitter and operator profiles
-      see a message, and a missing message answers exactly like an invisible
-      one.
+      The core's check_message_visibility decision, applied on the status and
+      cancel routes after authentication against the stored submitter: only
+      the submitter and operator profiles see a message, and a missing message
+      answers exactly like an invisible one.
     refusal: >-
       Answer 404 message.not-visible to every other caller, whether or not the
       message exists.
-    partialNote: >-
-      The status route authenticates and applies the decision, and every
-      authenticated caller receives message.not-visible because no message
-      store exists yet. Slice S3 supplies the submitter lookup and the cancel
-      route, and adds the negative test where a second sender reads and
-      cancels a real message.
     negativeTest:
-      path: crates/registry-messaging-core/src/visibility.rs
-      name: another_caller_is_told_the_message_is_not_visible
+      path: crates/registry-messaging/tests/postgres_messages.rs
+      name: a_message_is_visible_to_its_submitter_and_an_operator_only
   - id: MESSAGING-SEC-05
-    state: pending
-    plannedSlice: S3
+    state: enforced
     threat: >-
       A worker whose lease was reaped finishes late and overwrites the outcome
       a newer worker recorded.
@@ -109,24 +98,32 @@ invariants:
       outcome write.
     refusal: >-
       Refuse the stale write and leave the newer outcome in place.
-    pendingNote: >-
-      Dispatch lands in slice S3 on the extracted platform dispatch core. The
-      negative test writes an outcome after the lease is reaped.
+    negativeTest:
+      path: crates/registry-messaging/tests/postgres_dispatch.rs
+      name: a_stale_fence_cannot_finish_a_requeued_message
   - id: MESSAGING-SEC-06
-    state: pending
-    plannedSlice: S3
+    state: partial
     threat: >-
       A send that may have reached the provider is retried, so a recipient
       receives the same message twice.
     enforcementPoint: >-
       The platform transport's delivery certainty: a failure after the
       request was written is maybe-sent, and a maybe-sent attempt moves to
-      unknown unless the sender profile opts into retry.
+      unknown unless the sender profile opts into retry, which the package
+      allows only over a provider that declares idempotentSubmit or a profile
+      that sets acceptDuplicates.
     refusal: >-
       Record unknown and never send again without an operator settle.
-    pendingNote: >-
-      Dispatch lands in slice S3. The negative test times out after the
-      request is written and proves no second send occurs.
+    partialNote: >-
+      The dispatcher holds every maybe-sent attempt, and every attempt its
+      transport's timeout cuts off, as unknown under the default hold policy,
+      and never sends it again on its own. Each provider kind classifies its
+      own failures after the request was written as maybe-sent; that
+      classification and its negative tests arrive with the provider kinds
+      wired to the dispatch transport seam.
+    negativeTest:
+      path: crates/registry-messaging/tests/postgres_dispatch.rs
+      name: a_hanging_send_is_cut_off_and_held_as_unknown
   - id: MESSAGING-SEC-07
     state: pending
     plannedSlice: S5
@@ -155,9 +152,9 @@ invariants:
       Nothing to refuse at the caller: the absence is the control, proven over
       the logs and audit of a full journey.
     pendingNote: >-
-      Slice S1 writes only the start record, which carries the version and
-      retention. The full-journey absence test lands in slice S6, once every
-      audited operation exists.
+      Each slice's suites prove the records and log lines its own operations
+      write carry no payload value. The full-journey absence test lands in
+      slice S6, once every audited operation exists.
   - id: MESSAGING-SEC-09
     state: enforced
     threat: >-

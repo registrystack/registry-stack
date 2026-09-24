@@ -52,18 +52,19 @@ must all be present on the token, or the caller is refused
 `403 profile.not-authorized`. An operation the caller's role does not carry,
 such as an operator submitting, is refused `403 operation.not-authorized`.
 
-- Submission (MESSAGING-SEC-01, partial): `authorize_submission` admits only
-  a sender profile whose `senderProfiles` and `templates` list the request's
-  choices, and direct content only where `allowDirectContent` is set.
-  Operators never submit (MESSAGING-DEC-04). The decision is tested in the
-  core; the submission route that calls it is pending until slice S3.
-- Visibility (MESSAGING-SEC-04, partial): `check_message_visibility` shows a
-  message to its submitting profile and to operator profiles only, and a
+- Submission (MESSAGING-SEC-01, enforced): `authorize_submission` admits
+  only a sender profile whose `senderProfiles` and `templates` list the
+  request's choices, and direct content only where `allowDirectContent` is
+  set. Operators never submit (MESSAGING-DEC-04). `POST /v1/messages` calls
+  it before the store is reached, on every request including a replay
+  (MESSAGING-DEC-07).
+- Visibility (MESSAGING-SEC-04, enforced): `check_message_visibility` shows
+  a message to its submitting profile and to operator profiles only, and a
   missing message answers exactly like an invisible one, `404
-  message.not-visible` (MESSAGING-DEC-01). The status route applies it today;
-  since no message store exists yet, every authenticated read answers
-  not-visible. The route-level test with a second sender reading and
-  cancelling a real message is pending until slice S3.
+  message.not-visible` (MESSAGING-DEC-01). The status and cancel routes both
+  apply it, and a malformed identifier answers the same way before the store
+  is consulted. The `postgres_messages` suite has a second sender read and
+  cancel a real message.
 
 ## Configuration and secrets
 
@@ -136,17 +137,35 @@ public listener.
 ## Audit
 
 The journal is the platform keyed hash-chained sink under `audit.path`, keyed
-by `audit.hashKeyRef`. In this version it records two events. The runtime
-start carries the runtime version, the package digest, and the retention
-periods in force. A template preview carries the access profile, a keyed
-pseudonym of the verified issuer and subject, the package digest, the
-template reference when the package ships it, and the outcome with its
-problem code; never the data, the rendered parts, or the raw subject. A
-preview the journal cannot record is answered `503 service.unavailable`, not
-rendered. An unauthenticated or unprofiled request is not journaled, as for
-every route (MESSAGING-DEC-02). Listeners bind before the start
-record is written, so a taken address never leaves a start record for a
-runtime that did not serve.
+by `audit.hashKeyRef`. The runtime start carries the runtime version, the
+package digest, and the retention periods in force. A template preview
+carries the access profile, a keyed pseudonym of the verified issuer and
+subject, the package digest, the template reference when the package ships
+it, and the outcome with its problem code; never the data, the rendered
+parts, or the raw subject. A preview the journal cannot record is answered
+`503 service.unavailable`, not rendered. An unauthenticated or unprofiled
+request is not journaled, as for every route (MESSAGING-DEC-02). Listeners
+bind before the start record is written, so a taken address never leaves a
+start record for a runtime that did not serve.
+
+A message's audit records are written into `messaging_audit_outbox` inside
+the transaction that makes the change, and the runtime's publisher appends
+them to the journal in outbox order. So an accepted message, a transition,
+an attempt, a quarantine, or a settlement is recorded if and only if it
+committed, and `messagingctl`, which never opens the journal, records its
+operator actions the same way (MESSAGING-DEC-13). The events are
+`messaging.message.accepted`, `messaging.dispatch.transition` with its actor
+(`caller`, `worker`, or `operator-tool`), `messaging.attempt.started`,
+`messaging.attempt.finished`, `messaging.message.quarantined`, and
+`messaging.message.settled`. A refused or replayed submission is journaled
+directly, as `messaging.message.refused` with its problem code or
+`messaging.message.replayed` with the message identifier. The records carry
+identifiers, classes, the principal pseudonym, and a keyed recipient
+reference; never a contact, a part, template data, or the provider's own
+message reference (MESSAGING-DEC-14).
+
+Reads are not journaled: the status route and `messagingctl messages list`
+and `show` leave no record. See the open questions below.
 
 ## Data minimization and log and audit absence (pending, slice S6)
 
@@ -157,14 +176,72 @@ contact. The full-journey absence test lands with slice S6. `MESSAGING_LOG`
 accepts only `error`, `warn`, or `info`, so no dependency's debug logging can
 be switched on by the environment.
 
-## Egress (pending, slice S3)
+## Submission and idempotency
 
-MESSAGING-SEC-02, -03, -05, and -06: a closed submission schema, provider
-egress through the platform fixed-destination substrate pinned after DNS, the
-lease fence on outcome writes, and no retry of a maybe-sent attempt unless the
-sender profile opts in. Provider egress for the HTTP provider kind is
-described in the next section; the rest does not exist yet, and the matrix
-names each test the slice owes.
+Threat: a caller smuggles a field the package did not review, replays a key
+to learn or alter another request, or has one request delivered twice.
+
+MESSAGING-SEC-02, enforced. The body is strict JSON (duplicate members
+refused) in a closed shape; an unknown member, a missing required member, or
+a malformed instant is `400 request.invalid`, and nothing is recorded. The
+`Idempotency-Key` header is required and bounded, and is scoped to the
+caller's issuer and subject, so a caller cannot probe another caller's keys.
+The request hash covers the canonical request body: the same key with
+another body is `409 idempotency.key-reused`, and a key older than
+`retention.submissionReceiptDays` is `410 idempotency.expired`. A replay is
+authorized and rendered again against the active package before the stored
+receipt is answered, so a key cannot outlive the caller's authority
+(MESSAGING-DEC-07). One transaction records the key, the message, its
+payload, its dispatch job, and the acceptance audit; concurrent submissions
+under one key produce exactly one message, which the `postgres_messages`
+suite proves.
+
+Tests: MESSAGING-SEC-01 and -02 in `contracts/security-test-traceability.yaml`.
+
+## Dispatch
+
+Threat: a worker that lost its lease overwrites the outcome another worker
+recorded, a send that may have reached the provider is sent again and the
+recipient gets it twice, or a cancel races a send.
+
+MESSAGING-SEC-05, enforced. The worker runs on
+`registry-platform-dispatch`: a claim takes a lease, and every outcome write
+names the lease and the generation, so a stale worker's write is refused
+and changes nothing. An operator requeue starts a new generation.
+
+MESSAGING-SEC-06, partial. A transport must finish within the attempt's
+budget; the worker stops waiting when it is spent and records the attempt as
+maybe sent (MESSAGING-DEC-10). A maybe-sent attempt, or a lease that lapsed
+mid-attempt, stops the message as `unknown` unless the sender profile set
+`onUncertain: retry`, which the package accepts only over a provider that
+declares `idempotentSubmit` or a profile that sets `acceptDuplicates`. A
+retry then carries the same provider idempotency key, derived from the
+message, its generation, and a digest of its content (MESSAGING-DEC-11). The
+row stays partial because the provider kinds, not the worker, decide
+whether a failure happened after the request was written.
+
+A cancel takes the job row's lock, so it and a claim serialize: a message is
+either cancelled before any attempt or refused `409 message.dispatch-started`
+(MESSAGING-DEC-09), which the `postgres_messages` race test proves across
+forty rounds. A message whose provider has no transport, or whose payload
+was erased, fails permanently without a send (MESSAGING-DEC-12).
+
+Tests: MESSAGING-SEC-05 and -06 in `contracts/security-test-traceability.yaml`
+and the `postgres_dispatch` suite.
+
+## Operator actions
+
+Threat: an operator tool changes a message without a record, or an operator
+changes one by mistake.
+
+`messagingctl messages retry`, `settle`, and `cancel` report the action and
+the status it would reach, and change nothing without `--apply`. Each checks
+the message's status in the same transaction that changes it, refuses with
+`message.not-eligible` or `message.changed` otherwise, and writes its
+`operator-tool` audit record into the outbox (MESSAGING-DEC-13). `list` and
+`show` mask the recipient and never print a part, template data, or the
+submitter's subject. `messagingctl` reaches the database only through the
+runtime configuration's credential references.
 
 ## HTTP provider egress (MESSAGING-SEC-03 partial)
 
@@ -216,15 +293,30 @@ metadata addresses; the substrate's own tests cover an answer that changes
 between resolutions. Scripts run on the async runtime thread within the send
 deadline. The OAuth token decoder is strict, so a token endpoint that returns
 members beyond `access_token`, `token_type`, and `expires_in` is refused and
-the send is transient. The worker that records the attempt, and the
-configuration loader that activates providers, land with the rest of slice
-S3.
+the send is transient. The configuration loader that activates providers,
+and the adapter that registers them as the worker's transport, are not wired
+yet.
 
 Tests: MESSAGING-SEC-03 in `contracts/security-test-traceability.yaml`, and
 the `http_provider/tests.rs` suite, including
 `secrets_are_absent_from_script_scope`,
 `a_script_header_outside_the_declared_allowlist_is_refused`, and
 `a_script_referring_to_anything_outside_its_arguments_fails`.
+
+## Open questions
+
+- Reads are not audited. The status route and `messagingctl messages list`
+  and `show` are unjournaled, and no test pins that choice. Either record it
+  as a decision with evidence or journal reads.
+- The specification's `dispatch` member of the message view is not served.
+- A malformed submission answers `400 request.invalid`, while the preview
+  route answers a malformed body `422 request.unprocessable`.
+- A payload may be erased `retention.payloadDays` after acceptance even when
+  the message still waits in a retry; MESSAGING-SEC-10 and the sweep must
+  decide how the two interact.
+- The `messaging` binary registers no transport, so every claimed message
+  fails `provider-unconfigured` until the SMTP and HTTP provider kinds are
+  wired in.
 
 ## Callbacks (pending, slice S5)
 

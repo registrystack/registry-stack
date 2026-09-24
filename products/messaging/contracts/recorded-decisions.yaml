@@ -12,8 +12,7 @@ decisions:
     decision: >-
       Every authenticated read of a message the caller may not see answers
       404 message.not-visible, and so does a read of a message that does not
-      exist. Until the message store lands, every authenticated read answers
-      that way.
+      exist. The cancel route answers a caller the same way.
     reasoning: >-
       A distinct not-found answer would let any authenticated caller probe
       which identifiers exist. One answer for both keeps the status route from
@@ -21,6 +20,7 @@ decisions:
     evidence:
       - {path: crates/registry-messaging-core/src/visibility.rs, name: a_missing_message_answers_exactly_like_an_invisible_one}
       - {path: crates/registry-messaging/src/http.rs, name: an_authenticated_caller_is_told_an_unknown_message_is_not_visible}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_message_is_visible_to_its_submitter_and_an_operator_only}
   - id: MESSAGING-DEC-02
     subject: Authentication refusals are counted, not audited
     decision: >-
@@ -95,3 +95,116 @@ decisions:
       - {path: crates/registry-messaging/tests/postgres_package.rs, name: the_runtime_refuses_a_package_the_ledger_does_not_name_active}
       - {path: crates/registry-messaging/tests/postgres_package.rs, name: a_pinned_digest_must_match_the_package_before_any_ledger_write}
       - {path: crates/registry-messaging/tests/postgres_package.rs, name: a_template_version_renders_the_same_bytes_across_a_package_upgrade}
+  - id: MESSAGING-DEC-07
+    subject: A replay is authorized and rendered again before its key is looked up
+    decision: >-
+      POST /v1/messages authorizes the caller, validates the body, and renders
+      the template on every request, including one that repeats an
+      idempotency key, and only then consults the key. An expired key answers
+      idempotency.expired before its request hash is compared, and a key is
+      scoped to the caller that used it.
+    reasoning: >-
+      A replay answered from the key alone would let a caller whose profile
+      lost a template keep sending it by repeating an old key, and would let
+      a different caller probe another caller's keys. The request hash covers
+      the canonical request body, so one key never stands for two different
+      requests.
+    evidence:
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_idempotency_key_replays_one_request_and_refuses_another}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: concurrent_submissions_under_one_key_record_one_message}
+  - id: MESSAGING-DEC-08
+    subject: The recipient is masked for every reader, the operator included
+    decision: >-
+      The message view names the recipient's kind and replaces the contact
+      with the literal redacted, for the submitter, for an operator on the
+      status route, and in messagingctl messages show. No read returns the
+      body or the template data.
+    reasoning: >-
+      The submitter already holds the contact, and an operator acts on
+      dispatch state, not on who was written to. One masked shape for every
+      reader keeps the status route from being a way to recover contacts,
+      and keeps the operator tool from printing them into a terminal log.
+    evidence:
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_message_is_visible_to_its_submitter_and_an_operator_only}
+      - {path: crates/registry-messagingctl/tests/postgres_messages_cli.rs, name: list_and_show_report_messages_with_the_contact_masked}
+  - id: MESSAGING-DEC-09
+    subject: Only a queued message cancels; unknown answers dispatch-started
+    decision: >-
+      Cancellation applies to a queued message only. A message being sent,
+      submitted to its provider, or in an unknown outcome answers 409
+      message.dispatch-started, and one in any other final state answers 409
+      message.terminal.
+    reasoning: >-
+      An unknown outcome may already have reached the recipient, so calling
+      it cancelled would tell the caller something nobody knows. The operator
+      settles it instead.
+    evidence:
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_queued_message_cancels_once_and_a_claimed_one_does_not}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_cancellation_racing_a_claim_has_one_winner}
+  - id: MESSAGING-DEC-10
+    subject: An attempt its timeout cuts off is maybe-sent, never transient
+    decision: >-
+      The dispatcher bounds every attempt by its transport's timeout, between
+      1 and 60 seconds, and records an attempt the timeout cuts off as
+      maybe-sent, which the default hold policy moves to unknown.
+    reasoning: >-
+      The dispatcher cannot tell whether a cut-off request reached the
+      provider. Treating it as transient would retry a send that may have
+      been delivered, which is the duplicate MESSAGING-SEC-06 exists to stop.
+    evidence:
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_hanging_send_is_cut_off_and_held_as_unknown}
+      - {path: crates/registry-messaging/src/dispatch.rs, name: a_transport_timeout_outside_one_to_sixty_seconds_is_refused}
+  - id: MESSAGING-DEC-11
+    subject: The provider idempotency key changes with the generation
+    decision: >-
+      The idempotency key a transport sends its provider is derived from the
+      message, its generation, and a digest of the rendered content, so every
+      attempt of one generation carries the same key and an operator requeue
+      starts a new one.
+    reasoning: >-
+      An operator who retries a failed message or settles an unknown one as
+      not sent is asking for another delivery; a provider that deduplicates
+      on the old key would silently drop it.
+    evidence:
+      - {path: crates/registry-messaging/src/dispatch.rs, name: the_provider_key_is_stable_per_generation_and_binds_the_content}
+  - id: MESSAGING-DEC-12
+    subject: A provider without a transport fails its messages permanently
+    decision: >-
+      A message whose provider has no transport registered in the running
+      binary is failed with the attempt failure code provider-unconfigured,
+      without a send, and a warning names the code. A message whose payload
+      retention already erased fails permanently with payload-erased, also
+      without a send.
+    reasoning: >-
+      Holding such a message queued would hide a deployment defect behind a
+      growing backlog. Failing it is visible in the status, the journal, and
+      the log, and an operator retries it once the provider is configured.
+    evidence:
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_message_for_an_unconfigured_provider_fails_without_a_send}
+  - id: MESSAGING-DEC-13
+    subject: Operator actions preview by default and journal through the outbox
+    decision: >-
+      messagingctl messages retry, settle, and cancel report what they would
+      do and change nothing unless --apply is given; an action the message is
+      not in the state for is refused either way. An applied action writes
+      its audit record into the outbox in the same transaction as the
+      change, attributed to the operator tool, and the running runtime
+      publishes it to the journal.
+    reasoning: >-
+      The journal has one writer, the runtime, so a second process appending
+      to it would fork its chain. The outbox keeps the change and its record
+      atomic and leaves publication with that one writer.
+    evidence:
+      - {path: crates/registry-messagingctl/tests/postgres_messages_cli.rs, name: actions_preview_by_default_and_change_the_message_only_with_apply}
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: operator_actions_preview_by_default_and_apply_on_request}
+  - id: MESSAGING-DEC-14
+    subject: The provider reference is never journaled
+    decision: >-
+      An attempt record says whether the provider returned a reference, and
+      the reference itself stays in the message store for receipt matching.
+    reasoning: >-
+      A provider reference is provider data that can be joined to the
+      provider's own logs, which carry the contact. The journal only needs to
+      know that one exists.
+    evidence:
+      - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: no_contact_content_data_or_credential_reaches_the_dispatch_journal_or_log}

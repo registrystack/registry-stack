@@ -26,6 +26,27 @@
 - Add the problems `template.not-found`, `template.data-invalid`,
   `template.locale-unavailable`, `template.render-refused`,
   `content.invalid`, `content.too-large`, and `content.too-many-segments`.
+- Add `POST /v1/messages`, which accepts one message under a caller-scoped
+  `Idempotency-Key`, renders it from the active package at acceptance, and
+  records the message, its dispatch job, and its acceptance audit in one
+  transaction. The same key and request answer the stored receipt again
+  after the caller is authorized and the message rendered again.
+- Serve `GET /v1/messages/{message_id}` from the message store and add
+  `POST /v1/messages/{message_id}/cancel`. Both answer only the submitting
+  access profile and operators, mask the recipient, and answer a message the
+  caller may not see exactly like one that does not exist.
+- Add the dispatch worker on the platform PostgreSQL dispatch substrate, with
+  lease-fenced outcome writes, retries bounded by the sender profile's
+  dispatch policy, a per-attempt time budget, and quarantine of a message
+  whose send may have happened unless its provider deduplicates or its sender
+  profile accepts duplicates. A provider without a transport fails its
+  messages with `provider-unconfigured`.
+- Write every message audit record into an outbox inside the transaction
+  that makes the change, published to the journal by the runtime.
+- Add `messagingctl messages list`, `show`, `retry`, `settle`, and `cancel`.
+  Actions preview unless `--apply` is given.
+- Add the problems `message.dispatch-started` and `message.terminal`, and the
+  provider `idempotentSubmit` flag.
 - Add `registry-messaging-client` with health and readiness.
 - Publish the security invariant matrix, the recorded decisions, and the
   problem catalog under `https://id.registrystack.org/problems/registry-messaging/`.

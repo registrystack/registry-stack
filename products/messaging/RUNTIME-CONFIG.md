@@ -93,9 +93,14 @@ the retention periods in force.
 | `recordDays` | 90 | `payloadDays` to 3650 |
 | `submissionReceiptDays` | 7 | 1 to `recordDays` |
 
-The start record carries the deployed values. The retention sweep that
-enforces them arrives with the message store; until then no message data
-exists to retain.
+The start record carries the deployed values. `submissionReceiptDays` is
+also the idempotency window: a submission repeating a key whose receipt is
+older is refused with `idempotency.expired`. Each accepted message records
+the time its payload may be erased, `payloadDays` after acceptance, and a
+submission whose `expiresAt` is already past or falls later is refused with
+`request.invalid`. The sweep that erases
+payloads and records when their periods end arrives in a later slice; until
+then nothing is erased.
 
 ## The package
 
@@ -128,13 +133,39 @@ templates:
   - {id: appointment-reminder, version: "1"}
 ```
 
-A provider declares only its `kind`, `smtp` or `http`; its endpoint and
-credentials are runtime configuration. A sender profile names its `channel`
+A provider declares its `kind`, `smtp` or `http`, and `idempotentSubmit`
+when it deduplicates submissions on the idempotency key the runtime sends;
+its endpoint and credentials are runtime configuration. A sender profile names its `channel`
 (`email` or `sms`), a declared provider that can carry it, and the `sender`
 identity. An SMS sender profile sets `maximumSegments`, from 1 to 10; a
 rendered SMS needing more segments is refused `422
 content.too-many-segments`. Each entry of `templates` names a version the
 package ships; a version is a label, so quote a numeric one.
+
+A sender profile also sets how the worker sends its messages. Each message
+keeps the policy its profile had when it was accepted:
+
+| Key | Default | Bounds |
+|---|---|---|
+| `retry.maximumAttempts` | 5 | 1 to 20 |
+| `retry.initialDelaySeconds` | 30 | at least 1 |
+| `retry.maximumDelaySeconds` | 3600 | `initialDelaySeconds` to 86400 |
+| `onUncertain` | `hold` | `hold` or `retry` |
+| `acceptDuplicates` | `false` | |
+| `defaultExpirySeconds` | 86400 | 60 to 2592000 |
+
+A send that definitely failed is retried with exponential backoff doubling
+from the initial delay up to the maximum, with jitter. A send that may have
+reached the provider, including one cut off by its time budget, stops the
+message as `unknown` under `hold` until an operator settles it with
+`messagingctl messages settle`. `retry` sends it again under the same
+provider idempotency key, and is accepted only when the profile's provider
+declares `idempotentSubmit: true`, meaning it deduplicates on that key, or
+the profile sets `acceptDuplicates: true`, the operator's choice that a
+duplicate is better than a missed message. A message whose request names no
+`expiresAt` expires `defaultExpirySeconds` after acceptance, or at
+`retention.payloadDays` if that comes first, and is not sent after it
+expires.
 
 ### Templates
 
