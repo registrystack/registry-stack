@@ -48,6 +48,7 @@ members = [
     "crates/registry-render",
     "crates/registry-breg-client",
     "crates/registry-breg-mcp",
+    "crates/registry-breg-review",
     "crates/registry-breg-client-node",
     "crates/registry-breg-client-py",
     "crates/registry-relay-http-contract",
@@ -183,6 +184,9 @@ ipnet = { version = "2" }
 # already holds in memory, so neither belongs in the dependency graph.
 jsonschema = { version = "0.18", default-features = false, features = ["draft202012"] }
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
+# Server-rendered pages only. Templates are compiled in, so no loader; the
+# builtin filters and a shared layout are wanted, debug and macros are not.
+minijinja = { version = "2.24", default-features = false, features = ["builtins", "multi_template", "serde"] }
 napi = { version = "3.12.0", features = ["async", "serde-json"] }
 napi-build = { version = "2.4.0" }
 napi-derive = { version = "3.6.2" }

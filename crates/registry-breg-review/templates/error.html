@@ -1,0 +1,6 @@
+{% extends "layout.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block main %}
+<h1 data-error-code="{{ code }}">{{ title }}</h1>
+<p>{{ message }}</p>
+{% endblock %}
