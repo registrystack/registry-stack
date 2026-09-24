@@ -486,6 +486,8 @@ async fn serve_available_result_authority(
 /// What the scripted result resource answers on its next lookup.
 #[derive(Clone, Copy)]
 enum ScriptedLookup {
+    Pending,
+    ConcealedOrUnknown,
     Failing,
     Approved,
 }
@@ -508,6 +510,12 @@ async fn scripted_review_result(
     assert_eq!(state.accepted["requestId"], request_id.to_string());
     let answer = *state.answer.lock().expect("scripted answer");
     match answer {
+        ScriptedLookup::Pending => {
+            (StatusCode::ACCEPTED, [("traceparent", TRACEPARENT)]).into_response()
+        }
+        ScriptedLookup::ConcealedOrUnknown => {
+            (StatusCode::NOT_FOUND, [("traceparent", TRACEPARENT)]).into_response()
+        }
         ScriptedLookup::Failing => (
             StatusCode::SERVICE_UNAVAILABLE,
             [("traceparent", TRACEPARENT)],
@@ -3719,7 +3727,7 @@ async fn expired_recovery_leaves_a_live_submission_lease_to_its_holder() {
 }
 
 #[tokio::test]
-async fn accepted_recovery_expiry_and_poll_exhaustion_become_terminal_preserving_binding() {
+async fn accepted_poll_exhaustion_becomes_terminal_preserving_binding_but_expiry_does_not() {
     let database = TestDatabase::create(2).await;
     database
         .admin
@@ -3805,23 +3813,26 @@ async fn accepted_recovery_expiry_and_poll_exhaustion_become_terminal_preserving
         .expect("read terminal accepted rows");
     assert_eq!(rows.len(), 2);
     for row in rows {
-        assert_eq!(row.get::<_, String>(1), "failed");
         let request_id: Uuid = row.get(0);
         let binding: Value = row
             .get::<_, Option<Value>>(2)
-            .expect("result give-up must preserve the accepted binding for late correlation");
+            .expect("an accepted row always retains its binding for late correlation");
         assert_eq!(
             binding["requestId"],
             Uuid::from_u128(request_id.as_u128() + 100).to_string()
         );
-        assert_eq!(
-            row.get::<_, String>(3),
-            if request_id == expired {
-                "result-recovery-expired"
-            } else {
-                "result-poll-attempts-exhausted"
-            }
-        );
+        if request_id == expired {
+            // The recovery deadline bounds submission replay, not the life of
+            // a review the authority accepted: only the poll budget ends it.
+            assert_eq!(row.get::<_, String>(1), "accepted");
+            assert_eq!(row.get::<_, Option<String>>(3), None);
+        } else {
+            assert_eq!(row.get::<_, String>(1), "failed");
+            assert_eq!(
+                row.get::<_, Option<String>>(3).as_deref(),
+                Some("result-poll-attempts-exhausted")
+            );
+        }
     }
 
     drop(pool);
@@ -3872,6 +3883,130 @@ async fn poll_scripted_result(
 }
 
 #[tokio::test]
+async fn a_review_the_authority_keeps_pending_outlives_the_poll_budget_and_recovery_deadline() {
+    let mut database = prepare_review_database().await;
+    let request_id = Uuid::from_u128(0xa1);
+    let accepted = seed_accepted_submission(&database, request_id, Uuid::from_u128(0xa2)).await;
+    // The review started long ago: the submission recovery deadline has
+    // passed and earlier lookups have nearly spent the attempt budget.
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET on_approved_mode='automatic',executor='automatic-applier',
+                    recovery_deadline=transaction_timestamp()-interval '1 second',
+                    result_poll_attempts=995
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("age the accepted review");
+    let (endpoint, script, server) =
+        serve_scripted_result_authority(accepted, ScriptedLookup::Failing).await;
+
+    // One transient lookup failure is recorded as operator attention.
+    make_result_poll_due(&database.admin, request_id).await;
+    assert!(matches!(
+        poll_scripted_result(&mut database, &endpoint).await,
+        Err(MutationError::Unavailable)
+    ));
+    let failed = database
+        .admin
+        .query_one(
+            "SELECT result_poll_attempts,last_error_code
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("failed lookup");
+    assert_eq!(failed.get::<_, i32>(0), 996);
+    assert_eq!(
+        failed.get::<_, Option<String>>(1).as_deref(),
+        Some("result-lookup-uncertain")
+    );
+
+    // The authority then keeps answering 202 for longer than the remaining
+    // budget. Each answer proves the endpoint works and the review is live.
+    script.answer(ScriptedLookup::Pending);
+    for _ in 0..10 {
+        make_result_poll_due(&database.admin, request_id).await;
+        assert!(poll_scripted_result(&mut database, &endpoint)
+            .await
+            .expect("pending result lookup succeeds"));
+    }
+    let pending = database
+        .admin
+        .query_one(
+            "SELECT state,result_poll_attempts,last_error_code,
+                    next_result_poll_at > transaction_timestamp()
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("pending review");
+    assert_eq!(pending.get::<_, String>(0), "accepted");
+    assert_eq!(
+        pending.get::<_, i32>(1),
+        12,
+        "a pending answer settles the poll count at the maximum-backoff step"
+    );
+    assert_eq!(pending.get::<_, Option<String>>(2), None);
+    assert!(pending.get::<_, bool>(3));
+
+    // The give-up sweep leaves the live review alone. The registry's
+    // authority has no reachable result feed, so the pass itself reports the
+    // authority unavailable after the sweep has run.
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let authorities = authority_registry("casework-a", "producer-a", "sender", "registry-a");
+    let pass = run_review_authority_once_for_test(&pool, &authorities).await;
+    let swept = database
+        .admin
+        .query_one(
+            "SELECT state,last_error_code
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("swept review");
+    assert_eq!(swept.get::<_, String>(0), "accepted");
+    assert_eq!(swept.get::<_, Option<String>>(1), None);
+    assert!(matches!(pass, Err(MutationError::Unavailable)));
+
+    // When the reviewer finally approves, the result reconciles and the
+    // automatic application is queued.
+    script.answer(ScriptedLookup::Approved);
+    make_result_poll_due(&database.admin, request_id).await;
+    assert!(poll_scripted_result(&mut database, &endpoint)
+        .await
+        .expect("available result reconciles"));
+    let reconciled = database
+        .admin
+        .query_one(
+            "SELECT r.status,j.state,j.executor,s.last_error_code
+               FROM registry_internal.registry_request_review_submissions s
+               JOIN registry_internal.registry_request_review_results r
+                 USING (request_entity_id,request_id,proposal_version)
+               JOIN registry_internal.registry_request_application_jobs j
+                 USING (request_entity_id,request_id,proposal_version)
+              WHERE s.request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("reconciled result and queued application");
+    assert_eq!(reconciled.get::<_, String>(0), "approved");
+    assert_eq!(reconciled.get::<_, String>(1), "queued");
+    assert_eq!(reconciled.get::<_, String>(2), "automatic-applier");
+    assert_eq!(reconciled.get::<_, Option<String>>(3), None);
+
+    drop(pool);
+    server.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test]
 async fn a_resolved_result_lookup_failure_leaves_no_error_on_the_reconciled_submission() {
     let mut database = prepare_review_database().await;
     let request_id = Uuid::from_u128(0xa3);
@@ -3910,6 +4045,72 @@ async fn a_resolved_result_lookup_failure_leaves_no_error_on_the_reconciled_subm
     );
     assert_eq!(row.get::<_, String>(2), "approved");
 
+    server.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_concealed_or_unknown_result_stream_still_exhausts_the_poll_budget() {
+    let mut database = prepare_review_database().await;
+    let request_id = Uuid::from_u128(0xa5);
+    let accepted = seed_accepted_submission(&database, request_id, Uuid::from_u128(0xa6)).await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET result_poll_attempts=997 WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("nearly spend the poll budget");
+    let (endpoint, _script, server) =
+        serve_scripted_result_authority(accepted, ScriptedLookup::ConcealedOrUnknown).await;
+
+    // An empty 404 is not evidence that the review is live, so it keeps
+    // counting toward the budget even well inside the recovery deadline.
+    for _ in 0..3 {
+        make_result_poll_due(&database.admin, request_id).await;
+        assert!(poll_scripted_result(&mut database, &endpoint)
+            .await
+            .expect("concealed result lookup completes"));
+    }
+    let counted: i32 = database
+        .admin
+        .query_one(
+            "SELECT result_poll_attempts
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("counted lookups")
+        .get(0);
+    assert_eq!(counted, 1000);
+
+    make_result_poll_due(&database.admin, request_id).await;
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+    let authorities = authority_registry("casework-a", "producer-a", "sender", "registry-a");
+    assert!(run_review_authority_once_for_test(&pool, &authorities)
+        .await
+        .expect("exhausted poll budget terminalizes the submission"));
+    let row = database
+        .admin
+        .query_one(
+            "SELECT state,last_error_code,accepted_binding IS NOT NULL
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("exhausted submission");
+    assert_eq!(row.get::<_, String>(0), "failed");
+    assert_eq!(
+        row.get::<_, Option<String>>(1).as_deref(),
+        Some("result-poll-attempts-exhausted")
+    );
+    assert!(row.get::<_, bool>(2));
+
+    drop(pool);
     server.abort();
     database.cleanup().await;
 }

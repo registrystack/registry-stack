@@ -18,6 +18,20 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+- BReg no longer fails an accepted review that the review authority still
+  reports as pending. A `202` from the result resource no longer spends the
+  result-poll attempt budget and clears an earlier `result-lookup-uncertain`,
+  and the submission recovery deadline no longer ends an accepted review, so
+  an approval that arrives days later is still reconciled and, in automatic
+  mode, applied. Failed lookups and empty `404` answers still exhaust the
+  budget as `result-poll-attempts-exhausted`, and a `410` still fails the
+  review as `result-expired`; BReg no longer reports
+  `result-recovery-expired`. See
+  [operate Base Registry Engine](../operate/breg/).
+
+{/* Evidence: crates/registry-breg/src/review_store.rs, poll_one_result and run_one;
+    crates/registry-breg/tests/postgres_review_executor.rs, a_review_the_authority_keeps_pending_outlives_the_poll_budget_and_recovery_deadline. */}
+
 - BReg clears a submission's recorded error when it reconciles the terminal
   review result, so the review projection of a settled review reports
   `recovery.state: none` instead of `operatorAttention` for a result lookup

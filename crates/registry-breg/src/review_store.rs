@@ -663,23 +663,20 @@ impl ReviewAuthorityRegistry {
         }
         // An accepted row whose result lookup keeps failing has no other give-up
         // path: it never returns to `pending`/`cancelling`, so without this sweep
-        // a permanently broken result endpoint would poll forever. The recovery
-        // deadline or the saturated poll-attempt budget bounds it the same way
-        // the sibling submission and cancellation sweeps bound theirs, and the
-        // binding is preserved for the same late-correlation reason as above.
+        // a permanently broken result endpoint would poll forever. Only the
+        // saturated poll-attempt budget bounds it. The recovery deadline bounds
+        // idempotent submission replay, not the life of a review the authority
+        // accepted: a review may stay pending for as long as the authority
+        // holds it, and a pending answer never spends this budget. The binding
+        // is preserved for the same late-correlation reason as above.
         if client
             .execute(
                 "UPDATE registry_internal.registry_request_review_submissions s
                     SET state='failed',lease_until=NULL,
-                        last_error_code=CASE
-                            WHEN s.recovery_deadline <= transaction_timestamp()
-                            THEN 'result-recovery-expired'
-                            ELSE 'result-poll-attempts-exhausted'
-                        END,
+                        last_error_code='result-poll-attempts-exhausted',
                         updated_at=transaction_timestamp()
                   WHERE s.state='accepted'
-                    AND (s.recovery_deadline <= transaction_timestamp()
-                         OR s.result_poll_attempts >= 1000)
+                    AND s.result_poll_attempts >= 1000
                     AND (s.lease_until IS NULL OR s.lease_until < transaction_timestamp())
                     AND NOT EXISTS (
                         SELECT 1 FROM registry_internal.registry_request_review_results r
@@ -2145,10 +2142,10 @@ pub async fn poll_one_result(
     {
         Ok(response) => response,
         Err(_) => {
-            // A failed lookup still leaves row-level evidence and consumes the
-            // same attempt budget a successful pending poll would, so an
-            // indefinitely failing endpoint is bounded by the recovery-deadline
-            // sweep in `run_one` instead of polling forever in silence.
+            // A failed lookup leaves row-level evidence and spends the give-up
+            // budget, so an indefinitely failing endpoint is bounded by the
+            // poll-attempt sweep in `run_one` instead of polling forever in
+            // silence.
             client
                 .execute(
                     "UPDATE registry_internal.registry_request_review_submissions
@@ -2178,10 +2175,36 @@ pub async fn poll_one_result(
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
         }
-        ReviewResultResponse::Pending { .. } | ReviewResultResponse::ConcealedOrUnknown { .. } => {
-            // The lease fence keeps a worker that lost its claim (expired
-            // lease, reclaimed row) from republishing a backoff over the
-            // new holder's schedule.
+        ReviewResultResponse::Pending { .. } => {
+            // A conforming 202 proves the result endpoint works and the
+            // authority still holds the review open, and the authority, not
+            // BReg, owns how long a review may take. So a pending answer
+            // never spends the give-up budget: it settles the count at the
+            // step where the backoff reaches its 60-second ceiling, which
+            // also forgives earlier failed lookups, and it clears the lookup
+            // error those failures recorded. The lease fence keeps a worker
+            // that lost its claim from republishing over the new holder.
+            client
+                .execute(
+                    "UPDATE registry_internal.registry_request_review_submissions
+                        SET result_poll_attempts=LEAST(result_poll_attempts+1,12),
+                            last_error_code=NULL,
+                            next_result_poll_at=transaction_timestamp()+
+                              (LEAST(60,5*LEAST(result_poll_attempts+1,12)) * interval '1 second'),
+                            updated_at=transaction_timestamp()
+                      WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
+                        AND state='accepted' AND lease_until=$4",
+                    &[&entity_id, &request_id, &version, &lease_until],
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+        }
+        ReviewResultResponse::ConcealedOrUnknown { .. } => {
+            // An empty 404 cannot tell a live review from a lost or concealed
+            // one, so it spends the give-up budget like a failed lookup. The
+            // lease fence keeps a worker that lost its claim (expired lease,
+            // reclaimed row) from republishing a backoff over the new
+            // holder's schedule.
             client
                 .execute(
                     "UPDATE registry_internal.registry_request_review_submissions
