@@ -8,6 +8,7 @@ import io
 import tarfile
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 
@@ -161,6 +162,35 @@ class AssetAuthenticationTest(unittest.TestCase):
             write_tar(asset, {**closed, library: b"different"})
             with self.assertRaisesRegex(Error, "conflicting"):
                 MODULE.install_asset(asset, "breg", destination)
+
+
+class SideTest(unittest.TestCase):
+    def test_delegating_tools_find_this_side_s_runtime_not_an_ambient_one(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            bin_dir = Path(temp) / "bin"
+            side = MODULE.Side("from", bin_dir, Path(temp) / "ca.pem")
+            ambient = {"EVIDENCE_BIN": "/elsewhere/evidence", "PATH": "/usr/bin"}
+            with unittest.mock.patch.dict(MODULE.os.environ, ambient):
+                env = side.env()
+            self.assertEqual(env["EVIDENCE_BIN"], str(bin_dir / "evidence"))
+            self.assertEqual(env["PATH"].split(MODULE.os.pathsep)[0], str(bin_dir))
+
+    def test_a_focused_run_needs_only_the_named_products_binaries(self) -> None:
+        self.assertEqual(MODULE.product_binaries(["evidence"]), ("evidence", "evidencectl"))
+        self.assertEqual(MODULE.product_binaries(list(MODULE.PRODUCTS)), MODULE.BINARIES)
+        assets = MODULE.asset_names("v0.33.0", "linux-amd64", ("evidence", "evidencectl"))
+        self.assertEqual(sorted(assets), ["evidence", "evidencectl"])
+        with tempfile.TemporaryDirectory() as temp:
+            bin_dir = Path(temp)
+            for binary in ("evidence", "evidencectl"):
+                script = bin_dir / binary
+                script.write_text(f"#!/bin/sh\necho '{binary} 0.33.0'\n", encoding="utf-8")
+                script.chmod(0o755)
+            side = MODULE.Side("from", bin_dir, bin_dir / "ca.pem")
+            versions = MODULE.check_binaries(side, "0.33.0", ("evidence", "evidencectl"))
+            self.assertEqual(sorted(versions), ["evidence", "evidencectl"])
+            with self.assertRaisesRegex(Error, "lack breg"):
+                MODULE.check_binaries(side, "0.33.0", MODULE.BINARIES)
 
 
 class StateComparisonTest(unittest.TestCase):

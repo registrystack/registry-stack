@@ -154,14 +154,21 @@ def check_forward_path(from_tag: str, version: str) -> None:
         raise RehearsalError(f"refusing {from_tag}: {FORWARD_PATH_EXCEPTION}")
 
 
-def asset_names(tag: str, platform: str) -> dict[str, str]:
+def product_binaries(products: list[str]) -> tuple[str, ...]:
+    """The runtime and tool binaries the named products' legs run."""
+
+    return tuple(binary for binary in BINARIES if binary.removesuffix("ctl") in products)
+
+
+def asset_names(tag: str, platform: str,
+                binaries: tuple[str, ...] = BINARIES) -> dict[str, str]:
     """Map each rehearsed binary to the release asset that carries it."""
 
     parse_tag(tag)
     if platform not in PLATFORMS:
         raise RehearsalError(f"unsupported platform {platform!r}")
     suffix = ".tar.gz" if platform == "macos-arm64" else ""
-    return {binary: f"{binary}-{tag}-{platform}{suffix}" for binary in BINARIES}
+    return {binary: f"{binary}-{tag}-{platform}{suffix}" for binary in binaries}
 
 
 def parse_sha256sums(text: str) -> dict[str, str]:
@@ -444,6 +451,10 @@ class Side:
         env = {key: value for key, value in os.environ.items()
                if not key.startswith(("DYLD_", "REGISTRY_", "CASEWORK_", "BREG_"))}
         env["SSL_CERT_FILE"] = str(self.ca_file)
+        # Tools that delegate to a runtime (evidencectl to evidence) must reach
+        # this side's binary, never one from the caller's environment.
+        env["EVIDENCE_BIN"] = self.path("evidence")
+        env["PATH"] = os.pathsep.join([str(self.bin_dir), env.get("PATH", os.defpath)])
         if sys.platform == "darwin":
             env["DYLD_FALLBACK_LIBRARY_PATH"] = str(self.bin_dir)
         return env
@@ -1324,14 +1335,15 @@ def published_tags() -> list[str]:
     return [entry["tagName"] for entry in json.loads(output)]
 
 
-def fetch_release(tag: str, platform: str, download: Path, bin_dir: Path) -> None:
+def fetch_release(tag: str, platform: str, download: Path, bin_dir: Path,
+                  binaries: tuple[str, ...]) -> None:
     """Download, authenticate, and install the previous release's binaries."""
 
     view = json.loads(run(["gh", "release", "view", tag, "--repo", REPOSITORY, "--json",
                            "isDraft,isPrerelease,tagName"]).stdout)
     if view != {"isDraft": False, "isPrerelease": False, "tagName": tag}:
         raise RehearsalError(f"{tag} is not a public, non-prerelease release")
-    assets = asset_names(tag, platform)
+    assets = asset_names(tag, platform, binaries)
     bundle = f"registry-stack-{tag}-SHA256SUMS.sigstore.json"
     private_directory(download)
     patterns = ["SHA256SUMS", bundle, *assets.values()]
@@ -1347,9 +1359,10 @@ def fetch_release(tag: str, platform: str, download: Path, bin_dir: Path) -> Non
         install_asset(download / asset, binary, bin_dir)
 
 
-def check_binaries(side: Side, expected_version: str | None) -> dict[str, str]:
+def check_binaries(side: Side, expected_version: str | None,
+                   binaries: tuple[str, ...]) -> dict[str, str]:
     versions = {}
-    for binary in BINARIES:
+    for binary in binaries:
         if not (side.bin_dir / binary).is_file():
             raise RehearsalError(f"{side.label} binaries lack {binary} in {side.bin_dir}")
         output = side.run(binary, "--version").stdout.strip()
@@ -1398,9 +1411,11 @@ def main(argv: list[str]) -> int:
         tls = work / "tls"
         report: dict[str, Any] = {"from": from_tag, "toWorkspaceVersion": version,
                                   "platform": args.platform}
+        products = args.product or list(PRODUCTS)
+        binaries = product_binaries(products)
         if args.from_bin_dir is None:
             from_bin = work / "from-bin"
-            fetch_release(from_tag, args.platform, work / "download", from_bin)
+            fetch_release(from_tag, args.platform, work / "download", from_bin, binaries)
             report["fromProvenance"] = "cosign and SHA256SUMS verified"
         else:
             from_bin = args.from_bin_dir.resolve()
@@ -1408,10 +1423,9 @@ def main(argv: list[str]) -> int:
             print(f"warning: {from_bin} is not authenticated as {from_tag}", file=sys.stderr)
         old = Side("from", from_bin, tls / "ca.pem")
         new = Side("to", args.to_bin_dir.resolve(), tls / "ca.pem")
-        report["fromVersions"] = check_binaries(old, from_tag[1:])
-        report["toVersions"] = check_binaries(new, None)
+        report["fromVersions"] = check_binaries(old, from_tag[1:], binaries)
+        report["toVersions"] = check_binaries(new, None, binaries)
         keys = Keys(work / "keys")
-        products = args.product or list(PRODUCTS)
         postgres = None
         try:
             if {"breg", "casework"} & set(products):
