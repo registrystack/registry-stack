@@ -1,0 +1,16 @@
+# Example HTTP provider package: an SMS provider that takes a form POST to
+# Messages.json, answers 201 with a message sid, and reports delivery through
+# a signed form callback. The package names no endpoint and no credential;
+# connection.example.yaml carries those for one environment.
+prepareScript: scripts/prepare.rhai
+interpretScript: scripts/interpret.rhai
+receiptScript: scripts/receipt.rhai
+request:
+  method: post
+capabilities:
+  receipts: callback
+  # The provider does not deduplicate submissions, so an uncertain send is
+  # never retried unless the sender profile accepts duplicates.
+  idempotentSubmit: false
+  concurrencyLimit: 16
+  ratePerSecond: 1

@@ -1,0 +1,14 @@
+# Example HTTP provider package for a generic JSON gateway that carries email
+# and SMS, deduplicates on an idempotency key, and reports delivery through a
+# signed JSON callback. Local development points it at a loopback mock.
+prepareScript: scripts/prepare.rhai
+interpretScript: scripts/interpret.rhai
+receiptScript: scripts/receipt.rhai
+request:
+  method: post
+  headers: [idempotency-key, x-request-id]
+responseHeaders: [x-request-id]
+capabilities:
+  receipts: callback
+  idempotentSubmit: true
+  concurrencyLimit: 8

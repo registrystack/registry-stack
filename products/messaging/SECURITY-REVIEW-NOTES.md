@@ -162,8 +162,69 @@ be switched on by the environment.
 MESSAGING-SEC-02, -03, -05, and -06: a closed submission schema, provider
 egress through the platform fixed-destination substrate pinned after DNS, the
 lease fence on outcome writes, and no retry of a maybe-sent attempt unless the
-sender profile opts in. None of this exists yet; the matrix names each test
-the slice owes.
+sender profile opts in. Provider egress for the HTTP provider kind is
+described in the next section; the rest does not exist yet, and the matrix
+names each test the slice owes.
+
+## HTTP provider egress (MESSAGING-SEC-03 partial)
+
+Threat: a provider package or its connection sends a message, or a
+credential, to an address other than the provider the operator configured:
+an internal service, a metadata endpoint, a path outside the provider's API,
+or a header the runtime owns.
+
+The HTTP provider kind sends only through the platform fixed-destination
+substrate. The connection's `baseUrl` fixes the origin and a base path ending
+in `/`; it may not carry userinfo, a query, a fragment, an escape, or a dot
+segment, and plain `http` is accepted only to a loopback host. A production
+(`https`) provider's name is resolved by the substrate, which refuses a
+loopback, private, shared, link-local, or metadata address before connecting,
+unless
+the address falls in an exact `allowedPrivateCidrs` entry; the attempt is
+then not sent and transient. Redirects are never followed; a 3xx is
+classified like any other status. The OAuth token endpoint is a second fixed
+origin under the same address rules and the same scheme.
+
+The prepare script chooses only a relative target under the base path, the
+values of headers the package declares, and a JSON or form body that Rust
+serializes. A target that is absolute, rooted, protocol-relative, escaped,
+carries a fragment, or climbs out of the base path, and a header the package
+did not declare, is refused before anything is sent (`provider.request-refused`,
+permanent). A package may not declare a runtime-owned header such as
+`authorization`, `host`, `content-type`, or `cookie`, and an API key header
+may not also be script-writable.
+
+Credentials are `secret:` references resolved at activation. No script sees
+a credential, a reference, the base URL, or a runtime-owned header: prepare
+receives the rendered message and the sender profile, interpret the status,
+the package's allowlisted response headers, and the JSON body read within
+`maximumResponseBytes`, and receipt the callback's method, form, query, and
+JSON body. Every script runs with a fresh scope, an operation budget, the
+send deadline, and no `import`, `eval`, `print`, or `debug`; interpret and
+receipt output is refused above 64 KiB. A 2xx the interpret script cannot
+classify is `maybe-sent`, never accepted. Tracing records the stage, the HTTP
+status, the failure kind, and the outcome class only.
+
+`onUncertain: retry` is refused at startup unless the provider declares
+`idempotentSubmit` or the sender profile accepts duplicates
+(`check_uncertain_retry`); the check is exposed for the configuration loader
+to call.
+
+Residual risks: the test suite cannot inject a resolver, so it proves the
+refusal with a name that resolves to loopback and with literal private and
+metadata addresses; the substrate's own tests cover an answer that changes
+between resolutions. Scripts run on the async runtime thread within the send
+deadline. The OAuth token decoder is strict, so a token endpoint that returns
+members beyond `access_token`, `token_type`, and `expires_in` is refused and
+the send is transient. The worker that records the attempt, and the
+configuration loader that activates providers, land with the rest of slice
+S3.
+
+Tests: MESSAGING-SEC-03 in `contracts/security-test-traceability.yaml`, and
+the `http_provider/tests.rs` suite, including
+`secrets_are_absent_from_script_scope`,
+`a_script_header_outside_the_declared_allowlist_is_refused`, and
+`a_script_referring_to_anything_outside_its_arguments_fails`.
 
 ## Callbacks (pending, slice S5)
 

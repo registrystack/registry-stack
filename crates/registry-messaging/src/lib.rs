@@ -9,6 +9,7 @@ pub mod auth;
 pub mod config;
 pub mod environment;
 pub mod http;
+pub mod http_provider;
 pub mod metrics;
 pub mod package;
 pub mod runtime;

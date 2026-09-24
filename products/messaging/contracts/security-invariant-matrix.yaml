@@ -55,8 +55,7 @@ invariants:
       No submission route exists until slice S3. The negative test proves the
       schema is closed and an extra member is refused.
   - id: MESSAGING-SEC-03
-    state: pending
-    plannedSlice: S3
+    state: partial
     threat: >-
       A provider origin resolves, or is rebound, to a private, loopback, or
       metadata address, so the worker reaches an internal service.
@@ -67,10 +66,16 @@ invariants:
     refusal: >-
       Refuse the send before any byte leaves and record the attempt as not
       sent.
-    pendingNote: >-
-      Provider egress lands in slice S3 with the HTTP provider kind. The
-      negative test rebinds a provider origin to a private or metadata
-      address.
+    partialNote: >-
+      The HTTP provider kind sends only through the substrate: a production
+      provider whose name resolves to loopback, or whose address is private,
+      shared, or metadata without an exact allowance, is refused at send
+      before any connection, and the attempt is classified not sent and
+      transient. The worker that records that attempt lands with the rest of
+      slice S3.
+    negativeTest:
+      path: crates/registry-messaging/src/http_provider/tests.rs
+      name: a_production_provider_name_resolving_to_loopback_is_refused_before_connecting
   - id: MESSAGING-SEC-04
     state: partial
     threat: >-

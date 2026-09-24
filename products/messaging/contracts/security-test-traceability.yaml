@@ -15,6 +15,14 @@ entries:
       - {path: crates/registry-messaging-core/src/access.rs, name: a_client_in_two_profiles_is_refused}
       - {path: crates/registry-messaging/src/auth.rs, name: an_admitted_client_without_a_profile_is_not_authorized}
       - {path: crates/registry-messaging/src/http.rs, name: a_client_without_a_profile_or_scope_is_not_authorized}
+  - id: MESSAGING-SEC-03
+    tests:
+      - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_production_provider_name_resolving_to_loopback_is_refused_before_connecting}
+      - {path: crates/registry-messaging/src/http_provider/tests.rs, name: metadata_private_and_loopback_provider_addresses_are_refused_without_an_allowlist}
+      - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_private_network_allowance_must_be_an_exact_cidr_for_an_https_provider}
+      - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_provider_url_with_credentials_a_query_or_plain_http_to_a_remote_host_is_refused}
+      - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_script_target_outside_the_base_path_or_origin_is_refused}
+      - {path: crates/registry-messaging/src/http_provider/tests.rs, name: a_refused_connection_is_not_sent_and_transient}
   - id: MESSAGING-SEC-04
     tests:
       - {path: crates/registry-messaging-core/src/visibility.rs, name: another_caller_is_told_the_message_is_not_visible}
