@@ -19,6 +19,8 @@ use zeroize::Zeroizing;
 
 const MAXIMUM_BLOB_BYTES: u64 = crate::contract::MAX_ATTACHMENT_BYTES as u64;
 const MAXIMUM_CONTROL_BYTES: u64 = 16 * 1024;
+/// The longest one object-store request may run, body included.
+pub(crate) const MAXIMUM_TIMEOUT_MILLISECONDS: u64 = 60_000;
 
 /// Storage failures carry no URLs, object keys, credentials or backend responses.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
@@ -168,7 +170,7 @@ impl AttachmentStorageConfig {
             || !region
                 .bytes()
                 .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-            || !(100..=60_000).contains(&timeout_milliseconds)
+            || !(100..=MAXIMUM_TIMEOUT_MILLISECONDS).contains(&timeout_milliseconds)
         {
             return Err(AttachmentStorageError::InvalidConfiguration);
         }

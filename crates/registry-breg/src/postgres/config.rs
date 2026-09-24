@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{fmt, str::FromStr, time::Duration};
+use std::{fmt, str::FromStr, sync::OnceLock, time::Duration};
 
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 #[cfg(feature = "postgres-test")]
@@ -11,8 +11,40 @@ use tokio_postgres_rustls::MakeRustlsConnect;
 use super::{PostgresKernelError, Result};
 
 const MAX_POOL_SIZE: usize = 128;
-const MAX_POOL_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const MAX_POOL_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_CUSTOM_CA_DER_BYTES: usize = 1024 * 1024;
+/// The `application_name` a session reports when its process named none.
+const DEFAULT_APPLICATION_NAME: &str = "breg";
+
+/// The `application_name` every session this process opens reports in
+/// `pg_stat_activity`, fixed by the first configuration built or by
+/// [`set_application_name`], whichever comes first.
+static APPLICATION_NAME: OnceLock<&'static str> = OnceLock::new();
+
+/// Name every PostgreSQL session this process opens, so an operator reading
+/// `pg_stat_activity` tells the Registry server from its operator tooling.
+///
+/// Call it once, before the first connection configuration is built. A
+/// process that never calls it reports `breg`. A second, different name is
+/// refused rather than ignored, because configurations built before it would
+/// already carry the first.
+pub fn set_application_name(name: &'static str) -> Result<()> {
+    if *APPLICATION_NAME.get_or_init(|| name) == name {
+        Ok(())
+    } else {
+        Err(PostgresKernelError::Configuration(
+            "the PostgreSQL application name is already fixed for this process",
+        ))
+    }
+}
+
+/// Name the session unless the operator's connection URL already did, so a
+/// deployment that tells replicas apart by `application_name` keeps its name.
+fn name_session(postgres: &mut Config) {
+    if postgres.get_application_name().is_none() {
+        postgres.application_name(*APPLICATION_NAME.get_or_init(|| DEFAULT_APPLICATION_NAME));
+    }
+}
 
 /// Explicit PostgreSQL TLS policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -105,6 +137,7 @@ impl ConnectionConfig {
 
     pub fn require_tls_config(mut postgres: Config, pool_bounds: PoolBounds) -> Result<Self> {
         postgres.ssl_mode(SslMode::Require);
+        name_session(&mut postgres);
         if postgres.get_user().is_none() || postgres.get_dbname().is_none() {
             return Err(PostgresKernelError::Configuration(
                 "database configuration requires an explicit user and database",
@@ -132,6 +165,7 @@ impl ConnectionConfig {
     ) -> Result<Self> {
         let mut postgres = parse_connection(url)?;
         postgres.ssl_mode(SslMode::Require);
+        name_session(&mut postgres);
         if postgres.get_user().is_none() || postgres.get_dbname().is_none() {
             return Err(PostgresKernelError::Configuration(
                 "database configuration requires an explicit user and database",
@@ -163,6 +197,7 @@ impl ConnectionConfig {
     #[cfg(feature = "postgres-test")]
     pub fn from_test_config(mut postgres: Config, pool_bounds: PoolBounds) -> Result<Self> {
         postgres.ssl_mode(SslMode::Disable);
+        name_session(&mut postgres);
         if postgres.get_user().is_none() || postgres.get_dbname().is_none() {
             return Err(PostgresKernelError::Configuration(
                 "test database configuration requires an explicit user and database",
@@ -173,6 +208,35 @@ impl ConnectionConfig {
             transport: Transport::TestOnlyPlaintext,
             pool_bounds,
         })
+    }
+
+    /// Bound how long a session may sit idle inside an open transaction
+    /// before the server ends it, rolling the transaction back.
+    ///
+    /// The bound travels as a connection-start option rather than a `SET`, so
+    /// it is the session's default: a recycled pool session keeps it, and so
+    /// does one that runs `RESET ALL` or `DISCARD ALL`. It is appended after
+    /// any options the connection URL carries, so it takes precedence over an
+    /// operator value for the same setting. It is never
+    /// `idle_session_timeout`: a session holding a session-level advisory lock
+    /// between transactions must keep it.
+    pub fn with_idle_in_transaction_session_timeout(mut self, timeout: Duration) -> Result<Self> {
+        let milliseconds = timeout.as_millis();
+        if milliseconds == 0
+            || !timeout.subsec_nanos().is_multiple_of(1_000_000)
+            || milliseconds > i32::MAX as u128
+        {
+            return Err(PostgresKernelError::Configuration(
+                "the idle-in-transaction bound must be a positive whole number of milliseconds",
+            ));
+        }
+        let bound = format!("-c idle_in_transaction_session_timeout={milliseconds}");
+        let options = match self.postgres.get_options() {
+            Some(existing) if !existing.trim().is_empty() => format!("{existing} {bound}"),
+            _ => bound,
+        };
+        self.postgres.options(&options);
+        Ok(self)
     }
 
     pub(crate) fn postgres(&self) -> Config {
@@ -384,5 +448,78 @@ mod tests {
         assert!(
             ConnectionConfig::require_tls_with_custom_ca(url, &oversized, valid_bounds()).is_err()
         );
+    }
+
+    #[test]
+    fn sessions_carry_the_process_name_unless_the_url_names_one() {
+        let named = ConnectionConfig::require_tls(
+            "postgresql://registry_runtime@registry.example/registry",
+            valid_bounds(),
+        )
+        .expect("configuration parses");
+        assert_eq!(named.postgres().get_application_name(), Some("breg"));
+        let operator = ConnectionConfig::require_tls(
+            "postgresql://registry_runtime@registry.example/registry?application_name=breg-a",
+            valid_bounds(),
+        )
+        .expect("configuration parses");
+        assert_eq!(operator.postgres().get_application_name(), Some("breg-a"));
+
+        // This process never names itself, so its first configuration fixed
+        // the default. The same name is accepted; a different one is refused
+        // rather than silently leaving earlier configurations misnamed.
+        assert!(set_application_name(DEFAULT_APPLICATION_NAME).is_ok());
+        assert!(matches!(
+            set_application_name("bregctl"),
+            Err(PostgresKernelError::Configuration(_))
+        ));
+    }
+
+    #[test]
+    fn idle_in_transaction_bound_is_a_connection_option_after_operator_options() {
+        let config = ConnectionConfig::require_tls(
+            "postgresql://registry_runtime@registry.example/registry?options=-c%20work_mem%3D8MB",
+            valid_bounds(),
+        )
+        .expect("configuration parses")
+        .with_idle_in_transaction_session_timeout(Duration::from_secs(120))
+        .expect("the bound is valid");
+        assert_eq!(
+            config.postgres().get_options(),
+            Some("-c work_mem=8MB -c idle_in_transaction_session_timeout=120000")
+        );
+        let bare = ConnectionConfig::require_tls(
+            "postgresql://registry_runtime@registry.example/registry",
+            valid_bounds(),
+        )
+        .expect("configuration parses")
+        .with_idle_in_transaction_session_timeout(Duration::from_millis(1_500))
+        .expect("the bound is valid");
+        assert_eq!(
+            bare.postgres().get_options(),
+            Some("-c idle_in_transaction_session_timeout=1500")
+        );
+    }
+
+    #[test]
+    fn idle_in_transaction_bound_refuses_values_the_server_cannot_hold() {
+        let config = ConnectionConfig::require_tls(
+            "postgresql://registry_runtime@registry.example/registry",
+            valid_bounds(),
+        )
+        .expect("configuration parses");
+        for timeout in [
+            Duration::ZERO,
+            Duration::from_micros(500),
+            Duration::from_micros(1_500),
+            Duration::from_millis(i32::MAX as u64 + 1),
+        ] {
+            assert!(matches!(
+                config
+                    .clone()
+                    .with_idle_in_transaction_session_timeout(timeout),
+                Err(PostgresKernelError::Configuration(_))
+            ));
+        }
     }
 }

@@ -26,7 +26,8 @@ pub use catalog::{
     verify_catalog_identity, verify_catalog_identity_for_catalog, CatalogIdentity,
     ExpectedManagedCatalog, ExpectedRegistryIdentity,
 };
-pub use config::{ConnectionConfig, PoolBounds, RuntimePool, TlsPolicy};
+pub(crate) use config::MAX_POOL_TIMEOUT;
+pub use config::{set_application_name, ConnectionConfig, PoolBounds, RuntimePool, TlsPolicy};
 pub(crate) use context::{
     begin_action_transaction, ActionClaimContext, ChangeRequestActionContext,
     ChangeRequestTargetBinding, ChangeRequestTargetContext, ImmediateActionLinkBinding,

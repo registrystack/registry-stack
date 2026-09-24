@@ -1744,6 +1744,11 @@ pub fn command() -> clap::Command {
 /// honoring `NO_COLOR` and `CLICOLOR_FORCE` on the way. A tutorial that
 /// captures a command therefore records the same plain bytes it prints.
 pub fn main_entry() -> ExitCode {
+    // Every PostgreSQL session this process opens names it, so an operator can
+    // tell tooling sessions from the runtime's in `pg_stat_activity`. Nothing
+    // has connected yet, so the name cannot already be fixed to another one.
+    registry_breg::postgres::set_application_name("bregctl")
+        .expect("bregctl names its PostgreSQL sessions before opening any");
     let stdout = io::stdout();
     let stderr = io::stderr();
     let mut stdout = AutoStream::new(stdout, AutoStream::choice(&io::stdout()));
