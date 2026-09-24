@@ -5697,15 +5697,17 @@ dependencies = [
 name = "registry-platform-config"
 version = "0.34.0"
 dependencies = [
- "base64 0.22.1",
- "registry-platform-crypto",
+ "registry-platform-canonical-json",
  "rustix 1.1.5",
+ "schemars",
  "serde",
  "serde_json",
+ "serde_norway",
+ "serde_path_to_error",
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.20",
- "time",
+ "url",
  "zeroize",
 ]
 

@@ -1,0 +1,590 @@
+//! The runtime configuration blocks every Registry Stack runtime shares.
+//!
+//! A product's runtime configuration embeds these types under the same keys,
+//! so an operator reads `secretProviders`, `database`, `listener.bind`,
+//! `package` and `authentication.oidc.jwksSource` the same way in every
+//! product, and one implementation checks them. Product-specific siblings
+//! stay in the product's own configuration types.
+
+use std::fmt;
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::path::{Component, Path, PathBuf};
+use std::str::FromStr;
+
+use serde::{Deserialize, Deserializer};
+
+use crate::{SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES};
+
+/// The schema pattern of a field that must name an enabled secret provider.
+pub const SECRET_PROVIDER_PATTERN: &str = "^secret:(?:env|file)/";
+
+/// The schema pattern of an exact secret reference.
+pub const SECRET_REFERENCE_PATTERN: &str =
+    "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$";
+
+/// Why a shared block was refused.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConfigBlockErrorKind {
+    /// A path that must be absolute is not.
+    RelativePath,
+    /// `secretProviders` enables no provider.
+    NoSecretProvider,
+    /// A `*Ref` field is not an exact secret reference.
+    InvalidSecretReference,
+    /// A `*Ref` field names a provider `secretProviders` does not enable.
+    SecretProviderDisabled,
+    /// A required value is empty.
+    Empty,
+    /// `package.expectedDigest` is not a `sha256:` label.
+    InvalidDigest,
+    /// A JWKS URI is not an absolute `https` URL.
+    InvalidUri,
+}
+
+/// A shared block refusal naming its field and never a configured value.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("{message}")]
+pub struct ConfigBlockError {
+    kind: ConfigBlockErrorKind,
+    field: String,
+    message: String,
+}
+
+impl ConfigBlockError {
+    fn new(kind: ConfigBlockErrorKind, field: &str, message: String) -> Self {
+        Self {
+            kind,
+            field: field.to_owned(),
+            message,
+        }
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> ConfigBlockErrorKind {
+        self.kind
+    }
+
+    /// The dotted field the refusal concerns.
+    #[must_use]
+    pub fn field(&self) -> &str {
+        &self.field
+    }
+}
+
+fn require_absolute(field: &str, path: &Path) -> Result<(), ConfigBlockError> {
+    let normal = path.is_absolute()
+        && path.components().all(|component| {
+            matches!(
+                component,
+                Component::Prefix(_) | Component::RootDir | Component::Normal(_)
+            )
+        });
+    if normal {
+        Ok(())
+    } else {
+        Err(ConfigBlockError::new(
+            ConfigBlockErrorKind::RelativePath,
+            field,
+            format!("{field} must be an absolute path without . or .. components"),
+        ))
+    }
+}
+
+/// The secret providers a runtime enables. A reference is resolved only by a
+/// provider declared here: `secret:file/name` under `file.root`, and
+/// `secret:env/NAME` only when `environment: {}` is present.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(
+    feature = "schema",
+    schemars(extend("anyOf" = [
+        {"required": ["file"], "properties": {"file": {"$ref": "#/$defs/FileSecretProviderConfig"}}},
+        {"required": ["environment"], "properties": {"environment": {"$ref": "#/$defs/EnvironmentSecretProviderConfig"}}}
+    ]))
+)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SecretProvidersConfig {
+    /// Enables `secret:file/name` references, read from files under `root`.
+    #[serde(default)]
+    pub file: Option<FileSecretProviderConfig>,
+    /// Enables `secret:env/NAME` references, read from the process
+    /// environment. Declared as an empty mapping: `environment: {}`.
+    #[serde(default)]
+    pub environment: Option<EnvironmentSecretProviderConfig>,
+}
+
+/// The file secret provider.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FileSecretProviderConfig {
+    /// Absolute directory holding one file per secret. Each file must be a
+    /// regular file owned by the runtime user, mode 0400 or 0600, with exactly
+    /// one hard link.
+    #[cfg_attr(feature = "schema", schemars(extend("pattern" = "^/")))]
+    pub root: PathBuf,
+}
+
+/// The environment secret provider. It takes no settings.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct EnvironmentSecretProviderConfig {}
+
+impl SecretProvidersConfig {
+    /// At least one provider is enabled, and the file root is absolute.
+    pub fn check(&self) -> Result<(), ConfigBlockError> {
+        if self.file.is_none() && self.environment.is_none() {
+            return Err(ConfigBlockError::new(
+                ConfigBlockErrorKind::NoSecretProvider,
+                "secretProviders",
+                "secretProviders must enable file, environment, or both".to_owned(),
+            ));
+        }
+        if let Some(file) = &self.file {
+            require_absolute("secretProviders.file.root", &file.root)?;
+        }
+        Ok(())
+    }
+
+    /// `raw`, configured at `field`, is an exact secret reference whose
+    /// provider this block enables.
+    pub fn check_reference(&self, field: &str, raw: &str) -> Result<(), ConfigBlockError> {
+        let reference = SecretReference::parse(raw).map_err(|_| {
+            ConfigBlockError::new(
+                ConfigBlockErrorKind::InvalidSecretReference,
+                field,
+                format!("{field} must be an exact secret:env/NAME or secret:file/name reference"),
+            )
+        })?;
+        let (enabled, provider) = match reference.provider() {
+            SecretProvider::File => (self.file.is_some(), "secretProviders.file"),
+            SecretProvider::Environment => {
+                (self.environment.is_some(), "secretProviders.environment")
+            }
+        };
+        if enabled {
+            Ok(())
+        } else {
+            Err(ConfigBlockError::new(
+                ConfigBlockErrorKind::SecretProviderDisabled,
+                field,
+                format!("{field} uses a provider that is not enabled; declare {provider}"),
+            ))
+        }
+    }
+
+    /// The providers this block enables.
+    #[must_use]
+    pub fn providers(&self) -> Vec<SecretProvider> {
+        let mut providers = Vec::new();
+        if self.file.is_some() {
+            providers.push(SecretProvider::File);
+        }
+        if self.environment.is_some() {
+            providers.push(SecretProvider::Environment);
+        }
+        providers
+    }
+
+    /// A resolver for exactly the providers this block enables.
+    pub fn resolver(&self) -> Result<SecretResolver, SecretError> {
+        SecretResolver::new(
+            self.providers(),
+            self.file
+                .as_ref()
+                .map_or_else(|| Path::new(""), |file| file.root.as_path()),
+        )
+    }
+}
+
+/// Explain one refused secret reference without disclosing what it protects.
+///
+/// A valid reference is safe and useful to name, but invalid operator-authored
+/// text might itself be a literal credential, so only its field is named. The
+/// resolved bytes and opened path never appear.
+#[must_use]
+pub fn describe_secret_failure(field: &str, reference: &str, error: &SecretError) -> String {
+    let reason = match error {
+        SecretError::InvalidReference => {
+            "it is not an exact secret:env/NAME or secret:file/name reference".to_owned()
+        }
+        SecretError::ProviderDisabled => "its provider is not enabled for this runtime".to_owned(),
+        SecretError::InvalidProviderConfiguration => {
+            "the secret provider configuration is invalid".to_owned()
+        }
+        SecretError::Unavailable => {
+            "no readable secret of that name exists under the configured provider".to_owned()
+        }
+        SecretError::UnsafeFile => concat!(
+            "the secret file must be a regular file owned by the runtime user, ",
+            "with mode 0400 or 0600, and exactly one hard link"
+        )
+        .to_owned(),
+        SecretError::Read => "the secret could not be read".to_owned(),
+        SecretError::InvalidValue => format!(
+            "the secret value must be non-empty text of at most {MAX_SECRET_BYTES} bytes \
+             without NUL bytes"
+        ),
+    };
+    if error == &SecretError::InvalidReference {
+        format!("the secret reference configured at {field} could not be resolved: {reason}")
+    } else {
+        format!("the secret reference {reference} could not be resolved: {reason}")
+    }
+}
+
+/// The PostgreSQL connection a stateful runtime uses. Both URLs are secret
+/// references and may name the same secret.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DatabaseConfig {
+    /// Secret reference to the least-privileged runtime connection URL.
+    #[cfg_attr(feature = "schema", schemars(extend("pattern" = SECRET_PROVIDER_PATTERN)))]
+    pub runtime_url_ref: String,
+    /// Secret reference to the migration connection URL.
+    #[cfg_attr(feature = "schema", schemars(extend("pattern" = SECRET_PROVIDER_PATTERN)))]
+    pub migration_url_ref: String,
+    /// Secret reference to a PEM root certificate the connection trusts.
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(extend("pattern" = SECRET_PROVIDER_PATTERN)))]
+    pub trusted_root_certificate_ref: Option<String>,
+    /// Allow a plaintext connection. Refused outside test builds.
+    #[serde(default)]
+    pub test_only_plaintext: bool,
+}
+
+impl fmt::Debug for DatabaseConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DatabaseConfig")
+            .field("runtime_url_ref", &"<redacted>")
+            .field("migration_url_ref", &"<redacted>")
+            .field(
+                "trusted_root_certificate_ref",
+                &self
+                    .trusted_root_certificate_ref
+                    .as_ref()
+                    .map(|_| "<redacted>"),
+            )
+            .field("test_only_plaintext", &self.test_only_plaintext)
+            .finish()
+    }
+}
+
+impl DatabaseConfig {
+    /// Every secret reference this block configures, with its field.
+    #[must_use]
+    pub fn references(&self) -> Vec<(&'static str, &str)> {
+        let mut references = vec![
+            ("database.runtimeUrlRef", self.runtime_url_ref.as_str()),
+            ("database.migrationUrlRef", self.migration_url_ref.as_str()),
+        ];
+        if let Some(reference) = &self.trusted_root_certificate_ref {
+            references.push(("database.trustedRootCertificateRef", reference.as_str()));
+        }
+        references
+    }
+}
+
+/// Where a runtime obtains the OIDC issuer's signing keys.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum JwksSource {
+    /// Read `jwks_uri` from the issuer's OpenID Connect discovery document.
+    #[default]
+    Discovery,
+    /// Fetch the key set from this absolute `https` URI, skipping discovery.
+    Uri {
+        #[cfg_attr(feature = "schema", schemars(extend("pattern" = "^https?://")))]
+        uri: String,
+    },
+    /// Read the key set from a secret, for deployments without network access
+    /// to the issuer.
+    Static {
+        #[serde(rename = "documentRef")]
+        #[cfg_attr(feature = "schema", schemars(extend("pattern" = SECRET_REFERENCE_PATTERN)))]
+        document_ref: String,
+    },
+}
+
+impl JwksSource {
+    /// A `uri` source names an absolute `https` URL without credentials. A
+    /// loopback `http` URL is accepted only when `allow_loopback_http` is set,
+    /// for supervised local development.
+    pub fn check(&self, field: &str, allow_loopback_http: bool) -> Result<(), ConfigBlockError> {
+        match self {
+            Self::Discovery => Ok(()),
+            Self::Uri { uri } => {
+                let field = format!("{field}.uri");
+                if valid_jwks_uri(uri, allow_loopback_http) {
+                    Ok(())
+                } else {
+                    Err(ConfigBlockError::new(
+                        ConfigBlockErrorKind::InvalidUri,
+                        &field,
+                        format!("{field} must be an absolute https URL without credentials"),
+                    ))
+                }
+            }
+            Self::Static { document_ref } => {
+                if document_ref.is_empty() {
+                    let field = format!("{field}.documentRef");
+                    Err(ConfigBlockError::new(
+                        ConfigBlockErrorKind::Empty,
+                        &field,
+                        format!("{field} must be a secret reference"),
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    /// The URI a `uri` source fetches from.
+    #[must_use]
+    pub fn uri(&self) -> Option<&str> {
+        match self {
+            Self::Uri { uri } => Some(uri),
+            _ => None,
+        }
+    }
+
+    /// The secret reference a `static` source reads.
+    #[must_use]
+    pub fn document_ref(&self) -> Option<&str> {
+        match self {
+            Self::Static { document_ref } => Some(document_ref),
+            _ => None,
+        }
+    }
+}
+
+fn valid_jwks_uri(value: &str, allow_loopback_http: bool) -> bool {
+    let Ok(parsed) = url::Url::parse(value) else {
+        return false;
+    };
+    if !parsed.username().is_empty() || parsed.password().is_some() || parsed.host().is_none() {
+        return false;
+    }
+    match parsed.scheme() {
+        "https" => true,
+        "http" => {
+            allow_loopback_http
+                && matches!(
+                    parsed.host(),
+                    Some(url::Host::Ipv4(address)) if address.is_loopback()
+                )
+        }
+        _ => false,
+    }
+}
+
+/// The package a runtime serves: `root` is the absolute package directory,
+/// and `expectedDigest`, when set, pins the package identity the runtime must
+/// find there.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PackageConfig {
+    /// Absolute path of the package directory.
+    #[cfg_attr(feature = "schema", schemars(extend("pattern" = "^/")))]
+    pub root: PathBuf,
+    /// `sha256:` label of the package identity. When set, the runtime refuses
+    /// to start on any other package.
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(extend("pattern" = "^sha256:[0-9a-f]{64}$")))]
+    pub expected_digest: Option<String>,
+}
+
+impl PackageConfig {
+    /// `root` is absolute and `expectedDigest`, if set, is a `sha256:` label.
+    pub fn check(&self) -> Result<(), ConfigBlockError> {
+        require_absolute("package.root", &self.root)?;
+        if let Some(digest) = &self.expected_digest {
+            if !is_sha256_label(digest) {
+                return Err(ConfigBlockError::new(
+                    ConfigBlockErrorKind::InvalidDigest,
+                    "package.expectedDigest",
+                    "package.expectedDigest must be sha256: followed by 64 lowercase hex digits"
+                        .to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Compare the identity of the package found at `root` with the pin.
+    /// `found` is `None` when the package carries no identity.
+    pub fn verify_digest(&self, found: Option<&str>) -> Result<(), PackageDigestMismatch> {
+        match (&self.expected_digest, found) {
+            (None, _) => Ok(()),
+            (Some(expected), Some(found)) if expected == found => Ok(()),
+            (Some(expected), found) => Err(PackageDigestMismatch {
+                expected: expected.clone(),
+                found: found.map(ToOwned::to_owned),
+            }),
+        }
+    }
+}
+
+/// The package at `package.root` is not the one `package.expectedDigest` pins.
+/// Both values are package identities, not secrets.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+#[error(
+    "package.expectedDigest is {expected} but the package at package.root {}; \
+     deploy the pinned package or update package.expectedDigest",
+    match found { Some(found) => format!("is {found}"), None => "carries no identity".to_owned() }
+)]
+pub struct PackageDigestMismatch {
+    pub expected: String,
+    pub found: Option<String>,
+}
+
+/// Whether `value` is `sha256:` followed by 64 lowercase hex digits.
+#[must_use]
+pub fn is_sha256_label(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
+/// A listener socket address written `host:port`, with an IP literal host
+/// (`[addr]:port` for IPv6).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ListenerBind(pub SocketAddr);
+
+impl ListenerBind {
+    #[must_use]
+    pub const fn socket_addr(self) -> SocketAddr {
+        self.0
+    }
+
+    #[must_use]
+    pub const fn ip(self) -> IpAddr {
+        self.0.ip()
+    }
+}
+
+impl FromStr for ListenerBind {
+    type Err = std::net::AddrParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        value.parse().map(Self)
+    }
+}
+
+impl<'de> Deserialize<'de> for ListenerBind {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        value.parse().map_err(|_| {
+            serde::de::Error::custom(
+                "listener.bind must be host:port with an IP address host, such as \
+                 127.0.0.1:8080 or [::1]:8080",
+            )
+        })
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ListenerBind {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ListenerBind".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "Socket address the runtime listens on, written host:port with an IP address host ([addr]:port for IPv6).",
+            "type": "string",
+            "minLength": 1
+        })
+    }
+}
+
+/// The listener of a runtime that declares no TLS or exposure settings.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ListenerConfig {
+    pub bind: ListenerBind,
+}
+
+/// Declares the trusted transport boundary for a runtime's plaintext HTTP
+/// listener. Production listeners require operator-controlled upstream TLS
+/// termination; direct plaintext is limited to the explicit loopback-only
+/// development mode.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TlsTermination {
+    OperatorControlledUpstream,
+    DevelopmentLoopback,
+}
+
+/// The operator-declared private network placement of an HTTP listener.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ListenerNetworkExposure {
+    #[default]
+    PrivateAddress,
+    ContainerPrivate,
+}
+
+/// The listener of a runtime that declares its TLS termination and network
+/// exposure.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PrivateListenerConfig {
+    pub bind: ListenerBind,
+    pub tls_termination: TlsTermination,
+    #[serde(default)]
+    pub network_exposure: ListenerNetworkExposure,
+}
+
+impl PrivateListenerConfig {
+    /// Whether the bind address is allowed for the declared TLS termination
+    /// and network exposure: loopback only in development; a loopback or
+    /// private address behind an operator-controlled terminator; the
+    /// unspecified address only inside a private container network.
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        let address = self.bind.ip();
+        if address.is_multicast() {
+            return false;
+        }
+        if self.tls_termination == TlsTermination::DevelopmentLoopback {
+            return self.network_exposure == ListenerNetworkExposure::PrivateAddress
+                && address.is_loopback();
+        }
+        match (address, self.network_exposure) {
+            (IpAddr::V4(address), ListenerNetworkExposure::PrivateAddress) => {
+                address.is_loopback() || address.is_private()
+            }
+            (IpAddr::V6(address), ListenerNetworkExposure::PrivateAddress) => {
+                address.is_loopback() || is_unique_local(address)
+            }
+            (IpAddr::V4(address), ListenerNetworkExposure::ContainerPrivate) => {
+                address.is_unspecified() || address.is_loopback() || address.is_private()
+            }
+            (IpAddr::V6(address), ListenerNetworkExposure::ContainerPrivate) => {
+                address.is_unspecified() || address.is_loopback() || is_unique_local(address)
+            }
+        }
+    }
+}
+
+fn is_unique_local(address: Ipv6Addr) -> bool {
+    address.octets()[0] & 0xfe == 0xfc
+}
+
+#[cfg(test)]
+#[path = "blocks_tests.rs"]
+mod tests;
