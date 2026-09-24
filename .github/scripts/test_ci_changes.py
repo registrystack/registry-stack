@@ -1758,6 +1758,7 @@ class CiChangesTest(unittest.TestCase):
         for entry_point in (
             "products/breg/scripts/check-contracts.sh",
             "products/breg/scripts/check-client-contract.sh",
+            "products/breg/scripts/check-mcp-gateway-boundary.sh",
             "products/breg/scripts/test-postgres.sh",
             "products/breg/scripts/test-postgres-tls.sh",
             "products/breg/scripts/test-adopter-workflow.sh",

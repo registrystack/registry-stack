@@ -107,6 +107,10 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
   # the runtime only under this test feature.
   cargo test --locked -p registry-breg-review --features postgres-test \
     --test postgres_breg
+  # The citizen gateway against the real registry, under the same feature
+  # rule as the review page.
+  cargo test --locked -p registry-breg-mcp --features postgres-test \
+    --test postgres_gateway
 
   # Use Cargo's reported executable so configured target directories work too.
   # This proof must start the real Evidence service, never silently skip it.

@@ -7,6 +7,7 @@ python3 "$script_dir/validate_product.py"
 python3 "$script_dir/check_source_neutrality.py"
 "$script_dir/check-generated.sh"
 cargo test --locked -p registry-bregctl --test explain_contract
+"$script_dir/check-mcp-gateway-boundary.sh"
 python3 -m unittest \
   "$script_dir/test_validate_product.py" \
   "$script_dir/test_check_source_neutrality.py" \

@@ -90,6 +90,8 @@ class BRegProductCatalogTests(unittest.TestCase):
         self.assertEqual(
             [
                 "crates/registry-breg-client",
+                "crates/registry-breg-mcp",
+                "crates/registry-breg-review",
                 "crates/registry-breg-client-node",
                 "crates/registry-breg-client-py",
                 "crates/registry-breg",
