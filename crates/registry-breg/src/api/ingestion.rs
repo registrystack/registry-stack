@@ -730,7 +730,8 @@ pub(super) fn batch_refusal_problem(refusal: crate::mutation::IngestionRefusal) 
             crate::problem::ProblemCode::IngestionChunkMismatch,
             StatusCode::CONFLICT,
         ),
-        crate::mutation::IngestionRefusal::BindingChanged => catalogue_problem(
+        crate::mutation::IngestionRefusal::BindingChanged
+        | crate::mutation::IngestionRefusal::AuthorityClosed => catalogue_problem(
             crate::problem::ProblemCode::IngestionRunBlocked,
             StatusCode::CONFLICT,
         ),
@@ -1480,7 +1481,7 @@ fn ingestion_run_schema() -> Value {
             "blockedReason": {
                 "oneOf": [
                     {"type": "null"},
-                    {"type": "string", "enum": ["activePackageChanged"]}
+                    {"type": "string", "enum": ["activePackageChanged", "importAuthorityClosed"]}
                 ]
             },
             "entityId": {"type": "string"},

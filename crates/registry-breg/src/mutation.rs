@@ -1667,6 +1667,59 @@ impl MutationCoordinator {
         })
     }
 
+    /// Move an open ingestion run to `blocked` for `reason`, recording the
+    /// attempt in the caller's transaction, and answer the refusal the caller
+    /// returns with the blocked audit record it appends once that transaction
+    /// commits.
+    ///
+    /// The blocking transition verifies it changed the row: the run row lock
+    /// serializes this against every other transition, so a zero-row update
+    /// means the run was no longer stored open and belongs to the terminal
+    /// answer, not a blocked audit record this request never earned.
+    async fn block_ingestion_run(
+        &self,
+        transaction: &tokio_postgres::Transaction<'_>,
+        run: &crate::ingestion_store::IngestionRunRecord,
+        chunk_index: i64,
+        reason: crate::ingestion_store::IngestionBlockedReason,
+        refusal: IngestionRefusal,
+        correlation: &RequestCorrelation,
+    ) -> Result<(IngestionRefusal, Option<Value>), MutationError> {
+        let changed = crate::ingestion_store::mark_blocked(transaction, run.run_id, reason)
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        if changed == 0 {
+            record_attempt(
+                transaction,
+                run.run_id,
+                IngestionAttemptOutcome::RunNotOpen,
+                chunk_index,
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+            return Ok((IngestionRefusal::RunNotOpen, None));
+        }
+        record_attempt(
+            transaction,
+            run.run_id,
+            IngestionAttemptOutcome::BindingChanged,
+            chunk_index,
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+        let mut audited_run = run.clone();
+        audited_run.status = IngestionRunStatus::Blocked;
+        audited_run.blocked_reason = Some(reason);
+        let blocked_record = crate::ingestion_store::run_audit_record(
+            "blocked",
+            &audited_run,
+            &self.expected.package_revision,
+            &run.created_principal_reference,
+            Some(&correlation.request_id().to_string()),
+        );
+        Ok((refusal, Some(blocked_record)))
+    }
+
     async fn execute_batch_after_attempt(
         &self,
         client: &mut Client,
@@ -1811,67 +1864,81 @@ impl MutationCoordinator {
                 &self.expected.package_revision,
                 &self.expected.schema_fingerprint,
             ) {
-                // The blocking transition verifies it changed the row: the run
-                // row lock serializes this arm against every other
-                // transition, so a zero-row update means the run was no
-                // longer stored open and belongs to the terminal answer, not
-                // a blocked audit record this request never earned.
-                let changed = crate::ingestion_store::mark_blocked(
-                    transaction.transaction(),
-                    chunk_binding.run_id,
-                    crate::ingestion_store::IngestionBlockedReason::ActivePackageChanged,
-                )
-                .await
-                .map_err(|_| MutationError::Unavailable)?;
-                if changed == 0 {
-                    record_attempt(
+                let (refusal, blocked_record) = self
+                    .block_ingestion_run(
                         transaction.transaction(),
-                        chunk_binding.run_id,
-                        IngestionAttemptOutcome::RunNotOpen,
+                        &run,
                         chunk_binding.chunk_index,
+                        crate::ingestion_store::IngestionBlockedReason::ActivePackageChanged,
+                        IngestionRefusal::BindingChanged,
+                        &request.correlation,
                     )
-                    .await
-                    .map_err(|_| MutationError::Unavailable)?;
-                    transaction
-                        .commit()
-                        .await
-                        .map_err(|_| MutationError::Unavailable)?;
-                    return Err(MutationError::IngestionRefusal(
-                        IngestionRefusal::RunNotOpen,
-                    ));
-                }
-                record_attempt(
-                    transaction.transaction(),
-                    chunk_binding.run_id,
-                    IngestionAttemptOutcome::BindingChanged,
-                    chunk_binding.chunk_index,
-                )
-                .await
-                .map_err(|_| MutationError::Unavailable)?;
-                let mut audited_run = run.clone();
-                audited_run.status = IngestionRunStatus::Blocked;
-                audited_run.blocked_reason =
-                    Some(crate::ingestion_store::IngestionBlockedReason::ActivePackageChanged);
-                let blocked_record = crate::ingestion_store::run_audit_record(
-                    "blocked",
-                    &audited_run,
-                    &self.expected.package_revision,
-                    &run.created_principal_reference,
-                    Some(&request.correlation.request_id().to_string()),
-                );
-                // The blocked marking and its audit must outlive the refusal,
-                // so the refusal returns only after an explicit commit and
-                // the accepted audit append that follows it.
+                    .await?;
+                // The blocked marking must outlive the refusal, so the refusal
+                // returns only after an explicit commit and the blocked audit
+                // entry it earned.
                 transaction
                     .commit()
                     .await
                     .map_err(|_| MutationError::Unavailable)?;
-                crate::ingestion_store::append_run_audit(&self.audit, blocked_record)
-                    .await
-                    .map_err(|_| MutationError::Unavailable)?;
-                return Err(MutationError::IngestionRefusal(
-                    IngestionRefusal::BindingChanged,
-                ));
+                if let Some(record) = blocked_record {
+                    crate::ingestion_store::append_run_audit(&self.audit, record)
+                        .await
+                        .map_err(|_| MutationError::Unavailable)?;
+                }
+                return Err(MutationError::IngestionRefusal(refusal));
+            }
+            // An `import` run commits a chunk only while the authority it
+            // consumes is open, unexpired, opened under the active package,
+            // and has room for the chunk. The authority row lock taken here
+            // is held to the chunk commit, which counts the chunk against it,
+            // so a concurrent close waits for this chunk and stops the next.
+            // A run no longer stored open is answered by the window check
+            // below and consumes nothing.
+            if let Some(authority_id) = run
+                .import_authority_id
+                .filter(|_| run.status == IngestionRunStatus::Open)
+            {
+                let chunk_items =
+                    i64::try_from(request.items.len()).map_err(|_| MutationError::Unavailable)?;
+                let mut authority_records = Vec::new();
+                let admitted = crate::import_authority::admit_chunk(
+                    transaction.transaction(),
+                    &mut authority_records,
+                    &self.expected.package_revision,
+                    authority_id,
+                    chunk_items,
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+                if !admitted {
+                    let (refusal, blocked_record) = self
+                        .block_ingestion_run(
+                            transaction.transaction(),
+                            &run,
+                            chunk_binding.chunk_index,
+                            crate::ingestion_store::IngestionBlockedReason::ImportAuthorityClosed,
+                            IngestionRefusal::AuthorityClosed,
+                            &request.correlation,
+                        )
+                        .await?;
+                    // The authority transition and the blocked marking must
+                    // outlive the refusal, and their audit entries are
+                    // appended once that commit holds.
+                    transaction
+                        .commit()
+                        .await
+                        .map_err(|_| MutationError::Unavailable)?;
+                    crate::import_authority::append_transitions(&self.audit, authority_records)
+                        .await
+                        .map_err(|_| MutationError::Unavailable)?;
+                    if let Some(record) = blocked_record {
+                        crate::ingestion_store::append_run_audit(&self.audit, record)
+                            .await
+                            .map_err(|_| MutationError::Unavailable)?;
+                    }
+                    return Err(MutationError::IngestionRefusal(refusal));
+                }
             }
             let announced_items =
                 i64::try_from(request.items.len()).map_err(|_| MutationError::Unavailable)?;
@@ -2205,6 +2272,7 @@ impl MutationCoordinator {
             .await?;
         }
         let mut run_record = None;
+        let mut authority_records = Vec::new();
         if let (Some(chunk_binding), Some(run)) = (request.ingestion, ingestion_run.as_ref()) {
             // The chunk receipt, its record links, and the checkpoint advance
             // join the mutation transaction itself, so the committed prefix
@@ -2229,6 +2297,17 @@ impl MutationCoordinator {
             )
             .await
             .map_err(|_| MutationError::Unavailable)?;
+            if let Some(authority_id) = run.import_authority_id {
+                crate::import_authority::consume(
+                    transaction.transaction(),
+                    &mut authority_records,
+                    &self.expected.package_revision,
+                    authority_id,
+                    chunk_binding.item_count,
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            }
             let mut audited_run = run.clone();
             audited_run.committed_items += chunk_binding.item_count;
             audited_run.next_chunk_index = chunk_binding.chunk_index + 1;
@@ -2250,6 +2329,9 @@ impl MutationCoordinator {
             .map_err(|_| MutationError::CommitUnresolved)?;
         self.audit
             .append(entry)
+            .await
+            .map_err(|_| MutationError::CommitUnresolved)?;
+        crate::import_authority::append_transitions(&self.audit, authority_records)
             .await
             .map_err(|_| MutationError::CommitUnresolved)?;
         if let Some(record) = run_record {

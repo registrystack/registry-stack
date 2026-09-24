@@ -2127,7 +2127,8 @@ impl PostgresRecordMutationService {
                             IngestionAttemptOutcome::ChunkMismatch,
                             Some(IngestionServiceError::ChunkMismatch),
                         ),
-                        crate::mutation::IngestionRefusal::BindingChanged => (
+                        crate::mutation::IngestionRefusal::BindingChanged
+                        | crate::mutation::IngestionRefusal::AuthorityClosed => (
                             IngestionAttemptOutcome::BindingChanged,
                             Some(IngestionServiceError::RunBlocked),
                         ),

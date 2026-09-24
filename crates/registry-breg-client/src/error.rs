@@ -275,7 +275,7 @@ impl BRegProblemCode {
                 "The selected access profile does not match the run's bound profile."
             }
             Self::IngestionReceiptErased => "The stored receipt of the chunk was erased.",
-            Self::IngestionRunBlocked => "The active package no longer matches the run binding.",
+            Self::IngestionRunBlocked => "The ingestion run is blocked and refuses further chunks.",
             Self::IngestionRunNotOpen => "The ingestion run is not open for this transition.",
             Self::LookupUnresolved => "The lookup did not resolve exactly one record.",
             Self::MutationConflict => "The mutation conflicts with current state.",

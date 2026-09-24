@@ -349,6 +349,85 @@ impl Harness {
             .to_owned()
     }
 
+    async fn submit(
+        &self,
+        entity_route: &str,
+        profile_id: &str,
+        run_id: &str,
+        plan: &Plan,
+        index: usize,
+    ) -> axum::response::Response {
+        send(
+            &self.app,
+            Method::POST,
+            &format!(
+                "/v1/records/{entity_route}/ingestion-runs/{run_id}/chunks?accessProfile={profile_id}"
+            ),
+            plan.chunk_body(index),
+        )
+        .await
+    }
+
+    async fn committed_chunk(&self, run_id: &str, plan: &Plan, index: usize) {
+        let response = self.submit("widgets", "loader", run_id, plan, index).await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// Submit the chunk and prove the run blocked on its authority: the
+    /// refusal is `ingestion.run_blocked`, the run reports
+    /// `importAuthorityClosed`, and no widget was written by the chunk.
+    async fn blocked_chunk(&self, run_id: &str, plan: &Plan, index: usize) {
+        let before = self.widget_count().await;
+        let response = self.submit("widgets", "loader", run_id, plan, index).await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let problem = body_json(response).await;
+        assert_eq!(problem["code"], "ingestion.run_blocked");
+        // The run names why it blocked; the refusal names no single cause.
+        assert_eq!(
+            problem["detail"],
+            "The ingestion run is blocked and refuses further chunks."
+        );
+        assert_eq!(self.widget_count().await, before);
+        let run = send(
+            &self.app,
+            Method::GET,
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}?accessProfile=loader"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(run.status(), StatusCode::OK);
+        let run = body_json(run).await;
+        let run = if run.get("run").is_some() {
+            run["run"].clone()
+        } else {
+            run
+        };
+        assert_eq!(run["status"], "blocked", "{run}");
+        assert_eq!(run["blockedReason"], "importAuthorityClosed");
+    }
+
+    async fn widget_count(&self) -> i64 {
+        let table = &self.registry.entities()["widget"].physical_table;
+        self.database
+            .admin
+            .query_one(
+                &format!("SELECT count(*) FROM registry_data.\"{table}\""),
+                &[],
+            )
+            .await
+            .expect("administrator counts widgets")
+            .get(0)
+    }
+
+    /// The run audit records of one run, oldest first.
+    async fn run_records(&self, run_id: &str) -> Vec<Value> {
+        self.database
+            .audit_records()
+            .into_iter()
+            .filter(|record| record["kind"] == "ingestionRun" && record["runId"] == run_id)
+            .collect()
+    }
+
     async fn refused_run(&self, entity_route: &str, profile_id: &str, plan: &Plan) {
         let before = self.run_count().await;
         let response = self
@@ -479,12 +558,26 @@ fn hex_digest(bytes: &[u8]) -> String {
 }
 
 /// One import input: its items, the greedy chunks the run announces, and the
-/// digest the run binds.
+/// digests the run and every chunk bind.
 struct Plan {
     items: Vec<Value>,
     chunks: Vec<(usize, usize)>,
     input_digest: String,
     input_length: i64,
+    chunk_digests: Vec<String>,
+    prefix_digests: Vec<String>,
+}
+
+impl Plan {
+    fn chunk_body(&self, index: usize) -> Value {
+        let (start, end) = self.chunks[index];
+        json!({
+            "chunkIndex": index,
+            "items": self.items[start..end],
+            "digest": self.chunk_digests[index],
+            "prefixDigest": self.prefix_digests[index],
+        })
+    }
 }
 
 fn plan(label_prefix: &str, count: usize) -> Plan {
@@ -511,12 +604,29 @@ fn plan(label_prefix: &str, count: usize) -> Plan {
         chunks.push((start, end));
         start = end;
     }
+    let chunk_digests = chunks
+        .iter()
+        .map(|&(start, end)| {
+            hex_digest(
+                &registry_platform_canonical_json::canonicalize_json(
+                    &json!({"items": items[start..end]}),
+                )
+                .expect("canonical JSON"),
+            )
+        })
+        .collect();
+    let prefix_digests = chunks
+        .iter()
+        .map(|&(_, end)| hex_digest(&lines[..end].concat()))
+        .collect();
     let input = lines.concat();
     Plan {
         items,
         chunks,
         input_digest: hex_digest(&input),
         input_length: input.len() as i64,
+        chunk_digests,
+        prefix_digests,
     }
 }
 
@@ -856,16 +966,178 @@ async fn an_open_authority_opens_no_direct_write_route() {
             response.status()
         );
     }
-    let table = &harness.registry.entities()["widget"].physical_table;
-    let count: i64 = harness
-        .database
-        .admin
-        .query_one(
-            &format!("SELECT count(*) FROM registry_data.\"{table}\""),
-            &[],
+    assert_eq!(
+        harness.widget_count().await,
+        0,
+        "no route but the ingestion run writes a widget"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_chunk_counts_against_the_authority_until_it_is_exhausted() {
+    let harness = Harness::create().await;
+    let authority = harness.open("widget", "loader", 5, &[]).await;
+    let load = plan("counted", 5);
+    let run_id = harness.created_run("widgets", "loader", &load).await;
+    harness.committed_chunk(&run_id, &load, 0).await;
+    assert_eq!(
+        harness.authority(authority.authority_id).await,
+        ("open".to_owned(), 3)
+    );
+    harness.committed_chunk(&run_id, &load, 1).await;
+    assert_eq!(
+        harness.authority(authority.authority_id).await,
+        ("exhausted".to_owned(), 5)
+    );
+    assert_eq!(harness.widget_count().await, 5);
+
+    let transitions: Vec<Value> = harness
+        .authority_records(authority.authority_id)
+        .await
+        .iter()
+        .map(|record| record["transition"].clone())
+        .collect();
+    assert_eq!(transitions, [json!("opened"), json!("exhausted")]);
+    let runs = harness.run_records(&run_id).await;
+    let committed = runs
+        .iter()
+        .filter(|record| record["outcome"] == "committed")
+        .collect::<Vec<_>>();
+    assert_eq!(committed.len(), 2);
+    assert!(committed
+        .iter()
+        .all(|record| record["importAuthorityId"] == authority.authority_id.to_string()));
+    harness
+        .refused_run("widgets", "loader", &plan("after-exhaustion", 1))
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn closing_the_authority_blocks_the_next_chunk_and_keeps_committed_ones() {
+    let harness = Harness::create().await;
+    let authority = harness.open("widget", "loader", 10, &[]).await;
+    let load = plan("revoked-mid-run", 6);
+    let run_id = harness.created_run("widgets", "loader", &load).await;
+    harness.committed_chunk(&run_id, &load, 0).await;
+    harness.close(authority.authority_id).await;
+    harness.blocked_chunk(&run_id, &load, 1).await;
+    assert_eq!(
+        harness.widget_count().await,
+        3,
+        "revoking never undoes data"
+    );
+    let blocked: Vec<Value> = harness
+        .run_records(&run_id)
+        .await
+        .into_iter()
+        .filter(|record| record["outcome"] == "blocked")
+        .collect();
+    assert_eq!(blocked.len(), 1, "{blocked:?}");
+    assert_eq!(blocked[0]["blockedReason"], "import_authority_closed");
+    assert_eq!(
+        blocked[0]["importAuthorityId"],
+        authority.authority_id.to_string()
+    );
+    // A blocked run stays blocked; a later chunk is refused without a second
+    // blocked record.
+    let again = harness.submit("widgets", "loader", &run_id, &load, 1).await;
+    assert_eq!(again.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        harness
+            .run_records(&run_id)
+            .await
+            .iter()
+            .filter(|record| record["outcome"] == "blocked")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn expiry_between_two_chunks_blocks_the_run_and_records_the_expiry() {
+    let harness = Harness::create().await;
+    let authority = harness.open("widget", "loader", 10, &[]).await;
+    let load = plan("expires-mid-run", 6);
+    let run_id = harness.created_run("widgets", "loader", &load).await;
+    harness.committed_chunk(&run_id, &load, 0).await;
+    harness.age_past_expiry(authority.authority_id).await;
+    harness.blocked_chunk(&run_id, &load, 1).await;
+    assert_eq!(
+        harness.authority(authority.authority_id).await,
+        ("expired".to_owned(), 3)
+    );
+    let transitions: Vec<Value> = harness
+        .authority_records(authority.authority_id)
+        .await
+        .iter()
+        .map(|record| record["transition"].clone())
+        .collect();
+    assert_eq!(transitions, [json!("opened"), json!("expired")]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_second_run_cannot_spend_volume_the_first_already_committed() {
+    let harness = Harness::create().await;
+    let authority = harness.open("widget", "loader", 6, &[]).await;
+    let first = plan("first", 3);
+    let second = plan("second", 6);
+    let first_run = harness.created_run("widgets", "loader", &first).await;
+    // Both runs are admitted while the whole volume is still free.
+    let second_run = harness.created_run("widgets", "loader", &second).await;
+    harness.committed_chunk(&first_run, &first, 0).await;
+    harness.committed_chunk(&second_run, &second, 0).await;
+    assert_eq!(
+        harness.authority(authority.authority_id).await,
+        ("exhausted".to_owned(), 6)
+    );
+    harness.blocked_chunk(&second_run, &second, 1).await;
+    assert_eq!(harness.widget_count().await, 6);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_close_racing_a_chunk_waits_for_it_and_stops_the_next() {
+    let harness = Harness::create().await;
+    let authority = harness.open("widget", "loader", 10, &[]).await;
+    let load = plan("raced", 6);
+    let run_id = harness.created_run("widgets", "loader", &load).await;
+
+    // Hold the authority row lock from a second session, as an in-flight
+    // chunk transaction would, and start the close behind it.
+    let (holder, holder_task) = harness.database.connect_admin().await;
+    holder
+        .batch_execute("BEGIN")
+        .await
+        .expect("the holder opens a transaction");
+    holder
+        .execute(
+            "SELECT 1 FROM registry_internal.registry_import_authorities
+              WHERE authority_id = $1 FOR UPDATE",
+            &[&authority.authority_id],
         )
         .await
-        .expect("administrator counts widgets")
-        .get(0);
-    assert_eq!(count, 0, "no route but the ingestion run writes a widget");
+        .expect("the holder locks the authority");
+    let operator = harness.operator();
+    let close = tokio::spawn(async move {
+        operator
+            .close(ImportAuthorityCloseRequest {
+                authority_id: authority.authority_id,
+                operator_reference: "operator-b",
+                reason: "stop the load",
+            })
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!close.is_finished(), "the close waits for the row lock");
+    assert_eq!(harness.authority(authority.authority_id).await.0, "open");
+    holder
+        .batch_execute("COMMIT")
+        .await
+        .expect("the holder releases the lock");
+    holder_task.abort();
+    let closed = close
+        .await
+        .expect("the close task joins")
+        .expect("the close commits");
+    assert_eq!(closed.status, ImportAuthorityStatus::Closed);
+    harness.blocked_chunk(&run_id, &load, 0).await;
 }

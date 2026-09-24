@@ -86,12 +86,16 @@ impl IngestionRunStatus {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(crate) enum IngestionBlockedReason {
     ActivePackageChanged,
+    /// The import authority an `import` run consumes is no longer open or
+    /// has no room for the next chunk.
+    ImportAuthorityClosed,
 }
 
 impl IngestionBlockedReason {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::ActivePackageChanged => "active_package_changed",
+            Self::ImportAuthorityClosed => "import_authority_closed",
         }
     }
 
@@ -99,12 +103,14 @@ impl IngestionBlockedReason {
     pub(crate) fn wire_str(self) -> &'static str {
         match self {
             Self::ActivePackageChanged => "activePackageChanged",
+            Self::ImportAuthorityClosed => "importAuthorityClosed",
         }
     }
 
     fn parse(value: &str) -> Option<Self> {
         match value {
             "active_package_changed" => Some(Self::ActivePackageChanged),
+            "import_authority_closed" => Some(Self::ImportAuthorityClosed),
             _ => None,
         }
     }
@@ -425,6 +431,8 @@ pub enum IngestionRefusal {
     ChunkMismatch,
     #[error("active package no longer matches the run binding")]
     BindingChanged,
+    #[error("the import authority the run consumes admits no further chunk")]
+    AuthorityClosed,
     #[error("the stored receipt of the committed chunk was erased")]
     ReceiptErased,
 }
@@ -1357,6 +1365,12 @@ pub(crate) fn run_audit_record(
         "nextChunkIndex": run.next_chunk_index,
         "status": run.status.as_str(),
     });
+    if let Some(authority_id) = run.import_authority_id {
+        record["importAuthorityId"] = json!(authority_id.to_string());
+    }
+    if let Some(reason) = run.blocked_reason {
+        record["blockedReason"] = json!(reason.as_str());
+    }
     if let Some(correlation) = correlation {
         record["correlation"] = json!(correlation);
     }
