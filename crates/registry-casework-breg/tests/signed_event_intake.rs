@@ -6,7 +6,7 @@ mod support;
 use std::sync::Arc;
 
 use registry_breg_client::{BaseRegistryClient, BaseRegistryClientConfig, StaticToken};
-use registry_casework_breg::{BregAdapter, BregSourceConfig};
+use registry_casework_breg::{BregAdapter, BregRequestConfig, BregSourceConfig};
 use registry_casework_core::{
     EventRequest, RoutingSourceMetadata, SourceAdapter, SourceAdapterError,
 };
@@ -15,7 +15,7 @@ use registry_platform_hooks::{Causation, EnvelopeLimits, EventSubject, HookEnvel
 use serde_json::{json, Value};
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 use wiremock::{
-    matchers::{header, method, path},
+    matchers::{header, method, path, query_param, query_param_is_missing},
     Mock, MockServer, ResponseTemplate,
 };
 
@@ -49,14 +49,16 @@ fn adapter_at(
     BregAdapter::new(
         BregSourceConfig {
             source_id: source_id.to_owned(),
-            entity: "correction".to_owned(),
-            route: "corrections".to_owned(),
-            routing_metadata: RoutingSourceMetadata {
-                stages: vec![],
-                fields: vec![],
-            },
-            context_projection: Vec::new(),
-            display_reference: None,
+            requests: vec![BregRequestConfig {
+                entity: "correction".to_owned(),
+                route: "corrections".to_owned(),
+                routing_metadata: RoutingSourceMetadata {
+                    stages: vec![],
+                    fields: vec![],
+                },
+                context_projection: Vec::new(),
+                display_reference: None,
+            }],
             expected_registry_revision: REGISTRY_REVISION.to_owned(),
             binding_generation: "generation-1".to_owned(),
             reader_profile: "reader".to_owned(),
@@ -315,14 +317,16 @@ async fn route_target_and_route_segment_are_closed_before_intake() {
         BregAdapter::new(
             BregSourceConfig {
                 source_id: "source/a".into(),
-                entity: "correction".into(),
-                route: "corrections".into(),
-                routing_metadata: RoutingSourceMetadata {
-                    stages: vec![],
-                    fields: vec![],
-                },
-                context_projection: Vec::new(),
-                display_reference: None,
+                requests: vec![BregRequestConfig {
+                    entity: "correction".into(),
+                    route: "corrections".into(),
+                    routing_metadata: RoutingSourceMetadata {
+                        stages: vec![],
+                        fields: vec![],
+                    },
+                    context_projection: Vec::new(),
+                    display_reference: None,
+                }],
                 expected_registry_revision: REGISTRY_REVISION.into(),
                 binding_generation: "generation-1".into(),
                 reader_profile: "reader".into(),
@@ -603,4 +607,356 @@ async fn discovery_rejects_a_non_uuid_record_identifier() {
         receiver.discover_active(None, 50).await,
         Err(SourceAdapterError::Unavailable)
     );
+}
+
+const SECOND_RECORD_ID: &str = "00000000-0000-4000-8000-000000000002";
+
+fn request_config(entity: &str, route: &str) -> BregRequestConfig {
+    BregRequestConfig {
+        entity: entity.to_owned(),
+        route: route.to_owned(),
+        routing_metadata: RoutingSourceMetadata {
+            stages: vec![],
+            fields: vec![],
+        },
+        context_projection: Vec::new(),
+        display_reference: None,
+    }
+}
+
+/// One source whose registry carries two request entities.
+fn two_entity_adapter(base_url: &str) -> BregAdapter {
+    BregAdapter::new(
+        BregSourceConfig {
+            source_id: "source_a".to_owned(),
+            requests: vec![
+                request_config("correction", "corrections"),
+                request_config("renewal", "renewals"),
+            ],
+            expected_registry_revision: REGISTRY_REVISION.to_owned(),
+            binding_generation: "generation-1".to_owned(),
+            reader_profile: "reader".to_owned(),
+            event_source: EVENT_SOURCE_A.to_owned(),
+            event_type: EVENT_TYPE.to_owned(),
+        },
+        BaseRegistryClient::new(
+            BaseRegistryClientConfig::new(base_url.parse().unwrap())
+                .with_token_provider(Arc::new(StaticToken::new("reader-token").unwrap())),
+        )
+        .unwrap(),
+        KEY.to_vec(),
+    )
+    .unwrap()
+}
+
+async fn mount_metadata_times(server: &MockServer, times: u64) {
+    Mock::given(method("GET"))
+        .and(path("/v1/registry"))
+        .and(header("authorization", "Bearer reader-token"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(support::lifecycle_metadata(REGISTRY_REVISION))
+                .insert_header("traceparent", TRACEPARENT),
+        )
+        .expect(times)
+        .mount(server)
+        .await;
+}
+
+fn listing(record_ids: &[&str], entity: &str, next: Option<&str>) -> ResponseTemplate {
+    collection_response(
+        json!({
+            "items": record_ids
+                .iter()
+                .map(|id| record(id, entity)["data"].clone())
+                .collect::<Vec<_>>(),
+            "pageInfo": {"nextCursor": next},
+            "meta": {
+                "registryIdentifier": "test",
+                "datasetIdentifier": "primary",
+                "entityTypeIdentifier": entity
+            }
+        }),
+        entity,
+    )
+}
+
+async fn mount_listing(
+    server: &MockServer,
+    route: &str,
+    skiptoken: Option<&str>,
+    response: ResponseTemplate,
+) {
+    let mock = Mock::given(method("GET"))
+        .and(path(format!("/v1/records/{route}")))
+        .and(header("authorization", "Bearer reader-token"));
+    match skiptoken {
+        Some(token) => mock.and(query_param("$skiptoken", token)),
+        None => mock.and(query_param_is_missing("$skiptoken")),
+    }
+    .respond_with(response)
+    .expect(1)
+    .mount(server)
+    .await;
+}
+
+#[tokio::test]
+async fn a_signed_transition_names_whichever_configured_request_entity_it_carries() {
+    let receiver = two_entity_adapter("http://127.0.0.1:9");
+    let mut renewal = data("deduplication-1");
+    renewal["entity"] = json!("renewal");
+    let hint = receiver
+        .verify_transition(signed_request(
+            "source_a",
+            EVENT_SOURCE_A,
+            EVENT_TYPE,
+            &now(),
+            renewal,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(hint.subject.kind, "renewal");
+
+    let mut unconfigured = data("deduplication-1");
+    unconfigured["entity"] = json!("licence");
+    assert_eq!(
+        receiver
+            .verify_transition(signed_request(
+                "source_a",
+                EVENT_SOURCE_A,
+                EVENT_TYPE,
+                &now(),
+                unconfigured,
+            ))
+            .await,
+        Err(SourceAdapterError::Invalid)
+    );
+}
+
+#[tokio::test]
+async fn an_authoritative_read_uses_the_route_of_the_subject_request_entity() {
+    let server = MockServer::start().await;
+    mount_metadata(&server, REGISTRY_REVISION).await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/records/renewals/{RECORD_ID}")))
+        .and(header("authorization", "Bearer reader-token"))
+        .respond_with(response(record(RECORD_ID, "renewal"), "renewal"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let subject = registry_casework_core::SubjectRef {
+        source_id: "source_a".into(),
+        kind: "renewal".into(),
+        id: RECORD_ID.into(),
+    };
+    let observation = two_entity_adapter(&server.uri())
+        .read_authoritative(&subject)
+        .await
+        .unwrap();
+    assert_eq!(observation.subject.kind, "renewal");
+
+    let unconfigured = registry_casework_core::SubjectRef {
+        kind: "licence".into(),
+        ..subject
+    };
+    assert_eq!(
+        two_entity_adapter(&server.uri())
+            .read_authoritative(&unconfigured)
+            .await,
+        Err(SourceAdapterError::Invalid)
+    );
+}
+
+#[tokio::test]
+async fn discovery_pages_through_every_request_entity_in_order() {
+    let server = MockServer::start().await;
+    mount_metadata_times(&server, 2).await;
+    mount_listing(
+        &server,
+        "corrections",
+        None,
+        listing(&[RECORD_ID], "correction", Some("next-token")),
+    )
+    .await;
+    mount_listing(
+        &server,
+        "corrections",
+        Some("next-token"),
+        listing(&[], "correction", None),
+    )
+    .await;
+    mount_listing(
+        &server,
+        "renewals",
+        None,
+        listing(&[SECOND_RECORD_ID], "renewal", None),
+    )
+    .await;
+    let adapter = two_entity_adapter(&server.uri());
+
+    let first = adapter.discover_active(None, 50).await.unwrap();
+    assert_eq!(first.subjects.len(), 1);
+    assert_eq!(first.subjects[0].kind, "correction");
+    assert_eq!(first.subjects[0].id, RECORD_ID);
+    let cursor = first.next_cursor.expect("the correction listing continues");
+
+    // The correction listing's last page is empty, so the same call moves on
+    // to the renewal listing instead of returning an empty page.
+    let second = adapter.discover_active(Some(&cursor), 50).await.unwrap();
+    assert_eq!(second.subjects.len(), 1);
+    assert_eq!(second.subjects[0].kind, "renewal");
+    assert_eq!(second.subjects[0].id, SECOND_RECORD_ID);
+    assert!(second.next_cursor.is_none());
+}
+
+#[tokio::test]
+async fn discovery_moves_to_the_next_request_entity_when_a_listing_ends() {
+    let server = MockServer::start().await;
+    mount_metadata_times(&server, 2).await;
+    mount_listing(
+        &server,
+        "corrections",
+        None,
+        listing(&[RECORD_ID], "correction", None),
+    )
+    .await;
+    mount_listing(
+        &server,
+        "renewals",
+        None,
+        listing(&[SECOND_RECORD_ID], "renewal", None),
+    )
+    .await;
+    let adapter = two_entity_adapter(&server.uri());
+
+    let first = adapter.discover_active(None, 50).await.unwrap();
+    assert_eq!(first.subjects[0].kind, "correction");
+    let cursor = first
+        .next_cursor
+        .expect("the renewal listing is still to read");
+    let second = adapter.discover_active(Some(&cursor), 50).await.unwrap();
+    assert_eq!(second.subjects[0].kind, "renewal");
+    assert!(second.next_cursor.is_none());
+}
+
+#[tokio::test]
+async fn a_discovery_cursor_naming_an_unconfigured_request_entity_is_refused() {
+    let server = MockServer::start().await;
+    mount_metadata_times(&server, 1).await;
+    let cursor = registry_casework_core::DiscoveryCursor(
+        json!({"entity": "licence", "continuation": null}).to_string(),
+    );
+    assert_eq!(
+        two_entity_adapter(&server.uri())
+            .discover_active(Some(&cursor), 50)
+            .await,
+        Err(SourceAdapterError::Invalid)
+    );
+}
+
+/// A one-entity source keeps its binding generation, so a cursor stored as a
+/// bare BReg continuation before request entities were named must still resume.
+fn bare_continuation(cursor: &registry_casework_core::DiscoveryCursor) -> Value {
+    let position: Value = serde_json::from_str(&cursor.0).unwrap();
+    position["continuation"].clone()
+}
+
+#[tokio::test]
+async fn a_one_entity_source_resumes_from_a_bare_continuation_cursor() {
+    let server = MockServer::start().await;
+    mount_metadata_times(&server, 2).await;
+    mount_listing(
+        &server,
+        "corrections",
+        None,
+        listing(&[RECORD_ID], "correction", Some("next-token")),
+    )
+    .await;
+    mount_listing(
+        &server,
+        "corrections",
+        Some("next-token"),
+        listing(&[SECOND_RECORD_ID], "correction", None),
+    )
+    .await;
+    let adapter = adapter_at("source_a", EVENT_SOURCE_A, EVENT_TYPE, &server.uri());
+
+    let first = adapter.discover_active(None, 50).await.unwrap();
+    let legacy = registry_casework_core::DiscoveryCursor(
+        bare_continuation(&first.next_cursor.expect("the listing continues")).to_string(),
+    );
+    let second = adapter.discover_active(Some(&legacy), 50).await.unwrap();
+    assert_eq!(second.subjects.len(), 1);
+    assert_eq!(second.subjects[0].id, SECOND_RECORD_ID);
+    assert!(second.next_cursor.is_none());
+}
+
+#[tokio::test]
+async fn a_several_entity_source_refuses_a_bare_continuation_cursor() {
+    let server = MockServer::start().await;
+    mount_metadata_times(&server, 2).await;
+    mount_listing(
+        &server,
+        "corrections",
+        None,
+        listing(&[RECORD_ID], "correction", Some("next-token")),
+    )
+    .await;
+    let adapter = two_entity_adapter(&server.uri());
+
+    let first = adapter.discover_active(None, 50).await.unwrap();
+    let legacy = registry_casework_core::DiscoveryCursor(
+        bare_continuation(&first.next_cursor.expect("the listing continues")).to_string(),
+    );
+    assert_eq!(
+        adapter.discover_active(Some(&legacy), 50).await,
+        Err(SourceAdapterError::Invalid)
+    );
+}
+
+#[test]
+fn routing_metadata_is_scoped_to_one_request_entity() {
+    let adapter = two_entity_adapter("http://127.0.0.1:9");
+    assert!(adapter.routing_metadata("correction").is_some());
+    assert!(adapter.routing_metadata("renewal").is_some());
+    assert!(adapter.routing_metadata("licence").is_none());
+}
+
+#[test]
+fn an_adapter_with_no_or_duplicate_request_entities_is_refused() {
+    let base = || {
+        BaseRegistryClient::new(
+            BaseRegistryClientConfig::new("http://127.0.0.1:9".parse().unwrap())
+                .with_token_provider(Arc::new(StaticToken::new("reader-token").unwrap())),
+        )
+        .unwrap()
+    };
+    let config = |requests| BregSourceConfig {
+        source_id: "source_a".to_owned(),
+        requests,
+        expected_registry_revision: REGISTRY_REVISION.to_owned(),
+        binding_generation: "generation-1".to_owned(),
+        reader_profile: "reader".to_owned(),
+        event_source: EVENT_SOURCE_A.to_owned(),
+        event_type: EVENT_TYPE.to_owned(),
+    };
+    assert!(BregAdapter::new(config(Vec::new()), base(), KEY.to_vec()).is_err());
+    assert!(BregAdapter::new(
+        config(vec![
+            request_config("correction", "corrections"),
+            request_config("correction", "renewals"),
+        ]),
+        base(),
+        KEY.to_vec(),
+    )
+    .is_err());
+    assert!(BregAdapter::new(
+        config(vec![
+            request_config("correction", "corrections"),
+            request_config("renewal", "corrections"),
+        ]),
+        base(),
+        KEY.to_vec(),
+    )
+    .is_err());
 }

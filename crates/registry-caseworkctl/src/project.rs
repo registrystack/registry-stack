@@ -5,6 +5,7 @@ use registry_casework::{
     secret_resolver, validate_breg_source_description, verify_policy_package,
     PolicyPackageManifest, PostgresStore, RuntimeConfig, POLICY_PACKAGE_MANIFEST_FILE,
 };
+use registry_casework_breg::MAXIMUM_REQUEST_ENTITIES;
 use registry_casework_core::{
     AttemptSettlement, AttemptSettlementReport, AttemptUncertainMarking,
     AttemptUncertainMarkingReport, CaseworkProject, ReviewContextStrategy, ReviewKindPurpose,
@@ -515,12 +516,14 @@ pub(super) fn load_and_check_policy(project: &Path) -> Result<CaseworkProject> {
         }
         return Ok(policy);
     }
-    if policy
-        .sources
-        .iter()
-        .any(|source| source.adapter != "breg" || source.requests.len() != 1)
-    {
-        bail!("each source must use the breg adapter and declare one request entity");
+    if policy.sources.iter().any(|source| {
+        source.adapter != "breg"
+            || source.requests.is_empty()
+            || source.requests.len() > MAXIMUM_REQUEST_ENTITIES
+    }) {
+        bail!(
+            "each source must use the breg adapter and declare between 1 and {MAXIMUM_REQUEST_ENTITIES} request entities"
+        );
     }
     Ok(policy)
 }
@@ -1212,7 +1215,23 @@ fn check_source_review_binding(
 ) -> Result<()> {
     let root: Value = serde_json::from_slice(bytes)
         .context("re-parsing a source description already validated as well-formed JSON")?;
-    let review = &root["request"]["review"];
+    let described = match root.get("requests").and_then(Value::as_array) {
+        Some(requests) => requests.iter().collect::<Vec<_>>(),
+        None => vec![&root["request"]],
+    };
+    for request in described {
+        check_request_review_binding(policy, source, path, &root, &request["review"])?;
+    }
+    Ok(())
+}
+
+fn check_request_review_binding(
+    policy: &CaseworkProject,
+    source: &SourcePolicy,
+    path: &Path,
+    root: &Value,
+    review: &Value,
+) -> Result<()> {
     if review.get("mode").and_then(Value::as_str) == Some("none") {
         return Ok(());
     }

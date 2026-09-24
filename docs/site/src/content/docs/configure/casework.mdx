@@ -544,6 +544,9 @@ subject namespace, and Casework uses the same key for source-context lookup. `ad
 selects the BReg adapter, and `description` points at the imported source description that
 `caseworkctl source add` writes.
 Each entry in `requests` binds one BReg entity to one fallback queue; `target` is the response time the team is measured against.
+One source can declare up to 32 request entities from the same register, each named once.
+`caseworkctl source add` pairs them all in one pass, and requests that share a review authority must agree on its producer admission.
+Casework discovers work entity by entity, in the order you declare them.
 Until the description exists, `caseworkctl check` reports `"sourceDescription": "pending_source_add"`.
 
 The template's `scope-correction` review kind uses `contextStrategy: source`, so its `displaySchema` must admit exactly what the source discloses to a reviewer.
@@ -580,11 +583,11 @@ caseworkctl source add ./tutorial-work/project \
 ```
 
 :::caution[Apply edits your BReg project on disk]
-`--apply` stages a candidate copy of the register, re-checks it with `bregctl`, then writes the patched `registry.yaml` back over your authored file, adding a lifecycle event and a `casework-reader` access profile scoped to the projected fields. Commit or back up the register before you run it, because the command replaces the file rather than offering a diff to accept.
+`--apply` stages a candidate copy of the register, re-checks it with `bregctl`, then writes the patched `registry.yaml` back over your authored file, adding a lifecycle event and a `casework-reader` access profile scoped to the request's target-record fields and the projected fields. A request that only creates records has no target-record field, so it needs at least one projected field for the lifecycle event to carry. When another Casework pairing already added `casework-reader`, the command adds this request entity's permission to that profile instead, so every Casework reader on the register can read each paired entity's projected fields. Commit or back up the register before you run it, because the command replaces the file rather than offering a diff to accept.
 :::
 
 Applying writes two owner-only files into the Casework project's `sources/` directory:
-`professional-licences.json`, the imported description that pins the entity, fields, review
+`professional-licences.json`, the imported description that pins each paired entity with its fields, review
 authority and policy, and application mode, and `professional-licences.breg-runtime.yaml`, a
 candidate BReg runtime binding. The binding includes the event destination, the Casework review
 authority client, optional completion delivery, and an automatic executor only when the authored

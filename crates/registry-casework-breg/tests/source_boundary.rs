@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 use registry_breg_client::{BaseRegistryClient, BaseRegistryClientConfig, StaticToken};
-use registry_casework_breg::{BregAdapter, BregSourceConfig};
+use registry_casework_breg::{BregAdapter, BregRequestConfig, BregSourceConfig};
 use registry_casework_core::*;
 use serde_json::{json, Value};
 use std::io::Write;
@@ -23,34 +23,36 @@ fn adapter(base: &str) -> BregAdapter {
 fn adapter_with_context_projection(base: &str) -> BregAdapter {
     let mut config = BregSourceConfig {
         source_id: "source".into(),
-        entity: "correction".into(),
-        route: "correction".into(),
-        routing_metadata: RoutingSourceMetadata::default(),
-        context_projection: vec![
-            RoutingFieldDescriptor {
-                field: "summary".into(),
-                api_name: "summary".into(),
-                schema: json!({"type":"string","maxLength":32}),
-            },
-            RoutingFieldDescriptor {
-                field: "attachment-metadata".into(),
-                api_name: "attachmentMetadata".into(),
-                schema: json!({
-                    "type":"object",
-                    "additionalProperties":false,
-                    "required":["name"],
-                    "properties":{"name":{"type":"string","maxLength":32}}
-                }),
-            },
-        ],
-        display_reference: None,
+        requests: vec![BregRequestConfig {
+            entity: "correction".into(),
+            route: "correction".into(),
+            routing_metadata: RoutingSourceMetadata::default(),
+            context_projection: vec![
+                RoutingFieldDescriptor {
+                    field: "summary".into(),
+                    api_name: "summary".into(),
+                    schema: json!({"type":"string","maxLength":32}),
+                },
+                RoutingFieldDescriptor {
+                    field: "attachment-metadata".into(),
+                    api_name: "attachmentMetadata".into(),
+                    schema: json!({
+                        "type":"object",
+                        "additionalProperties":false,
+                        "required":["name"],
+                        "properties":{"name":{"type":"string","maxLength":32}}
+                    }),
+                },
+            ],
+            display_reference: None,
+        }],
         binding_generation: "generation-1".into(),
         expected_registry_revision: DIGEST.into(),
         reader_profile: "reader".into(),
         event_source: "urn:registrystack:registry:test:instance:test".into(),
         event_type: "casework-lifecycle-v1".into(),
     };
-    config.routing_metadata.stages.clear();
+    config.requests[0].routing_metadata.stages.clear();
     BregAdapter::new(
         config,
         BaseRegistryClient::new(
@@ -66,18 +68,20 @@ fn adapter_with_routing(base: &str) -> BregAdapter {
     BregAdapter::new(
         BregSourceConfig {
             source_id: "source".into(),
-            entity: "correction".into(),
-            route: "correction".into(),
-            routing_metadata: RoutingSourceMetadata {
-                stages: vec![],
-                fields: vec![RoutingFieldDescriptor {
-                    field: "region".into(),
-                    api_name: "serviceRegion".into(),
-                    schema: json!({"type":"string","enum":["north","south"]}),
-                }],
-            },
-            context_projection: Vec::new(),
-            display_reference: None,
+            requests: vec![BregRequestConfig {
+                entity: "correction".into(),
+                route: "correction".into(),
+                routing_metadata: RoutingSourceMetadata {
+                    stages: vec![],
+                    fields: vec![RoutingFieldDescriptor {
+                        field: "region".into(),
+                        api_name: "serviceRegion".into(),
+                        schema: json!({"type":"string","enum":["north","south"]}),
+                    }],
+                },
+                context_projection: Vec::new(),
+                display_reference: None,
+            }],
             binding_generation: "generation-1".into(),
             expected_registry_revision: DIGEST.into(),
             reader_profile: "reader".into(),
@@ -114,11 +118,13 @@ fn adapter_with_reference_config(
     BregAdapter::new(
         BregSourceConfig {
             source_id: "source".into(),
-            entity: "correction".into(),
-            route: "correction".into(),
-            routing_metadata,
-            context_projection: Vec::new(),
-            display_reference,
+            requests: vec![BregRequestConfig {
+                entity: "correction".into(),
+                route: "correction".into(),
+                routing_metadata,
+                context_projection: Vec::new(),
+                display_reference,
+            }],
             binding_generation: "generation-1".into(),
             expected_registry_revision: DIGEST.into(),
             reader_profile: "reader".into(),
@@ -353,6 +359,25 @@ async fn reader_diagnostic_proves_exact_get_list_projection_on_an_empty_registry
 }
 
 #[tokio::test]
+async fn reader_diagnostic_does_not_require_a_target_record_field() {
+    // A create request has no target record, and a patch request may name its
+    // target field anything; the adapter reads neither.
+    let server = MockServer::start().await;
+    mount_reader_diagnostic(
+        &server,
+        diagnostic_metadata(&["get", "list"], &[("region", "region")]),
+        200,
+        true,
+    )
+    .await;
+
+    adapter(&server.uri())
+        .verify_reader_readiness()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn reader_diagnostic_refuses_missing_get_or_routing_projection_grants() {
     let server = MockServer::start().await;
     mount_reader_diagnostic(
@@ -514,21 +539,55 @@ async fn authoritative_read_retains_representation_etag_at_unchanged_record_revi
             .read_authoritative(&subject())
             .await
             .unwrap();
-        assert_eq!(
-            serde_json::to_value(&observation).unwrap()["representationEtag"],
-            etag
-        );
         observations.push(observation);
     }
     assert_eq!(
         observations[0].ordered_revision,
         observations[1].ordered_revision
     );
+    assert_ne!(
+        observations[0].representation_etag,
+        observations[1].representation_etag
+    );
     assert_eq!(observations[0].binding, observations[1].binding);
     let first = serde_json::to_value(&observations[0]).unwrap();
     assert!(first.get("submittedAt").is_none());
     assert!(first.get("stageEnteredAt").is_none());
     assert_eq!(observations[0].review_timing, None);
+}
+
+#[tokio::test]
+async fn review_settlement_changes_the_representation_etag_at_an_unchanged_record_etag() {
+    // Base Registry's record ETag covers the record revision, not the request
+    // extension, so a review settlement alone leaves it unchanged.
+    let mut etags = Vec::new();
+    for application_state in ["awaitingReview", "awaitingReview", "ready"] {
+        let server = MockServer::start().await;
+        let mut representation = record("submitted", None);
+        representation["data"]["request"]["review"] = review_status(application_state);
+        let observation = authoritative(&server, representation).await;
+        assert_eq!(observation.ordered_revision, 2);
+        etags.push(observation.representation_etag);
+    }
+    assert_eq!(etags[0], etags[1]);
+    assert_ne!(etags[1], etags[2]);
+}
+
+#[tokio::test]
+async fn a_resubmitted_proposal_changes_the_representation_etag_at_an_unchanged_record_etag() {
+    // A revised and resubmitted request keeps its record revision and ETag
+    // when its record data is unchanged; only the proposal version moves.
+    let mut etags = Vec::new();
+    for proposal_version in [1, 2] {
+        let server = MockServer::start().await;
+        let mut representation = record("submitted", None);
+        representation["data"]["request"]["review"] = review_status("awaitingReview");
+        representation["data"]["request"]["proposalVersion"] = json!(proposal_version);
+        let observation = authoritative(&server, representation).await;
+        assert_eq!(observation.ordered_revision, 2);
+        etags.push(observation.representation_etag);
+    }
+    assert_ne!(etags[0], etags[1]);
 }
 
 #[tokio::test]
@@ -548,7 +607,7 @@ async fn authoritative_read_maps_only_imported_routing_fields_and_redacts_values
 
     let adapter = adapter_with_routing(&server.uri());
     assert_eq!(
-        adapter.routing_metadata().unwrap().fields[0].api_name,
+        adapter.routing_metadata("correction").unwrap().fields[0].api_name,
         "serviceRegion"
     );
     let observation = adapter.read_authoritative(&subject()).await.unwrap();

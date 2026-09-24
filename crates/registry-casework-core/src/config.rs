@@ -340,6 +340,13 @@ impl CaseworkProject {
                 || source.adapter.is_empty()
                 || source.description.is_empty()
                 || source.requests.is_empty()
+                || source
+                    .requests
+                    .iter()
+                    .map(|request| &request.entity)
+                    .collect::<BTreeSet<_>>()
+                    .len()
+                    != source.requests.len()
             {
                 return Err(ConfigError::Identifier);
             }
@@ -1065,6 +1072,14 @@ mod tests {
         duplicate.adapter = "other-adapter".to_owned();
         duplicate.description = "other-description.json".to_owned();
         candidate.sources.push(duplicate);
+        assert_eq!(candidate.check(), Err(ConfigError::Identifier));
+    }
+
+    #[test]
+    fn request_entities_are_unique_within_a_source() {
+        let mut candidate = project_with_source_queue("decisions");
+        let duplicate = candidate.sources[0].requests[0].clone();
+        candidate.sources[0].requests.push(duplicate);
         assert_eq!(candidate.check(), Err(ConfigError::Identifier));
     }
 

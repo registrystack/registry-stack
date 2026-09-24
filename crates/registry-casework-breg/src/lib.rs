@@ -25,8 +25,7 @@ use zeroize::Zeroizing;
 
 /// One imported request entry. This does not grant source access.
 #[derive(Clone, Debug)]
-pub struct BregSourceConfig {
-    pub source_id: String,
+pub struct BregRequestConfig {
     pub entity: String,
     pub route: String,
     pub routing_metadata: RoutingSourceMetadata,
@@ -34,11 +33,29 @@ pub struct BregSourceConfig {
     /// may disclose through the unified review-task context endpoint.
     pub context_projection: Vec<RoutingFieldDescriptor>,
     pub display_reference: Option<RoutingFieldDescriptor>,
+}
+
+/// The imported request entries of one source and the single reader binding
+/// they share. This does not grant source access.
+#[derive(Clone, Debug)]
+pub struct BregSourceConfig {
+    pub source_id: String,
+    pub requests: Vec<BregRequestConfig>,
     pub binding_generation: String,
     pub expected_registry_revision: String,
     pub reader_profile: String,
     pub event_source: String,
     pub event_type: String,
+}
+
+/// Where discovery resumes: the request entity whose listing is being read
+/// and, inside that listing, the BReg continuation. A missing continuation
+/// starts the named entity's listing from its first page.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct DiscoveryPosition {
+    entity: String,
+    continuation: Option<BRegContinuationProjection>,
 }
 
 pub struct BregAdapter {
@@ -66,8 +83,6 @@ impl BregAdapter {
         webhook_key: Vec<u8>,
     ) -> Result<Self, SourceAdapterError> {
         if [
-            &config.entity,
-            &config.route,
             &config.binding_generation,
             &config.expected_registry_revision,
             &config.reader_profile,
@@ -75,48 +90,16 @@ impl BregAdapter {
         .iter()
         .any(|v| v.is_empty() || v.len() > 512)
             || webhook_key.len() < MIN_HMAC_SHA256_KEY_BYTES
-            || !config.routing_metadata.stages.is_empty()
-            || config.routing_metadata.fields.iter().any(|field| {
-                field.field.is_empty()
-                    || field.field.len() > 512
-                    || field.api_name.is_empty()
-                    || field.api_name.len() > 512
-                    || !matches!(&field.schema, Value::Object(_) | Value::Bool(_))
-            })
+            || config.requests.is_empty()
+            || config.requests.len() > MAXIMUM_REQUEST_ENTITIES
             || config
-                .routing_metadata
-                .fields
+                .requests
                 .iter()
-                .enumerate()
-                .any(|(index, field)| {
-                    config.routing_metadata.fields[..index]
-                        .iter()
-                        .any(|prior| prior.field == field.field || prior.api_name == field.api_name)
-                })
-            || config.context_projection.len() > 32
-            || config.context_projection.iter().any(|field| {
-                field.field.is_empty()
-                    || field.field.len() > 128
-                    || field.api_name.is_empty()
-                    || field.api_name.len() > 128
-                    || !matches!(&field.schema, Value::Object(_) | Value::Bool(_))
-                    || !check_source_field_descriptor(field)
-            })
-            || config
-                .context_projection
-                .iter()
-                .enumerate()
-                .any(|(index, field)| {
-                    config.context_projection[..index]
-                        .iter()
-                        .any(|prior| prior.field == field.field || prior.api_name == field.api_name)
-                })
-            || config.display_reference.as_ref().is_some_and(|field| {
-                field.field.is_empty()
-                    || field.api_name.is_empty()
-                    || field.field.len() > 512
-                    || field.api_name.len() > 512
-                    || field.schema.get("type").and_then(Value::as_str) != Some("string")
+                .any(|request| !valid_request_config(request))
+            || config.requests.iter().enumerate().any(|(index, request)| {
+                config.requests[..index]
+                    .iter()
+                    .any(|prior| prior.entity == request.entity || prior.route == request.route)
             })
         {
             return Err(SourceAdapterError::Invalid);
@@ -139,6 +122,28 @@ impl BregAdapter {
         })
     }
 
+    /// Decode a stored discovery cursor. A one-entity source keeps its binding
+    /// generation, so it also resumes from a cursor stored as a bare BReg
+    /// continuation; with several entities that shape names no entity and is
+    /// refused.
+    fn discovery_position(
+        &self,
+        cursor: &DiscoveryCursor,
+    ) -> Result<DiscoveryPosition, SourceAdapterError> {
+        if let Ok(position) = serde_json::from_str::<DiscoveryPosition>(&cursor.0) {
+            return Ok(position);
+        }
+        let [only] = self.config.requests.as_slice() else {
+            return Err(SourceAdapterError::Invalid);
+        };
+        let continuation: BRegContinuationProjection =
+            serde_json::from_str(&cursor.0).map_err(|_| SourceAdapterError::Invalid)?;
+        Ok(DiscoveryPosition {
+            entity: only.entity.clone(),
+            continuation: Some(continuation),
+        })
+    }
+
     /// Verify the configured BReg runtime and the complete read contract
     /// Casework needs without requiring a specimen request to exist.
     ///
@@ -151,48 +156,52 @@ impl BregAdapter {
         let metadata = self
             .metadata(ReadClient::SourceReader, &self.config.reader_profile)
             .await?;
-        self.verify_reader_operation(
-            &metadata,
-            BRegOperationKind::Get,
-            &format!("/v1/records/{}/{{record_id}}", self.config.route),
-        )?;
-        self.verify_reader_operation(
-            &metadata,
-            BRegOperationKind::List,
-            &format!("/v1/records/{}", self.config.route),
-        )?;
+        for entry in &self.config.requests {
+            self.verify_reader_operation(
+                &metadata,
+                entry,
+                BRegOperationKind::Get,
+                &format!("/v1/records/{}/{{record_id}}", entry.route),
+            )?;
+            self.verify_reader_operation(
+                &metadata,
+                entry,
+                BRegOperationKind::List,
+                &format!("/v1/records/{}", entry.route),
+            )?;
+        }
 
-        let request = BRegListRequest::default()
-            .options(Self::options(&self.config.reader_profile)?)
-            .top(1)
-            .map_err(|_| SourceAdapterError::Invalid)?
-            .filter("bregState eq 'submitted'")
-            .map_err(|_| SourceAdapterError::Invalid)?;
-        let listed = self.reader.list_records(&self.config.route, &request).await;
-        self.read_result(ReadClient::SourceReader, listed)?;
+        for entry in &self.config.requests {
+            let request = BRegListRequest::default()
+                .options(Self::options(&self.config.reader_profile)?)
+                .top(1)
+                .map_err(|_| SourceAdapterError::Invalid)?
+                .filter("bregState eq 'submitted'")
+                .map_err(|_| SourceAdapterError::Invalid)?;
+            let listed = self.reader.list_records(&entry.route, &request).await;
+            self.read_result(ReadClient::SourceReader, listed)?;
+        }
         Ok(())
     }
 
     fn verify_reader_operation(
         &self,
         metadata: &BRegMetadata,
+        entry: &BregRequestConfig,
         kind: BRegOperationKind,
         expected_path: &str,
     ) -> Result<(), SourceAdapterError> {
-        let identifier = format!("records.{}.{}", self.config.entity, kind.as_str());
+        let identifier = format!("records.{}.{}", entry.entity, kind.as_str());
         let operation = metadata
             .operation(&identifier)
             .ok_or(SourceAdapterError::Denied)?;
-        let required_fields = std::iter::once("record")
+        let required_fields = entry
+            .routing_metadata
+            .fields
+            .iter()
+            .map(|field| field.field.as_str())
             .chain(
-                self.config
-                    .routing_metadata
-                    .fields
-                    .iter()
-                    .map(|field| field.field.as_str()),
-            )
-            .chain(
-                self.config
+                entry
                     .display_reference
                     .iter()
                     .map(|field| field.field.as_str()),
@@ -201,8 +210,8 @@ impl BregAdapter {
         if operation.kind() != &kind
             || operation.method() != "GET"
             || operation.path() != expected_path
-            || operation.source_entity() != self.config.entity
-            || operation.response_entity() != self.config.entity
+            || operation.source_entity() != entry.entity
+            || operation.response_entity() != entry.entity
             || operation.access_profile() != self.config.reader_profile
             || !operation.required_capabilities().is_empty()
             || required_fields.iter().any(|required| {
@@ -224,14 +233,24 @@ impl BregAdapter {
         Ok(())
     }
 
-    fn validate_subject(&self, subject: &SubjectRef) -> Result<(), SourceAdapterError> {
-        if subject.source_id != self.config.source_id
-            || subject.kind != self.config.entity
-            || uuid::Uuid::parse_str(&subject.id).is_err()
+    /// The configured request entry a subject belongs to.
+    fn request_entry(&self, entity: &str) -> Result<&BregRequestConfig, SourceAdapterError> {
+        self.config
+            .requests
+            .iter()
+            .find(|entry| entry.entity == entity)
+            .ok_or(SourceAdapterError::Invalid)
+    }
+
+    fn validate_subject(
+        &self,
+        subject: &SubjectRef,
+    ) -> Result<&BregRequestConfig, SourceAdapterError> {
+        if subject.source_id != self.config.source_id || uuid::Uuid::parse_str(&subject.id).is_err()
         {
             return Err(SourceAdapterError::Invalid);
         }
-        Ok(())
+        self.request_entry(&subject.kind)
     }
 
     fn caller(
@@ -332,10 +351,10 @@ impl BregAdapter {
         subject: &SubjectRef,
         profile: &str,
     ) -> Result<(RegistryRecordSingleResponse, BRegMetadata, String), SourceAdapterError> {
-        self.validate_subject(subject)?;
+        let entry = self.validate_subject(subject)?;
         let record = self
             .client(client)
-            .get_record(&self.config.route, &subject.id, &Self::options(profile)?)
+            .get_record(&entry.route, &subject.id, &Self::options(profile)?)
             .await;
         // A missing record is an ordinary source state, not a reader failure.
         // A 404 from the registry contract, readiness, or a list still is.
@@ -350,7 +369,7 @@ impl BregAdapter {
             .as_str()
             .to_owned();
         let record = response.value;
-        if record.meta.entity_type_identifier != self.config.entity {
+        if record.meta.entity_type_identifier != entry.entity {
             return Err(SourceAdapterError::BindingMoved);
         }
         let metadata = self.metadata(client, profile).await?;
@@ -379,10 +398,10 @@ impl BregAdapter {
             .ok_or(SourceAdapterError::Invalid)
     }
 
-    fn subject(&self, id: String) -> SubjectRef {
+    fn subject(&self, entry: &BregRequestConfig, id: String) -> SubjectRef {
         SubjectRef {
             source_id: self.config.source_id.clone(),
-            kind: self.config.entity.clone(),
+            kind: entry.entity.clone(),
             id,
         }
     }
@@ -421,7 +440,7 @@ impl BregAdapter {
     }
 
     fn routing_context(
-        &self,
+        entry: &BregRequestConfig,
         record: &RegistryRecordSingleResponse,
         kind: OccurrenceKind,
         state: OccurrenceState,
@@ -434,8 +453,7 @@ impl BregAdapter {
             OccurrenceKind::Review => RoutingActivity::Review,
             OccurrenceKind::Application => RoutingActivity::Apply,
         };
-        let fields = self
-            .config
+        let fields = entry
             .routing_metadata
             .fields
             .iter()
@@ -456,10 +474,10 @@ impl BregAdapter {
     }
 
     fn display_reference(
-        &self,
+        entry: &BregRequestConfig,
         record: &RegistryRecordSingleResponse,
     ) -> Result<Option<String>, SourceAdapterError> {
-        let Some(field) = &self.config.display_reference else {
+        let Some(field) = &entry.display_reference else {
             return Ok(None);
         };
         match record.data.domain_data.get(&field.api_name) {
@@ -474,6 +492,59 @@ impl BregAdapter {
             _ => Err(SourceAdapterError::Invalid),
         }
     }
+}
+
+/// The most request entities one source may pair. Discovery walks every
+/// entity's listing, so the bound keeps one reconciliation pass finite.
+pub const MAXIMUM_REQUEST_ENTITIES: usize = 32;
+
+fn valid_request_config(request: &BregRequestConfig) -> bool {
+    !([&request.entity, &request.route]
+        .iter()
+        .any(|v| v.is_empty() || v.len() > 512)
+        || !request.routing_metadata.stages.is_empty()
+        || request.routing_metadata.fields.iter().any(|field| {
+            field.field.is_empty()
+                || field.field.len() > 512
+                || field.api_name.is_empty()
+                || field.api_name.len() > 512
+                || !matches!(&field.schema, Value::Object(_) | Value::Bool(_))
+        })
+        || request
+            .routing_metadata
+            .fields
+            .iter()
+            .enumerate()
+            .any(|(index, field)| {
+                request.routing_metadata.fields[..index]
+                    .iter()
+                    .any(|prior| prior.field == field.field || prior.api_name == field.api_name)
+            })
+        || request.context_projection.len() > 32
+        || request.context_projection.iter().any(|field| {
+            field.field.is_empty()
+                || field.field.len() > 128
+                || field.api_name.is_empty()
+                || field.api_name.len() > 128
+                || !matches!(&field.schema, Value::Object(_) | Value::Bool(_))
+                || !check_source_field_descriptor(field)
+        })
+        || request
+            .context_projection
+            .iter()
+            .enumerate()
+            .any(|(index, field)| {
+                request.context_projection[..index]
+                    .iter()
+                    .any(|prior| prior.field == field.field || prior.api_name == field.api_name)
+            })
+        || request.display_reference.as_ref().is_some_and(|field| {
+            field.field.is_empty()
+                || field.api_name.is_empty()
+                || field.field.len() > 512
+                || field.api_name.len() > 512
+                || field.schema.get("type").and_then(Value::as_str) != Some("string")
+        }))
 }
 
 fn valid_source_identifier(value: &str) -> bool {
@@ -568,6 +639,35 @@ fn occurrence_key(
     ))
 }
 
+/// Base Registry's record ETag covers the record revision but not the request
+/// extension, so a review settlement or a resubmitted proposal leaves it
+/// unchanged. The observed representation also binds the proposal it
+/// describes and the lifecycle facts derived from that extension, so either
+/// change at an unchanged revision is observed as a new representation.
+fn observed_representation_etag(
+    record_etag: &str,
+    binding: &SourceBinding,
+    state: OccurrenceState,
+    remaining_actions: &[OperationName],
+) -> Result<String, SourceAdapterError> {
+    let input = serde_json::to_vec(&(
+        record_etag,
+        binding.version.as_str(),
+        binding.integrity.as_deref(),
+        state,
+        remaining_actions,
+    ))
+    .map_err(|_| SourceAdapterError::Invalid)?;
+    let digest = domain_separated_sha256(b"registry-casework-breg-representation-v1\0", &input);
+    Ok(format!(
+        "\"sha256:{}\"",
+        digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ))
+}
+
 fn state_name(state: BRegRequestState) -> &'static str {
     match state {
         BRegRequestState::Draft => "draft",
@@ -620,8 +720,10 @@ impl SourceAdapter for BregAdapter {
         &self.config.binding_generation
     }
 
-    fn routing_metadata(&self) -> Option<&RoutingSourceMetadata> {
-        Some(&self.config.routing_metadata)
+    fn routing_metadata(&self, entity: &str) -> Option<&RoutingSourceMetadata> {
+        self.request_entry(entity)
+            .ok()
+            .map(|entry| &entry.routing_metadata)
     }
 
     async fn verify_transition(
@@ -693,12 +795,16 @@ impl SourceAdapter for BregAdapter {
             return Err(SourceAdapterError::Invalid);
         }
         let body = envelope.data;
-        if body.get("trigger").and_then(Value::as_str) != Some("request_lifecycle")
-            || body.get("entity").and_then(Value::as_str) != Some(self.config.entity.as_str())
-        {
+        if body.get("trigger").and_then(Value::as_str) != Some("request_lifecycle") {
             return Err(SourceAdapterError::Invalid);
         }
+        let entry = self.request_entry(
+            body.get("entity")
+                .and_then(Value::as_str)
+                .ok_or(SourceAdapterError::Invalid)?,
+        )?;
         let subject = self.subject(
+            entry,
             body.get("recordId")
                 .and_then(Value::as_str)
                 .ok_or(SourceAdapterError::Invalid)?
@@ -734,22 +840,29 @@ impl SourceAdapter for BregAdapter {
                 &self.config.reader_profile,
             )
             .await?;
+        let entry = self.request_entry(&subject.kind)?;
         let request = Self::request(&record)?;
         let binding = self.binding(&record, &request)?;
         let kind = OccurrenceKind::Application;
         let state = Self::occurrence_state(&request)?;
-        let routing_context = self.routing_context(&record, kind, state, None)?;
-        let remaining_actions = request
+        let routing_context = Self::routing_context(entry, &record, kind, state, None)?;
+        let remaining_actions: Vec<OperationName> = request
             .advertised_operations()
             .filter_map(operation)
             .collect();
+        let representation_etag = observed_representation_etag(
+            &representation_etag,
+            &binding,
+            state,
+            &remaining_actions,
+        )?;
         Ok(AuthoritativeObservation {
             subject: subject.clone(),
             occurrence_key: occurrence_key(kind, None, &binding)?,
             ordered_revision: ordered_revision(&record.data.revision_identifier)?,
             representation_etag,
             binding,
-            display_reference: self.display_reference(&record)?,
+            display_reference: Self::display_reference(entry, &record)?,
             occurrence_kind: kind,
             stage: None,
             submitted_at: None,
@@ -768,52 +881,95 @@ impl SourceAdapter for BregAdapter {
     ) -> Result<ActiveSubjectsPage, SourceAdapterError> {
         self.metadata(ReadClient::SourceReader, &self.config.reader_profile)
             .await?;
-        let page = match cursor {
+        let (mut index, mut continuation) = match cursor {
             Some(cursor) => {
-                let projection: BRegContinuationProjection =
-                    serde_json::from_str(&cursor.0).map_err(|_| SourceAdapterError::Invalid)?;
-                let continuation = BRegContinuation::try_from_projection(projection)
-                    .map_err(|_| SourceAdapterError::Invalid)?;
-                if continuation.route() != self.config.route
-                    || continuation.access_profile() != Some(self.config.reader_profile.as_str())
-                {
-                    return Err(SourceAdapterError::Invalid);
-                }
-                self.reader.continue_list(&continuation).await
+                let position = self.discovery_position(cursor)?;
+                let index = self
+                    .config
+                    .requests
+                    .iter()
+                    .position(|entry| entry.entity == position.entity)
+                    .ok_or(SourceAdapterError::Invalid)?;
+                let continuation = position
+                    .continuation
+                    .map(|projection| {
+                        let continuation = BRegContinuation::try_from_projection(projection)
+                            .map_err(|_| SourceAdapterError::Invalid)?;
+                        if continuation.route() != self.config.requests[index].route
+                            || continuation.access_profile()
+                                != Some(self.config.reader_profile.as_str())
+                        {
+                            return Err(SourceAdapterError::Invalid);
+                        }
+                        Ok(continuation)
+                    })
+                    .transpose()?;
+                (index, continuation)
             }
-            None => {
-                let request = BRegListRequest::default()
-                    .options(Self::options(&self.config.reader_profile)?)
-                    .top(
-                        u32::try_from(limit.clamp(1, 100))
-                            .map_err(|_| SourceAdapterError::Invalid)?,
-                    )
-                    .map_err(|_| SourceAdapterError::Invalid)?
-                    .filter("bregState eq 'submitted'")
-                    .map_err(|_| SourceAdapterError::Invalid)?;
-                self.reader.list_records(&self.config.route, &request).await
-            }
+            None => (0, None),
         };
-        let page = self.read_result(ReadClient::SourceReader, page)?.value;
-        let subjects = page
-            .value
-            .items
-            .into_iter()
-            .map(|r| {
-                let subject = self.subject(r.record_identifier);
-                self.validate_subject(&subject)?;
-                Ok(subject)
-            })
-            .collect::<Result<Vec<_>, SourceAdapterError>>()?;
-        let next_cursor = page
-            .continuation
-            .map(|c| serde_json::to_string(&c.projection()).map(DiscoveryCursor))
-            .transpose()
-            .map_err(|_| SourceAdapterError::Invalid)?;
-        Ok(ActiveSubjectsPage {
-            subjects,
-            next_cursor,
-        })
+        loop {
+            let entry = &self.config.requests[index];
+            let page = match continuation.take() {
+                Some(continuation) => self.reader.continue_list(&continuation).await,
+                None => {
+                    let request = BRegListRequest::default()
+                        .options(Self::options(&self.config.reader_profile)?)
+                        .top(
+                            u32::try_from(limit.clamp(1, 100))
+                                .map_err(|_| SourceAdapterError::Invalid)?,
+                        )
+                        .map_err(|_| SourceAdapterError::Invalid)?
+                        .filter("bregState eq 'submitted'")
+                        .map_err(|_| SourceAdapterError::Invalid)?;
+                    self.reader.list_records(&entry.route, &request).await
+                }
+            };
+            let page = self.read_result(ReadClient::SourceReader, page)?.value;
+            let subjects = page
+                .value
+                .items
+                .into_iter()
+                .map(|r| {
+                    let subject = self.subject(entry, r.record_identifier);
+                    self.validate_subject(&subject)?;
+                    Ok(subject)
+                })
+                .collect::<Result<Vec<_>, SourceAdapterError>>()?;
+            let next = match page.continuation {
+                Some(continuation) => Some(DiscoveryPosition {
+                    entity: entry.entity.clone(),
+                    continuation: Some(continuation.projection()),
+                }),
+                None => self
+                    .config
+                    .requests
+                    .get(index + 1)
+                    .map(|next| DiscoveryPosition {
+                        entity: next.entity.clone(),
+                        continuation: None,
+                    }),
+            };
+            // An exhausted listing with nothing in it moves straight on, so a
+            // caller probing with a small limit sees the next entity's work.
+            if subjects.is_empty() {
+                if let Some(DiscoveryPosition {
+                    continuation: None, ..
+                }) = next
+                {
+                    index += 1;
+                    continue;
+                }
+            }
+            let next_cursor = next
+                .map(|position| serde_json::to_string(&position).map(DiscoveryCursor))
+                .transpose()
+                .map_err(|_| SourceAdapterError::Invalid)?;
+            return Ok(ActiveSubjectsPage {
+                subjects,
+                next_cursor,
+            });
+        }
     }
 
     async fn read_task_context(
@@ -822,11 +978,11 @@ impl SourceAdapter for BregAdapter {
         fields: &[String],
         caller: Option<(&str, EphemeralCredential<'_>)>,
     ) -> Result<TaskSubjectContext, SourceAdapterError> {
+        let entry = self.request_entry(&subject.kind)?;
         if fields.is_empty()
             || fields.len() > 32
             || fields.iter().any(|field| {
-                !self
-                    .config
+                !entry
                     .routing_metadata
                     .fields
                     .iter()
@@ -858,8 +1014,7 @@ impl SourceAdapter for BregAdapter {
         }
         let mut values = BTreeMap::new();
         for field in fields {
-            let descriptor = self
-                .config
+            let descriptor = entry
                 .routing_metadata
                 .fields
                 .iter()
@@ -888,9 +1043,10 @@ impl SourceAdapter for BregAdapter {
         let (record, _, _) = self
             .read(ReadClient::Caller(&caller), subject, profile)
             .await?;
+        let entry = self.request_entry(&subject.kind)?;
         let request = Self::request(&record)?;
         let mut disclosed = BTreeMap::new();
-        for field in &self.config.context_projection {
+        for field in &entry.context_projection {
             let Some(value) = record.data.domain_data.get(&field.api_name) else {
                 // Caller-filtered BReg reads omit fields this exact human and
                 // profile cannot see. Omission must never be widened with the
@@ -908,7 +1064,7 @@ impl SourceAdapter for BregAdapter {
         Ok(CallerSubjectView {
             subject: subject.clone(),
             binding: self.binding(&record, &request)?,
-            display_reference: self.display_reference(&record)?,
+            display_reference: Self::display_reference(entry, &record)?,
             disclosed,
             permitted_operations: request
                 .advertised_operations()

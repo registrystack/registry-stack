@@ -8,8 +8,8 @@
   journey follows the `rebase` value BReg's `revise_request` action carries
   after a send-back, and asserts that BReg records a revision.
 - `caseworkctl source add` no longer refuses the whole pairing when the BReg
-  registry declares another change-request entity, besides the one being
-  paired, that names this Casework project's review authority with a
+  registry declares another change-request entity, besides the ones being
+  paired, that names one of this Casework project's review authorities with a
   `policyId` no `reviewKinds` entry matches. BReg's own compile check only
   validates that `review.authority` and `review.policyId` are well-formed
   identifiers, so such an entity previously passed unnoticed until something
@@ -21,8 +21,8 @@
   instead, naming the entity, the declared `policyId`, and that no
   `reviewKinds[].id` matches it (a missing or non-string `policyId` still
   fails `bregctl check` first). Preview
-  and apply report the same findings. The entity actually being paired is
-  unaffected: an unresolved `policyId` on it is still refused. A `policyId`
+  and apply report the same findings. The entities actually being paired
+  are unaffected: an unresolved `policyId` on any of them is still refused. A `policyId`
   edited in the BReg project after pairing is not caught: nothing
   `source add` writes records the BReg project's location or content, and
   the existing pinned-description re-check is deliberately scoped to the
@@ -113,6 +113,12 @@
   attempt calls `POST /v1/work-items/{itemId}/attempts/{attemptId}/recover`
   while the source is reachable, and the attempt is settled only if recovery
   leaves it uncertain. Who may recover or settle is unchanged.
+- Pair several request entities of one BReg register with one Casework
+  source. A source declares up to 32 request entities; `caseworkctl source add`
+  pairs them in one pass, the imported description lists them under
+  `casework-source-description/v1alpha2`, and discovery pages through each
+  entity in declaration order. A source with one entity keeps its `v1alpha1`
+  description and its binding generation, so existing bindings do not change.
 - Fix the professional-review starter hiding every source-backed review task.
   Its `scope-correction` `displaySchema` described `record` as an object, but
   the professional-licences source discloses it as a UUID string, so every
