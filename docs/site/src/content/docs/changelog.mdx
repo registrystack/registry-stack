@@ -44,14 +44,17 @@ relevant product pages on this site rather than duplicating release notes.
   `review_state` can filter on `reviewOutcome`. The automatic application
   worker leaves a queued job unclaimed once its cached approval's
   `availableUntil` has passed, rather than spend a retry on a request that no
-  longer offers `apply_request`. `bregctl explain lifecycle` reports the
-  check as its `review_outcome` layer. See
+  longer offers `apply_request`. Such a job also no longer holds its review
+  authority or executor binding: the activation check that refuses to drop a
+  binding with durable work outstanding no longer counts it, so an operator
+  may remove a binding an expired, queued job no longer needs. `bregctl
+  explain lifecycle` reports the check as its `review_outcome` layer. See
   [change requests](../reference/breg-api/#change-requests).
 
 {/* Evidence: crates/registry-breg/src/postgres/request_read.rs, action_is_available and revise_rebase_available;
     crates/registry-breg/src/mutation/request.rs, execute_request_action_transaction;
     crates/registry-breg/src/postgres/read.rs, REQUEST_REVIEW_OUTCOME_SQL;
-    crates/registry-breg/src/review_store.rs, run_one and run_one_application;
+    crates/registry-breg/src/review_store.rs, run_one, run_one_application, and verify_retained_bindings;
     crates/registry-breg/src/lifecycle.rs, request_lifecycle;
     crates/registry-breg-client/src/lifecycle.rs, BRegExternalReviewApplicationState. */}
 

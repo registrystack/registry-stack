@@ -50,7 +50,11 @@ pub(crate) const MAXIMUM_REVIEW_RECOVERY_DAYS: u32 = 3_650;
 /// `expired`. An `applying` job stays claimable regardless: the earlier claim
 /// may still be in flight, or its receipt may need recovery, and a 412 there
 /// returns the job to `queued`, where this predicate then applies on its next
-/// pass. `q` names the candidate job row in both queries this is spliced into.
+/// pass. `verify_retained_bindings` shares this predicate: a job it would not
+/// let the worker claim is not durable work either, so it does not pin the
+/// review authority or executor binding it used, and an operator may drop
+/// that binding. `q` names the candidate job row in every query this is
+/// spliced into.
 const APPLICATION_JOB_CLAIMABLE: &str = "(q.state <> 'queued' OR NOT EXISTS (
         SELECT 1 FROM registry_internal.registry_request_review_results r
          WHERE (r.request_entity_id,r.request_id,r.proposal_version)
@@ -246,7 +250,8 @@ pub async fn verify_retained_bindings(
     let client = pool.get().await.map_err(|_| MutationError::Unavailable)?;
     let authority_rows = client
         .query(
-            "SELECT DISTINCT authority,producer_id
+            &format!(
+                "SELECT DISTINCT authority,producer_id
                FROM registry_internal.registry_request_review_submissions s
               WHERE state IN ('pending','submitting','uncertain','cancelling')
                  OR (state='accepted' AND NOT EXISTS (
@@ -254,10 +259,11 @@ pub async fn verify_retained_bindings(
                          WHERE (r.request_entity_id,r.request_id,r.proposal_version)=
                                (s.request_entity_id,s.request_id,s.proposal_version)))
                  OR EXISTS (
-                        SELECT 1 FROM registry_internal.registry_request_application_jobs j
-                         WHERE (j.request_entity_id,j.request_id,j.proposal_version)=
+                        SELECT 1 FROM registry_internal.registry_request_application_jobs q
+                         WHERE (q.request_entity_id,q.request_id,q.proposal_version)=
                                (s.request_entity_id,s.request_id,s.proposal_version)
-                           AND j.state IN ('queued','applying'))
+                           AND q.state IN ('queued','applying')
+                           AND {APPLICATION_JOB_CLAIMABLE})
                  OR (s.state='accepted' AND s.on_approved_mode='manual'
                      AND EXISTS (
                          SELECT 1 FROM registry_internal.registry_request_review_results r
@@ -268,7 +274,8 @@ pub async fn verify_retained_bindings(
                          SELECT 1 FROM registry_internal.registry_request_state w
                           WHERE (w.request_entity_id,w.request_id,w.proposal_version)=
                                 (s.request_entity_id,s.request_id,s.proposal_version)
-                            AND w.state='submitted'))",
+                            AND w.state='submitted'))"
+            ),
             &[],
         )
         .await
@@ -285,9 +292,12 @@ pub async fn verify_retained_bindings(
     }
     let executor_rows = client
         .query(
-            "SELECT DISTINCT executor,request_entity_id
-               FROM registry_internal.registry_request_application_jobs
-              WHERE state IN ('queued','applying')",
+            &format!(
+                "SELECT DISTINCT executor,request_entity_id
+               FROM registry_internal.registry_request_application_jobs q
+              WHERE q.state IN ('queued','applying')
+                AND {APPLICATION_JOB_CLAIMABLE}"
+            ),
             &[],
         )
         .await

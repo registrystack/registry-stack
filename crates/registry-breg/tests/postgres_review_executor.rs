@@ -1597,6 +1597,112 @@ async fn expired_automatic_approval_is_not_claimed_by_the_application_worker() {
 }
 
 #[tokio::test]
+async fn an_expired_automatic_approvals_queued_job_no_longer_retains_its_bindings() {
+    // The activation check must treat a queued job over an expired automatic
+    // approval as not durable work, the same as the application worker:
+    // once such a job is inert, an operator may drop the review authority or
+    // executor binding it used, separately or together, without database
+    // intervention. "unexpired" is the control: an ordinary due, queued job
+    // still retains both bindings and refuses activation.
+    for (name, expired) in [("expired", true), ("unexpired", false)] {
+        let database = TestDatabase::create(2).await;
+        database
+            .admin
+            .batch_execute(
+                "CREATE TABLE registry_internal.registry_request_state (
+                    request_entity_id text NOT NULL,
+                    request_id uuid NOT NULL,
+                    proposal_version bigint NOT NULL,
+                    state text NOT NULL,
+                    PRIMARY KEY (request_entity_id,request_id)
+                );
+                CREATE TABLE registry_internal.registry_request_proposals (
+                    request_entity_id text NOT NULL,
+                    request_id uuid NOT NULL,
+                    proposal_version bigint NOT NULL,
+                    PRIMARY KEY (request_entity_id,request_id,proposal_version)
+                );",
+            )
+            .await
+            .expect("state and proposal parent tables");
+        install_review_storage_for_test(&database.admin, &database.runtime_role)
+            .await
+            .expect("review storage");
+        database
+            .admin
+            .batch_execute(&format!(
+                "GRANT USAGE ON SCHEMA registry_internal TO \"{}\";
+                 GRANT SELECT ON registry_internal.registry_request_state TO \"{}\";",
+                database.runtime_role.as_str(),
+                database.runtime_role.as_str()
+            ))
+            .await
+            .expect("runtime review schema access");
+
+        let request_id = Uuid::new_v4();
+        let job_id = Uuid::new_v4();
+        seed_application_job(&database.admin, request_id, Uuid::new_v4(), job_id).await;
+        if expired {
+            database
+                .admin
+                .execute(
+                    "UPDATE registry_internal.registry_request_review_results
+                        SET completed_at=transaction_timestamp() - interval '2 days',
+                            available_until=transaction_timestamp() - interval '1 day'
+                      WHERE request_id=$1",
+                    &[&request_id],
+                )
+                .await
+                .expect("expire the cached approval");
+        }
+
+        let pool = database.runtime_config.build_pool().expect("runtime pool");
+        // Matches seed_application_job's authority and producer binding.
+        let authorities =
+            authority_registry("casework-a", "registry-producer", "sender", "registry-a");
+        // Matches seed_application_job's executor and request-entity binding.
+        let endpoint: reqwest::Url = "http://127.0.0.1:9/".parse().unwrap();
+        let executors = ReviewExecutorRegistry::new(BTreeMap::from([(
+            "registry-automatic".to_owned(),
+            Arc::new(executor(endpoint)),
+        )]))
+        .expect("executor registry");
+
+        let executor_removed = verify_retained_bindings(&pool, Some(&authorities), None).await;
+        let authority_removed = verify_retained_bindings(&pool, None, Some(&executors)).await;
+        let both_removed = verify_retained_bindings(&pool, None, None).await;
+
+        if expired {
+            executor_removed.unwrap_or_else(|error| {
+                panic!("executor binding removed, job inert: {name}: {error:?}")
+            });
+            authority_removed.unwrap_or_else(|error| {
+                panic!("authority binding removed, job inert: {name}: {error:?}")
+            });
+            both_removed.unwrap_or_else(|error| {
+                panic!("both bindings removed, job inert: {name}: {error:?}")
+            });
+        } else {
+            assert!(
+                matches!(executor_removed, Err(MutationError::PreconditionFailed)),
+                "{name}"
+            );
+            assert!(
+                matches!(authority_removed, Err(MutationError::PreconditionFailed)),
+                "{name}"
+            );
+            assert!(
+                matches!(both_removed, Err(MutationError::PreconditionFailed)),
+                "{name}"
+            );
+        }
+
+        drop(pool);
+        database.cleanup().await;
+    }
+}
+
+#[tokio::test]
 async fn real_postgres_review_feed_checkpoint_uses_the_client_uuid_cursor_contract() {
     let database = TestDatabase::create(2).await;
     database
