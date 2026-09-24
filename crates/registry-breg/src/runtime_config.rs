@@ -72,6 +72,8 @@ const DEFAULT_JWKS_REQUEST_TIMEOUT_MILLISECONDS: u64 = 5_000;
 const DEFAULT_JWKS_OUTAGE_TOLERANCE_SECONDS: u64 = 900;
 const DEFAULT_CURSOR_MAX_AGE_SECONDS: u64 = 300;
 const DEFAULT_HTTP_REQUEST_TIMEOUT_MILLISECONDS: u64 = 10_000;
+/// The longest a Registry request may run before the server abandons it.
+pub(crate) const MAX_HTTP_REQUEST_TIMEOUT_MILLISECONDS: u64 = 60_000;
 const DEFAULT_SHUTDOWN_GRACE_MILLISECONDS: u64 = 30_000;
 const DEFAULT_RECORD_LOCK_MILLISECONDS: u64 = 5_000;
 const DEFAULT_MIGRATION_LOCK_MILLISECONDS: u64 = 30_000;
@@ -2091,7 +2093,11 @@ pub struct OperationalTimeouts {
 impl OperationalTimeouts {
     fn from_raw(raw: RawOperationalTimeouts) -> Result<Self> {
         Ok(Self {
-            http_request: millis_bounded(raw.http_request_milliseconds, 1, 60_000)?,
+            http_request: millis_bounded(
+                raw.http_request_milliseconds,
+                1,
+                MAX_HTTP_REQUEST_TIMEOUT_MILLISECONDS,
+            )?,
             shutdown_grace: millis_bounded(raw.shutdown_grace_milliseconds, 1, 300_000)?,
             record_lock: millis_bounded(raw.record_lock_milliseconds, 1, 30_000)?,
             migration_lock: millis_bounded(raw.migration_lock_milliseconds, 1, 300_000)?,

@@ -858,3 +858,127 @@ async fn forced_disconnect_is_recycled(
     drop(client);
     assert_pool_context_clean(pool).await;
 }
+
+/// A pooled runtime session names its process and carries the idle-in-transaction
+/// bound as a connection-start default, so neither a recycled checkout nor a
+/// session-wide `RESET ALL` or `DISCARD ALL` can drop it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn runtime_sessions_are_named_and_bounded_across_recycling() {
+    let database = TestDatabase::create(1).await;
+    let pool = database
+        .runtime_config
+        .clone()
+        .with_idle_in_transaction_session_timeout(Duration::from_secs(120))
+        .expect("the bound is a positive whole number of milliseconds")
+        .build_pool()
+        .expect("bounded pool builds");
+    let mut backends = Vec::new();
+    for reset in ["RESET ALL", "DISCARD ALL"] {
+        let client = pool
+            .get_for_test()
+            .await
+            .expect("pool returns a connection");
+        client.batch_execute(reset).await.expect("session resets");
+        let row = client
+            .query_one(
+                "SELECT pg_backend_pid(),
+                        pg_catalog.current_setting('application_name'),
+                        setting,
+                        source
+                 FROM pg_catalog.pg_settings
+                 WHERE name = 'idle_in_transaction_session_timeout'",
+                &[],
+            )
+            .await
+            .expect("session settings are readable");
+        backends.push(row.get::<_, i32>(0));
+        assert_eq!(row.get::<_, String>(1), "breg");
+        assert_eq!(row.get::<_, String>(2), "120000");
+        assert_eq!(row.get::<_, String>(3), "client");
+        drop(client);
+    }
+    assert_eq!(
+        backends[0], backends[1],
+        "the second checkout is the recycled first session"
+    );
+    let unbounded = database
+        .runtime_config
+        .build_pool()
+        .expect("unbounded pool builds");
+    let client = unbounded
+        .get_for_test()
+        .await
+        .expect("pool returns a connection");
+    let row = client
+        .query_one(
+            "SELECT pg_catalog.current_setting('application_name'),
+                    pg_catalog.current_setting('idle_in_transaction_session_timeout')",
+            &[],
+        )
+        .await
+        .expect("session settings are readable");
+    assert_eq!(row.get::<_, String>(0), "breg");
+    assert_eq!(
+        row.get::<_, String>(1),
+        "0",
+        "only a configuration that asks for the bound carries it"
+    );
+    drop(client);
+    database.cleanup().await;
+}
+
+/// The server ends a session left idle inside a transaction. The owner sees an
+/// ordinary database failure, nothing it wrote commits, and the pool replaces
+/// the terminated session on the next checkout.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_in_transaction_bound_rolls_back_and_the_pool_recovers() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute(&format!(
+            "CREATE TABLE public.idle_probe (id integer NOT NULL);
+             GRANT SELECT, INSERT ON public.idle_probe TO \"{}\";",
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("administrator creates the probe table");
+    let pool = database
+        .runtime_config
+        .clone()
+        .with_idle_in_transaction_session_timeout(Duration::from_millis(500))
+        .expect("the bound is a positive whole number of milliseconds")
+        .build_pool()
+        .expect("bounded pool builds");
+    let mut client = pool
+        .get_for_test()
+        .await
+        .expect("pool returns a connection");
+    let transaction = client.transaction().await.expect("transaction opens");
+    transaction
+        .execute("INSERT INTO public.idle_probe (id) VALUES (1)", &[])
+        .await
+        .expect("the write succeeds inside the transaction");
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    assert!(
+        transaction.commit().await.is_err(),
+        "a transaction the server ended cannot commit"
+    );
+    drop(client);
+    let rows: i64 = database
+        .admin
+        .query_one("SELECT count(*) FROM public.idle_probe", &[])
+        .await
+        .expect("administrator counts probe rows")
+        .get(0);
+    assert_eq!(rows, 0, "nothing the idle transaction wrote committed");
+    let client = pool
+        .get_for_test()
+        .await
+        .expect("the pool replaces the terminated session");
+    client
+        .execute("INSERT INTO public.idle_probe (id) VALUES (2)", &[])
+        .await
+        .expect("the replacement session writes");
+    drop(client);
+    database.cleanup().await;
+}

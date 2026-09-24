@@ -692,6 +692,24 @@ async fn prepare_verified_package_with_key_source(
     .await
 }
 
+/// How long a server session may sit idle inside an open transaction before
+/// PostgreSQL ends it and rolls the transaction back.
+///
+/// Every request, including the transactions it holds, is abandoned after the
+/// configured request timeout, at most one minute. Outside a request, the
+/// longest wait a server transaction holds open is one object-store read by
+/// the attachment verification worker, also capped at one minute; webhook,
+/// review, Evidence, and verifier calls run between transactions. A pool
+/// checkout waits at most one minute too. The bound is twice the largest of
+/// those caps, so it only ends a transaction that nothing is still bounding.
+const SERVER_IDLE_IN_TRANSACTION_TIMEOUT: Duration = Duration::from_secs(120);
+const _: () = {
+    let bound = SERVER_IDLE_IN_TRANSACTION_TIMEOUT.as_millis();
+    assert!(bound >= 2 * crate::runtime_config::MAX_HTTP_REQUEST_TIMEOUT_MILLISECONDS as u128);
+    assert!(bound >= 2 * crate::attachment_storage::MAXIMUM_TIMEOUT_MILLISECONDS as u128);
+    assert!(bound >= 2 * crate::postgres::MAX_POOL_TIMEOUT.as_millis());
+};
+
 async fn prepare_database_startup(
     package: VerifiedPackage,
     connection: &crate::postgres::ConnectionConfig,
@@ -699,6 +717,9 @@ async fn prepare_database_startup(
     runtime_role: &SqlIdentifier,
 ) -> Result<(RuntimePool, VerifiedStartup)> {
     let pool = connection
+        .clone()
+        .with_idle_in_transaction_session_timeout(SERVER_IDLE_IN_TRANSACTION_TIMEOUT)
+        .map_err(|_| StartupError::DatabaseConnection)?
         .build_pool()
         .map_err(|_| StartupError::DatabaseConnection)?;
     let mut client = pool
