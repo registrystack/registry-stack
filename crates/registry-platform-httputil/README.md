@@ -39,6 +39,16 @@ Outbound HTTP utilities for registry services.
 - Async validation with a wall-clock timeout around DNS resolution.
 - Marker-typed fixed-destination requests and opaque bounded response bodies for
   registry-data and credential endpoints.
+- A side-effecting send class for data destinations, compiled only by
+  `DataDestinationRequestTemplate::new_script_send` and refused by every
+  read-only constructor. It sends a POST with a JSON or form body, or a GET
+  whose content travels in the query string only behind an explicit
+  `QueryStringContentAcknowledgement` that the content reaches provider access
+  logs.
+- `DestinationSendError::delivery_certainty`, which reports a failed send as
+  `NotSent` when it failed before the connection was established (policy
+  refusal, resolution, connect, or TLS handshake) and conservatively as
+  `MaybeSent` for every failure after it.
 - A closed no-expiry OAuth client-credentials response decoder that returns a
   fresh, move-only bearer authorization capability.
 - A decoder pinned to the OpenCRVS DCI adapter v1.9.0-rc.1. It verifies the

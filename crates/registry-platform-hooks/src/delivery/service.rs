@@ -1695,7 +1695,10 @@ fn classify_send_error(
     deadline_reached: bool,
 ) -> DeliveryAuditOutcome {
     match error {
-        DestinationSendError::DeadlineExceeded => DeliveryAuditOutcome::DestinationTimeout,
+        DestinationSendError::DeadlineExceeded
+        | DestinationSendError::DeadlineExceededAfterConnect => {
+            DeliveryAuditOutcome::DestinationTimeout
+        }
         DestinationSendError::ResolutionFailed
         | DestinationSendError::TooManyResolverAnswers
         | DestinationSendError::NoResolverAnswers
@@ -1716,10 +1719,14 @@ fn classify_send_error(
         | DestinationSendError::ResponseHeaderBytesExceeded => {
             DeliveryAuditOutcome::DestinationTransportUnavailable
         }
-        DestinationSendError::TransportFailed if deadline_reached => {
+        DestinationSendError::TransportFailed
+        | DestinationSendError::TransportFailedAfterConnect
+            if deadline_reached =>
+        {
             DeliveryAuditOutcome::DestinationTimeout
         }
-        DestinationSendError::TransportFailed => {
+        DestinationSendError::TransportFailed
+        | DestinationSendError::TransportFailedAfterConnect => {
             DeliveryAuditOutcome::DestinationTransportUnavailable
         }
         DestinationSendError::InvalidRemainingTimeout
@@ -2179,6 +2186,26 @@ mod tests {
             classify_send_error(DestinationSendError::DeadlineExceeded, false),
             DeliveryAuditOutcome::DestinationTimeout
         );
+    }
+
+    #[test]
+    fn failures_after_connect_keep_the_outcome_of_their_pre_connect_counterpart() {
+        for deadline_reached in [false, true] {
+            assert_eq!(
+                classify_send_error(
+                    DestinationSendError::TransportFailedAfterConnect,
+                    deadline_reached
+                ),
+                classify_send_error(DestinationSendError::TransportFailed, deadline_reached)
+            );
+            assert_eq!(
+                classify_send_error(
+                    DestinationSendError::DeadlineExceededAfterConnect,
+                    deadline_reached
+                ),
+                classify_send_error(DestinationSendError::DeadlineExceeded, deadline_reached)
+            );
+        }
     }
 
     #[test]
