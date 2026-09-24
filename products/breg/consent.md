@@ -180,8 +180,13 @@ the reserved `registry:recipients` claim:
 ```
 
 `registry:recipients` binds only an `in` row boundary on a consent record's
-recipient field, in a permission limited to `get` and `list`. It cannot be a
-principal claim, another row boundary, or an entity access requirement. The
+recipient field, in a permission limited to `get` and `list`. The compiler
+refuses it, and every `registry:consent-decisions:` claim, on each other
+surface that names a verified claim: a principal claim, another row boundary,
+an entity access requirement, a lookup `claimMapping`, an action target, an
+`applyTargets` grant, or a `requestPresence` grant. Each refusal is
+`consent.feed.claim`, so no authored selector reaches a consent record without
+the feed's decision bound. The
 compiler adds a second row boundary to the feed on the decision field, filled
 by the engine with the codes a recipient may learn: every give, and every
 revoke that is not a refusal.

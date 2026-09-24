@@ -663,6 +663,50 @@ fn validate_reserved_claims(
                     refuse_claim(&format!("{path}.rowBoundaries"), errors);
                 }
             }
+            // A verified-claim lookup would select rows by a reserved claim
+            // without the feed's decision bound.
+            for lookup in &profile.lookups {
+                if lookup
+                    .claim_mapping
+                    .values()
+                    .any(|claim| is_reserved_claim(claim))
+                {
+                    refuse_claim(
+                        &format!("{path}.lookups[selector={}].claimMapping", lookup.selector),
+                        errors,
+                    );
+                }
+            }
+            for target in &profile.apply_targets {
+                if target
+                    .row_boundaries
+                    .iter()
+                    .any(|boundary| is_reserved_claim(&boundary.claim))
+                {
+                    refuse_claim(
+                        &format!(
+                            "{path}.applyTargets[entity={}].rowBoundaries",
+                            target.entity
+                        ),
+                        errors,
+                    );
+                }
+            }
+            for presence in &profile.request_presence {
+                if presence
+                    .row_boundaries
+                    .iter()
+                    .any(|boundary| is_reserved_claim(&boundary.claim))
+                {
+                    refuse_claim(
+                        &format!(
+                            "{path}.requestPresence[requestType={}].rowBoundaries",
+                            presence.request_type
+                        ),
+                        errors,
+                    );
+                }
+            }
         }
         if entity
             .access_requirements

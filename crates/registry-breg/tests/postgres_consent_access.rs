@@ -46,6 +46,9 @@ const AUDIENCE: &str = "urn:breg:consent";
 const PACKAGE_ID: &str = "consent-access";
 const WFP_CLIENT: &str = "wfp-scope";
 const ALPHA_CLIENT: &str = "ngo-alpha-portal";
+/// The client of an organization in no group, whose recipient set is that
+/// organization alone.
+const BETA_CLIENT: &str = "ngo-beta-portal";
 /// Admitted by the issuer but mapped to no recipient organization.
 const STEWARD_CLIENT: &str = "steward-console";
 const PURPOSE: &str = "food-assistance";
@@ -65,7 +68,11 @@ struct Harness {
 
 impl Harness {
     async fn start() -> Self {
-        let registry = Arc::new(consent_fixture::compile(&consent_fixture::source()).unwrap());
+        Self::start_with(&consent_fixture::source()).await
+    }
+
+    async fn start_with(source: &Value) -> Self {
+        let registry = Arc::new(consent_fixture::compile(source).unwrap());
         let database = postgres_harness::TestDatabase::create(4).await;
         let (migration, migration_task) = database.connect_migration().await;
         install_compiled_schema(&migration, &registry, &database.runtime_role)
@@ -152,6 +159,7 @@ impl Harness {
         verifier.allowed_clients = vec![
             WFP_CLIENT.into(),
             ALPHA_CLIENT.into(),
+            BETA_CLIENT.into(),
             STEWARD_CLIENT.into(),
         ];
         let authenticator = Arc::new(
@@ -1033,6 +1041,82 @@ async fn real_postgres_consent_matches_recipient_sets_purpose_and_scope_exactly(
     assert!(
         !h.sees(&wfp_only, &forged_reader).await,
         "a forged recipient set reached a give addressed to another recipient"
+    );
+    h.database.cleanup().await;
+}
+
+/// The consent fixture with a client for ngo-beta, an organization in no
+/// group, admitted to the recipient feed.
+fn ungrouped_recipient_source() -> Value {
+    let mut value = consent_fixture::source();
+    value["recipients"]["organizations"][2]["clients"] = json!([BETA_CLIENT]);
+    value["accessProfiles"][1]["requesterClients"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!(BETA_CLIENT));
+    value
+}
+
+/// A refusal reaches its recipient through no authored path. The feed is
+/// the one place the recipient claim selects consent rows, and the compiler
+/// adds the decision bound there; a verified-claim lookup over the same claim
+/// would select rows by recipient alone, so the compiler refuses it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_consent_refusals_reach_no_recipient_through_an_authored_selector() {
+    let mut selector = ungrouped_recipient_source();
+    selector["entities"][consent_fixture::CONSENT_RECORD]["selectorProfiles"] =
+        json!([{"id": "recipient", "fields": ["recipient"]}]);
+    selector["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "recipient-lookup", "principalClaim": "principal", "actorKind": "service",
+            "requesterClients": [BETA_CLIENT], "requiredScopes": ["consent:read"],
+            "permissions": [{
+                "entity": "consent-decision", "operations": ["lookup"],
+                "readableFields": ["subject", "recipient", "decision"], "rowBoundaries": [],
+                "lookups": [{
+                    "selector": "recipient", "valueOrigin": "verified_claim",
+                    "claimMapping": {"recipient": "registry:recipients"}
+                }]
+            }]
+        }));
+    let Err(failure) = consent_fixture::compile(&selector) else {
+        panic!("a lookup selecting by the recipient claim compiled");
+    };
+    assert_eq!(
+        failure
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect::<Vec<_>>(),
+        [(
+            "consent.feed.claim",
+            "entities[id=consent-decision].accessProfiles[id=recipient-lookup].lookups[selector=recipient].claimMapping"
+        )]
+    );
+
+    let h = Harness::start_with(&ungrouped_recipient_source()).await;
+    let refused = h.person("Refused").await;
+    let refusal = h.decide(decision(&refused, "ngo-beta", "refused")).await;
+    let given = h.person("Given").await;
+    let give = h.decide(decision(&given, "ngo-beta", "given")).await;
+    let beta = h.feed(BETA_CLIENT);
+    let feed = h
+        .get(
+            "/v1/records/consent-decisions?accessProfile=recipient-feed&$top=100",
+            &beta,
+        )
+        .await;
+    assert_eq!(ids(&feed), BTreeSet::from([give]), "{feed}");
+    assert_eq!(
+        h.status(
+            &format!("/v1/records/consent-decisions/{refusal}?accessProfile=recipient-feed"),
+            &beta,
+        )
+        .await,
+        StatusCode::NOT_FOUND,
+        "a refusal never reaches its recipient"
     );
     h.database.cleanup().await;
 }

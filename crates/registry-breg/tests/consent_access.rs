@@ -721,6 +721,143 @@ fn the_recipient_claim_binds_only_the_consent_feed() {
     let mut value = source();
     value["accessProfiles"][FEED]["principalClaim"] = json!("registry:recipients");
     assert_refused(&value, "consent.feed.claim");
+
+    // Nor wherever else a project names a verified claim.
+    reserved_claims_never_select_lookup_values();
+    reserved_claims_never_bound_change_request_grants();
+}
+
+/// Every diagnostic a variant raises, as `(code, path)` pairs, so a test can
+/// show the reserved claim is the only thing wrong with it.
+fn refusals(value: &Value) -> Vec<(String, String)> {
+    let Err(failure) = compile(value) else {
+        panic!("the variant must be refused");
+    };
+    failure
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+        .collect()
+}
+
+fn assert_only_reserved_claim_refusal(value: &Value, path: &str) {
+    assert_eq!(
+        refusals(value),
+        [("consent.feed.claim".to_owned(), path.to_owned())]
+    );
+}
+
+/// A profile that looks consent rows up by one field, with the value taken
+/// from a verified claim.
+fn consent_claim_lookup(field: &str, claim: &str) -> Value {
+    let mut value = source();
+    value["entities"][CONSENT]["selectorProfiles"] = json!([{"id": field, "fields": [field]}]);
+    value["accessProfiles"].as_array_mut().unwrap().push(json!({
+        "id": "claim-lookup", "principalClaim": "principal", "actorKind": "service",
+        "requesterClients": ["wfp-scope"], "requiredScopes": ["consent:read"],
+        "permissions": [{
+            "entity": "consent-decision", "operations": ["lookup"],
+            "readableFields": ["subject", "recipient", "decision"], "rowBoundaries": [],
+            "lookups": [{"selector": field, "valueOrigin": "verified_claim", "claimMapping": {field: claim}}]
+        }]
+    }));
+    value
+}
+
+fn reserved_claims_never_select_lookup_values() {
+    // The same lookup over an ordinary claim is a valid project.
+    compile(&consent_claim_lookup("recipient", "recipient_org"))
+        .unwrap_or_else(|failure| panic!("{:?}", failure.diagnostics()));
+
+    // The recipient set would select consent rows by recipient alone,
+    // without the feed's decision bound that hides refusals.
+    assert_only_reserved_claim_refusal(
+        &consent_claim_lookup("recipient", "registry:recipients"),
+        "entities[id=consent-decision].accessProfiles[id=claim-lookup].lookups[selector=recipient].claimMapping",
+    );
+    assert_only_reserved_claim_refusal(
+        &consent_claim_lookup("decision", "registry:consent-decisions:consent-decision"),
+        "entities[id=consent-decision].accessProfiles[id=claim-lookup].lookups[selector=decision].claimMapping",
+    );
+
+    // Nor on an entity that is not a consent record.
+    let person_lookup = |claim: &str| {
+        let mut value = source();
+        let grant = &mut value["accessProfiles"][STEWARD]["permissions"][0];
+        grant["operations"] = json!(["create", "get", "patch", "lookup"]);
+        grant["lookups"] = json!([{
+            "selector": "given-name", "valueOrigin": "verified_claim",
+            "claimMapping": {"given-name": claim}
+        }]);
+        value
+    };
+    compile(&person_lookup("given_name"))
+        .unwrap_or_else(|failure| panic!("{:?}", failure.diagnostics()));
+    assert_only_reserved_claim_refusal(
+        &person_lookup("registry:consent-decisions:consent-decision"),
+        "entities[id=person].accessProfiles[id=steward].lookups[selector=given-name].claimMapping",
+    );
+}
+
+/// A change request whose apply and presence grants bound rows by `claim`.
+fn change_request_project(apply_claim: &str, presence_claim: &str) -> Value {
+    json!({
+        "apiVersion": "registry.registrystack.org/v1alpha1",
+        "kind": "RegistryProject",
+        "registry": {"id": "reserved-claims", "version": "1", "defaultLanguage": "en",
+                     "canonicalBaseIri": "https://authoring.example.test"},
+        "entities": [{
+            "id": "asset", "primaryDataset": "test-dataset", "route": "assets",
+            "mutationMode": "mutable", "changeControl": {"requiredFor": ["patch"]},
+            "fields": [{"id": "label", "type": "string", "maxLength": 32, "required": true, "classification": "internal"}]
+        }, {
+            "id": "asset-request", "primaryDataset": "test-dataset", "route": "asset-requests",
+            "mutationMode": "mutable",
+            "fields": [
+                {"id": "asset", "type": "reference", "target": "asset", "required": true, "classification": "internal"},
+                {"id": "label", "type": "string", "maxLength": 32, "required": true, "classification": "internal"}
+            ],
+            "changeRequest": {
+                "effects": [{"id": "apply-label", "target": {"fromField": "asset"}, "operation": "patch",
+                             "set": {"label": {"fromField": "label"}}}],
+                "review": {"authority": "casework-main", "policyId": "request-review"},
+                "onApproved": {"mode": "manual"}
+            }
+        }],
+        "accessProfiles": [{
+            "id": "asset-reader", "principalClaim": "principal",
+            "permissions": [{
+                "entity": "asset", "operations": ["get"], "readableFields": ["label"],
+                "rowBoundaries": [],
+                "requestPresence": [{"requestType": "asset-request", "rowBoundaries": [
+                    {"field": "label", "claim": presence_claim, "operator": "in"}
+                ]}]
+            }]
+        }, {
+            "id": "reviewer", "default": true, "principalClaim": "principal",
+            "permissions": [{
+                "entity": "asset-request", "operations": ["get", "submit_request", "apply_request"],
+                "readableFields": ["asset", "label"], "writableFields": ["asset", "label"],
+                "rowBoundaries": [],
+                "applyTargets": [{"entity": "asset", "rowBoundaries": [
+                    {"field": "label", "claim": apply_claim, "operator": "in"}
+                ]}]
+            }]
+        }]
+    })
+}
+
+fn reserved_claims_never_bound_change_request_grants() {
+    compile(&change_request_project("labels", "labels"))
+        .unwrap_or_else(|failure| panic!("{:?}", failure.diagnostics()));
+    assert_only_reserved_claim_refusal(
+        &change_request_project("registry:recipients", "labels"),
+        "entities[id=asset-request].accessProfiles[id=reviewer].applyTargets[entity=asset].rowBoundaries",
+    );
+    assert_only_reserved_claim_refusal(
+        &change_request_project("labels", "registry:consent-decisions:asset-request"),
+        "entities[id=asset].accessProfiles[id=asset-reader].requestPresence[requestType=asset-request].rowBoundaries",
+    );
 }
 
 #[cfg(feature = "runtime")]
