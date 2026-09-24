@@ -76,6 +76,7 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_ingestion_runs \
     --test postgres_ingestion_contract \
     --test postgres_ingestion_receipts \
+    --test postgres_import_authority \
     --test postgres_change_requests \
     --test postgres_task_grants \
     --test postgres_request_receipts \
