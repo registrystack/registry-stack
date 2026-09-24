@@ -182,7 +182,8 @@ impl From<PostgresKernelError> for ReconcileError {
             | PostgresKernelError::Pool
             | PostgresKernelError::PoolBuild
             | PostgresKernelError::CatalogInvariant(_)
-            | PostgresKernelError::RegistryUnavailable => Self::Unavailable,
+            | PostgresKernelError::RegistryUnavailable
+            | PostgresKernelError::HistoryCoverageIncomplete => Self::Unavailable,
         }
     }
 }
@@ -192,6 +193,7 @@ impl From<MigrationError> for ReconcileError {
         match error {
             MigrationError::PackageBinding | MigrationError::EmptyPlan => Self::PackageBinding,
             MigrationError::ApplyFailed
+            | MigrationError::HistoryCoverage
             | MigrationError::FieldPatternSyntax { .. }
             | MigrationError::FieldPatternExistingRows { .. }
             | MigrationError::FieldEncryptionLookupCollision { .. }

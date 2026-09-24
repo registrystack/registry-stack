@@ -4245,6 +4245,13 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
                 DiagnosticArtifact::PackageActivation,
                 SuggestedAction::CorrectPackageBuild,
             ),
+            registry_breg::migration::MigrationError::HistoryCoverage => (
+                "apply.history.coverage_incomplete",
+                "history",
+                "retained history coverage does not admit a successor package, so maintenance state was not changed: finish a pending field-encryption erase-history run, or run history rebaseline after a history erasure, then apply the same package again; see https://docs.registrystack.org/operate/breg-retention/#restore-snapshot-coverage-after-an-erasure",
+                DiagnosticArtifact::HistoryRebaseline,
+                SuggestedAction::PrepareHistoryRebaselineRequest,
+            ),
             registry_breg::migration::MigrationError::ApplyFailed => (
                 "apply.migration.failed",
                 "database",
@@ -13776,6 +13783,36 @@ fn apply_reports_an_empty_successor_plan_as_nothing_to_apply() {
             diagnostic.message
         );
     }
+}
+
+#[cfg(test)]
+#[test]
+fn apply_reports_a_history_coverage_refusal_with_its_recovery() {
+    let report = apply_lifecycle_failure(ApplyLifecycleError::Apply(
+        registry_breg::migration::MigrationError::HistoryCoverage,
+    ));
+    let diagnostic = &report.diagnostics[0];
+    assert_eq!(diagnostic.code, "apply.history.coverage_incomplete");
+    assert_eq!(diagnostic.path, "history");
+    assert_eq!(diagnostic.artifact, DiagnosticArtifact::HistoryRebaseline);
+    assert_eq!(
+        diagnostic.suggested_action,
+        SuggestedAction::PrepareHistoryRebaselineRequest
+    );
+    for fragment in [
+        "history coverage",
+        "field-encryption erase-history",
+        "history rebaseline",
+        "https://docs.registrystack.org/operate/breg-retention/#restore-snapshot-coverage-after-an-erasure",
+        "maintenance state was not changed",
+    ] {
+        assert!(
+            diagnostic.message.contains(fragment),
+            "{fragment}: {}",
+            diagnostic.message
+        );
+    }
+    assert!(!diagnostic.message.contains("reconciliation"));
 }
 
 #[cfg(test)]
