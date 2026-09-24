@@ -7,6 +7,11 @@
 //! serves requests and never changes the schema. Migrations are serialized on
 //! one session advisory lock, so two migrators started together apply each
 //! version once and both succeed.
+//!
+//! The package ledger records each package a deployment activated. The
+//! operator records a package with the migration credential, through
+//! `messagingctl apply`; the runtime reads the latest entry at startup and
+//! serves only the package it names.
 
 use std::str::FromStr;
 use std::time::Duration;
@@ -28,6 +33,10 @@ const MIGRATIONS: [(i64, &str); 1] = [(1, MESSAGING_MIGRATION)];
 /// waits here instead of racing the migrations table's primary key. The key
 /// spells the ASCII bytes of "messagin".
 const MIGRATION_LOCK_KEY: i64 = 0x6d65_7373_6167_696e;
+
+/// Serializes package activations on one transaction lock, so two operators
+/// applying the same package record it once. The key spells "msgledgr".
+const LEDGER_LOCK_KEY: i64 = 0x6d73_676c_6564_6772;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -179,6 +188,55 @@ impl PostgresStore {
         } else {
             Err(StoreError::SchemaVersion)
         }
+    }
+
+    /// The digest of the package the ledger names active: its latest entry,
+    /// or none when no package was ever applied.
+    pub async fn active_package_digest(&self) -> Result<Option<String>, StoreError> {
+        let client = self.client().await?;
+        let row = client
+            .query_opt(
+                "SELECT package_digest FROM messaging_package_ledger \
+                 ORDER BY sequence DESC LIMIT 1",
+                &[],
+            )
+            .await?;
+        Ok(row.map(|row| row.get(0)))
+    }
+
+    /// Record `digest` as the active package. Applying the package the
+    /// ledger already names active records nothing and answers `false`.
+    pub async fn apply_package(
+        &self,
+        digest: &str,
+        runtime_version: &str,
+    ) -> Result<bool, StoreError> {
+        let mut client = self.client().await?;
+        let transaction = client.transaction().await?;
+        transaction
+            .execute("SELECT pg_advisory_xact_lock($1)", &[&LEDGER_LOCK_KEY])
+            .await?;
+        let active: Option<String> = transaction
+            .query_opt(
+                "SELECT package_digest FROM messaging_package_ledger \
+                 ORDER BY sequence DESC LIMIT 1",
+                &[],
+            )
+            .await?
+            .map(|row| row.get(0));
+        if active.as_deref() == Some(digest) {
+            transaction.commit().await?;
+            return Ok(false);
+        }
+        transaction
+            .execute(
+                "INSERT INTO messaging_package_ledger(package_digest, runtime_version, activated_at) \
+                 VALUES ($1, $2, now())",
+                &[&digest, &runtime_version],
+            )
+            .await?;
+        transaction.commit().await?;
+        Ok(true)
     }
 }
 

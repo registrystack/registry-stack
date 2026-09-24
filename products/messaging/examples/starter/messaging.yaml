@@ -1,9 +1,33 @@
 apiVersion: registry.registrystack.org/messaging-package/v1alpha1
 kind: MessagingPackage
+# The transports this deployment sends through. Only the kind is package;
+# each provider's endpoint and credentials are runtime configuration.
+providers:
+  - id: mail-relay
+    kind: smtp
+  - id: sms-gateway
+    kind: http
+# What a caller selects: a channel, the provider carrying it, the sender
+# identity, and for SMS the most segments one message may use.
+senderProfiles:
+  - id: transactional
+    channel: email
+    provider: mail-relay
+    sender: notices@example.org
+  - id: reminders-sms
+    channel: sms
+    provider: sms-gateway
+    sender: Registry
+    maximumSegments: 2
+# Every template version the package ships, each under
+# templates/<id>/<version>/. A version is a label, so quote a numeric one.
+templates:
+  - id: appointment-reminder
+    version: "1"
+  - id: appointment-reminder-sms
+    version: "1"
 # Who may call this deployment and what each caller may do. A client appears
-# in exactly one profile. Sender profiles and templates are named here by
-# identifier; the package documents that declare them arrive with templates
-# and provider dispatch.
+# in exactly one profile.
 accessProfiles:
   - id: case-notices
     principalClaim: sub
@@ -11,8 +35,8 @@ accessProfiles:
     requesterClients: [case-system]
     actorKind: service
     role: sender
-    senderProfiles: [transactional]
-    templates: [appointment-reminder]
+    senderProfiles: [transactional, reminders-sms]
+    templates: [appointment-reminder, appointment-reminder-sms]
     requestsPerMinute: 60
     burst: 10
   - id: operations

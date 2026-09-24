@@ -169,6 +169,7 @@ pub struct CompiledTemplate {
     parts: Vec<PartKind>,
     locales: BTreeMap<String, LocaleSources>,
     schema: Arc<JSONSchema>,
+    sample: Option<Value>,
 }
 
 impl fmt::Debug for CompiledTemplate {
@@ -251,8 +252,9 @@ impl CompiledTemplate {
             parts: source.document.parts,
             locales: source.locales,
             schema: Arc::new(schema),
+            sample: source.sample,
         };
-        if let Some(sample) = &source.sample {
+        if let Some(sample) = compiled.sample() {
             for locale in compiled.locales() {
                 compiled
                     .render(locale, sample)
@@ -279,6 +281,12 @@ impl CompiledTemplate {
 
     pub fn locales(&self) -> impl Iterator<Item = &str> {
         self.locales.keys().map(String::as_str)
+    }
+
+    /// The version's `sample.json`, which renders in every locale.
+    #[must_use]
+    pub fn sample(&self) -> Option<&Value> {
+        self.sample.as_ref()
     }
 
     /// Validate `data` against the schema, then render every part in
@@ -579,6 +587,14 @@ pub(crate) mod tests {
         );
         assert_eq!(parts.html.as_deref(), Some("<p>Bonjour Ada</p>"));
         assert_eq!(template.segments(&parts), None);
+    }
+
+    #[test]
+    fn a_compiled_template_keeps_its_sample_for_tooling() {
+        let template = CompiledTemplate::compile(email_source("1")).unwrap();
+        assert_eq!(template.sample(), Some(&data()));
+        let template = CompiledTemplate::compile(sms_source("1", "x")).unwrap();
+        assert_eq!(template.sample(), None);
     }
 
     #[test]

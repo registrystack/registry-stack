@@ -104,9 +104,16 @@ mod tests {
     }
 
     #[test]
-    fn messaging_publishes_its_runtime_and_check_commands() {
+    fn messaging_publishes_its_runtime_and_package_commands() {
         let catalog = catalog();
-        for invocation in ["messaging migrate", "messaging serve", "messagingctl check"] {
+        for invocation in [
+            "messaging migrate",
+            "messaging serve",
+            "messagingctl init",
+            "messagingctl check",
+            "messagingctl preview",
+            "messagingctl apply",
+        ] {
             assert!(!find_command(&catalog.binaries, invocation).usage.is_empty());
         }
         let messaging = find_command(&catalog.binaries, "messaging");

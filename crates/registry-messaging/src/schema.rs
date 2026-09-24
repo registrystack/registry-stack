@@ -72,7 +72,15 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
         let mut responses = Map::new();
         responses.insert(
             operation.success_status.to_string(),
-            json!({"description": "The operation succeeded. The body is empty."}),
+            match operation.response_body {
+                Some(schema) => json!({
+                    "description": "The operation succeeded.",
+                    "content": {"application/json": {"schema": {
+                        "$ref": format!("#/components/schemas/{schema}")
+                    }}}
+                }),
+                None => json!({"description": "The operation succeeded. The body is empty."}),
+            },
         );
         let mut by_status: BTreeMap<u16, Vec<ProblemCode>> = BTreeMap::new();
         for problem in operation.problems {
@@ -101,13 +109,26 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
             "summary": operation.summary,
             "responses": responses,
         });
-        if operation.path.contains('{') {
-            entry["parameters"] = json!([{
-                "name": "message_id",
-                "in": "path",
+        let parameters: Vec<Value> = path_parameters(operation.path)
+            .map(|name| {
+                json!({
+                    "name": name,
+                    "in": "path",
+                    "required": true,
+                    "schema": {"type": "string", "minLength": 1}
+                })
+            })
+            .collect();
+        if !parameters.is_empty() {
+            entry["parameters"] = Value::Array(parameters);
+        }
+        if let Some(schema) = operation.request_body {
+            entry["requestBody"] = json!({
                 "required": true,
-                "schema": {"type": "string", "minLength": 1}
-            }]);
+                "content": {"application/json": {"schema": {
+                    "$ref": format!("#/components/schemas/{schema}")
+                }}}
+            });
         }
         entry["security"] = if operation.authenticated {
             json!([{"bearer": []}])
@@ -156,11 +177,75 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
                         "code": {"type": "string", "enum": codes},
                         "traceId": {"type": "string"}
                     }
+                },
+                "TemplatePreviewRequest": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["locale", "data"],
+                    "properties": {
+                        "locale": {
+                            "type": "string",
+                            "description": "A locale the template version declares."
+                        },
+                        "data": {
+                            "description": "The template data, validated against the template \
+                                            version's schema before rendering."
+                        }
+                    }
+                },
+                "TemplatePreview": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["template", "locale", "channel", "packageDigest", "parts"],
+                    "properties": {
+                        "template": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["id", "version"],
+                            "properties": {
+                                "id": {"type": "string"},
+                                "version": {"type": "string"}
+                            }
+                        },
+                        "locale": {"type": "string"},
+                        "channel": {"type": "string", "enum": ["email", "sms"]},
+                        "packageDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                        "parts": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["text"],
+                            "properties": {
+                                "subject": {"type": "string"},
+                                "text": {"type": "string"},
+                                "html": {"type": "string"}
+                            }
+                        },
+                        "sms": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["encoding", "units", "segments"],
+                            "description": "The segment count, for an SMS template only.",
+                            "properties": {
+                                "encoding": {"type": "string", "enum": ["gsm7", "ucs2"]},
+                                "units": {"type": "integer", "minimum": 0},
+                                "segments": {"type": "integer", "minimum": 1}
+                            }
+                        }
+                    }
                 }
             }
         }
     });
     Ok([(OPENAPI_FILE, render(&document)?)].into())
+}
+
+/// The `{name}` segments of a route template, in order.
+fn path_parameters(path: &str) -> impl Iterator<Item = &str> {
+    path.split('/').filter_map(|segment| {
+        segment
+            .strip_prefix('{')
+            .and_then(|segment| segment.strip_suffix('}'))
+    })
 }
 
 /// The generator examples' shared entry point: parse `--output <directory>`
@@ -412,6 +497,86 @@ mod tests {
         assert_eq!(message["security"], json!([{"bearer": []}]));
         assert!(message["responses"]["404"].is_object());
         assert!(message["responses"]["401"].is_object());
+    }
+
+    #[test]
+    fn the_preview_operation_publishes_its_path_parameters_and_bodies() {
+        let documents = openapi_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[OPENAPI_FILE]).unwrap();
+        let preview = &document["paths"][registry_messaging_core::TEMPLATE_PREVIEW_PATH]["post"];
+        let names: Vec<&str> = preview["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|parameter| parameter["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["template_id", "version"]);
+        assert_eq!(
+            preview["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/TemplatePreviewRequest"
+        );
+        assert_eq!(
+            preview["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/TemplatePreview"
+        );
+        let message = &document["paths"]["/v1/messages/{message_id}"]["get"];
+        assert_eq!(message["parameters"][0]["name"], "message_id");
+        assert!(message.get("requestBody").is_none());
+    }
+
+    /// The published preview schemas are written out by hand, since the core
+    /// types carry no schema derive; this holds them to what the core
+    /// serializes, member for member.
+    #[test]
+    fn the_published_preview_schemas_name_exactly_the_serialized_members() {
+        let documents = openapi_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[OPENAPI_FILE]).unwrap();
+        let schemas = &document["components"]["schemas"];
+        let package = crate::package::load_package(&crate::package::tests::starter_root())
+            .unwrap()
+            .package;
+        let request = registry_messaging_core::TemplatePreviewRequest {
+            locale: "en".to_owned(),
+            data: json!({"name": "Ada", "day": "2026-10-01", "office": "Office"}),
+        };
+        let email = package
+            .preview("appointment-reminder", "1", &request)
+            .unwrap();
+        let sms = package
+            .preview("appointment-reminder-sms", "1", &request)
+            .unwrap();
+        fn members(value: &Value) -> Vec<String> {
+            let mut members: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+            members.sort();
+            members
+        }
+        let email = serde_json::to_value(email).unwrap();
+        let sms = serde_json::to_value(sms).unwrap();
+        let preview = &schemas["TemplatePreview"];
+        assert_eq!(members(&sms), members(&preview["properties"]));
+        assert_eq!(
+            members(&email["parts"]),
+            members(&preview["properties"]["parts"]["properties"])
+        );
+        assert_eq!(
+            members(&sms["sms"]),
+            members(&preview["properties"]["sms"]["properties"])
+        );
+        assert_eq!(
+            members(&email["template"]),
+            members(&preview["properties"]["template"]["properties"])
+        );
+        assert_eq!(
+            members(&serde_json::to_value(&request).unwrap()),
+            members(&schemas["TemplatePreviewRequest"]["properties"])
+        );
+        let encoding = sms["sms"]["encoding"].clone();
+        assert!(
+            preview["properties"]["sms"]["properties"]["encoding"]["enum"]
+                .as_array()
+                .unwrap()
+                .contains(&encoding)
+        );
     }
 
     #[test]

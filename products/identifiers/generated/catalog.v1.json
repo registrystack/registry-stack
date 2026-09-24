@@ -1639,12 +1639,69 @@
       "description": "The bearer credential is missing, invalid, or expired. Sign in again.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "2f304ff2b1214e6adfe936606c7520312125ff22e75d9c8c1350396f42cfc8ed"
+        "sha256": "b8d6447b58b5956a540e720290f7fe61c112d34d411cdc6687792ce99b98782e"
       },
       "problem": {
         "code": "authentication.refused",
         "httpStatuses": [
           401
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-messaging/content/invalid",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "messaging",
+      "title": "Content invalid for the channel",
+      "description": "The content does not have the parts the channel requires, or the template's channel differs from the sender profile's.",
+      "source": {
+        "path": "crates/registry-messaging-core/src/problem.rs",
+        "sha256": "b8d6447b58b5956a540e720290f7fe61c112d34d411cdc6687792ce99b98782e"
+      },
+      "problem": {
+        "code": "content.invalid",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-messaging/content/too-large",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "messaging",
+      "title": "Content too large",
+      "description": "A content part exceeds the size the channel accepts. Shorten the content or the data.",
+      "source": {
+        "path": "crates/registry-messaging-core/src/problem.rs",
+        "sha256": "b8d6447b58b5956a540e720290f7fe61c112d34d411cdc6687792ce99b98782e"
+      },
+      "problem": {
+        "code": "content.too-large",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-messaging/content/too-many-segments",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "messaging",
+      "title": "Too many SMS segments",
+      "description": "The SMS text needs more segments than the sender profile allows. Shorten the text or the data.",
+      "source": {
+        "path": "crates/registry-messaging-core/src/problem.rs",
+        "sha256": "b8d6447b58b5956a540e720290f7fe61c112d34d411cdc6687792ce99b98782e"
+      },
+      "problem": {
+        "code": "content.too-many-segments",
+        "httpStatuses": [
+          422
         ]
       }
     },
@@ -1658,7 +1715,7 @@
       "description": "The stored response for this idempotency key has expired. Reconcile the original submission before choosing a new key.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "2f304ff2b1214e6adfe936606c7520312125ff22e75d9c8c1350396f42cfc8ed"
+        "sha256": "b8d6447b58b5956a540e720290f7fe61c112d34d411cdc6687792ce99b98782e"
       },
       "problem": {
         "code": "idempotency.expired",
@@ -1677,7 +1734,7 @@
       "description": "This idempotency key was used for a different request.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "2f304ff2b1214e6adfe936606c7520312125ff22e75d9c8c1350396f42cfc8ed"
+        "sha256": "b8d6447b58b5956a540e720290f7fe61c112d34d411cdc6687792ce99b98782e"
       },
       "problem": {
         "code": "idempotency.key-reused",
@@ -1696,7 +1753,7 @@
       "description": "No message with this identifier is visible to the caller.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "2f304ff2b1214e6adfe936606c7520312125ff22e75d9c8c1350396f42cfc8ed"
+        "sha256": "b8d6447b58b5956a540e720290f7fe61c112d34d411cdc6687792ce99b98782e"
       },
       "problem": {
         "code": "message.not-visible",
@@ -1715,7 +1772,7 @@
       "description": "Your Messaging access profile does not allow this operation.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "2f304ff2b1214e6adfe936606c7520312125ff22e75d9c8c1350396f42cfc8ed"
+        "sha256": "b8d6447b58b5956a540e720290f7fe61c112d34d411cdc6687792ce99b98782e"
       },
       "problem": {
         "code": "operation.not-authorized",
@@ -1734,7 +1791,7 @@
       "description": "No Messaging access profile authorizes this caller for this request.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "2f304ff2b1214e6adfe936606c7520312125ff22e75d9c8c1350396f42cfc8ed"
+        "sha256": "b8d6447b58b5956a540e720290f7fe61c112d34d411cdc6687792ce99b98782e"
       },
       "problem": {
         "code": "profile.not-authorized",
@@ -1753,7 +1810,7 @@
       "description": "The request body exceeds the accepted size.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "2f304ff2b1214e6adfe936606c7520312125ff22e75d9c8c1350396f42cfc8ed"
+        "sha256": "b8d6447b58b5956a540e720290f7fe61c112d34d411cdc6687792ce99b98782e"
       },
       "problem": {
         "code": "request.body-too-large",
@@ -1772,7 +1829,7 @@
       "description": "The request could not be read as a Messaging request.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "2f304ff2b1214e6adfe936606c7520312125ff22e75d9c8c1350396f42cfc8ed"
+        "sha256": "b8d6447b58b5956a540e720290f7fe61c112d34d411cdc6687792ce99b98782e"
       },
       "problem": {
         "code": "request.invalid",
@@ -1791,7 +1848,7 @@
       "description": "The route exists but not for this method.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "2f304ff2b1214e6adfe936606c7520312125ff22e75d9c8c1350396f42cfc8ed"
+        "sha256": "b8d6447b58b5956a540e720290f7fe61c112d34d411cdc6687792ce99b98782e"
       },
       "problem": {
         "code": "request.method-not-allowed",
@@ -1810,7 +1867,7 @@
       "description": "The requested route does not exist.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "2f304ff2b1214e6adfe936606c7520312125ff22e75d9c8c1350396f42cfc8ed"
+        "sha256": "b8d6447b58b5956a540e720290f7fe61c112d34d411cdc6687792ce99b98782e"
       },
       "problem": {
         "code": "request.not-found",
@@ -1829,7 +1886,7 @@
       "description": "The request body could not be processed.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "2f304ff2b1214e6adfe936606c7520312125ff22e75d9c8c1350396f42cfc8ed"
+        "sha256": "b8d6447b58b5956a540e720290f7fe61c112d34d411cdc6687792ce99b98782e"
       },
       "problem": {
         "code": "request.unprocessable",
@@ -1848,7 +1905,7 @@
       "description": "The request body is not JSON.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "2f304ff2b1214e6adfe936606c7520312125ff22e75d9c8c1350396f42cfc8ed"
+        "sha256": "b8d6447b58b5956a540e720290f7fe61c112d34d411cdc6687792ce99b98782e"
       },
       "problem": {
         "code": "request.unsupported-media-type",
@@ -1867,12 +1924,88 @@
       "description": "Messaging is unavailable. Try again after the service recovers.",
       "source": {
         "path": "crates/registry-messaging-core/src/problem.rs",
-        "sha256": "2f304ff2b1214e6adfe936606c7520312125ff22e75d9c8c1350396f42cfc8ed"
+        "sha256": "b8d6447b58b5956a540e720290f7fe61c112d34d411cdc6687792ce99b98782e"
       },
       "problem": {
         "code": "service.unavailable",
         "httpStatuses": [
           503
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-messaging/template/data-invalid",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "messaging",
+      "title": "Template data invalid",
+      "description": "The data does not match the template's data schema.",
+      "source": {
+        "path": "crates/registry-messaging-core/src/problem.rs",
+        "sha256": "b8d6447b58b5956a540e720290f7fe61c112d34d411cdc6687792ce99b98782e"
+      },
+      "problem": {
+        "code": "template.data-invalid",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-messaging/template/locale-unavailable",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "messaging",
+      "title": "Template locale unavailable",
+      "description": "The template version has no content in the requested locale. Choose one of its declared locales.",
+      "source": {
+        "path": "crates/registry-messaging-core/src/problem.rs",
+        "sha256": "b8d6447b58b5956a540e720290f7fe61c112d34d411cdc6687792ce99b98782e"
+      },
+      "problem": {
+        "code": "template.locale-unavailable",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-messaging/template/not-found",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "messaging",
+      "title": "Template not found",
+      "description": "No template with this identifier and version is available to the caller.",
+      "source": {
+        "path": "crates/registry-messaging-core/src/problem.rs",
+        "sha256": "b8d6447b58b5956a540e720290f7fe61c112d34d411cdc6687792ce99b98782e"
+      },
+      "problem": {
+        "code": "template.not-found",
+        "httpStatuses": [
+          404
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-messaging/template/render-refused",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "messaging",
+      "title": "Template render refused",
+      "description": "The template could not be rendered with this data within the rendering limits.",
+      "source": {
+        "path": "crates/registry-messaging-core/src/problem.rs",
+        "sha256": "b8d6447b58b5956a540e720290f7fe61c112d34d411cdc6687792ce99b98782e"
+      },
+      "problem": {
+        "code": "template.render-refused",
+        "httpStatuses": [
+          422
         ]
       }
     },
@@ -3096,11 +3229,11 @@
       "description": "Registry Messaging runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-messaging/src/schema.rs",
-        "sha256": "a5094292dbe9e8a344ef0fa4bf44d454a7cbe3d4bb6c615d42e30cf550b7630f"
+        "sha256": "e4083e52482dc288c9a63dfdfe2fc4f7c23619d81519c1a8cf3cbbd5bf92eaf6"
       },
       "artifact": {
         "path": "products/messaging/generated/runtime/runtime.schema.json",
-        "sha256": "46c8a07a3a61ea3c58b44507e7764335c55ef4cf591eb705db9ba72d42866436",
+        "sha256": "c7b5b378e17278a1c789ad46e09828f441fcdd551a55308f426f7b001355bec5",
         "mediaType": "application/schema+json"
       }
     },

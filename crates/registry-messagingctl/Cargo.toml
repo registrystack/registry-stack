@@ -18,10 +18,9 @@ workspace = true
 [dependencies]
 clap.workspace = true
 registry-messaging.workspace = true
+registry-messaging-core.workspace = true
 registry-platform-buildinfo.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-
-[dev-dependencies]
-registry-messaging-core.workspace = true
 tempfile.workspace = true
+tokio = { workspace = true, features = ["rt"] }

@@ -15,7 +15,10 @@ SPEC.loader.exec_module(MODULE)
 
 
 def metadata(features=(), required=("postgres-test",), target="postgres_migrate", extra=()):
-    targets = [{"name": target, "kind": ["test"], "required-features": list(required)}]
+    targets = [
+        {"name": name, "kind": ["test"], "required-features": list(required)}
+        for name in (target, "postgres_package")
+    ]
     targets.extend(extra)
     return {
         "packages": [{"id": "runtime", "name": "registry-messaging", "targets": targets}],
@@ -72,13 +75,15 @@ class DatabaseTestIsolationTests(unittest.TestCase):
             (root / "src").mkdir()
             (root / "tests").mkdir()
             (root / "src/lib.rs").write_text("", encoding="utf-8")
-            (root / "tests/postgres_migrate.rs").write_text("", encoding="utf-8")
+            for suite in ("postgres_migrate", "postgres_package"):
+                (root / f"tests/{suite}.rs").write_text("", encoding="utf-8")
             for default, expected in [('[]', False), ('["full"]', True)]:
                 (root / "Cargo.toml").write_text(
                     '[package]\nname="registry-messaging"\nversion="0.1.0"\nedition="2021"\n'
                     '[workspace]\n[features]\n'
                     f'default={default}\nfull=["alias"]\nalias=["postgres-test"]\npostgres-test=[]\n'
-                    '[[test]]\nname="postgres_migrate"\nrequired-features=["postgres-test"]\n',
+                    '[[test]]\nname="postgres_migrate"\nrequired-features=["postgres-test"]\n'
+                    '[[test]]\nname="postgres_package"\nrequired-features=["postgres-test"]\n',
                     encoding="utf-8",
                 )
                 subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=root, check=True,

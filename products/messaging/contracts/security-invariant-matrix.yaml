@@ -154,19 +154,22 @@ invariants:
       retention. The full-journey absence test lands in slice S6, once every
       audited operation exists.
   - id: MESSAGING-SEC-09
-    state: pending
-    plannedSlice: S2
+    state: enforced
     threat: >-
       A template reaches the network or a file, or renders without bound and
       exhausts the runtime.
     enforcementPoint: >-
-      The template engine with no loader beyond the package, no filesystem or
-      network functions, fuel, and an output ceiling.
+      The core's template environment: sources come only from the package
+      the runtime loaded and checked at startup, with no loader, include,
+      import, or extends; only the date and number filters; strict undefined;
+      a fuel budget per render; and a byte ceiling per part checked as the
+      output grows.
     refusal: >-
-      Refuse the render with a bounded error and accept nothing.
-    pendingNote: >-
-      Templates land in slice S2. The negative tests exhaust fuel and exceed
-      the output ceiling.
+      Refuse the render with 422 template.render-refused, naming the part and
+      the failure class but no value, and accept nothing.
+    negativeTest:
+      path: crates/registry-messaging-core/src/render.rs
+      name: a_runaway_template_runs_out_of_fuel
   - id: MESSAGING-SEC-10
     state: pending
     plannedSlice: S6

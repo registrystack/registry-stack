@@ -2,7 +2,8 @@
 
 //! Database-backed store tests: migrations applied concurrently and
 //! repeatedly, readiness against the applied schema, and a served runtime
-//! answering `/ready` from a real PostgreSQL deployment.
+//! answering `/ready` from a real PostgreSQL deployment. The package ledger
+//! has its own suite, `postgres_package`.
 //!
 //! Every test runs in its own schema inside the database named by
 //! `MESSAGING_TEST_DATABASE_URL`. A test binary that passes because its
@@ -13,8 +14,8 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
 
-use registry_messaging::config::DatabaseConfig;
-use registry_messaging::runtime::{migrate_from_path, serve_from_path};
+use registry_messaging::config::{DatabaseConfig, RuntimeConfig};
+use registry_messaging::runtime::{apply_package, migrate_from_path, serve_from_path};
 use registry_messaging::store::{PostgresStore, StoreError};
 use registry_messaging_client::{MessagingClient, MessagingClientConfig};
 use registry_platform_config::{SecretProvider, SecretResolver};
@@ -241,6 +242,10 @@ async fn a_served_runtime_is_ready_and_keeps_metrics_on_the_private_listener() {
     migrate_from_path(&runtime_config)
         .await
         .expect("messaging migrate");
+    let config = RuntimeConfig::load(&runtime_config).expect("the runtime configuration");
+    apply_package(&config, true)
+        .await
+        .expect("messagingctl apply --apply");
     let served = tokio::spawn(serve_from_path(runtime_config.clone()));
 
     let mut ready = None;

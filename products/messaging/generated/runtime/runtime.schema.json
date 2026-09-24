@@ -246,11 +246,11 @@
     },
     "RuntimePackageConfig": {
       "additionalProperties": false,
-      "description": "The root of an authored Messaging package, holding `messaging.yaml`.",
+      "description": "The root of an authored Messaging package, holding `messaging.yaml` and\nits `templates/` tree.",
       "properties": {
         "expectedDigest": {
           "default": null,
-          "description": "The `sha256:` digest the operator pins the package to. This version\ncannot compute a package digest yet, so a pinned digest is refused\nrather than accepted unverified.",
+          "description": "The `sha256:` digest the operator pins the package to. The runtime\ncomputes the digest of the package it reads and refuses to start when\nthe two differ.",
           "type": [
             "string",
             "null"

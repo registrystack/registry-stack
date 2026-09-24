@@ -10,8 +10,7 @@ use std::time::Duration;
 use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
 use jsonwebtoken::Algorithm;
 use registry_messaging_core::{
-    AccessProfiles, MessagingPackage, MESSAGING_RUNTIME_API_VERSION, MESSAGING_RUNTIME_KIND,
-    PACKAGE_FILE,
+    MESSAGING_RUNTIME_API_VERSION, MESSAGING_RUNTIME_KIND, PACKAGE_FILE,
 };
 use registry_platform_config::{
     SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,
@@ -24,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::environment::{substitute, SubstitutionError};
+use crate::package::{load_package, LoadedPackage, PackageLoadError};
 
 /// Explain one refused secret reference without disclosing what it protects.
 ///
@@ -112,15 +112,16 @@ pub struct RuntimeConfig {
     pub retention: RetentionConfig,
 }
 
-/// The root of an authored Messaging package, holding `messaging.yaml`.
+/// The root of an authored Messaging package, holding `messaging.yaml` and
+/// its `templates/` tree.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimePackageConfig {
     pub root: PathBuf,
-    /// The `sha256:` digest the operator pins the package to. This version
-    /// cannot compute a package digest yet, so a pinned digest is refused
-    /// rather than accepted unverified.
+    /// The `sha256:` digest the operator pins the package to. The runtime
+    /// computes the digest of the package it reads and refuses to start when
+    /// the two differ.
     #[serde(default)]
     pub expected_digest: Option<String>,
 }
@@ -379,20 +380,20 @@ impl RuntimeConfig {
         self.package.root.join(PACKAGE_FILE)
     }
 
-    /// Read and check the package this deployment runs, returning its access
-    /// profiles. Every client a profile names must be one the OIDC settings
-    /// admit, or the profile could never be reached.
-    pub fn load_package(&self) -> Result<AccessProfiles, RuntimeConfigError> {
-        let bytes = read_bounded(&self.package_path()).map_err(RuntimeConfigError::PackageRead)?;
-        let deserializer = serde_norway::Deserializer::from_slice(&bytes);
-        let package: MessagingPackage =
-            serde_path_to_error::deserialize(deserializer).map_err(|error| {
-                let (path, cause) = refused_yaml(error);
-                RuntimeConfigError::PackageParse { path, cause }
-            })?;
-        let profiles = package
-            .check()
-            .map_err(|error| RuntimeConfigError::Package(error.to_string()))?;
+    /// Read and check the package this deployment runs. Every client a
+    /// profile names must be one the OIDC settings admit, or the profile
+    /// could never be reached, and a pinned `expectedDigest` must equal the
+    /// digest of what was read.
+    pub fn load_package(&self) -> Result<LoadedPackage, RuntimeConfigError> {
+        let loaded = load_package(&self.package.root).map_err(RuntimeConfigError::Package)?;
+        if let Some(expected) = &self.package.expected_digest {
+            if expected != loaded.package.digest() {
+                return Err(RuntimeConfigError::PackageDigestMismatch {
+                    expected: expected.clone(),
+                    actual: loaded.package.digest().to_owned(),
+                });
+            }
+        }
         let allowed: BTreeSet<&str> = self
             .authentication
             .oidc
@@ -400,7 +401,7 @@ impl RuntimeConfig {
             .iter()
             .map(String::as_str)
             .collect();
-        for profile in profiles.iter() {
+        for profile in loaded.package.access_profiles().iter() {
             if let Some(client) = profile
                 .requester_clients
                 .iter()
@@ -412,7 +413,7 @@ impl RuntimeConfig {
                 });
             }
         }
-        Ok(profiles)
+        Ok(loaded)
     }
 
     pub fn check(&self) -> Result<(), RuntimeConfigError> {
@@ -429,7 +430,6 @@ impl RuntimeConfig {
             if !valid_sha256_digest(digest) {
                 return Err(RuntimeConfigError::InvalidExpectedDigest);
             }
-            return Err(RuntimeConfigError::ExpectedDigestUnsupported);
         }
         if self
             .secret_providers
@@ -720,7 +720,9 @@ fn parse_static_jwks(bytes: &[u8]) -> Result<JwkSet, RuntimeConfigError> {
 
 /// Name where a YAML document was refused and why. A refusal serde never
 /// attributed to a member is reported at the document root.
-fn refused_yaml(error: serde_path_to_error::Error<serde_norway::Error>) -> (String, String) {
+pub(crate) fn refused_yaml(
+    error: serde_path_to_error::Error<serde_norway::Error>,
+) -> (String, String) {
     let path = error.path().to_string();
     let path = if path == "." { "/".to_owned() } else { path };
     (path, redact_refused_values(&error.into_inner().to_string()))
@@ -731,7 +733,7 @@ fn refused_yaml(error: serde_path_to_error::Error<serde_norway::Error>) -> (Stri
 /// `invalid type:` or `invalid value:` clause survives, because the value
 /// might be a secret reference, a database URL, or a credential typed in the
 /// wrong place, and a startup refusal is written to the operator's log.
-fn redact_refused_values(message: &str) -> String {
+pub(crate) fn redact_refused_values(message: &str) -> String {
     const CLAUSES: [&str; 2] = ["invalid type: ", "invalid value: "];
     let mut redacted = String::with_capacity(message.len());
     let mut rest = message;
@@ -806,10 +808,10 @@ pub enum RuntimeConfigError {
     #[error("package.expectedDigest must be sha256: followed by 64 lowercase hexadecimal digits")]
     InvalidExpectedDigest,
     #[error(
-        "package.expectedDigest cannot be verified by this version of the runtime; remove it \
-         rather than run an unverified pin"
+        "package.expectedDigest is {expected}, but the package under package.root has digest \
+         {actual}"
     )]
-    ExpectedDigestUnsupported,
+    PackageDigestMismatch { expected: String, actual: String },
     #[error("secretProviders must explicitly enable file, environment, or both")]
     InvalidSecretProviders,
     #[error("{path} is not a valid secret reference")]
@@ -842,12 +844,8 @@ pub enum RuntimeConfigError {
     InvalidRetention,
     #[error("plaintext PostgreSQL is test-only")]
     PlaintextDatabase,
-    #[error("the Messaging package could not be read")]
-    PackageRead(#[source] std::io::Error),
-    #[error("the Messaging package is not valid at {path}: {cause}")]
-    PackageParse { path: String, cause: String },
-    #[error("the Messaging package is invalid: {0}")]
-    Package(String),
+    #[error("the Messaging package at {0}")]
+    Package(#[source] PackageLoadError),
     #[error(
         "access profile {profile} names requester client {client}, which \
          authentication.oidc.allowedClients does not admit"
@@ -870,7 +868,7 @@ impl RuntimeConfigError {
             Self::RelativeRuntimePath | Self::Read(_) => "/",
             Self::Parse { path, .. } => path,
             Self::Environment(error) => &error.path,
-            Self::InvalidExpectedDigest | Self::ExpectedDigestUnsupported => {
+            Self::InvalidExpectedDigest | Self::PackageDigestMismatch { .. } => {
                 "package.expectedDigest"
             }
             Self::InvalidSecretProviders => "secretProviders",
@@ -882,9 +880,7 @@ impl RuntimeConfigError {
             Self::InvalidDatabaseReference | Self::PlaintextDatabase => "database",
             Self::InvalidAuditReference => "audit.hashKeyRef",
             Self::InvalidRetention => "retention",
-            Self::PackageRead(_) | Self::PackageParse { .. } | Self::Package(_) => {
-                "package.root/messaging.yaml"
-            }
+            Self::Package(error) => error.path(),
             Self::ProfileClientNotAllowed { .. } => "authentication.oidc.allowedClients",
         }
     }
@@ -893,37 +889,14 @@ impl RuntimeConfigError {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use registry_messaging_core::{MESSAGING_PACKAGE_API_VERSION, MESSAGING_PACKAGE_KIND};
     use serde_json::{json, Value};
 
+    /// The starter package's manifest, as a value a test may change.
     pub(crate) fn package_value() -> Value {
-        json!({
-            "apiVersion": MESSAGING_PACKAGE_API_VERSION,
-            "kind": MESSAGING_PACKAGE_KIND,
-            "accessProfiles": [
-                {
-                    "id": "case-notices",
-                    "principalClaim": "sub",
-                    "requiredScopes": ["messaging:send"],
-                    "requesterClients": ["case-system"],
-                    "actorKind": "service",
-                    "role": "sender",
-                    "senderProfiles": ["transactional"],
-                    "templates": ["appointment-reminder"],
-                    "requestsPerMinute": 60,
-                    "burst": 10
-                },
-                {
-                    "id": "operations",
-                    "principalClaim": "sub",
-                    "requiredScopes": ["messaging:operate"],
-                    "requesterClients": ["operations-console"],
-                    "role": "operator",
-                    "requestsPerMinute": 60,
-                    "burst": 10
-                }
-            ]
-        })
+        let text =
+            std::fs::read_to_string(crate::package::tests::starter_root().join(PACKAGE_FILE))
+                .unwrap();
+        serde_norway::from_str(&text).unwrap()
     }
 
     pub(crate) fn runtime_value(root: &Path) -> Value {
@@ -946,11 +919,11 @@ pub(crate) mod tests {
         })
     }
 
-    /// Write a package and a runtime document under `root`, returning the
-    /// runtime document's path.
+    /// Write the starter templates, `package` as the manifest, and a runtime
+    /// document under `root`, returning the runtime document's path.
     pub(crate) fn write_project(root: &Path, runtime: &Value, package: &Value) -> PathBuf {
         let package_root = root.join("package");
-        std::fs::create_dir_all(&package_root).unwrap();
+        crate::package::tests::copy_starter(&package_root);
         std::fs::write(
             package_root.join(PACKAGE_FILE),
             serde_norway::to_string(package).unwrap(),
@@ -1180,18 +1153,52 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_pinned_package_digest_is_refused_until_it_can_be_verified() {
+    fn a_pinned_package_digest_must_equal_the_digest_of_the_package_read() {
         let mut value = base();
         value["package"]["expectedDigest"] = json!("sha256:ABC");
         assert!(matches!(
             load(value).unwrap_err(),
             RuntimeConfigError::InvalidExpectedDigest
         ));
-        let mut value = base();
-        value["package"]["expectedDigest"] = json!(format!("sha256:{}", "a".repeat(64)));
+
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = runtime_value(root.path());
+        let path = write_project(root.path(), &runtime, &package_value());
+        let config = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap();
+        let digest = config.load_package().unwrap().package.digest().to_owned();
+
+        runtime["package"]["expectedDigest"] = json!(digest);
+        let path = write_project(root.path(), &runtime, &package_value());
+        RuntimeConfig::load_with_environment(&path, &no_environment).unwrap();
+
+        let pinned = format!("sha256:{}", "a".repeat(64));
+        runtime["package"]["expectedDigest"] = json!(pinned);
+        let path = write_project(root.path(), &runtime, &package_value());
+        let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                RuntimeConfigError::PackageDigestMismatch { expected, actual }
+                    if *expected == pinned && *actual == digest
+            ),
+            "{error}"
+        );
+        assert_eq!(error.path(), "package.expectedDigest");
+        assert!(error.to_string().contains(&digest), "{error}");
+
+        // A changed template is a changed package: the pin that matched it
+        // no longer does.
+        runtime["package"]["expectedDigest"] = json!(digest);
+        let path = write_project(root.path(), &runtime, &package_value());
+        std::fs::write(
+            root.path()
+                .join("package/templates/appointment-reminder/1/en/subject.j2"),
+            "Changed {{ day|date }}",
+        )
+        .unwrap();
         assert!(matches!(
-            load(value).unwrap_err(),
-            RuntimeConfigError::ExpectedDigestUnsupported
+            RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err(),
+            RuntimeConfigError::PackageDigestMismatch { .. }
         ));
     }
 
@@ -1286,15 +1293,21 @@ pub(crate) mod tests {
         let path = write_project(root.path(), &runtime, &package);
         let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
         assert!(matches!(error, RuntimeConfigError::Package(_)), "{error}");
+        assert_eq!(error.path(), "package.root/messaging.yaml");
 
         let mut package = package_value();
         package["accessProfiles"][0]["providerUrl"] = json!("https://x.test");
         let path = write_project(root.path(), &runtime, &package);
         let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
-        assert!(
-            matches!(error, RuntimeConfigError::PackageParse { .. }),
-            "{error}"
-        );
+        assert!(matches!(error, RuntimeConfigError::Package(_)), "{error}");
+        assert!(error.to_string().contains("providerUrl"), "{error}");
+
+        let mut package = package_value();
+        package["providers"][0]["endpointRef"] = json!("${RELAY_URL}");
+        let path = write_project(root.path(), &runtime, &package);
+        let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
+        assert!(error.to_string().contains("endpointRef"), "{error}");
+        assert!(!error.to_string().contains("RELAY_URL"), "{error}");
     }
 
     #[test]

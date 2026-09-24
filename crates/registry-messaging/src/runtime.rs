@@ -2,9 +2,13 @@
 
 //! Service assembly: `messaging migrate` applies the schema with the
 //! migration credential, and `messaging serve` loads the configuration and
-//! the access profiles, checks the store, keys the audit journal, and serves
-//! the public listener beside the optional operator-private metrics
-//! listener.
+//! the package, checks the store and the package ledger, keys the audit
+//! journal, and serves the public listener beside the optional
+//! operator-private metrics listener.
+//!
+//! The runtime serves only the package the ledger names active. A changed
+//! package on disk is refused at startup until `messagingctl apply` records
+//! it, and a recorded package takes effect when the runtime restarts.
 //!
 //! Every step that can refuse a deployment runs before either listener
 //! binds, so a mis-provisioned deployment never answers a request.
@@ -13,21 +17,18 @@ use std::path::Path;
 use std::sync::Arc;
 
 use clap::{Arg, Command};
-use registry_platform_audit::{AuditError, AuditProfile, ChainState, DurableSegmentedJsonlSink};
+use registry_platform_audit::{AuditError, AuditProfile};
 use registry_platform_config::{ProtectedSecret, SecretResolver};
 use serde::Serialize;
 use thiserror::Error;
 use tracing_subscriber::filter::LevelFilter;
 
+use crate::audit::AuditJournal;
 use crate::auth::MessagingAuthenticator;
 use crate::config::{describe_secret_failure, RetentionConfig, RuntimeConfig, RuntimeConfigError};
 use crate::http::{metrics_router, router, HttpState, Readiness};
 use crate::metrics::Metrics;
 use crate::store::{PostgresStore, StoreError};
-
-/// The largest active audit segment before the sink seals it and opens the
-/// next one.
-const MAXIMUM_AUDIT_SEGMENT_BYTES: u64 = 10 * 1024 * 1024;
 
 /// The event the journal records when a runtime starts serving.
 const RUNTIME_STARTED_EVENT: &str = "messaging.runtime.started";
@@ -91,6 +92,75 @@ pub async fn migrate_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeErro
     Ok(())
 }
 
+/// What applying the package on disk would change in the ledger, and
+/// whether this call recorded it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageApply {
+    /// The digest of the package on disk.
+    pub package_digest: String,
+    /// The digest the ledger names active, if any.
+    pub active_digest: Option<String>,
+    pub change: PackageChange,
+    /// Whether this call recorded the package in the ledger.
+    pub applied: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PackageChange {
+    /// The ledger already names this package active.
+    None,
+    /// Recording the package makes it the one the runtime serves after its
+    /// next restart.
+    Activate,
+}
+
+/// Compare the package on disk with the ledger, and with `apply` record it
+/// as active. The package is loaded and checked exactly as `serve` loads it,
+/// pinned digest included, and the ledger is reached with the migration
+/// credential. A running runtime keeps serving its package until restarted.
+pub async fn apply_package(
+    config: &RuntimeConfig,
+    apply: bool,
+) -> Result<PackageApply, RuntimeError> {
+    let loaded = config.load_package()?;
+    let secrets = config.secret_resolver()?;
+    let store = PostgresStore::connect_migration(&config.database, &secrets)
+        .map_err(database_step("migration database configuration"))?;
+    store
+        .ready()
+        .await
+        .map_err(database_step("schema readiness check"))?;
+    let active_digest = store
+        .active_package_digest()
+        .await
+        .map_err(database_step("package ledger read"))?;
+    let package_digest = loaded.package.digest().to_owned();
+    let change = if active_digest.as_deref() == Some(package_digest.as_str()) {
+        PackageChange::None
+    } else {
+        PackageChange::Activate
+    };
+    let applied = if apply && change == PackageChange::Activate {
+        store
+            .apply_package(
+                &package_digest,
+                registry_platform_buildinfo::DISPLAY_VERSION,
+            )
+            .await
+            .map_err(database_step("package ledger write"))?
+    } else {
+        false
+    };
+    Ok(PackageApply {
+        package_digest,
+        active_digest,
+        change,
+        applied,
+    })
+}
+
 pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
     let config = RuntimeConfig::load(path)?;
     let listeners = Listeners::bind(&config).await?;
@@ -109,10 +179,11 @@ pub struct Assembled {
     metrics: axum::Router,
 }
 
-/// Build everything `serve` needs from a checked configuration: the store,
-/// the authenticator, and the keyed audit journal, then record the start.
+/// Build everything `serve` needs from a checked configuration: the
+/// package the ledger names active, the store, the authenticator, and the
+/// keyed audit journal, then record the start.
 pub async fn assemble(config: &RuntimeConfig) -> Result<Assembled, RuntimeError> {
-    let profiles = config.load_package()?;
+    let loaded = config.load_package()?;
     let secrets = config.secret_resolver()?;
     let store = PostgresStore::connect_runtime(&config.database, &secrets)
         .map_err(database_step("runtime database configuration"))?;
@@ -120,12 +191,17 @@ pub async fn assemble(config: &RuntimeConfig) -> Result<Assembled, RuntimeError>
         .ready()
         .await
         .map_err(database_step("schema readiness check"))?;
+    let active = store
+        .active_package_digest()
+        .await
+        .map_err(database_step("package ledger read"))?;
+    check_active_package(active.as_deref(), loaded.package.digest())?;
 
     let keys = config.jwks_fetcher(&secrets).await?;
     let authenticator = Arc::new(MessagingAuthenticator::new(
         config.verifier_profile(),
         keys,
-        profiles,
+        loaded.package.access_profiles().clone(),
         config.binds_assertion_issuers(),
     ));
 
@@ -136,9 +212,14 @@ pub async fn assemble(config: &RuntimeConfig) -> Result<Assembled, RuntimeError>
         audit_secret.expose_secret().to_vec(),
     ))
     .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
-    let (sink, chain) = open_audit_journal(&config.audit.path, &audit_profile).await?;
-    chain
-        .append(sink.as_ref(), RuntimeStarted::new(config.retention))
+    let audit = AuditJournal::open(&config.audit.path, &audit_profile)
+        .await
+        .map_err(|error| RuntimeError::AuditJournal(describe_audit_failure(&error)))?;
+    audit
+        .append(RuntimeStarted::new(
+            config.retention,
+            loaded.package.digest().to_owned(),
+        ))
         .await
         .map_err(|error| RuntimeError::AuditJournal(describe_audit_failure(&error)))?;
 
@@ -148,6 +229,8 @@ pub async fn assemble(config: &RuntimeConfig) -> Result<Assembled, RuntimeError>
             authenticator,
             readiness: Readiness::Store(store),
             metrics: Arc::clone(&metrics),
+            package: Arc::new(loaded.package),
+            audit: Arc::new(audit),
         }),
         metrics: metrics_router(metrics),
     })
@@ -208,39 +291,42 @@ impl Listeners {
     }
 }
 
-/// The start record: the runtime version and the retention periods this
-/// deployment enforces. It names no principal, contact, or secret.
+/// Refuse to serve a package the ledger does not name active: none was
+/// ever applied, or the package on disk changed since the last apply.
+fn check_active_package(active: Option<&str>, package: &str) -> Result<(), RuntimeError> {
+    match active {
+        None => Err(RuntimeError::PackageNotApplied {
+            package: package.to_owned(),
+        }),
+        Some(active) if active != package => Err(RuntimeError::PackageLedgerMismatch {
+            active: active.to_owned(),
+            package: package.to_owned(),
+        }),
+        Some(_) => Ok(()),
+    }
+}
+
+/// The start record: the runtime version, the active package digest, and
+/// the retention periods this deployment enforces. It names no principal,
+/// contact, or secret.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RuntimeStarted {
     event: &'static str,
     runtime_version: &'static str,
+    package_digest: String,
     retention: RetentionConfig,
 }
 
 impl RuntimeStarted {
-    fn new(retention: RetentionConfig) -> Self {
+    fn new(retention: RetentionConfig, package_digest: String) -> Self {
         Self {
             event: RUNTIME_STARTED_EVENT,
             runtime_version: registry_platform_buildinfo::DISPLAY_VERSION,
+            package_digest,
             retention,
         }
     }
-}
-
-async fn open_audit_journal(
-    path: &Path,
-    profile: &AuditProfile,
-) -> Result<(Arc<DurableSegmentedJsonlSink>, ChainState), RuntimeError> {
-    let sink = Arc::new(
-        DurableSegmentedJsonlSink::open(path, MAXIMUM_AUDIT_SEGMENT_BYTES)
-            .map_err(|error| RuntimeError::AuditJournal(describe_audit_failure(&error)))?,
-    );
-    let chain = profile
-        .bootstrap_or_start_empty(sink.as_ref())
-        .await
-        .map_err(|error| RuntimeError::AuditJournal(describe_audit_failure(&error)))?;
-    Ok((sink, chain))
 }
 
 /// The audit error's own account. Audit errors describe paths, permissions,
@@ -268,6 +354,16 @@ fn resolve_audit_secret(
 pub enum RuntimeError {
     #[error("the messaging command arguments are invalid")]
     Arguments,
+    #[error(
+        "the Messaging package ledger names no active package; record package {package} with \
+         messagingctl apply before serving"
+    )]
+    PackageNotApplied { package: String },
+    #[error(
+        "the Messaging package on disk ({package}) is not the package the ledger names active \
+         ({active}); record it with messagingctl apply, then restart"
+    )]
+    PackageLedgerMismatch { active: String, package: String },
     #[error("MESSAGING_LOG must be one of error, warn, or info")]
     Logging,
     #[error(transparent)]
@@ -296,6 +392,7 @@ pub enum RuntimeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn operational_log_level_is_a_closed_vocabulary() {
@@ -354,11 +451,18 @@ mod tests {
 
     #[test]
     fn the_start_record_names_only_the_version_and_retention() {
-        let record = serde_json::to_value(RuntimeStarted::new(RetentionConfig::default())).unwrap();
+        let record = serde_json::to_value(RuntimeStarted::new(
+            RetentionConfig::default(),
+            format!("sha256:{}", "a".repeat(64)),
+        ))
+        .unwrap();
         let object = record.as_object().unwrap();
         let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
         keys.sort_unstable();
-        assert_eq!(keys, ["event", "retention", "runtimeVersion"]);
+        assert_eq!(
+            keys,
+            ["event", "packageDigest", "retention", "runtimeVersion"]
+        );
         assert_eq!(object["event"], RUNTIME_STARTED_EVENT);
     }
 
@@ -369,19 +473,43 @@ mod tests {
         let profile =
             AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(vec![7u8; 32]))
                 .unwrap();
-        let (sink, chain) = open_audit_journal(&audit, &profile).await.unwrap();
-        chain
-            .append(
-                sink.as_ref(),
-                RuntimeStarted::new(RetentionConfig::default()),
-            )
+        let journal = AuditJournal::open(&audit, &profile).await.unwrap();
+        journal
+            .append(RuntimeStarted::new(
+                RetentionConfig::default(),
+                format!("sha256:{}", "a".repeat(64)),
+            ))
             .await
             .unwrap();
-        drop(sink);
+        drop(journal);
         let written = std::fs::read_to_string(&audit).unwrap();
         assert_eq!(written.lines().count(), 1);
         assert!(written.contains(RUNTIME_STARTED_EVENT));
-        let (_sink, reopened) = open_audit_journal(&audit, &profile).await.unwrap();
-        assert!(reopened.last_hash().await.is_some());
+        let reopened = AuditJournal::open(&audit, &profile).await.unwrap();
+        reopened.append(json!({"event": "second"})).await.unwrap();
+        drop(reopened);
+        // The reopened chain continues the first record's chain rather than
+        // starting a second genesis.
+        let written = std::fs::read_to_string(&audit).unwrap();
+        let second: serde_json::Value =
+            serde_json::from_str(written.lines().nth(1).unwrap()).unwrap();
+        assert!(!second["prev_hash"].is_null(), "{second}");
+    }
+
+    #[test]
+    fn the_runtime_serves_only_the_package_the_ledger_names_active() {
+        let package = format!("sha256:{}", "a".repeat(64));
+        let other = format!("sha256:{}", "b".repeat(64));
+        assert!(check_active_package(Some(&package), &package).is_ok());
+        let error = check_active_package(None, &package).unwrap_err();
+        assert!(matches!(error, RuntimeError::PackageNotApplied { .. }));
+        assert!(error.to_string().contains("messagingctl apply"));
+        let error = check_active_package(Some(&other), &package).unwrap_err();
+        assert!(matches!(error, RuntimeError::PackageLedgerMismatch { .. }));
+        let message = error.to_string();
+        assert!(
+            message.contains(&package) && message.contains(&other),
+            "{message}"
+        );
     }
 }

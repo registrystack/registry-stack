@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 DATABASE_SUITES = {
-    "registry-messaging": {"postgres_migrate"},
+    "registry-messaging": {"postgres_migrate", "postgres_package"},
 }
 
 

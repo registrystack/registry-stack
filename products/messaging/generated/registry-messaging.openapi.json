@@ -7,6 +7,9 @@
           "code": {
             "enum": [
               "authentication.refused",
+              "content.invalid",
+              "content.too-large",
+              "content.too-many-segments",
               "idempotency.expired",
               "idempotency.key-reused",
               "message.not-visible",
@@ -18,7 +21,11 @@
               "request.not-found",
               "request.unprocessable",
               "request.unsupported-media-type",
-              "service.unavailable"
+              "service.unavailable",
+              "template.data-invalid",
+              "template.locale-unavailable",
+              "template.not-found",
+              "template.render-refused"
             ],
             "type": "string"
           },
@@ -37,6 +44,9 @@
           "type": {
             "enum": [
               "https://id.registrystack.org/problems/registry-messaging/authentication/refused",
+              "https://id.registrystack.org/problems/registry-messaging/content/invalid",
+              "https://id.registrystack.org/problems/registry-messaging/content/too-large",
+              "https://id.registrystack.org/problems/registry-messaging/content/too-many-segments",
               "https://id.registrystack.org/problems/registry-messaging/idempotency/expired",
               "https://id.registrystack.org/problems/registry-messaging/idempotency/key-reused",
               "https://id.registrystack.org/problems/registry-messaging/message/not-visible",
@@ -48,7 +58,11 @@
               "https://id.registrystack.org/problems/registry-messaging/request/not-found",
               "https://id.registrystack.org/problems/registry-messaging/request/unprocessable",
               "https://id.registrystack.org/problems/registry-messaging/request/unsupported-media-type",
-              "https://id.registrystack.org/problems/registry-messaging/service/unavailable"
+              "https://id.registrystack.org/problems/registry-messaging/service/unavailable",
+              "https://id.registrystack.org/problems/registry-messaging/template/data-invalid",
+              "https://id.registrystack.org/problems/registry-messaging/template/locale-unavailable",
+              "https://id.registrystack.org/problems/registry-messaging/template/not-found",
+              "https://id.registrystack.org/problems/registry-messaging/template/render-refused"
             ],
             "type": "string"
           }
@@ -60,6 +74,111 @@
           "detail",
           "code",
           "traceId"
+        ],
+        "type": "object"
+      },
+      "TemplatePreview": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "enum": [
+              "email",
+              "sms"
+            ],
+            "type": "string"
+          },
+          "locale": {
+            "type": "string"
+          },
+          "packageDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "parts": {
+            "additionalProperties": false,
+            "properties": {
+              "html": {
+                "type": "string"
+              },
+              "subject": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "type": "object"
+          },
+          "sms": {
+            "additionalProperties": false,
+            "description": "The segment count, for an SMS template only.",
+            "properties": {
+              "encoding": {
+                "enum": [
+                  "gsm7",
+                  "ucs2"
+                ],
+                "type": "string"
+              },
+              "segments": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "units": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "encoding",
+              "units",
+              "segments"
+            ],
+            "type": "object"
+          },
+          "template": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "version"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "template",
+          "locale",
+          "channel",
+          "packageDigest",
+          "parts"
+        ],
+        "type": "object"
+      },
+      "TemplatePreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "description": "The template data, validated against the template version's schema before rendering."
+          },
+          "locale": {
+            "description": "A locale the template version declares.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "locale",
+          "data"
         ],
         "type": "object"
       }
@@ -316,6 +435,270 @@
           }
         ],
         "summary": "Read the status of a message the caller submitted, or any message for an operator. A message the caller may not see answers exactly like one that does not exist."
+      }
+    },
+    "/v1/templates/{template_id}/versions/{version}/preview": {
+      "post": {
+        "operationId": "previewTemplate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplatePreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplatePreview"
+                }
+              }
+            },
+            "description": "The operation succeeded."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.invalid"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.invalid."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "authentication.refused"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: authentication.refused."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "operation.not-authorized",
+                            "profile.not-authorized"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: operation.not-authorized, profile.not-authorized."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "template.not-found"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: template.not-found."
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.method-not-allowed"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.method-not-allowed."
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.body-too-large"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.body-too-large."
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.unsupported-media-type"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.unsupported-media-type."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.unprocessable",
+                            "template.data-invalid",
+                            "template.locale-unavailable",
+                            "template.render-refused"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.unprocessable, template.data-invalid, template.locale-unavailable, template.render-refused."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "service.unavailable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: service.unavailable."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Render a template version of the active package with the given locale and data, for a sender whose profile lists the template. Nothing is persisted; the body is byte-identical to `messagingctl preview --format json`."
       }
     }
   }

@@ -14,9 +14,9 @@
 apiVersion: registry.registrystack.org/messaging-runtime/v1alpha1
 kind: MessagingRuntimeConfig
 package:
-  # The directory holding messaging.yaml. `expectedDigest` pins the package to
-  # a sha256: digest; this version cannot verify a package digest yet, so a
-  # configuration that sets it is refused rather than accepted unverified.
+  # The directory holding messaging.yaml and its templates/ tree. Setting
+  # `expectedDigest` to the sha256: digest `messagingctl check` reports pins
+  # the package: a package with any other digest is refused.
   root: /srv/registry-messaging/package
 listener:
   bind: 127.0.0.1:8107

@@ -46,6 +46,7 @@ variant() {
   local name=$1 change=$2
   mkdir -p "$work/$name/package"
   cp "$starter/messaging.yaml" "$work/$name/package/messaging.yaml"
+  cp -R "$starter/templates" "$work/$name/package/templates"
   python3 - "$starter/runtime.example.yaml" "$work/$name" "$change" <<'PY'
 import sys
 from pathlib import Path
@@ -85,6 +86,75 @@ assert report["ok"] is True, report
 assert report["listener"] == "127.0.0.1:8107", report
 assert report["metricsListener"] == "127.0.0.1:9107", report
 assert [profile["id"] for profile in report["accessProfiles"]] == ["case-notices", "operations"], report
+assert [(t["id"], t["version"]) for t in report["templates"]] == [
+    ("appointment-reminder", "1"),
+    ("appointment-reminder-sms", "1"),
+], report
+assert report["packageDigest"].startswith("sha256:"), report
+PY
+starter_digest=$(python3 -c 'import json, sys; print(json.loads(sys.argv[1])["packageDigest"])' "$report")
+
+# init writes exactly the published starter, and its package has the same
+# digest the runtime configuration above reported.
+"$messagingctl_bin" --format json init "$work/init" >/dev/null
+diff -r "$starter" "$work/init"
+report=$("$messagingctl_bin" --format json check --package "$work/init")
+python3 - "$report" "$starter_digest" <<'PY'
+import json
+import sys
+
+report, digest = json.loads(sys.argv[1]), sys.argv[2]
+assert report["ok"] is True, report
+assert report["packageDigest"] == digest, report
+PY
+
+# Pinning the digest the check reported is accepted.
+python3 - "$work/starter/runtime.yaml" "$starter_digest" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+path, digest = Path(sys.argv[1]), sys.argv[2]
+document = yaml.safe_load(path.read_text(encoding="utf-8"))
+document["package"]["expectedDigest"] = digest
+path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+PY
+"$messagingctl_bin" --format json check --runtime-config "$work/starter/runtime.yaml" >/dev/null
+
+# preview renders the sample offline, byte-stable across runs, and refuses a
+# locale the template does not declare with its problem code.
+sms_sample="$starter/templates/appointment-reminder-sms/1/sample.json"
+"$messagingctl_bin" --format json preview --package "$work/init" \
+  appointment-reminder-sms 1 --locale en --data "$sms_sample" >"$work/preview-1.json"
+"$messagingctl_bin" --format json preview --runtime-config "$work/starter/runtime.yaml" \
+  appointment-reminder-sms 1 --locale en --data "$sms_sample" >"$work/preview-2.json"
+cmp "$work/preview-1.json" "$work/preview-2.json"
+python3 - "$work/preview-1.json" "$starter_digest" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+preview, digest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")), sys.argv[2]
+assert preview["template"] == {"id": "appointment-reminder-sms", "version": "1"}, preview
+assert preview["packageDigest"] == digest, preview
+assert preview["channel"] == "sms", preview
+assert "Ada Lovelace" in preview["parts"]["text"], preview
+assert preview["sms"]["segments"] == 1, preview
+PY
+status=0
+report=$("$messagingctl_bin" --format json preview --package "$work/init" \
+  appointment-reminder 1 --locale de --data "$sms_sample") || status=$?
+if [[ "$status" -ne 1 ]]; then
+  printf 'messagingctl preview exited %s for an undeclared locale, expected 1\n' "$status" >&2
+  exit 1
+fi
+python3 - "$report" <<'PY'
+import json
+import sys
+
+report = json.loads(sys.argv[1])
+assert report["diagnostics"][0]["code"] == "template.locale-unavailable", report
 PY
 
 # Each refusal exits 1 and names the member it refused.

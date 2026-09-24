@@ -73,14 +73,25 @@ decisions:
       - {path: crates/registry-messaging/src/config.rs, name: an_environment_expression_in_a_credential_field_is_refused}
       - {path: crates/registry-messaging/src/environment.rs, name: an_expression_in_a_credential_member_is_refused}
   - id: MESSAGING-DEC-06
-    subject: A pinned package digest is refused until the ledger can verify it
+    subject: The package ledger names the package the runtime serves, and a change applies on restart
     decision: >-
-      package.expectedDigest is part of the configuration grammar, and a
-      configuration that sets it is refused at load until the package ledger
-      can verify it.
+      messagingctl apply records the digest of the package on disk in
+      messaging_package_ledger, and only with --apply; without it the command
+      reports the change it would make. The runtime starts only when the
+      package on disk has the digest the ledger names active, and a pinned
+      package.expectedDigest must equal that digest before any ledger read or
+      write. A package change takes effect when the runtime restarts.
     reasoning: >-
-      Accepting the key and ignoring it would tell an operator their package
-      is pinned when nothing checks the pin. A loud refusal is the honest
-      answer until slice S2 verifies it.
+      One recorded activation per package gives every later message a digest
+      it was accepted under, and refusing a package nobody recorded stops an
+      edited file from changing what a running deployment sends. Restart to
+      apply keeps one package per process, the same lifecycle as the rest of
+      the stack; the pin lets an operator bind a deployment to a reviewed
+      package without trusting the directory.
     evidence:
-      - {path: crates/registry-messaging/src/config.rs, name: a_pinned_package_digest_is_refused_until_it_can_be_verified}
+      - {path: crates/registry-messaging/src/config.rs, name: a_pinned_package_digest_must_equal_the_digest_of_the_package_read}
+      - {path: crates/registry-messaging/src/runtime.rs, name: the_runtime_serves_only_the_package_the_ledger_names_active}
+      - {path: crates/registry-messaging/tests/postgres_package.rs, name: apply_previews_by_default_records_once_and_is_idempotent}
+      - {path: crates/registry-messaging/tests/postgres_package.rs, name: the_runtime_refuses_a_package_the_ledger_does_not_name_active}
+      - {path: crates/registry-messaging/tests/postgres_package.rs, name: a_pinned_digest_must_match_the_package_before_any_ledger_write}
+      - {path: crates/registry-messaging/tests/postgres_package.rs, name: a_template_version_renders_the_same_bytes_across_a_package_upgrade}

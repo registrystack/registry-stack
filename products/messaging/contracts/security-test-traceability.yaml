@@ -28,3 +28,12 @@ entries:
       - {path: crates/registry-messaging/src/auth.rs, name: a_client_the_deployment_does_not_admit_is_refused}
       - {path: crates/registry-messaging/src/auth.rs, name: an_exchanged_token_is_refused_when_no_authority_was_declared}
       - {path: crates/registry-messaging/tests/postgres_migrate.rs, name: a_served_runtime_is_ready_and_keeps_metrics_on_the_private_listener}
+  - id: MESSAGING-SEC-09
+    tests:
+      - {path: crates/registry-messaging-core/src/render.rs, name: a_runaway_template_runs_out_of_fuel}
+      - {path: crates/registry-messaging-core/src/render.rs, name: a_part_that_outgrows_its_ceiling_is_refused}
+      - {path: crates/registry-messaging-core/src/render.rs, name: the_environment_offers_no_loader_function_or_builtin_filter}
+      - {path: crates/registry-messaging-core/src/render.rs, name: an_undefined_value_is_refused_not_rendered_empty}
+      - {path: crates/registry-messaging-core/src/template.rs, name: a_schema_may_not_reach_outside_the_package}
+      - {path: crates/registry-messaging/src/package.rs, name: a_symbolic_link_anywhere_in_the_package_is_refused}
+      - {path: crates/registry-messaging/src/http.rs, name: a_preview_refuses_each_malformed_request_with_its_problem}

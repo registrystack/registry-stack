@@ -11,6 +11,12 @@
 //! The public listener serves `/health`, `/ready`, and the `/v1` routes.
 //! `/metrics` is served only by [`metrics_router`], on the operator-private
 //! metrics listener.
+//!
+//! The template preview route renders a template version from the active
+//! package for a sender whose profile lists the template. It persists
+//! nothing and journals metadata only: the profile, the principal's keyed
+//! pseudonym, the template version and locale the package ships, and the
+//! outcome. Template data and rendered parts never reach the journal.
 
 use std::sync::Arc;
 
@@ -21,17 +27,20 @@ use axum::http::header::{
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use registry_messaging_core::{
-    check_message_visibility, type_uri, Caller, CallerIdentity, ProblemCode, HEALTH_PATH,
-    MESSAGE_PATH, METRICS_PATH, READY_PATH,
+    check_message_visibility, type_uri, Caller, CallerIdentity, ContentRefusal, Package,
+    ProblemCode, TemplatePreview, TemplatePreviewRequest, HEALTH_PATH, MESSAGE_PATH, METRICS_PATH,
+    READY_PATH, TEMPLATE_PREVIEW_PATH,
 };
 use registry_platform_authcommon::parse_bearer_token;
 use registry_platform_httpsec::{
     request_body_limit_default, security_headers, CspBuilder, ProblemBody, TraceContext,
 };
+use serde::Serialize;
 
+use crate::audit::AuditJournal;
 use crate::auth::{AuthenticationError, MessagingAuthenticator};
 use crate::metrics::{count_requests, serve_metrics, Metrics};
 use crate::store::PostgresStore;
@@ -71,7 +80,13 @@ pub struct HttpState {
     pub authenticator: Arc<MessagingAuthenticator>,
     pub readiness: Readiness,
     pub metrics: Arc<Metrics>,
+    /// The package the ledger names active.
+    pub package: Arc<Package>,
+    pub audit: Arc<AuditJournal>,
 }
+
+/// The audited event for every preview an authenticated caller asked for.
+pub const TEMPLATE_PREVIEWED_EVENT: &str = "messaging.template.previewed";
 
 /// One operation of the public HTTP contract. The router and the generated
 /// OpenAPI document both read this table, so neither can publish a route the
@@ -84,8 +99,14 @@ pub struct Operation {
     pub summary: &'static str,
     /// Whether the operation requires a bearer access token.
     pub authenticated: bool,
-    /// The success status, answered with an empty body.
+    /// The success status.
     pub success_status: u16,
+    /// The component schema of the JSON request body, if the operation
+    /// takes one.
+    pub request_body: Option<&'static str>,
+    /// The component schema of the JSON success body, or `None` for an
+    /// empty body.
+    pub response_body: Option<&'static str>,
     /// Every problem the operation can answer with.
     pub problems: &'static [ProblemCode],
 }
@@ -104,6 +125,8 @@ pub const OPERATIONS: &[Operation] = &[
         summary: "Report that the process is serving.",
         authenticated: false,
         success_status: 200,
+        request_body: None,
+        response_body: None,
         problems: &[ProblemCode::RequestMethodNotAllowed],
     },
     Operation {
@@ -113,6 +136,8 @@ pub const OPERATIONS: &[Operation] = &[
         summary: "Report that the store answers with the expected schema.",
         authenticated: false,
         success_status: 200,
+        request_body: None,
+        response_body: None,
         problems: &EDGE_PROBLEMS,
     },
     Operation {
@@ -124,11 +149,40 @@ pub const OPERATIONS: &[Operation] = &[
                   not exist.",
         authenticated: true,
         success_status: 200,
+        request_body: None,
+        response_body: None,
         problems: &[
             ProblemCode::AuthenticationRefused,
             ProblemCode::ProfileNotAuthorized,
             ProblemCode::MessageNotVisible,
             ProblemCode::RequestMethodNotAllowed,
+            ProblemCode::ServiceUnavailable,
+        ],
+    },
+    Operation {
+        method: "post",
+        path: TEMPLATE_PREVIEW_PATH,
+        operation_id: "previewTemplate",
+        summary: "Render a template version of the active package with the given locale and \
+                  data, for a sender whose profile lists the template. Nothing is persisted; \
+                  the body is byte-identical to `messagingctl preview --format json`.",
+        authenticated: true,
+        success_status: 200,
+        request_body: Some("TemplatePreviewRequest"),
+        response_body: Some("TemplatePreview"),
+        problems: &[
+            ProblemCode::RequestInvalid,
+            ProblemCode::AuthenticationRefused,
+            ProblemCode::OperationNotAuthorized,
+            ProblemCode::ProfileNotAuthorized,
+            ProblemCode::TemplateNotFound,
+            ProblemCode::RequestMethodNotAllowed,
+            ProblemCode::RequestBodyTooLarge,
+            ProblemCode::RequestUnsupportedMediaType,
+            ProblemCode::RequestUnprocessable,
+            ProblemCode::TemplateDataInvalid,
+            ProblemCode::TemplateLocaleUnavailable,
+            ProblemCode::TemplateRenderRefused,
             ProblemCode::ServiceUnavailable,
         ],
     },
@@ -141,6 +195,7 @@ pub fn router(state: HttpState) -> Router {
             .route(HEALTH_PATH, get(health))
             .route(READY_PATH, get(ready))
             .route(MESSAGE_PATH, get(get_message))
+            .route(TEMPLATE_PREVIEW_PATH, post(preview_template))
             .with_state(state)
             .layer(middleware::from_fn_with_state(metrics, count_requests)),
     )
@@ -235,6 +290,163 @@ async fn get_message(
     Ok(StatusCode::OK)
 }
 
+/// The bytes of a preview document, shared by the preview route and
+/// `messagingctl preview --format json` so both answer the same bytes.
+pub fn preview_json(preview: &TemplatePreview) -> Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(preview)
+}
+
+async fn preview_template(
+    State(state): State<HttpState>,
+    Path((template_id, version)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, HttpError> {
+    let caller = authenticate(&state, &headers).await?;
+    let outcome = render_preview(
+        &state.package,
+        &caller,
+        &template_id,
+        &version,
+        &headers,
+        &body,
+    );
+    let record = PreviewRecord::new(&state, &caller, &template_id, &version, &outcome)?;
+    if let Err(error) = state.audit.append(record).await {
+        tracing::error!(error = %error, "the Messaging audit journal refused a preview record");
+        return Err(HttpError(ProblemCode::ServiceUnavailable));
+    }
+    let preview = outcome.result.map_err(HttpError)?;
+    let body = preview_json(&preview).map_err(|error| {
+        tracing::error!(error = %error, "a Messaging preview could not be serialized");
+        HttpError(ProblemCode::ServiceUnavailable)
+    })?;
+    Ok((StatusCode::OK, [(CONTENT_TYPE, "application/json")], body).into_response())
+}
+
+/// A preview's result, with the locale the request named once the body
+/// was read.
+struct PreviewOutcome {
+    locale: Option<String>,
+    result: Result<TemplatePreview, ProblemCode>,
+}
+
+fn render_preview(
+    package: &Package,
+    caller: &Caller,
+    template_id: &str,
+    version: &str,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> PreviewOutcome {
+    let request = match preview_request(headers, body) {
+        Ok(request) => request,
+        Err(problem) => {
+            return PreviewOutcome {
+                locale: None,
+                result: Err(problem),
+            }
+        }
+    };
+    let result = package
+        .preview_for(caller, template_id, version, &request)
+        .map_err(|refusal: ContentRefusal| refusal.problem());
+    PreviewOutcome {
+        locale: Some(request.locale),
+        result,
+    }
+}
+
+/// Read a preview body: JSON by media type, then JSON by syntax, then the
+/// request's closed shape.
+fn preview_request(
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<TemplatePreviewRequest, ProblemCode> {
+    let json = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"));
+    if !json {
+        return Err(ProblemCode::RequestUnsupportedMediaType);
+    }
+    let value: serde_json::Value =
+        serde_json::from_slice(body).map_err(|_| ProblemCode::RequestInvalid)?;
+    serde_json::from_value(value).map_err(|_| ProblemCode::RequestUnprocessable)
+}
+
+/// The journal record of one preview. It names the template version and
+/// locale only when the active package ships them, so a caller cannot write
+/// arbitrary text into the journal through the path or the body.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewRecord {
+    event: &'static str,
+    access_profile: String,
+    principal_pseudonym: String,
+    package_digest: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    template: Option<PreviewedTemplate>,
+    outcome: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    problem: Option<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewedTemplate {
+    id: String,
+    version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    locale: Option<String>,
+}
+
+impl PreviewRecord {
+    fn new(
+        state: &HttpState,
+        caller: &Caller,
+        template_id: &str,
+        version: &str,
+        outcome: &PreviewOutcome,
+    ) -> Result<Self, HttpError> {
+        let principal_pseudonym =
+            state
+                .audit
+                .principal_pseudonym(&caller.identity)
+                .map_err(|error| {
+                    tracing::error!(error = %error, "a Messaging principal pseudonym failed");
+                    HttpError(ProblemCode::ServiceUnavailable)
+                })?;
+        let template =
+            state
+                .package
+                .template(template_id, version)
+                .map(|shipped| PreviewedTemplate {
+                    id: shipped.id().to_owned(),
+                    version: shipped.version().to_owned(),
+                    locale: outcome
+                        .locale
+                        .as_deref()
+                        .and_then(|locale| shipped.locales().find(|shipped| *shipped == locale))
+                        .map(str::to_owned),
+                });
+        let (outcome, problem) = match &outcome.result {
+            Ok(_) => ("rendered", None),
+            Err(problem) => ("refused", Some(problem.code())),
+        };
+        Ok(Self {
+            event: TEMPLATE_PREVIEWED_EVENT,
+            access_profile: caller.profile.id.clone(),
+            principal_pseudonym,
+            package_digest: state.package.digest().to_owned(),
+            template,
+            outcome,
+            problem,
+        })
+    }
+}
+
 /// The identity that submitted a message. This version records no message,
 /// so every lookup finds none and every read answers `message.not-visible`.
 fn submitter_of(_message_id: &str) -> Option<CallerIdentity> {
@@ -326,6 +538,7 @@ fn problem_response(problem: ProblemCode) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audit::tests::{memory_journal, MemorySink};
     use crate::auth::tests::{
         authenticator, authenticator_over, operator_claims, sender_claims, token,
         token_signed_with, UNPROFILED_CLIENT,
@@ -340,12 +553,83 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    fn starter_package() -> Package {
+        crate::package::load_package(&crate::package::tests::starter_root())
+            .unwrap()
+            .package
+    }
+
     fn state_with(authenticator: MessagingAuthenticator, ready: bool) -> HttpState {
+        state_over(authenticator, ready, memory_journal().1)
+    }
+
+    fn state_over(
+        authenticator: MessagingAuthenticator,
+        ready: bool,
+        audit: AuditJournal,
+    ) -> HttpState {
         HttpState {
             authenticator: Arc::new(authenticator),
             readiness: Readiness::Fixed(ready),
             metrics: Arc::new(Metrics::default()),
+            package: Arc::new(starter_package()),
+            audit: Arc::new(audit),
         }
+    }
+
+    /// A router over the starter package and an in-memory journal the test
+    /// can read.
+    fn preview_app() -> (Router, Arc<MemorySink>) {
+        let (sink, journal) = memory_journal();
+        (router(state_over(authenticator(), true, journal)), sink)
+    }
+
+    const PREVIEW: &str = "/v1/templates/appointment-reminder/versions/1/preview";
+
+    fn sample_request() -> serde_json::Value {
+        json!({
+            "locale": "fr",
+            "data": {"name": "Ada Lovelace", "day": "2026-10-01", "office": "Central Registry Office"}
+        })
+    }
+
+    async fn post(
+        app: Router,
+        uri: &str,
+        bearer: Option<&str>,
+        content_type: Option<&str>,
+        body: Vec<u8>,
+    ) -> Response {
+        let mut request = Request::builder().method("POST").uri(uri);
+        if let Some(bearer) = bearer {
+            request = request.header(AUTHORIZATION, format!("Bearer {bearer}"));
+        }
+        if let Some(content_type) = content_type {
+            request = request.header(CONTENT_TYPE, content_type);
+        }
+        app.oneshot(request.body(Body::from(body)).unwrap())
+            .await
+            .unwrap()
+    }
+
+    async fn post_json(
+        app: Router,
+        uri: &str,
+        bearer: Option<&str>,
+        body: &serde_json::Value,
+    ) -> Response {
+        post(
+            app,
+            uri,
+            bearer,
+            Some("application/json"),
+            serde_json::to_vec(body).unwrap(),
+        )
+        .await
+    }
+
+    fn journal(sink: &MemorySink) -> Vec<serde_json::Value> {
+        sink.records.lock().unwrap().clone()
     }
 
     fn app() -> (Router, Arc<Metrics>) {
@@ -574,6 +858,238 @@ mod tests {
             ProblemCode::RequestMethodNotAllowed,
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn a_preview_answers_the_bytes_the_cli_prints_and_journals_metadata_only() {
+        let (app, sink) = preview_app();
+        let response = post_json(
+            app,
+            PREVIEW,
+            Some(&token(sender_claims())),
+            &sample_request(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+        assert_eq!(response.headers().get(CACHE_CONTROL).unwrap(), "no-store");
+        let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+
+        let request: TemplatePreviewRequest = serde_json::from_value(sample_request()).unwrap();
+        let expected = starter_package()
+            .preview("appointment-reminder", "1", &request)
+            .unwrap();
+        assert_eq!(body.as_ref(), preview_json(&expected).unwrap().as_slice());
+        let answered: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(answered["channel"], "email");
+        assert!(answered["parts"]["subject"]
+            .as_str()
+            .unwrap()
+            .contains("01/10/2026"));
+        assert!(answered["parts"]["html"]
+            .as_str()
+            .unwrap()
+            .contains("Ada Lovelace"));
+
+        let records = journal(&sink);
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        assert_eq!(record["event"], TEMPLATE_PREVIEWED_EVENT);
+        assert_eq!(record["accessProfile"], "case-notices");
+        assert_eq!(record["outcome"], "rendered");
+        assert_eq!(
+            record["template"],
+            json!({"id": "appointment-reminder", "version": "1", "locale": "fr"})
+        );
+        assert!(record.get("problem").is_none());
+        let written = record.to_string();
+        for leaked in [
+            "Ada Lovelace",
+            "Central Registry Office",
+            "2026-10-01",
+            "subject-1",
+            "case-system",
+        ] {
+            assert!(
+                !written.contains(leaked),
+                "{leaked} reached the journal: {written}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_preview_requires_a_credential_and_journals_nothing_without_one() {
+        let (app, sink) = preview_app();
+        let headers = expect_problem(
+            post_json(app.clone(), PREVIEW, None, &sample_request()).await,
+            ProblemCode::AuthenticationRefused,
+        )
+        .await;
+        assert_eq!(headers.get(WWW_AUTHENTICATE).unwrap(), "Bearer");
+        let forged = token_signed_with(sender_claims(), b"another-secret-another-secret-another!");
+        expect_problem(
+            post_json(app.clone(), PREVIEW, Some(&forged), &sample_request()).await,
+            ProblemCode::AuthenticationRefused,
+        )
+        .await;
+        let mut unprofiled = sender_claims();
+        unprofiled["azp"] = json!(UNPROFILED_CLIENT);
+        expect_problem(
+            post_json(app, PREVIEW, Some(&token(unprofiled)), &sample_request()).await,
+            ProblemCode::ProfileNotAuthorized,
+        )
+        .await;
+        assert!(journal(&sink).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_preview_outside_the_callers_profile_is_refused_and_journaled() {
+        let (app, sink) = preview_app();
+        // An operator resolves to a profile but does not send.
+        expect_problem(
+            post_json(
+                app.clone(),
+                PREVIEW,
+                Some(&token(operator_claims())),
+                &sample_request(),
+            )
+            .await,
+            ProblemCode::OperationNotAuthorized,
+        )
+        .await;
+        // The package ships this template, but the sender's profile does not
+        // list it.
+        expect_problem(
+            post_json(
+                app.clone(),
+                "/v1/templates/appointment-reminder-sms/versions/1/preview",
+                Some(&token(sender_claims())),
+                &json!({"locale": "en", "data": {}}),
+            )
+            .await,
+            ProblemCode::ProfileNotAuthorized,
+        )
+        .await;
+        // A template the package does not ship is refused on the profile
+        // before its existence is consulted.
+        expect_problem(
+            post_json(
+                app,
+                "/v1/templates/unshipped/versions/1/preview",
+                Some(&token(sender_claims())),
+                &sample_request(),
+            )
+            .await,
+            ProblemCode::ProfileNotAuthorized,
+        )
+        .await;
+        let records = journal(&sink);
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0]["accessProfile"], "operations");
+        assert_eq!(records[0]["problem"], "operation.not-authorized");
+        assert_eq!(
+            records[1]["template"],
+            json!({"id": "appointment-reminder-sms", "version": "1", "locale": "en"})
+        );
+        assert_eq!(records[1]["problem"], "profile.not-authorized");
+        assert!(records[2].get("template").is_none(), "{}", records[2]);
+    }
+
+    #[tokio::test]
+    async fn a_preview_refuses_each_malformed_request_with_its_problem() {
+        let (app, sink) = preview_app();
+        let sender = token(sender_claims());
+        let cases: Vec<(&str, Option<&str>, Vec<u8>, ProblemCode)> = vec![
+            (
+                PREVIEW,
+                None,
+                b"{}".to_vec(),
+                ProblemCode::RequestUnsupportedMediaType,
+            ),
+            (
+                PREVIEW,
+                Some("text/plain"),
+                b"{}".to_vec(),
+                ProblemCode::RequestUnsupportedMediaType,
+            ),
+            (
+                PREVIEW,
+                Some("application/json"),
+                b"{".to_vec(),
+                ProblemCode::RequestInvalid,
+            ),
+            (
+                PREVIEW,
+                Some("application/json"),
+                br#"{"locale": "en"}"#.to_vec(),
+                ProblemCode::RequestUnprocessable,
+            ),
+            (
+                PREVIEW,
+                Some("application/json; charset=utf-8"),
+                br#"{"locale": "en", "data": {}, "extra": 1}"#.to_vec(),
+                ProblemCode::RequestUnprocessable,
+            ),
+            (
+                "/v1/templates/appointment-reminder/versions/2/preview",
+                Some("application/json"),
+                serde_json::to_vec(&sample_request()).unwrap(),
+                ProblemCode::TemplateNotFound,
+            ),
+            (
+                PREVIEW,
+                Some("application/json"),
+                br#"{"locale": "de", "data": {"name": "A", "day": "2026-10-01", "office": "B"}}"#
+                    .to_vec(),
+                ProblemCode::TemplateLocaleUnavailable,
+            ),
+            (
+                PREVIEW,
+                Some("application/json"),
+                br#"{"locale": "en", "data": {"name": "A"}}"#.to_vec(),
+                ProblemCode::TemplateDataInvalid,
+            ),
+        ];
+        for (uri, content_type, body, expected) in cases {
+            expect_problem(
+                post(app.clone(), uri, Some(&sender), content_type, body).await,
+                expected,
+            )
+            .await;
+        }
+        let records = journal(&sink);
+        assert_eq!(records.len(), 8);
+        // The undeclared locale is not written; the declared template is.
+        assert_eq!(
+            records[6]["template"],
+            json!({"id": "appointment-reminder", "version": "1"})
+        );
+        assert_eq!(records[6]["problem"], "template.locale-unavailable");
+        assert!(records[5].get("template").is_none());
+        for record in &records {
+            assert_eq!(record["outcome"], "refused");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_preview_the_journal_cannot_record_is_not_answered() {
+        let (app, sink) = preview_app();
+        sink.refuse.store(true, std::sync::atomic::Ordering::SeqCst);
+        let headers = expect_problem(
+            post_json(
+                app,
+                PREVIEW,
+                Some(&token(sender_claims())),
+                &sample_request(),
+            )
+            .await,
+            ProblemCode::ServiceUnavailable,
+        )
+        .await;
+        assert_eq!(headers.get(RETRY_AFTER).unwrap(), "5");
     }
 
     #[test]

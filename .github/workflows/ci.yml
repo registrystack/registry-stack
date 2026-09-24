@@ -920,6 +920,10 @@ jobs:
         env:
           MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
         run: cargo test --locked --profile ci -p registry-messaging --features postgres-test --test postgres_migrate
+      - name: Verify the package ledger and template stability
+        env:
+          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
+        run: cargo test --locked --profile ci -p registry-messaging --features postgres-test --test postgres_package
 
   breg-contracts:
     name: Base Registry Engine product contracts (${{ matrix.lane }})

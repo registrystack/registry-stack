@@ -5652,6 +5652,7 @@ dependencies = [
 name = "registry-messaging"
 version = "0.34.0"
 dependencies = [
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "chrono",
@@ -5663,6 +5664,7 @@ dependencies = [
  "registry-platform-audit",
  "registry-platform-authcommon",
  "registry-platform-buildinfo",
+ "registry-platform-canonical-json",
  "registry-platform-config",
  "registry-platform-httpsec",
  "registry-platform-httputil",
@@ -5673,6 +5675,7 @@ dependencies = [
  "serde_json",
  "serde_norway",
  "serde_path_to_error",
+ "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -5724,6 +5727,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
