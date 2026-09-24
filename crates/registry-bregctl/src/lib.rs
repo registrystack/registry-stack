@@ -2624,14 +2624,6 @@ fn history_rebaseline_lifecycle_failure(error: HistoryRebaselineLifecycleError) 
                 DiagnosticArtifact::HistoryRebaseline,
                 SuggestedAction::ReviewRetainedHistory,
             ),
-            registry_breg::history_rebaseline::HistoryRebaselineError::LiveRowBudgetExceeded => (
-                "history.rebaseline.live_rows.budget_exceeded",
-                "history",
-                "history rebaseline verifies at most 1000 live rows in one transaction and this \
-                 registry holds more, so retrying cannot restore snapshot coverage",
-                DiagnosticArtifact::HistoryRebaseline,
-                SuggestedAction::ReviewRetainedHistory,
-            ),
             registry_breg::history_rebaseline::HistoryRebaselineError::HistoryNotReady
             | registry_breg::history_rebaseline::HistoryRebaselineError::Unavailable => (
                 "history.rebaseline.unavailable",
@@ -3024,14 +3016,6 @@ fn field_encryption_erase_history_failure(
                     "the closing rebaseline requires the retained journal head to reproduce every live \
                      row; the first record that disagrees is not named, so compare the live rows with \
                      their revisions to find it",
-                    DiagnosticArtifact::FieldEncryption,
-                    SuggestedAction::ReviewRetainedHistory,
-                ),
-                registry_breg::history_rebaseline::HistoryRebaselineError::LiveRowBudgetExceeded => (
-                    "field_encryption.erase_history.rebaseline.live_rows_budget_exceeded",
-                    "history",
-                    "the closing rebaseline verifies at most 1000 live rows in one transaction and this \
-                     registry holds more, so retrying cannot restore snapshot coverage",
                     DiagnosticArtifact::FieldEncryption,
                     SuggestedAction::ReviewRetainedHistory,
                 ),
@@ -13658,7 +13642,7 @@ accessProfiles:
 
     #[test]
     fn rebaseline_history_diagnostics_point_at_the_retained_history() {
-        use registry_breg::history_rebaseline::{HistoryRebaselineError, MAX_REBASELINE_LIVE_ROWS};
+        use registry_breg::history_rebaseline::HistoryRebaselineError;
 
         for (error, code) in [
             (
@@ -13668,10 +13652,6 @@ accessProfiles:
             (
                 HistoryRebaselineError::LiveHistoryMismatch,
                 "history.rebaseline.live_rows.unverified",
-            ),
-            (
-                HistoryRebaselineError::LiveRowBudgetExceeded,
-                "history.rebaseline.live_rows.budget_exceeded",
             ),
         ] {
             let report = history_rebaseline_lifecycle_failure(
@@ -13686,20 +13666,6 @@ accessProfiles:
                  not by re-checking the migration authority"
             );
         }
-
-        let budget =
-            history_rebaseline_lifecycle_failure(HistoryRebaselineLifecycleError::Rebaseline(
-                HistoryRebaselineError::LiveRowBudgetExceeded,
-            ));
-        assert_eq!(
-            budget.diagnostics[0].message,
-            format!(
-                "history rebaseline verifies at most {MAX_REBASELINE_LIVE_ROWS} live rows in one \
-                 transaction and this registry holds more, so retrying cannot restore snapshot \
-                 coverage"
-            ),
-            "the budget diagnostic states the limit it enforces and what retrying cannot do"
-        );
 
         let mismatch =
             history_rebaseline_lifecycle_failure(HistoryRebaselineLifecycleError::Rebaseline(

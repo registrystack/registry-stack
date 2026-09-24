@@ -74,8 +74,8 @@ Confirm the record and the approved revision boundary before running the command
 backups, saved exports, and copies already delivered to consumers. A saved snapshot reference
 cannot restore erased bytes. There is no dry run. Erasing baseline data also makes snapshot
 coverage unavailable until [`history rebaseline`](#restore-snapshot-coverage-after-an-erasure)
-restores it, and that command refuses a registry holding more than 1,000 live rows: if this
-registry is at or near that size, confirm the rebaseline is possible before you erase, not after.
+restores it, and that command holds a write lock on every entity table until it has verified
+every live row, so plan the erasure for a window in which writes can wait.
 :::
 
 **`history erase` refuses to run without `--acknowledge-irreversible`, because erasure cannot be
@@ -109,7 +109,9 @@ apply the same package again once the rebaseline completes.
 {/* Evidence: crates/registry-breg/src/history_erasure.rs;
     crates/registry-bregctl/src/history_erasure_lifecycle.rs;
     crates/registry-bregctl/src/lib.rs, HistoryEraseArgs;
-    crates/registry-breg/src/history_rebaseline.rs, MAX_REBASELINE_LIVE_ROWS;
+    crates/registry-breg/src/history_rebaseline.rs;
+    crates/registry-breg/src/history_migration.rs, verify_every_live_row_matches_its_journal_head;
+    crates/registry-breg/tests/postgres_history_rebaseline.rs, rebaseline_verifies_more_live_rows_than_one_commit_indexes;
     crates/registry-breg/src/postgres/interlock.rs, history_coverage_admits_successor;
     crates/registry-breg/tests/postgres_history_erasure.rs;
     crates/registry-breg/tests/postgres_history_migration.rs;
@@ -144,11 +146,27 @@ is already complete, when the registry is not ready, when a retained journal hea
 by a commit, and when a live row has no retained journal head that reproduces it. The result and
 the audit record carry counts and positions, not values.
 
-That one transaction verifies at most 1,000 live rows, and a registry holding more is refused
-with `history.rebaseline.live_rows.budget_exceeded`. The limit is fixed and the refusal is not
-retryable: a registry over that limit cannot restore snapshot coverage with this command, so
-treat the code as a report that the erasure left coverage unrecoverable rather than as a
-transient failure.
+The transaction has no live-row limit. It reads each entity's live rows, their journal heads, and
+the retained heads in the same record-identifier range in pages of 1,000 records, so its memory
+and each statement stay the same size as the registry grows, and it proves each entity holds
+exactly one retained journal head per live row.
+
+The run is a read outage for the whole registry. To read rows under forced row security, the
+migration role lifts that force on every entity table before the first page, and lifting it takes
+each table exclusively until the transaction commits or rolls back. API reads and writes of every
+entity wait for the whole run, and a request that waits past
+`operationalTimeouts.httpRequestMilliseconds` fails. The migration role deliberately has no
+`BYPASSRLS` authority, which is what would let it read without that lock. Plan the run as a
+maintenance window:
+
+- Size the window from a rehearsal. Restore a recent backup to a scratch database, erase there,
+  and time `history rebaseline` against it. The run grows with the number of live rows and
+  retained revisions across all entities; allow at least twice the rehearsed time.
+- Stop or drain API traffic for the window, or announce that reads and writes fail during it.
+- Set `operationalTimeouts.migrationLockMilliseconds` long enough to wait out in-flight requests
+  at the start. Set `operationalTimeouts.migrationStatementMilliseconds` long enough for one scan
+  of the whole revision journal: before the entity tables are locked, one statement proves every
+  retained journal head is indexed by a commit. Every later statement reads one page.
 
 `history.rebaseline.live_rows.unverified` reports one live row that its journal head does not
 reproduce, and names neither the entity nor the record, because operator refusals here carry no
@@ -377,7 +395,7 @@ retention record to the journal, so the chain states what left it.
 | Symptom | Next move |
 | --- | --- |
 | A saved snapshot returns `503 source.unavailable` | Retained history no longer covers it, after an erasure or an incompatible successor. Take a fresh reference. |
-| A fresh snapshot reference is refused after an erasure | Coverage ends before the erased commit. Run `history rebaseline` to cover the current state again; earlier references stay unavailable. It verifies at most 1,000 live rows, and refuses a larger registry outright. |
+| A fresh snapshot reference is refused after an erasure | Coverage ends before the erased commit. Run `history rebaseline` to cover the current state again; earlier references stay unavailable. Writes wait while it runs. |
 | `history rebaseline` reports `history.rebaseline.live_rows.unverified` | A live row and its journal head disagree, and the refusal names no record. Read the revisions of the records you suspect, or compare live rows with their journal heads under the migration role. |
 | `history erase` reports `history.erase.acknowledgement.required` | The command was run without `--acknowledge-irreversible`. Confirm the record and the revision boundary, then run it again with the flag. Nothing was read or erased. |
 | `history.erase.request_file.refused` or `history.rebaseline.request_file.refused` | The request file must be an absolute path to an owner-only regular file, not a symbolic link, holding the documented fields and nothing else. |

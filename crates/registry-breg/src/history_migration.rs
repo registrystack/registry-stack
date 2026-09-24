@@ -409,7 +409,8 @@ pub(crate) async fn verify_live_rows_match_journal_heads(
     );
     for entity in entities.values() {
         let live_rows = capture_entity_rows(transaction, entity, true).await?;
-        let latest_revisions = load_latest_revision_snapshots(transaction, &entity.id).await?;
+        let latest_revisions =
+            load_latest_revision_snapshots(transaction, &entity.id, None).await?;
         if live_rows.keys().ne(latest_revisions.keys()) {
             return Err(HistoryMigrationError::UnexpectedRowShape);
         }
@@ -417,16 +418,7 @@ pub(crate) async fn verify_live_rows_match_journal_heads(
             let latest = latest_revisions
                 .get(&record_id)
                 .ok_or(HistoryMigrationError::UnexpectedRowShape)?;
-            let snapshot = canonical_snapshot(&live.data)
-                .map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
-            if live.record_revision != latest.record_revision
-                || live.record_lifecycle != latest.record_lifecycle
-                || required_package_revision
-                    .is_some_and(|required| latest.package_revision != required)
-                || snapshot != latest.snapshot
-            {
-                return Err(HistoryMigrationError::UnexpectedRowShape);
-            }
+            verify_journal_head_reproduces_live_row(&live, latest, required_package_revision)?;
             members.push(BaselineMember {
                 entity_id: entity.id.clone(),
                 record_id,
@@ -435,6 +427,149 @@ pub(crate) async fn verify_live_rows_match_journal_heads(
         }
     }
     Ok(members)
+}
+
+/// The live rows one page of [`verify_every_live_row_matches_its_journal_head`]
+/// reads, and the journal heads it loads beside them.
+#[cfg(feature = "runtime")]
+const LIVE_ROW_VERIFICATION_PAGE_ROWS: i64 = 1_000;
+
+/// Prove the retained journal head of every live row reproduces that row, and
+/// that every retained journal head still has its live row, page by page.
+/// Returns how many live rows were verified.
+///
+/// Each entity table is locked against writes before its first page, so every
+/// page reads one stable state for the rest of the caller's transaction. A
+/// caller that has already lifted forced row security on the entity tables
+/// holds them exclusively, reads included, and this lock adds nothing to that.
+/// Every statement reads one page: at most [`LIVE_ROW_VERIFICATION_PAGE_ROWS`]
+/// live rows, their journal heads, and the retained heads whose record
+/// identifiers fall in the page's key range, so the number of live rows is not
+/// bounded here and no statement scans an entity's whole history. Nothing is
+/// collected for a commit: a caller that must index the live rows as members
+/// uses [`verify_live_rows_match_journal_heads`], which the commit-member budget
+/// bounds.
+#[cfg(feature = "runtime")]
+pub(crate) async fn verify_every_live_row_matches_its_journal_head(
+    transaction: &Transaction<'_>,
+    entities: &BTreeMap<String, CompiledEntity>,
+) -> Result<u64> {
+    let mut verified = 0_u64;
+    for entity in entities.values() {
+        let table_name = SqlIdentifier::parse(&entity.physical_table)
+            .map_err(|_| HistoryMigrationError::UnsupportedObject)?;
+        transaction
+            .batch_execute(&format!(
+                "LOCK TABLE registry_data.{} IN SHARE ROW EXCLUSIVE MODE",
+                table_name.quoted()
+            ))
+            .await
+            .map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
+        let projection = history_returning_projection(entity);
+        let mut after: Option<Uuid> = None;
+        loop {
+            let rows = transaction
+                .query(
+                    &format!(
+                        "SELECT {projection}
+                           FROM registry_data.{}
+                          WHERE $1::uuid IS NULL OR record_id > $1::uuid
+                          ORDER BY record_id
+                          LIMIT $2",
+                        table_name.quoted()
+                    ),
+                    &[&after, &LIVE_ROW_VERIFICATION_PAGE_ROWS],
+                )
+                .await
+                .map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
+            let fetched = rows.len();
+            let live_rows = decode_captured_rows(rows, entity)?;
+            let Some(last) = live_rows.keys().next_back().copied() else {
+                break;
+            };
+            let page = live_rows.keys().copied().collect::<Vec<_>>();
+            let latest_revisions =
+                load_latest_revision_snapshots(transaction, &entity.id, Some(&page)).await?;
+            if live_rows.keys().ne(latest_revisions.keys()) {
+                return Err(HistoryMigrationError::UnexpectedRowShape);
+            }
+            for (record_id, live) in &live_rows {
+                let latest = latest_revisions
+                    .get(record_id)
+                    .ok_or(HistoryMigrationError::UnexpectedRowShape)?;
+                verify_journal_head_reproduces_live_row(live, latest, None)?;
+            }
+            let page_rows = u64::try_from(live_rows.len())
+                .map_err(|_| HistoryMigrationError::UnexpectedRowShape)?;
+            // Every live row of the page has a journal head, proved above, so
+            // an equal count of retained heads across the page's key range
+            // leaves no head there without its live row.
+            if count_retained_journal_heads_in_range(transaction, &entity.id, after, Some(last))
+                .await?
+                != page_rows
+            {
+                return Err(HistoryMigrationError::UnexpectedRowShape);
+            }
+            verified = verified
+                .checked_add(page_rows)
+                .ok_or(HistoryMigrationError::UnexpectedRowShape)?;
+            after = Some(last);
+            if i64::try_from(fetched).map_or(true, |count| count < LIVE_ROW_VERIFICATION_PAGE_ROWS)
+            {
+                break;
+            }
+        }
+        // No live row lies past the last page, so no retained head may either.
+        if count_retained_journal_heads_in_range(transaction, &entity.id, after, None).await? != 0 {
+            return Err(HistoryMigrationError::UnexpectedRowShape);
+        }
+    }
+    Ok(verified)
+}
+
+/// Count the distinct records holding a retained journal head for one entity
+/// whose identifiers lie after `after` and up to `through`, either bound open
+/// when absent. The primary key leads with the entity and record identifiers,
+/// so the count reads only that key range.
+#[cfg(feature = "runtime")]
+async fn count_retained_journal_heads_in_range(
+    transaction: &Transaction<'_>,
+    entity_id: &str,
+    after: Option<Uuid>,
+    through: Option<Uuid>,
+) -> Result<u64> {
+    let count = transaction
+        .query_one(
+            "SELECT count(DISTINCT record_id)::bigint
+               FROM registry_internal.registry_revisions
+              WHERE entity_id = $1
+                AND ($2::uuid IS NULL OR record_id > $2::uuid)
+                AND ($3::uuid IS NULL OR record_id <= $3::uuid)",
+            &[&entity_id, &after, &through],
+        )
+        .await
+        .map_err(|_| HistoryMigrationError::RevisionUnavailable)?
+        .try_get::<_, i64>(0)
+        .map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
+    u64::try_from(count).map_err(|_| HistoryMigrationError::UnexpectedRowShape)
+}
+
+#[cfg(feature = "runtime")]
+fn verify_journal_head_reproduces_live_row(
+    live: &CapturedEntityRow,
+    latest: &LatestRevisionSnapshot,
+    required_package_revision: Option<&str>,
+) -> Result<()> {
+    let snapshot =
+        canonical_snapshot(&live.data).map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
+    if live.record_revision != latest.record_revision
+        || live.record_lifecycle != latest.record_lifecycle
+        || required_package_revision.is_some_and(|required| latest.package_revision != required)
+        || snapshot != latest.snapshot
+    {
+        return Err(HistoryMigrationError::UnexpectedRowShape);
+    }
+    Ok(())
 }
 
 #[cfg(feature = "runtime")]
@@ -512,6 +647,7 @@ async fn count_entity_rows(transaction: &Transaction<'_>, entity: &CompiledEntit
 async fn load_latest_revision_snapshots(
     transaction: &Transaction<'_>,
     entity_id: &str,
+    records: Option<&[Uuid]>,
 ) -> Result<BTreeMap<Uuid, LatestRevisionSnapshot>> {
     let rows = transaction
         .query(
@@ -519,8 +655,9 @@ async fn load_latest_revision_snapshots(
                     record_id, record_revision, record_lifecycle, package_revision, snapshot
                FROM registry_internal.registry_revisions
               WHERE entity_id = $1
+                AND ($2::uuid[] IS NULL OR record_id = ANY($2::uuid[]))
               ORDER BY record_id, record_revision DESC",
-            &[&entity_id],
+            &[&entity_id, &records],
         )
         .await
         .map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
