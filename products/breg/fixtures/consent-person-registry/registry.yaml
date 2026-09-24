@@ -1,0 +1,212 @@
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: consent-person-registry
+  canonicalBaseIri: https://consent-person-registry.example.gov
+  version: 0.1.0
+  defaultLanguage: en
+package:
+  environment: acceptance
+  instanceId: consent-person-registry-fixture
+  sequence: 1
+  sourceRevision: consent-person-registry-fixture-0.1.0
+manifestProjection:
+  accessProfile: person-registry-operator
+  classificationCeiling: restricted
+  catalog:
+    baseUrl: https://consent-person-registry.example.gov
+    title: Consent Person Registry Catalog
+    description: Portable metadata for the person registry consent fixture.
+    publisher:
+      id: consent-person-registry-authority
+      name: Person Registry Authority
+      iri: https://consent-person-registry.example.gov/authority
+  publicService: {id: consent-person-registry-service, title: Consent Person Registry Catalog}
+  datasets:
+    - id: consent-person-registry
+      title: Consent Person Registry
+      description: Person records a recipient reads only while the person's consent is in force.
+      owner: Person Registry Authority
+      status: active
+    - id: consent
+      title: Person Consent Decisions
+      description: Privacy notices, notice clauses, consent links, and the append-only consent decisions over persons.
+      owner: Person Registry Authority
+      status: active
+      accessProfile: person-consent-steward
+  dataServices:
+    - id: consent-person-registry-data-service
+      title: Consent Person Registry Catalog
+      endpointUrl: https://consent-person-registry.example.gov
+      servesDatasets: [consent-person-registry, consent]
+  distributions: []
+modules:
+  - id: "consent-person"
+    version: "0.1.0"
+    digest: "sha256:c6e4531cfd8c888bf6f5365a50163f215d769c5505b4a2f14e3cd237b2fa9568"
+  - id: "consent-person-registry-core"
+    version: "0.1.0"
+    digest: "sha256:25e368776882cc97fbc7aa76d60a90a8bca359c689139b28567434fb360a2141"
+
+recipients:
+  organizations:
+    - id: food-agency
+      name: Food Assistance Agency
+      contact: privacy@food-agency.example.gov
+      clients: [food-agency-portal]
+    - id: health-ngo
+      name: Health Referral NGO
+      contact: dpo@health-ngo.example.org
+      clients: [health-ngo-portal]
+  groups:
+    - id: referral-network
+      name: Referral network
+      members: [food-agency, health-ngo]
+vocabularies:
+  - id: data-use-purpose
+    values: [food-assistance, health-referral]
+  - id: consent-decision
+    values: [given, refused, withdrawn, invalidated]
+  - id: consent-channel
+    values: [self-service, assisted, steward-review, import]
+  - id: consent-invalidation-reason
+    values: [captured-in-error, identity-mismatch, notice-withdrawn, controller-decision]
+
+entities: []
+accessProfiles:
+  - id: person-registry-operator
+    default: true
+    principalClaim: registry_principal
+    actorKind: human
+    requesterClients: [person-registry-console]
+    requiredScopes: [registry:person:operate]
+    permissions:
+      - entity: person
+        operations: [create, get, list]
+        readableFields: [person-code, legal-name, district]
+        writableFields: [person-code, legal-name, district]
+        rowBoundaries: []
+  - id: food-targeting
+    principalClaim: registry_principal
+    actorKind: service
+    requesterClients: [food-agency-portal, health-ngo-portal]
+    requiredScopes: [registry:person:read]
+    requiredPurposes: [food-assistance]
+    permissions:
+      - entity: person
+        operations: [get, list]
+        readableFields: [person-code, legal-name, district]
+        allowCount: true
+        rowBoundaries: []
+        requireConsent:
+          - {record: person-consent-decision, on: id}
+  - id: person-consent-self
+    principalClaim: registry_principal
+    requiredScopes: ['consent:person:self']
+    permissions:
+    - entity: person-consent-decision
+      rowBoundaries: []
+      membershipBoundaries:
+      - {field: subject, membershipEntity: person-consent-link, membershipKeyField: subject, principalField: principal, activeField: active}
+      operations: [get, list]
+      readableFields: [subject, notice, clause, recipient, purpose, scope, decision, effective-at, expires-at, channel]
+    - entity: person-consent-link
+      rowBoundaries:
+      - {field: principal, claim: registry_principal, operator: equals}
+      operations: [get, list]
+      readableFields: [subject, active]
+    - entity: person-privacy-notice
+      rowBoundaries: []
+      operations: [get, list]
+      readableFields: [notice-version, language, title, text, text-uri, controller-name, controller-contact, jurisdiction, legal-basis, rights-statement, rights-uri, withdrawal-method, published-at]
+    - entity: person-notice-clause
+      rowBoundaries: []
+      operations: [get, list]
+      readableFields: [notice, recipient, purpose, scope, data-life, description]
+    - action: give-person-consent
+      operations: [invoke]
+      targets:
+      - {entity: person-consent-link, rowBoundaries: [{field: principal, claim: registry_principal, operator: equals}]}
+      - {entity: person, rowBoundaries: []}
+      - {entity: person-notice-clause, rowBoundaries: []}
+      - {entity: person-consent-decision, rowBoundaries: []}
+      results: [decision]
+    - action: refuse-person-consent
+      operations: [invoke]
+      targets:
+      - {entity: person-consent-link, rowBoundaries: [{field: principal, claim: registry_principal, operator: equals}]}
+      - {entity: person, rowBoundaries: []}
+      - {entity: person-notice-clause, rowBoundaries: []}
+      - {entity: person-consent-decision, rowBoundaries: []}
+      results: [decision]
+    - action: withdraw-person-consent
+      operations: [invoke]
+      targets:
+      - {entity: person-consent-link, rowBoundaries: [{field: principal, claim: registry_principal, operator: equals}]}
+      - {entity: person, rowBoundaries: []}
+      - {entity: person-notice-clause, rowBoundaries: []}
+      - {entity: person-consent-decision, rowBoundaries: []}
+      results: [decision]
+  - id: person-consent-assisted-capture
+    principalClaim: registry_principal
+    requiredScopes: ['consent:person:capture']
+    permissions:
+    - entity: person-notice-clause
+      rowBoundaries: []
+      operations: [get, list]
+      readableFields: [notice, recipient, purpose, scope, data-life, description]
+    - action: record-person-consent-assisted
+      operations: [invoke]
+      targets:
+      - {entity: person, rowBoundaries: []}
+      - {entity: person-notice-clause, rowBoundaries: []}
+      - {entity: person-consent-decision, rowBoundaries: []}
+      results: [decision]
+  - id: person-consent-steward
+    principalClaim: registry_principal
+    requiredScopes: ['consent:person:steward']
+    permissions:
+    - entity: person-privacy-notice
+      rowBoundaries: []
+      operations: [create, get, list]
+      readableFields: [notice-version, language, title, text, text-uri, controller-name, controller-contact, jurisdiction, legal-basis, rights-statement, rights-uri, withdrawal-method, published-at]
+      writableFields: [notice-version, language, title, text, text-uri, controller-name, controller-contact, jurisdiction, legal-basis, rights-statement, rights-uri, withdrawal-method, published-at]
+    - entity: person-notice-clause
+      rowBoundaries: []
+      operations: [create, get, list]
+      readableFields: [notice, recipient, purpose, scope, data-life, description]
+      writableFields: [notice, recipient, purpose, scope, data-life, description]
+    - entity: person-consent-decision
+      rowBoundaries: []
+      operations: [get, list]
+      readableFields: [subject, link, notice, clause, recipient, purpose, scope, decision, effective-at, expires-at, channel, evidence, witness, invalidation-reason, source-reference]
+    - action: invalidate-person-consent
+      operations: [invoke]
+      targets:
+      - {entity: person, rowBoundaries: []}
+      - {entity: person-consent-decision, rowBoundaries: []}
+      results: [decision]
+    - action: import-person-consent
+      operations: [invoke]
+      targets:
+      - {entity: person, rowBoundaries: []}
+      - {entity: person-consent-decision, rowBoundaries: []}
+      results: [decision]
+  - id: person-consent-link-steward
+    principalClaim: registry_principal
+    requiredScopes: ['consent:person:link']
+    permissions:
+    - entity: person-consent-link
+      rowBoundaries: []
+      operations: [create, get, list, patch]
+      readableFields: [subject, principal, active]
+      writableFields: [subject, principal, active]
+  - id: person-consent-recipient
+    principalClaim: registry_principal
+    requiredScopes: ['consent:person:read']
+    permissions:
+    - entity: person-consent-decision
+      rowBoundaries:
+      - {field: recipient, claim: 'registry:recipients', operator: in}
+      operations: [get, list]
+      readableFields: [subject, recipient, purpose, scope, decision, effective-at, expires-at]

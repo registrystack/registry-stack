@@ -594,7 +594,7 @@ class BRegProductCatalogTests(unittest.TestCase):
         ):
             VALIDATOR.validate_acceptance(errors)
         self.assertIn(
-            "acceptance matrix: must contain BREG-J01 through BREG-J21 exactly once in order",
+            "acceptance matrix: must contain BREG-J01 through BREG-J23 exactly once in order",
             errors,
         )
 

@@ -1,0 +1,1 @@
+{"$id":"urn:breg:entity:person-consent-link","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"properties":{"active":{"type":"boolean"},"principal":{"maxLength":255,"minLength":0,"type":"string"},"subject":{"format":"uuid","type":"string"}},"required":["subject","principal","active"],"type":"object","x-registry-mutationMode":"mutable"}

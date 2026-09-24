@@ -1,0 +1,24 @@
+id: consent-land-registry-core
+version: 0.1.0
+entities:
+  - id: parcel
+    primaryDataset: consent-land-registry
+    route: parcels
+    mutationMode: mutable
+    classification: internal
+    fields:
+      - {id: parcel-code, apiName: parcelCode, type: string, required: true, maxLength: 64, classification: internal}
+      - {id: district, type: string, required: true, maxLength: 80, classification: internal}
+      - {id: area-square-metres, apiName: areaSquareMetres, type: int64, required: true, classification: internal}
+    constraints:
+      - {kind: unique, fields: [parcel-code]}
+  - id: tenure-right
+    primaryDataset: consent-land-registry
+    route: tenure-rights
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - {id: parcel, type: reference, target: parcel, required: true, classification: internal}
+      - {id: holder-name, apiName: holderName, type: string, required: true, maxLength: 160, classification: restricted}
+      - {id: tenure-kind, apiName: tenureKind, type: string, required: true, maxLength: 40, classification: internal}
+      - {id: encumbered, type: boolean, required: true, classification: restricted}

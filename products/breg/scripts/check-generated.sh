@@ -13,6 +13,8 @@ fixtures=(
   acceptance/request-attachments
   fixtures/asset-registration-actions
   fixtures/household-contact-actions
+  fixtures/consent-person-registry
+  fixtures/consent-land-registry
 )
 authoring_baseline="$repository_root/products/breg/generated/authoring"
 runtime_baseline="$repository_root/products/breg/generated/runtime"

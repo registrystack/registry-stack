@@ -88,6 +88,7 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_history_migration \
     --test postgres_immediate_action_examples \
     --test postgres_immediate_action_activation \
+    --test postgres_consent_examples \
     --test postgres_registry_extensibility \
     --test postgres_action_handlers \
     --test postgres_request_activation \
