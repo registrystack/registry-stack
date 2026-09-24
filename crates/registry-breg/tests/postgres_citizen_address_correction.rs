@@ -536,9 +536,14 @@ async fn review_page_reads_only_the_linked_target_of_a_draft() {
         .await;
     assert_refused(&foreign, "review page reading another citizen's address");
 
-    // The registry does not bind a draft's target to the owner's link, so a
-    // draft naming another person's address may be accepted. Whether it is
-    // or not, that target must stay unreadable to the draft's owner.
+    // This pins a known registry gap: the registry does not bind a draft's
+    // target to its owner's link, so citizen B may create a draft naming
+    // citizen A's address. The gateway and the review page cover it: the
+    // gateway derives the target from the caller's own linked record and
+    // accepts no target argument, and the review page reads the target under
+    // the owner's token before it offers or makes a submit. A registry-level binding will change this expectation
+    // deliberately; until then the target must stay unreadable to the
+    // draft's owner.
     let created = fixture
         .call(
             Method::POST,
@@ -548,36 +553,26 @@ async fn review_page_reads_only_the_linked_target_of_a_draft() {
             &fixture.agent_token(CITIZEN_B),
         )
         .await;
-    if created.status == StatusCode::CREATED {
-        let id = created.body["data"]["recordIdentifier"]
-            .as_str()
-            .expect("draft has an identifier");
-        let draft = fixture
-            .call(
-                Method::GET,
-                &format!(
-                    "/v1/records/address-correction-requests/{id}?accessProfile=citizen-review"
-                ),
-                None,
-                &[],
-                &review_b,
-            )
-            .await;
-        assert_eq!(draft.status, StatusCode::OK, "{}", draft.body);
-        let target = draft.body["data"]["domainData"]["address"]
-            .as_str()
-            .expect("the draft names its target");
-        assert_eq!(target, citizen_a.address);
-        let target_read = fixture.review_address_read(target, &review_b).await;
-        assert_refused(&target_read, "review page reading a draft's foreign target");
-    } else {
-        assert!(
-            created.status.is_client_error(),
-            "{} {}",
-            created.status,
-            created.body
-        );
-    }
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
+    let id = created.body["data"]["recordIdentifier"]
+        .as_str()
+        .expect("draft has an identifier");
+    let draft = fixture
+        .call(
+            Method::GET,
+            &format!("/v1/records/address-correction-requests/{id}?accessProfile=citizen-review"),
+            None,
+            &[],
+            &review_b,
+        )
+        .await;
+    assert_eq!(draft.status, StatusCode::OK, "{}", draft.body);
+    let target = draft.body["data"]["domainData"]["address"]
+        .as_str()
+        .expect("the draft names its target");
+    assert_eq!(target, citizen_a.address);
+    let target_read = fixture.review_address_read(target, &review_b).await;
+    assert_refused(&target_read, "review page reading a draft's foreign target");
     fixture.finish().await;
 }
 
