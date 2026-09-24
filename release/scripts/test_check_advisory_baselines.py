@@ -27,19 +27,19 @@ LIVE_BASELINES = (
     ROOT / "release/security/scheduling-advisory-baseline.json",
 )
 LIVE_REFERENCE_IMAGE_DIGESTS = {
-    "relay": "sha256:312340bc15d1d6c2c13044c804ad3cfe56ea7d1418d4a7e3bd073bd470c033a3",
-    "breg": "sha256:e9fcb877af6d0c6b398a00a7a4b8b37535344820ee1590a1e4e209333e35f69d",
-    "casework": "sha256:94323ff38c32ffecc3c7000712259d1ea1833734befcf63d6453047b0a2a0f32",
-    "discovery": "sha256:86b466a5df06270a1d999c4965395a2ab7eb0783f103cec01348f6896c51fd44",
-    "evidence": "sha256:ad9b41b5b893fe690d2032c20506654ab3f9fc015104796e1d5d912be8443b9f",
-    "scheduling": "sha256:1795061867f186f4f52c503a96035f0c5ed12e251f15ad3b664ab9cc51ef0cac",
+    "relay": "sha256:f9fa381c0ac12a69d4eff15bb3dc5a083de79fcb84616aa4977d7e2c0d49f7c9",
+    "breg": "sha256:4dc801680e0bbca53ac011db95c23c6d184ef3f4172ea0fd072d489df8257d83",
+    "casework": "sha256:e78d35fc08a36c110569fcdbb7dfe444673e8a99abc4468419eecb2979fd0cd3",
+    "discovery": "sha256:8b182c37270bae364e143fde93bc8b52db77e6f6bfa4994c441a090ab50b360e",
+    "evidence": "sha256:851d650a5b8dfe27b1a5dc50d01cc30c2557a4665859dd4187b083df04403bef",
+    "scheduling": "sha256:ca05b9194f7afe144ddb96826648b8f51855d9b7e4c176ee7ec248663bea8d44",
 }
-LIVE_REFERENCE_SOURCE_REVISION = "82c1b813a28d61c322d435ce93c9b022455ddb2b"
+LIVE_REFERENCE_SOURCE_REVISION = "926d1aacad0f2f563f5a32086b28e49d9d8804b8"
 # The date the live exceptions below were reviewed against, stated here rather
 # than derived from the baselines: deriving it from their own reviewed_at values
 # would make the checker's future-dated guard unreachable for the newest
 # exception. Move it forward by hand when the baselines are renewed.
-LIVE_REVIEW_EVALUATION_DATE = "2026-09-22"
+LIVE_REVIEW_EVALUATION_DATE = "2026-09-24"
 LIVE_REFERENCE_PROVENANCE = {
     "relay": "local_reproduction",
     "breg": "local_reproduction",
