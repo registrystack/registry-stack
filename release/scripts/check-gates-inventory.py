@@ -301,6 +301,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer",
     ),
     (
+        "Messaging Python client binding coverage",
+        "registry-casework-client-py registry-messaging-client-py",
+    ),
+    (
         "Scheduling contract path filter",
         "scheduling_contracts: ${{ steps.filter.outputs.scheduling_contracts }}",
     ),

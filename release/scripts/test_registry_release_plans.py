@@ -424,6 +424,10 @@ version = "1.1.0"
                 "crates/registry-casework-client-node",
                 "@registrystack/casework-client-native",
             ),
+            (
+                "crates/registry-messaging-client-node",
+                "@registrystack/messaging-client-native",
+            ),
         ):
             client_root = self.root / relative_root
             write_json(
@@ -505,6 +509,11 @@ version = "1.1.0"
                 "crates/registry-casework-client-py",
                 "registry-casework-client-native",
                 "casework-client-sdk",
+            ),
+            (
+                "crates/registry-messaging-client-py",
+                "registry-messaging-client-native",
+                "messaging-client-sdk",
             ),
         ):
             client_root = self.root / relative_root
@@ -740,6 +749,9 @@ class RegistryReleasePlanTest(unittest.TestCase):
             "crates/registry-evidence-client-node/index.js",
             "crates/registry-casework-client-node/package.json",
             "crates/registry-casework-client-node/index.js",
+            "crates/registry-messaging-client-node/package.json",
+            "crates/registry-messaging-client-node/index.js",
+            "crates/registry-messaging-client-py/pyproject.toml",
             "crates/registry-relay-client-py/pyproject.toml",
             "products/breg/wasm-handler-sdk/Cargo.lock",
             "products/manifest/fuzz/Cargo.lock",
@@ -836,7 +848,7 @@ version = "1.0.0"
         )
 
     def test_prepare_rejects_stale_loader_diagnostics_with_current_guards(self) -> None:
-        for client in ("discovery", "evidence", "relay", "breg", "casework"):
+        for client in ("discovery", "evidence", "relay", "breg", "casework", "messaging"):
             with self.subTest(client=client):
                 loader = self.repo.root / f"crates/registry-{client}-client-node/index.js"
                 write(
@@ -867,7 +879,7 @@ version = "1.0.0"
         self.assertIn("expected-version diagnostics", result.stderr)
 
     def test_prepare_accepts_the_maintained_generated_loaders(self) -> None:
-        for client in ("discovery", "evidence", "relay", "breg", "casework"):
+        for client in ("discovery", "evidence", "relay", "breg", "casework", "messaging"):
             relative_root = Path(f"crates/registry-{client}-client-node")
             package = json.loads((ROOT / relative_root / "package.json").read_text())
             loader = (ROOT / relative_root / "index.js").read_text()

@@ -108,6 +108,10 @@ NODE_CLIENT_RELEASE_SURFACES = (
         "crates/registry-casework-client-node",
         "@registrystack/casework-client-native",
     ),
+    (
+        "crates/registry-messaging-client-node",
+        "@registrystack/messaging-client-native",
+    ),
 )
 PYTHON_CLIENT_RELEASE_SURFACES = (
     (
@@ -134,6 +138,11 @@ PYTHON_CLIENT_RELEASE_SURFACES = (
         "crates/registry-casework-client-py",
         "registry-casework-client-native",
         "casework-client-sdk",
+    ),
+    (
+        "crates/registry-messaging-client-py",
+        "registry-messaging-client-native",
+        "messaging-client-sdk",
     ),
 )
 FUZZ_LOCK_RELEASE_SURFACE_PATHS = (

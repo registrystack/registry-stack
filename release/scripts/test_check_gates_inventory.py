@@ -1071,6 +1071,10 @@ class GateInventoryTest(unittest.TestCase):
                 "cargo test --locked --profile ci -p registry-messaging --features postgres-test --test postgres_migrate",
                 "Messaging runtime PostgreSQL suite",
             ),
+            (
+                "registry-casework-client-py registry-messaging-client-py",
+                "Messaging Python client binding coverage",
+            ),
         ):
             with self.subTest(gate=gate):
                 text = self.workflow.replace(snippet, "true # disabled", 1)
