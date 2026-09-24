@@ -544,6 +544,9 @@ subject namespace, and Casework uses the same key for source-context lookup. `ad
 selects the BReg adapter, and `description` points at the imported source description that
 `caseworkctl source add` writes.
 Each entry in `requests` binds one BReg entity to one fallback queue; `target` is the response time the team is measured against.
+One source can declare up to 32 request entities from the same register, each named once.
+`caseworkctl source add` pairs them all in one pass, and requests that share a review authority must agree on its producer admission.
+Casework discovers work entity by entity, in the order you declare them.
 Until the description exists, `caseworkctl check` reports `"sourceDescription": "pending_source_add"`.
 
 The template's `scope-correction` review kind uses `contextStrategy: source`, so its `displaySchema` must admit exactly what the source discloses to a reviewer.
@@ -584,7 +587,7 @@ caseworkctl source add ./tutorial-work/project \
 :::
 
 Applying writes two owner-only files into the Casework project's `sources/` directory:
-`professional-licences.json`, the imported description that pins the entity, fields, review
+`professional-licences.json`, the imported description that pins each paired entity with its fields, review
 authority and policy, and application mode, and `professional-licences.breg-runtime.yaml`, a
 candidate BReg runtime binding. The binding includes the event destination, the Casework review
 authority client, optional completion delivery, and an automatic executor only when the authored
