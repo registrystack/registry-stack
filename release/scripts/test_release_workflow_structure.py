@@ -5,8 +5,10 @@ import json
 import importlib.util
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import yaml
@@ -2358,7 +2360,10 @@ class NightlyRustCoverageWorkflowStructureTest(unittest.TestCase):
         module_path = ROOT / ".github/scripts/ci_changes.py"
         spec = importlib.util.spec_from_file_location("ci_changes", module_path)
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        # Dataclasses resolve their module through sys.modules while the
+        # classifier executes.
+        with mock.patch.dict(sys.modules, {spec.name: module}):
+            spec.loader.exec_module(module)
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_path = Path(temporary_directory) / "github_output"
