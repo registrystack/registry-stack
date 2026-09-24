@@ -34,6 +34,7 @@ SHARDS = {
         "registry-platform-httpsec",
         "registry-platform-httputil",
         "registry-platform-oidc",
+        "registry-platform-ratelimit",
         "registry-platform-script",
         "registry-platform-sdjwt",
         "registry-platform-sqlite",
