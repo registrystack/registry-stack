@@ -195,6 +195,7 @@ impl From<MigrationError> for ReconcileError {
             MigrationError::ApplyFailed
             | MigrationError::ActivePackageMismatch
             | MigrationError::HistoryCoverage
+            | MigrationError::DatabaseUnavailable
             | MigrationError::FieldPatternSyntax { .. }
             | MigrationError::FieldPatternExistingRows { .. }
             | MigrationError::FieldEncryptionLookupCollision { .. }
