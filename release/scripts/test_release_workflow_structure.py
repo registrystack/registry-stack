@@ -408,6 +408,22 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             },
             module._candidate_image_names("0.33.0"),
         )
+        self.assertEqual(
+            module._candidate_image_names("0.33.0"),
+            module._candidate_image_names("0.34.0"),
+        )
+        self.assertEqual(
+            {
+                "breg",
+                "casework",
+                "discovery",
+                "evidence",
+                "messaging",
+                "relay",
+                "scheduling",
+            },
+            module._candidate_image_names("0.35.0"),
+        )
         self.assertFalse(
             any(
                 "registry-notary" in name
@@ -585,7 +601,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertEqual("validate", shards["needs"])
         self.assertFalse(shards["strategy"]["fail-fast"])
         self.assertEqual(
-            ["core", "breg", "casework", "scheduling"],
+            ["core", "breg", "casework", "scheduling", "messaging"],
             shards["strategy"]["matrix"]["group"],
         )
         checkout = shards["steps"][0]
@@ -612,13 +628,14 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         downloads = [
             step for step in consumer["steps"] if "download-artifact@" in str(step)
         ]
-        self.assertEqual(4, len(downloads))
+        self.assertEqual(5, len(downloads))
         self.assertEqual(
             {
                 "binary-shards/core",
                 "binary-shards/breg",
                 "binary-shards/casework",
                 "binary-shards/scheduling",
+                "binary-shards/messaging",
             },
             {step["with"]["path"] for step in downloads},
         )
@@ -631,9 +648,22 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "--breg binary-shards/breg",
             "--casework binary-shards/casework",
             "--scheduling binary-shards/scheduling",
+            "--messaging binary-shards/messaging",
             '--builder-image "${RELEASE_BUILDER_IMAGE}"',
         ):
             self.assertIn(binding, merge)
+        messaging_smoke = merge.split(
+            "if (( release_major > 0 || release_minor >= 35 )); then", 1
+        )[1].split("fi", 1)[0]
+        for binary in ("messaging", "messagingctl"):
+            self.assertIn(
+                f'"dist/bin/{binary}-${{{{ needs.validate.outputs.tag }}}}-linux-amd64" --version',
+                messaging_smoke,
+            )
+            self.assertIn(
+                f'"{binary} ${{{{ needs.validate.outputs.version }}}}"',
+                messaging_smoke,
+            )
         assemble_download = next(
             step
             for step in document["jobs"]["assemble"]["steps"]

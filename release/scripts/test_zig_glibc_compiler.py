@@ -295,7 +295,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "target.mkdir(parents=True, exist_ok=True)\n"
             "for binary in ('registry-manifest', 'relay', 'relayctl', 'evidence', "
             "'evidencectl', 'evidence-oid4vci', 'discovery', 'breg', 'bregctl', "
-            "'casework', 'caseworkctl', 'scheduling'):\n"
+            "'casework', 'caseworkctl', 'scheduling', 'messaging', 'messagingctl'):\n"
             "    (target / binary).write_text('fixture binary\\n')\n",
             encoding="utf-8",
         )
@@ -324,10 +324,13 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "selected = (core if group in ('all', 'core') else []) + "
             "(breg if group in ('all', 'breg') else []) + "
             "(['casework', 'caseworkctl'] if parsed >= (0, 30, 0) and group in ('all', 'casework') else []) + "
-            "(['scheduling'] if parsed >= (0, 33, 0) and group in ('all', 'scheduling') else [])\n"
+            "(['scheduling'] if parsed >= (0, 33, 0) and group in ('all', 'scheduling') else []) + "
+            "(['messaging', 'messagingctl'] if parsed >= (0, 35, 0) and group in ('all', 'messaging') else [])\n"
             "for name in selected:\n"
+            "    if name == 'scheduling' and group != 'scheduling':\n"
+            "        continue\n"
             "    (bin_dir / f'{name}-{tag}-linux-amd64').write_text(name + '\\n')\n"
-            "for name in ('discovery', 'breg', 'casework', 'scheduling', 'evidence', 'relay'):\n"
+            "for name in ('discovery', 'breg', 'casework', 'scheduling', 'messaging', 'evidence', 'relay'):\n"
             "    if name in selected:\n"
             "        (image_dir / name).write_text(name + '\\n')\n",
             encoding="utf-8",
@@ -509,6 +512,45 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             [call["args"] for call in calls],
         )
 
+    def test_messaging_group_builds_both_exact_binary_targets_from_v0_35(self) -> None:
+        result, calls = self.run_payload(version="0.34.0", group="messaging")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([], calls)
+        self.assertEqual([], list((self.root / "dist/bin").iterdir()))
+        result, calls = self.run_payload(version="0.35.0", group="messaging")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            [
+                [
+                    "build",
+                    "--release",
+                    "--locked",
+                    "-p",
+                    "registry-messaging",
+                    "--bin",
+                    "messaging",
+                ],
+                [
+                    "build",
+                    "--release",
+                    "--locked",
+                    "-p",
+                    "registry-messagingctl",
+                    "--bin",
+                    "messagingctl",
+                ],
+            ],
+            [call["args"] for call in calls],
+        )
+        self.assertEqual(
+            ["messaging-v0.35.0-linux-amd64", "messagingctl-v0.35.0-linux-amd64"],
+            sorted(path.name for path in (self.root / "dist/bin").iterdir()),
+        )
+        self.assertEqual(
+            ["messaging"],
+            [path.name for path in (self.root / "dist/image-bin").iterdir()],
+        )
+
     def test_outer_builder_dispatches_each_group_with_canonical_container_paths(
         self,
     ) -> None:
@@ -628,11 +670,20 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         self.assertFalse(any(path.name.startswith("breg-") for path in (output / "bin").iterdir()))
 
     def test_merged_groups_are_byte_mode_and_inventory_equivalent_to_all(self) -> None:
-        source_sha = "1" * 40
+        for version, groups in (
+            ("0.31.0", ("core", "breg", "casework")),
+            ("0.35.0", ("core", "breg", "casework", "scheduling", "messaging")),
+        ):
+            with self.subTest(version=version):
+                self.assert_merged_groups_equivalent_to_all(version, groups)
 
-        def build(
-            group: str, version: str = "0.31.0"
-        ) -> subprocess.CompletedProcess[str]:
+    def assert_merged_groups_equivalent_to_all(
+        self, version: str, groups: tuple[str, ...]
+    ) -> None:
+        source_sha = "1" * 40
+        work = self.root / f"merge-{version}"
+
+        def build(group: str) -> subprocess.CompletedProcess[str]:
             arguments = ["bash", str(self.scripts / BINARY_RECIPE.name)]
             if group != "all":
                 arguments.extend(["--group", group])
@@ -642,8 +693,8 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
                 cwd=self.root,
                 env={
                     **self.env,
-                    "RELEASE_CARGO_HOME": str(self.root / f"cargo-{group}"),
-                    "RELEASE_TARGET_DIR": str(self.root / f"target-{group}"),
+                    "RELEASE_CARGO_HOME": str(work / f"cargo-{group}"),
+                    "RELEASE_TARGET_DIR": str(work / f"target-{group}"),
                     "RELEASE_SOURCE_SHA": source_sha,
                 },
                 capture_output=True,
@@ -653,12 +704,12 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
 
         result = build("all")
         self.assertEqual(result.returncode, 0, result.stderr)
-        expected = self.root / "expected"
+        expected = work / "expected"
         shutil.copytree(self.root / "dist/bin", expected / "bin")
         shutil.copytree(self.root / "dist/image-bin", expected / "image-bin")
 
-        shards = self.root / "shards"
-        for group in ("core", "breg", "casework"):
+        shards = work / "shards"
+        for group in groups:
             result = build(group)
             self.assertEqual(result.returncode, 0, result.stderr)
             destination = shards / group
@@ -667,20 +718,20 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             for marker in ("RELEASE_BINARY_SHARD", "RELEASE_BUILDER_IMAGE"):
                 shutil.copy2(self.root / "dist" / marker, destination / marker)
 
-        output = self.root / "merged-groups"
+        output = work / "merged-groups"
+        shard_arguments = [
+            argument
+            for group in groups
+            for argument in (f"--{group}", str(shards / group))
+        ]
         result = subprocess.run(
             [
                 str(self.scripts / "merge-release-binary-shards.py"),
                 "--version",
-                "0.31.0",
+                version,
                 "--source-sha",
                 source_sha,
-                "--core",
-                str(shards / "core"),
-                "--breg",
-                str(shards / "breg"),
-                "--casework",
-                str(shards / "casework"),
+                *shard_arguments,
                 "--output",
                 str(output),
                 "--builder-image",

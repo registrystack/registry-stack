@@ -281,6 +281,34 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
             ("breg", "casework", "discovery", "evidence", "relay", "scheduling"),
         )
 
+    def test_v0_35_roster_includes_messaging(self) -> None:
+        result = subprocess.run(
+            [
+                "python3",
+                str(ROOT / "release/scripts/release_candidate.py"),
+                "image-names",
+                "--version",
+                "0.35.0",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        roster = MODULE.parse_roster(result.stdout)
+        self.assertEqual(
+            roster,
+            (
+                "breg",
+                "casework",
+                "discovery",
+                "evidence",
+                "messaging",
+                "relay",
+                "scheduling",
+            ),
+        )
+        self.assertEqual(set(roster), MODULE.IMAGE_NAMES)
+
     def test_collects_every_owned_image_with_exact_daemon_context(self) -> None:
         fake = FakeCommands()
         with tempfile.TemporaryDirectory() as temporary:

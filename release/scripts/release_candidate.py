@@ -51,6 +51,7 @@ DISCOVERY_RUNTIME_IMAGE_NAMES = OFFICIAL_RUNTIME_IMAGE_NAMES | {"discovery"}
 BREG_RELEASE_MINIMUM_VERSION = (0, 26, 0)
 CASEWORK_RELEASE_MINIMUM_VERSION = (0, 30, 0)
 SCHEDULING_RELEASE_MINIMUM_VERSION = (0, 33, 0)
+MESSAGING_RELEASE_MINIMUM_VERSION = (0, 35, 0)
 UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 26, 1)
 RELEASE_PROVENANCE_ASSET_MINIMUM_VERSION = (0, 27, 1)
 BREG_RUNTIME_IMAGE_NAMES = DISCOVERY_RUNTIME_IMAGE_NAMES | {
@@ -62,6 +63,7 @@ CASEWORK_RUNTIME_IMAGE_NAMES = (BREG_RUNTIME_IMAGE_NAMES - {"mint"}) | {"casewor
 THIRD_PARTY_NOTICES_MINIMUM_VERSION = (0, 33, 0)
 MACOS_FIPS_BUNDLE_MINIMUM_VERSION = (0, 33, 0)
 SCHEDULING_RUNTIME_IMAGE_NAMES = CASEWORK_RUNTIME_IMAGE_NAMES | {"scheduling"}
+MESSAGING_RUNTIME_IMAGE_NAMES = SCHEDULING_RUNTIME_IMAGE_NAMES | {"messaging"}
 V2_TOP_LEVEL_FIELDS = {
     "schema_version",
     "repository",
@@ -101,7 +103,7 @@ SECURITY_EVIDENCE_COMMON_REQUIRED_FILES = {
 }
 SECURITY_EVIDENCE_REQUIRED_FILES = SECURITY_EVIDENCE_COMMON_REQUIRED_FILES | {
     f"{directory}/{image}.{suffix}.json"
-    for image in SCHEDULING_RUNTIME_IMAGE_NAMES
+    for image in MESSAGING_RUNTIME_IMAGE_NAMES
     for directory, suffix in (
         ("image-sbom", "spdx"),
         ("syft", "syft"),
@@ -133,7 +135,9 @@ def _candidate_image_names(version: str) -> set[str]:
         return CASEWORK_RUNTIME_IMAGE_NAMES | {"mint"}
     if parsed < SCHEDULING_RELEASE_MINIMUM_VERSION:
         return CASEWORK_RUNTIME_IMAGE_NAMES
-    return SCHEDULING_RUNTIME_IMAGE_NAMES
+    if parsed < MESSAGING_RELEASE_MINIMUM_VERSION:
+        return SCHEDULING_RUNTIME_IMAGE_NAMES
+    return MESSAGING_RUNTIME_IMAGE_NAMES
 
 
 def _literal_string_roster(path: Path, name: str) -> set[str]:
@@ -404,6 +408,9 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
             inventory[f"caseworkctl-{tag}-{platform}"] = "binary"
         inventory[f"casework-{tag}-install.sh"] = "installer"
         inventory["casework-install.sh"] = "installer"
+    if version_tuple >= MESSAGING_RELEASE_MINIMUM_VERSION:
+        inventory[f"messaging-{tag}-linux-amd64"] = "binary"
+        inventory[f"messagingctl-{tag}-linux-amd64"] = "binary"
     if version_tuple >= THIRD_PARTY_NOTICES_MINIMUM_VERSION:
         inventory["THIRD_PARTY_NOTICES"] = "notice"
     if version_tuple >= MACOS_FIPS_BUNDLE_MINIMUM_VERSION:

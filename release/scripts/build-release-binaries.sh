@@ -16,13 +16,14 @@ done
 if [[ "$#" -eq 1 ]]; then
   version="$1"
 else
-  printf 'usage: %s [--include-casework] [--group core|breg|casework|scheduling] <release-version>\n' "$0" >&2
+  printf 'usage: %s [--include-casework] [--group core|breg|casework|scheduling|messaging] <release-version>\n' "$0" >&2
   exit 2
 fi
 if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ||
       ("${group}" != all && "${group}" != core && "${group}" != breg &&
-       "${group}" != casework && "${group}" != scheduling) ]]; then
-  printf 'usage: %s [--include-casework] [--group core|breg|casework|scheduling] <release-version>\n' "$0" >&2
+       "${group}" != casework && "${group}" != scheduling &&
+       "${group}" != messaging) ]]; then
+  printf 'usage: %s [--include-casework] [--group core|breg|casework|scheduling|messaging] <release-version>\n' "$0" >&2
   exit 2
 fi
 tag="v${version}"
@@ -46,6 +47,10 @@ fi
 include_scheduling=0
 if ((version_major > 0 || version_minor >= 33)); then
   include_scheduling=1
+fi
+include_messaging=0
+if ((version_major > 0 || version_minor >= 35)); then
+  include_messaging=1
 fi
 
 # Compile and link every product binary through Zig against the glibc stubs of
@@ -237,6 +242,16 @@ build_payload() {
     fi
   fi
 
+  if [[ ("${group}" == all || "${group}" == messaging) && "${include_messaging}" -eq 1 ]]; then
+    cargo build --release --locked \
+      -p registry-messaging --bin messaging
+    cargo build --release --locked \
+      -p registry-messagingctl --bin messagingctl
+    cp target/release/messaging "dist/bin/messaging-${RELEASE_TAG}-linux-amd64"
+    cp target/release/messagingctl "dist/bin/messagingctl-${RELEASE_TAG}-linux-amd64"
+    cp target/release/messaging dist/image-bin/messaging
+  fi
+
   # Nothing but the staged payload is in these directories yet: the checksum
   # files and the builder image record are written by the outer invocation
   # after this container exits. Every staged binary is checked, so a build that
@@ -345,6 +360,7 @@ docker run --rm \
   --env RELEASE_INCLUDE_BREG="${include_breg}" \
   --env RELEASE_INCLUDE_CASEWORK="${include_casework}" \
   --env RELEASE_INCLUDE_SCHEDULING="${include_scheduling}" \
+  --env RELEASE_INCLUDE_MESSAGING="${include_messaging}" \
   --env RELEASE_TAG="${tag}" \
   --env REGISTRY_RELEASE_TAG="${tag}" \
   --env RELEASE_RUSTFLAGS="${release_rustflags}" \
@@ -394,6 +410,13 @@ if [[ "${group}" == scheduling && "${include_scheduling}" -eq 1 ]]; then
 fi
 if [[ "${group}" == all && "${include_scheduling}" -eq 1 ]]; then
   image_bin_binaries+=(scheduling)
+fi
+if [[ ("${group}" == all || "${group}" == messaging) && "${include_messaging}" -eq 1 ]]; then
+  bin_assets+=(
+    "messaging-${tag}-linux-amd64"
+    "messagingctl-${tag}-linux-amd64"
+  )
+  image_bin_binaries+=(messaging)
 fi
 if [[ "${group}" == all || "${group}" == core ]]; then
   bin_assets+=(

@@ -953,7 +953,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         (
             "build-canonical-binaries:\n    name: Build canonical Linux ${{ matrix.group }} binary shard",
             "fail-fast: false",
-            "group: [core, breg, casework, scheduling]",
+            "group: [core, breg, casework, scheduling, messaging]",
             "build-canonical:\n    name: Build Linux payload and private images once",
             "name: Restore reusable Cargo cache",
             "restore-keys:",
@@ -1030,6 +1030,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             '    "breg",\n',
             '    "casework",\n',
             '    "scheduling",\n',
+            '    "messaging",\n',
             '    "relay",\n',
             "if package in PUBLIC_PACKAGES:",
             "if package not in CANDIDATE_PACKAGES:",
@@ -1539,7 +1540,7 @@ def candidate_build_isolation_violations(workflow: str | None) -> list[str]:
     if (
         "needs: validate" not in shards
         or "actions/cache@" not in shards
-        or "group: [core, breg, casework, scheduling]" not in shards
+        or "group: [core, breg, casework, scheduling, messaging]" not in shards
         or "fail-fast: false" not in shards
         or shards.count("name: Build canonical Linux binary shard") != 1
         or shards.count("actions/upload-artifact@") != 1
@@ -1548,7 +1549,7 @@ def candidate_build_isolation_violations(workflow: str | None) -> list[str]:
         or "      - build-canonical-binaries" not in build_a
         or "actions/cache@" in build_a
         or "release/scripts/build-release-binaries.sh" in build_a
-        or build_a.count("actions/download-artifact@") != 4
+        or build_a.count("actions/download-artifact@") != 5
         or build_a.count("name: Merge and smoke the canonical Linux payload") != 1
         or build_a.count("name: Build private candidate image layouts once") != 1
     ):

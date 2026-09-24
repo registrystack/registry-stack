@@ -43,6 +43,9 @@ CASEWORK_RELEASE_MINIMUM_VERSION = (
 SCHEDULING_RELEASE_MINIMUM_VERSION = (
     REGISTRY_RELEASE.SCHEDULING_RELEASE_MINIMUM_VERSION
 )
+MESSAGING_RELEASE_MINIMUM_VERSION = (
+    REGISTRY_RELEASE.MESSAGING_RELEASE_MINIMUM_VERSION
+)
 MINT_RETIREMENT_VERSION = REGISTRY_RELEASE.release_candidate.MINT_RETIREMENT_VERSION
 FIXTURE_IDENTIFIER_CATALOG = {
     "version": 1,
@@ -154,6 +157,8 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
         )
     if version_tuple >= SCHEDULING_RELEASE_MINIMUM_VERSION:
         inventory += ("scheduling",)
+    if version_tuple >= MESSAGING_RELEASE_MINIMUM_VERSION:
+        inventory += ("messaging", "messagingctl")
     data = {
         "stack": {
             "release": release_id,

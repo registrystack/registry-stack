@@ -222,7 +222,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
         binary_job = document["jobs"]["canonical-linux-binaries"]
         self.assertFalse(binary_job["strategy"]["fail-fast"])
         self.assertEqual(
-            ["core", "breg", "casework", "scheduling"],
+            ["core", "breg", "casework", "scheduling", "messaging"],
             binary_job["strategy"]["matrix"]["group"],
         )
         self.assertEqual(
@@ -278,6 +278,12 @@ class ReleaseRehearsalTest(unittest.TestCase):
             "if (( release_major > 0 || release_minor >= 33 )); then", merge
         )
         self.assertIn("dist/image-bin/scheduling --version", merge)
+        self.assertIn("--messaging binary-shards/messaging", merge)
+        self.assertIn(
+            "if (( release_major > 0 || release_minor >= 35 )); then", merge
+        )
+        self.assertIn("messaging-v${REHEARSAL_VERSION}-linux-amd64", merge)
+        self.assertIn("messagingctl-v${REHEARSAL_VERSION}-linux-amd64", merge)
         self.assertNotIn("${{ inputs.", merge)
         for forbidden in (
             "npm publish",
