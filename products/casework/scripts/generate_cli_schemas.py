@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 
-API_VERSION = "registry.registrystack.org/caseworkctl/v1alpha1"
+API_VERSION = "registry.registrystack.org/caseworkctl/v1alpha2"
 OUTPUT = Path(__file__).resolve().parents[1] / "contracts" / "cli"
 
 STRING = {"type": "string"}
@@ -70,6 +70,7 @@ REPORTS = {
             "runtimeConfig",
             "packageRoot",
             "checks",
+            "packageDigest",
             "secretFileChecks",
             "sourceChecks",
             "eventWiringGuidance",
@@ -77,6 +78,7 @@ REPORTS = {
         "properties": {
             "runtimeConfig": STRING,
             "packageRoot": STRING,
+            "packageDigest": {"type": ["string", "null"]},
             "checks": {"$ref": "#/$defs/doctorChecks"},
             "secretFileChecks": OBJECT_ARRAY,
             "sourceChecks": OBJECT_ARRAY,
@@ -95,6 +97,7 @@ REPORTS = {
                     "database",
                     "oidcIssuer",
                     "directory",
+                    "reconciliation",
                 ],
                 "properties": {
                     key: {"const": "ready"}
@@ -107,6 +110,7 @@ REPORTS = {
                         "database",
                         "oidcIssuer",
                         "directory",
+                        "reconciliation",
                     ]
                 },
             }
@@ -497,7 +501,7 @@ def schema(kind: str, report: dict) -> dict:
     defs.update(report.get("defs", {}))
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": f"https://registrystack.org/caseworkctl/v1alpha1/{kind}.schema.json",
+        "$id": f"https://registrystack.org/caseworkctl/v1alpha2/{kind}.schema.json",
         "title": kind,
         "description": f"Versioned JSON report emitted by caseworkctl for {report['command']}.",
         "oneOf": variants,

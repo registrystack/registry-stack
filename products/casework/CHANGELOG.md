@@ -51,6 +51,30 @@
     `audit.path` (`audit.caseworkctl.ndjson` beside `audit.ndjson`).
   - The retention report no longer carries an `auditRecords` count.
 
+- BREAKING: `caseworkctl doctor` names the check that failed instead of
+  reporting every dependency failure as "A Casework runtime dependency check
+  failed." A refusal carries the code `casework.doctor.check-failed`, names the
+  check in its `path` (`doctor:/checks/database`, `sourceConnections`,
+  `directory`, `reconciliation`, `audit`, and so on), says what failed
+  without echoing a connection string or a source response, and suggests the
+  next step. `doctor` also checks each source's reconciliation health, and
+  its report adds `packageDigest`, the `reconciliation` readiness key, and
+  each source's reconciliation health. Because pinned
+  objects gained fields, the `caseworkctl --format json` wire contract moves
+  from `caseworkctl/v1alpha1` to `caseworkctl/v1alpha2`; a consumer that
+  matches the version must accept the new one.
+- BREAKING: `GET /ready` answers `503` once a source's reconciliation has
+  failed five consecutive passes, and until one pass for that source succeeds.
+  Schema migration 18 records each pass's outcome, so every replica and
+  `doctor` see the same health; run `casework migrate` before serving this
+  release. A database that was never migrated, or that an earlier release
+  migrated, is now named as `the Casework database schema is not current`
+  with the migrate instruction, instead of as invalid stored data.
+- One item a reconciliation or event-synchronization pass cannot apply no
+  longer stops the rest of the pass. The pass applies every other claimed
+  item, logs how many it could not apply, and retries each after its claim
+  lapses.
+
 ## v0.34.0 - 2026-09-25
 
 - BREAKING: give each paired BReg request entity its own lifecycle hook, so

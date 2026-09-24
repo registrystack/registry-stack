@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha1/DevEventsReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha2/DevEventsReport.schema.json",
   "title": "DevEventsReport",
   "description": "Versioned JSON report emitted by caseworkctl for dev events.",
   "oneOf": [
@@ -19,7 +19,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
         },
         "kind": {
           "const": "DevEventsReport"
@@ -58,7 +58,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
         },
         "kind": {
           "const": "DevEventsReport"

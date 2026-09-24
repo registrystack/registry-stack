@@ -492,8 +492,11 @@ reporting the stopped worker, because a deployment whose maintenance, review com
 source reconciliation loop is gone keeps neither its deadlines nor its source state current.
 
 Probe `GET /health` for liveness: it answers `200` as long as the process runs. Probe `GET /ready`
-before routing traffic: it answers `503` while the audit writer is not ready or PostgreSQL is
-unreachable, and `200` otherwise. Readiness checks the audit writer first, then the store.
+before routing traffic: it answers `503` while the audit writer is not ready, PostgreSQL is
+unreachable or its schema is not current, or a source's reconciliation has failed five consecutive
+passes, and `200` otherwise. Readiness checks the audit writer first, then the store, then
+reconciliation health. The `503` body names none of these; the runtime log and `caseworkctl doctor`
+do.
 
 Each audited call writes a request entry, schema `registry-casework-audit/v1`, before it opens its
 transaction, and its response entries after the transaction commits, all sharing one correlation.
@@ -516,6 +519,17 @@ from the registry contract, readiness, or a list is. The next successful reader 
 `Casework source reader requests to BReg succeed again`. That entry means BReg answers the reader
 again, not that reconciliation has caught up: a pass that still cannot apply the source logs
 `Casework reconciliation pass did not complete`.
+
+A reconciliation pass that cannot apply one item keeps going with the rest, logs
+`Casework reconciliation could not apply every claimed subject` with how many it could not apply,
+and retries each one once its 30-second claim lapses. The runtime records every pass's outcome in
+the database: consecutive failures, the time of the last pass that succeeded and of the last that
+failed, and the class of the last failure (`source-unavailable`, `source-refused`, `store`, or
+`configuration`). The fifth consecutive failed pass for a source logs
+`Casework reconciliation keeps failing; readiness fails until a pass succeeds`, and every replica's
+readiness fails until one pass for that source succeeds, which resets the count. Readiness does not
+see a pass that hangs without finishing; the time of the last pass that succeeded, which `doctor`
+prints, does.
 
 Between a source change and the reconciliation that applies it, an item whose binding moved within
 the same source generation stays in the inbox, the next-item result, and holdings, and its view,
@@ -595,16 +609,25 @@ caseworkctl doctor --runtime-config /etc/registry-casework/runtime.yaml
 ```
 
 It checks the configuration, the exact imported source descriptions, each source connection and its
-reader grants, that the audit destination is writable by the user running it, the database, the
-OIDC issuer, and directory readiness, and it stops at the first one that refuses and names it. Run
-it as the runtime user. The audit check refuses an audit directory that is missing and cannot be
-created, that another user owns, or that is group- or world-writable, and an existing audit file
-that is not owner-only. It takes no lock, so it passes beside a running service. Its secret
-preflight resolves the audit reference before it opens anything, and a reference that cannot
-resolve is reported by name with the rule it broke. Directory
+reader grants, that the audit destination is writable by the user running it, the database and its
+schema version, the OIDC issuer, directory readiness, and each source's reconciliation health, and it
+stops at the first one that refuses. A refusal carries the code `casework.doctor.check-failed`,
+names the check in its `path` (for example `doctor:/checks/database`), says what failed, and
+suggests the next step. It never echoes a connection string or a source response. Run it as the
+runtime user. The audit check refuses an audit directory that is missing and cannot be created, that
+another user owns, or that is group- or world-writable, and an existing audit file that is not
+owner-only. It takes no lock, so it passes beside a running service. Its secret preflight resolves
+the audit reference before it opens anything, and a reference that cannot resolve is reported by
+name with the rule it broke. Directory
 readiness requires a team serving every queue the package declares, and a gap is reported as an
-instruction to complete the queue assignments as an Administrator. A run that reaches the end
-prints a report naming each check and each source it contacted.
+instruction to complete the queue assignments as an Administrator. Reconciliation health refuses a
+source whose last five or more passes failed, naming the source, the count, the last failure's
+class, and when a pass last succeeded. The audit check verifies the sealed audit files, and the
+active file too when no runtime holds its lock, so run it with the runtime stopped to prove a key
+against the whole chain; it refuses a chain the configured key does not verify. A run that reaches
+the end prints a report naming each check, the digest of the package `package.root` holds
+(`packageDigest`, `null` for an unpackaged local project), each source it contacted with its
+reconciliation health, and the audit records and files it verified.
 
 `doctor` answers whether the deployment is ready to do work. It does not summarize an individual
 review. Inspect the Casework request, task, context, result, and result-feed resources for review
@@ -615,8 +638,11 @@ or applying. Use `application.state` with `recovery.code` for recovery decisions
 either product's database directly.
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, doctor(), load_runtime(),
-    and check_source_descriptions();
+    check_source_descriptions(), doctor_dependency_failure(), and reconciliation_failure_message();
+    crates/registry-caseworkctl/src/lib.rs, classify_failure();
     crates/registry-platform-audit/src/writer.rs, FileDestination::check_writable();
+    crates/registry-casework/src/service.rs, reconcile_source() and RECONCILIATION_FAILURE_THRESHOLD;
+    crates/registry-casework/src/store.rs, record_reconciliation_outcome() and reconciliation_health();
     crates/registry-casework/tests/secret_diagnostics.rs. */}
 
 ## Change the active package
@@ -664,13 +690,15 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 | A secret reference is refused | The named file must be a regular file owned by the running user, mode `0400` or `0600`, one link, no symbolic link, non-empty, and free of NUL bytes. |
 | Startup refuses the database or `doctor` stops at it | Check the resolved URL's user and database name, TLS on the server, and the trusted root reference when the server uses a private authority. |
 | Startup refuses the OIDC issuer | Check discovery reachability from the Casework host, or the pinned JWKS document's keys and their distinct `kid` values. |
+| `the Casework database schema is not current` | The database was never migrated, or an earlier release migrated it. Run `casework migrate` or `caseworkctl db migrate` with the migration credential, then start the runtime. |
 | `the Casework database schema version N is newer than this binary supports (M)` | A newer release already migrated this database. Run that release or a later one; Casework does not migrate a schema down. |
 | `the Casework database holds hosted work that schema migration 15 would drop` | The database still holds hosted work from Casework 0.32.0 or earlier. Keep it with that release until its work is exported, then migrate a fresh database as [Migrate and serve](#migrate-and-serve) describes. |
 | `the Casework database holds N audit record(s) that schema migration 17 would drop` | The earlier release has not published every audit record. Run it until its publisher drains the outbox, then migrate as [the upgrade steps](#upgrade-from-a-release-that-chained-the-audit-file) describe. |
 | `the Casework audit destination could not be opened: another process holds the single-writer lock beside the audit file` | Another `casework` process writes this file. Stop it, or give this process its own `audit.path`. |
 | `the Casework audit destination could not be opened: the audit file could not be opened: ...` | The rest of the message names the rule the audit file or its directory broke and the fix, for example `chown it to the service user and chmod it 0700`, or `archive it and restart with a fresh path` for a file whose last entry is incomplete. Apply it and start again. |
 | `caseworkctl doctor` stops at `the Casework audit destination is not writable by this user` | Run `doctor` as the runtime user, and fix the audit directory's owner and mode, or the audit file's, as the message names. |
-| `GET /ready` returns `503` while `GET /health` returns `200` | The audit writer stopped or PostgreSQL is failing. Read the runtime log for `audit file write failed`, check the audit file, its lock, the free space, and the database, then restart the process. |
+| `GET /ready` returns `503` while `GET /health` returns `200` | The audit writer stopped, PostgreSQL is failing, or a source's reconciliation is failing. Run `caseworkctl doctor`, which names the check, then read the runtime log for `audit file write failed` or the reconciliation entry, and check the audit file, its lock, the free space, and the database. |
+| `doctor` refuses at `doctor:/checks/reconciliation` | The named source's last passes failed. `source-unavailable` means the source did not answer; `source-refused` means it answered with a refusal or a response Casework cannot use; `store` and `configuration` point at the database and the binding. Repair the cause; the next pass that succeeds restores readiness. |
 | `profile.not-human` on a token you believe is human | The issuer did not add the configured human-identity claim to that session. Check the claim name and value against the issuer's mapping for interactive sessions. |
 | Work items report a source outage | The bound source is unreachable or refusing the reader. Run `caseworkctl doctor`, which names the failing source, read the runtime log's `Casework source reader request to BReg failed` entry for the cause, then check that binding's base URL, token endpoint, and reader grants. |
 

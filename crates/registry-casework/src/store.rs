@@ -45,9 +45,11 @@ const UNIFIED_REVIEWS_MIGRATION: &str = include_str!("../migrations/0015_unified
 const OCCURRENCE_IDENTITY_MIGRATION: &str =
     include_str!("../migrations/0016_occurrence_identity_excludes_superseded.sql");
 const AUDIT_WRITER_MIGRATION: &str = include_str!("../migrations/0017_audit_writer.sql");
+const SOURCE_RECONCILIATION_HEALTH_MIGRATION: &str =
+    include_str!("../migrations/0018_source_reconciliation_health.sql");
 
 /// Every schema version in ledger order.
-const MIGRATIONS: [(i64, &str); 17] = [
+const MIGRATIONS: [(i64, &str); 18] = [
     (1, MIGRATION),
     (2, HOSTED_MIGRATION),
     (3, ASSIGNMENT_MIGRATION),
@@ -65,6 +67,7 @@ const MIGRATIONS: [(i64, &str); 17] = [
     (15, UNIFIED_REVIEWS_MIGRATION),
     (16, OCCURRENCE_IDENTITY_MIGRATION),
     (17, AUDIT_WRITER_MIGRATION),
+    (18, SOURCE_RECONCILIATION_HEALTH_MIGRATION),
 ];
 
 /// The newest schema version this binary knows how to run against.
@@ -80,6 +83,13 @@ fn refuse_newer_schema(newest_applied: Option<i64>) -> Result<(), StoreError> {
             supported: SUPPORTED_SCHEMA_VERSION,
         }),
         _ => Ok(()),
+    }
+}
+
+fn applied_schema(applied: Option<i64>) -> String {
+    match applied {
+        Some(version) => format!("its newest applied migration is version {version}"),
+        None => "no migration has been applied".to_owned(),
     }
 }
 
@@ -431,6 +441,19 @@ impl PostgresStore {
 
     pub async fn ready(&self) -> Result<(), StoreError> {
         let client = self.client().await?;
+        let ledger_exists: bool = client
+            .query_one(
+                "SELECT to_regclass('casework_schema_migrations') IS NOT NULL",
+                &[],
+            )
+            .await?
+            .get(0);
+        if !ledger_exists {
+            return Err(StoreError::SchemaNotCurrent {
+                applied: None,
+                required: SUPPORTED_SCHEMA_VERSION,
+            });
+        }
         let applied = client
             .query(
                 "SELECT version FROM casework_schema_migrations ORDER BY version",
@@ -454,7 +477,13 @@ impl PostgresStore {
         if schema_is_current {
             Ok(())
         } else {
-            Err(StoreError::Corrupt)
+            Err(StoreError::SchemaNotCurrent {
+                applied: applied
+                    .last()
+                    .map(|row| row.try_get::<_, i64>(0))
+                    .transpose()?,
+                required: SUPPORTED_SCHEMA_VERSION,
+            })
         }
     }
 
@@ -3277,6 +3306,70 @@ impl PostgresStore {
         Ok(())
     }
 
+    /// Record the outcome of one reconciliation pass for a source and return
+    /// the number of consecutive failed passes after it. A success resets the
+    /// count and keeps the last failure for the operator to read.
+    pub async fn record_reconciliation_outcome(
+        &self,
+        source_id: &str,
+        generation: &str,
+        failure: Option<ReconciliationFailure>,
+    ) -> Result<i32, StoreError> {
+        let client = self.client().await?;
+        let row = match failure {
+            None => client.query_one(
+                "INSERT INTO casework_source_status(source_id,binding_generation,remote_complete,unavailable,checked_at,consecutive_failures,last_succeeded_at) VALUES($1,$2,false,false,now(),0,now()) ON CONFLICT(source_id) DO UPDATE SET consecutive_failures=0,last_succeeded_at=EXCLUDED.last_succeeded_at RETURNING consecutive_failures",
+                &[&source_id, &generation],
+            ).await?,
+            Some(failure) => client.query_one(
+                "INSERT INTO casework_source_status(source_id,binding_generation,remote_complete,unavailable,checked_at,consecutive_failures,last_failed_at,last_failure) VALUES($1,$2,false,false,now(),1,now(),$3) ON CONFLICT(source_id) DO UPDATE SET consecutive_failures=LEAST(casework_source_status.consecutive_failures,2147483646)+1,last_failed_at=EXCLUDED.last_failed_at,last_failure=EXCLUDED.last_failure RETURNING consecutive_failures",
+                &[&source_id, &generation, &failure.as_str()],
+            ).await?,
+        };
+        Ok(row.get(0))
+    }
+
+    /// The recorded reconciliation health of each named source, in the order
+    /// given. A source with no recorded pass reports no pass and no failure.
+    pub async fn reconciliation_health(
+        &self,
+        source_ids: &[String],
+    ) -> Result<Vec<SourceReconciliationHealth>, StoreError> {
+        let client = self.client().await?;
+        let rows = client
+            .query(
+                "SELECT source_id,consecutive_failures,last_succeeded_at,last_failed_at,last_failure FROM casework_source_status WHERE source_id=ANY($1)",
+                &[&source_ids],
+            )
+            .await?;
+        let mut recorded = std::collections::BTreeMap::new();
+        for row in rows {
+            let failure: Option<String> = row.try_get(4)?;
+            let last_failure = failure
+                .as_deref()
+                .map(ReconciliationFailure::parse)
+                .transpose()?;
+            recorded.insert(
+                row.try_get::<_, String>(0)?,
+                SourceReconciliationHealth {
+                    source_id: String::new(),
+                    consecutive_failures: row.try_get(1)?,
+                    last_succeeded_at: row.try_get(2)?,
+                    last_failed_at: row.try_get(3)?,
+                    last_failure,
+                },
+            );
+        }
+        Ok(source_ids
+            .iter()
+            .map(|source_id| {
+                let mut health = recorded.remove(source_id).unwrap_or_default();
+                health.source_id.clone_from(source_id);
+                health
+            })
+            .collect())
+    }
+
     pub async fn source_status(
         &self,
         source_id: &str,
@@ -4058,6 +4151,54 @@ impl From<serde_json::Error> for AttemptSettlementError {
     }
 }
 
+/// Why a reconciliation pass failed, as a closed vocabulary an operator can
+/// read without the source's or the database's own error text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReconciliationFailure {
+    /// The source could not be reached or did not answer the reader.
+    SourceUnavailable,
+    /// The source answered with something the adapter refused.
+    SourceRefused,
+    /// The Casework database refused or failed an operation.
+    Store,
+    /// The served package or runtime configuration could not handle the work.
+    Configuration,
+}
+
+impl ReconciliationFailure {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SourceUnavailable => "source-unavailable",
+            Self::SourceRefused => "source-refused",
+            Self::Store => "store",
+            Self::Configuration => "configuration",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, StoreError> {
+        match value {
+            "source-unavailable" => Ok(Self::SourceUnavailable),
+            "source-refused" => Ok(Self::SourceRefused),
+            "store" => Ok(Self::Store),
+            "configuration" => Ok(Self::Configuration),
+            _ => Err(StoreError::Corrupt),
+        }
+    }
+}
+
+/// The recorded outcome of a source's reconciliation passes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceReconciliationHealth {
+    pub source_id: String,
+    pub consecutive_failures: i32,
+    pub last_succeeded_at: Option<DateTime<Utc>>,
+    pub last_failed_at: Option<DateTime<Utc>>,
+    pub last_failure: Option<ReconciliationFailure>,
+}
+
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("the Casework database configuration is invalid")]
@@ -4102,6 +4243,11 @@ pub enum StoreError {
         "the Casework database schema version {found} is newer than this binary supports ({supported}); run a casework release that supports it"
     )]
     SchemaNewer { found: i64, supported: i64 },
+    #[error(
+        "the Casework database schema is not current: {}, and this binary requires version {required}; apply the migrations with `casework migrate` or `caseworkctl db migrate`",
+        applied_schema(*.applied)
+    )]
+    SchemaNotCurrent { applied: Option<i64>, required: i64 },
     #[error(
         "the Casework database holds hosted work that schema migration {version} would drop: {}; nothing was changed. This release does not carry hosted work forward: keep this database with the release that wrote it until the work it holds is exported, then migrate a fresh Casework database for this release",
         hosted_row_counts(.tables)

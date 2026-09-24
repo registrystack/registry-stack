@@ -617,6 +617,8 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
     ]);
     assert_eq!(doctor["checks"]["directory"], "ready", "{doctor:#}");
     assert_eq!(doctor["checks"]["secretFiles"], "ready", "{doctor:#}");
+    assert_eq!(doctor["checks"]["reconciliation"], "ready", "{doctor:#}");
+    assert_eq!(doctor["checks"]["audit"], "ready", "{doctor:#}");
 
     let accepted = create_review_request(&session, &first, "synthetic-batch-0042");
     let request = accepted["requestId"]

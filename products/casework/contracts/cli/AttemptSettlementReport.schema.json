@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha1/AttemptSettlementReport.schema.json",
+  "$id": "https://registrystack.org/caseworkctl/v1alpha2/AttemptSettlementReport.schema.json",
   "title": "AttemptSettlementReport",
   "description": "Versioned JSON report emitted by caseworkctl for attempt settle.",
   "oneOf": [
@@ -18,7 +18,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
         },
         "kind": {
           "const": "AttemptSettlementReport"
@@ -51,7 +51,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "registry.registrystack.org/caseworkctl/v1alpha1"
+          "const": "registry.registrystack.org/caseworkctl/v1alpha2"
         },
         "kind": {
           "const": "AttemptSettlementReport"
