@@ -5807,11 +5807,14 @@ dependencies = [
 name = "registry-messagingctl"
 version = "0.34.0"
 dependencies = [
+ "aws-lc-rs",
  "axum",
  "base64 0.22.1",
  "chrono",
  "clap",
+ "hex",
  "jsonwebtoken",
+ "rcgen",
  "registry-messaging",
  "registry-messaging-core",
  "registry-platform-audit",
@@ -5819,9 +5822,12 @@ dependencies = [
  "registry-platform-dispatch",
  "registry-platform-oidc",
  "registry-platform-testing",
+ "reqwest",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
  "serde_norway",
+ "signal-hook",
  "tempfile",
  "tokio",
  "tokio-postgres",

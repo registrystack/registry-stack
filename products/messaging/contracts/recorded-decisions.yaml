@@ -402,7 +402,7 @@ decisions:
       explicit port that is neither 587 nor 465, and the refusal of every
       non-loopback answer are unchanged.
     reasoning: >-
-      `messagingctl dev` runs the release `messaging` binary against a local
+      `messagingctl dev` runs the runtime of a release build against a local
       Mailpit, which speaks no TLS, so a test-build-only rule would make the
       local development path impossible without a second binary. Tying the
       relaxation to the listener keeps the production posture whole: a
@@ -414,3 +414,35 @@ decisions:
     evidence:
       - {path: crates/registry-messagingctl/src/lib.rs, name: a_development_listener_admits_a_plaintext_loopback_relay}
       - {path: crates/registry-messagingctl/src/lib.rs, name: a_plaintext_loopback_relay_is_refused_behind_a_production_listener}
+  - id: MESSAGING-DEC-27
+    subject: The development session is foreground, in-process, and owns everything it starts
+    decision: >-
+      `messagingctl dev` runs in the foreground until Ctrl-C or SIGTERM. It
+      starts a pinned PostgreSQL container and a pinned Mailpit container,
+      each publishing on 127.0.0.1 only and labelled with the session's
+      random owner, runs a mock HTTP gateway and the Messaging runtime inside
+      the `messagingctl` process on a `development-loopback` listener, and
+      removes both containers with their volumes when it stops. Its secrets,
+      generated runtime configuration, audit journal, and log live in the
+      project's owner-only `.messaging/dev` directory, which the next start
+      removes, together with any container the previous record names, before
+      it generates everything again. `messagingctl dev token CLIENT` signs a
+      one-hour ES256 token with the session's key for a client one access
+      profile names, carrying that profile's scopes and actor kind.
+    reasoning: >-
+      Casework's retained, supervised session keeps a database across
+      restarts because its tutorials build state over several sessions.
+      Messaging's local path is one send and one look at the result, and a
+      session that keeps no database cannot leave a rendered payload or a
+      recipient behind, so the simpler ephemeral shape serves it. Running the
+      runtime in process needs no second binary on `PATH` and no supervisor;
+      the runtime is the same library `messaging serve` runs, reading a
+      generated configuration that `messagingctl check` would accept. A
+      static key set generated with the session replaces a local issuer
+      container: the runtime already accepts a static JWKS, and the signing
+      key never leaves the session directory.
+    evidence:
+      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: the_generated_configuration_is_one_the_runtime_accepts}
+      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: every_session_file_is_owner_only}
+      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: a_token_verifies_under_the_session_key_set_with_the_profile_claims}
+      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: a_second_start_in_the_same_project_is_refused_while_the_first_runs}

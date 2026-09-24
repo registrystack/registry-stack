@@ -434,8 +434,8 @@ transient. TLS modes:
   `operator-controlled-upstream` listener at `messagingctl check` and at
   startup (MESSAGING-DEC-26). A production runtime therefore cannot be
   pointed at a plaintext relay without also giving up its production
-  listener posture, and `messagingctl dev` can run the release binary
-  against a local Mailpit.
+  listener posture, and `messagingctl dev` can run a release build of the
+  runtime against a local Mailpit.
 
 Both TLS modes verify the relay's certificate against the configured host
 name, not the connected address, over the public web roots plus an optional
@@ -688,3 +688,44 @@ a cutoff that bounds the backlog. Published outbox rows, whose records carry
 no payload value, are not pruned by retention.
 
 Tests: MESSAGING-SEC-10 in `contracts/security-test-traceability.yaml`.
+
+## Development session (MESSAGING-DEC-27)
+
+Threat: a local development session leaves a credential, a rendered payload,
+or a recipient behind, exposes a service beyond the machine, or teaches a
+posture that reaches production.
+
+`messagingctl dev` publishes PostgreSQL and Mailpit on 127.0.0.1 only and
+runs the runtime on a `development-loopback` listener, which is refused on
+any non-loopback bind. Every secret the session generates, the database
+passwords, the audit key, the gateway token and callback key, and the token
+signing key, is written owner-only (files 0600 under 0700 directories,
+single link, never through a symbolic link) in the project's
+`.messaging/dev`, which `.messaging/.gitignore` keeps out of version
+control. No secret is placed on a command line: PostgreSQL's superuser
+password reaches Docker through an owner-only `--env-file`, role passwords
+reach `psql` on standard input, and a failed Docker command's error output is
+repeated with the password removed. The database serves TLS with a
+certificate signed by a session-generated authority, refuses every
+non-TLS host connection, and checks passwords with SCRAM; the runtime
+connects with the least-privilege runtime role and migrates with the
+migration role, as in production.
+
+A session token is signed with the session's own ES256 key, carries the
+scopes and actor kind of the one access profile that names its client, and
+expires in an hour; the runtime verifies it against the session's static key
+set, so the key never leaves the session directory and no issuer runs. The
+mock gateway compares the static bearer token in constant time, signs each
+delivery report with the session's HMAC key, reads no field of a send, and
+logs nothing a send carries. Stopping the session removes both containers
+with their volumes; the next start in the project removes any container the
+previous record names before it replaces the session directory, and a second
+start is refused while one runs.
+
+Residual risk: the audit journal and log of the last session stay in
+`.messaging/dev` until the next start. Neither carries a payload value
+(MESSAGING-SEC-08). A session killed with SIGKILL leaves its containers
+running until the next start in the same project removes them.
+
+Tests: the `dev` unit tests in `crates/registry-messagingctl/src/dev/`, and
+`products/messaging/scripts/test-dev.sh`.

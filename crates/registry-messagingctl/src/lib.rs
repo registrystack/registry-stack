@@ -21,6 +21,10 @@
 //! - `retention erase-expired` reports what the configured retention
 //!   periods say had expired by `--before`, and with `--apply` erases it,
 //!   with the migration credential. A cutoff in the future is refused.
+//! - `dev` runs the package in the foreground against PostgreSQL and Mailpit
+//!   in Docker and a mock HTTP gateway, with the runtime in this process,
+//!   and removes its containers on Ctrl-C; `dev token` writes a bearer
+//!   header file for a client an access profile names.
 //!
 //! Exit codes: 0 when the command succeeds, 1 when the configuration,
 //! package, preview, message action, or retention cutoff is refused, 2 for a usage error, and
@@ -49,6 +53,7 @@ use registry_messaging_core::{
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+mod dev;
 mod starter;
 
 #[derive(Debug, Parser)]
@@ -83,6 +88,9 @@ enum Command {
     /// Erase what the retention periods say has expired.
     #[command(subcommand)]
     Retention(RetentionCommand),
+    /// Run the package locally with PostgreSQL, Mailpit, and a mock HTTP
+    /// gateway in Docker, until Ctrl-C.
+    Dev(dev::DevArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -306,6 +314,8 @@ enum View {
     MessageShow,
     MessageAction,
     Retention,
+    Dev,
+    DevToken,
 }
 
 impl Outcome {
@@ -378,6 +388,7 @@ where
         }
     };
     let outcome = match cli.command {
+        Command::Dev(args) => return dev::run(args, cli.format, stdout, stderr),
         Command::Init(args) => init(&args.directory),
         Command::Check(args) => check(&args.source),
         Command::Preview(args) => preview(&args),
@@ -951,7 +962,45 @@ fn render_human(
         View::MessageShow => render_message_show(report, stdout),
         View::MessageAction => render_message_action(report, stdout),
         View::Retention => render_retention(report, stdout),
+        View::Dev => render_dev(report, stdout),
+        View::DevToken => render_dev_token(report, stdout),
     }
+}
+
+fn render_dev(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
+    if report["state"] == json!("stopped") {
+        writeln!(stdout, "stopped; the session's containers are removed")?;
+        return writeln!(
+            stdout,
+            "session directory: {}",
+            text(&report["sessionDirectory"])
+        );
+    }
+    writeln!(stdout, "ready")?;
+    for (label, key) in [
+        ("api", "api"),
+        ("metrics", "metrics"),
+        ("mailpit", "mailpit"),
+        ("mock gateway", "mockGateway"),
+        ("runtime config", "runtimeConfig"),
+        ("log", "log"),
+    ] {
+        writeln!(stdout, "  {label}: {}", text(&report[key]))?;
+    }
+    writeln!(
+        stdout,
+        "next: messagingctl dev token CLIENT, then send with curl -H @HEADER_FILE; Ctrl-C stops the session"
+    )
+}
+
+fn render_dev_token(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
+    writeln!(stdout, "header file: {}", text(&report["headerFile"]))?;
+    writeln!(
+        stdout,
+        "valid for {} seconds; send with curl -H @{}",
+        report["expiresInSeconds"],
+        text(&report["headerFile"])
+    )
 }
 
 fn render_init(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {

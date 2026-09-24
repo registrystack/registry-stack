@@ -25,28 +25,34 @@ postgres-test = ["registry-messaging/postgres-test"]
 workspace = true
 
 [dependencies]
+aws-lc-rs.workspace = true
+axum.workspace = true
+base64.workspace = true
 chrono.workspace = true
 clap.workspace = true
+hex.workspace = true
+jsonwebtoken.workspace = true
+rcgen.workspace = true
 registry-messaging.workspace = true
 registry-messaging-core.workspace = true
 registry-platform-buildinfo.workspace = true
+reqwest.workspace = true
+rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_norway.workspace = true
+signal-hook.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["rt"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "net", "time"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
 uuid.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
-axum.workspace = true
-base64.workspace = true
-jsonwebtoken.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-dispatch = { workspace = true, features = ["postgres"] }
 registry-platform-oidc.workspace = true
 registry-platform-testing.workspace = true
-serde_norway.workspace = true
 tokio-postgres.workspace = true
 tower.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
-zeroize.workspace = true

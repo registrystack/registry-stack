@@ -122,3 +122,8 @@
 - Accept an SMTP provider's `tls: development-loopback` in a release build
   when the runtime's own listener is `development-loopback`; behind an
   `operator-controlled-upstream` listener it is still refused.
+- Add `messagingctl dev`, a foreground local session that runs a package
+  against a pinned PostgreSQL and a pinned Mailpit in Docker and a mock HTTP
+  gateway that reports delivery through signed callbacks, and removes its
+  containers when it stops, and `messagingctl dev token CLIENT`, which writes
+  a one-hour bearer header file for a client an access profile names.

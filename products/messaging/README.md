@@ -41,7 +41,8 @@ Pre-1.0 and under construction. This version is the product skeleton:
   message reached a terminal state, by the runtime's hourly sweep or on
   demand;
 - `messagingctl init`, `check`, `preview`, `apply`, `messages list`,
-  `show`, `retry`, `settle`, and `cancel`, and `retention erase-expired`;
+  `show`, `retry`, `settle`, and `cancel`, `retention erase-expired`, and
+  `dev` with `dev token` for a local session;
 - the Rust client for health, readiness, and reading one message's status;
 - the security invariant matrix, the problem catalog, and the generated
   OpenAPI and runtime schema.
@@ -78,8 +79,47 @@ with the caller's source of record.
 
 ## Running locally
 
-The starter under `examples/starter/` is a runtime configuration and a package
-with an email and an SMS sender profile, an email template in English and
+`messagingctl dev` runs a package end to end on one machine. It needs Docker:
+
+```bash
+messagingctl init ./notices
+messagingctl dev ./notices
+# in another terminal
+messagingctl dev token case-system ./notices
+curl -X POST http://127.0.0.1:8107/v1/messages \
+  -H @./notices/.messaging/dev/tokens/case-system.header \
+  -H 'content-type: application/json' -H 'Idempotency-Key: first' \
+  --data '{"senderProfile":"reminders-sms","to":{"phone":"+15555550100"},"template":{"id":"appointment-reminder-sms","version":"1"},"locale":"en","data":{"name":"Ada","day":"2026-10-01","office":"North"}}'
+```
+
+The session runs in the foreground until Ctrl-C or SIGTERM and owns
+everything it starts: a pinned PostgreSQL container serving TLS with a
+certificate the session generates, a pinned Mailpit container every `smtp`
+provider sends to, a mock gateway every `http` provider sends to, and the
+Messaging runtime itself, in the `messagingctl` process, on a
+`development-loopback` listener at `--port` (8107) with metrics at
+`--metrics-port` (9107). Both containers publish on 127.0.0.1 only and are
+removed with their volumes when the session stops, so nothing a session sent
+or recorded outlives it. The mock gateway speaks the example provider under
+`examples/providers/mock`: it answers each send after `--mock-latency-ms`
+(200) and then posts a delivery report, signed with the session's callback
+key, to the runtime's callback route, so an SMS reaches `delivered` and an
+email reaches `submitted` with its message in Mailpit.
+
+The session's secrets, generated `runtime.yaml`, audit journal, and JSON log
+live in the project's private `.messaging/dev` directory (mode 0700, files
+0600, ignored by git through `.messaging/.gitignore`), and the next start in
+the project replaces it. A second start in the same project is refused while
+the first runs. `messagingctl dev token CLIENT` signs a one-hour bearer token
+for a client one access profile names, carrying that profile's scopes and
+actor kind, with the key the running session's runtime trusts, and writes it
+as a header file under `.messaging/dev/tokens/`. The tokens and the key are
+for this session only; nothing about the session is a production posture.
+`products/messaging/scripts/test-dev.sh` is the automated run of the same
+path.
+
+To run the runtime yourself instead, start from the starter. The starter
+under `examples/starter/` is a runtime configuration and a package with an email and an SMS sender profile, an email template in English and
 French, an SMS template, a sender access profile, and an operator access
 profile. `messagingctl init DIRECTORY` writes a copy, and `DIRECTORY` is
 itself the package root: it holds `messaging.yaml`, `providers/`, and
@@ -198,6 +238,7 @@ MESSAGING_TEST_DATABASE_URL=<disposable database> cargo test --locked \
   -p registry-messaging --features postgres-test --test postgres_retention
 MESSAGING_TEST_DATABASE_URL=<disposable database> cargo test --locked \
   -p registry-messagingctl --features postgres-test --test postgres_messages_cli
+products/messaging/scripts/test-dev.sh
 ```
 
 The checkpoint runs the database-free checks: dependency direction,
@@ -205,7 +246,12 @@ database-suite isolation, the contract validator and its tests, the generated
 artifact drift test, `messagingctl init` against the published starter,
 `messagingctl check` over the starter, a pinned digest, and five refusals,
 `messagingctl preview` byte stability, and `messagingctl messages` refusing a
-malformed id and an unreachable database. Each PostgreSQL suite works in its own schema inside the database the
+malformed id and an unreachable database. `test-dev.sh` needs Docker: it
+starts `messagingctl dev` on a starter whose SMS provider is the example mock
+provider, sends one email and one SMS, requires the SMS to be `delivered`
+through one applied signed callback and the email to be `submitted` with one
+message in Mailpit, and requires the stopped session to leave no container.
+Each PostgreSQL suite works in its own schema inside the database the
 URL names and fails, rather than skipping, when the URL is absent. A test
 binary that skips because its database is absent is not database
 verification.
