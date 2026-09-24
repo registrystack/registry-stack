@@ -63,6 +63,8 @@ jobs:
       scheduling_postgres: ${{ steps.filter.outputs.scheduling_postgres }}
       evidence_contracts: ${{ steps.filter.outputs.evidence_contracts }}
       scheduling_contracts: ${{ steps.filter.outputs.scheduling_contracts }}
+      messaging_contracts: ${{ steps.filter.outputs.messaging_contracts }}
+      messaging_postgres: ${{ steps.filter.outputs.messaging_postgres }}
       release_tool: ${{ steps.filter.outputs.release_tool }}
       release_source_proof: ${{ steps.filter.outputs.release_source_proof }}
       docs: ${{ steps.filter.outputs.docs }}
@@ -853,6 +855,72 @@ jobs:
           DISPATCH_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ job.services.postgres.ports['5432'] }}/dispatch
         run: cargo test --locked -p registry-platform-dispatch --features postgres-test
 
+  messaging-contracts:
+    name: Messaging product contracts
+    needs: [changes, rust-policy]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.messaging_contracts == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Messaging contract consistency
+        run: products/messaging/scripts/check-contracts.sh
+
+  messaging-postgres:
+    name: Messaging PostgreSQL runtime
+    needs: [changes, rust-policy]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.messaging_postgres == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        env:
+          POSTGRES_DB: messaging
+          POSTGRES_USER: messaging
+          POSTGRES_PASSWORD: messaging_test
+        options: >-
+          --health-cmd "pg_isready -U messaging -d messaging"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432/tcp
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: Rust cache
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build the Messaging operator tool
+        run: cargo build --locked --profile ci -p registry-messagingctl
+      - name: Verify Messaging product contracts and offline configuration checks
+        env:
+          MESSAGINGCTL_BIN: ${{ github.workspace }}/target/ci/messagingctl
+        run: products/messaging/scripts/check-checkpoint.sh
+      - name: Verify migrations, readiness, and the served runtime
+        env:
+          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
+        run: cargo test --locked --profile ci -p registry-messaging --features postgres-test --test postgres_migrate
+
   breg-contracts:
     name: Base Registry Engine product contracts (${{ matrix.lane }})
     needs: changes
@@ -1065,6 +1133,8 @@ jobs:
       - casework-postgres
       - scheduling-postgres
       - scheduling-contracts
+      - messaging-postgres
+      - messaging-contracts
     runs-on: ubuntu-slim
     timeout-minutes: 5
     env:
@@ -2090,6 +2160,8 @@ jobs:
       - casework-postgres
       - scheduling-postgres
       - scheduling-contracts
+      - messaging-postgres
+      - messaging-contracts
       - release-tool
       - release-source-proof
       - evidence-tutorials

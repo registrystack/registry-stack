@@ -77,6 +77,12 @@ SHARDS = {
         "registry-schedulingctl",
         "registry-scheduling-client",
     ),
+    "messaging": (
+        "registry-messaging-core",
+        "registry-messaging",
+        "registry-messagingctl",
+        "registry-messaging-client",
+    ),
     "stack-client": ("registry-record", "registry-stack-client"),
     "evidence": (
         "registry-evidence",
@@ -106,6 +112,7 @@ RELAY_CLIENT_PACKAGES = frozenset(SHARDS["relay-client"])
 BREG_PACKAGES = frozenset(SHARDS["breg"])
 CASEWORK_PACKAGES = frozenset(SHARDS["casework"])
 SCHEDULING_PACKAGES = frozenset(SHARDS["scheduling"])
+MESSAGING_PACKAGES = frozenset(SHARDS["messaging"])
 STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
 
 # These are the cross-product semantic commitments implemented independently by
@@ -311,6 +318,11 @@ CLI_REFERENCE_INPUTS = (
         "crates/registry-casework/src/runtime.rs",
     ),
     ("crates/registry-caseworkctl/src/**", "crates/registry-caseworkctl/src/lib.rs"),
+    (
+        "crates/registry-messaging/src/runtime.rs",
+        "crates/registry-messaging/src/runtime.rs",
+    ),
+    ("crates/registry-messagingctl/src/**", "crates/registry-messagingctl/src/lib.rs"),
 )
 CLI_REFERENCE_PATTERNS = tuple(pattern for pattern, _ in CLI_REFERENCE_INPUTS)
 
@@ -1021,6 +1033,8 @@ def classify(
                 seeds.update(CASEWORK_PACKAGES)
             elif path.startswith("products/scheduling/"):
                 seeds.update(SCHEDULING_PACKAGES)
+            elif path.startswith("products/messaging/"):
+                seeds.update(MESSAGING_PACKAGES)
             elif path.startswith("products/identifiers/"):
                 # The catalog gate compiles its focused Relay V2 exporter.
                 # Catalog-only tooling does not require the full Rust matrix.
@@ -1297,6 +1311,8 @@ def classify(
         "scheduling_postgres": bool(
             affected & (SCHEDULING_PACKAGES | {"registry-platform-dispatch"})
         ),
+        "messaging_contracts": bool(affected & MESSAGING_PACKAGES),
+        "messaging_postgres": bool(affected & MESSAGING_PACKAGES),
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,
         "docs": docs,

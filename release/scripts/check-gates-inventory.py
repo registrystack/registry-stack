@@ -19,6 +19,9 @@ CASEWORK_CHECKPOINT_RUNNER = (
 SCHEDULING_CHECKPOINT_RUNNER = (
     ROOT / "products" / "scheduling" / "scripts" / "check-checkpoint.sh"
 )
+MESSAGING_CHECKPOINT_RUNNER = (
+    ROOT / "products" / "messaging" / "scripts" / "check-checkpoint.sh"
+)
 
 REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
@@ -358,6 +361,64 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Scheduling delivery intent suite",
         "cargo test --locked -p registry-schedulingctl --features postgres-test --test intents_postgres",
+    ),
+    (
+        "Messaging contract path filter",
+        "messaging_contracts: ${{ steps.filter.outputs.messaging_contracts }}",
+    ),
+    (
+        "Messaging contract gate",
+        "messaging-contracts:\n    name: Messaging product contracts",
+    ),
+    (
+        "Messaging contract reproduction",
+        "run: products/messaging/scripts/check-contracts.sh",
+    ),
+    (
+        "Messaging PostgreSQL path filter",
+        "messaging_postgres: ${{ steps.filter.outputs.messaging_postgres }}",
+    ),
+    (
+        "Messaging PostgreSQL gate",
+        "messaging-postgres:\n    name: Messaging PostgreSQL runtime",
+    ),
+    (
+        "Messaging PostgreSQL 17 image pin",
+        "image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
+        "        env:\n"
+        "          POSTGRES_DB: messaging",
+    ),
+    (
+        "Messaging product checkpoint wrapper",
+        "run: products/messaging/scripts/check-checkpoint.sh",
+    ),
+    (
+        "Messaging dependency-direction guard",
+        "python3 products/messaging/scripts/check_dependency_direction.py",
+    ),
+    (
+        "Messaging database test isolation guard",
+        "python3 products/messaging/scripts/check_database_test_isolation.py",
+    ),
+    (
+        "Messaging product script tests",
+        "python3 -m unittest discover -s products/messaging/scripts -p 'test_*.py'",
+    ),
+    (
+        "Messaging security contract validation",
+        "python3 products/messaging/scripts/validate_contracts.py",
+    ),
+    (
+        "Messaging generated document drift check",
+        "cargo test --locked --quiet -p registry-messaging --features schema",
+    ),
+    (
+        "Messaging configuration refusal journeys",
+        "expect_refusal unknown-key listener.port",
+    ),
+    (
+        "Messaging runtime PostgreSQL suite",
+        "cargo test --locked --profile ci -p registry-messaging --features postgres-test --test postgres_migrate",
     ),
     (
         "Release Linux Node client path filter",
@@ -1214,6 +1275,7 @@ def missing_gates(
     platform_fuzz_runner_text: str | None = None,
     casework_checkpoint_runner_text: str | None = None,
     scheduling_checkpoint_runner_text: str | None = None,
+    messaging_checkpoint_runner_text: str | None = None,
 ) -> list[str]:
     if classifier_text is None:
         classifier_text = CI_CLASSIFIER.read_text(encoding="utf-8")
@@ -1235,9 +1297,16 @@ def missing_gates(
             if SCHEDULING_CHECKPOINT_RUNNER.is_file()
             else ""
         )
+    if messaging_checkpoint_runner_text is None:
+        messaging_checkpoint_runner_text = (
+            MESSAGING_CHECKPOINT_RUNNER.read_text(encoding="utf-8")
+            if MESSAGING_CHECKPOINT_RUNNER.is_file()
+            else ""
+        )
     inventory_text = (
         f"{workflow_text}\n{classifier_text}\n{platform_fuzz_runner_text}\n"
-        f"{casework_checkpoint_runner_text}\n{scheduling_checkpoint_runner_text}"
+        f"{casework_checkpoint_runner_text}\n{scheduling_checkpoint_runner_text}\n"
+        f"{messaging_checkpoint_runner_text}"
     )
     return [name for name, snippet in REQUIRED_GATES if snippet not in inventory_text]
 

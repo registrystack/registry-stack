@@ -56,6 +56,9 @@ class GateInventoryTest(unittest.TestCase):
         self.scheduling_checkpoint_runner = (
             ROOT / "products" / "scheduling" / "scripts" / "check-checkpoint.sh"
         ).read_text(encoding="utf-8")
+        self.messaging_checkpoint_runner = (
+            ROOT / "products" / "messaging" / "scripts" / "check-checkpoint.sh"
+        ).read_text(encoding="utf-8")
         self.nightly_security = (
             ROOT / ".github" / "workflows" / "nightly-security.yml"
         ).read_text(encoding="utf-8")
@@ -1035,6 +1038,80 @@ class GateInventoryTest(unittest.TestCase):
                     self.module.missing_gates(
                         self.workflow,
                         scheduling_checkpoint_runner_text=runner,
+                    ),
+                )
+
+    def test_missing_messaging_workflow_gates_are_reported(self) -> None:
+        for snippet, gate in (
+            (
+                "messaging_contracts: ${{ steps.filter.outputs.messaging_contracts }}",
+                "Messaging contract path filter",
+            ),
+            (
+                "messaging-contracts:\n    name: Messaging product contracts",
+                "Messaging contract gate",
+            ),
+            (
+                "run: products/messaging/scripts/check-contracts.sh",
+                "Messaging contract reproduction",
+            ),
+            (
+                "messaging_postgres: ${{ steps.filter.outputs.messaging_postgres }}",
+                "Messaging PostgreSQL path filter",
+            ),
+            (
+                "messaging-postgres:\n    name: Messaging PostgreSQL runtime",
+                "Messaging PostgreSQL gate",
+            ),
+            (
+                "run: products/messaging/scripts/check-checkpoint.sh",
+                "Messaging product checkpoint wrapper",
+            ),
+            (
+                "cargo test --locked --profile ci -p registry-messaging --features postgres-test --test postgres_migrate",
+                "Messaging runtime PostgreSQL suite",
+            ),
+        ):
+            with self.subTest(gate=gate):
+                text = self.workflow.replace(snippet, "true # disabled", 1)
+                self.assertIn(gate, self.module.missing_gates(text))
+
+    def test_missing_messaging_checkpoint_wrapper_steps_are_reported(self) -> None:
+        for snippet, gate in (
+            (
+                "python3 products/messaging/scripts/check_dependency_direction.py",
+                "Messaging dependency-direction guard",
+            ),
+            (
+                "python3 products/messaging/scripts/check_database_test_isolation.py",
+                "Messaging database test isolation guard",
+            ),
+            (
+                "python3 -m unittest discover -s products/messaging/scripts -p 'test_*.py'",
+                "Messaging product script tests",
+            ),
+            (
+                "python3 products/messaging/scripts/validate_contracts.py",
+                "Messaging security contract validation",
+            ),
+            (
+                "cargo test --locked --quiet -p registry-messaging --features schema",
+                "Messaging generated document drift check",
+            ),
+            (
+                'expect_refusal unknown-key listener.port',
+                "Messaging configuration refusal journeys",
+            ),
+        ):
+            with self.subTest(gate=gate):
+                runner = self.messaging_checkpoint_runner.replace(
+                    snippet, "true # disabled", 1
+                )
+                self.assertIn(
+                    gate,
+                    self.module.missing_gates(
+                        self.workflow,
+                        messaging_checkpoint_runner_text=runner,
                     ),
                 )
 
