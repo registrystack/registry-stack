@@ -923,7 +923,7 @@ struct HistoryEraseArgs {
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     request_file: PathBuf,
 
-    /// Acknowledge that erasure cannot be undone and blocks successor packages until `history rebaseline`.
+    /// Acknowledge that erasure cannot be undone.
     ///
     /// Without this flag the command is refused before any file is read or
     /// any database connection is opened.
@@ -2289,7 +2289,7 @@ fn history_erase(args: &HistoryEraseArgs) -> Result<HistoryEraseSuccessReport, F
                 diagnostic(
                     "history.erase.acknowledgement.required",
                     "acknowledgeIrreversible",
-                    "history erasure is irreversible, and no successor package can be applied until `history rebaseline` restores snapshot coverage; pass --acknowledge-irreversible to proceed",
+                    "history erasure is irreversible: no command restores erased revisions; pass --acknowledge-irreversible to proceed",
                 ),
                 DiagnosticArtifact::CommandArguments,
                 SuggestedAction::CorrectCommandUsage,

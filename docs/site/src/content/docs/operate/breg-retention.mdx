@@ -78,8 +78,8 @@ restores it, and that command refuses a registry holding more than 1,000 live ro
 registry is at or near that size, confirm the rebaseline is possible before you erase, not after.
 :::
 
-**`history erase` refuses to run without `--acknowledge-irreversible`: erasure cannot be undone,
-and no successor package can be applied until `history rebaseline` restores snapshot coverage.**
+**`history erase` refuses to run without `--acknowledge-irreversible`, because erasure cannot be
+undone and no command restores the erased revisions.**
 
 ```sh
 bregctl history erase \
@@ -98,11 +98,19 @@ snapshot; erasing baseline data makes all snapshot coverage unavailable. Nothing
 registry on its own: run `history rebaseline` when snapshot reads of current state must work again.
 Live reads and writes continue.
 
+An erasure of revisions committed after the coverage baseline does not hold back the next
+package: `bregctl apply` accepts a successor when the only gap in coverage is one the audit
+journal records as that erasure. Erasing baseline data, or any gap the journal does not record as
+a committed erasure, still refuses every successor package until `history rebaseline` restores
+coverage. That includes an erasure whose audit record `audit prune` has since removed.
+
 {/* Evidence: crates/registry-breg/src/history_erasure.rs;
     crates/registry-bregctl/src/history_erasure_lifecycle.rs;
     crates/registry-bregctl/src/lib.rs, HistoryEraseArgs;
     crates/registry-breg/src/history_rebaseline.rs, MAX_REBASELINE_LIVE_ROWS;
+    crates/registry-breg/src/postgres/interlock.rs, history_coverage_admits_successor;
     crates/registry-breg/tests/postgres_history_erasure.rs;
+    crates/registry-breg/tests/postgres_history_migration.rs;
     products/breg/scripts/test-historical-workflow.sh. */}
 
 ## Restore snapshot coverage after an erasure
@@ -369,7 +377,7 @@ retention record to the journal, so the chain states what left it.
 | A saved snapshot returns `503 source.unavailable` | Retained history no longer covers it, after an erasure or an incompatible successor. Take a fresh reference. |
 | A fresh snapshot reference is refused after an erasure | Coverage ends before the erased commit. Run `history rebaseline` to cover the current state again; earlier references stay unavailable. It verifies at most 1,000 live rows, and refuses a larger registry outright. |
 | `history rebaseline` reports `history.rebaseline.live_rows.unverified` | A live row and its journal head disagree, and the refusal names no record. Read the revisions of the records you suspect, or compare live rows with their journal heads under the migration role. |
-| `history erase` reports `history.erase.acknowledgement.required` | The command was run without `--acknowledge-irreversible`. Confirm the record, the revision boundary, and the successor package plan, then run it again with the flag. Nothing was read or erased. |
+| `history erase` reports `history.erase.acknowledgement.required` | The command was run without `--acknowledge-irreversible`. Confirm the record and the revision boundary, then run it again with the flag. Nothing was read or erased. |
 | `history.erase.request_file.refused` or `history.rebaseline.request_file.refused` | The request file must be an absolute path to an owner-only regular file, not a symbolic link, holding the documented fields and nothing else. |
 | `request-retention erase` is refused | The request entity's retention mode is `retain`, or the version is pinned. Run the dry run for the exact version first. |
 | `evidence-retention erase-expired` removes nothing | No retained assertion has passed its 24-hour window yet, or the cutoff precedes every expiry. The count is the whole report. |

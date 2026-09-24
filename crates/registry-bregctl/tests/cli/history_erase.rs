@@ -81,6 +81,10 @@ fn erase_refuses_without_the_irreversibility_acknowledgement() {
     let message = diagnostic["message"].as_str().expect("message is text");
     assert!(message.contains("--acknowledge-irreversible"), "{message}");
     assert!(message.contains("irreversible"), "{message}");
+    assert!(
+        !message.contains("successor") && !message.contains("package"),
+        "a recorded erasure does not block successor packages: {message}"
+    );
     assert_tool_diagnostic(diagnostic, "command_arguments", "correct_command_usage");
     assert!(
         !report
