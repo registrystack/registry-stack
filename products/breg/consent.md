@@ -200,14 +200,17 @@ tenure rights for lenders, including a group give.
 
 The command refuses until the project declares `recipients` and a
 `data-use-purpose` vocabulary. The generated entities belong to a dataset
-named `consent`. A project with a `manifestProjection` must declare that
-dataset, served by a data service, with an `accessProfile` one of the
-generated entities carries, such as `person-consent-steward`; otherwise the
-command reports `manifest_projection.entity.dataset_dangling` or
-`manifest_projection.dataset.access_profile_unknown` and writes nothing.
-The `consent` dataset in
+named `consent`. When the project carries a `manifestProjection`, the command
+declares that dataset itself if it is not there yet, naming a generated
+steward profile as its `accessProfile`, such as `person-consent-steward`. If
+the project already declares a `consent` dataset, the command leaves it
+exactly as authored and reuses it for the new subject too, the way a second
+subject's run already reuses the first subject's shared vocabularies; if that
+existing dataset's access profile does not cover the module's entities, the
+command reports `module.consent.dataset_conflict` and writes nothing. The
+`consent` dataset in
 [`consent-land-registry`](fixtures/consent-land-registry/registry.yaml)
-shows the declaration.
+shows the declaration a first run writes.
 
 ## Semantics
 
