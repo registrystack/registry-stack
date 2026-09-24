@@ -12697,6 +12697,7 @@ mod tests {
                 "init",
                 "check",
                 "project",
+                "module",
                 "generate",
                 "dev",
                 "examples",
