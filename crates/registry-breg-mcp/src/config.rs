@@ -233,9 +233,11 @@ pub struct DetailsConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ApplicationConfig {
     pub entity: String,
-    /// The API name of the field that references the citizen's own record.
+    /// The field identifier of the field that references the citizen's own
+    /// record.
     pub target_field: String,
-    /// The API name of the field that records the citizen's principal.
+    /// The field identifier of the field that records the citizen's
+    /// principal.
     pub owner_field: String,
 }
 

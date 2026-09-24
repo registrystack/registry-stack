@@ -18,10 +18,11 @@ pub(crate) struct ContractSpec {
     pub(crate) access_profile: String,
     pub(crate) details_entity: String,
     pub(crate) application_entity: String,
-    /// The API name of the application field that references the citizen's
-    /// own record.
+    /// The field identifier of the application field that references the
+    /// citizen's own record.
     pub(crate) target_field: String,
-    /// The API name of the application field that records the citizen.
+    /// The field identifier of the application field that records the
+    /// citizen.
     pub(crate) owner_field: String,
 }
 
@@ -113,12 +114,12 @@ impl Contract {
             .ok_or(ContractError::ApplicationOperationMissing("create"))?
             .to_owned();
 
-        let target = field_by_api_name(create, &spec.target_field)
+        let target = field_by_id(create, &spec.target_field)
             .filter(|field| field.reference_target_entity() == Some(spec.details_entity.as_str()))
             .filter(|field| contains(create.create_writable_fields(), field.identifier()))
             .filter(|field| contains(patch.readable_fields(), field.identifier()))
             .ok_or(ContractError::TargetFieldInvalid)?;
-        let owner = field_by_api_name(create, &spec.owner_field)
+        let owner = field_by_id(create, &spec.owner_field)
             .filter(|field| contains(create.create_writable_fields(), field.identifier()))
             .ok_or(ContractError::OwnerFieldInvalid)?;
 
@@ -187,22 +188,14 @@ fn field_by_id<'a>(
         .find(|field| field.identifier() == identifier)
 }
 
-fn field_by_api_name<'a>(
-    operation: &'a BRegMetadataOperation,
-    api_name: &str,
-) -> Option<&'a registry_breg_client::BRegMetadataField> {
-    operation
-        .fields()
-        .iter()
-        .find(|field| field.api_name() == api_name)
-}
-
 fn contains(values: &[String], wanted: &str) -> bool {
     values.iter().any(|value| value == wanted)
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use serde_json::json;
+
     use super::*;
 
     pub(crate) const FIXTURE: &[u8] =
@@ -221,6 +214,49 @@ pub(crate) mod tests {
     pub(crate) fn fixture_contract() -> Contract {
         let metadata = BRegMetadata::from_slice(FIXTURE).expect("fixture metadata");
         Contract::derive(&metadata, &spec()).expect("fixture contract")
+    }
+
+    /// [`FIXTURE`], with the application's reference field's identifier
+    /// changed from "address" to "target-ref" everywhere the document names
+    /// it by identifier (its own `id`, the readable and writable field lists
+    /// that list it, and the change-request effect that targets it), while
+    /// its API name stays "address". It exists only to tell apart
+    /// identifier-based and API-name-based field resolution, which
+    /// [`FIXTURE`] itself cannot: there, every reference field's identifier
+    /// and API name are equal.
+    fn divergent_fixture() -> Vec<u8> {
+        let mut document: Value = serde_json::from_slice(FIXTURE).expect("fixture parses");
+
+        // The create operation's field definition, and the identifier lists
+        // that name it.
+        document["operations"][0]["fields"][0]["id"] = json!("target-ref");
+        document["operations"][0]["createWritableFields"][0] = json!("target-ref");
+        document["operations"][0]["readableFields"][0] = json!("target-ref");
+
+        // The get operation's field definition and readable field identifiers.
+        document["operations"][1]["fields"][0]["id"] = json!("target-ref");
+        document["operations"][1]["readableFields"][0] = json!("target-ref");
+
+        // The patch operation's field definition, and the identifier lists
+        // that name it.
+        document["operations"][2]["fields"][0]["id"] = json!("target-ref");
+        document["operations"][2]["patchWritableFields"][0] = json!("target-ref");
+        document["operations"][2]["readableFields"][0] = json!("target-ref");
+
+        // The entity-level readable field list and the change-request effect
+        // that names the same field by identifier.
+        document["entities"][0]["readableFields"][0] = json!("target-ref");
+        document["entities"][0]["changeRequest"]["effects"][0]["target"]["fromField"] =
+            json!("target-ref");
+
+        serde_json::to_vec(&document).expect("fixture serializes")
+    }
+
+    fn divergent_spec(target_field: &str) -> ContractSpec {
+        ContractSpec {
+            target_field: target_field.to_owned(),
+            ..spec()
+        }
     }
 
     #[test]
@@ -269,8 +305,28 @@ pub(crate) mod tests {
     #[test]
     fn a_target_that_does_not_reference_the_citizen_record_is_refused() {
         let mut spec = spec();
-        spec.target_field = "newLocality".to_owned();
+        spec.target_field = "new-locality".to_owned();
         let metadata = BRegMetadata::from_slice(FIXTURE).expect("fixture metadata");
+        assert_eq!(
+            Contract::derive(&metadata, &spec),
+            Err(ContractError::TargetFieldInvalid)
+        );
+    }
+
+    #[test]
+    fn a_target_field_named_by_its_identifier_is_matched_even_when_its_api_name_differs() {
+        let metadata =
+            BRegMetadata::from_slice(&divergent_fixture()).expect("divergent fixture metadata");
+        let spec = divergent_spec("target-ref");
+        let contract = Contract::derive(&metadata, &spec).expect("identifier-based target");
+        assert_eq!(contract.target_api_name, "address");
+    }
+
+    #[test]
+    fn a_target_field_named_by_its_api_name_is_refused_when_it_differs_from_the_identifier() {
+        let metadata =
+            BRegMetadata::from_slice(&divergent_fixture()).expect("divergent fixture metadata");
+        let spec = divergent_spec("address");
         assert_eq!(
             Contract::derive(&metadata, &spec),
             Err(ContractError::TargetFieldInvalid)
