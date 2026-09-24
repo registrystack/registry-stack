@@ -185,6 +185,7 @@ pub const OPERATIONS: &[Operation] = &[
             ProblemCode::IdempotencyExpired,
             ProblemCode::RequestBodyTooLarge,
             ProblemCode::RequestUnsupportedMediaType,
+            ProblemCode::RequestUnprocessable,
             ProblemCode::ContentInvalid,
             ProblemCode::ContentTooLarge,
             ProblemCode::ContentTooManySegments,
@@ -1253,6 +1254,12 @@ mod tests {
             ),
             (
                 PREVIEW,
+                Some("application/json"),
+                b"[]".to_vec(),
+                ProblemCode::RequestUnprocessable,
+            ),
+            (
+                PREVIEW,
                 Some("application/json; charset=utf-8"),
                 br#"{"locale": "en", "data": {}, "extra": 1}"#.to_vec(),
                 ProblemCode::RequestUnprocessable,
@@ -1285,14 +1292,14 @@ mod tests {
             .await;
         }
         let records = journal(&sink);
-        assert_eq!(records.len(), 8);
+        assert_eq!(records.len(), 9);
         // The undeclared locale is not written; the declared template is.
         assert_eq!(
-            records[6]["template"],
+            records[7]["template"],
             json!({"id": "appointment-reminder", "version": "1"})
         );
-        assert_eq!(records[6]["problem"], "template.locale-unavailable");
-        assert!(records[5].get("template").is_none());
+        assert_eq!(records[7]["problem"], "template.locale-unavailable");
+        assert!(records[6].get("template").is_none());
         for record in &records {
             assert_eq!(record["outcome"], "refused");
         }
@@ -1485,26 +1492,32 @@ mod tests {
             (
                 Some("key-1"),
                 Some("application/json"),
+                b"[]".to_vec(),
+                ProblemCode::RequestUnprocessable,
+            ),
+            (
+                Some("key-1"),
+                Some("application/json"),
                 serde_json::to_vec(&provider_chosen).unwrap(),
-                ProblemCode::RequestInvalid,
+                ProblemCode::RequestUnprocessable,
             ),
             (
                 Some("key-1"),
                 Some("application/json"),
                 serde_json::to_vec(&credential_chosen).unwrap(),
-                ProblemCode::RequestInvalid,
+                ProblemCode::RequestUnprocessable,
             ),
             (
                 Some("key-1"),
                 Some("application/json"),
                 serde_json::to_vec(&wrong_channel).unwrap(),
-                ProblemCode::RequestInvalid,
+                ProblemCode::RequestUnprocessable,
             ),
             (
                 Some("key-1"),
                 Some("application/json"),
                 serde_json::to_vec(&bad_instant).unwrap(),
-                ProblemCode::RequestInvalid,
+                ProblemCode::RequestUnprocessable,
             ),
         ];
         let count = cases.len();

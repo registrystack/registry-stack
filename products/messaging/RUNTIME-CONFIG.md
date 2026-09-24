@@ -98,7 +98,7 @@ also the idempotency window: a submission repeating a key whose receipt is
 older is refused with `idempotency.expired`. Each accepted message records
 the time its payload may be erased, `payloadDays` after acceptance, and a
 submission whose `expiresAt` is already past or falls later is refused with
-`request.invalid`. The sweep that erases
+`request.unprocessable`. The sweep that erases
 payloads and records when their periods end arrives in a later slice; until
 then nothing is erased.
 

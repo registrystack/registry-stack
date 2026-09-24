@@ -47,6 +47,12 @@
   Actions preview unless `--apply` is given.
 - Add the problems `message.dispatch-started` and `message.terminal`, and the
   provider `idempotentSubmit` flag.
+- Answer a submission whose body is well-formed JSON of the wrong shape, an
+  unknown member, a recipient of the wrong channel, or a malformed or
+  out-of-window instant with `422 request.unprocessable`, as the preview
+  route and Scheduling do. A body that is not strict JSON, or a missing or
+  malformed `Idempotency-Key`, stays `400 request.invalid`.
+- Record that status reads are not journaled (MESSAGING-DEC-15).
 - Add `registry-messaging-client` with health and readiness.
 - Publish the security invariant matrix, the recorded decisions, and the
   problem catalog under `https://id.registrystack.org/problems/registry-messaging/`.

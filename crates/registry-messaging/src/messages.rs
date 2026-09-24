@@ -107,20 +107,20 @@ impl PreparedSubmission {
 ///
 /// # Errors
 ///
-/// `request.invalid` for a body that is not strict JSON, not the closed
-/// submission shape, or names a recipient its channel cannot carry, and the
-/// content refusal's own problem for an unauthorized or unrenderable
-/// submission.
+/// `request.invalid` for a body that is not strict JSON,
+/// `request.unprocessable` for JSON that is not the closed submission shape
+/// or names a recipient its channel cannot carry, and the content refusal's
+/// own problem for an unauthorized or unrenderable submission.
 pub fn prepare_submission(
     package: &Package,
     caller: &Caller,
     body: &[u8],
 ) -> Result<PreparedSubmission, ProblemCode> {
     let value = parse_json_strict(body).map_err(|_| ProblemCode::RequestInvalid)?;
-    let canonical = canonicalize_json(&value).map_err(|_| ProblemCode::RequestInvalid)?;
+    let canonical = canonicalize_json(&value).map_err(|_| ProblemCode::RequestUnprocessable)?;
     let request_hash = idempotency_key(REQUEST_HASH_DOMAIN, &[&canonical]);
     let request: SubmitMessageRequest =
-        serde_json::from_value(value).map_err(|_| ProblemCode::RequestInvalid)?;
+        serde_json::from_value(value).map_err(|_| ProblemCode::RequestUnprocessable)?;
     let not_before = parse_instant(request.not_before.as_deref())?;
     let expires_at = parse_instant(request.expires_at.as_deref())?;
     let content = match request.content()? {
@@ -144,7 +144,7 @@ pub fn prepare_submission(
     }
     .map_err(|refusal: ContentRefusal| refusal.problem())?;
     if request.to.channel() != content.channel {
-        return Err(ProblemCode::RequestInvalid);
+        return Err(ProblemCode::RequestUnprocessable);
     }
     let profile = package
         .sender_profile(&content.sender_profile)
@@ -165,7 +165,7 @@ fn parse_instant(value: Option<&str>) -> Result<Option<SystemTime>, ProblemCode>
         .map(|value| {
             DateTime::parse_from_rfc3339(value)
                 .map(|instant| SystemTime::from(instant.with_timezone(&Utc)))
-                .map_err(|_| ProblemCode::RequestInvalid)
+                .map_err(|_| ProblemCode::RequestUnprocessable)
         })
         .transpose()
 }
@@ -991,7 +991,7 @@ impl Window {
         submission: &PreparedSubmission,
         retention: &RetentionConfig,
     ) -> Result<Self, Refusal> {
-        let invalid = || Refusal::Problem(ProblemCode::RequestInvalid);
+        let invalid = || Refusal::Problem(ProblemCode::RequestUnprocessable);
         let payload = days(retention.payload_days);
         let erase_after = now + payload;
         let expires_at = match submission.expires_at {
@@ -1184,7 +1184,7 @@ mod tests {
         for refused in ["2026-10-01", "tomorrow", "2026-10-01T07:30:00"] {
             assert_eq!(
                 parse_instant(Some(refused)).unwrap_err(),
-                ProblemCode::RequestInvalid
+                ProblemCode::RequestUnprocessable
             );
         }
     }

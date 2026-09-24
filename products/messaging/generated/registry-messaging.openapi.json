@@ -865,6 +865,7 @@
                       "properties": {
                         "code": {
                           "enum": [
+                            "request.unprocessable",
                             "content.invalid",
                             "content.too-large",
                             "content.too-many-segments",
@@ -879,7 +880,7 @@
                 }
               }
             },
-            "description": "A problem: content.invalid, content.too-large, content.too-many-segments, template.data-invalid, template.locale-unavailable, template.render-refused."
+            "description": "A problem: request.unprocessable, content.invalid, content.too-large, content.too-many-segments, template.data-invalid, template.locale-unavailable, template.render-refused."
           },
           "503": {
             "content": {

@@ -208,3 +208,19 @@ decisions:
       know that one exists.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: no_contact_content_data_or_credential_reaches_the_dispatch_journal_or_log}
+  - id: MESSAGING-DEC-15
+    subject: Status reads are not journaled
+    decision: >-
+      GET /v1/messages/{message_id} and messagingctl messages list and show
+      answer from the message store and write no audit record, whether the
+      caller sees the message or not.
+    reasoning: >-
+      The sibling runtimes journal changes, not ordinary reads: Scheduling's
+      get_appointment and Casework's review_request and review_task answer
+      without an audit record, and Casework journals only the accountability
+      read that releases a raw reviewer identity. A message view releases no
+      contact, part, template data, or provider reference, so it is an
+      ordinary read, and journaling every poll would grow the journal with
+      the callers' polling rate rather than with what happened.
+    evidence:
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_status_read_writes_no_audit_record}

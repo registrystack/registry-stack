@@ -266,8 +266,8 @@ async fn a_submission_naming_an_unknown_member_is_refused_and_records_nothing() 
     for body in [provider_chosen, credential_chosen, wrong_channel] {
         assert_problem(
             &harness.submit(&sender_token(), "key-1", &body).await,
-            StatusCode::BAD_REQUEST,
-            "request.invalid",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "request.unprocessable",
         );
     }
     assert_eq!(
@@ -334,6 +334,30 @@ async fn a_message_is_visible_to_its_submitter_and_an_operator_only() {
     assert_eq!(harness.state(id).await, "pending");
     let (status, _) = harness.call("GET", &uri, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+/// MESSAGING-DEC-15: a status read is answered from the store and writes
+/// no audit record, whether the caller sees the message or not.
+#[tokio::test]
+async fn a_status_read_writes_no_audit_record() {
+    let harness = Harness::start().await;
+    let id = harness.accepted(&email_submission()).await;
+    harness.publish().await;
+    let outbox = harness.outbox().await.len();
+    let journal = harness.journal().len();
+    let uri = format!("/v1/messages/{id}");
+
+    let (status, _) = harness.call("GET", &uri, Some(&sender_token())).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = harness.call("GET", &uri, Some(&operator_token())).await;
+    assert_eq!(status, StatusCode::OK);
+    let other = sender_token_for(OTHER_SENDER_PRINCIPAL);
+    let (status, _) = harness.call("GET", &uri, Some(&other)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    harness.publish().await;
+
+    assert_eq!(harness.outbox().await.len(), outbox);
+    assert_eq!(harness.journal().len(), journal);
 }
 
 #[tokio::test]

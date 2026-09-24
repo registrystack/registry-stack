@@ -165,7 +165,11 @@ reference; never a contact, a part, template data, or the provider's own
 message reference (MESSAGING-DEC-14).
 
 Reads are not journaled: the status route and `messagingctl messages list`
-and `show` leave no record. See the open questions below.
+and `show` leave no record (MESSAGING-DEC-15). Scheduling's appointment read
+and Casework's review request and task reads are not journaled either;
+Casework journals only its accountability read, which releases a raw
+reviewer identity. A message view releases no contact, part, or data, so it
+is an ordinary read.
 
 ## Data minimization and log and audit absence (pending, slice S6)
 
@@ -182,9 +186,12 @@ Threat: a caller smuggles a field the package did not review, replays a key
 to learn or alter another request, or has one request delivered twice.
 
 MESSAGING-SEC-02, enforced. The body is strict JSON (duplicate members
-refused) in a closed shape; an unknown member, a missing required member, or
-a malformed instant is `400 request.invalid`, and nothing is recorded. The
-`Idempotency-Key` header is required and bounded, and is scoped to the
+refused) in a closed shape. A body that is not strict JSON, or a missing
+or malformed `Idempotency-Key`, is `400 request.invalid`; well-formed JSON
+with an unknown member, a missing required member, a recipient of the wrong
+channel, or a malformed or out-of-window instant is
+`422 request.unprocessable`, as in Scheduling and the preview route; nothing
+is recorded either way. The `Idempotency-Key` header is required and bounded, and is scoped to the
 caller's issuer and subject, so a caller cannot probe another caller's keys.
 The request hash covers the canonical request body: the same key with
 another body is `409 idempotency.key-reused`, and a key older than
@@ -306,12 +313,7 @@ the `http_provider/tests.rs` suite, including
 
 ## Open questions
 
-- Reads are not audited. The status route and `messagingctl messages list`
-  and `show` are unjournaled, and no test pins that choice. Either record it
-  as a decision with evidence or journal reads.
 - The specification's `dispatch` member of the message view is not served.
-- A malformed submission answers `400 request.invalid`, while the preview
-  route answers a malformed body `422 request.unprocessable`.
 - A payload may be erased `retention.payloadDays` after acceptance even when
   the message still waits in a retry; MESSAGING-SEC-10 and the sweep must
   decide how the two interact.

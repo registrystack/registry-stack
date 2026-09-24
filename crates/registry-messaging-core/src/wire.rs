@@ -122,7 +122,7 @@ impl SubmitMessageRequest {
     /// Check the shape the schema cannot: exactly one content source, the
     /// template's locale and data only beside a template, a well-formed
     /// recipient, and a bounded correlation identifier. Every refusal is
-    /// `request.invalid`, so no member's value is echoed.
+    /// `request.unprocessable`, so no member's value is echoed.
     pub fn content(&self) -> Result<SubmissionContent<'_>, ProblemCode> {
         if !self.to.is_well_formed()
             || self.correlation_id.as_ref().is_some_and(|value| {
@@ -131,7 +131,7 @@ impl SubmitMessageRequest {
                     || value.chars().any(char::is_control)
             })
         {
-            return Err(ProblemCode::RequestInvalid);
+            return Err(ProblemCode::RequestUnprocessable);
         }
         match (&self.template, &self.content) {
             (Some(template), None) => match (&self.locale, &self.data) {
@@ -140,12 +140,12 @@ impl SubmitMessageRequest {
                     locale,
                     data,
                 }),
-                _ => Err(ProblemCode::RequestInvalid),
+                _ => Err(ProblemCode::RequestUnprocessable),
             },
             (None, Some(content)) if self.locale.is_none() && self.data.is_none() => {
                 Ok(SubmissionContent::Direct(content))
             }
-            _ => Err(ProblemCode::RequestInvalid),
+            _ => Err(ProblemCode::RequestUnprocessable),
         }
     }
 }
@@ -391,7 +391,7 @@ mod tests {
             mutate(&mut body);
             assert_eq!(
                 submission(body.clone()).unwrap().content().unwrap_err(),
-                ProblemCode::RequestInvalid,
+                ProblemCode::RequestUnprocessable,
                 "{body}"
             );
         }
