@@ -2680,7 +2680,7 @@ fn field_encryption_preflight_failure(
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
                 PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
                 PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+                PackageError::Binding | PackageError::OlderThanActive => SuggestedAction::VerifyPackageBinding,
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
@@ -4042,6 +4042,13 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
             DiagnosticArtifact::VerifiedPackage,
             SuggestedAction::VerifyPackagePath,
         ),
+        ApplyLifecycleError::TargetPackage(PackageError::OlderThanActive) => (
+            "apply.package.older_than_active",
+            "package",
+            "the target package is older than the active package, and packages apply forward only; to undo a change, build and apply a successor that reverts it, or restore the pre-activation backup: https://docs.registrystack.org/operate/breg-changes/#roll-back-by-rolling-forward",
+            DiagnosticArtifact::VerifiedPackage,
+            SuggestedAction::CorrectPackageBuild,
+        ),
         ApplyLifecycleError::CurrentPackage(error) | ApplyLifecycleError::TargetPackage(error) => {
             let action = match error {
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
@@ -4399,7 +4406,7 @@ fn reconcile_lifecycle_failure(error: ReconcileLifecycleError) -> FailureReport 
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
                 PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
                 PackageError::Signature => SuggestedAction::VerifyPackageTrust,
-                PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+                PackageError::Binding | PackageError::OlderThanActive => SuggestedAction::VerifyPackageBinding,
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
@@ -4521,7 +4528,9 @@ fn inspection_failure(
                 PackageError::Signature => {
                     ("signature_refused", SuggestedAction::VerifyPackageTrust)
                 }
-                PackageError::Binding => ("binding_refused", SuggestedAction::VerifyPackageBinding),
+                PackageError::Binding | PackageError::OlderThanActive => {
+                    ("binding_refused", SuggestedAction::VerifyPackageBinding)
+                }
                 PackageError::TrustAnchorNotCanonical => (
                     "anchor_not_canonical",
                     SuggestedAction::VerifyPackageIntegrity,
@@ -4609,7 +4618,7 @@ fn package_diff_failure(error: PackageError) -> FailureReport {
             "diff.baseline.signature_refused",
             SuggestedAction::VerifyPackageTrust,
         ),
-        PackageError::Binding => (
+        PackageError::Binding | PackageError::OlderThanActive => (
             "diff.baseline.binding_refused",
             SuggestedAction::VerifyPackageBinding,
         ),

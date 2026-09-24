@@ -365,6 +365,7 @@ mod tests {
             PackageError::Closure,
             PackageError::Integrity,
             PackageError::Binding,
+            PackageError::OlderThanActive,
             PackageError::Signature,
             PackageError::Derivation,
             PackageError::MigrationPlan,

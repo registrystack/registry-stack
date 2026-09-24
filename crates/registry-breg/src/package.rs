@@ -817,6 +817,10 @@ pub enum PackageError {
     Integrity,
     #[error("the package deployment binding is invalid")]
     Binding,
+    /// The package's sequence is below the active package's. Packages apply
+    /// forward only, so a rollback is a new successor, never an older package.
+    #[error("the package is older than the active package")]
+    OlderThanActive,
     #[error("the package signature policy failed")]
     Signature,
     #[error("the package compiler derivation failed")]
@@ -3766,7 +3770,10 @@ fn validate_bindings(manifest: &PackageManifest, context: &PackageLoadContext<'_
             active_revision,
             active_sequence,
         } => {
-            if manifest.sequence <= active_sequence
+            if manifest.sequence < active_sequence {
+                return Err(PackageError::OlderThanActive);
+            }
+            if manifest.sequence == active_sequence
                 || manifest.prior_revision.as_deref() != Some(active_revision)
                 || manifest.migration_plan.from_revision.as_deref() != Some(active_revision)
             {

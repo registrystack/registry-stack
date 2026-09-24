@@ -1,6 +1,6 @@
 ---
 title: Change an active registry
-description: Compare an edited project with the active package, test and sign the successor against the active baseline, activate it with reviewed migration evidence, and recover a registry that a failed activation pinned.
+description: Compare an edited project with the active package, test and sign the successor against the active baseline, activate it with reviewed migration evidence, recover a registry that a failed activation pinned, and undo a change by rolling forward or restoring a backup.
 status: current
 owner: registry-docs
 source_repos:
@@ -184,6 +184,51 @@ its failed ledger row, so a later attempt needs a newly built package revision.
     crates/registry-bregctl/src/reconcile_lifecycle.rs;
     crates/registry-breg/src/postgres/interlock.rs. */}
 
+## Roll back by rolling forward
+
+Packages apply forward only. A target package must carry a higher `package.sequence` than the
+active package and name the active revision as its prior, so `apply` refuses an older package
+with `apply.package.older_than_active` before it opens a database connection. There are two ways
+back, and which one fits depends on whether the data must return too.
+
+**Roll forward to undo a model change.** When the activated model is wrong but the data it holds
+is sound, build a successor that reverts the change:
+
+1. Restore the earlier project sources, for example from version control, and set
+   `package.sequence` in `registry.yaml` to the sequence after the active one. `registry.version`
+   stays as it is.
+2. Run `diff` against the active runtime file. The planner classifies the revert like any other
+   change: undoing an added field is a field removal, which is destructive and needs a reviewed
+   migration and its backup artifact; undoing a widened grant is an access change that needs
+   reviewed evidence.
+3. Test, package, sign, and apply the successor with `--baseline-runtime-config` as the sections
+   above describe, then update the runtime file and restart.
+
+The revert is a new revision with its own ledger row, audit record, and history baseline. Records
+written under the undone model stay, reshaped by the revert's own migration.
+
+**Restore the pre-activation backup** when the data itself must go back: `migration reconcile`
+reported `unresolvable`, or a reviewed migration changed rows in a way no successor can undo.
+
+1. Stop the server, and export the audit journal with
+   [`audit export`](../breg-retention/#keep-the-audit-journal) so the records written
+   after the backup are kept outside the database.
+2. Restore the database from the backup you took before the `apply`, with your PostgreSQL tooling.
+3. Point the runtime file at the package that was active when the backup was taken, with its
+   directory, revision, and sequence, run `bregctl verify`, and start the server.
+
+A restore discards every write, activation, and audit record committed after the backup, and it
+brings back history that a later `history erase` removed: repeat those erasures before the
+registry serves traffic again. Webhook deliveries and exports already sent are not recalled. The
+next successor needs a sequence above the restored active package, not above the discarded one.
+
+{/* Evidence: crates/registry-breg/src/package.rs, validate_bindings() and PackageError::OlderThanActive;
+    crates/registry-bregctl/src/lib.rs, apply_lifecycle_failure();
+    crates/registry-breg/src/package.rs, CompiledRegistryChangeCode::FieldRemoved;
+    crates/registry-breg/tests/postgres_package.rs, activation_refuses_an_older_package_as_a_rollback;
+    crates/registry-bregctl/tests/cli/reviewed_migrations.rs,
+    apply_refuses_an_older_package_and_points_at_the_roll_forward_procedure. */}
+
 ## Inspect the migration plan
 
 `migration explain --runtime-config <file>` describes the configured package's migration plan
@@ -210,6 +255,7 @@ server binary, and earlier packages keep verifying under their recorded rules.
 | `test` or `package` reports `migration.review.refused` | A precondition failed before the reviewed directory was read, such as the prior revision or the baseline binding. Check the baseline arguments and the fingerprints in the rehearsal receipt. |
 | `test` or `package` reports `migration.review.fingerprint_mismatch` | The rehearsal receipt was taken for a different candidate or baseline. Rehearse the exact candidate again. |
 | `apply` fails after maintenance begins | Read the report, fix the cause, and retry the same target. If that is not available, run `migration reconcile` to assess the pinned target, execute the transition it names, and restore the pre-activation backup only when it reports `unresolvable`. |
+| `apply` reports `apply.package.older_than_active` | The target package is older than the active one, and packages apply forward only. Build a successor that reverts the change, or restore the pre-activation backup, as [roll back by rolling forward](#roll-back-by-rolling-forward) describes. Nothing was changed. |
 | `migration reconcile` reports `in_progress` | Another session holds the migration lock. Wait for it to finish, then assess again. |
 | The process still serves the old package after `apply` | Activation changes the database, not the process. Update the runtime file and restart the server. |
 
