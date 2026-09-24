@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::policy::MAXIMUM_SOURCE_DESCRIPTION_BYTES;
 use crate::SourceAddArgs;
 use anyhow::{bail, Context, Result};
 use registry_casework_breg::MAXIMUM_REQUEST_ENTITIES;
@@ -2065,6 +2066,11 @@ fn source_description(
                 .collect();
         }
     }
+    // Refuse before any write a description that check and package would
+    // later reject; each entry alone may fit while the aggregate does not.
+    if json_file_bytes(&description)?.len() > MAXIMUM_SOURCE_DESCRIPTION_BYTES {
+        bail!("the source description for these request entities exceeds the one MiB authoring limit; no files were written");
+    }
     Ok(description)
 }
 
@@ -2204,10 +2210,14 @@ fn copy_tree(source: &Path, destination: &Path, root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_json_atomic(path: &Path, value: &Value) -> Result<()> {
+fn json_file_bytes(value: &Value) -> Result<Vec<u8>> {
     let mut bytes = serde_json::to_vec_pretty(value)?;
     bytes.push(b'\n');
-    write_atomic(path, &bytes)
+    Ok(bytes)
+}
+
+fn write_json_atomic(path: &Path, value: &Value) -> Result<()> {
+    write_atomic(path, &json_file_bytes(value)?)
 }
 
 fn require_absent_or_exact_json(path: &Path, expected: &Value) -> Result<()> {
@@ -3848,6 +3858,29 @@ mod tests {
         .err()
         .expect("each request entity is named once");
         assert!(format!("{error:#}").contains("correction"));
+    }
+
+    #[test]
+    fn source_description_refuses_a_description_over_the_authoring_limit() {
+        let project = tempfile::tempdir().unwrap();
+        two_entity_policy(project.path());
+        let report = two_entity_explanation();
+        let mut selected = select_requests(project.path(), "farmers", "farmers", &report).unwrap();
+        // Each entry fits the provider output limit; together they do not fit
+        // the limit check and package enforce on the written description.
+        let mut padded = Vec::new();
+        for request in &selected {
+            let mut metadata = request.metadata.clone();
+            metadata["padding"] = json!("x".repeat(600 * 1024));
+            padded.push(metadata);
+        }
+        for (request, metadata) in selected.iter_mut().zip(&padded) {
+            request.metadata = metadata;
+        }
+
+        let error = source_description("farmers", &selected, &report)
+            .expect_err("an oversized description is refused before any write");
+        assert!(format!("{error:#}").contains("one MiB"));
     }
 
     #[test]

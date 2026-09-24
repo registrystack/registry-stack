@@ -15,7 +15,7 @@ use registry_casework_core::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-const MAXIMUM_SOURCE_DESCRIPTION_BYTES: usize = 1024 * 1024;
+pub(crate) const MAXIMUM_SOURCE_DESCRIPTION_BYTES: usize = 1024 * 1024;
 
 /// Compile source metadata against authored routing. Runtime startup, explain,
 /// and simulation use this same boundary.
