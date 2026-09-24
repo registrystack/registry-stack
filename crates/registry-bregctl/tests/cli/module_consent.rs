@@ -476,3 +476,79 @@ fn module_add_consent_runs_once_per_subject_and_reuses_shared_vocabularies() {
         .iter()
         .all(|(code, _)| !code.starts_with("access.consent.")));
 }
+
+/// A fresh `bregctl init` project already carries a Registry Manifest
+/// projection over its `record` entity, whose generated entities declare
+/// `primaryDataset: consent`. This run must declare that dataset itself, so
+/// the module fits a project it never saw rather than needing an adopter to
+/// pre-declare it.
+#[test]
+fn module_add_consent_fits_a_freshly_initialized_project() {
+    let scratch = TestProject::from_registry_source(b"placeholder: true\n");
+    let destination = scratch.path().join("initialized");
+
+    let init = bregctl(&["--format", "json", "init", path(&destination)]);
+    assert!(init.status.success(), "{init:?}");
+
+    // The init template declares neither recipients nor a purpose vocabulary;
+    // both are prerequisites the docs already ask an adopter to declare before
+    // running this command, independent of the dataset this fix adds.
+    let initialized = registry_source(&destination);
+    let (before, after) = initialized
+        .split_once("manifestProjection:\n")
+        .expect("the init template declares manifestProjection");
+    let with_recipients = format!(
+        "{before}recipients:\n  organizations:\n  - id: food-agency\n    name: Food Agency\n    contact: dpo@food-agency.example.test\n    clients: [food-agency-portal]\n\nmanifestProjection:\n{after}"
+    );
+    let with_purposes = with_recipients.replacen(
+        "vocabularies:\n  - id: record-status\n    values: [draft, active, retired]\n",
+        "vocabularies:\n  - id: record-status\n    values: [draft, active, retired]\n  - id: data-use-purpose\n    values: [food-assistance]\n",
+        1,
+    );
+    fs::write(destination.join("registry.yaml"), with_purposes).expect("prerequisites write");
+
+    let added = module_add(&destination, "record");
+
+    assert!(added.status.success(), "{added:?}");
+    let report = json_stdout(&added);
+    assert_eq!(report["ok"], true);
+
+    let source = registry_source(&destination);
+    let parsed = parse_project_yaml(source.as_bytes()).expect("the project parses");
+    let projection = parsed
+        .manifest_projection
+        .as_ref()
+        .expect("the init template's manifestProjection stays declared");
+    assert!(
+        projection
+            .datasets
+            .iter()
+            .any(|dataset| dataset.id == "consent"),
+        "{source}"
+    );
+
+    // `requireConsent` needs a read-only permission whose profile already
+    // names a declared recipient client and a purpose vocabulary code, so this
+    // gates the template's read-only `record-reader` profile rather than the
+    // mixed-operation `operator` profile.
+    let anchor = "  - id: record-reader\n    principalClaim: registry_principal\n    requiredScopes: [registry:generic:read]\n    requiredPurposes: [registry-reporting]\n    permissions:\n      - entity: record\n        operations: [get, list]\n        readableFields: [code, label, group, status]\n        filterableFields: [code]\n        rowBoundaries:\n          - {field: status, claim: registry_record_status, operator: equals}\n";
+    let (before, after) = source
+        .split_once(anchor)
+        .expect("the init template's record-reader profile is present");
+    let gated = format!(
+        "{before}  - id: record-reader\n    principalClaim: registry_principal\n    actorKind: service\n    requesterClients: [food-agency-portal]\n    requiredScopes: [registry:generic:read]\n    requiredPurposes: [food-assistance]\n    permissions:\n      - entity: record\n        operations: [get, list]\n        readableFields: [code, label, group, status]\n        filterableFields: [code]\n        rowBoundaries:\n          - {{field: status, claim: registry_record_status, operator: equals}}\n        requireConsent:\n        - {{record: record-consent-decision, on: id}}\n{after}"
+    );
+    fs::write(destination.join("registry.yaml"), gated).expect("gated project writes");
+
+    let checked = bregctl(&["--format", "json", "check", path(&destination)]);
+
+    assert!(checked.status.success(), "{checked:?}");
+    let report = json_stdout(&checked);
+    let codes = finding_codes(&report);
+    assert!(
+        codes
+            .iter()
+            .all(|(code, _)| !code.starts_with("manifest_projection.")),
+        "{codes:?}"
+    );
+}

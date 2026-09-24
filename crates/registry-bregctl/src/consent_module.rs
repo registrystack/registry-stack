@@ -8,7 +8,11 @@
 //! actions over it. The project-level parts a module cannot carry, the shared
 //! vocabularies and the access profiles, are appended to `registry.yaml`, and
 //! the module is pinned in `modules`. Every name carries the subject, so a
-//! registry with two subject types runs the command twice.
+//! registry with two subject types runs the command twice. When the project
+//! carries a Registry Manifest projection, the module's entities join its
+//! shared `consent` dataset; this run declares that dataset if the project
+//! does not have it yet, and otherwise leaves an existing one exactly as
+//! authored.
 //!
 //! Nothing is written unless the edited project parses to exactly the
 //! authored document plus the appended items, and compiles. A project whose
@@ -73,6 +77,12 @@ const SHARED_VOCABULARIES: [(&str, &[&str]); 3] = [
 /// consent yet. It is never written.
 const SCOPE_PROBE: &str = "bregctl-module-add-probe";
 
+/// The shared dataset every generated module's entities declare
+/// `primaryDataset` against, so that two subjects run through this command
+/// publish one Registry Manifest dataset for consent records rather than one
+/// each.
+const CONSENT_DATASET_ID: &str = "consent";
+
 /// Principal claim used when the project has no non-anonymous profile to take
 /// it from.
 const FALLBACK_PRINCIPAL_CLAIM: &str = "principal";
@@ -125,10 +135,15 @@ pub(crate) fn add_consent_module(
                     .project
                     .retired_consent_scopes
                     .push(SCOPE_PROBE.to_owned());
-                (
-                    compile_captured_project(&candidate, ProfileArg::Authoring, COMMAND)?,
-                    false,
-                )
+                match compile_captured_project(&candidate, ProfileArg::Authoring, COMMAND) {
+                    Ok(compiled) => (compiled, false),
+                    Err(failure) => {
+                        return Err(match plan.dataset_conflict_index {
+                            Some(index) => dataset_conflict(index, failure),
+                            None => failure,
+                        })
+                    }
+                }
             }
         };
 
@@ -162,6 +177,14 @@ struct Plan {
     reused_vocabularies: Vec<&'static str>,
     vocabulary_items: String,
     profile_items: String,
+    /// The `manifestProjection.datasets` block-list item this run appends for
+    /// the shared `consent` dataset, when the project has a Registry Manifest
+    /// projection and does not declare that dataset yet.
+    dataset_addition: Option<String>,
+    /// The position of an already-declared `consent` dataset in
+    /// `manifestProjection.datasets`, carried through to translate a compile
+    /// failure over it into `module.consent.dataset_conflict`.
+    dataset_conflict_index: Option<usize>,
     lock: ModuleLockSource,
     requirements: Vec<(String, String)>,
 }
@@ -243,6 +266,12 @@ fn plan(source: &CapturedProjectSource, subject: &str) -> Result<Plan, FailureRe
         .replace(SUBJECT_TOKEN, subject)
         .replace(CLAIM_TOKEN, &yaml_scalar(&principal_claim(source)));
 
+    let (dataset_addition, dataset_conflict_index) = match consent_dataset_plan(source, subject) {
+        ConsentDataset::NotProjected => (None, None),
+        ConsentDataset::Existing(index) => (None, Some(index)),
+        ConsentDataset::Add(item) => (Some(item), None),
+    };
+
     Ok(Plan {
         lock: ModuleLockSource {
             id: module_id.clone(),
@@ -256,8 +285,67 @@ fn plan(source: &CapturedProjectSource, subject: &str) -> Result<Plan, FailureRe
         reused_vocabularies,
         vocabulary_items,
         profile_items,
+        dataset_addition,
+        dataset_conflict_index,
         requirements: requirements(source, subject),
     })
+}
+
+/// The shared `consent` dataset every generated module's entities declare
+/// `primaryDataset: consent` against.
+enum ConsentDataset {
+    /// The project carries no Registry Manifest projection, so no dataset
+    /// check applies to it.
+    NotProjected,
+    /// A `consent` dataset is already declared, at this position in
+    /// `manifestProjection.datasets`. It is left exactly as authored; the
+    /// compile below proves whether it still covers what the merged project
+    /// needs.
+    Existing(usize),
+    /// No `consent` dataset is declared yet; this is the block-list item this
+    /// run appends, naming the generated steward profile as its access
+    /// profile, the way the project format already declares other datasets.
+    Add(String),
+}
+
+fn consent_dataset_plan(source: &CapturedProjectSource, subject: &str) -> ConsentDataset {
+    let Some(projection) = source.project.manifest_projection.as_ref() else {
+        return ConsentDataset::NotProjected;
+    };
+    if let Some(index) = projection
+        .datasets
+        .iter()
+        .position(|dataset| dataset.id == CONSENT_DATASET_ID)
+    {
+        return ConsentDataset::Existing(index);
+    }
+    ConsentDataset::Add(format!(
+        "- id: {CONSENT_DATASET_ID}\n  title: Consent records\n  description: Privacy notices, consent decisions, and consent links.\n  status: under_development\n  classificationCeiling: restricted\n  accessProfile: {subject}-consent-steward\n"
+    ))
+}
+
+/// When the project already declared the shared `consent` dataset before this
+/// run and the merged project then fails to compile because that dataset's
+/// effective access profile no longer covers any exposed entity, the raw
+/// compiler diagnostic names an index the adopter did not write. Report it as
+/// a conflict over the dataset instead, and leave every other compile failure
+/// as the compiler reported it.
+fn dataset_conflict(index: usize, failure: FailureReport) -> FailureReport {
+    const CONFLICT_CODES: [&str; 2] = [
+        "manifest_projection.dataset.access_profile_unknown",
+        "manifest_projection.dataset.access_profile_ambiguous",
+    ];
+    let prefix = format!("project.manifestProjection.datasets[{index}]");
+    if failure.diagnostics.iter().any(|diagnostic| {
+        CONFLICT_CODES.contains(&diagnostic.code.as_str()) && diagnostic.path.starts_with(&prefix)
+    }) {
+        return authoring_failure(
+            "module.consent.dataset_conflict",
+            &prefix,
+            "the project already declares a 'consent' dataset in manifestProjection, and its access profile does not cover the entities this module adds; give it an accessProfile a generated consent access profile exposes, such as the subject's consent-steward profile, or free the 'consent' dataset id for this module to declare",
+        );
+    }
+    failure
 }
 
 /// Where the subject entity is declared: `Some(None)` for the project itself,
@@ -363,6 +451,13 @@ fn render_registry(source: &CapturedProjectSource, plan: &Plan) -> Result<Vec<u8
             ))
         })?;
     }
+    if let Some(dataset_addition) = &plan.dataset_addition {
+        edited = append_manifest_projection_dataset(&edited, dataset_addition).ok_or_else(|| {
+            render_failure(
+                "the manifestProjection.datasets list is not a block list this command can extend; write it as a block list and run the command again",
+            )
+        })?;
+    }
     let mut locks = source.project.modules.clone();
     locks.push(plan.lock.clone());
     locks.sort_by(|left, right| left.id.cmp(&right.id));
@@ -409,6 +504,24 @@ fn renders_exactly(
         if slot.is_null() {
             *slot = Value::Array(Vec::new());
         }
+        let Some(list) = slot.as_array_mut() else {
+            return false;
+        };
+        list.extend(items);
+    }
+    if let Some(items) = &plan.dataset_addition {
+        let Ok(Value::Array(items)) = serde_norway::from_str::<Value>(items) else {
+            return false;
+        };
+        let Some(projection) = document
+            .get_mut("manifestProjection")
+            .and_then(Value::as_object_mut)
+        else {
+            return false;
+        };
+        let slot = projection
+            .entry("datasets".to_owned())
+            .or_insert_with(|| Value::Array(Vec::new()));
         let Some(list) = slot.as_array_mut() else {
             return false;
         };
@@ -488,6 +601,104 @@ fn append_top_level_items(source: &str, key: &str, items: &str) -> Option<String
     for line in items.split_inclusive('\n') {
         if !line.trim().is_empty() {
             rendered.push_str(&" ".repeat(indent));
+        }
+        rendered.push_str(line);
+    }
+    rendered.push_str(&lines[insert_at..].concat());
+    Some(rendered)
+}
+
+/// The indentation and key name of a mapping-key line: not a list item, a
+/// comment, or blank. Unlike [`crate::top_level_key`], it matches at any
+/// indentation, so it can find a key nested under a top-level block.
+fn indented_key(line: &str) -> Option<(usize, &str)> {
+    let trimmed = line.trim_start();
+    if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('-') {
+        return None;
+    }
+    let indent = line.len() - trimmed.len();
+    let (key, _) = trimmed.trim_end().split_once(':')?;
+    if key.is_empty()
+        || key
+            .bytes()
+            .any(|byte| !(byte.is_ascii_alphanumeric() || byte == b'_'))
+    {
+        return None;
+    }
+    Some((indent, key))
+}
+
+/// Append one block-list item to `manifestProjection.datasets`, in the list's
+/// own indentation, before the next key at `datasets`'s own indent level.
+/// `item` is rendered at column zero. Refused, the same way
+/// [`append_top_level_items`] is, when `datasets` is not a block list this
+/// command can extend, or when `manifestProjection` or `datasets` is absent:
+/// both are structurally required once a project declares the other.
+fn append_manifest_projection_dataset(source: &str, item: &str) -> Option<String> {
+    let lines = source.split_inclusive('\n').collect::<Vec<_>>();
+    let projection_start = lines
+        .iter()
+        .position(|line| crate::top_level_key(line) == Some("manifestProjection"))?;
+    let projection_end = lines
+        .iter()
+        .enumerate()
+        .skip(projection_start + 1)
+        .find(|(_, line)| crate::top_level_key(line).is_some())
+        .map_or(lines.len(), |(index, _)| index);
+    let (datasets_start, datasets_indent) = (projection_start + 1..projection_end).find_map(
+        |index| {
+            let (indent, key) = indented_key(lines[index])?;
+            (key == "datasets").then_some((index, indent))
+        },
+    )?;
+    let value = lines[datasets_start]
+        .trim_end()
+        .split_once(':')
+        .map(|(_, value)| value.trim())?;
+    let mut rendered = String::new();
+    if value == "[]" {
+        rendered.push_str(&lines[..datasets_start].concat());
+        rendered.push_str(&" ".repeat(datasets_indent));
+        rendered.push_str("datasets:\n");
+        for line in item.split_inclusive('\n') {
+            if !line.trim().is_empty() {
+                rendered.push_str(&" ".repeat(datasets_indent));
+            }
+            rendered.push_str(line);
+        }
+        rendered.push_str(&lines[datasets_start + 1..].concat());
+        return Some(rendered);
+    }
+    if !value.is_empty() && !value.starts_with('#') {
+        return None;
+    }
+    let block_end = (datasets_start + 1..projection_end)
+        .find(|&index| {
+            indented_key(lines[index]).is_some_and(|(indent, _)| indent <= datasets_indent)
+        })
+        .unwrap_or(projection_end);
+    let item_indent = lines[datasets_start + 1..block_end]
+        .iter()
+        .find(|line| line.trim_start().starts_with('-'))
+        .map_or(datasets_indent + 2, |line| {
+            line.len() - line.trim_start_matches(' ').len()
+        });
+    // Blank lines and comments that close the block introduce the next key, so
+    // the item goes above them.
+    let insert_at = (datasets_start + 1..block_end)
+        .rev()
+        .find(|&index| {
+            let line = lines[index];
+            !line.trim().is_empty() && !line.trim_start().starts_with('#')
+        })
+        .map_or(datasets_start + 1, |index| index + 1);
+    rendered.push_str(&lines[..insert_at].concat());
+    if !rendered.ends_with('\n') {
+        rendered.push('\n');
+    }
+    for line in item.split_inclusive('\n') {
+        if !line.trim().is_empty() {
+            rendered.push_str(&" ".repeat(item_indent));
         }
         rendered.push_str(line);
     }
@@ -742,6 +953,42 @@ mod tests {
     fn a_populated_flow_list_is_refused() {
         assert!(append_top_level_items("list: [{id: x}]\n", "list", ITEMS).is_none());
         assert!(append_top_level_items("list: &shared\n- id: x\n", "list", ITEMS).is_none());
+    }
+
+    const DATASET_ITEM: &str = "- id: consent\n  title: Consent records\n  accessProfile: person-consent-steward\n";
+
+    #[test]
+    fn a_dataset_is_appended_before_the_projections_next_sibling_key() {
+        let source = "manifestProjection:\n  accessProfile: operator\n  datasets:\n    - id: generic-registry\n      title: Generic Registry\n  dataServices:\n    - id: generic-registry-api\n";
+
+        let rendered = append_manifest_projection_dataset(source, DATASET_ITEM).unwrap();
+
+        assert_eq!(
+            rendered,
+            "manifestProjection:\n  accessProfile: operator\n  datasets:\n    - id: generic-registry\n      title: Generic Registry\n    - id: consent\n      title: Consent records\n      accessProfile: person-consent-steward\n  dataServices:\n    - id: generic-registry-api\n"
+        );
+    }
+
+    #[test]
+    fn an_empty_datasets_flow_list_becomes_a_block_list() {
+        assert_eq!(
+            append_manifest_projection_dataset(
+                "manifestProjection:\n  datasets: []\n  dataServices: []\n",
+                DATASET_ITEM
+            )
+            .unwrap(),
+            "manifestProjection:\n  datasets:\n  - id: consent\n    title: Consent records\n    accessProfile: person-consent-steward\n  dataServices: []\n"
+        );
+    }
+
+    #[test]
+    fn no_manifest_projection_or_a_populated_flow_list_is_refused() {
+        assert!(append_manifest_projection_dataset("a: 1\n", DATASET_ITEM).is_none());
+        assert!(append_manifest_projection_dataset(
+            "manifestProjection:\n  datasets: [{id: x}]\n",
+            DATASET_ITEM
+        )
+        .is_none());
     }
 
     #[test]
