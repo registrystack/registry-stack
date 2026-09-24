@@ -567,7 +567,7 @@ caseworkctl source add ./tutorial-work/project \
   --project ./licence-casework --source-id professional-licences
 ```
 
-`source add` drives your own `bregctl` of the same Registry Stack version, requires it on `PATH` or named with `--bregctl-bin`, runs its public `check` and `explain change-requests`, and refuses a mismatched source namespace, policy, producer admission, or application binding. It also reports a finding when another change-request entity in the same BReg registry names this Casework project's review authority with a `policyId` that no declared `reviewKinds` entry matches, or with a `policyId` that is not a string, since that entity would pass BReg's own compile check yet still be unreviewable here; several Casework projects can share an authority id, so that entity's policy may legitimately live in one of them, and pairing does not wait on it.
+`source add` drives your own `bregctl` of the same Registry Stack version, requires it on `PATH` or named with `--bregctl-bin`, runs its public `check` and `explain change-requests`, and refuses a mismatched source namespace, policy, producer admission, or application binding. It also reports a finding when another change-request entity in the same BReg registry names this Casework project's review authority with a `policyId` that no declared `reviewKinds` entry matches, since that entity would pass BReg's own compile check yet still be unreviewable here; several Casework projects can share an authority id, so that entity's policy may legitimately live in one of them, and pairing does not wait on it.
 Without `--apply` it previews the lifecycle event, the least-privilege `casework-reader` profile,
 the paired local clients, and the authority and optional executor runtime bindings.
 The report includes the exact candidate fragments, `status: preview`, and
@@ -608,7 +608,7 @@ For a deployment, package the connected project and hand it to an operator, who 
 
 | Finding | Meaning | What to do |
 |---|---|---|
-| `casework.source-add.review-policy-unresolved` | Another change-request entity in the BReg registry names this Casework project's review authority with a `policyId` that no `reviewKinds[].id` matches, or with a `policyId` that is not a string. | Add a matching `reviewKinds[].id` to `casework.yaml`, or correct the entity's `changeRequest.review.policyId`, once that entity's review kind is meant to live here. |
+| `casework.source-add.review-policy-unresolved` | Another change-request entity in the BReg registry names this Casework project's review authority with a `policyId` that no `reviewKinds[].id` matches. | Add a matching `reviewKinds[].id` to `casework.yaml`, or correct the entity's `changeRequest.review.policyId`, once that entity's review kind is meant to live here. |
 | `casework.source-add.row-boundary-claim-unsupported` | The selected request's review or apply access profile declares a `rowBoundaries` claim using operator `equals` over a string-shaped field, and the local dev-client export does not add the claim it depends on. An `in` operator, or `equals` over a non-string-shaped field (for example Boolean or Int64), refuses `source add` outright: the local Casework dev-client claim model holds only strings, and neither pairing can be represented that way. | Add the named claim to the local Casework reviewer dev clients that need the profile, each set to the string value equal to the field's stored value. |
 
 {/* Evidence: crates/registry-caseworkctl/src/source_add.rs, run(), select_request(),

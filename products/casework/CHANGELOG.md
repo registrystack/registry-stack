@@ -19,8 +19,8 @@
   projects share the same authority id, since the other entity's policy may
   legitimately live in one of them. The command now reports a finding
   instead, naming the entity, the declared `policyId`, and that no
-  `reviewKinds[].id` matches it; a sibling entity whose `policyId` is not a
-  string is also reported as a finding rather than silently skipped. Preview
+  `reviewKinds[].id` matches it (a missing or non-string `policyId` still
+  fails `bregctl check` first). Preview
   and apply report the same findings. The entity actually being paired is
   unaffected: an unresolved `policyId` on it is still refused. A `policyId`
   edited in the BReg project after pairing is not caught: nothing

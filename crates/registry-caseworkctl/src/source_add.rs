@@ -593,9 +593,9 @@ fn check_unpaired_review_policies(
             Some(policy_id) => findings.push(unresolved_review_policy_finding(
                 index, entity_id, authority, policy_id,
             )),
-            None => findings.push(non_string_review_policy_finding(
-                index, entity_id, authority,
-            )),
+            // `bregctl check` already refused a missing or non-string
+            // policyId, since BReg reads it as a required string.
+            None => {}
         }
     }
     Ok(findings)
@@ -623,25 +623,6 @@ fn unresolved_review_policy_finding(
         ),
         "suggestedAction": format!(
             "Add a reviewKinds[].id matching {policy_id} to casework.yaml, or correct entity {entity_id}'s changeRequest.review.policyId, before pairing a source for it."
-        ),
-    })
-}
-
-/// A finding warning that a BReg change-request entity other than the one
-/// being paired names this Casework project's review authority but its
-/// `policyId` is missing or not a string, so it cannot be checked against
-/// casework.yaml's `reviewKinds` at all.
-fn non_string_review_policy_finding(index: usize, entity_id: &str, authority: &str) -> Value {
-    json!({
-        "severity": "finding",
-        "code": "casework.source-add.review-policy-unresolved",
-        "artifact": "breg_entity",
-        "path": format!("registry.yaml:/entities/{index}/changeRequest/review/policyId"),
-        "message": format!(
-            "BReg change-request entity {entity_id} declares review authority {authority} with a policyId that is not a string, so source add cannot check it against casework.yaml's reviewKinds[].id"
-        ),
-        "suggestedAction": format!(
-            "Set entity {entity_id}'s changeRequest.review.policyId to a string matching a reviewKinds[].id in casework.yaml before pairing a source for it."
         ),
     })
 }
@@ -2068,14 +2049,15 @@ mod tests {
     }
 
     #[test]
-    fn unpaired_casework_review_policies_report_a_finding_when_a_sibling_policy_id_is_not_a_string()
-    {
+    fn unpaired_casework_review_policies_leave_a_non_string_sibling_policy_id_to_bregctl_check() {
         let project = tempfile::tempdir().unwrap();
         fs::write(
             project.path().join("casework.yaml"),
             serde_json::to_vec(&casework_policy_with_one_review_kind()).unwrap(),
         )
         .unwrap();
+        // `bregctl check` refuses a missing or non-string policyId before this
+        // check runs, so it promises no finding for one.
         let authored = json!({"entities":[
             {"id":"correction", "changeRequest":{"review":{"authority":"casework","policyId":"registry-correction"}}},
             {"id":"numeric-policy", "changeRequest":{"review":{"authority":"casework","policyId":123}}},
@@ -2086,20 +2068,7 @@ mod tests {
             check_unpaired_review_policies(project.path(), &authored, "correction", "casework")
                 .expect("a non-string sibling policyId must not refuse the pairing");
 
-        assert_eq!(findings.len(), 2, "{findings:?}");
-        for finding in &findings {
-            assert_eq!(finding["severity"], "finding");
-            let message = finding["message"].as_str().unwrap();
-            assert!(message.contains("not a string"), "{message}");
-        }
-        let messages: Vec<&str> = findings
-            .iter()
-            .map(|finding| finding["message"].as_str().unwrap())
-            .collect();
-        assert!(messages
-            .iter()
-            .any(|message| message.contains("numeric-policy")));
-        assert!(messages.iter().any(|message| message.contains("no-policy")));
+        assert!(findings.is_empty(), "{findings:?}");
     }
 
     #[test]
