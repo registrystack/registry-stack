@@ -996,6 +996,18 @@ published, the command runs `verify-public`, reports the release complete, and
 does not recommend a retry. It never approves environments or dispatches a
 workflow, and it adds no release gate.
 
+### Open the next development version
+
+Once `verify-public` passes, open one PR against protected `main` that bumps
+`workspace.package.version` in `Cargo.toml` to the next planned version,
+refreshes `Cargo.lock`, and moves any other version surface the protected
+checks hold equal to it. Until it merges, source on `main` still claims the
+released number: its crates carry the released version, and a development
+build reports `<version>-dev`, which SemVer orders before the release it
+follows. Do not wait for the next release PR to make this change.
+The release manifest, notes, changelogs, and documentation archive stay with
+that release PR.
+
 ## Failure handling
 
 | Failure state | Response |
