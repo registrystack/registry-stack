@@ -91,6 +91,7 @@ use reconcile_lifecycle::{
 };
 use registry_breg::data::DataError;
 use registry_breg::migration_reconcile::{ReconcileError, ReconcileOutcome};
+use registry_breg_client::BRegIngestionBlockedReason;
 use request_retention::{
     RequestRetentionCliError, RequestRetentionDryRunOutcome, RequestRetentionEraseOutcome,
     RequestRetentionListOutcome,
@@ -1528,6 +1529,7 @@ struct DataValidateSuccessReport {
     profile_id: String,
     operation: DataOperationArg,
     input_length: u64,
+    input_digest: String,
     item_count: u64,
     chunk_count: usize,
     maximum_items: u16,
@@ -3432,6 +3434,7 @@ fn data_validate(args: &DataValidateArgs) -> Result<DataValidateSuccessReport, F
         profile_id: outcome.profile_id,
         operation: operation_arg(outcome.operation),
         input_length: outcome.input_length,
+        input_digest: outcome.input_digest,
         item_count: outcome.item_count,
         chunk_count: outcome.chunk_count,
         maximum_items: outcome.maximum_items,
@@ -3579,12 +3582,40 @@ fn data_lifecycle_failure(
             DiagnosticArtifact::DataCheckpoint,
             SuggestedAction::VerifyDataCheckpoint,
         ),
-        DataLifecycleError::ImportRunBlocked => (
+        DataLifecycleError::ImportRunBlocked(Some(BRegIngestionBlockedReason::ActivePackageChanged)) => (
             format!("{prefix}.ingestion_run.blocked"),
             "ingestionRun",
             "the ingestion run is blocked because the active package changed; the run stays inspectable, and a new import under the active package needs a fresh checkpoint path",
             DiagnosticArtifact::DataOperation,
             SuggestedAction::VerifyDataCheckpoint,
+        ),
+        DataLifecycleError::ImportRunBlocked(Some(BRegIngestionBlockedReason::ImportAuthorityClosed)) => (
+            format!("{prefix}.ingestion_run.import_authority_closed"),
+            "ingestionRun",
+            "the ingestion run is blocked because its import authority closed, expired, or has too little volume left for the next chunk; the committed chunks stay, and the remaining items need a new authority (bregctl import-authority list, then open) and a fresh checkpoint path",
+            DiagnosticArtifact::DataOperation,
+            SuggestedAction::VerifyDataCheckpoint,
+        ),
+        DataLifecycleError::ImportRunBlocked(None) => (
+            format!("{prefix}.ingestion_run.blocked"),
+            "ingestionRun",
+            "the ingestion run is blocked and refuses further chunks; read the run to see its blockedReason, and continue in a new import with a fresh checkpoint path",
+            DiagnosticArtifact::DataOperation,
+            SuggestedAction::VerifyDataCheckpoint,
+        ),
+        DataLifecycleError::IngestionRunPrecondition { through_import: true } => (
+            format!("{prefix}.ingestion_run.import_authority_required"),
+            "ingestionRun",
+            "the ingestion run was refused because no open import authority admits it: none is open for the entity, it names another profile, it expired, it has too little volume left, or it pins other input digests; check bregctl import-authority list and open one that covers this input",
+            DiagnosticArtifact::DataOperation,
+            SuggestedAction::CorrectDataBinding,
+        ),
+        DataLifecycleError::IngestionRunPrecondition { through_import: false } => (
+            format!("{prefix}.ingestion_run.precondition_failed"),
+            "ingestionRun",
+            "the ingestion run was refused on a failed precondition",
+            DiagnosticArtifact::DataOperation,
+            SuggestedAction::CorrectDataBinding,
         ),
         DataLifecycleError::ImportRunCancelled => (
             format!("{prefix}.ingestion_run.cancelled"),
@@ -11624,6 +11655,7 @@ fn write_data_validate_success(
                     data_operation_name(report.operation).to_owned(),
                 ),
                 ("input bytes", report.input_length.to_string()),
+                ("input sha256", report.input_digest.clone()),
                 ("items", report.item_count.to_string()),
                 ("chunks", report.chunk_count.to_string()),
                 ("maximum items", report.maximum_items.to_string()),
@@ -13263,6 +13295,55 @@ mod tests {
             .as_str()
             .expect("the message renders")
             .contains("without the output"));
+    }
+
+    #[test]
+    fn a_blocked_or_refused_import_run_names_its_cause_and_next_step() {
+        for (error, code, hint) in [
+            (
+                DataLifecycleError::ImportRunBlocked(Some(
+                    BRegIngestionBlockedReason::ActivePackageChanged,
+                )),
+                "data.import.ingestion_run.blocked",
+                "active package changed",
+            ),
+            (
+                DataLifecycleError::ImportRunBlocked(Some(
+                    BRegIngestionBlockedReason::ImportAuthorityClosed,
+                )),
+                "data.import.ingestion_run.import_authority_closed",
+                "bregctl import-authority list",
+            ),
+            (
+                DataLifecycleError::ImportRunBlocked(None),
+                "data.import.ingestion_run.blocked",
+                "blockedReason",
+            ),
+            (
+                DataLifecycleError::IngestionRunPrecondition {
+                    through_import: true,
+                },
+                "data.import.ingestion_run.import_authority_required",
+                "bregctl import-authority list",
+            ),
+            (
+                DataLifecycleError::IngestionRunPrecondition {
+                    through_import: false,
+                },
+                "data.import.ingestion_run.precondition_failed",
+                "precondition",
+            ),
+        ] {
+            let report =
+                serde_json::to_value(data_lifecycle_failure("data import", "data.import", error))
+                    .expect("the failure report serializes");
+            assert_eq!(report["diagnostics"][0]["code"], code);
+            assert_eq!(report["diagnostics"][0]["path"], "ingestionRun");
+            let message = report["diagnostics"][0]["message"]
+                .as_str()
+                .expect("the message renders");
+            assert!(message.contains(hint), "{code}: {message}");
+        }
     }
 
     #[test]

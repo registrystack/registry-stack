@@ -22,10 +22,10 @@ use registry_breg::data::{
 };
 use registry_breg::package::{inspect_package_integrity, PackageEnvelope, PackageError};
 use registry_breg_client::{
-    ingestion_prefix_digest, BRegBatchOperation, BRegIngestionChunk, BRegIngestionChunkReceipt,
-    BRegIngestionError, BRegIngestionRun, BRegIngestionRunRequest, BRegIngestionRunStatus,
-    BRegProblemCode, BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError,
-    BearerToken, BREG_INGESTION_CHUNK_ALGORITHM_VERSION,
+    ingestion_prefix_digest, BRegBatchOperation, BRegIngestionBlockedReason, BRegIngestionChunk,
+    BRegIngestionChunkReceipt, BRegIngestionError, BRegIngestionRun, BRegIngestionRunRequest,
+    BRegIngestionRunStatus, BRegProblemCode, BaseRegistryClient, BaseRegistryClientConfig,
+    BaseRegistryClientError, BearerToken, BREG_INGESTION_CHUNK_ALGORITHM_VERSION,
 };
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_httputil::client::{
@@ -69,10 +69,18 @@ pub(crate) enum DataLifecycleError {
     /// Resuming its committed items under a new run id would duplicate
     /// mutations, so it is refused rather than upgraded.
     LegacyImportCheckpoint,
-    /// The ingestion run is blocked because the active package changed.
-    ImportRunBlocked,
+    /// The ingestion run is blocked and refuses further chunks. The reason is
+    /// the one the run state names, absent only when the run could not be
+    /// re-read after the refusal.
+    ImportRunBlocked(Option<BRegIngestionBlockedReason>),
     /// The ingestion run was cancelled and refuses new chunks.
     ImportRunCancelled,
+    /// The service refused to create the run on a failed precondition. For a
+    /// plan through an `import` grant that means no open import authority
+    /// admits it; `through_import` says which hint the operator needs.
+    IngestionRunPrecondition {
+        through_import: bool,
+    },
     BRegUrl,
     Token,
     Runtime,
@@ -136,6 +144,8 @@ pub(crate) struct DataValidateOutcome {
     pub profile_id: String,
     pub operation: DataImportOperation,
     pub input_length: u64,
+    /// SHA-256 of the raw input bytes: the digest an import authority pins.
+    pub input_digest: String,
     pub item_count: u64,
     pub chunk_count: usize,
     pub maximum_items: u16,
@@ -206,6 +216,7 @@ pub(crate) fn validate_import(
         profile_id: plan.profile_id().to_owned(),
         operation: plan.operation(),
         input_length: plan.input_length(),
+        input_digest: plan.input_digest().to_owned(),
         item_count: plan.item_count(),
         chunk_count: plan.chunks().len(),
         maximum_items: plan.maximum_items(),
@@ -269,7 +280,15 @@ impl IngestionDrive<'_> {
         let created = self
             .runtime
             .block_on(self.client.create_ingestion_run(self.entity_route, request))
-            .map_err(map_ingestion_client_error)?;
+            .map_err(|error| match error {
+                BaseRegistryClientError::Problem {
+                    code: BRegProblemCode::PreconditionFailed,
+                    ..
+                } => DataLifecycleError::IngestionRunPrecondition {
+                    through_import: self.plan.through_import(),
+                },
+                error => map_ingestion_client_error(error),
+            })?;
         Ok(created.value)
     }
 
@@ -645,7 +664,11 @@ fn submit_ingestion_chunks(
     while !started.run.complete() && submitted < max_chunks {
         match started.run.status() {
             BRegIngestionRunStatus::Open => {}
-            BRegIngestionRunStatus::Blocked => return Err(DataLifecycleError::ImportRunBlocked),
+            BRegIngestionRunStatus::Blocked => {
+                return Err(DataLifecycleError::ImportRunBlocked(
+                    started.run.blocked_reason(),
+                ))
+            }
             BRegIngestionRunStatus::Cancelled => {
                 return Err(DataLifecycleError::ImportRunCancelled)
             }
@@ -704,6 +727,15 @@ fn recover_lost_submission(
                 ..
             }
     );
+    if matches!(
+        error,
+        BaseRegistryClientError::Problem {
+            code: BRegProblemCode::IngestionRunBlocked,
+            ..
+        }
+    ) {
+        return Err(blocked_run_reason(drive, run_id));
+    }
     if !run_may_have_committed {
         return Err(map_ingestion_client_error(error));
     }
@@ -716,7 +748,9 @@ fn recover_lost_submission(
         return Ok(RecoveredSubmission::Answered(replayed.run().clone()));
     }
     match run.status() {
-        BRegIngestionRunStatus::Blocked => Err(DataLifecycleError::ImportRunBlocked),
+        BRegIngestionRunStatus::Blocked => {
+            Err(DataLifecycleError::ImportRunBlocked(run.blocked_reason()))
+        }
         BRegIngestionRunStatus::Cancelled => Err(DataLifecycleError::ImportRunCancelled),
         BRegIngestionRunStatus::Open | BRegIngestionRunStatus::Complete
             if run.next_chunk_index() > chunk_index =>
@@ -725,6 +759,18 @@ fn recover_lost_submission(
         }
         _ => Err(DataLifecycleError::Data(DataError::InvalidResponse)),
     }
+}
+
+/// A chunk refused because its run is blocked carries no cause, so the run is
+/// read once to name it. The refusal stands whatever the read returns; a
+/// failed read leaves the reason unnamed rather than replacing the refusal.
+fn blocked_run_reason(drive: &IngestionDrive<'_>, run_id: Uuid) -> DataLifecycleError {
+    let reason = drive
+        .read_run(run_id)
+        .ok()
+        .filter(|run| run.status() == BRegIngestionRunStatus::Blocked)
+        .and_then(|run| run.blocked_reason());
+    DataLifecycleError::ImportRunBlocked(reason)
 }
 
 /// The receipt must name the chunk that was sent: index and digest both.
@@ -810,7 +856,7 @@ fn map_ingestion_client_error(error: BaseRegistryClientError) -> DataLifecycleEr
         BaseRegistryClientError::Problem {
             code: BRegProblemCode::IngestionRunBlocked,
             ..
-        } => DataLifecycleError::ImportRunBlocked,
+        } => DataLifecycleError::ImportRunBlocked(None),
         BaseRegistryClientError::Problem {
             code: BRegProblemCode::AuthenticationRefused,
             ..
@@ -1647,6 +1693,10 @@ mod tests {
     }
 
     fn compiled() -> registry_breg::CompiledRegistry {
+        compiled_with(&["create", "batch", "list"])
+    }
+
+    fn compiled_with(operations: &[&str]) -> registry_breg::CompiledRegistry {
         let source = json!({
             "apiVersion": "registry.registrystack.org/v1alpha1",
             "kind": "RegistryProject",
@@ -1668,7 +1718,7 @@ mod tests {
                 "principalClaim": "principal",
                 "permissions": [{
                     "entity": ENTITY,
-                    "operations": ["create", "batch", "list"],
+                    "operations": operations,
                     "readableFields": ["code"],
                     "writableFields": ["code"],
                     "allowDataExport": true,
@@ -1681,7 +1731,18 @@ mod tests {
     }
 
     fn import_plan_and_inspected(input: &[u8]) -> (DataImportPlan, InspectedDataPackage) {
-        let registry = compiled();
+        plan_and_inspected(compiled(), input)
+    }
+
+    /// A plan through an `import` grant, which drives the same run routes.
+    fn import_grant_plan_and_inspected(input: &[u8]) -> (DataImportPlan, InspectedDataPackage) {
+        plan_and_inspected(compiled_with(&["import", "list"]), input)
+    }
+
+    fn plan_and_inspected(
+        registry: registry_breg::CompiledRegistry,
+        input: &[u8],
+    ) -> (DataImportPlan, InspectedDataPackage) {
         let plan = DataImportPlan::from_jsonl(
             &registry,
             ENTITY,
@@ -1910,6 +1971,42 @@ mod tests {
         }))
         .unwrap();
         ingestion_http_response(200, "OK", &body)
+    }
+
+    /// One run document blocked for the named wire reason.
+    fn blocked_run_response(plan: &DataImportPlan, input: &[u8], reason: &str) -> Vec<u8> {
+        let mut run = ingestion_run_value(plan, input, 0, "blocked");
+        run["blockedReason"] = json!(reason);
+        let body = canonicalize_json(&json!({ "run": run })).unwrap();
+        ingestion_http_response(200, "OK", &body)
+    }
+
+    /// One problem answer carrying the published type, title, and detail the
+    /// maintained client checks for `code`.
+    fn problem_response(code: BRegProblemCode, reason: &str) -> Vec<u8> {
+        let body = serde_json::to_vec(&json!({
+            "type": format!(
+                "https://id.registrystack.org/problems/registry-breg/{}",
+                code.code().replace('.', "/")
+            ),
+            "title": reason,
+            "status": code.status(),
+            "detail": code.detail(),
+            "code": code.code(),
+            "traceId": INGESTION_TRACE_ID
+        }))
+        .unwrap();
+        let head = format!(
+            "HTTP/1.1 {} {reason}\r\nContent-Type: application/problem+json\r\n\
+             Cache-Control: no-store\r\nVary: authorization, accept\r\n\
+             traceparent: 00-{INGESTION_TRACE_ID}-{INGESTION_SPAN_ID}-01\r\n\
+             Connection: close\r\nContent-Length: {}\r\n\r\n",
+            code.status(),
+            body.len()
+        );
+        let mut response = head.into_bytes();
+        response.extend_from_slice(&body);
+        response
     }
 
     /// Stage the sidecar pair a rerun resumes from: the v2 state naming the
@@ -2469,7 +2566,12 @@ mod tests {
             // server, and no chunk was sent to a run that refuses it.
             assert_eq!(requests.len(), 1);
             let surfaced = if blocked {
-                matches!(error, DataLifecycleError::ImportRunBlocked)
+                matches!(
+                    error,
+                    DataLifecycleError::ImportRunBlocked(Some(
+                        BRegIngestionBlockedReason::ActivePackageChanged
+                    ))
+                )
             } else {
                 matches!(error, DataLifecycleError::ImportRunCancelled)
             };
@@ -2479,6 +2581,152 @@ mod tests {
         }
 
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn an_import_grant_drives_the_same_run_routes() {
+        let input = import_input();
+        let (plan, inspected) = import_grant_plan_and_inspected(&input);
+        assert!(plan.through_import());
+        let directory = test_directory("ingestion-import-grant");
+        let checkpoint_path = directory.join("import.checkpoint.json");
+        let (address, handle) = spawn_scripted_server(vec![
+            ScriptedExchange::Respond(ingestion_run_response(
+                201, "Created", &plan, &input, 0, "open",
+            )),
+            ScriptedExchange::Respond(ingestion_submission_response(
+                &plan, &input, 0, false, "open",
+            )),
+            ScriptedExchange::Respond(ingestion_submission_response(
+                &plan, &input, 1, false, "complete",
+            )),
+        ]);
+        let base = parse_breg_url(&format!("http://{address}")).unwrap();
+        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let drive = ingestion_drive(&plan, &inspected, &input, &client);
+
+        let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
+        let mut started = load_or_start_ingestion(&drive, destinations).unwrap();
+        let outcome = submit_ingestion_chunks(&drive, &mut started, None).unwrap();
+        let requests = handle.join().unwrap();
+
+        assert_eq!(requests.len(), 3);
+        assert!(outcome.complete);
+        assert_eq!(outcome.committed_items, 3);
+        let (request_line, _, _) = request_parts(&requests[0]);
+        assert!(request_line.starts_with("POST /v1/records/records/ingestion-runs"));
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_run_blocked_by_its_import_authority_names_that_reason() {
+        let input = import_input();
+        let (plan, inspected) = import_grant_plan_and_inspected(&input);
+        let directory = test_directory("ingestion-authority-blocked");
+        let checkpoint_path = directory.join("import.checkpoint.json");
+        staged_import(&plan, &inspected, &checkpoint_path, None);
+        let (address, handle) = spawn_scripted_server(vec![ScriptedExchange::Respond(
+            blocked_run_response(&plan, &input, "importAuthorityClosed"),
+        )]);
+        let base = parse_breg_url(&format!("http://{address}")).unwrap();
+        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let drive = ingestion_drive(&plan, &inspected, &input, &client);
+
+        let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
+        let mut started = load_or_start_ingestion(&drive, destinations).unwrap();
+        let error = submit_ingestion_chunks(&drive, &mut started, None).unwrap_err();
+        assert_eq!(handle.join().unwrap().len(), 1);
+        assert!(
+            matches!(
+                error,
+                DataLifecycleError::ImportRunBlocked(Some(
+                    BRegIngestionBlockedReason::ImportAuthorityClosed
+                ))
+            ),
+            "{error:?}"
+        );
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_blocked_chunk_answer_reads_the_run_to_name_its_reason() {
+        let input = import_input();
+        let (plan, inspected) = import_grant_plan_and_inspected(&input);
+        let directory = test_directory("ingestion-blocked-answer");
+        let checkpoint_path = directory.join("import.checkpoint.json");
+        // The refusal carries a code and no cause; the run state names the
+        // cause, so the drive reads it once and sends nothing further.
+        let (address, handle) = spawn_scripted_server(vec![
+            ScriptedExchange::Respond(ingestion_run_response(
+                201, "Created", &plan, &input, 0, "open",
+            )),
+            ScriptedExchange::Respond(problem_response(
+                BRegProblemCode::IngestionRunBlocked,
+                "Conflict",
+            )),
+            ScriptedExchange::Respond(blocked_run_response(&plan, &input, "importAuthorityClosed")),
+        ]);
+        let base = parse_breg_url(&format!("http://{address}")).unwrap();
+        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let drive = ingestion_drive(&plan, &inspected, &input, &client);
+
+        let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
+        let mut started = load_or_start_ingestion(&drive, destinations).unwrap();
+        let error = submit_ingestion_chunks(&drive, &mut started, None).unwrap_err();
+        let requests = handle.join().unwrap();
+        assert_eq!(requests.len(), 3);
+        let (request_line, _, _) = request_parts(&requests[2]);
+        assert!(request_line.starts_with("GET "), "{request_line}");
+        assert!(
+            matches!(
+                error,
+                DataLifecycleError::ImportRunBlocked(Some(
+                    BRegIngestionBlockedReason::ImportAuthorityClosed
+                ))
+            ),
+            "{error:?}"
+        );
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_refused_run_creation_says_whether_an_import_authority_is_in_play() {
+        let input = import_input();
+        for (through_import, (plan, inspected)) in [
+            (true, import_grant_plan_and_inspected(&input)),
+            (false, import_plan_and_inspected(&input)),
+        ] {
+            let directory = test_directory("ingestion-precondition");
+            let checkpoint_path = directory.join("import.checkpoint.json");
+            let (address, handle) = spawn_scripted_server(vec![ScriptedExchange::Respond(
+                problem_response(BRegProblemCode::PreconditionFailed, "Precondition Failed"),
+            )]);
+            let base = parse_breg_url(&format!("http://{address}")).unwrap();
+            let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+            let drive = ingestion_drive(&plan, &inspected, &input, &client);
+
+            let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
+            let error = match load_or_start_ingestion(&drive, destinations) {
+                Ok(_) => panic!("a refused run creation starts no import"),
+                Err(error) => error,
+            };
+            assert_eq!(handle.join().unwrap().len(), 1);
+            assert!(
+                matches!(
+                    error,
+                    DataLifecycleError::IngestionRunPrecondition { through_import: found }
+                        if found == through_import
+                ),
+                "{error:?}"
+            );
+            // No run exists, so no sidecar names one.
+            assert!(!import_state_path(&checkpoint_path).exists());
+            assert!(!checkpoint_path.exists());
+            fs::remove_dir_all(directory).unwrap();
+        }
     }
 
     #[cfg(unix)]
