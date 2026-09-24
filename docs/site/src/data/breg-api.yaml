@@ -67,7 +67,7 @@
     - ['`idempotency.conflict`', '409', 'The `Idempotency-Key` was reused with a different request.']
     - ['`ingestion.profile_mismatch`', '403', 'The selected profile is not the one the run bound, or does not satisfy the compiled batch route for the bound operation. A run id grants nothing on its own.']
     - ['`ingestion.run_not_open`', '409', 'The run completed or was cancelled, so it accepts no chunk and no cancel. The run stays readable.']
-    - ['`ingestion.run_blocked`', '409', 'The active package revision or schema fingerprint no longer matches the run binding. The run stays blocked and inspectable; continue in a successor run.']
+    - ['`ingestion.run_blocked`', '409', 'The run is blocked: the active package revision or schema fingerprint no longer matches the run binding, or the import authority the run consumes closed, expired, or has too little volume left for the chunk. The run''s `blockedReason` names which. The run stays blocked and inspectable; continue in a successor run.']
     - ['`ingestion.chunk_mismatch`', '409', 'The chunk index, chunk digest, or rolling prefix digest does not match the run''s expected next chunk. Nothing was written; reread the run and resubmit the exact chunk.']
     - ['`ingestion.receipt_erased`', '410', 'The chunk receipt was erased with the record history it describes. The chunk and its counts stay visible in the run.']
     - ['`request.timeout`', '504', 'The request exceeded `operationalTimeouts.httpRequestMilliseconds`.']

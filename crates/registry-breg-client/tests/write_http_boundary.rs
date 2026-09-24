@@ -1644,7 +1644,7 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
             "The selected access profile does not match the run's bound profile."
         }
         Code::IngestionReceiptErased => "The stored receipt of the chunk was erased.",
-        Code::IngestionRunBlocked => "The active package no longer matches the run binding.",
+        Code::IngestionRunBlocked => "The ingestion run is blocked and refuses further chunks.",
         Code::IngestionRunNotOpen => "The ingestion run is not open for this transition.",
         Code::LookupUnresolved => "The lookup did not resolve exactly one record.",
         Code::MutationConflict => "The mutation conflicts with current state.",

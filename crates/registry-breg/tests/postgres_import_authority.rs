@@ -403,7 +403,13 @@ impl Harness {
         let before = self.widget_count().await;
         let response = self.submit("widgets", "loader", run_id, plan, index).await;
         assert_eq!(response.status(), StatusCode::CONFLICT);
-        assert_eq!(body_json(response).await["code"], "ingestion.run_blocked");
+        let problem = body_json(response).await;
+        assert_eq!(problem["code"], "ingestion.run_blocked");
+        // The run names why it blocked; the refusal names no single cause.
+        assert_eq!(
+            problem["detail"],
+            "The ingestion run is blocked and refuses further chunks."
+        );
         assert_eq!(self.widget_count().await, before);
         let run = send(
             &self.app,
