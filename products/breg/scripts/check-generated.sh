@@ -48,10 +48,10 @@ mkdir "$authoring_candidate"
 mkdir "$runtime_candidate"
 (
   cd "$temporary_root"
-  cargo run --manifest-path "$repository_root/Cargo.toml" --locked --quiet \
+  cargo run --manifest-path "$repository_root/Cargo.toml" --locked \
     -p registry-breg --features schema --example authoring-schema -- \
     --output "$authoring_candidate"
-  cargo run --manifest-path "$repository_root/Cargo.toml" --locked --quiet \
+  cargo run --manifest-path "$repository_root/Cargo.toml" --locked \
     -p registry-breg --features runtime,schema --example runtime-schema -- \
     --output "$runtime_candidate"
   for fixture_path in "${fixtures[@]}"; do

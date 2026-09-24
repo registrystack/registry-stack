@@ -94,7 +94,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ("Cargo metadata", "cargo metadata --locked --no-deps --format-version 1"),
     (
         "Manifest profile validation",
-        "run: cargo run --locked --profile ci -p registry-manifest-cli -- validate-profiles profiles",
+        "run: cargo run --locked -p registry-manifest-cli -- validate-profiles profiles",
     ),
     ("Format", "run: cargo fmt --check"),
     (
@@ -123,6 +123,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Platform path filter",
         "platform: ${{ steps.filter.outputs.platform }}",
+    ),
+    (
+        "Platform assurance path filter",
+        "platform_assurance: ${{ steps.filter.outputs.platform_assurance }}",
     ),
     (
         "Platform hygiene path filter",
@@ -247,15 +251,15 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Casework claim, reconciliation, and attempt suite",
-        "cargo test --locked --profile ci -p registry-casework --features postgres-test --test postgres_transactions",
+        "cargo test --locked -p registry-casework --features postgres-test --test postgres_transactions",
     ),
     (
         "Casework caller visibility suite",
-        "cargo test --locked --profile ci -p registry-casework --features postgres-test --test service_visibility",
+        "cargo test --locked -p registry-casework --features postgres-test --test service_visibility",
     ),
     (
         "Casework assignment and source routing suites",
-        "cargo test --locked --profile ci -p registry-casework --features postgres-test --test assignment_postgres --test routing_postgres",
+        "cargo test --locked -p registry-casework --features postgres-test --test assignment_postgres --test routing_postgres",
     ),
     (
         "Casework persisted source clock selection",
@@ -267,23 +271,31 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Casework inbox ordering suite",
-        "cargo test --locked --profile ci -p registry-casework --features postgres-test --test inbox_ordering_postgres",
+        "cargo test --locked -p registry-casework --features postgres-test --test inbox_ordering_postgres",
     ),
     (
         "Casework source retention suite",
-        "cargo test --locked --profile ci -p registry-casework --features postgres-test --test source_retention_postgres",
+        "cargo test --locked -p registry-casework --features postgres-test --test source_retention_postgres",
     ),
     (
         "Casework governed review persistence, HTTP, payment, and BReg suites",
-        "cargo test --locked --profile ci -p registry-casework --features postgres-test\n          --test review_postgres\n          --test review_http\n          --test review_payment_fixture_postgres\n          --test breg_review_journey",
+        "cargo test --locked -p registry-casework --features postgres-test\n          --test review_postgres\n          --test review_http\n          --test review_payment_fixture_postgres\n          --test breg_review_journey",
     ),
     (
         "Casework governed review schema upgrade suite",
-        "cargo test --locked --profile ci -p registry-casework --features postgres-test --test review_migration_postgres",
+        "cargo test --locked -p registry-casework --features postgres-test --test review_migration_postgres",
     ),
     (
         "Casework Python client binding coverage",
         "registry-breg-client-py registry-casework-client-py",
+    ),
+    (
+        "Casework task approval through Evidence, BReg, and Scheduling",
+        "approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid",
+    ),
+    (
+        "Casework task approval on the source-backed local issuer",
+        "source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer",
     ),
     (
         "Scheduling contract path filter",
@@ -337,15 +349,15 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Scheduling commitment ledger suite",
-        "cargo test --locked --profile ci -p registry-scheduling --features postgres-test --test postgres_commitments",
+        "cargo test --locked -p registry-scheduling --features postgres-test --test postgres_commitments",
     ),
     (
         "Scheduling authoring record application suite",
-        "cargo test --locked --profile ci -p registry-schedulingctl --features postgres-test --test records_apply_postgres",
+        "cargo test --locked -p registry-schedulingctl --features postgres-test --test records_apply_postgres",
     ),
     (
         "Scheduling delivery intent suite",
-        "cargo test --locked --profile ci -p registry-schedulingctl --features postgres-test --test intents_postgres",
+        "cargo test --locked -p registry-schedulingctl --features postgres-test --test intents_postgres",
     ),
     (
         "Release Linux Node client path filter",

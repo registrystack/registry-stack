@@ -12,7 +12,7 @@ import textwrap
 import unittest
 
 from ci_changes import SHARDS, Workspace, classify
-from ci_event_routing import select_event
+from ci_event_routing import select_event, selection_outputs
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -126,6 +126,57 @@ class EventRoutingTest(unittest.TestCase):
             "pull_request": {"base": {"sha": self.base}, "head": {"sha": head}},
         }, self.base)
         self.assertEqual(selection.paths, ("crates/registry-breg/src/lib.rs",))
+
+    def test_only_pull_requests_defer_broad_assurance(self) -> None:
+        path = "crates/registry-platform-crypto/src/lib.rs"
+        head = self.commit(path)
+        events = {
+            "pull_request": {"pull_request": {"base": {"sha": self.base}, "head": {"sha": head}}},
+            "merge_group": {"merge_group": {"base_sha": self.base, "head_sha": head}},
+            "push": {"before": self.base},
+        }
+        for event_name, event in events.items():
+            with self.subTest(event=event_name):
+                selection = select_event(self.repo, event_name, event, head)
+                self.assertEqual(selection.pull_request, event_name == "pull_request")
+                outputs = selection_outputs(self.workspace, selection)
+                self.assertTrue(outputs["platform"])
+                self.assertEqual(
+                    outputs["platform_assurance"], event_name != "pull_request"
+                )
+
+    def test_lock_only_event_routes_through_locked_consumers(self) -> None:
+        lock = (ROOT / "Cargo.lock").read_text(encoding="utf-8")
+        base = self.commit("Cargo.lock", lock)
+        bumped = lock.replace(
+            'name = "pdf-writer"\nversion = "0.15.0"\n',
+            'name = "pdf-writer"\nversion = "0.15.1"\n', 1,
+        )
+        self.assertNotEqual(bumped, lock)
+        head = self.commit("Cargo.lock", bumped)
+        for event_name, event in (
+            ("pull_request", {"pull_request": {"base": {"sha": base}, "head": {"sha": head}}}),
+            ("merge_group", {"merge_group": {"base_sha": base, "head_sha": head}}),
+            ("push", {"before": base}),
+        ):
+            with self.subTest(event=event_name):
+                selection = select_event(self.repo, event_name, event, head)
+                self.assertEqual(selection.paths, ("Cargo.lock",))
+                self.assertEqual(selection.lock_texts, (lock, bumped))
+                outputs = selection_outputs(self.workspace, selection)
+                self.assertEqual(
+                    outputs["rust_packages"],
+                    sorted(self.workspace.affected_packages({"registry-render"})),
+                )
+                self.assertFalse(outputs["release_linux_node_clients"] and event_name == "pull_request")
+
+    def test_lock_absent_at_one_endpoint_selects_every_rust_package(self) -> None:
+        lock = (ROOT / "Cargo.lock").read_text(encoding="utf-8")
+        head = self.commit("Cargo.lock", lock)
+        selection = select_event(self.repo, "push", {"before": self.base}, head)
+        self.assertEqual(selection.lock_texts, (None, lock))
+        outputs = selection_outputs(self.workspace, selection)
+        self.assertEqual(outputs["rust_packages"], sorted(self.workspace.package_names))
 
     def test_schedule_has_no_historical_comparison_and_selects_every_gate(self) -> None:
         selection = select_event(self.repo, "schedule", {}, self.base)

@@ -58,8 +58,10 @@ curl --fail --silent --show-error --aws-sigv4 "aws:amz:us-east-1:s3" \
 
 export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
 export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
-cargo test --locked -p registry-breg --features runtime,schema --lib \
+# The two feature sets match test-postgres.sh, so running after it reuses
+# its registry-breg builds.
+cargo test --locked -p registry-breg --features runtime,tooling,schema --lib \
   attachment_storage -- --include-ignored
-cargo test --locked -p registry-breg --features postgres-test,tooling \
+cargo test --locked -p registry-breg --features postgres-test,tooling,schema \
   --test postgres_change_requests \
   real_s3_http_attachments_preserve_proposals_and_complete_operator_erasure -- --ignored --exact

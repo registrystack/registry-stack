@@ -38,7 +38,7 @@
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
     "test": "node --test __test__/*.test.js",
-    "check:types": "napi build --platform --release --dts index.d.ts.check && cmp index.d.ts index.d.ts.check && rm -f index.d.ts.check"
+    "check:types": "napi build --platform --dts index.d.ts.check && cmp index.d.ts index.d.ts.check && rm -f index.d.ts.check"
   },
   "devDependencies": {
     "@napi-rs/cli": "3.8.2"

@@ -1822,7 +1822,6 @@ def load_rust_contract(repository_root: Path) -> dict:
                 "cargo",
                 "run",
                 "--locked",
-                "--quiet",
                 "-p",
                 "registry-casework",
                 "--example",

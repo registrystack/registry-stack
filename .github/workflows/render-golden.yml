@@ -29,12 +29,29 @@ on:
       - "Cargo.lock"
       - "Cargo.toml"
       - ".github/workflows/render-golden.yml"
+  # GitHub offers no paths filter for merge_group, so a merge queue run is
+  # never skipped here.
   merge_group:
     types:
       - checks_requested
   push:
     branches:
       - main
+    # Keep this list equal to the pull_request paths above.
+    paths:
+      - "crates/registry-render/**"
+      - "crates/registry-platform-audit/**"
+      - "crates/registry-platform-authcommon/**"
+      - "crates/registry-platform-buildinfo/**"
+      - "crates/registry-platform-canonical-json/**"
+      - "crates/registry-platform-config/**"
+      - "crates/registry-platform-crypto/**"
+      - "crates/registry-platform-httpsec/**"
+      - "crates/registry-platform-testing/**"
+      - "products/render/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - ".github/workflows/render-golden.yml"
 
 concurrency:
   group: render-golden-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}

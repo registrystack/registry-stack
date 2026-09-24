@@ -90,10 +90,46 @@ successfully, and document which changed inputs bring it back into ordinary
 CI. Nightly Rust coverage complements the product database gates; its default
 feature shards do not replace PostgreSQL or TLS execution.
 
+The checks below run wholly or partly after review instead of on the pull
+request. Each remains a job of `RegistryStack CI` (`.github/workflows/ci.yml`),
+owned by the maintainers, runs in every nightly full sweep, and passed in that
+workflow's scheduled full sweep on 2026-09-24 before it moved:
+
+- Platform fuzz smoke and Platform line coverage run on the merge queue and
+  on main whenever the platform crates, their products directory or the root
+  Rust inputs change, including a `Cargo.lock` change that reaches a platform
+  crate. No pull-request input brings them back: the platform tests and
+  hygiene checks still run there, and the merge queue holds the 80 percent
+  line floor and the committed-corpus fuzz smoke before anything lands.
+  `nightly-security.yml` additionally explores every declared fuzz target
+  daily, and `nightly-rust-coverage.yml` reports workspace coverage daily.
+  Coverage upload stays on protected main pushes.
+- Release Linux native clients, for both architectures, keeps its full
+  selector on the merge queue and main. On a pull request it runs only for
+  inputs the recipe reads that the native binding job does not already prove:
+  `.cargo/`, the Rust toolchain file,
+  `release/glibc-floor.env`, the pinned maturin requirement, the Linux build,
+  cross-compiler and smoke scripts under `release/scripts/`, each Node.js
+  binding's `Cargo.toml`, `build.rs`, `index.js`, `npm/`, `scripts/` and
+  package files, the Evidence Python binding's `Cargo.toml`, `build.rs` and
+  `pyproject.toml`, the unified Node.js package's `native.js`, `npm/` and
+  package files, and a `Cargo.lock` change that touches a native or
+  git-sourced package or cannot be compared.
+- Immutable docs archives run on pull requests, the merge queue and main only
+  for the archive recipe's own inputs: the docs site package, lockfile and
+  Astro configuration, the archive and link-checking scripts under
+  `docs/site/scripts/` and the modules they import, and the docset, archive
+  lock and repository-docs data. A change to `ci.yml` alone does not rebuild
+  history there; the nightly sweep and a manual full run do.
+
 Main pushes and merge-queue checks select affected work using the event's exact
 before/after commits, including every commit in a multi-commit push and both
 owners of a renamed path. Shared build and CI inputs still select the broad
-matrix. Missing comparison commits select all gates and refuse to claim archive
+matrix. A `Cargo.lock` change without them selects the workspace packages that
+reach a changed locked package, and still selects the broad matrix when the
+lock cannot be parsed or compared, its format changes, a native, build-helper
+or git-sourced package changes, or the change reaches half the workspace or
+more. Missing comparison commits select all gates and refuse to claim archive
 immutability without the required baseline.
 
 The same `RegistryStack CI` workflow runs every gate daily at 22:37 UTC,

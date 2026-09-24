@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import tomllib
 from collections import defaultdict, deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -373,6 +375,7 @@ LINUX_NODE_RELEASE_RECIPE_INPUTS = frozenset(
         "release/scripts/smoke-evidence-client-package.js",
         "release/scripts/smoke-relay-client-package.js",
         "release/scripts/smoke-registry-client-package.js",
+        "release/scripts/smoke-registry-client-package.mjs",
         "release/scripts/assemble-registry-client-wheel.py",
         "release/scripts/sync-registry-client-node.py",
         "release/scripts/test_build_linux_node_client.py",
@@ -382,6 +385,47 @@ LINUX_NODE_RELEASE_RECIPE_INPUTS = frozenset(
         "rust-toolchain",
         "rust-toolchain.toml",
     }
+)
+
+# On a pull request, the production Linux client recipe runs only when an input
+# it reads that the native binding job does not already prove changes: the
+# cross-compiler, the toolchain whose standard library sets part of the glibc
+# floor, the glibc floor, the pinned wheel builder, the smoke scripts, and each
+# package's native build and platform-loader files. Binding sources, CI
+# routing, release workflows and helper tests are proven by their own jobs on
+# the pull request, and by this recipe on the merge queue, main and the
+# nightly sweep.
+LINUX_NATIVE_RELEASE_PULL_REQUEST_INPUTS = (
+    ".cargo/*",
+    "rust-toolchain",
+    "rust-toolchain.toml",
+    "release/glibc-floor.env",
+    "release/requirements/maturin-1.9.6.txt",
+    "release/scripts/build-linux-node-client",
+    "release/scripts/build-linux-python-client",
+    "release/scripts/smoke-*-client-package.js",
+    "release/scripts/smoke-registry-client-package.mjs",
+    "release/scripts/zig-glibc-compiler",
+    *(
+        f"crates/{package}/{pattern}"
+        for package in sorted(LINUX_NODE_BINDING_PACKAGES)
+        for pattern in (
+            "Cargo.toml",
+            "build.rs",
+            "index.js",
+            "npm/*",
+            "package-lock.json",
+            "package.json",
+            "scripts/*",
+        )
+    ),
+    "crates/registry-evidence-client-py/Cargo.toml",
+    "crates/registry-evidence-client-py/build.rs",
+    "crates/registry-evidence-client-py/pyproject.toml",
+    "crates/registry-stack-client-node/native.js",
+    "crates/registry-stack-client-node/npm/*",
+    "crates/registry-stack-client-node/package-lock.json",
+    "crates/registry-stack-client-node/package.json",
 )
 
 # A package is exempt from the tutorial trigger only while no tutorial runs it.
@@ -451,6 +495,78 @@ ROOT_RUST_INPUTS = {
     "scripts/cargo-runtime-library-path.sh",
     "scripts/cargo_runtime_library_path.py",
 }
+
+# A Cargo.lock-only change is routed through the workspace members that reach
+# a changed locked package, except when that package can change native code.
+# Cargo.lock does not record `links`, so every `-sys` package counts by name,
+# every locked package that depends on a C build helper counts by that edge,
+# and this list names the rest: each locked package declaring `links` without
+# a `-sys` suffix, and the helpers themselves. Refresh it from
+# `cargo metadata --format-version 1 --locked | jq -r '.packages[] | select(.links) | .name'`
+# when the lock gains a native package: an unlisted one is routed like pure
+# Rust.
+LOCK_NATIVE_BUILD_HELPERS = frozenset(
+    {
+        "bindgen",
+        "cc",
+        "cmake",
+        "napi-build",
+        "pkg-config",
+        "pyo3-build-config",
+        "vcpkg",
+    }
+)
+LOCK_NATIVE_PACKAGES = LOCK_NATIVE_BUILD_HELPERS | frozenset(
+    {
+        "aws-lc-rs",
+        "dunce",
+        "fs_extra",
+        "prettyplease",
+        "pyo3",
+        "pyo3-ffi",
+        "rayon-core",
+        "ring",
+        "tree-sitter",
+        "tree-sitter-language",
+        "wasm-bindgen-shared",
+    }
+)
+
+# Everything the archive-specific commands of `check:archives` and
+# `check:archive-lock` read after the current-site build the docs job proves:
+# the site build configuration, the archive scripts and their import closure,
+# the locked archive inventory, and the page-markdown source check-llms reads.
+DOCS_ARCHIVE_INPUTS = frozenset(
+    {
+        "docs/site/astro.config.mjs",
+        "docs/site/package-lock.json",
+        "docs/site/package.json",
+        "docs/site/scripts/apply-archive-seo.mjs",
+        "docs/site/scripts/archive-bundle.mjs",
+        "docs/site/scripts/archive-lock.mjs",
+        "docs/site/scripts/assemble-archives.mjs",
+        "docs/site/scripts/build-archive.mjs",
+        "docs/site/scripts/build-archives.mjs",
+        "docs/site/scripts/check-built-analytics.mjs",
+        "docs/site/scripts/check-built-links.mjs",
+        "docs/site/scripts/check-evidence-links.mjs",
+        "docs/site/scripts/check-llms.mjs",
+        "docs/site/scripts/check-seo.mjs",
+        "docs/site/scripts/configuration-reference.mjs",
+        "docs/site/scripts/docsets.mjs",
+        "docs/site/scripts/generate-breg-configuration.mjs",
+        "docs/site/scripts/generate-evidence-configuration.mjs",
+        "docs/site/scripts/retry.mjs",
+        "docs/site/src/data/archive-lock.yaml",
+        "docs/site/src/data/docsets.yaml",
+        "docs/site/src/data/repo-docs.yaml",
+        "docs/site/src/lib/analytics.mjs",
+        "docs/site/src/lib/docset-path.mjs",
+        "docs/site/src/lib/docset-retention.mjs",
+        "docs/site/src/lib/generated-api-bases.mjs",
+        "docs/site/src/lib/page-markdown.ts",
+    }
+)
 
 # Every workflow whose security properties are inspected by the release gate
 # inventory selects the additional local gates that own those properties. All
@@ -645,6 +761,175 @@ class Workspace:
         return affected
 
 
+def identifier_catalog_packages(workspace: Workspace) -> frozenset[str]:
+    """Workspace packages owning a file the identifier catalog is built from."""
+
+    return frozenset(
+        package
+        for path in IDENTIFIER_CATALOG_INPUTS
+        if not any(character in path for character in "*?[")
+        and (package := workspace.package_for_path(path)) is not None
+    )
+
+
+@dataclass(frozen=True)
+class LockChange:
+    """How a Cargo.lock difference routes CI.
+
+    ``members`` names the workspace members whose locked dependency closure
+    changed, or is None when the change must select the complete matrix.
+    ``native`` is true when the change can alter compiled or linked native
+    code, or when that cannot be ruled out.
+    """
+
+    members: frozenset[str] | None
+    native: bool
+    reason: str
+
+
+LockKey = tuple[str, str, str]
+
+
+class LockGraph:
+    """The package graph Cargo.lock records, keyed by name, version and source.
+
+    Lock edges carry no dependency kind, so normal, build and dev edges are all
+    followed. Parsing needs no registry download.
+    """
+
+    def __init__(self, text: str) -> None:
+        document = tomllib.loads(text)
+        packages = document.get("package")
+        if not isinstance(packages, list) or not packages:
+            raise ValueError("it has no package list")
+        self.header = {key: value for key, value in document.items() if key != "package"}
+        self.entries: dict[LockKey, tuple[Any, tuple[str, ...]]] = {}
+        for package in packages:
+            name, version = package.get("name"), package.get("version")
+            source = package.get("source", "")
+            dependencies = package.get("dependencies", [])
+            if not all(isinstance(value, str) for value in (name, version, source)):
+                raise ValueError(f"it has an invalid package entry: {package!r}")
+            if not isinstance(dependencies, list) or not all(
+                isinstance(dependency, str) for dependency in dependencies
+            ):
+                raise ValueError(f"{name} {version} has invalid dependencies")
+            key = (name, version, source)
+            if key in self.entries:
+                raise ValueError(f"it repeats {name} {version}")
+            self.entries[key] = (package.get("checksum"), tuple(dependencies))
+
+        by_name: dict[str, list[LockKey]] = defaultdict(list)
+        for key in self.entries:
+            by_name[key[0]].append(key)
+        self.dependents: dict[LockKey, set[LockKey]] = defaultdict(set)
+        for key, (_, dependencies) in self.entries.items():
+            for dependency in dependencies:
+                parts = dependency.split(" ")
+                candidates = [
+                    candidate
+                    for candidate in by_name.get(parts[0], ())
+                    if len(parts) < 2 or candidate[1] == parts[1]
+                ]
+                if len(parts) == 3:
+                    candidates = [
+                        candidate
+                        for candidate in candidates
+                        if f"({candidate[2]})" == parts[2]
+                    ]
+                if len(parts) > 3 or len(candidates) != 1:
+                    raise ValueError(f"{key[0]} {key[1]} names unresolved {dependency!r}")
+                self.dependents[candidates[0]].add(key)
+
+    def members_reaching(
+        self, changed: Iterable[LockKey], members: frozenset[str]
+    ) -> set[str]:
+        """Workspace members whose locked closure contains a changed package.
+
+        The walk stops at a member: Workspace.affected_packages owns the
+        member-to-member closure, including its dev-dependency rule.
+        """
+
+        reached: set[str] = set()
+        seen = set(changed)
+        queue = deque(seen)
+        while queue:
+            key = queue.popleft()
+            if not key[2] and key[0] in members:
+                reached.add(key[0])
+                continue
+            for dependent in self.dependents.get(key, ()):
+                if dependent not in seen:
+                    seen.add(dependent)
+                    queue.append(dependent)
+        return reached
+
+
+def lock_change(
+    base_text: str | None, head_text: str | None, workspace: Workspace
+) -> LockChange:
+    """Route a Cargo.lock difference, failing closed to the complete matrix."""
+
+    if base_text is None or head_text is None:
+        return LockChange(None, True, "Cargo.lock is absent or unreadable at one comparison endpoint")
+    try:
+        base, head = LockGraph(base_text), LockGraph(head_text)
+    except (tomllib.TOMLDecodeError, ValueError) as error:
+        return LockChange(None, True, f"Cargo.lock cannot be compared: {error}")
+    if base.header != head.header:
+        return LockChange(None, True, "Cargo.lock format or patch section changed")
+
+    changed = {
+        key
+        for key in base.entries.keys() | head.entries.keys()
+        if base.entries.get(key) != head.entries.get(key)
+    }
+    if not changed:
+        return LockChange(None, True, "Cargo.lock changed without a package difference")
+
+    native = sorted(
+        {
+            key[0]
+            for key in changed
+            if key[0].endswith("-sys")
+            or key[0] in LOCK_NATIVE_PACKAGES
+            or any(
+                dependency.split(" ")[0] in LOCK_NATIVE_BUILD_HELPERS
+                for graph in (base, head)
+                for dependency in graph.entries.get(key, (None, ()))[1]
+            )
+        }
+    )
+    if native:
+        return LockChange(None, True, f"native locked package changed: {', '.join(native)}")
+    git = sorted({key[0] for key in changed if key[2].startswith("git+")})
+    if git:
+        return LockChange(None, True, f"git-sourced locked package changed: {', '.join(git)}")
+
+    members = workspace.package_names
+    reached = base.members_reaching(changed & base.entries.keys(), members)
+    reached |= head.members_reaching(changed & head.entries.keys(), members)
+    if not reached:
+        return LockChange(None, False, "Cargo.lock change reaches no workspace member")
+    affected = workspace.affected_packages(reached)
+    # Widely used proc-macros (serde_derive, thiserror-impl, tokio-macros) and
+    # their syntax toolchain reach most of the workspace, and so does any other
+    # widely shared crate. Past half the workspace, the remaining gates cost
+    # little more than the affected ones, so the complete matrix runs instead.
+    if 2 * len(affected) >= len(members):
+        return LockChange(
+            None,
+            False,
+            f"Cargo.lock change reaches {len(affected)} of {len(members)} workspace members",
+        )
+    return LockChange(
+        frozenset(reached),
+        False,
+        f"{len(changed)} locked package entries changed; "
+        f"{len(affected)} workspace members affected",
+    )
+
+
 def matches(path: str, *patterns: str) -> bool:
     return any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
 
@@ -666,9 +951,28 @@ def classify(
     *,
     run_all: bool = False,
     full_sweep: bool = False,
+    pull_request: bool = False,
+    lock_change: LockChange | None = None,
 ) -> dict[str, Any]:
-    paths = tuple(
+    """Select CI gates for changed paths.
+
+    ``pull_request`` defers broad assurance to the merge queue, main and the
+    nightly sweep. ``lock_change`` routes a Cargo.lock difference through the
+    packages it reaches; without one, Cargo.lock selects the complete matrix.
+    """
+
+    changed = tuple(
         path.strip().removeprefix("./") for path in changed_paths if path.strip()
+    )
+    lock_members = (
+        lock_change.members
+        if lock_change is not None and "Cargo.lock" in changed
+        else None
+    )
+    # A routed lock change selects work through its affected packages, so the
+    # literal Cargo.lock path only reaches the gates that read the lock bytes.
+    paths = tuple(
+        path for path in changed if not (path == "Cargo.lock" and lock_members is not None)
     )
     security_workflow_gates = frozenset(
         gate
@@ -692,7 +996,7 @@ def classify(
         for path in paths
     )
 
-    seeds: set[str] = set()
+    seeds: set[str] = set(lock_members or ())
     if not force_all:
         for path in paths:
             package = workspace.package_for_path(path)
@@ -740,21 +1044,39 @@ def classify(
     # trigger when no relevant path changed.
     linux_node_seeds = {
         package
-        for path in paths
+        for path in changed
         if (package := workspace.package_for_path(path)) is not None
     }
-    release_linux_node_clients = full_sweep or any(
-        path in LINUX_NODE_RELEASE_RECIPE_INPUTS
-        or path.startswith(".cargo/")
-        or path.startswith("crates/registry-stack-client-node/")
-        for path in paths
-    ) or bool(
-        workspace.affected_packages(linux_node_seeds)
-        & LINUX_RELEASE_BINDING_PACKAGES
-    )
+    if pull_request:
+        # Review proves each binding with the native binding job; the
+        # production cross-compiled recipe waits for the merge queue unless
+        # the recipe itself, or native code it links, changes.
+        release_linux_node_clients = (
+            full_sweep
+            or any(matches(path, *LINUX_NATIVE_RELEASE_PULL_REQUEST_INPUTS) for path in changed)
+            or (
+                "Cargo.lock" in changed
+                and (lock_change is None or lock_change.native)
+            )
+        )
+    else:
+        release_linux_node_clients = full_sweep or any(
+            path in LINUX_NODE_RELEASE_RECIPE_INPUTS
+            or path.startswith(".cargo/")
+            or path.startswith("crates/registry-stack-client-node/")
+            for path in changed
+        ) or bool(
+            workspace.affected_packages(linux_node_seeds)
+            & LINUX_RELEASE_BINDING_PACKAGES
+        )
 
     identifiers = complete or any(
         matches(path, *IDENTIFIER_CATALOG_INPUTS) for path in paths
+    ) or (
+        # The catalog compiles its exporters, so a routed lock change that
+        # reaches one regenerates the catalog as the complete matrix did.
+        lock_members is not None
+        and bool(affected & identifier_catalog_packages(workspace))
     )
 
     platform = complete or "platform" in security_workflow_gates or any(
@@ -765,7 +1087,10 @@ def classify(
         )
         or path in ROOT_RUST_INPUTS
         for path in paths
-    )
+    ) or (lock_members is not None and bool(affected & PLATFORM_PACKAGES))
+    # Coverage and fuzz smoke are broad assurance: the merge queue, main and
+    # the nightly sweeps run them, while review keeps platform-quality.
+    platform_assurance = platform and (full_sweep or not pull_request)
     platform_hygiene = complete or any(
         matches(
             path,
@@ -786,10 +1111,12 @@ def classify(
             path.startswith("release/")
             or path
             in {
+                # The release helper validates the workspace versions it locks.
+                "Cargo.lock",
                 "THIRD_PARTY_NOTICES",
                 "docs/site/src/content/docs/reference/errors.mdx",
             }
-            for path in paths
+            for path in changed
         )
     )
     release_source_proof = (
@@ -804,7 +1131,7 @@ def classify(
                 "release/scripts/test_check_release_source_model.py",
             }
             or path.startswith("release/manifests/")
-            for path in paths
+            for path in changed
         )
     )
     docs = complete or "docs" in security_workflow_gates or any(
@@ -854,32 +1181,16 @@ def classify(
             "crates/registry-relay-http-contract/src/lib.rs",
         }
         for path in paths
+    ) or (
+        # Generated CLI pages compile every public Clap tree.
+        lock_members is not None and "registry-cli-docs" in affected
     )
     # Rebuild immutable history only when archive inputs or assembly semantics
-    # change. Publication workflows and this classifier do not alter archived
-    # bytes; their focused tests cover those contracts without replaying every
-    # historical docset.
+    # change. Publication workflows, this workflow and this classifier do not
+    # alter archived bytes; their focused tests cover those contracts, and the
+    # nightly full sweep replays the archive job's own recipe.
     docs_archives = full_sweep or any(
-        path
-        in {
-            ".github/workflows/ci.yml",
-            "docs/site/astro.config.mjs",
-            "docs/site/package-lock.json",
-            "docs/site/package.json",
-            "docs/site/scripts/apply-archive-seo.mjs",
-            "docs/site/scripts/archive-bundle.mjs",
-            "docs/site/scripts/archive-lock.mjs",
-            "docs/site/scripts/assemble-archives.mjs",
-            "docs/site/scripts/build-archive.mjs",
-            "docs/site/scripts/build-archives.mjs",
-            "docs/site/scripts/check-built-links.mjs",
-            "docs/site/scripts/check-seo.mjs",
-            "docs/site/scripts/docsets.mjs",
-            "docs/site/src/data/archive-lock.yaml",
-            "docs/site/src/data/docsets.yaml",
-            "docs/site/src/data/repo-docs.yaml",
-        }
-        for path in paths
+        path in DOCS_ARCHIVE_INPUTS for path in changed
     )
     editors = (
         complete
@@ -938,23 +1249,10 @@ def classify(
                 }
             )
 
-    return {
-        "rust": bool(affected),
-        "rust_matrix": {"include": matrix},
-        "rust_packages": sorted(affected),
-        "platform": platform,
-        "platform_hygiene": platform_hygiene,
-        "discovery_contracts": complete
-        or bool(affected & DISCOVERY_PACKAGES)
-        or any(matches(path, *DISCOVERY_PROVIDER_INPUTS) for path in paths)
-        or any(path in DISCOVERY_TUTORIAL_INPUTS for path in paths),
-        "relay_v2_contracts": registry_record_cross_product
-        or bool(affected & RELAY_V2_PACKAGES)
-        or any(path in RELAY_TUTORIAL_INPUTS for path in paths),
-        "relay_client_contracts": bool(affected & RELAY_CLIENT_PACKAGES),
-        # The PostgreSQL lane starts the real Evidence service. This is an
-        # integration test edge, not a production runtime Cargo dependency.
-        "breg_contracts": registry_record_cross_product
+    # The PostgreSQL lane starts the real Evidence service. This is an
+    # integration test edge, not a production runtime Cargo dependency.
+    breg_contracts = (
+        registry_record_cross_product
         or bool(affected & BREG_PACKAGES)
         or "registry-evidence" in affected
         or any(
@@ -965,10 +1263,33 @@ def classify(
                 "crates/registry-thunderid-tooling/**",
             )
             for path in paths
-        ),
+        )
+    )
+
+    return {
+        "rust": bool(affected),
+        "rust_matrix": {"include": matrix},
+        "rust_packages": sorted(affected),
+        "platform": platform,
+        "platform_assurance": platform_assurance,
+        "platform_hygiene": platform_hygiene,
+        "discovery_contracts": complete
+        or bool(affected & DISCOVERY_PACKAGES)
+        or any(matches(path, *DISCOVERY_PROVIDER_INPUTS) for path in paths)
+        or any(path in DISCOVERY_TUTORIAL_INPUTS for path in paths),
+        "relay_v2_contracts": registry_record_cross_product
+        or bool(affected & RELAY_V2_PACKAGES)
+        or any(path in RELAY_TUTORIAL_INPUTS for path in paths),
+        "relay_client_contracts": bool(affected & RELAY_CLIENT_PACKAGES),
+        "breg_contracts": breg_contracts,
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
         "scheduling_contracts": bool(affected & SCHEDULING_PACKAGES),
-        "casework_postgres": bool(affected & CASEWORK_PACKAGES),
+        # The Casework task approval journey drives the stock issuer through
+        # Evidence, BReg, and the Scheduling authorization probe, so it runs on
+        # every input of the BReg product gate and of the Scheduling runtime.
+        "casework_postgres": bool(affected & CASEWORK_PACKAGES)
+        or breg_contracts
+        or "registry-scheduling" in affected,
         "scheduling_postgres": bool(affected & SCHEDULING_PACKAGES),
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,
