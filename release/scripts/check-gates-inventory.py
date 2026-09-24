@@ -1447,7 +1447,7 @@ def platform_coverage_oidc_isolation_violations(workflow: str | None) -> list[st
         or len(upload_steps) != 2
         or "uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
         not in upload_steps[0]
-        or "uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f"
+        or "uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5"
         not in upload_steps[1]
         or "use_oidc: true" not in upload_steps[1]
         or "actions/checkout@" in upload
