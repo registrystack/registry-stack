@@ -2559,6 +2559,98 @@ async fn a_subject_clock_continues_inside_the_result_window_and_restarts_after_i
     );
 }
 
+/// CASEWORK-SEC-20: a subject clock occurrence bound to a round is erased at
+/// that round's result_available_until. The retention pass usually does
+/// this, but it runs asynchronously and may skip a locked request, so this
+/// covers the other side: the next round's own creation must make the same
+/// check and erase a paused (or otherwise still-bound) occurrence itself
+/// when the round it is bound to already expired, rather than rebinding it
+/// and letting the old paused budget and pinned policy outlive terminalDays.
+#[tokio::test]
+async fn a_subject_clock_restarts_when_the_next_round_arrives_after_its_bound_round_expired() {
+    let fixture = fixture().await;
+    let service = subject_clock_retention_service(&fixture);
+    let subject = "clock-retention-late-round";
+
+    let first =
+        settle_clock_retention_round(&fixture, &service, subject, 1, "needs-correction").await;
+    let paused = subject_clocks_for_subject(&fixture, subject).await;
+    assert_eq!(paused.len(), 1);
+    let (paused_clock, bound_to, state) = paused[0].clone();
+    assert_eq!((bound_to, state.as_str()), (first, "paused"));
+
+    // Push the first round's result window into the past without running
+    // retention, reproducing a retention pass that has not caught up yet (or
+    // skipped a locked request) by the time the next round arrives.
+    expire_review_results(&fixture, &[first]).await;
+
+    let resubmitted_at = Utc::now();
+    let second = service
+        .create_review_request(
+            &fixture.producer,
+            clock_retention_request(subject, 2),
+            &format!("create-{subject}-2"),
+        )
+        .await
+        .expect("a round after the bound round's expiry is accepted");
+    let clocks = service
+        .review_clocks(
+            &fixture.producer,
+            second.accepted.request_id,
+            None,
+            "producer-token",
+        )
+        .await
+        .expect("read the fresh round's clocks");
+    let subject_clock = clocks
+        .iter()
+        .find(|clock| clock.clock_id == "subject-deadline")
+        .expect("the fresh round has a subject clock");
+
+    assert_ne!(
+        subject_clock.clock_occurrence_id, paused_clock,
+        "an occurrence bound to an expired round is erased, not rebound"
+    );
+    assert_eq!(subject_clock.request_id, second.accepted.request_id);
+    assert_eq!(subject_clock.state, ReviewClockState::Running);
+    assert!(subject_clock.anchor_at >= resubmitted_at);
+    assert_eq!(
+        subject_clock.due_at,
+        Some(subject_clock.anchor_at + TimeDelta::hours(1)),
+        "the fresh subject clock computes a full deadline from the new round, not the old paused budget"
+    );
+
+    let paused_seconds: i64 = fixture
+        .database
+        .query_one(
+            "SELECT paused_seconds FROM casework_review_clock_occurrences
+             WHERE clock_occurrence_id=$1",
+            &[&subject_clock.clock_occurrence_id],
+        )
+        .await
+        .expect("read the fresh occurrence's paused budget")
+        .get(0);
+    assert_eq!(
+        paused_seconds, 0,
+        "a fresh subject clock starts with no paused budget"
+    );
+
+    let old_still_exists: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_clock_occurrences
+             WHERE clock_occurrence_id=$1",
+            &[&paused_clock],
+        )
+        .await
+        .expect("check the expired occurrence")
+        .get(0);
+    assert_eq!(
+        old_still_exists, 0,
+        "the occurrence bound to the expired round is erased, not left behind"
+    );
+}
+
 #[tokio::test]
 async fn canonical_json_bounds_allow_safe_postgresql_expansion_for_context_and_drafts() {
     let fixture = fixture().await;

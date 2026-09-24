@@ -2115,8 +2115,11 @@ impl PostgresStore {
         // evaluated effects, so it expires with the request context at terminalDays. Subject
         // clocks span review rounds by moving their request binding to the latest round, so a
         // paused or running subject clock a later round continued inside this window is bound to
-        // that round and kept with it. One still bound here was never continued; a round after
-        // this expiry starts a fresh subject clock with a full deadline.
+        // that round and kept with it. One still bound here was never continued by the time this
+        // pass ran; a round after this expiry starts a fresh subject clock with a full deadline
+        // either way, since `insert_initial_review_clocks` makes the same expiry check against
+        // the occurrence's bound round atomically when that round is created, without waiting on
+        // this asynchronous pass.
         transaction
             .execute(
                 "DELETE FROM casework_review_clock_occurrences c USING casework_review_requests r
@@ -4300,6 +4303,48 @@ fn next_review_clock_action(
         .min()
 }
 
+// Inserts a fresh subject-scope clock occurrence, anchored at `now` with a
+// full deadline computed from the current policy. Shared by the
+// no-prior-occurrence path and the path that erases an occurrence bound to a
+// round already past its result_available_until, so both start the new
+// subject clock the same way.
+#[allow(clippy::too_many_arguments)]
+async fn insert_fresh_subject_clock_occurrence(
+    transaction: &Transaction<'_>,
+    request_id: Uuid,
+    subject: &SubjectBinding,
+    correlation_key: &str,
+    clock_id: &str,
+    digest: &str,
+    document: &serde_json::Value,
+    now: DateTime<Utc>,
+    due_at: DateTime<Utc>,
+) -> Result<(), ReviewRuntimeError> {
+    transaction
+        .execute(
+            "INSERT INTO casework_review_clock_occurrences(
+                clock_occurrence_id,clock_id,scope,correlation_key,
+                subject_source,subject_type,subject_id,request_id,policy_digest,
+                policy,state,anchor_at,due_at,created_at,updated_at)
+             VALUES($1,$2,'subject',$3,$4,$5,$6,$7,$8,$9,'running',$10,$11,$10,$10)",
+            &[
+                &Uuid::new_v4(),
+                &clock_id,
+                &correlation_key,
+                &subject.source,
+                &subject.subject_type,
+                &subject.id,
+                &request_id,
+                &digest,
+                document,
+                &now,
+                &due_at,
+            ],
+        )
+        .await?;
+    Ok(())
+}
+
 async fn insert_initial_review_clocks(
     transaction: &Transaction<'_>,
     request_id: Uuid,
@@ -4324,10 +4369,12 @@ async fn insert_initial_review_clocks(
                 let due_at = now + TimeDelta::seconds(seconds);
                 let existing = transaction
                     .query_opt(
-                        "SELECT clock_occurrence_id,state,paused_at FROM casework_review_clock_occurrences
-                         WHERE subject_source=$1 AND subject_type=$2 AND subject_id=$3
-                           AND clock_id=$4 AND scope='subject' AND correlation_key=$5
-                         FOR UPDATE",
+                        "SELECT c.clock_occurrence_id,c.state,c.paused_at,req.result_available_until
+                         FROM casework_review_clock_occurrences c
+                         LEFT JOIN casework_review_requests req ON req.request_id=c.request_id
+                         WHERE c.subject_source=$1 AND c.subject_type=$2 AND c.subject_id=$3
+                           AND c.clock_id=$4 AND c.scope='subject' AND c.correlation_key=$5
+                         FOR UPDATE OF c",
                         &[
                             &subject.source,
                             &subject.subject_type,
@@ -4340,7 +4387,39 @@ async fn insert_initial_review_clocks(
                 if let Some(existing) = existing {
                     let id: Uuid = existing.get(0);
                     let state: String = existing.get(1);
-                    if state == "paused" {
+                    let bound_round_result_available_until: Option<DateTime<Utc>> = existing.get(3);
+                    let bound_round_expired = bound_round_result_available_until
+                        .is_some_and(|available_until| available_until <= now);
+                    if bound_round_expired {
+                        // CASEWORK-SEC-20: every clock occurrence bound to a
+                        // round is erased at that round's
+                        // result_available_until. The retention pass usually
+                        // does this, but it may skip a locked request and
+                        // run asynchronously, so a round created after that
+                        // boundary must not inherit a paused, running, or
+                        // settled occurrence still bound to the expired
+                        // round: erase it here and start a fresh subject
+                        // clock, atomically with this round's creation.
+                        transaction
+                            .execute(
+                                "DELETE FROM casework_review_clock_occurrences
+                                 WHERE clock_occurrence_id=$1",
+                                &[&id],
+                            )
+                            .await?;
+                        insert_fresh_subject_clock_occurrence(
+                            transaction,
+                            request_id,
+                            subject,
+                            &subject_correlation_key,
+                            clock.id(),
+                            &digest,
+                            &document,
+                            now,
+                            due_at,
+                        )
+                        .await?;
+                    } else if state == "paused" {
                         transaction
                             .execute(
                                 "UPDATE casework_review_clock_occurrences
@@ -4380,28 +4459,18 @@ async fn insert_initial_review_clocks(
                             .await?;
                     }
                 } else {
-                    transaction
-                        .execute(
-                            "INSERT INTO casework_review_clock_occurrences(
-                                clock_occurrence_id,clock_id,scope,correlation_key,
-                                subject_source,subject_type,subject_id,request_id,policy_digest,
-                                policy,state,anchor_at,due_at,created_at,updated_at)
-                             VALUES($1,$2,'subject',$3,$4,$5,$6,$7,$8,$9,'running',$10,$11,$10,$10)",
-                            &[
-                                &Uuid::new_v4(),
-                                &clock.id(),
-                                &subject_correlation_key,
-                                &subject.source,
-                                &subject.subject_type,
-                                &subject.id,
-                                &request_id,
-                                &digest,
-                                &document,
-                                &now,
-                                &due_at,
-                            ],
-                        )
-                        .await?;
+                    insert_fresh_subject_clock_occurrence(
+                        transaction,
+                        request_id,
+                        subject,
+                        &subject_correlation_key,
+                        clock.id(),
+                        &digest,
+                        &document,
+                        now,
+                        due_at,
+                    )
+                    .await?;
                 }
             }
             ClockPolicy::Activity { .. } => {
