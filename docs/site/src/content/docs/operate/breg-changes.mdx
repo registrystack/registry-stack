@@ -58,11 +58,19 @@ lifetime: a package that changes it can only initialize a new database.
 Pass the active runtime file as `--baseline-runtime-config` to both `test` and `package`, so the
 receipt and the package bind to the baseline they will succeed. A change the migration planner
 classifies as compatible additive, such as a new optional field or a code added to a vocabulary a
-field or action input uses (`field_vocabulary_codes_added`, `action_vocabulary_codes_added`), needs
-no further evidence. An added action input code is still marked for review in the diff, because the
-action accepts it with no further check. A widened grant is an access change: the planner accepts
-it as metadata-only, but it still needs a reviewed migration descriptor and rehearsal evidence, as
-the metadata-only case below describes.
+field uses (`field_vocabulary_codes_added`), needs no further evidence. The diff classifies a field
+code addition as `lock_or_rewrite_risk`, because the migration replaces the column check under an
+exclusive table lock and validates every stored row. A widened grant is an access change: the
+planner accepts it as metadata-only, but it still needs a reviewed migration descriptor and
+rehearsal evidence, as the metadata-only case below describes.
+
+An action input that starts accepting more codes is additive (`action_vocabulary_codes_added`)
+only when every code it gained was added to its vocabulary in the same successor. An input that
+starts accepting a code its vocabulary already had, such as a withdraw action that also accepts
+`given`, is `action_changed` and needs a reviewed migration. A predecessor package built before
+the engine recorded each input's vocabulary cannot show that a code is new, so every input
+widening against it is reviewed. An additive input widening is still marked for review in the
+diff, because the action accepts the new codes with no further check.
 When `test` or `package` reports `migration.review.required`, prepare a reviewed migration
 directory and pass it to both commands as `--reviewed-migrations`:
 
@@ -113,6 +121,9 @@ Reviewed artifacts cannot authorize a change the planner classifies as unsupport
 {/* Evidence: crates/registry-bregctl/src/lib.rs, PackageCandidateArgs;
     crates/registry-bregctl/src/reviewed_migrations.rs;
     crates/registry-breg/src/migration_plan.rs;
+    crates/registry-breg/src/immediate_actions.rs, contract_only_adds_vocabulary_codes();
+    crates/registry-breg/src/tooling.rs, classify_change();
+    crates/registry-breg/tests/action_vocabulary_codes.rs;
     crates/registry-bregctl/tests/cli/reviewed_migrations.rs;
     products/breg/scripts/test-adopter-workflow.sh. */}
 

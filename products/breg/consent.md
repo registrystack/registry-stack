@@ -345,11 +345,22 @@ codes, so a migration that removes one fails against existing rows and
   again.
 
 Adding a vocabulary code to a field is a compatible additive migration: stored
-codes stay valid and only the check constraint widens. Adding a code an
-action input accepts is also compatible and additive, and metadata-only, so
-adding a recipient migrates its issuing actions without a schema change.
-`bregctl diff` still marks the widened input codes for review, because the
-action then accepts each new code with no further check.
+codes stay valid and only the check constraint widens. The migration replaces
+that check under an exclusive table lock and validates every stored row, so
+`bregctl diff` classifies the change `lock_or_rewrite_risk`; it still needs
+no reviewed migration.
+
+An action input that starts accepting more codes is compatible and additive,
+and metadata-only, only when every code it gained is new to its vocabulary in
+the same revision. Adding a recipient or scope therefore migrates the issuing
+actions that pick it up without a schema change. An input that starts
+accepting a code its vocabulary already had, such as a withdraw action whose
+decision input adds `given`, changes what the action does: it is an
+`action_changed` access change and needs a reviewed migration. `bregctl diff`
+still marks new-code input widenings for review, because the action then
+accepts each new code with no further check. A package built before the
+engine recorded each input's vocabulary cannot show a code is new, so every
+input widening against it is reviewed.
 
 `bregctl diff` classifies consent, recipient, and consent-issuer changes as
 access changes and attaches a `reason` to each change that alters who holds
@@ -364,7 +375,8 @@ an existing consent:
 | `maxDuration` raised | existing gives last longer than the notice said |
 | a consent vocabulary code removed | codes are append-only; retire the code |
 | an action becomes a steward issuer | steward actions create consent without the subject's principal |
-| an action accepts added codes | check each code is one the action may write |
+| an action accepts codes new to their vocabulary | check each code is one the action may write |
+| the consent indexes are rebuilt | the build blocks writes to the consent table until the migration commits |
 
 Removing a client or lowering `maxDuration` narrows access and carries no
 reason. The `reason` is a review aid in tooling output, not a runtime
@@ -373,7 +385,11 @@ guarantee: the registry enforces what the new package declares.
 A consent record change replaces its probe function, so it is an access
 change and never metadata-only. Recipient organization and group changes are
 metadata-only access changes. A successor replaces or drops each probe and
-index so the result matches a fresh install.
+index so the result matches a fresh install. A changed key or revoke set
+drops the prior consent index and builds the new one with a plain
+`CREATE INDEX` in the migration's transaction, since `CREATE INDEX
+CONCURRENTLY` cannot run inside one; the diff lists the dropped and built
+indexes under `consentIndexes`.
 
 ## Explain and preview
 
