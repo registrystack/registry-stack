@@ -57,9 +57,9 @@ pub enum Command {
         /// Runtime file whose audit file is proven to resolve under the
         /// given root (the container preflight proof). A stdout audit
         /// destination is refused.
-        #[arg(long)]
+        #[arg(long = "runtime-config", value_name = "FILE")]
         runtime: Option<PathBuf>,
-        /// Root the audit file must resolve under (with --runtime).
+        /// Root the audit file must resolve under (with --runtime-config).
         #[arg(long)]
         require_audit_under: Option<PathBuf>,
     },
@@ -142,15 +142,16 @@ pub enum Command {
     },
     /// Serve the HTTP rendering API (see the runtime YAML).
     Serve {
-        /// Runtime file naming the bundle, bind address, secrets, and limits.
-        #[arg(long, env = "REGISTRY_RENDER_RUNTIME")]
-        runtime: Option<PathBuf>,
+        /// Absolute path of the runtime file naming the package, listener,
+        /// secrets, and limits.
+        #[arg(long = "runtime-config", value_name = "FILE")]
+        runtime: PathBuf,
     },
     /// Probe a running server's /health.
     Healthcheck {
-        /// Runtime file naming the server to probe.
-        #[arg(long, env = "REGISTRY_RENDER_RUNTIME")]
-        runtime: Option<PathBuf>,
+        /// Absolute path of the runtime file naming the server to probe.
+        #[arg(long = "runtime-config", value_name = "FILE")]
+        runtime: PathBuf,
     },
     /// Hidden: one supervised render (used by `registry-render serve`).
     #[command(hide = true, name = "__worker")]
@@ -356,11 +357,11 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             Ok(0)
         }
         Command::Serve { runtime } => {
-            let code = crate::server::serve(runtime.as_deref())?;
+            let code = crate::server::serve(&runtime)?;
             Ok(code)
         }
         Command::Healthcheck { runtime } => {
-            let code = crate::server::healthcheck(runtime.as_deref())?;
+            let code = crate::server::healthcheck(&runtime)?;
             Ok(code)
         }
         Command::Worker => Ok(crate::worker::worker_main()),

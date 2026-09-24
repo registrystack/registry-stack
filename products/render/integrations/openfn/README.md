@@ -10,7 +10,7 @@ Deployment shape:
 
 1. Run the binary with a runtime file (sealed bundle, loopback bind, API
    key in an owner-only file, audit file or `stdout` destination):
-   `registry-render serve --runtime /etc/registry-render/runtime.yaml`
+   `registry-render serve --runtime-config /etc/registry-render/runtime.yaml`
 2. Put the API key *value* in the job's private configuration (kit
    precedent: `notification.json`), beside the breg reader token and the
    delivery adaptor's key.
