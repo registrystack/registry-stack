@@ -927,7 +927,7 @@ fn switching_the_consent_issuer_changes_the_action_contract() {
     );
 }
 
-#[cfg(feature = "tooling")]
+#[cfg(all(feature = "runtime", feature = "tooling"))]
 fn package_request(
     value: &Value,
     sequence: u64,
@@ -968,7 +968,7 @@ fn package_request(
 
 /// A signed predecessor keeps its recipients, so a successor that only maps a
 /// new client derives a metadata-only plan from it rather than an empty one.
-#[cfg(feature = "tooling")]
+#[cfg(all(feature = "runtime", feature = "tooling"))]
 #[test]
 fn a_signed_predecessor_carries_its_recipients_into_a_metadata_only_successor() {
     use registry_breg::package::{
