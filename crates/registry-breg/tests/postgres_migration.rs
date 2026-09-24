@@ -657,6 +657,40 @@ async fn real_postgres_reports_an_unavailable_database_before_maintenance_as_unc
     database.cleanup().await;
 }
 
+/// A provisioned database that was never activated holds no registry state.
+/// Presenting its initial package as the configured active package, which is
+/// what an initial apply without `--initial` does, is refused as an active
+/// package the database does not run. It is never reported as a database
+/// that is unavailable, because retrying cannot create the missing state.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_refuses_a_never_activated_database_as_an_active_package_mismatch() {
+    let PublishedInitialPackage {
+        database,
+        root: _root,
+        package_root,
+        initial,
+    } = PublishedInitialPackage::publish().await;
+    let startup = load_for_startup(&package_root, &initial.manifest().package_revision);
+
+    assert_value_free(
+        confirm(&database, &startup).await.err(),
+        MigrationError::ActivePackageMismatch,
+    );
+
+    let (migration, task) = database.connect_migration().await;
+    let state_table: Option<String> = migration
+        .query_one(
+            "SELECT pg_catalog.to_regclass('registry_internal.registry_state')::text",
+            &[],
+        )
+        .await
+        .expect("registry state lookup runs")
+        .get(0);
+    task.abort();
+    assert_eq!(state_table, None, "the refusal created no registry state");
+    database.cleanup().await;
+}
+
 /// One registry whose initial package is active, with that package loaded
 /// both for its activation and, as the configured active package, for startup.
 struct ActivePackageFixture {
@@ -669,6 +703,37 @@ struct ActivePackageFixture {
 
 impl ActivePackageFixture {
     async fn activate() -> Self {
+        let PublishedInitialPackage {
+            database,
+            root,
+            package_root,
+            initial,
+        } = PublishedInitialPackage::publish().await;
+        let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+            .await
+            .expect("initial package activates");
+        let startup = load_for_startup(&package_root, &active.package_revision);
+        Self {
+            database,
+            root,
+            initial,
+            active,
+            startup,
+        }
+    }
+}
+
+/// A provisioned database that has never been activated, with its initial
+/// package published and loaded for activation.
+struct PublishedInitialPackage {
+    database: TestDatabase,
+    root: tempfile::TempDir,
+    package_root: std::path::PathBuf,
+    initial: VerifiedPackage,
+}
+
+impl PublishedInitialPackage {
+    async fn publish() -> Self {
         let database = TestDatabase::create(1).await;
         database
             .admin
@@ -702,28 +767,28 @@ impl ActivePackageFixture {
             &local_context(DATABASE, PackageIntent::InitialActivation),
         )
         .expect("initial package loads for activation");
-        let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
-            .await
-            .expect("initial package activates");
-        let startup = load_package(
-            &package_root,
-            &local_context(
-                DATABASE,
-                PackageIntent::Startup {
-                    active_revision: &active.package_revision,
-                    active_sequence: 1,
-                },
-            ),
-        )
-        .expect("the active package loads for startup");
         Self {
             database,
             root,
+            package_root,
             initial,
-            active,
-            startup,
         }
     }
+}
+
+/// Loads a published package as the configured active package at sequence one.
+fn load_for_startup(package_root: &std::path::Path, active_revision: &str) -> VerifiedPackage {
+    load_package(
+        package_root,
+        &local_context(
+            DATABASE,
+            PackageIntent::Startup {
+                active_revision,
+                active_sequence: 1,
+            },
+        ),
+    )
+    .expect("the configured active package loads for startup")
 }
 
 async fn confirm(

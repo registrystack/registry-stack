@@ -4266,7 +4266,7 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
             registry_breg::migration::MigrationError::ActivePackageMismatch => (
                 "apply.package.active_mismatch",
                 "package.activeRevision",
-                "the runtime configuration names the target package as active, but the database does not record it as its active, ready package: set package.activeRevision and package.activeSequence to the package the database runs and apply again, or, if the database is pinned in maintenance, assess it with migration reconcile. Nothing was changed",
+                "the runtime configuration names the target package as active, but the database does not record it as its active, ready package: set package.activeRevision and package.activeSequence to the package the database runs and apply again; if the database has never been activated, apply it with --initial; if the database is pinned in maintenance, assess it with migration reconcile. Nothing was changed",
                 DiagnosticArtifact::PackageActivation,
                 SuggestedAction::CorrectRuntimeConfiguration,
             ),
@@ -13954,6 +13954,7 @@ fn apply_refuses_an_already_active_package_the_database_does_not_run() {
     for fragment in [
         "names the target package as active",
         "migration reconcile",
+        "never been activated, apply it with --initial",
         "Nothing was changed",
     ] {
         assert!(

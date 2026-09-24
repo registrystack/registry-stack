@@ -2049,7 +2049,19 @@ impl DedicatedApplyConnection {
                  WHERE singleton",
                 &[],
             )
-            .await?
+            .await
+            .map_err(|error| {
+                // A provisioned database that was never activated has no
+                // registry state table. The database answered, so this is
+                // absent state like a missing singleton row, not a lost
+                // connection; every other driver error stays a connection
+                // failure.
+                if error.code() == Some(&tokio_postgres::error::SqlState::UNDEFINED_TABLE) {
+                    PostgresKernelError::RegistryUnavailable
+                } else {
+                    PostgresKernelError::from(error)
+                }
+            })?
             .ok_or(PostgresKernelError::RegistryUnavailable)?;
         Ok(MaintenanceSnapshot {
             identity: ExpectedRegistryIdentity {
