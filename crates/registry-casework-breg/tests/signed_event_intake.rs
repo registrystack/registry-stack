@@ -23,7 +23,10 @@ const KEY: &[u8] = b"casework-webhook-signing-key-0123456789abcdef";
 const RECORD_ID: &str = "00000000-0000-4000-8000-000000000001";
 const EVENT_SOURCE_A: &str = "urn:registrystack:registry:test:instance:source-a";
 const EVENT_SOURCE_B: &str = "urn:registrystack:registry:test:instance:source-b";
-const EVENT_TYPE: &str = "casework-lifecycle-v1";
+/// The `ce-type` BReg sends for the `correction` request entity's lifecycle hook.
+const EVENT_TYPE: &str = "casework-lifecycle-v1-correction";
+/// The `ce-type` BReg sends for the `renewal` request entity's lifecycle hook.
+const RENEWAL_EVENT_TYPE: &str = "casework-lifecycle-v1-renewal";
 const VALUES_CANARY: &str = "VALUES-MUST-DIE-WITH-INTAKE";
 const REASON_CANARY: &str = "REASON-MUST-DIE-WITH-INTAKE";
 const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
@@ -32,20 +35,15 @@ const REGISTRY_REVISION: &str =
 const EVENT_ID: &str = "00000000-0000-4000-8000-000000000099";
 const EVENT_TIME: &str = "2026-09-10T01:00:00Z";
 const DATA_SCHEMA: &str =
-    "urn:registrystack:registry:test:event:casework-lifecycle-v1:schema:sha256:aaa";
+    "urn:registrystack:registry:test:event:casework-lifecycle-v1-correction:schema:sha256:aaa";
 const RECORD_REFERENCE: &str =
     "hmac-sha256:00000000000000000000000000000000000000000000000000000000000000aa";
 
-fn adapter(source_id: &str, event_source: &str, event_type: &str) -> BregAdapter {
-    adapter_at(source_id, event_source, event_type, "http://127.0.0.1:9")
+fn adapter(source_id: &str, event_source: &str) -> BregAdapter {
+    adapter_at(source_id, event_source, "http://127.0.0.1:9")
 }
 
-fn adapter_at(
-    source_id: &str,
-    event_source: &str,
-    event_type: &str,
-    base_url: &str,
-) -> BregAdapter {
+fn adapter_at(source_id: &str, event_source: &str, base_url: &str) -> BregAdapter {
     BregAdapter::new(
         BregSourceConfig {
             source_id: source_id.to_owned(),
@@ -63,7 +61,6 @@ fn adapter_at(
             binding_generation: "generation-1".to_owned(),
             reader_profile: "reader".to_owned(),
             event_source: event_source.to_owned(),
-            event_type: event_type.to_owned(),
         },
         BaseRegistryClient::new(
             BaseRegistryClientConfig::new(base_url.parse().unwrap())
@@ -249,7 +246,7 @@ fn now() -> String {
 
 #[tokio::test]
 async fn signed_transition_returns_only_source_qualified_invalidation_metadata() {
-    let first = adapter("source_a", EVENT_SOURCE_A, EVENT_TYPE)
+    let first = adapter("source_a", EVENT_SOURCE_A)
         .verify_transition(signed_request(
             "source_a",
             EVENT_SOURCE_A,
@@ -259,7 +256,7 @@ async fn signed_transition_returns_only_source_qualified_invalidation_metadata()
         ))
         .await
         .unwrap();
-    let second = adapter("source_b", EVENT_SOURCE_B, EVENT_TYPE)
+    let second = adapter("source_b", EVENT_SOURCE_B)
         .verify_transition(signed_request(
             "source_b",
             EVENT_SOURCE_B,
@@ -287,7 +284,7 @@ async fn signed_transition_returns_only_source_qualified_invalidation_metadata()
 
 #[tokio::test]
 async fn signed_but_wrong_source_or_event_type_is_refused() {
-    let receiver = adapter("source_a", EVENT_SOURCE_A, EVENT_TYPE);
+    let receiver = adapter("source_a", EVENT_SOURCE_A);
     for request in [
         signed_request(
             "source_a",
@@ -331,7 +328,6 @@ async fn route_target_and_route_segment_are_closed_before_intake() {
                 binding_generation: "generation-1".into(),
                 reader_profile: "reader".into(),
                 event_source: EVENT_SOURCE_A.into(),
-                event_type: EVENT_TYPE.into(),
             },
             BaseRegistryClient::new(BaseRegistryClientConfig::new(
                 "http://127.0.0.1:9".parse().unwrap(),
@@ -350,7 +346,7 @@ async fn route_target_and_route_segment_are_closed_before_intake() {
         data("deduplication-1"),
     );
     assert_eq!(
-        adapter("source_a", EVENT_SOURCE_A, EVENT_TYPE)
+        adapter("source_a", EVENT_SOURCE_A)
             .verify_transition(request)
             .await,
         Err(SourceAdapterError::Invalid)
@@ -368,7 +364,7 @@ async fn case_insensitive_duplicate_signed_header_is_refused() {
     );
     request.headers.push(("CE-ID".into(), "duplicate".into()));
     assert_eq!(
-        adapter("source_a", EVENT_SOURCE_A, EVENT_TYPE)
+        adapter("source_a", EVENT_SOURCE_A)
             .verify_transition(request)
             .await,
         Err(SourceAdapterError::Invalid)
@@ -380,7 +376,7 @@ async fn stale_delivery_and_body_tampering_are_refused() {
     let stale = (OffsetDateTime::now_utc() - Duration::minutes(10))
         .format(&Rfc3339)
         .unwrap();
-    let receiver = adapter("source_a", EVENT_SOURCE_A, EVENT_TYPE);
+    let receiver = adapter("source_a", EVENT_SOURCE_A);
     assert_eq!(
         receiver
             .verify_transition(signed_request(
@@ -413,7 +409,7 @@ async fn a_pre_envelope_delivery_body_is_refused() {
     let projection = serde_json::to_vec(&data("deduplication-1")).unwrap();
     let request = signed_bytes("source_a", EVENT_SOURCE_A, EVENT_TYPE, &now(), projection);
     assert_eq!(
-        adapter("source_a", EVENT_SOURCE_A, EVENT_TYPE)
+        adapter("source_a", EVENT_SOURCE_A)
             .verify_transition(request)
             .await,
         Err(SourceAdapterError::Invalid),
@@ -423,7 +419,7 @@ async fn a_pre_envelope_delivery_body_is_refused() {
 
 #[tokio::test]
 async fn an_envelope_that_disagrees_with_its_signed_identity_is_refused() {
-    let receiver = adapter("source_a", EVENT_SOURCE_A, EVENT_TYPE);
+    let receiver = adapter("source_a", EVENT_SOURCE_A);
     let foreign = envelope_body(EVENT_SOURCE_B, EVENT_TYPE, data("deduplication-1"));
     assert_eq!(
         receiver
@@ -540,7 +536,7 @@ async fn a_non_canonical_envelope_is_refused() {
         serde_json::to_vec(&envelope).unwrap(),
     );
     assert_eq!(
-        adapter("source_a", EVENT_SOURCE_A, EVENT_TYPE)
+        adapter("source_a", EVENT_SOURCE_A)
             .verify_transition(request)
             .await,
         Err(SourceAdapterError::Invalid),
@@ -562,7 +558,7 @@ async fn authoritative_read_rejects_a_record_from_another_entity() {
         .mount(&server)
         .await;
 
-    let receiver = adapter_at("source_a", EVENT_SOURCE_A, EVENT_TYPE, &server.uri());
+    let receiver = adapter_at("source_a", EVENT_SOURCE_A, &server.uri());
     let subject = registry_casework_core::SubjectRef {
         source_id: "source_a".into(),
         kind: "correction".into(),
@@ -599,7 +595,7 @@ async fn discovery_rejects_a_non_uuid_record_identifier() {
         .mount(&server)
         .await;
 
-    let receiver = adapter_at("source_a", EVENT_SOURCE_A, EVENT_TYPE, &server.uri());
+    let receiver = adapter_at("source_a", EVENT_SOURCE_A, &server.uri());
     // The maintained BReg client rejects the identifier before the adapter's
     // defense-in-depth SubjectRef validation, so its protocol failure maps to
     // source unavailability. Either way, no malformed subject is returned.
@@ -637,7 +633,6 @@ fn two_entity_adapter(base_url: &str) -> BregAdapter {
             binding_generation: "generation-1".to_owned(),
             reader_profile: "reader".to_owned(),
             event_source: EVENT_SOURCE_A.to_owned(),
-            event_type: EVENT_TYPE.to_owned(),
         },
         BaseRegistryClient::new(
             BaseRegistryClientConfig::new(base_url.parse().unwrap())
@@ -709,7 +704,7 @@ async fn a_signed_transition_names_whichever_configured_request_entity_it_carrie
         .verify_transition(signed_request(
             "source_a",
             EVENT_SOURCE_A,
-            EVENT_TYPE,
+            RENEWAL_EVENT_TYPE,
             &now(),
             renewal,
         ))
@@ -731,6 +726,80 @@ async fn a_signed_transition_names_whichever_configured_request_entity_it_carrie
             .await,
         Err(SourceAdapterError::Invalid)
     );
+}
+
+/// BReg sends each paired request entity's lifecycle hook identifier as
+/// `ce-type`, so a signed event is bound to the entity its type names.
+#[tokio::test]
+async fn each_paired_request_entity_accepts_only_its_own_lifecycle_event_type() {
+    assert_eq!(
+        registry_casework_breg::lifecycle_event_type("correction"),
+        EVENT_TYPE
+    );
+    assert_eq!(
+        registry_casework_breg::lifecycle_event_type("renewal"),
+        RENEWAL_EVENT_TYPE
+    );
+    let receiver = two_entity_adapter("http://127.0.0.1:9");
+    let body = |entity: &str| {
+        let mut body = data("deduplication-1");
+        body["entity"] = json!(entity);
+        body
+    };
+    for (event_type, entity) in [(EVENT_TYPE, "correction"), (RENEWAL_EVENT_TYPE, "renewal")] {
+        let hint = receiver
+            .verify_transition(signed_request(
+                "source_a",
+                EVENT_SOURCE_A,
+                event_type,
+                &now(),
+                body(entity),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(hint.subject.kind, entity);
+    }
+    for (event_type, entity) in [(EVENT_TYPE, "renewal"), (RENEWAL_EVENT_TYPE, "correction")] {
+        assert_eq!(
+            receiver
+                .verify_transition(signed_request(
+                    "source_a",
+                    EVENT_SOURCE_A,
+                    event_type,
+                    &now(),
+                    body(entity),
+                ))
+                .await,
+            Err(SourceAdapterError::Invalid),
+            "{event_type} carrying {entity}"
+        );
+    }
+}
+
+/// A type no paired entity derives is refused, including the bare
+/// registry-wide identifier an older `caseworkctl source add` wrote.
+#[tokio::test]
+async fn a_lifecycle_event_type_no_paired_request_entity_derives_is_refused() {
+    let receiver = two_entity_adapter("http://127.0.0.1:9");
+    for event_type in [
+        "casework-lifecycle-v1",
+        "casework-lifecycle-v1-licence",
+        "another-lifecycle-v1-correction",
+    ] {
+        assert_eq!(
+            receiver
+                .verify_transition(signed_request(
+                    "source_a",
+                    EVENT_SOURCE_A,
+                    event_type,
+                    &now(),
+                    data("deduplication-1"),
+                ))
+                .await,
+            Err(SourceAdapterError::Invalid),
+            "{event_type}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -879,7 +948,7 @@ async fn a_one_entity_source_resumes_from_a_bare_continuation_cursor() {
         listing(&[SECOND_RECORD_ID], "correction", None),
     )
     .await;
-    let adapter = adapter_at("source_a", EVENT_SOURCE_A, EVENT_TYPE, &server.uri());
+    let adapter = adapter_at("source_a", EVENT_SOURCE_A, &server.uri());
 
     let first = adapter.discover_active(None, 50).await.unwrap();
     let legacy = registry_casework_core::DiscoveryCursor(
@@ -938,7 +1007,6 @@ fn an_adapter_with_no_or_duplicate_request_entities_is_refused() {
         binding_generation: "generation-1".to_owned(),
         reader_profile: "reader".to_owned(),
         event_source: EVENT_SOURCE_A.to_owned(),
-        event_type: EVENT_TYPE.to_owned(),
     };
     assert!(BregAdapter::new(config(Vec::new()), base(), KEY.to_vec()).is_err());
     assert!(BregAdapter::new(

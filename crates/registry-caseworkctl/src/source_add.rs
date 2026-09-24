@@ -3,7 +3,7 @@
 use crate::policy::MAXIMUM_SOURCE_DESCRIPTION_BYTES;
 use crate::SourceAddArgs;
 use anyhow::{bail, Context, Result};
-use registry_casework_breg::MAXIMUM_REQUEST_ENTITIES;
+use registry_casework_breg::{lifecycle_event_type, MAXIMUM_REQUEST_ENTITIES};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -31,6 +31,12 @@ const ACTOR_KIND_CLAIM: &str = "registry_actor_kind";
 const SERVICE_ACTOR_KIND: &str = "service";
 /// The issuer claim a local BReg client's access token carries its purpose under.
 const PURPOSE_CLAIM: &str = "registry_purpose";
+/// The bare lifecycle hook identifier an earlier `source add` wrote on every
+/// paired request entity. BReg hook identifiers are unique across a registry,
+/// so it paired only one entity and is refused by name wherever it is left.
+const LEGACY_LIFECYCLE_HOOK_ID: &str = "casework-lifecycle-v1";
+/// BReg's identifier limit, which a lifecycle hook identifier must fit.
+const BREG_IDENTIFIER_MAXIMUM_BYTES: usize = 64;
 
 pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     validate_id(&args.source_id)?;
@@ -65,6 +71,8 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     }
     let requests = select_requests(&project, &args.source_id, &registry_id, &explained)?;
     let paired_entities: BTreeSet<&str> = requests.iter().map(SelectedRequest::entity).collect();
+    refuse_overlong_lifecycle_hook_ids(&paired_entities)?;
+    refuse_legacy_lifecycle_hooks(&authored)?;
     refuse_dropped_entity_fragments(&authored, &paired_entities)?;
     let mut findings = check_unpaired_review_policies(
         &project,
@@ -642,10 +650,59 @@ fn select_request<'a>(
 /// missing or not a string never reaches this check: `bregctl check` refuses
 /// it first. Only root registry.yaml entities are scanned; entities a locked
 /// module contributes are not.
+/// Refuse, before any write, a paired request entity whose lifecycle hook
+/// identifier would exceed BReg's identifier limit: `bregctl check` would
+/// refuse the hook, so source add names the entity and the limit instead.
+fn refuse_overlong_lifecycle_hook_ids(paired_entities: &BTreeSet<&str>) -> Result<()> {
+    let Some(entity_id) = paired_entities
+        .iter()
+        .find(|entity_id| lifecycle_event_type(entity_id).len() > BREG_IDENTIFIER_MAXIMUM_BYTES)
+    else {
+        return Ok(());
+    };
+    let hook_id = lifecycle_event_type(entity_id);
+    bail!(
+        "the lifecycle hook identifier {hook_id} that source add would write on {} is {} bytes, over BReg's {BREG_IDENTIFIER_MAXIMUM_BYTES}-byte identifier limit, and nothing was written. BReg hook identifiers are unique across a registry, so each paired request entity gets its own {}<entity> hook; pair a request entity whose id is at most {} bytes",
+        entity_list(&[entity_id]),
+        hook_id.len(),
+        registry_casework_breg::LIFECYCLE_EVENT_TYPE_PREFIX,
+        BREG_IDENTIFIER_MAXIMUM_BYTES - registry_casework_breg::LIFECYCLE_EVENT_TYPE_PREFIX.len(),
+    )
+}
+
+/// Refuse, before any write, a BReg registry.yaml that still carries the bare
+/// lifecycle hook an earlier source add wrote on every paired entity. BReg
+/// refuses that identifier on a second entity, and the Casework adapter no
+/// longer accepts it as an event type, so it is named for removal on every
+/// entity that carries it rather than kept beside the per-entity hook.
+fn refuse_legacy_lifecycle_hooks(authored: &Value) -> Result<()> {
+    let legacy: Vec<&str> = authored["entities"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|entity| {
+            entity["hooks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|hook| hook["id"] == LEGACY_LIFECYCLE_HOOK_ID)
+        })
+        .filter_map(|entity| entity["id"].as_str())
+        .collect();
+    if legacy.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "registry.yaml still carries the {LEGACY_LIFECYCLE_HOOK_ID} hook an earlier caseworkctl source add wrote on {}, and nothing was written. source add now writes one {}<entity> hook per paired request entity, since BReg hook identifiers are unique across a registry and Casework accepts only the per-entity event type. Remove the {LEGACY_LIFECYCLE_HOOK_ID} hook from each entity named above in registry.yaml (and the hooks key itself when that hook is its only entry), then repeat source add; it writes each paired entity's hook in its place",
+        entity_list(&legacy),
+        registry_casework_breg::LIFECYCLE_EVENT_TYPE_PREFIX,
+    )
+}
+
 /// Refuse, before any write, a BReg registry.yaml that still grants
 /// least-privilege access `apply_breg_candidate` generated for a request
 /// entity this run's paired set no longer includes. `apply_breg_candidate`
-/// only ensures the casework-lifecycle-v1 hook and the READER_CLIENT_ID
+/// only ensures each entity's lifecycle hook and the READER_CLIENT_ID
 /// permission for entities in the current pairing; it never removes either
 /// for an entity that leaves that set, whether casework.yaml drops a request
 /// or this run targets a different set on retry. Left alone, BReg keeps
@@ -655,11 +712,12 @@ fn select_request<'a>(
 /// whether this run previews or applies.
 ///
 /// Detection trusts the same reserved names `apply_breg_candidate`'s own
-/// collision refusals already trust: a `hooks` entry named
-/// `casework-lifecycle-v1` on any entity, and a `permissions` entry naming
+/// collision refusals already trust: a `hooks` entry on an entity named with
+/// that entity's own `lifecycle_event_type`, and a `permissions` entry naming
 /// any entity under the `accessProfiles` entry with id READER_CLIENT_ID, are
 /// presumed to be source add's own fragments, whether or not that entity is
-/// in the set this run pairs.
+/// in the set this run pairs. The bare hook an earlier source add wrote is
+/// refused before this check, by `refuse_legacy_lifecycle_hooks`.
 fn refuse_dropped_entity_fragments(
     authored: &Value,
     paired_entities: &BTreeSet<&str>,
@@ -674,7 +732,7 @@ fn refuse_dropped_entity_fragments(
                 .as_array()
                 .into_iter()
                 .flatten()
-                .any(|hook| hook["id"] == "casework-lifecycle-v1");
+                .any(|hook| hook["id"] == lifecycle_event_type(entity_id).as_str());
             (has_hook && !paired_entities.contains(entity_id)).then_some(entity_id)
         })
         .collect();
@@ -700,10 +758,13 @@ fn refuse_dropped_entity_fragments(
     let dropped = dropped.into_iter().collect::<Vec<_>>();
     let mut instructions = Vec::new();
     if !hooked.is_empty() {
-        instructions.push(format!(
-            "remove the casework-lifecycle-v1 hook from {} in registry.yaml (and the hooks key itself when that hook is its only entry)",
-            entity_list(&hooked)
-        ));
+        instructions.extend(hooked.iter().map(|entity_id| {
+            format!(
+                "remove the {} hook from {} in registry.yaml (and the hooks key itself when that hook is its only entry)",
+                lifecycle_event_type(entity_id),
+                entity_list(&[entity_id])
+            )
+        }));
     }
     if !granted.is_empty() {
         instructions.push(format!(
@@ -922,8 +983,8 @@ fn load_casework_policy(project: &Path) -> Result<Value> {
     Ok(root)
 }
 
-/// Pair every request entity with the lifecycle hook and the shared reader
-/// profile. Each pass patches the text the previous pass rendered, so every
+/// Pair every request entity with its own lifecycle hook and the shared
+/// reader profile. Each pass patches the text the previous pass rendered, so every
 /// narrow YAML patch is checked against the authored state it produced.
 fn apply_breg_candidates(
     root: &mut Value,
@@ -967,13 +1028,11 @@ fn apply_breg_candidate(root: &mut Value, entity_id: &str, reader: &ReaderGrant)
         .as_array_mut()
         .context("BReg entity hooks must be an array")?;
     let (hook, profile) = candidate_fragments(entity_id, reader);
-    match hooks
-        .iter()
-        .find(|item| item["id"] == "casework-lifecycle-v1")
-    {
+    let hook_id = lifecycle_event_type(entity_id);
+    match hooks.iter().find(|item| item["id"] == hook_id.as_str()) {
         Some(existing) if existing != &hook => {
             bail!(
-                "BReg hook casework-lifecycle-v1 on entity {entity_id} in registry.yaml already exists with different content, and nothing was written. source add writes that hook from the request's existing-target fields and the casework.yaml projection, so an earlier caseworkctl, a changed projection, or a hand edit leaves a different one. If you did not write that hook yourself, remove that hook from the hooks of entity {entity_id} in the BReg registry.yaml, and the hooks key itself when that hook is its only entry, then repeat source add --apply; it writes the current hook in its place"
+                "BReg hook {hook_id} on entity {entity_id} in registry.yaml already exists with different content, and nothing was written. source add writes that hook from the request's existing-target fields and the casework.yaml projection, so an earlier caseworkctl, a changed projection, or a hand edit leaves a different one. If you did not write that hook yourself, remove that hook from the hooks of entity {entity_id} in the BReg registry.yaml, and the hooks key itself when that hook is its only entry, then repeat source add --apply; it writes the current hook in its place"
             )
         }
         None => hooks.push(hook),
@@ -1015,7 +1074,7 @@ fn apply_breg_candidate(root: &mut Value, entity_id: &str, reader: &ReaderGrant)
         }
     }
     Ok(json!([
-        {"file":"registry.yaml","path":format!("/entities/{entity_id}/hooks/casework-lifecycle-v1"),"operation":"ensure_exact"},
+        {"file":"registry.yaml","path":format!("/entities/{entity_id}/hooks/{hook_id}"),"operation":"ensure_exact"},
         {"file":"registry.yaml","path":format!("/accessProfiles/{READER_CLIENT_ID}"),"operation":"ensure_exact"}
     ]))
 }
@@ -1023,7 +1082,7 @@ fn apply_breg_candidate(root: &mut Value, entity_id: &str, reader: &ReaderGrant)
 fn candidate_fragments(entity_id: &str, reader: &ReaderGrant) -> (Value, Value) {
     let fields = &reader.fields;
     (
-        json!({"id":"casework-lifecycle-v1","phase":"after","trigger":"request_lifecycle","projection":[reader.event_field],"handler":{"kind":"url","destinationId":"casework"}}),
+        json!({"id":lifecycle_event_type(entity_id),"phase":"after","trigger":"request_lifecycle","projection":[reader.event_field],"handler":{"kind":"url","destinationId":"casework"}}),
         json!({
             "id":READER_CLIENT_ID, "default":false, "principalClaim":READER_PRINCIPAL_CLAIM,
             "requiredScopes":[READER_SCOPE], "requiredPurposes":[READER_PURPOSE],
@@ -1086,7 +1145,7 @@ fn render_candidate_preserving_authored_text(
         .is_some_and(|hooks| {
             hooks
                 .iter()
-                .any(|hook| hook["id"] == "casework-lifecycle-v1")
+                .any(|hook| hook["id"] == lifecycle_event_type(entity_id).as_str())
         });
     let profile = parsed["accessProfiles"].as_array().and_then(|profiles| {
         profiles
@@ -1166,10 +1225,11 @@ fn insert_entity_hook(text: &str, entity_id: &str, event_field: &str) -> Result<
     } else {
         end
     };
+    let hook_id = lifecycle_event_type(entity_id);
     let block = if hooks.is_some() {
-        format!("{}- id: casework-lifecycle-v1\n{}  phase: after\n{}  trigger: request_lifecycle\n{}  projection: [{}]\n{}  handler: {{kind: url, destinationId: casework}}\n", " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), yaml_string(event_field), " ".repeat(field_indent + 2))
+        format!("{}- id: {hook_id}\n{}  phase: after\n{}  trigger: request_lifecycle\n{}  projection: [{}]\n{}  handler: {{kind: url, destinationId: casework}}\n", " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), yaml_string(event_field), " ".repeat(field_indent + 2))
     } else {
-        format!("{}hooks:\n{}- id: casework-lifecycle-v1\n{}  phase: after\n{}  trigger: request_lifecycle\n{}  projection: [{}]\n{}  handler: {{kind: url, destinationId: casework}}\n", " ".repeat(field_indent), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), yaml_string(event_field), " ".repeat(field_indent + 2))
+        format!("{}hooks:\n{}- id: {hook_id}\n{}  phase: after\n{}  trigger: request_lifecycle\n{}  projection: [{}]\n{}  handler: {{kind: url, destinationId: casework}}\n", " ".repeat(field_indent), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), yaml_string(event_field), " ".repeat(field_indent + 2))
     };
     Ok(insert_at_line(&lines, insertion, &block))
 }
@@ -2439,8 +2499,13 @@ fn description_conflict(path: &Path, expected: &Value) -> Result<Option<String>>
             String::new()
         } else {
             format!(
-                "; dropping {} also means removing its casework-lifecycle-v1 hook and {READER_CLIENT_ID} permission from registry.yaml, or source add refuses this pairing",
-                entity_list(&dropped)
+                "; dropping {} also means removing its lifecycle hook ({}) and {READER_CLIENT_ID} permission from registry.yaml, or source add refuses this pairing",
+                entity_list(&dropped),
+                dropped
+                    .iter()
+                    .map(|entity_id| lifecycle_event_type(entity_id))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )
         };
         return Ok(Some(format!(
@@ -2775,7 +2840,10 @@ mod tests {
 
         let error = format!("{error:#}");
         assert!(error.contains("scope-review"), "{error}");
-        assert!(error.contains("casework-lifecycle-v1"), "{error}");
+        assert!(
+            error.contains("casework-lifecycle-v1-scope-review"),
+            "{error}"
+        );
         assert!(error.contains("casework-reader"), "{error}");
         assert!(error.contains("registry.yaml"), "{error}");
     }
@@ -3341,7 +3409,7 @@ mod tests {
             apply_breg_candidate(&mut hooked, "request", &region).unwrap_err()
         );
         assert!(
-            error.contains("hook casework-lifecycle-v1 on entity request")
+            error.contains("hook casework-lifecycle-v1-request on entity request")
                 && error.contains("registry.yaml")
                 && error.contains("remove that hook")
                 && error.contains("repeat source add --apply"),
@@ -3373,10 +3441,78 @@ mod tests {
             refuse_dropped_entity_fragments(&root, &paired).unwrap_err()
         );
         assert!(error.contains("transfer"), "{error}");
-        assert!(error.contains("casework-lifecycle-v1"), "{error}");
+        assert!(
+            error.contains(
+                "remove the casework-lifecycle-v1-transfer hook from request entity transfer"
+            ),
+            "{error}"
+        );
+        assert!(!error.contains("casework-lifecycle-v1-request"), "{error}");
         assert!(error.contains("casework-reader"), "{error}");
         assert!(error.contains("registry.yaml"), "{error}");
         assert!(error.contains("nothing was written"), "{error}");
+    }
+
+    #[test]
+    fn refuse_dropped_entity_fragments_recognises_only_the_dropped_entitys_own_hook() {
+        // A hook named for another entity is not the generated fragment of
+        // the entity that carries it.
+        let root = json!({"entities":[
+            {"id":"request"},
+            {"id":"transfer","hooks":[{"id":"casework-lifecycle-v1-request"}]}
+        ],"accessProfiles":[]});
+        let paired: BTreeSet<&str> = BTreeSet::from(["request"]);
+        refuse_dropped_entity_fragments(&root, &paired).unwrap();
+    }
+
+    /// An earlier caseworkctl wrote the same bare hook identifier on every
+    /// paired entity. That hook is refused by name on whichever entity carries
+    /// it, paired or not, so it is never silently kept beside the per-entity
+    /// hook or left on an entity Casework no longer coordinates.
+    #[test]
+    fn a_legacy_registry_wide_lifecycle_hook_is_named_for_removal() {
+        let legacy = json!([{"id":"casework-lifecycle-v1","phase":"after","trigger":"request_lifecycle","projection":["record"],"handler":{"kind":"url","destinationId":"casework"}}]);
+        let root = json!({"entities":[
+            {"id":"request","hooks":legacy},
+            {"id":"transfer","hooks":legacy},
+            {"id":"untouched"}
+        ],"accessProfiles":[]});
+        let error = format!("{:#}", refuse_legacy_lifecycle_hooks(&root).unwrap_err());
+        assert!(
+            error.contains("casework-lifecycle-v1 hook")
+                && error.contains("request entities request, transfer")
+                && error.contains("casework-lifecycle-v1-<entity>")
+                && error.contains("registry.yaml")
+                && error.contains("nothing was written")
+                && error.contains("repeat source add"),
+            "{error}"
+        );
+        assert!(!error.contains("untouched"), "{error}");
+        let current = json!({"entities":[{"id":"request"}],"accessProfiles":[]});
+        refuse_legacy_lifecycle_hooks(&current).unwrap();
+    }
+
+    #[test]
+    fn a_lifecycle_hook_id_over_the_breg_identifier_limit_is_refused() {
+        // "casework-lifecycle-v1-" is 22 bytes, so a 42-byte entity id reaches
+        // BReg's 64-byte identifier limit exactly.
+        let longest = "e".repeat(42);
+        let too_long = "e".repeat(43);
+        refuse_overlong_lifecycle_hook_ids(&BTreeSet::from(["request", longest.as_str()])).unwrap();
+        let error = format!(
+            "{:#}",
+            refuse_overlong_lifecycle_hook_ids(&BTreeSet::from(["request", too_long.as_str()]))
+                .unwrap_err()
+        );
+        assert!(
+            error.contains(&format!("request entity {too_long}"))
+                && error.contains(&format!("casework-lifecycle-v1-{too_long}"))
+                && error.contains("65 bytes")
+                && error.contains("64-byte")
+                && error.contains("nothing was written"),
+            "{error}"
+        );
+        assert!(!error.contains("entity request,"), "{error}");
     }
 
     #[test]
@@ -4690,7 +4826,10 @@ mod tests {
             authored
         );
         for entity in authored["entities"].as_array().unwrap() {
-            assert_eq!(entity["hooks"][0]["id"], "casework-lifecycle-v1");
+            assert_eq!(
+                entity["hooks"][0]["id"],
+                format!("casework-lifecycle-v1-{}", entity["id"].as_str().unwrap())
+            );
         }
         let permitted = authored["accessProfiles"][0]["permissions"]
             .as_array()
@@ -4706,9 +4845,9 @@ mod tests {
         assert_eq!(
             paths,
             [
-                "/entities/correction/hooks/casework-lifecycle-v1",
+                "/entities/correction/hooks/casework-lifecycle-v1-correction",
                 "/accessProfiles/casework-reader",
-                "/entities/renewal/hooks/casework-lifecycle-v1",
+                "/entities/renewal/hooks/casework-lifecycle-v1-renewal",
             ]
         );
     }
@@ -4762,5 +4901,62 @@ mod tests {
         let scopes = supervisor["scopes"].as_array().unwrap();
         assert!(scopes.contains(&json!("starter:reviewer")));
         assert!(scopes.contains(&json!("starter:renewals")));
+    }
+
+    /// BReg hook identifiers are unique across a registry, so pairing two
+    /// request entities of one registry must leave a project `bregctl check`
+    /// accepts, with one distinct lifecycle hook per entity.
+    #[test]
+    fn a_two_entity_pairing_passes_bregctl_check() {
+        let starter = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/starters/public-organizations/core/registry.yaml");
+        let input = fs::read_to_string(starter).unwrap();
+        let mut authored: Value = serde_norway::from_str(&input).unwrap();
+        let readers = vec![
+            ("name-correction".to_owned(), record_reader(&[])),
+            ("relationship-correction".to_owned(), record_reader(&[])),
+        ];
+
+        let (_, proposed) =
+            apply_breg_candidates(&mut authored, input.as_bytes(), &readers).unwrap();
+
+        let hook_ids = authored["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|entity| entity["hooks"].as_array().into_iter().flatten())
+            .map(|hook| hook["id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            hook_ids,
+            [
+                "casework-lifecycle-v1-name-correction",
+                "casework-lifecycle-v1-relationship-correction"
+            ]
+        );
+        let registry = tempfile::tempdir().unwrap();
+        // bregctl refuses a project path through a symbolic link, and the
+        // system temporary directory is reached through one on macOS.
+        let registry_dir = registry.path().canonicalize().unwrap();
+        fs::write(registry_dir.join("registry.yaml"), &proposed).unwrap();
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        let status = registry_bregctl::run_from(
+            [
+                OsString::from("bregctl"),
+                "--format".into(),
+                "json".into(),
+                "check".into(),
+                registry_dir.into_os_string(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(
+            status,
+            std::process::ExitCode::SUCCESS,
+            "bregctl check: {} {}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
     }
 }
