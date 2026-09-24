@@ -133,8 +133,8 @@ the product does not do.
   must name a backup artifact that the tooling validates but never creates.
 - Erasure runs one way and stops early: `history erase` has no dry run and no undo, and refuses
   more than 10,000 revisions in one transaction. `history rebaseline`, the only way to restore
-  snapshot coverage after an erasure, refuses a registry holding more than 1,000 live rows, so a
-  larger registry does not get that coverage back.
+  snapshot coverage after an erasure, verifies every live row in one transaction and holds writes
+  to every entity table until it commits.
 - No request-rate limit: the runtime enforces operator-set timeouts and connection-pool bounds,
   but no rate limit of its own. A registry that admits anonymous reads belongs behind an upstream
   limiter.

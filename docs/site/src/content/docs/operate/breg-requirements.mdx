@@ -94,16 +94,15 @@ You ship the streams from every process to append-only storage and verify delive
 retention expires. The product does not provide tamper evidence.
 
 **Retention and erasure.** Erasing a record's history is a bounded operator command with no undo.
-It removes at most 10,000 revisions per transaction, and restoring snapshot coverage afterwards is
-refused for a registry with more than 1,000 live rows, so a large registry cannot regain snapshot
-coverage after an erasure. Retained webhook payloads expire after a configurable number of days,
-at most 30.
+It removes at most 10,000 revisions per transaction. Restoring snapshot coverage afterwards
+verifies every live row in one transaction that holds writes until it commits. Retained webhook
+payloads expire after a configurable number of days, at most 30.
 
 {/* Evidence: crates/registry-breg/src/runtime_config.rs, AuditConfig, CursorConfig, DatabaseConfig,
     and MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS; crates/registry-bregctl/src/lib.rs, ApplyArgs and MigrationCommand;
     crates/registry-breg/src/migration_reconcile.rs; crates/registry-breg/src/audit.rs;
     crates/registry-breg/src/history_erasure.rs, MAX_ERASURE_REVISIONS;
-    crates/registry-breg/src/history_rebaseline.rs, MAX_REBASELINE_LIVE_ROWS. */}
+    crates/registry-breg/src/history_rebaseline.rs. */}
 
 ## Capacity
 
