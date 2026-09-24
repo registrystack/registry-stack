@@ -139,13 +139,11 @@ cannot bootstrap its own registration at connect time.
 Both services serve `/health` (the process is up) and `/ready` (its audit
 journal is writable).
 
-Both log JSON, filtered by an environment variable: `BREG_MCP_LOG` for the
-gateway and `BREG_REVIEW_LOG` for the review page. The two are not the same
-kind of setting. `BREG_REVIEW_LOG` accepts exactly `error`, `warn`, or
-`info` (the default); any other value stops startup with exit status 2, so a
-typo cannot silently change what is logged. `BREG_MCP_LOG` is a tracing
-filter directive; it defaults to `info` when unset or when it does not
-parse. See
+Both write JSON operational records to standard output, at the level an
+environment variable names: `BREG_MCP_LOG` for the gateway and
+`BREG_REVIEW_LOG` for the review page. Each accepts exactly `error`,
+`warn`, or `info` (the default); any other value stops startup with exit
+status 2, so a typo cannot silently change what is logged. See
 [environment variables](../../docs/site/src/content/docs/reference/environment-variables.mdx)
 for both entries in full.
 

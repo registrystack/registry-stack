@@ -163,12 +163,10 @@ preserves the previous set. It does not verify release authenticity.
 
 | Name | Purpose | Default or required |
 | --- | --- | --- |
-| `BREG_MCP_LOG` | Tracing filter for the operational records `breg-mcp` writes as JSON on standard output. | Defaults to `info`. |
-| `BREG_REVIEW_LOG` | Level for the JSON operational records `breg-review` writes on standard error. | Defaults to `info`. |
+| `BREG_MCP_LOG` | Level for the JSON operational records `breg-mcp` writes on standard output. | Defaults to `info`. |
+| `BREG_REVIEW_LOG` | Level for the JSON operational records `breg-review` writes on standard output. | Defaults to `info`. |
 
-`BREG_MCP_LOG` is a tracing filter directive, not a closed enumeration: it is parsed as an ordinary `tracing-subscriber` filter and falls back to `info` when unset or when it does not parse.
-
-`BREG_REVIEW_LOG` is a closed enumeration, not a tracing filter directive. It accepts exactly `error`, `warn`, and `info`, and the level applies to the `breg_review` and `registry_breg_review` targets. Any other value is refused: the process reports the error and exits with status 2 instead of falling back to `info`.
+Both are closed enumerations, not tracing filter directives. Each accepts exactly `error`, `warn`, and `info`; any other value is refused, and the process reports the error on standard error and exits with status 2 instead of falling back to `info`. `BREG_REVIEW_LOG` applies to the `breg_review` and `registry_breg_review` targets. Startup refusals, such as an invalid runtime configuration, go to standard error, apart from the JSON records on standard output.
 
 ## Source
 
