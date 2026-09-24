@@ -530,9 +530,10 @@ decides which actions stay on offer.
 
 Send the `rebase` value the `revise_request` action carries: `false` records the new draft as a
 revision of the proposal, `true` as a rebase onto updated context. An approval that expired
-unapplied reports `review.application.state` `expired` beside the result's `availableUntil`; the
-other application states are `awaitingReview`, `ready`, `queued`, `applying`, `applied`, and
-`blocked`.
+unapplied reports `review.application.state` `expired` beside the result's `availableUntil`, also
+when its automatic application is still queued; an application already `applying` keeps that state
+because it may still succeed. The other application states are `awaitingReview`, `ready`, `queued`,
+`applying`, `applied`, and `blocked`.
 
 The offered actions follow the result even when the selected profile does not disclose
 `review_state`, so the owner and the applier can tell a coarse outcome from which actions remain,
@@ -572,7 +573,8 @@ same answer as for any field its grant withholds.
     revision_after_changes_requested_records_revision_not_rebase,
     answered_review_hides_apply_and_keeps_revise_and_cancel,
     unexpired_approval_offers_apply_and_the_apply_succeeds,
-    expired_approval_hides_apply_and_is_answered_by_a_revision, and
+    expired_approval_hides_apply_and_is_answered_by_a_revision,
+    expired_automatic_approval_projects_expired_until_an_apply_is_in_flight, and
     request_list_filters_on_the_settled_review_outcome. */}
 
 <ApiReferenceTable id="request-actions" />

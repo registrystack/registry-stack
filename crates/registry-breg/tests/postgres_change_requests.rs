@@ -530,6 +530,94 @@ async fn expired_online_review_blocks_final_automatic_attempt_until_authorized_r
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn expired_automatic_approval_projects_expired_until_an_apply_is_in_flight() {
+    let (endpoint, _authority_state, authority_server) = serve_review_result_authority().await;
+    let reviews = review_authority_registry(endpoint);
+    let database = TestDatabase::create(8).await;
+    let mut source = serde_json::to_value(two_stage_project()).unwrap();
+    source["entities"][2]["changeRequest"]["review"] =
+        json!({"authority":"casework-a","policyId":"correction-review"});
+    source["entities"][2]["changeRequest"]["onApproved"] =
+        json!({"mode":"automatic","executor":"registry-automatic"});
+    source["accessProfiles"][4]["permissions"][0]["readableRequestFields"] =
+        json!(["reason", "review_state"]);
+    let registry = Arc::new(
+        compile_project(
+            &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
+            &[],
+            CompileProfile::Authoring,
+        )
+        .unwrap(),
+    );
+    let identity = install_registry(&database, &registry, "expired-review-automatic", false).await;
+    let (service, _) = change_request_service_with_evidence_options(
+        &database,
+        registry,
+        identity,
+        "expired-review-automatic",
+        None,
+        None,
+        registry_breg::attachment_storage::AttachmentStorage::Database,
+        None,
+        registry_breg::attachment_verification::AttachmentVerification::Disabled,
+        None,
+        Some(reviews),
+    );
+    let app = router(service);
+    let (request, _digest) = submit_two_stage_correction(&app).await;
+    // Automatic application always queues a job, so the queued job must not
+    // hide that the cached approval is past its availability.
+    reconcile_cached_external_result(
+        &database,
+        &request.id,
+        "approved",
+        true,
+        EXPIRED_UNTIL,
+        EXPIRED_UNTIL,
+    )
+    .await;
+    let applier = claims("applier", APPLIER, Some("apply"));
+    let path = format!(
+        "/v1/records/correction-requests/{}?accessProfile=applier",
+        request.id
+    );
+    let queued = get_record(&app, &path, applier.clone()).await;
+    assert_eq!(
+        queued.body["request"]["review"]["application"]["state"], "expired",
+        "{}",
+        queued.body
+    );
+    assert!(queued.body["request"]["review"]["application"]
+        .get("nextAttemptAt")
+        .is_none());
+    assert!(
+        !offered_operations(&queued.body).contains(&"apply_request".to_owned()),
+        "an expired approval must not advertise apply: {}",
+        queued.body
+    );
+
+    // An apply already in flight may still succeed, so it keeps its state.
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_application_jobs
+                SET state='applying',claim_token=$2 WHERE request_id=$1",
+            &[&Uuid::parse_str(&request.id).unwrap(), &Uuid::new_v4()],
+        )
+        .await
+        .expect("claim the automatic application job");
+    let applying = get_record(&app, &path, applier).await;
+    assert_eq!(
+        applying.body["request"]["review"]["application"]["state"], "applying",
+        "{}",
+        applying.body
+    );
+
+    authority_server.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn withdrawn_approval_blocks_the_manual_application_projection() {
     let (endpoint, _authority_state, authority_server) = serve_review_result_authority().await;
     let reviews = review_authority_registry(endpoint);

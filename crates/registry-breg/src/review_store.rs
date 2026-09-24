@@ -2880,6 +2880,16 @@ pub(crate) async fn read_projection(
         }
     }
     let application_state = match row.get::<_, Option<String>>(9).as_deref() {
+        // Automatic application queues every approval, so a queued job must
+        // not hide that the approval passed its availability unapplied. An
+        // apply already in flight keeps its state: it may still succeed.
+        Some("queued")
+            if request_submitted
+                && row.get::<_, Option<String>>(5).as_deref() == Some("approved")
+                && row.get::<_, Option<bool>>(20) == Some(true) =>
+        {
+            "expired"
+        }
         Some("queued") => "queued",
         Some("applying") => "applying",
         Some("applied") => "applied",
