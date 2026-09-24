@@ -81,6 +81,7 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-breg-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
 | `crates/registry-breg-client-py` | Internal PyO3 binding used to assemble the unified Python client |
 | `crates/registry-breg-mcp` | Citizen-facing MCP gateway beside the Base Registry Engine and the `breg-mcp` binary |
+| `crates/registry-breg-review` | Server-rendered citizen review page for BReg change requests and the `breg-review` binary |
 | `crates/registry-linkml` | LinkML reader and embedded PublicSchema snapshot behind `bregctl init --from publicschema` |
 | `crates/registry-casework-core` | Source-neutral Casework model, HTTP DTOs, transition rules, and source adapter contract |
 | `crates/registry-casework-breg` | BReg source adapter for Casework discovery, current visibility, promoted actions, and attempt recovery |
@@ -156,7 +157,10 @@ through `registry-breg-client`; `registry-breg` is a dev-dependency for its
 PostgreSQL end-to-end suite. `crates/registry-breg-mcp/clippy.toml` disallows
 the client methods it must never reach, and
 `products/breg/scripts/check-mcp-gateway-boundary.sh` proves that list still
-resolves and refuses.
+resolves and refuses. `registry-breg-review` (`breg-review`) is the paired
+review page a citizen uses to submit a draft the gateway prepared; it too
+depends on the engine only through `registry-breg-client`, and neither
+service depends on the other or on `registry-breg` outside dev-dependencies.
 
 Registry Casework is implemented by `registry-casework`,
 `registry-casework-core`, `registry-casework-breg`, `registry-caseworkctl`, and
