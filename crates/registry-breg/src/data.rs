@@ -23,10 +23,9 @@ use crate::contract::{
     valid_crs84_point, valid_decimal_value, valid_structured_value, FieldTypeSource, MutationMode,
     Operation,
 };
-#[cfg(feature = "runtime")]
-use crate::model::CompiledRoute;
 use crate::model::{
-    CompiledEntity, CompiledQueryKind, CompiledRegistry, CompiledStoredField, HttpMethod,
+    CompiledEntity, CompiledQueryKind, CompiledRegistry, CompiledRoute, CompiledStoredField,
+    HttpMethod,
 };
 
 const DATA_API_VERSION: &str = "registry.registrystack.org/v1alpha1";
@@ -364,6 +363,9 @@ pub struct DataImportPlan {
     maximum_bytes: u32,
     chunks: Vec<DataChunk>,
     route_path: String,
+    /// The binding is an `import` grant: it executes only through a durable
+    /// ingestion run, never through a raw batch route.
+    through_import: bool,
     response_fields: BTreeMap<String, (FieldTypeSource, bool)>,
 }
 
@@ -389,7 +391,7 @@ impl DataImportPlan {
         profile_id: &str,
         input: &[u8],
     ) -> Result<Self, DataError> {
-        let (entity, maximum_items, maximum_bytes, route_path) =
+        let (entity, maximum_items, maximum_bytes, route) =
             resolve_import_binding(registry, entity_id, operation, profile_id)?;
         if input.is_empty() || input.len() > MAX_DATA_IMPORT_INPUT_BYTES {
             return Err(DataError::InvalidInput);
@@ -423,7 +425,8 @@ impl DataImportPlan {
             maximum_items,
             maximum_bytes,
             chunks,
-            route_path,
+            route_path: route.path.clone(),
+            through_import: route.operation == Operation::Import,
             response_fields: entity.access_profiles[profile_id]
                 .readable_fields
                 .iter()
@@ -474,14 +477,21 @@ impl DataImportPlan {
     pub fn chunks(&self) -> &[DataChunk] {
         &self.chunks
     }
+
+    /// Whether the binding is an `import` grant, which a caller submits only
+    /// through a durable ingestion run.
+    pub fn through_import(&self) -> bool {
+        self.through_import
+    }
 }
 
 /// Whether the selected profile admits one item operation of a batch import,
 /// exactly as an admitted import binding requires it: the profile grants the
 /// operation, an access entry matches it, an item route serves the profile,
-/// and a patch stays confined to mutable entities. The durable run creation
-/// shares this decision so its announced operation is executable to the end
-/// of every chunk.
+/// and a patch stays confined to mutable entities. An `import` grant admits
+/// create alone, needs no item route, and is admitted only for an
+/// authenticated profile. The durable run creation shares this decision so
+/// its announced operation is executable to the end of every chunk.
 pub(crate) fn ingestion_item_operation_admitted(
     registry: &CompiledRegistry,
     entity: &CompiledEntity,
@@ -508,6 +518,11 @@ pub(crate) fn ingestion_item_operation_admitted(
                 (Operation::Create, HttpMethod::Post) | (Operation::Patch, HttpMethod::Patch)
             )
     });
+    if profile.operations.contains(&Operation::Import) {
+        return !profile.anonymous
+            && compiled == Operation::Create
+            && access_matches(Operation::Import);
+    }
     !profile.anonymous
         && profile.operations.contains(&Operation::Batch)
         && profile.operations.contains(&compiled)
@@ -522,7 +537,7 @@ pub(crate) fn resolve_import_binding<'a>(
     entity_id: &str,
     operation: DataImportOperation,
     profile_id: &str,
-) -> Result<(&'a CompiledEntity, u16, u32, String), DataError> {
+) -> Result<(&'a CompiledEntity, u16, u32, &'a CompiledRoute), DataError> {
     if !valid_binding(entity_id) || !valid_binding(profile_id) {
         return Err(DataError::InvalidBinding);
     }
@@ -531,25 +546,15 @@ pub(crate) fn resolve_import_binding<'a>(
         .get(entity_id)
         .ok_or(DataError::InvalidBinding)?;
     let batch = entity.batch.as_ref().ok_or(DataError::InvalidBinding)?;
-    let batch_route = registry.routes().routes.iter().find(|route| {
-        route.entity_id == entity_id
-            && route.operation == Operation::Batch
-            && route.method == HttpMethod::Post
-            && route.access_profiles.iter().any(|id| id == profile_id)
-    });
+    let route = ingestion_route(registry, entity_id, profile_id);
     if !ingestion_item_operation_admitted(registry, entity, profile_id, operation)
-        || batch_route.is_none()
         || batch.maximum_items == 0
         || batch.maximum_bytes == 0
     {
         return Err(DataError::InvalidBinding);
     }
-    Ok((
-        entity,
-        batch.maximum_items,
-        batch.maximum_bytes,
-        batch_route.expect("checked batch route").path.clone(),
-    ))
+    let route = route.ok_or(DataError::InvalidBinding)?;
+    Ok((entity, batch.maximum_items, batch.maximum_bytes, route))
 }
 
 fn validate_item(
@@ -790,17 +795,18 @@ fn plan_chunks(
 #[cfg(feature = "runtime")]
 pub(crate) const RUN_CHUNK_ALGORITHM_VERSION: &str = CHUNK_ALGORITHM_VERSION;
 
-/// The compiled batch route one ingestion run drives, under the same route
-/// lookup resolve_import_binding uses to admit a client-side plan.
-#[cfg(feature = "runtime")]
-pub(crate) fn ingestion_batch_route<'a>(
+/// The compiled bulk route one ingestion run drives: the `batch` route, or
+/// the `import` route the ingestion-run surface alone serves. The compiler
+/// refuses both on one entity, so at most one matches. resolve_import_binding
+/// admits a client-side plan under the same lookup.
+pub(crate) fn ingestion_route<'a>(
     registry: &'a CompiledRegistry,
     entity_id: &str,
     profile_id: &str,
 ) -> Option<&'a CompiledRoute> {
     registry.routes().routes.iter().find(|route| {
         route.entity_id == entity_id
-            && route.operation == Operation::Batch
+            && matches!(route.operation, Operation::Batch | Operation::Import)
             && route.method == HttpMethod::Post
             && route.access_profiles.iter().any(|id| id == profile_id)
     })
@@ -1099,6 +1105,11 @@ where
     Dispatch: FnMut(DataHttpRequest) -> DispatchFuture,
     DispatchFuture: Future<Output = Result<DataHttpResponse, DispatchError>>,
 {
+    // An `import` grant has no raw batch route; its chunks commit only
+    // through a durable ingestion run.
+    if plan.through_import {
+        return Err(DataError::InvalidBinding);
+    }
     checkpoint.validate_resume(
         plan,
         package_revision,

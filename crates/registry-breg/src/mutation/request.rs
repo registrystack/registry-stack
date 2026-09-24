@@ -2503,6 +2503,7 @@ impl MutationCoordinator {
             temporal_exclusion_constraints: temporal_exclusion_constraints(
                 registry, entity, inventory,
             )?,
+            imported_item: false,
         };
         let id = target.record_id.to_string();
         let request = MutationRequest {
