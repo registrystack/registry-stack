@@ -19,17 +19,6 @@ checkout="$1"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 files=(
   publicschema.yaml
-  agriculture.yaml
-  farm_operators.yaml
-  government.yaml
-  registry.yaml
-  work.yaml
-  agriculture_biology.yaml
-  agriculture_operations.yaml
-  assets.yaml
-  service_capacity.yaml
-  government_relationships.yaml
-  public_services.yaml
   assessment.yaml
   biometric.yaml
   categories.yaml
@@ -44,6 +33,24 @@ files=(
   payment.yaml
   program.yaml
   vocabularies.yaml
+  value_types.yaml
+  registry.yaml
+  physical_assets.yaml
+  organizations.yaml
+  ownership.yaml
+  regulation.yaml
+  public_services.yaml
+  education.yaml
+  work.yaml
+  transport.yaml
+  environment.yaml
+  tax.yaml
+  elections.yaml
+  land.yaml
+  agriculture_holdings.yaml
+  animals.yaml
+  plants.yaml
+  agriculture_operations.yaml
 )
 
 if [[ ! -f "${checkout}/schema/publicschema.yaml" ]]; then
@@ -67,6 +74,19 @@ if [[ -z "${version}" ]]; then
   exit 1
 fi
 
+# A file dropped from the list upstream must not linger in the snapshot.
+for existing in "${here}"/schema/*.yaml; do
+  name="${existing##*/}"
+  listed=false
+  for file in "${files[@]}"; do
+    if [[ "${file}" == "${name}" ]]; then
+      listed=true
+    fi
+  done
+  if [[ "${listed}" == false ]]; then
+    rm -- "${existing}"
+  fi
+done
 for file in "${files[@]}"; do
   cp "${checkout}/schema/${file}" "${here}/schema/${file}"
 done

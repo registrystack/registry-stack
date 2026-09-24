@@ -473,7 +473,7 @@ slots:
   decision_date:
     slot_uri: publicschema:decision_date
     title: Decision date
-    description: The date on which the eligibility decision was recorded.
+    description: The date on which the decision was made, which may precede the time it was recorded.
     range: date
     multivalued: false
     status: bibo:draft
@@ -481,8 +481,10 @@ slots:
       label_es: Fecha de decisión
       label_fr: Date de décision
       domain_override: "null"
-      description_es: La fecha en que se registró la decisión de elegibilidad.
-      description_fr: La date à laquelle la décision d'admissibilité a été enregistrée.
+      description_es: La fecha en que se tomó la decisión, que puede ser anterior al momento en que
+        se registró.
+      description_fr: La date à laquelle la décision a été prise, qui peut précéder le moment où elle
+        a été enregistrée.
       convergence_json: '{"system_count": 1, "total_systems": 2}'
   document_expiry_date:
     slot_uri: publicschema:sp/document_expiry_date

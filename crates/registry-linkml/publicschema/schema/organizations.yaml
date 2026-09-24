@@ -1,0 +1,339 @@
+id: https://publicschema.org/linkml/organizations
+name: publicschema-organizations
+title: Organizations and institutional roles
+description: Public organizations, institutional relationships, institutional and representation
+  roles, and the shared authority link.
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  bibo: http://purl.org/ontology/bibo/
+  cpov: http://data.europa.eu/m8g/
+  org: http://www.w3.org/ns/org#
+imports:
+- linkml:types
+- common
+- identity
+- misc
+- value_types
+- registry
+classes:
+  PublicOrganization:
+    class_uri: publicschema:PublicOrganization
+    title: Public Organization
+    description: An organization that a law or other legal framework places in the public sector, at
+      any level of government. Being public does not settle whether it has its own legal personality.
+    slots:
+    - legal_resources
+    - public_functions
+    - competence_areas
+    status: bibo:draft
+    is_a: Organization
+    exact_mappings:
+    - cpov:PublicOrganisation
+    annotations:
+      label_es: Organización pública
+      label_fr: Organisation publique
+      description_es: Una organización que una ley u otro marco jurídico sitúa en el sector público,
+        a cualquier nivel de gobierno. El hecho de ser pública no determina si posee personalidad jurídica
+        propia.
+      description_fr: Une organisation qu'une loi ou un autre cadre juridique place dans le secteur
+        public, à quelque niveau de gouvernement que ce soit. Le fait d'être publique ne détermine
+        pas si elle possède sa propre personnalité juridique.
+      bibliography_refs: '["semic-cpov"]'
+  InstitutionalRelationship:
+    class_uri: publicschema:InstitutionalRelationship
+    title: Institutional Relationship
+    description: A dated, directed relationship between two organizations, such as one being part of,
+      supervised by, affiliated with or a member of the other. The relationship type fixes its direction
+      and meaning; none of these relationships expresses ownership or control by itself. A merger, split
+      or succession is an OrganizationalChangeEvent instead.
+    slots:
+    - institution_from
+    - institution_to
+    - institutional_relationship_type
+    - start_date
+    - end_date
+    status: bibo:draft
+    annotations:
+      label_es: Relación institucional
+      label_fr: Relation institutionnelle
+      description_es: Una relación fechada y dirigida entre dos organizaciones, como el hecho de que
+        una forme parte de la otra, esté supervisada por ella, esté afiliada a ella o sea miembro de
+        ella. El tipo de relación fija su dirección y su significado; ninguna de estas relaciones expresa
+        por sí misma propiedad o control. Una fusión, una escisión o una sucesión se registra en cambio
+        como un OrganizationalChangeEvent.
+      description_fr: Une relation datée et orientée entre deux organisations, par exemple le fait
+        que l'une fasse partie de l'autre, soit supervisée par elle, lui soit affiliée ou en soit membre.
+        Le type de relation fixe sa direction et sa signification ; aucune de ces relations n'exprime
+        en elle-même la propriété ou le contrôle. Une fusion, une scission ou une succession relève
+        plutôt d'un OrganizationalChangeEvent.
+      bibliography_refs: '["w3c-org"]'
+  InstitutionalRole:
+    class_uri: publicschema:InstitutionalRole
+    title: Institutional Role
+    description: A dated assignment of a person, group or organization to a role in an organization,
+      such as member, director, officer or board member. Membership of a producer organization or cooperative
+      is an institutional role with a member role type. The role does not by itself show employment,
+      ownership or legal authority.
+    slots:
+    - role_actor
+    - role_organization
+    - institutional_role_type
+    - start_date
+    - end_date
+    status: bibo:draft
+    close_mappings:
+    - org:Membership
+    annotations:
+      label_es: Rol institucional
+      label_fr: Rôle institutionnel
+      description_es: Una asignación fechada de una persona, un grupo o una organización a un rol dentro
+        de una organización, como miembro, director, directivo o miembro de la junta. La pertenencia
+        a una organización de productores o a una cooperativa es un rol institucional de tipo miembro.
+        El rol no muestra por sí mismo empleo, propiedad ni autoridad legal.
+      description_fr: Une affectation datée d'une personne, d'un groupe ou d'une organisation à un
+        rôle au sein d'une organisation, par exemple membre, directeur, dirigeant ou administrateur.
+        L'appartenance à une organisation de producteurs ou à une coopérative est un rôle institutionnel
+        de type membre. Le rôle ne montre pas à lui seul un emploi, une propriété ou un pouvoir légal.
+      bibliography_refs: '["uk-companies-house-api", "w3c-org"]'
+  RepresentationRole:
+    class_uri: publicschema:RepresentationRole
+    title: Representation Role
+    description: A dated relationship in which a person or organization acts on behalf of a person,
+      organization, group or legal arrangement within a stated scope. Representation is distinct from identity, and recording it does not prove that
+      the representative may take a particular action. A receiving authority can check a mandate that
+      states its powers as codes, its legal basis in legal resources and the instrument that grants it
+      as evidence.
+    slots:
+    - representative
+    - represented
+    - representation_scope
+    - representation_powers
+    - legal_resources
+    - evidence_assertions
+    - start_date
+    - end_date
+    status: bibo:draft
+    annotations:
+      label_es: Rol de representación
+      label_fr: Rôle de représentation
+      description_es: Una relación fechada en la que una persona o una organización actúa en nombre
+        de una persona, una organización, un grupo o una estructura jurídica dentro de un ámbito
+        determinado. La representación es distinta de la identidad, y su
+        registro no demuestra que el representante pueda realizar una acción determinada. Una
+        autoridad receptora puede verificar un mandato que indica sus facultades como códigos, su
+        base jurídica en recursos jurídicos y el instrumento que lo otorga como evidencia.
+      description_fr: Une relation datée dans laquelle une personne ou une organisation agit pour le
+        compte d'une personne, d'une organisation, d'un groupe ou d'une construction juridique dans un
+        cadre défini. La représentation est distincte de l'identité, et
+        son enregistrement ne prouve pas que le représentant puisse accomplir une action particulière.
+        Une autorité destinataire peut vérifier un mandat qui indique ses pouvoirs sous forme de codes,
+        sa base juridique dans des ressources juridiques et l'instrument qui le confère comme preuve.
+      bibliography_refs: '["semic-core-business", "us-irs-form-2848", "w3c-prov-o"]'
+slots:
+  public_functions:
+    slot_uri: publicschema:public_functions
+    title: Public functions
+    description: The public functions or remit for which an organization is responsible, such as tax
+      collection or primary education, coded where possible.
+    range: CodedValue
+    multivalued: true
+    status: bibo:draft
+    close_mappings:
+    - org:purpose
+    annotations:
+      label_es: Funciones públicas
+      label_fr: Fonctions publiques
+      description_es: Las funciones públicas o el mandato del que es responsable una organización,
+        como la recaudación de impuestos o la educación primaria, codificadas cuando sea posible.
+      description_fr: Les fonctions publiques ou le mandat dont une organisation est responsable, par
+        exemple la collecte des impôts ou l'enseignement primaire, codées lorsque cela est possible.
+      category: governance
+  competence_areas:
+    slot_uri: publicschema:competence_areas
+    title: Competence areas
+    description: The administrative areas that an organization covers or serves. They are distinct from
+      the jurisdiction whose data-protection law applies to a record.
+    range: Location
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Áreas de competencia
+      label_fr: Zones de compétence
+      description_es: Las áreas administrativas que una organización cubre o atiende. Son distintas
+        de la jurisdicción cuya ley de protección de datos se aplica a un registro.
+      description_fr: Les zones administratives qu'une organisation couvre ou dessert. Elles sont distinctes
+        de la juridiction dont la loi sur la protection des données s'applique à un enregistrement.
+      category: governance
+  institution_from:
+    slot_uri: publicschema:institution_from
+    title: Institution from
+    description: The organization at the start of the directed institutional relationship.
+    range: Organization
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Institución de origen
+      label_fr: Institution de départ
+      description_es: La organización en el punto de origen de la relación institucional dirigida.
+      description_fr: L'organisation au point de départ de la relation institutionnelle orientée.
+      category: governance
+  institution_to:
+    slot_uri: publicschema:institution_to
+    title: Institution to
+    description: The organization at the end of the directed institutional relationship.
+    range: Organization
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Institución de destino
+      label_fr: Institution d'arrivée
+      description_es: La organización en el punto de destino de la relación institucional dirigida.
+      description_fr: L'organisation au point d'arrivée de la relation institutionnelle orientée.
+      category: governance
+  institutional_relationship_type:
+    slot_uri: publicschema:institutional_relationship_type
+    title: Institutional relationship type
+    description: The kind of institutional relationship, which also fixes which organization is at its
+      start and which is at its end.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de relación institucional
+      label_fr: Type de relation institutionnelle
+      description_es: El tipo de relación institucional, que también determina qué organización se
+        encuentra en su origen y cuál en su destino.
+      description_fr: Le type de relation institutionnelle, qui détermine également quelle organisation
+        se trouve à son point de départ et laquelle se trouve à son point d'arrivée.
+      category: classification
+  role_actor:
+    slot_uri: publicschema:role_actor
+    title: Role actor
+    description: The URI of the person, group or organization holding the institutional role, such as
+      a farmer who is a member of a producer organization.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - org:member
+    annotations:
+      label_es: Actor del rol
+      label_fr: Acteur du rôle
+      description_es: El URI de la persona, el grupo o la organización que ocupa el rol institucional,
+        como un productor agropecuario miembro de una organización de productores.
+      description_fr: L'URI de la personne, du groupe ou de l'organisation qui détient le rôle institutionnel,
+        par exemple un exploitant agricole membre d'une organisation de producteurs.
+      category: governance
+      sensitivity: sensitive
+  role_organization:
+    slot_uri: publicschema:role_organization
+    title: Role organization
+    description: The organization in which the role is held or for which the person practises.
+    range: Organization
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Organización del rol
+      label_fr: Organisation du rôle
+      description_es: La organización en la que se ocupa el rol o para la cual la persona ejerce.
+      description_fr: L'organisation au sein de laquelle le rôle est détenu ou pour laquelle la personne
+        exerce.
+      category: governance
+  institutional_role_type:
+    slot_uri: publicschema:institutional_role_type
+    title: Institutional role type
+    description: The kind of role held in an organization, such as member, director or secretary.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    close_mappings:
+    - org:role
+    annotations:
+      label_es: Tipo de rol institucional
+      label_fr: Type de rôle institutionnel
+      description_es: El tipo de rol ocupado dentro de una organización, como miembro, director o
+        secretario.
+      description_fr: Le type de rôle détenu au sein d'une organisation, par exemple membre, directeur
+        ou secrétaire.
+      category: classification
+  representative:
+    slot_uri: publicschema:representative
+    title: Representative
+    description: The person or organization acting on behalf of the represented party.
+    range: Agent
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Representante
+      label_fr: Représentant
+      description_es: La persona o la organización que actúa en nombre de la parte representada.
+      description_fr: La personne ou l'organisation agissant pour le compte de la partie représentée.
+      category: governance
+      sensitivity: sensitive
+  represented:
+    slot_uri: publicschema:represented
+    title: Represented
+    description: The URI of the person, organization, group or legal arrangement on whose behalf the
+      representative acts, such as a household applying through one of its members or a trust acting
+      through its trustees.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Representado
+      label_fr: Représenté
+      description_es: El URI de la persona, organización, grupo o estructura jurídica en cuyo nombre
+        actúa el representante, como un hogar que presenta una solicitud por medio de uno de sus
+        miembros o un fideicomiso que actúa por medio de sus fiduciarios.
+      description_fr: L'URI de la personne, de l'organisation, du groupe ou de la construction juridique
+        pour le compte duquel le représentant agit, par exemple un ménage qui dépose une demande par
+        l'intermédiaire de l'un de ses membres ou un trust qui agit par l'intermédiaire de ses
+        fiduciaires.
+      category: governance
+      sensitivity: sensitive
+  representation_powers:
+    slot_uri: publicschema:representation_powers
+    title: Representation powers
+    description: The acts the representative may perform for the represented party, each coded in a
+      named scheme, such as a tax authority's list of authorization types or the powers listed on a
+      power of attorney form. A receiving authority checks them against its own rules; a code does not
+      by itself grant authority to take any action.
+    range: CodedValue
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Facultades de representación
+      label_fr: Pouvoirs de représentation
+      description_es: Los actos que el representante puede realizar en nombre de la parte representada,
+        cada uno codificado en un esquema indicado, como la lista de tipos de autorización de una
+        administración tributaria o las facultades enumeradas en un formulario de poder. Una autoridad
+        receptora los verifica según sus propias normas; un código no otorga por sí solo autoridad
+        para realizar ninguna acción.
+      description_fr: Les actes que le représentant peut accomplir pour la partie représentée, chacun
+        codé dans un schéma indiqué, par exemple la liste des types d'autorisation d'une administration
+        fiscale ou les pouvoirs énumérés sur un formulaire de procuration. Une autorité destinataire
+        les vérifie selon ses propres règles ; un code ne confère pas à lui seul le pouvoir
+        d'accomplir une action.
+      category: governance
+      sensitivity: sensitive
+      bibliography_refs: '["us-irs-form-2848"]'
+  representation_scope:
+    slot_uri: publicschema:representation_scope
+    title: Representation scope
+    description: The matters for which, and the limits within which, the representative may act, such
+      as communication about a specified tax regime.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Alcance de la representación
+      label_fr: Portée de la représentation
+      description_es: Los asuntos para los que, y los límites dentro de los cuales, el representante
+        puede actuar, como la comunicación relativa a un régimen fiscal determinado.
+      description_fr: Les matières pour lesquelles, et les limites dans lesquelles, le représentant
+        peut agir, par exemple la communication au sujet d'un régime fiscal déterminé.
+      category: governance
+      sensitivity: sensitive

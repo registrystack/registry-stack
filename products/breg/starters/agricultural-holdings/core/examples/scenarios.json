@@ -72,7 +72,7 @@
         {
           "id": "ana-role",
           "operation": "create",
-          "entity": "person-holding-operator-role",
+          "entity": "person-agricultural-holder-role",
           "client": "editor",
           "accessProfile": "editor",
           "input": "ana-role",
@@ -81,7 +81,7 @@
         {
           "id": "bo-role",
           "operation": "create",
-          "entity": "person-holding-operator-role",
+          "entity": "person-agricultural-holder-role",
           "client": "editor",
           "accessProfile": "editor",
           "input": "bo-role",
@@ -90,7 +90,7 @@
         {
           "id": "cooperative-role",
           "operation": "create",
-          "entity": "organization-holding-operator-role",
+          "entity": "organization-agricultural-holder-role",
           "client": "editor",
           "accessProfile": "editor",
           "input": "cooperative-role",
@@ -99,7 +99,7 @@
         {
           "id": "group-role",
           "operation": "create",
-          "entity": "group-holding-operator-role",
+          "entity": "group-agricultural-holder-role",
           "client": "editor",
           "accessProfile": "editor",
           "input": "group-role",

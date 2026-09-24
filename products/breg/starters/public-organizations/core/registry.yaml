@@ -55,7 +55,7 @@ manifestProjection:
             - https://publicschema.org/name
         - id: description
           concepts:
-            - https://publicschema.org/public_mandate
+            - https://publicschema.org/description
     - id: institutional-relationship
       title: Institutional Relationship
       conceptUri: https://publicschema.org/InstitutionalRelationship

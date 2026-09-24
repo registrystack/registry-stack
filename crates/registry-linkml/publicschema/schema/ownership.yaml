@@ -1,0 +1,355 @@
+id: https://publicschema.org/linkml/ownership
+name: publicschema-ownership
+title: Ownership and control
+description: Ownership and control interests and legal arrangements.
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  bibo: http://purl.org/ontology/bibo/
+imports:
+- linkml:types
+- common
+- vocabularies
+- value_types
+classes:
+  OwnershipInterest:
+    class_uri: publicschema:OwnershipInterest
+    title: Ownership Interest
+    description: A stated ownership or control interest that a person, organization or legal arrangement
+      holds in an organization or legal arrangement, such as a shareholding or voting rights. Separate
+      interests may coexist. An indirect interest may list the direct interests that make up its route.
+      Recording an interest does not decide who is a beneficial owner under any law; a source's conclusion
+      is recorded separately, with the legal definition it applies.
+    slots:
+    - interest_holder
+    - interest_entity
+    - interest_type
+    - interest_directness
+    - interest_percentage
+    - interest_minimum_percentage
+    - interest_exclusive_minimum_percentage
+    - interest_maximum_percentage
+    - interest_exclusive_maximum_percentage
+    - interest_description
+    - component_interests
+    - beneficial_ownership_or_control
+    - beneficial_ownership_definition
+    - start_date
+    - end_date
+    status: bibo:draft
+    annotations:
+      label_es: Participación en la propiedad
+      label_fr: Intérêt de propriété
+      description_es: Una participación de propiedad o de control declarada que una persona, una organización
+        o una estructura jurídica posee en una organización o una estructura jurídica, como una participación
+        accionaria o derechos de voto. Pueden coexistir participaciones distintas. Una participación
+        indirecta puede enumerar las participaciones directas que componen su recorrido. El registro
+        de una participación no determina quién es beneficiario final conforme a ninguna ley; la conclusión
+        de una fuente se registra por separado, con la definición legal que aplica.
+      description_fr: Une participation de propriété ou de contrôle déclarée qu'une personne, une organisation
+        ou une construction juridique détient dans une organisation ou une construction juridique,
+        par exemple une participation au capital ou des droits de vote. Plusieurs participations distinctes
+        peuvent coexister. Une participation indirecte peut énumérer les participations directes qui
+        composent son parcours. L'enregistrement d'une participation ne détermine pas qui est un bénéficiaire
+        effectif au regard d'une loi quelconque ; la conclusion d'une source est enregistrée séparément,
+        avec la définition légale qu'elle applique.
+      bibliography_refs: '["openownership-bods"]'
+  LegalArrangement:
+    class_uri: publicschema:LegalArrangement
+    title: Legal Arrangement
+    description: An arrangement, such as a trust or nominee agreement, through which people or organizations
+      exercise ownership or control over an entity without forming a separate legal person. A trust that
+      has legal personality is an Organization instead. Identifying an arrangement does not establish
+      the identity, rights or beneficial ownership of its participants.
+    slots:
+    - name
+    - identifiers
+    - arrangement_type
+    status: bibo:draft
+    annotations:
+      label_es: Estructura jurídica
+      label_fr: Construction juridique
+      description_es: Una estructura, como un fideicomiso o un acuerdo de testaferro, mediante la cual
+        personas u organizaciones ejercen la propiedad o el control sobre una entidad sin constituir
+        una persona jurídica distinta. Un fideicomiso que posee personalidad jurídica es en cambio una
+        Organization. La identificación de una estructura no establece la identidad, los derechos ni
+        la condición de beneficiario final de sus participantes.
+      description_fr: Une construction, telle qu'un trust ou un accord de prête-nom, par laquelle des
+        personnes ou des organisations exercent la propriété ou le contrôle d'une entité sans constituer
+        une personne morale distincte. Un trust doté de la personnalité juridique est en revanche une
+        Organization. L'identification d'une construction n'établit pas l'identité, les droits ou le
+        statut de bénéficiaire effectif de ses participants.
+      bibliography_refs: '["openownership-bods"]'
+slots:
+  interest_holder:
+    slot_uri: publicschema:interest_holder
+    title: Interest holder
+    description: The URI of the person, organization or legal arrangement that holds the interest.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Titular de la participación
+      label_fr: Titulaire de la participation
+      description_es: El URI de la persona, la organización o la estructura jurídica que posee la
+        participación.
+      description_fr: L'URI de la personne, de l'organisation ou de la construction juridique qui détient
+        la participation.
+      category: governance
+      sensitivity: sensitive
+  interest_entity:
+    slot_uri: publicschema:interest_entity
+    title: Interest entity
+    description: The URI of the organization or legal arrangement in which the interest is held. A person
+      is never the entity in which an interest is held.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Entidad de la participación
+      label_fr: Entité de la participation
+      description_es: El URI de la organización o la estructura jurídica en la que se posee la participación.
+        Una persona nunca es la entidad en la que se posee una participación.
+      description_fr: L'URI de l'organisation ou de la construction juridique dans laquelle la participation
+        est détenue. Une personne n'est jamais l'entité dans laquelle une participation est détenue.
+      category: governance
+  interest_type:
+    slot_uri: publicschema:interest_type
+    title: Interest type
+    description: How the interest is held or exercised, such as shares, voting rights or the right to
+      appoint the board. Codes from the Beneficial Ownership Data Standard interestType codelist are
+      recommended; a jurisdiction's own scheme can be used for interests that list does not cover.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de participación
+      label_fr: Type de participation
+      description_es: La forma en que se posee o se ejerce la participación, como acciones, derechos
+        de voto o el derecho a nombrar la junta directiva. Se recomiendan los códigos de la lista interestType
+        del Beneficial Ownership Data Standard; puede usarse el esquema propio de una jurisdicción para
+        las participaciones que esa lista no cubre.
+      description_fr: La manière dont la participation est détenue ou exercée, par exemple des actions,
+        des droits de vote ou le droit de nommer le conseil d'administration. Les codes de la liste interestType
+        du Beneficial Ownership Data Standard sont recommandés ; le référentiel propre d'une juridiction
+        peut être utilisé pour les participations que cette liste ne couvre pas.
+      category: classification
+      bibliography_refs: '["openownership-bods"]'
+  interest_directness:
+    slot_uri: publicschema:interest_directness
+    title: Interest directness
+    description: Whether the interest is held directly, through intermediate entities or arrangements,
+      or with unknown directness.
+    range: InterestDirectness
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Carácter directo de la participación
+      label_fr: Caractère direct de la participation
+      description_es: Si la participación se posee directamente, a través de entidades o estructuras
+        intermedias, o con un carácter directo desconocido.
+      description_fr: Si la participation est détenue directement, par l'intermédiaire d'entités ou
+        de constructions intermédiaires, ou avec un caractère direct inconnu.
+      category: classification
+  interest_percentage:
+    slot_uri: publicschema:interest_percentage
+    title: Interest percentage
+    description: An exact asserted percentage for this interest, on a scale from zero to one hundred.
+      Omit when only a band or uncertain amount is known; preserve that qualification in interest_description.
+    range: decimal
+    minimum_value: 0
+    maximum_value: 100
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Porcentaje de la participación
+      label_fr: Pourcentage de la participation
+      description_es: Un porcentaje exacto declarado para esta participación, en una escala de cero
+        a cien. Debe omitirse cuando solo se conoce un rango o un monto incierto; esa precisión se
+        conserva en interest_description.
+      description_fr: Un pourcentage exact déclaré pour cette participation, sur une échelle de zéro
+        à cent. À omettre lorsque seule une fourchette ou un montant incertain est connu ; conserver
+        cette précision dans interest_description.
+      category: governance
+  beneficial_ownership_or_control:
+    slot_uri: publicschema:beneficial_ownership_or_control
+    title: Beneficial ownership or control
+    description: Whether the source concluded that this interest amounts to beneficial ownership or
+      control, as in the Beneficial Ownership Data Standard beneficialOwnershipOrControl field. It is a
+      legal conclusion under the definition named in beneficial_ownership_definition, and is stated only
+      with it. False records a conclusion that the interest does not qualify; an absent value means that
+      no conclusion is recorded.
+    range: boolean
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Titularidad real o control
+      label_fr: Bénéficiaire effectif ou contrôle
+      description_es: Si la fuente concluyó que esta participación constituye titularidad real o control,
+        como en el campo beneficialOwnershipOrControl del Beneficial Ownership Data Standard. Es una
+        conclusión jurídica según la definición indicada en beneficial_ownership_definition, y solo se
+        indica junto con ella. Falso registra la conclusión de que la participación no califica; un valor
+        ausente significa que no se registra ninguna conclusión.
+      description_fr: Indique si la source a conclu que cette participation constitue une propriété
+        effective ou un contrôle, comme dans le champ beneficialOwnershipOrControl du Beneficial Ownership
+        Data Standard. Il s'agit d'une conclusion juridique au regard de la définition indiquée dans
+        beneficial_ownership_definition, et elle n'est indiquée qu'avec celle-ci. Faux enregistre la
+        conclusion que la participation ne remplit pas les conditions ; une valeur absente signifie
+        qu'aucune conclusion n'est enregistrée.
+      category: governance
+      sensitivity: sensitive
+      bibliography_refs: '["openownership-bods"]'
+  beneficial_ownership_definition:
+    slot_uri: publicschema:beneficial_ownership_definition
+    title: Beneficial ownership definition
+    description: The URI of the legal provision or guidance that defines beneficial ownership or control
+      for the conclusion in beneficial_ownership_or_control, such as a national anti-money-laundering law.
+    range: uri
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Definición de titularidad real
+      label_fr: Définition du bénéficiaire effectif
+      description_es: El URI de la disposición legal o la orientación que define la titularidad real
+        o el control para la conclusión de beneficial_ownership_or_control, como una ley nacional
+        contra el blanqueo de capitales.
+      description_fr: L'URI de la disposition légale ou des orientations qui définissent la propriété
+        effective ou le contrôle pour la conclusion de beneficial_ownership_or_control, telle qu'une loi
+        nationale de lutte contre le blanchiment de capitaux.
+      category: governance
+      bibliography_refs: '["openownership-bods"]'
+  interest_description:
+    slot_uri: publicschema:interest_description
+    title: Interest description
+    description: The local name for the interest or other details that explain it, such as bounds or
+      uncertainty that the percentage slots cannot express.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Descripción de la participación
+      label_fr: Description de la participation
+      description_es: El nombre local de la participación u otros detalles que la expliquen, como
+        límites o una incertidumbre que los campos de porcentaje no pueden expresar.
+      description_fr: Le nom local de la participation ou d'autres précisions qui l'expliquent, par
+        exemple des bornes ou une incertitude que les champs de pourcentage ne peuvent exprimer.
+      category: governance
+      sensitivity: sensitive
+  arrangement_type:
+    slot_uri: publicschema:arrangement_type
+    title: Arrangement type
+    description: The kind of legal arrangement, such as a trust or nominee agreement. Its legal treatment
+      depends on the applicable jurisdiction.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de estructura jurídica
+      label_fr: Type de construction juridique
+      description_es: El tipo de estructura jurídica, como un fideicomiso o un acuerdo de testaferro.
+        Su tratamiento jurídico depende de la jurisdicción aplicable.
+      description_fr: Le type de construction juridique, par exemple un trust ou un accord de prête-nom.
+        Son traitement juridique dépend de la juridiction applicable.
+      category: classification
+  component_interests:
+    slot_uri: publicschema:component_interests
+    title: Component interests
+    description: The direct interests that together make up this indirect interest, each with its own
+      holder, entity and period. Listing them does not verify the route or calculate an effective share.
+    range: OwnershipInterest
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Participaciones componentes
+      label_fr: Participations composantes
+      description_es: Las participaciones directas que en conjunto conforman esta participación indirecta,
+        cada una con su propio titular, entidad y período. Su enumeración no verifica el recorrido
+        ni calcula una participación efectiva.
+      description_fr: Les participations directes qui composent ensemble cette participation indirecte,
+        chacune avec son propre titulaire, son entité et sa période. Leur énumération ne vérifie pas
+        le parcours ni ne calcule une part effective.
+      category: governance
+      sensitivity: sensitive
+  interest_minimum_percentage:
+    slot_uri: publicschema:interest_minimum_percentage
+    title: Interest minimum percentage
+    description: An inclusive lower percentage bound for an asserted interest on a zero-to-one-hundred
+      scale. This is a bound, not an exact value; omit when unknown.
+    range: decimal
+    minimum_value: 0
+    maximum_value: 100
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Porcentaje mínimo de la participación
+      label_fr: Pourcentage minimal de la participation
+      description_es: Un límite inferior inclusivo de porcentaje para una participación declarada,
+        en una escala de cero a cien. Se trata de un límite, no de un valor exacto; debe omitirse cuando
+        se desconoce.
+      description_fr: Une borne inférieure inclusive de pourcentage pour une participation déclarée,
+        sur une échelle de zéro à cent. Il s'agit d'une borne, non d'une valeur exacte ; à omettre
+        lorsqu'elle est inconnue.
+      category: governance
+  interest_exclusive_minimum_percentage:
+    slot_uri: publicschema:interest_exclusive_minimum_percentage
+    title: Interest exclusive minimum percentage
+    description: A percentage strictly below the asserted interest, on a zero-to-one-hundred scale.
+      An interest exceeding twenty-five percent may use 25 here without inventing an exact amount.
+      This is alternative to an inclusive lower bound.
+    range: decimal
+    minimum_value: 0
+    maximum_value: 100
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Porcentaje mínimo exclusivo de la participación
+      label_fr: Pourcentage minimal exclusif de la participation
+      description_es: Un porcentaje estrictamente inferior a la participación declarada, en una escala
+        de cero a cien. Una participación superior al veinticinco por ciento puede usar 25 aquí sin
+        inventar un monto exacto. Este valor es una alternativa a un límite inferior inclusivo.
+      description_fr: Un pourcentage strictement inférieur à la participation déclarée, sur une échelle
+        de zéro à cent. Une participation supérieure à vingt-cinq pour cent peut utiliser 25 ici sans
+        inventer un montant exact. Cette valeur est une alternative à une borne inférieure inclusive.
+      category: governance
+  interest_maximum_percentage:
+    slot_uri: publicschema:interest_maximum_percentage
+    title: Interest maximum percentage
+    description: An inclusive upper percentage bound for an asserted interest on a zero-to-one-hundred
+      scale. Omission means that this upper bound was not supplied; it does not imply an exact amount.
+    range: decimal
+    minimum_value: 0
+    maximum_value: 100
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Porcentaje máximo de la participación
+      label_fr: Pourcentage maximal de la participation
+      description_es: Un límite superior inclusivo de porcentaje para una participación declarada,
+        en una escala de cero a cien. Su omisión significa que no se proporcionó este límite superior;
+        no implica un monto exacto.
+      description_fr: Une borne supérieure inclusive de pourcentage pour une participation déclarée,
+        sur une échelle de zéro à cent. Son omission signifie que cette borne supérieure n'a pas été
+        fournie ; elle n'implique pas un montant exact.
+      category: governance
+  interest_exclusive_maximum_percentage:
+    slot_uri: publicschema:interest_exclusive_maximum_percentage
+    title: Interest exclusive maximum percentage
+    description: A percentage strictly above the asserted interest, on a zero-to-one-hundred scale.
+      This is alternative to an inclusive upper bound and never an exact percentage.
+    range: decimal
+    minimum_value: 0
+    maximum_value: 100
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Porcentaje máximo exclusivo de la participación
+      label_fr: Pourcentage maximal exclusif de la participation
+      description_es: Un porcentaje estrictamente superior a la participación declarada, en una escala
+        de cero a cien. Este valor es una alternativa a un límite superior inclusivo y nunca es un
+        porcentaje exacto.
+      description_fr: Un pourcentage strictement supérieur à la participation déclarée, sur une échelle
+        de zéro à cent. Cette valeur est une alternative à une borne supérieure inclusive et n'est
+        jamais un pourcentage exact.
+      category: governance

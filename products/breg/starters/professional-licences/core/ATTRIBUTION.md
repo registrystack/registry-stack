@@ -5,7 +5,7 @@ by the PublicSchema contributors, licensed under
 [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/).
 
 The exact draft source is commit
-[`1ea9ce333918693b29aec31068fac412e02cb8dc`](https://github.com/PublicSchema/publicschema.org/tree/1ea9ce333918693b29aec31068fac412e02cb8dc).
+[`bd07bda1fe9cb9eb8582cf7bc1c77367e2455e5b`](https://github.com/PublicSchema/publicschema.org/tree/bd07bda1fe9cb9eb8582cf7bc1c77367e2455e5b).
 The version string is 0.3.0; the commit, rather than that unchanged version
 string, identifies the draft vocabulary used here. The distribution includes
 `PUBLICSCHEMA-LICENSE.txt`.

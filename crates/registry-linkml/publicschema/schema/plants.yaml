@@ -1,0 +1,517 @@
+id: https://publicschema.org/linkml/plants
+name: publicschema-plants
+title: Crops and plant material
+description: Crop plantings, plant varieties, genetic resource accessions and seed lots.
+license: CC-BY-4.0
+default_prefix: publicschema
+prefixes:
+  publicschema: https://publicschema.org/
+  linkml: https://w3id.org/linkml/
+  bibo: http://purl.org/ontology/bibo/
+imports:
+- linkml:types
+- common
+- identity
+- value_types
+- agriculture_holdings
+- animals
+classes:
+  CropPlanting:
+    class_uri: publicschema:agri/CropPlanting
+    title: Crop Planting
+    description: One cultivation of one or more crops on an identified piece of land of an agricultural
+      holding, from sowing or planting to the end of that crop cycle. Growing a crop again on the same
+      land later is a separate planting. A declaration about a planting is a separate administrative record.
+    slots:
+    - planting_holding
+    - planting_parcel
+    - planting_components
+    - planting_date
+    - planting_season
+    status: bibo:draft
+    see_also:
+    - https://www.fao.org/4/i4913e/i4913e.pdf
+    annotations:
+      label_es: Siembra
+      label_fr: Mise en culture
+      description_es: Una siembra única de uno o más cultivos en una parcela de tierra identificada
+        de una explotación agropecuaria, desde la siembra o la plantación hasta el final de ese
+        ciclo de cultivo. Volver a sembrar un cultivo en la misma tierra más adelante constituye una
+        siembra distinta. Una declaración relativa a una siembra constituye un registro
+        administrativo independiente.
+      description_fr: Une seule mise en culture d'une ou plusieurs cultures sur une parcelle de
+        terre identifiée d'une exploitation agricole, du semis ou de la plantation jusqu'à la fin de
+        ce cycle cultural. Remettre une culture en place sur la même terre par la suite constitue
+        une mise en culture distincte. Une déclaration relative à une mise en culture constitue un
+        enregistrement administratif distinct.
+      source_domain: agri
+      bibliography_refs: '["fao-wca-2020-vol1"]'
+  CropPlantingComponent:
+    class_uri: publicschema:agri/CropPlantingComponent
+    title: Crop Planting Component
+    description: One crop, optionally of an identified variety, grown within a planting. Several components
+      describe inter-planted, mixed or associated crops, and each can have its own planting date.
+    slots:
+    - crop_kind
+    - planted_variety
+    - planting_date
+    - component_planted_area
+    status: bibo:draft
+    see_also:
+    - https://www.fao.org/4/i4913e/i4913e.pdf
+    annotations:
+      label_es: Componente de la siembra
+      label_fr: Composante de mise en culture
+      description_es: Un cultivo, opcionalmente de una variedad identificada, cultivado dentro de
+        una siembra. Varios componentes describen cultivos intercalados, mixtos o asociados, y cada
+        uno puede tener su propia fecha de siembra.
+      description_fr: Une culture, éventuellement d'une variété identifiée, cultivée au sein d'une
+        mise en culture. Plusieurs composantes décrivent des cultures intercalaires, mixtes ou
+        associées, et chacune peut avoir sa propre date de semis.
+      source_domain: agri
+      bibliography_refs: '["fao-wca-2020-vol1"]'
+  PlantVariety:
+    class_uri: publicschema:PlantVariety
+    title: Plant Variety
+    description: A plant grouping within a single botanical taxon of the lowest known rank that can be
+      defined by characteristics resulting from its genotype, is distinguished from any other grouping
+      by at least one of those characteristics, and is considered a unit because it can be propagated unchanged.
+      A variety is distinct from its listings, protection rights, denominations and physical seed.
+    slots:
+    - name
+    - biological_taxon
+    - variety_denominations
+    - breeder_reference
+    - origin_accessions
+    status: bibo:draft
+    see_also:
+    - https://www.upov.int/documents/d/upov/docs-en-pluto-contribute-pluto-tag-format-description.pdf
+    annotations:
+      label_es: Variedad vegetal
+      label_fr: Variété végétale
+      description_es: Un conjunto de plantas dentro de un único taxón botánico del rango más bajo
+        conocido que puede definirse por caracteres resultantes de su genotipo, que se distingue de
+        cualquier otro conjunto por al menos uno de esos caracteres, y que se considera una unidad
+        porque puede propagarse sin alteración. Una variedad es distinta de sus inscripciones, sus
+        derechos de protección, sus denominaciones y su semilla física.
+      description_fr: Un ensemble végétal au sein d'un taxon botanique du rang le plus bas connu,
+        qui peut être défini par des caractères résultant de son génotype, qui se distingue de tout
+        autre ensemble par au moins un de ces caractères, et qui est considéré comme une unité parce
+        qu'il peut être reproduit sans changement. Une variété est distincte de ses inscriptions, de
+        ses droits de protection, de ses dénominations et de sa semence physique.
+      bibliography_refs: '["upov-convention-1991", "upov-pluto-tag-format"]'
+  GeneticResourceAccession:
+    class_uri: publicschema:GeneticResourceAccession
+    title: Genetic Resource Accession
+    description: An identified sample of plant genetic material kept and maintained by a genebank or other
+      collection under an accession number that the maintaining institute assigns when the sample enters
+      the collection. An accession can have several physical samples or seed lots and need not be a named
+      variety.
+    slots:
+    - accession_number
+    - identifiers
+    - maintaining_institute
+    - biological_taxon
+    - accession_variety
+    - accession_collection_date
+    status: bibo:draft
+    see_also:
+    - https://www.genesys-pgr.org/documentation/apis
+    annotations:
+      label_es: Accesión de recurso genético
+      label_fr: Accession de ressource génétique
+      description_es: Una muestra identificada de material genético vegetal conservada y mantenida
+        por un banco de genes u otra colección bajo un número de accesión que el instituto
+        responsable de su conservación asigna cuando la muestra ingresa en la colección. Una
+        accesión puede tener varias muestras físicas o lotes de semillas y no necesita ser una
+        variedad con nombre.
+      description_fr: Un échantillon identifié de matériel génétique végétal conservé et entretenu
+        par une banque de gènes ou une autre collection sous un numéro d'accession que l'institut
+        conservateur attribue lorsque l'échantillon entre dans la collection. Une accession peut
+        comporter plusieurs échantillons physiques ou lots de semences et n'a pas besoin d'être une
+        variété nommée.
+      bibliography_refs: '["fao-bioversity-mcpd-2-1", "fao-itpgrfa-2001", "genesys-api-passport"]'
+  SeedLot:
+    class_uri: publicschema:SeedLot
+    title: Seed Lot
+    description: A specified quantity of seed that is physically and uniquely identifiable and handled
+      as one unit for storage, testing, certification or distribution. A lot is distinct from the varieties
+      and accessions whose material it contains, and combining source lots does not imply certification.
+    slots:
+    - name
+    - identifiers
+    - seed_lot_varieties
+    - seed_lot_accessions
+    - source_seed_lots
+    - seed_lot_quantity
+    - seed_lot_production_date
+    status: bibo:draft
+    see_also:
+    - https://inspection.canada.ca/en/plant-health/seeds/seed-inspection-procedures/oecd-and-eu
+    annotations:
+      label_es: Lote de semillas
+      label_fr: Lot de semences
+      description_es: Una cantidad determinada de semillas, física y unívocamente identificable,
+        tratada como una sola unidad para el almacenamiento, el análisis, la certificación o la
+        distribución. Un lote es distinto de las variedades y accesiones cuyo material contiene, y
+        la combinación de lotes de origen no implica certificación.
+      description_fr: Une quantité déterminée de semences, physiquement et uniquement identifiable,
+        traitée comme une seule unité pour le stockage, l'analyse, la certification ou la
+        distribution. Un lot est distinct des variétés et des accessions dont il contient le
+        matériel, et la combinaison de lots sources n'implique pas de certification.
+      bibliography_refs: '["cfia-qsp-152-1", "ista-rules-2026"]'
+slots:
+  planting_holding:
+    slot_uri: publicschema:agri/planting_holding
+    title: Planting holding
+    description: The agricultural holding that carries out this planting. It need not own the land.
+    range: Farm
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Explotación de la siembra
+      label_fr: Exploitation de la mise en culture
+      description_es: La explotación agropecuaria que realiza esta siembra. No es necesario que sea
+        propietaria de la tierra.
+      description_fr: L'exploitation agricole qui réalise cette mise en culture. Elle n'a pas besoin
+        d'être propriétaire de la terre.
+      source_domain: agri
+      category: agriculture
+  planting_parcel:
+    slot_uri: publicschema:agri/planting_parcel
+    title: Planting parcel
+    description: The agricultural parcel on which the planting takes place.
+    range: AgriculturalParcel
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Parcela de la siembra
+      label_fr: Parcelle de la mise en culture
+      description_es: La parcela agrícola en la que tiene lugar la siembra.
+      description_fr: La parcelle agricole sur laquelle la mise en culture a lieu.
+      source_domain: agri
+      category: agriculture
+  planting_components:
+    slot_uri: publicschema:agri/planting_components
+    title: Planting components
+    description: The crops grown in this planting, one component for each crop of a mixture.
+    range: CropPlantingComponent
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Componentes de la siembra
+      label_fr: Composantes de la mise en culture
+      description_es: Los cultivos cultivados en esta siembra, un componente por cada cultivo de una
+        mezcla.
+      description_fr: Les cultures cultivées dans cette mise en culture, une composante par culture
+        d'un mélange.
+      source_domain: agri
+      category: agriculture
+  planting_date:
+    slot_uri: publicschema:agri/planting_date
+    title: Planting date
+    description: The date on which the crop was sown or planted. On a planting it is the date shared by
+      all its components; on a component it is the date of that crop alone.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de siembra
+      label_fr: Date de semis
+      description_es: La fecha en que se sembró o plantó el cultivo. En una siembra, es la fecha
+        común a todos sus componentes; en un componente, es la fecha de ese único cultivo.
+      description_fr: La date à laquelle la culture a été semée ou plantée. Sur une mise en culture,
+        il s'agit de la date commune à toutes ses composantes ; sur une composante, il s'agit de la
+        date de cette seule culture.
+      source_domain: agri
+      category: agriculture
+  planting_season:
+    slot_uri: publicschema:agri/planting_season
+    title: Planting season
+    description: The cropping season in which the planting took place, as defined by a national or local
+      season scheme. A season need not match a calendar year.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Campaña agrícola
+      label_fr: Campagne agricole
+      description_es: La campaña agrícola en la que tuvo lugar la siembra, tal como se define en un
+        esquema de campañas nacional o local. Una campaña no tiene por qué coincidir con un año
+        calendario.
+      description_fr: La campagne agricole au cours de laquelle la mise en culture a eu lieu, telle
+        que définie par un référentiel de campagnes national ou local. Une campagne ne correspond
+        pas nécessairement à une année civile.
+      source_domain: agri
+      category: agriculture
+  crop_kind:
+    slot_uri: publicschema:agri/crop_kind
+    title: Crop kind
+    description: The kind of crop grown, as a code from an identified crop classification such as the
+      FAO Indicative Crop Classification or the Central Product Classification.
+    range: CodedValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Tipo de cultivo
+      label_fr: Type de culture
+      description_es: El tipo de cultivo cultivado, como un código procedente de una clasificación
+        de cultivos identificada, como la Clasificación Indicativa de Cultivos de la FAO o la
+        Clasificación Central de Productos.
+      description_fr: Le type de culture cultivée, sous forme de code issu d'une classification des
+        cultures identifiée, telle que la Classification indicative des cultures de la FAO ou la
+        Classification centrale de produits.
+      source_domain: agri
+      category: agriculture
+      bibliography_refs: '["fao-wca-2020-vol1"]'
+  planted_variety:
+    slot_uri: publicschema:agri/planted_variety
+    title: Planted variety
+    description: The variety grown in this component, when identified.
+    range: PlantVariety
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Variedad plantada
+      label_fr: Variété plantée
+      description_es: La variedad cultivada en este componente, cuando está identificada.
+      description_fr: La variété cultivée dans cette composante, lorsqu'elle est identifiée.
+      source_domain: agri
+      category: agriculture
+  component_planted_area:
+    slot_uri: publicschema:agri/component_planted_area
+    title: Component planted area
+    description: The area attributed to this component, with an area unit. For inter-planted, mixed or
+      associated crops the area of the plot or field is apportioned among the components, so the component
+      areas add up to the area of the plot or field.
+    range: QuantityValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Superficie plantada del componente
+      label_fr: Superficie plantée de la composante
+      description_es: La superficie atribuida a este componente, con una unidad de superficie. En el
+        caso de cultivos intercalados, mixtos o asociados, la superficie de la parcela o el campo se
+        reparte entre los componentes, de modo que las superficies de los componentes suman en total
+        la superficie de la parcela o el campo.
+      description_fr: La superficie attribuée à cette composante, avec une unité de superficie. Pour
+        les cultures intercalaires, mixtes ou associées, la superficie de la parcelle ou du champ
+        est répartie entre les composantes, de sorte que les superficies des composantes
+        correspondent au total à la superficie de la parcelle ou du champ.
+      source_domain: agri
+      category: agriculture
+      bibliography_refs: '["fao-wca-2020-vol1"]'
+  variety_denominations:
+    slot_uri: publicschema:variety_denominations
+    title: Variety denominations
+    description: Denominations under which the variety has been proposed or registered in one or more
+      jurisdictions. Approval status, jurisdiction and dates belong to a listing or protection record,
+      and trademarks are not denominations.
+    range: string
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Denominaciones varietales
+      label_fr: Dénominations variétales
+      description_es: Las denominaciones bajo las cuales se ha propuesto o registrado la variedad en
+        una o varias jurisdicciones. El estado de aprobación, la jurisdicción y las fechas
+        corresponden a un registro de inscripción o de protección, y las marcas comerciales no son
+        denominaciones.
+      description_fr: Les dénominations sous lesquelles la variété a été proposée ou enregistrée
+        dans une ou plusieurs juridictions. Le statut d'approbation, la juridiction et les dates
+        relèvent d'un enregistrement d'inscription ou de protection, et les marques commerciales ne
+        sont pas des dénominations.
+      category: agriculture
+      bibliography_refs: '["upov-convention-1991"]'
+  breeder_reference:
+    slot_uri: publicschema:breeder_reference
+    title: Breeder reference
+    description: The reference that the breeder uses for the variety, as supplied. It links records of
+      the same variety held under different denominations.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Referencia del obtentor
+      label_fr: Référence de l'obtenteur
+      description_es: La referencia que el obtentor utiliza para la variedad, tal como se ha
+        proporcionado. Vincula los registros de una misma variedad conservados bajo denominaciones
+        diferentes.
+      description_fr: La référence que l'obtenteur utilise pour la variété, telle que fournie. Elle
+        relie les enregistrements d'une même variété détenus sous des dénominations différentes.
+      category: agriculture
+  origin_accessions:
+    slot_uri: publicschema:origin_accessions
+    title: Origin accessions
+    description: Genebank accessions reported as sources of the variety's breeding material, without asserting
+      a complete pedigree. This breeding origin is a different relation from the variety an accession represents.
+    range: GeneticResourceAccession
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Accesiones de origen
+      label_fr: Accessions d'origine
+      description_es: Las accesiones de banco de genes señaladas como fuentes del material de
+        mejoramiento de la variedad, sin afirmar un pedigrí completo. Este origen de mejoramiento es
+        una relación distinta de la variedad que representa una accesión.
+      description_fr: Les accessions de banque de gènes signalées comme sources du matériel de
+        sélection de la variété, sans affirmer une généalogie complète. Cette origine de sélection
+        est une relation différente de la variété qu'une accession représente.
+      category: agriculture
+  accession_number:
+    slot_uri: publicschema:accession_number
+    title: Accession number
+    description: The number that the maintaining institute assigns to the accession when it enters the
+      collection. It is unique only within that institute.
+    range: string
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Número de accesión
+      label_fr: Numéro d'accession
+      description_es: El número que el instituto responsable de la conservación asigna a la accesión
+        cuando ingresa en la colección. Es único únicamente dentro de ese instituto.
+      description_fr: Le numéro que l'institut conservateur attribue à l'accession lorsqu'elle entre
+        dans la collection. Il n'est unique qu'au sein de cet institut.
+      category: agriculture
+      bibliography_refs: '["fao-bioversity-mcpd-2-1"]'
+  maintaining_institute:
+    slot_uri: publicschema:maintaining_institute
+    title: Maintaining institute
+    description: The organization that maintains the accession, such as a genebank identified by its institute
+      code in the FAO World Information and Early Warning System on plant genetic resources.
+    range: Organization
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Instituto responsable de la conservación
+      label_fr: Institut conservateur
+      description_es: La organización que conserva la accesión, como un banco de genes identificado
+        por su código de instituto en el Sistema Mundial de Información y Alerta Rápida sobre los
+        Recursos Fitogenéticos de la FAO.
+      description_fr: L'organisation qui conserve l'accession, telle qu'une banque de gènes
+        identifiée par son code d'institut dans le Système mondial d'information et d'alerte rapide
+        sur les ressources phytogénétiques de la FAO.
+      category: agriculture
+      bibliography_refs: '["fao-bioversity-mcpd-2-1"]'
+  accession_variety:
+    slot_uri: publicschema:accession_variety
+    title: Accession variety
+    description: The variety that the accession represents, when established. The accession and the variety
+      remain distinct, and this relation is not the inverse of a variety's origin accessions.
+    range: PlantVariety
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Variedad de la accesión
+      label_fr: Variété de l'accession
+      description_es: La variedad que la accesión representa, cuando se ha establecido. La accesión
+        y la variedad siguen siendo distintas, y esta relación no es la inversa de las accesiones de
+        origen de una variedad.
+      description_fr: La variété que l'accession représente, lorsqu'elle est établie. L'accession et
+        la variété restent distinctes, et cette relation n'est pas l'inverse des accessions
+        d'origine d'une variété.
+      category: agriculture
+  accession_collection_date:
+    slot_uri: publicschema:accession_collection_date
+    title: Accession collection date
+    description: The date on which the sample was collected to the precision known, in ISO 8601 form as
+      a year (1990), a year and month (1990-07) or a full date (1990-07-15). A collecting date recorded with
+      missing parts, such as 1990----, keeps only its known parts (1990).
+    range: string
+    pattern: ^[0-9]{4}(-(0[1-9]|1[0-2])(-(0[1-9]|[12][0-9]|3[01]))?)?$
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de recolección de la accesión
+      label_fr: Date de collecte de l'accession
+      description_es: La fecha en que se recolectó la muestra, con la precisión conocida, en formato
+        ISO 8601, en forma de un año (1990), un año y un mes (1990-07) o una fecha completa
+        (1990-07-15). Una fecha de recolección registrada con partes faltantes, como 1990----,
+        conserva únicamente sus partes conocidas (1990).
+      description_fr: La date à laquelle l'échantillon a été collecté, à la précision connue, au
+        format ISO 8601, sous la forme d'une année (1990), d'une année et d'un mois (1990-07) ou
+        d'une date complète (1990-07-15). Une date de collecte enregistrée avec des éléments
+        manquants, telle que 1990----, ne conserve que ses éléments connus (1990).
+      category: agriculture
+      bibliography_refs: '["fao-bioversity-mcpd-2-1"]'
+  seed_lot_varieties:
+    slot_uri: publicschema:seed_lot_varieties
+    title: Seed lot varieties
+    description: The varieties whose seed the lot contains. An empty or absent list does not imply varietal
+      purity.
+    range: PlantVariety
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Variedades del lote de semillas
+      label_fr: Variétés du lot de semences
+      description_es: Las variedades cuya semilla contiene el lote. Una lista vacía o ausente no
+        implica pureza varietal.
+      description_fr: Les variétés dont le lot contient la semence. Une liste vide ou absente
+        n'implique pas la pureté variétale.
+      category: agriculture
+  seed_lot_accessions:
+    slot_uri: publicschema:seed_lot_accessions
+    title: Seed lot accessions
+    description: The genebank accessions whose material the lot contains.
+    range: GeneticResourceAccession
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Accesiones del lote de semillas
+      label_fr: Accessions du lot de semences
+      description_es: Las accesiones de banco de genes cuyo material contiene el lote.
+      description_fr: Les accessions de banque de gènes dont le lot contient le matériel.
+      category: agriculture
+  source_seed_lots:
+    slot_uri: publicschema:source_seed_lots
+    title: Source seed lots
+    description: The seed lots combined to form this lot. The list does not express proportions or establish
+      certified blend status.
+    range: SeedLot
+    multivalued: true
+    status: bibo:draft
+    annotations:
+      label_es: Lotes de semillas de origen
+      label_fr: Lots de semences source
+      description_es: Los lotes de semillas combinados para formar este lote. La lista no expresa
+        proporciones ni establece un estado de mezcla certificada.
+      description_fr: Les lots de semences combinés pour former ce lot. La liste n'exprime pas de
+        proportions et n'établit pas de statut de mélange certifié.
+      category: agriculture
+  seed_lot_quantity:
+    slot_uri: publicschema:seed_lot_quantity
+    title: Seed lot quantity
+    description: The amount of seed in the lot, by weight or number of seeds, with an explicit unit. No
+      inventory balance or current availability is implied.
+    range: QuantityValue
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Cantidad del lote de semillas
+      label_fr: Quantité du lot de semences
+      description_es: La cantidad de semillas en el lote, en peso o en número de semillas, con una
+        unidad explícita. No se implica ningún saldo de inventario ni disponibilidad actual.
+      description_fr: La quantité de semences dans le lot, en poids ou en nombre de semences, avec
+        une unité explicite. Aucun solde d'inventaire ni disponibilité actuelle n'est impliqué.
+      category: agriculture
+  seed_lot_production_date:
+    slot_uri: publicschema:seed_lot_production_date
+    title: Seed lot production date
+    description: The date on which the lot was formed as a uniquely identified quantity of seed, distinct
+      from the harvest date and from the date a container was sealed.
+    range: date
+    multivalued: false
+    status: bibo:draft
+    annotations:
+      label_es: Fecha de producción del lote de semillas
+      label_fr: Date de production du lot de semences
+      description_es: La fecha en que se constituyó el lote como una cantidad de semillas
+        identificada de forma única, distinta de la fecha de cosecha y de la fecha en que se selló
+        un envase.
+      description_fr: La date à laquelle le lot a été constitué comme une quantité de semences
+        identifiée de manière unique, distincte de la date de récolte et de la date de scellement
+        d'un contenant.
+      category: agriculture
+      bibliography_refs: '["ista-rules-2026"]'
