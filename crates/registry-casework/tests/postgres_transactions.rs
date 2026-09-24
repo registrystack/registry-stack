@@ -1287,6 +1287,141 @@ async fn migration_16_releases_superseded_identities_in_a_database_that_holds_th
     );
 }
 
+/// The schema Casework v0.32.0 migrated to: versions 1 through 14, the last
+/// release whose ledger still held the hosted-item tables migration 15 drops.
+const V0_32_MIGRATIONS: [&str; 14] = [
+    include_str!("../migrations/0001_casework.sql"),
+    include_str!("../migrations/0002_hosted_casework.sql"),
+    include_str!("../migrations/0003_assignment.sql"),
+    include_str!("../migrations/0004_clocks.sql"),
+    include_str!("../migrations/0005_source_retention.sql"),
+    include_str!("../migrations/0006_source_history.sql"),
+    include_str!("../migrations/0007_directory_targets.sql"),
+    include_str!("../migrations/0008_retention_and_inbox_indexes.sql"),
+    include_str!("../migrations/0009_directory_display_names.sql"),
+    include_str!("../migrations/0010_reference_lookup_and_sort.sql"),
+    include_str!("../migrations/0011_source_reconciliation_progress.sql"),
+    include_str!("../migrations/0012_absence_cursors.sql"),
+    include_str!("../migrations/0013_sync_claim_indexes.sql"),
+    include_str!("../migrations/0014_task_grants.sql"),
+];
+
+async fn establish_v0_32_schema(client: &tokio_postgres::Client) {
+    client
+        .batch_execute(
+            "CREATE TABLE casework_schema_migrations (\
+             version bigint PRIMARY KEY CHECK (version > 0),\
+             applied_at timestamptz NOT NULL)",
+        )
+        .await
+        .expect("create the migration ledger");
+    for (version, migration) in (1_i64..).zip(V0_32_MIGRATIONS) {
+        client
+            .batch_execute(migration)
+            .await
+            .unwrap_or_else(|error| panic!("apply migration {version}: {error}"));
+        client
+            .execute(
+                "INSERT INTO casework_schema_migrations(version,applied_at) VALUES($1,now())",
+                &[&version],
+            )
+            .await
+            .unwrap_or_else(|error| panic!("record migration {version}: {error}"));
+    }
+}
+
+async fn row_count(client: &tokio_postgres::Client, table: &str) -> i64 {
+    client
+        .query_one(&format!("SELECT count(*) FROM {table}"), &[])
+        .await
+        .unwrap_or_else(|error| panic!("count {table}: {error}"))
+        .get(0)
+}
+
+#[tokio::test]
+async fn migration_refuses_to_drop_retained_hosted_work_and_writes_nothing() {
+    let (store, client, _schema) = isolated_schema("hosted_work_upgrade").await;
+    establish_v0_32_schema(&client).await;
+    // One claimed hosted item still in flight, and the accountability record
+    // an earlier decision retains for a year.
+    client
+        .batch_execute(
+            "INSERT INTO casework_hosted_items(item_id,kind_id,kind_version,kind_policy_digest,kind_policy,queue_id,state,holder_issuer,holder_subject,revision,created_at,updated_at) \
+                 VALUES('00000000-0000-4000-8000-0000000000a1','payment-review','1','sha256:policy','{}','review','claimed','https://issuer.test','officer-one',2,now(),now()); \
+             INSERT INTO casework_hosted_actor_references(actor_ref,issuer,subject) \
+                 VALUES('actor-1','https://issuer.test','officer-one'); \
+             INSERT INTO casework_hosted_accountability(event_id,item_id,actor_ref,actor_issuer,actor_subject,profile_id,queue_id,outcome,occurred_at,retained_until) \
+                 VALUES('00000000-0000-4000-8000-0000000000b1','00000000-0000-4000-8000-0000000000a2','actor-1','https://issuer.test','officer-one','staff','review','approved',now(),now()+interval '365 days');",
+        )
+        .await
+        .expect("seed hosted work the way v0.32.0 retained it");
+
+    let refusal = store
+        .migrate()
+        .await
+        .expect_err("migration must not drop retained hosted work");
+    assert!(
+        matches!(refusal, StoreError::HostedWorkWouldBeDropped { .. }),
+        "{refusal:?}"
+    );
+    assert_eq!(
+        refusal.to_string(),
+        "the Casework database holds hosted work that schema migration 15 would drop: \
+         casework_hosted_accountability (1 row), casework_hosted_items (1 row), \
+         casework_hosted_actor_references (1 row); nothing was changed. This release does not \
+         carry hosted work forward: keep this database with the release that wrote it until \
+         the work it holds is exported, then migrate a fresh Casework database for this release"
+    );
+    assert_eq!(
+        applied_versions(&client).await,
+        (1..=14).collect::<Vec<_>>()
+    );
+    assert_eq!(row_count(&client, "casework_hosted_items").await, 1);
+    assert_eq!(
+        row_count(&client, "casework_hosted_accountability").await,
+        1
+    );
+    assert_eq!(
+        row_count(&client, "casework_hosted_actor_references").await,
+        1
+    );
+    let review_tables: bool = client
+        .query_one(
+            "SELECT to_regclass('casework_review_requests') IS NULL",
+            &[],
+        )
+        .await
+        .expect("inspect the review schema")
+        .get(0);
+    assert!(review_tables, "migration 15 was not applied");
+}
+
+#[tokio::test]
+async fn migration_replaces_empty_hosted_tables_through_the_ledger_head() {
+    let (store, client, _schema) = isolated_schema("hosted_empty_upgrade").await;
+    establish_v0_32_schema(&client).await;
+
+    store
+        .migrate()
+        .await
+        .expect("empty hosted tables hold nothing to drop");
+
+    assert_eq!(
+        applied_versions(&client).await,
+        (1..=17).collect::<Vec<_>>()
+    );
+    let hosted_tables_remaining: bool = client
+        .query_one(
+            "SELECT to_regclass('casework_hosted_items') IS NOT NULL",
+            &[],
+        )
+        .await
+        .expect("inspect the hosted schema")
+        .get(0);
+    assert!(!hosted_tables_remaining);
+    store.ready().await.expect("the migrated schema is current");
+}
+
 #[tokio::test]
 async fn migration_13_adds_sync_claim_indexes_to_an_existing_schema() {
     let (store, client, _schema) = isolated_schema("sync_claim_indexes").await;

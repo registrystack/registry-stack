@@ -1752,6 +1752,7 @@ impl From<StoreError> for HttpError {
             | StoreError::SecretConfiguration(_)
             | StoreError::Corrupt
             | StoreError::SchemaNewer { .. }
+            | StoreError::HostedWorkWouldBeDropped { .. }
             | StoreError::Json(_) => Self::Internal,
         }
     }

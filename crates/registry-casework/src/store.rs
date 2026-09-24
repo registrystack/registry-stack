@@ -84,6 +84,64 @@ fn refuse_newer_schema(newest_applied: Option<i64>) -> Result<(), StoreError> {
     }
 }
 
+/// The schema version that replaces the hosted work tables with unified
+/// reviews, and the tables it drops, in its drop order.
+const HOSTED_WORK_DROP_VERSION: i64 = 15;
+const HOSTED_WORK_TABLES: [&str; 9] = [
+    "casework_hosted_idempotency_tombstones",
+    "casework_hosted_idempotency",
+    "casework_hosted_cursors",
+    "casework_hosted_history",
+    "casework_hosted_notes",
+    "casework_hosted_terminal_events",
+    "casework_hosted_accountability",
+    "casework_hosted_items",
+    "casework_hosted_actor_references",
+];
+
+/// Refuse a migration that would drop hosted work rows. The hosted tables have
+/// no successor in the unified review schema, so any row they still hold is
+/// named to the operator instead of being dropped.
+async fn refuse_to_drop_hosted_work(
+    transaction: &tokio_postgres::Transaction<'_>,
+) -> Result<(), StoreError> {
+    let replaced: bool = transaction
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM casework_schema_migrations WHERE version=$1)",
+            &[&HOSTED_WORK_DROP_VERSION],
+        )
+        .await?
+        .get(0);
+    if replaced {
+        return Ok(());
+    }
+    let mut tables = Vec::new();
+    for table in HOSTED_WORK_TABLES {
+        let exists: bool = transaction
+            .query_one("SELECT to_regclass($1) IS NOT NULL", &[&table])
+            .await?
+            .get(0);
+        if !exists {
+            continue;
+        }
+        let rows: i64 = transaction
+            .query_one(&format!("SELECT count(*) FROM {table}"), &[])
+            .await?
+            .get(0);
+        if rows > 0 {
+            tables.push((table, rows));
+        }
+    }
+    if tables.is_empty() {
+        Ok(())
+    } else {
+        Err(StoreError::HostedWorkWouldBeDropped {
+            version: HOSTED_WORK_DROP_VERSION,
+            tables,
+        })
+    }
+}
+
 /// Serializes operator-run migrations on one session lock. A second migrator
 /// waits here instead of racing the ledger primary key. The key spells the
 /// ASCII bytes of "casework".
@@ -229,6 +287,7 @@ impl PostgresStore {
             .await?
             .get(0);
         refuse_newer_schema(newest_applied)?;
+        refuse_to_drop_hosted_work(&transaction).await?;
         transaction.commit().await?;
 
         for (version, migration) in MIGRATIONS {
@@ -3753,6 +3812,17 @@ fn violated_constraint(error: &tokio_postgres::Error) -> String {
         .unwrap_or_default()
 }
 
+fn hosted_row_counts(tables: &[(&str, i64)]) -> String {
+    tables
+        .iter()
+        .map(|(table, rows)| {
+            let noun = if *rows == 1 { "row" } else { "rows" };
+            format!("{table} ({rows} {noun})")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn map_unique_conflict(error: tokio_postgres::Error) -> StoreError {
     if error
         .as_db_error()
@@ -3839,6 +3909,14 @@ pub enum StoreError {
         "the Casework database schema version {found} is newer than this binary supports ({supported}); run a casework release that supports it"
     )]
     SchemaNewer { found: i64, supported: i64 },
+    #[error(
+        "the Casework database holds hosted work that schema migration {version} would drop: {}; nothing was changed. This release does not carry hosted work forward: keep this database with the release that wrote it until the work it holds is exported, then migrate a fresh Casework database for this release",
+        hosted_row_counts(.tables)
+    )]
+    HostedWorkWouldBeDropped {
+        version: i64,
+        tables: Vec<(&'static str, i64)>,
+    },
     #[error("the Casework database operation failed{}", violated_constraint(.0))]
     Postgres(#[from] tokio_postgres::Error),
     #[error("Casework serialization failed")]
