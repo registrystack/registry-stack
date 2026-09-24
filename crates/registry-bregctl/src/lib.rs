@@ -49,6 +49,7 @@ mod field_encryption;
 mod field_encryption_lifecycle;
 mod history_erasure_lifecycle;
 mod history_rebaseline_lifecycle;
+mod import_authority_lifecycle;
 mod init_from_model;
 mod package_inspection;
 mod package_lifecycle;
@@ -79,6 +80,7 @@ use history_rebaseline_lifecycle::{
     HistoryRebaselineLifecycleError, HistoryRebaselineLifecycleOutcome,
     HistoryRebaselineLifecycleRequest,
 };
+use import_authority_lifecycle::ImportAuthorityCliError;
 use package_inspection::{
     inspect_runtime_package, inspect_runtime_predecessor_package,
     inspect_runtime_predecessor_rehearsal_baseline, RuntimePackageInspectionError,
@@ -176,6 +178,8 @@ enum Command {
     ReviewRecovery(ReviewRecoveryArgs),
     /// Erase expired protected action Evidence using configured migration authority.
     EvidenceRetention(EvidenceRetentionArgs),
+    /// Open, close, and list the authorities that bound `import` runs.
+    ImportAuthority(ImportAuthorityArgs),
     /// Maintain field-encryption key material.
     FieldEncryption(FieldEncryptionArgs),
 }
@@ -714,6 +718,87 @@ struct ReviewRecoveryExactArgs {
 }
 
 #[derive(Debug, Args)]
+struct ImportAuthorityArgs {
+    #[command(subcommand)]
+    command: ImportAuthorityCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ImportAuthorityCommand {
+    /// Open one bounded authority for an `import` grant of the active package.
+    Open(ImportAuthorityOpenArgs),
+    /// Close one authority; the next chunk of every run under it is blocked.
+    Close(ImportAuthorityCloseArgs),
+    /// Record every expiry and supersession already due.
+    CloseExpired(ImportAuthorityRuntimeArgs),
+    /// List the newest authorities, after recording every transition already due.
+    List(ImportAuthorityRuntimeArgs),
+}
+
+#[derive(Debug, Args)]
+struct ImportAuthorityOpenArgs {
+    /// Absolute Base Registry Engine runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Entity the authority admits creates for.
+    #[arg(long, value_name = "ENTITY")]
+    entity: String,
+
+    /// Access profile holding the entity's `import` grant.
+    #[arg(long, value_name = "PROFILE")]
+    profile: String,
+
+    /// Most records every run under the authority may create, together.
+    #[arg(long, value_name = "COUNT")]
+    max_items: i64,
+
+    /// How long the authority stays open: whole minutes, hours, or days
+    /// (`90m`, `12h`, `7d`), at most 30 days. There is no extension.
+    #[arg(long, value_name = "DURATION", default_value = "7d")]
+    expires_in: String,
+
+    /// SHA-256 input digest a run must carry, as `bregctl data validate`
+    /// reports it. Repeat to pin several reviewed files; omit to admit any.
+    #[arg(long = "input-sha256", value_name = "SHA256")]
+    input_sha256: Vec<String>,
+
+    /// Operator change reference recorded as a keyed hash.
+    #[arg(long, value_name = "REFERENCE")]
+    operator_reference: String,
+
+    /// Reason recorded as a keyed hash, never in clear.
+    #[arg(long, value_name = "TEXT")]
+    reason: String,
+}
+
+#[derive(Debug, Args)]
+struct ImportAuthorityCloseArgs {
+    /// Absolute Base Registry Engine runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Identifier `import-authority open` reported.
+    #[arg(long, value_name = "UUID")]
+    authority_id: String,
+
+    /// Operator change reference recorded as a keyed hash.
+    #[arg(long, value_name = "REFERENCE")]
+    operator_reference: String,
+
+    /// Reason recorded as a keyed hash, never in clear.
+    #[arg(long, value_name = "TEXT")]
+    reason: String,
+}
+
+#[derive(Debug, Args)]
+struct ImportAuthorityRuntimeArgs {
+    /// Absolute Base Registry Engine runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+}
+
+#[derive(Debug, Args)]
 struct WebhookSampleArgs {
     /// Base Registry Engine authoring project directory.
     #[arg(value_name = "PROJECT")]
@@ -1224,6 +1309,7 @@ enum DiagnosticArtifact {
     RequestRetentionOperation,
     ReviewRecoveryOperation,
     EvidenceRetentionOperation,
+    ImportAuthority,
     HistoryErasure,
     HistoryRebaseline,
     FieldEncryption,
@@ -1274,6 +1360,8 @@ enum SuggestedAction {
     VerifyRequestRetentionOperation,
     VerifyReviewRecoveryOperation,
     VerifyEvidenceRetentionOperation,
+    CorrectImportAuthorityRequest,
+    VerifyImportAuthority,
     PrepareHistoryErasureRequest,
     PrepareHistoryRebaselineRequest,
     ReviewRetainedHistory,
@@ -2149,6 +2237,55 @@ where
                 }
             };
         }
+        Command::ImportAuthority(args) => {
+            let (command, outcome) = match args.command {
+                ImportAuthorityCommand::Open(args) => (
+                    "import-authority open",
+                    import_authority_lifecycle::open(&import_authority_lifecycle::OpenArguments {
+                        runtime_config: &args.runtime_config,
+                        entity: &args.entity,
+                        profile: &args.profile,
+                        max_items: args.max_items,
+                        expires_in: &args.expires_in,
+                        input_sha256: &args.input_sha256,
+                        operator_reference: &args.operator_reference,
+                        reason: &args.reason,
+                    })
+                    .map(|authority| vec![authority]),
+                ),
+                ImportAuthorityCommand::Close(args) => (
+                    "import-authority close",
+                    import_authority_lifecycle::close(
+                        &import_authority_lifecycle::CloseArguments {
+                            runtime_config: &args.runtime_config,
+                            authority_id: &args.authority_id,
+                            operator_reference: &args.operator_reference,
+                            reason: &args.reason,
+                        },
+                    )
+                    .map(|authority| vec![authority]),
+                ),
+                ImportAuthorityCommand::CloseExpired(args) => (
+                    "import-authority close-expired",
+                    import_authority_lifecycle::close_expired(&args.runtime_config),
+                ),
+                ImportAuthorityCommand::List(args) => (
+                    "import-authority list",
+                    import_authority_lifecycle::list(&args.runtime_config),
+                ),
+            };
+            return match outcome {
+                Ok(authorities) => {
+                    write_import_authority_success(command, &authorities, format, stdout, stderr)
+                }
+                Err(error) => write_failure(
+                    &import_authority_failure(command, error),
+                    format,
+                    stdout,
+                    stderr,
+                ),
+            };
+        }
         Command::FieldEncryption(args) => {
             return match args.command {
                 FieldEncryptionCommand::Keygen(args) => {
@@ -2313,6 +2450,167 @@ fn review_recovery_failure(command: &'static str, error: ReviewRecoveryCliError)
             SuggestedAction::VerifyReviewRecoveryOperation,
         )],
     }
+}
+
+fn import_authority_failure(
+    command: &'static str,
+    error: ImportAuthorityCliError,
+) -> FailureReport {
+    use registry_breg::import_authority::ImportAuthorityError;
+    let (failure_diagnostic, action) = match error {
+        ImportAuthorityCliError::RuntimeConfigPath => (
+            diagnostic(
+                "import_authority.runtime_config.invalid",
+                "runtimeConfig",
+                "the runtime configuration must be an absolute path",
+            ),
+            SuggestedAction::CorrectCommandUsage,
+        ),
+        ImportAuthorityCliError::ExpiresIn => (
+            diagnostic(
+                "import_authority.expires_in.invalid",
+                "expiresIn",
+                "the authority window must be a whole number of minutes, hours, or days (for example 90m, 12h, or 7d), from one minute to at most 30 days",
+            ),
+            SuggestedAction::CorrectImportAuthorityRequest,
+        ),
+        ImportAuthorityCliError::AuthorityId => (
+            diagnostic(
+                "import_authority.authority_id.invalid",
+                "authorityId",
+                "the authority identifier must be the UUID `import-authority open` or `import-authority list` reported",
+            ),
+            SuggestedAction::CorrectImportAuthorityRequest,
+        ),
+        ImportAuthorityCliError::Authority(ImportAuthorityError::InvalidInput) => (
+            diagnostic(
+                "import_authority.request.invalid",
+                "importAuthority",
+                "the request is out of bounds: the entity, profile, operator reference, and reason must be present and free of control characters, the volume at least one, and each pinned input digest 64 lowercase hexadecimal characters, named once, at most 16",
+            ),
+            SuggestedAction::CorrectImportAuthorityRequest,
+        ),
+        ImportAuthorityCliError::Authority(ImportAuthorityError::NotImportable) => (
+            diagnostic(
+                "import_authority.grant.not_importable",
+                "entity",
+                "the entity and profile do not name an `import` grant of the active package; check them with `bregctl explain access`",
+            ),
+            SuggestedAction::CorrectImportAuthorityRequest,
+        ),
+        ImportAuthorityCliError::Authority(ImportAuthorityError::AlreadyOpen) => (
+            diagnostic(
+                "import_authority.already_open",
+                "entity",
+                "an import authority is already open for this entity; close it with `bregctl import-authority close` before opening another",
+            ),
+            SuggestedAction::VerifyImportAuthority,
+        ),
+        ImportAuthorityCliError::Authority(ImportAuthorityError::NotFound) => (
+            diagnostic(
+                "import_authority.not_found",
+                "authorityId",
+                "no import authority has this identifier; `bregctl import-authority list` names the recorded ones",
+            ),
+            SuggestedAction::VerifyImportAuthority,
+        ),
+        ImportAuthorityCliError::Authority(ImportAuthorityError::NotReady) => (
+            diagnostic(
+                "import_authority.not_ready",
+                "importAuthority",
+                "the registry is not ready for import authority maintenance; apply the configured package first",
+            ),
+            SuggestedAction::VerifyImportAuthority,
+        ),
+        ImportAuthorityCliError::Authority(ImportAuthorityError::Unavailable) => (
+            diagnostic(
+                "import_authority.unavailable",
+                "importAuthority",
+                "the import authority store is unavailable; verify the runtime configuration, the migration authority, the active package binding, and a keyed audit profile",
+            ),
+            SuggestedAction::VerifyImportAuthority,
+        ),
+    };
+    FailureReport {
+        ok: false,
+        command,
+        diagnostics: vec![tool_diagnostic(
+            failure_diagnostic,
+            DiagnosticArtifact::ImportAuthority,
+            action,
+        )],
+    }
+}
+
+fn write_import_authority_success(
+    command: &'static str,
+    authorities: &[registry_breg::import_authority::ImportAuthority],
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        let body = match command {
+            "import-authority open" | "import-authority close" => {
+                json!({"ok": true, "command": command, "authority": authorities.first()})
+            }
+            _ => json!({"ok": true, "command": command, "authorities": authorities}),
+        };
+        serde_json::to_writer_pretty(&mut *stdout, &body)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        let lead = match command {
+            "import-authority open" => "Opened the import authority.".to_owned(),
+            "import-authority close" => "Recorded the import authority's final state.".to_owned(),
+            "import-authority close-expired" => format!(
+                "Recorded the due import authority transitions. {}.",
+                report::counted(authorities.len(), "authority")
+            ),
+            _ => format!(
+                "Listed the newest import authorities. {}.",
+                report::counted(authorities.len(), "authority")
+            ),
+        };
+        let mut lines = report::Lines::new();
+        lines.lead(&lead);
+        for authority in authorities {
+            lines.blank();
+            lines.pairs(&import_authority_pairs(authority));
+        }
+        stdout.write_all(lines.finish().as_bytes())
+    };
+    write_result(result, stderr)
+}
+
+fn import_authority_pairs(
+    authority: &registry_breg::import_authority::ImportAuthority,
+) -> Vec<(&'static str, String)> {
+    let mut pairs = vec![
+        ("authority id", authority.authority_id.to_string()),
+        ("status", authority.status.as_str().to_owned()),
+        ("entity", authority.entity_id.clone()),
+        ("profile", authority.profile_id.clone()),
+        (
+            "committed items",
+            format!("{} of {}", authority.committed_items, authority.max_items),
+        ),
+        ("activation revision", authority.activation_revision.clone()),
+        ("opened at", authority.opened_at.to_rfc3339()),
+        ("expires at", authority.expires_at.to_rfc3339()),
+    ];
+    if let Some(closed_at) = authority.closed_at {
+        pairs.push(("closed at", closed_at.to_rfc3339()));
+    }
+    pairs.push((
+        "pinned input digests",
+        if authority.input_digests.is_empty() {
+            "none (any input)".to_owned()
+        } else {
+            authority.input_digests.join(", ")
+        },
+    ));
+    pairs
 }
 
 fn history_erase(args: &HistoryEraseArgs) -> Result<HistoryEraseSuccessReport, FailureReport> {
@@ -12968,6 +13266,62 @@ mod tests {
     }
 
     #[test]
+    fn import_authority_reports_name_the_bounds_in_both_formats() {
+        use registry_breg::import_authority::{ImportAuthority, ImportAuthorityStatus};
+        let opened_at = chrono::DateTime::parse_from_rfc3339("2026-09-25T10:00:00Z")
+            .expect("instant parses")
+            .with_timezone(&chrono::Utc);
+        let authority = ImportAuthority {
+            authority_id: uuid::Uuid::nil(),
+            entity_id: "widget".to_owned(),
+            profile_id: "loader".to_owned(),
+            operation: "create".to_owned(),
+            max_items: 10,
+            committed_items: 4,
+            input_digests: Vec::new(),
+            activation_revision: "package-1".to_owned(),
+            opened_at,
+            expires_at: opened_at + chrono::Duration::days(7),
+            status: ImportAuthorityStatus::Open,
+            closed_at: None,
+        };
+        let mut json_out = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            write_import_authority_success(
+                "import-authority open",
+                std::slice::from_ref(&authority),
+                OutputFormat::Json,
+                &mut json_out,
+                &mut stderr,
+            ),
+            ExitCode::SUCCESS
+        );
+        let report: Value = serde_json::from_slice(&json_out).expect("report is JSON");
+        assert_eq!(report["command"], "import-authority open");
+        assert_eq!(report["authority"]["status"], "open");
+        assert_eq!(report["authority"]["committedItems"], 4);
+        assert_eq!(report["authority"]["maxItems"], 10);
+
+        let mut listed = Vec::new();
+        assert_eq!(
+            write_import_authority_success(
+                "import-authority list",
+                &[authority],
+                OutputFormat::Human,
+                &mut listed,
+                &mut stderr,
+            ),
+            ExitCode::SUCCESS
+        );
+        let listed = String::from_utf8(listed).expect("report is UTF-8");
+        assert!(listed.contains("Listed the newest import authorities. 1 authority."));
+        assert!(listed.contains("4 of 10"));
+        assert!(listed.contains("none (any input)"));
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
     fn public_command_surface_is_explicit() {
         let command = command();
         let names: Vec<_> = command
@@ -12999,6 +13353,7 @@ mod tests {
                 "request-retention",
                 "review-recovery",
                 "evidence-retention",
+                "import-authority",
                 "field-encryption"
             ]
         );
