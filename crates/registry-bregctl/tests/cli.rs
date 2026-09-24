@@ -5944,11 +5944,8 @@ fn data_validate_uses_a_closed_package_plan_and_value_free_usage() {
 
     let (directory, package) = data_package_fixture();
     let input = directory.path().join("input.jsonl");
-    fs::write(
-        &input,
-        r#"{"operation":"create","data":{"code":"AA"}}"#.to_owned() + "\n",
-    )
-    .expect("data input writes");
+    let input_bytes = r#"{"operation":"create","data":{"code":"AA"}}"#.to_owned() + "\n";
+    fs::write(&input, &input_bytes).expect("data input writes");
 
     let output = bregctl(&[
         "--format",
@@ -5978,6 +5975,11 @@ fn data_validate_uses_a_closed_package_plan_and_value_free_usage() {
     assert_eq!(report["operation"], "create");
     assert_eq!(report["itemCount"], 1);
     assert_eq!(report["chunkCount"], 1);
+    // The digest an operator pins with `import-authority open --input-sha256`.
+    assert_eq!(
+        report["inputDigest"],
+        hex(Sha256::digest(input_bytes.as_bytes()).as_slice())
+    );
 
     let refused = bregctl(&[
         "--format",
