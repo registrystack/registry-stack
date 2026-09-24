@@ -748,6 +748,7 @@ fn refuse_rotated_audit_layout(path: &Path) -> Result<(), RuntimeError> {
             )))
         }
     };
+    let mut names = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|error| {
             RuntimeError::AuditJournal(format!(
@@ -755,28 +756,37 @@ fn refuse_rotated_audit_layout(path: &Path) -> Result<(), RuntimeError> {
                 error.kind()
             ))
         })?;
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
-        let rotated = name
-            .strip_prefix(active)
-            .and_then(|rest| rest.strip_prefix('.'))
-            .is_some_and(|suffix| {
-                !suffix.is_empty()
-                    && suffix.len() != AUDIT_SEGMENT_SEQUENCE_DIGITS
-                    && suffix.bytes().all(|byte| byte.is_ascii_digit())
-            });
-        if rotated {
-            return Err(RuntimeError::AuditJournal(format!(
-                "{name} beside audit.path was rotated by an earlier Casework release, and this \
-                 release neither reads nor continues that layout; stop every earlier process, \
-                 move audit.path and each numbered file beside it into an archive directory, \
-                 and start again"
-            )));
+        if let Some(name) = entry.file_name().to_str() {
+            names.push(name.to_owned());
         }
     }
-    Ok(())
+    match lowest_rotated_audit_file(active, names.iter().map(String::as_str)) {
+        Some(name) => Err(RuntimeError::AuditJournal(format!(
+            "{name} beside audit.path was rotated by an earlier Casework release, and this \
+             release neither reads nor continues that layout; stop every earlier process, \
+             move audit.path and each numbered file beside it into an archive directory, \
+             and start again"
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// The rotated file a refusal names, independent of directory order: the
+/// lowest-numbered `<active>.<n>`, which the rotating sink wrote most recently.
+fn lowest_rotated_audit_file<'a>(
+    active: &str,
+    names: impl Iterator<Item = &'a str>,
+) -> Option<&'a str> {
+    names
+        .filter_map(|name| {
+            let suffix = name.strip_prefix(active)?.strip_prefix('.')?;
+            let rotated = !suffix.is_empty()
+                && suffix.len() != AUDIT_SEGMENT_SEQUENCE_DIGITS
+                && suffix.bytes().all(|byte| byte.is_ascii_digit());
+            rotated.then_some((suffix.len(), suffix, name))
+        })
+        .min()
+        .map(|(_, _, name)| name)
 }
 
 /// Name the rule an audit journal refusal broke, without a record, a hash,
@@ -1889,6 +1899,29 @@ mod tests {
         let files =
             registry_platform_audit::segmented_audit_paths(&audit_path).expect("segment listing");
         assert_eq!(event_ids_in(&files)[..3], earlier[..]);
+    }
+
+    #[test]
+    fn the_rotated_layout_refusal_names_the_lowest_numbered_file_in_any_directory_order() {
+        let names = [
+            "casework.jsonl.5",
+            "casework.jsonl",
+            "casework.jsonl.12",
+            "casework.jsonl.00000001",
+            "casework.jsonl.1",
+            "casework.jsonl.lock",
+            "other.jsonl.0",
+        ];
+        for order in [names.to_vec(), names.iter().rev().copied().collect()] {
+            assert_eq!(
+                lowest_rotated_audit_file("casework.jsonl", order.into_iter()),
+                Some("casework.jsonl.1")
+            );
+        }
+        assert_eq!(
+            lowest_rotated_audit_file("casework.jsonl", ["casework.jsonl"].into_iter()),
+            None
+        );
     }
 
     #[tokio::test]
