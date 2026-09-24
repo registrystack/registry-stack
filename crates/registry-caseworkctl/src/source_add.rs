@@ -111,6 +111,9 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
             json!(["Review these exact local changes, then repeat source add with --apply."])
         }
     });
+    if !dev_clients_plan.warnings.is_empty() {
+        report["warnings"] = json!(dev_clients_plan.warnings);
+    }
     if !args.apply {
         report["candidateRuntimeBinding"] = serde_norway::from_str(&binding)?;
         return Ok(report);
@@ -319,6 +322,9 @@ struct ReviewerAuthority {
     scopes: BTreeSet<String>,
     purpose: Option<String>,
     row_boundary_findings: Vec<Value>,
+    /// Access profiles that also admit requester clients outside this Casework
+    /// project. Those clients can act on the request without Casework.
+    warnings: Vec<String>,
 }
 
 /// What it takes to write a planned set of BReg local dev clients back to the
@@ -343,6 +349,7 @@ struct DevClientsPlan {
     changes: Value,
     write: Option<DevClientsWrite>,
     findings: Vec<Value>,
+    warnings: Vec<String>,
 }
 
 struct SelectedRequest<'a> {
@@ -956,6 +963,7 @@ fn reviewer_authority(
     let mut scopes = BTreeSet::new();
     let mut allowed_purposes: Option<BTreeSet<String>> = None;
     let mut row_boundary_findings = Vec::new();
+    let mut warnings = Vec::new();
     for id in &profile_ids {
         let (profile_index, profile) = profiles
             .iter()
@@ -978,8 +986,18 @@ fn reviewer_authority(
                 })
             })
             .collect::<Result<BTreeSet<_>>>()?;
-        if &requesters != reviewer_clients {
-            bail!("BReg access profile {id} requesterClients must exactly match the Casework staff and supervisor clients");
+        if !reviewer_clients.is_subset(&requesters) {
+            bail!("BReg access profile {id} requesterClients must include every Casework staff and supervisor client");
+        }
+        let others: Vec<&str> = requesters
+            .difference(reviewer_clients)
+            .map(String::as_str)
+            .collect();
+        if !others.is_empty() {
+            warnings.push(format!(
+                "BReg access profile {id} also admits requester clients outside this Casework project ({}); they can act on the request without Casework",
+                others.join(", ")
+            ));
         }
         let mut row_boundary_locations = Vec::new();
         collect_row_boundary_locations(profile, None, &mut Vec::new(), &mut row_boundary_locations);
@@ -1038,6 +1056,7 @@ fn reviewer_authority(
         scopes,
         purpose,
         row_boundary_findings,
+        warnings,
     })
 }
 
@@ -1449,6 +1468,9 @@ fn plan_breg_dev_clients(
             Ok(DevClientsPlan {
                 patch: Value::Array(clients),
                 changes,
+                warnings: authority
+                    .map(|authority| authority.warnings)
+                    .unwrap_or_default(),
                 write: Some(DevClientsWrite {
                     path: dev_clients_path,
                     original,
@@ -1502,6 +1524,7 @@ fn absent_dev_clients_plan() -> DevClientsPlan {
         changes: json!([]),
         write: None,
         findings: Vec::new(),
+        warnings: Vec::new(),
     }
 }
 
@@ -2807,7 +2830,7 @@ mod tests {
     }
 
     #[test]
-    fn reviewer_authority_requires_exact_human_casework_clients() {
+    fn reviewer_authority_requires_every_human_casework_client() {
         let (mut authored, request) = reviewer_fixture();
         authored["accessProfiles"][0]
             .as_object_mut()
@@ -2818,6 +2841,21 @@ mod tests {
         let (mut authored, request) = reviewer_fixture();
         authored["accessProfiles"][0]["requesterClients"] = json!(["supervisor"]);
         assert!(reviewer_authority(&authored, &request, &reviewer_clients()).is_err());
+    }
+
+    #[test]
+    fn reviewer_authority_accepts_a_profile_shared_with_other_clients_and_warns() {
+        let (mut authored, request) = reviewer_fixture();
+        authored["accessProfiles"][0]["requesterClients"] =
+            json!(["staff", "supervisor", "other-project-staff"]);
+        let authority = reviewer_authority(&authored, &request, &reviewer_clients()).unwrap();
+        assert_eq!(authority.warnings.len(), 1);
+        assert!(authority.warnings[0].contains("reviewer"));
+        assert!(authority.warnings[0].contains("other-project-staff"));
+
+        let (authored, request) = reviewer_fixture();
+        let authority = reviewer_authority(&authored, &request, &reviewer_clients()).unwrap();
+        assert!(authority.warnings.is_empty());
     }
 
     #[test]
@@ -2949,6 +2987,7 @@ mod tests {
             scopes: BTreeSet::from(["starter:reviewer".to_owned()]),
             purpose: Some("starter-learning".to_owned()),
             row_boundary_findings: Vec::new(),
+            warnings: Vec::new(),
         };
         let client = json!({
             "id":"staff",
@@ -2979,6 +3018,7 @@ mod tests {
             scopes: BTreeSet::from(["starter:reviewer".to_owned()]),
             purpose: None,
             row_boundary_findings: Vec::new(),
+            warnings: Vec::new(),
         };
         let client = json!({
             "id":"staff",
@@ -3010,6 +3050,7 @@ mod tests {
             scopes: BTreeSet::from(["starter:reviewer".to_owned()]),
             purpose: None,
             row_boundary_findings: Vec::new(),
+            warnings: Vec::new(),
         };
         let client = json!({
             "id":"staff",
@@ -3030,6 +3071,7 @@ mod tests {
             scopes: BTreeSet::from(["starter:reviewer".to_owned()]),
             purpose: None,
             row_boundary_findings: Vec::new(),
+            warnings: Vec::new(),
         };
         let scopes = (0..MAX_BREG_DEV_CLIENT_SCOPES)
             .map(|index| format!("casework:scope-{index}"))
@@ -3067,6 +3109,7 @@ mod tests {
                 scopes: BTreeSet::new(),
                 purpose: None,
                 row_boundary_findings: Vec::new(),
+                warnings: Vec::new(),
             }),
         )
         .unwrap_err();
