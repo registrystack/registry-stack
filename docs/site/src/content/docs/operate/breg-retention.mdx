@@ -366,29 +366,58 @@ earliest retained record's previous hash is the only trace of it.
 
 `prune` removes the longest run of records at the start of the chain whose creation time precedes
 one RFC 3339 boundary. It stops at the first retained record, so a gap can never open in the
-middle, and it refuses a boundary later than the database transaction time. Take an export first,
-then count what the boundary would remove:
+middle, and it refuses a boundary later than the database transaction time. Three guards stand in
+front of the deletion:
+
+- **Minimum retention.** `audit.minimumRetentionDays` in `runtime.yaml` (default `365`, from `1`
+  to `36500`) sets how long every audit record is kept. A boundary later than that many days
+  before the database transaction time is refused as `audit.boundary.inside_minimum_retention`,
+  dry run or not. The floor guards against a mistyped or careless boundary, not against the
+  person running the prune: whoever holds the runtime configuration and the migration credential
+  can edit `runtime.yaml` and lower it. Keep the floor in reviewed deployment configuration, and
+  rely on the export below, not the floor, for the removed records.
+- **A verified export.** A prune that removes records requires `--export`, naming a file an
+  earlier `audit export` wrote. The command reads the whole file back and checks every record
+  against the deployment audit key before the prune transaction opens, and the runtime then
+  refuses a prune that would remove any record the export does not hold. Take the export first
+  and keep it under the institution's retention policy; it is the only copy the removed records
+  have.
+- **An acknowledgement.** A prune that is not a dry run is refused before any file is read or any
+  connection is opened unless it carries `--acknowledge-irreversible`.
+
+Export the journal, then count what the boundary would remove and check that the export holds it:
 
 ```sh
+bregctl --format json audit export \
+  --runtime-config /etc/breg/runtime.yaml \
+  --output /srv/registry/private/audit-journal-2026-01.jsonl
+
 bregctl --format json audit prune \
   --runtime-config /etc/breg/runtime.yaml \
-  --before 2026-01-01T00:00:00Z --dry-run
+  --before 2025-01-01T00:00:00Z \
+  --export /srv/registry/private/audit-journal-2026-01.jsonl \
+  --dry-run
 ```
 
 :::danger[Pruning the journal is irreversible]
-Pruned records leave no copy behind. Export the journal and store it under the institution's
-retention policy before running a prune without `--dry-run`, and confirm the approved boundary
-against the dry run's counts.
+Pruned records survive only in the export. Store the export under the institution's retention
+policy before running a prune without `--dry-run`, and confirm the approved boundary against the
+dry run's counts.
 :::
 
 ```sh
 bregctl --format json audit prune \
   --runtime-config /etc/breg/runtime.yaml \
-  --before 2026-01-01T00:00:00Z
+  --before 2025-01-01T00:00:00Z \
+  --export /srv/registry/private/audit-journal-2026-01.jsonl \
+  --acknowledge-irreversible
 ```
 
 The report names whether the run was a dry run, how many records it removed and retained, the
-hash the retained chain now starts from, and the first retained envelope. A prune runs on the
+hash the retained chain now starts from, the first retained envelope, and the SHA-256 digest of
+the export it checked. `audit export` reports the same digest for the file it writes, and the
+retention record the prune appends carries it as `exportSha256`, so the journal names the file
+that holds what left it. A prune runs on the
 migration connection under the exclusive registry lock with the head row locked, so no writer can
 append and no second operator can prune while the prefix is being decided; the runtime role keeps
 its insert-only grant and cannot delete a record. Every prune that removes anything appends one
@@ -415,6 +444,12 @@ retention record to the journal, so the chain states what left it.
 | `audit verify`, `audit export`, or `audit prune` reports `audit.envelope.invalid` | A reachable journal record holds an envelope no reader accepts. Nothing is pruned. Keep the database as it is and treat it as an integrity incident, like a broken chain. |
 | `audit verify`, `audit export`, or `audit prune` reports `audit.records.unreachable` | Records exist in the journal that the chain from the head does not reach. Nothing is pruned. Keep the database as it is and treat it as an integrity incident, like a broken chain. |
 | `audit prune` reports `audit.boundary.future` | `--before` is later than the database transaction time. Choose a boundary in the past. |
+| `audit prune` reports `audit.boundary.inside_minimum_retention` | `--before` falls inside `audit.minimumRetentionDays`. Choose an earlier boundary; changing the floor is a runtime configuration change, not a prune option. |
+| `audit prune` reports `audit.prune.acknowledgement.required` | The command was run without `--dry-run` and without `--acknowledge-irreversible`. Confirm the boundary against a dry run, then run it again with the flag. Nothing was read or removed. |
+| `audit prune` reports `audit.export.required` | The boundary removes records and no `--export` was given. Run `audit export`, then prune with that file. |
+| `audit prune` reports `audit.export.unreadable` | `--export` is not an existing regular file, or a component of its path is a symbolic link. Name the real file `audit export` wrote. |
+| `audit prune` reports `audit.export.invalid` | The export does not verify under this deployment's audit key at the record the message names: it was changed, reordered, truncated mid-record, or written by another deployment. Export the journal again. |
+| `audit prune` reports `audit.export.not_covering` | The export does not hold every record the boundary would remove, for example because it was taken from a later start. Export the journal again and prune with the new file. |
 | `audit export` is refused with `audit.operation.refused` | The runtime configuration path or `--output` is relative, or the database is unreachable. |
 | `audit export` is refused with `audit.output.exists` | `--output` already names an existing file. Choose a destination that does not exist. |
 | `audit export` is refused with `audit.output.not_durable` | The export reached `--output` and the directory holding it could not be made durable, so a crash may lose it. Verify the file, or remove it and export again. |

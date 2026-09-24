@@ -60,6 +60,10 @@ const MAX_RSA_MODULUS_BITS: usize = 8192;
 const MAX_RSA_EXPONENT_BYTES: usize = 8;
 const DEFAULT_WEBHOOK_PAYLOAD_RETENTION_DAYS: u8 = 7;
 const MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS: u8 = 30;
+/// The audit journal keeps at least this many days unless the deployment
+/// configures another floor.
+pub const DEFAULT_AUDIT_MINIMUM_RETENTION_DAYS: u16 = 365;
+const MAX_AUDIT_MINIMUM_RETENTION_DAYS: u16 = 36_500;
 const DEFAULT_POOL_WAIT_TIMEOUT_MILLISECONDS: u64 = 30_000;
 const DEFAULT_POOL_CREATE_TIMEOUT_MILLISECONDS: u64 = 30_000;
 const DEFAULT_POOL_RECYCLE_TIMEOUT_MILLISECONDS: u64 = 30_000;
@@ -2008,13 +2012,28 @@ impl fmt::Debug for AuthorityClaimsConfig {
 #[derive(Clone)]
 pub struct AuditConfig {
     hash_key_ref: SecretReference,
+    minimum_retention_days: u16,
 }
 
 impl AuditConfig {
     fn from_raw(raw: RawAuditConfig) -> Result<Self> {
         let hash_key_ref =
             parse_secret_reference(raw.hash_key_ref, RuntimeConfigError::InvalidAudit)?;
-        Ok(Self { hash_key_ref })
+        if raw.minimum_retention_days == 0
+            || raw.minimum_retention_days > MAX_AUDIT_MINIMUM_RETENTION_DAYS
+        {
+            return Err(RuntimeConfigError::InvalidAudit);
+        }
+        Ok(Self {
+            hash_key_ref,
+            minimum_retention_days: raw.minimum_retention_days,
+        })
+    }
+
+    /// Days of audit journal a prune may never reach into.
+    #[must_use]
+    pub fn minimum_retention_days(&self) -> u16 {
+        self.minimum_retention_days
     }
 }
 
@@ -2023,6 +2042,7 @@ impl fmt::Debug for AuditConfig {
         formatter
             .debug_struct("AuditConfig")
             .field("hash_key_ref", &"<redacted>")
+            .field("minimum_retention_days", &self.minimum_retention_days)
             .finish()
     }
 }
@@ -2691,6 +2711,14 @@ impl From<RawContextualClaimNames> for ClaimNames {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawAuditConfig {
     hash_key_ref: String,
+    /// Days of journal `bregctl audit prune` may never remove, counted back
+    /// from the time of the prune. Defaults to 365; between 1 and 36500.
+    #[serde(default = "default_audit_minimum_retention_days")]
+    minimum_retention_days: u16,
+}
+
+const fn default_audit_minimum_retention_days() -> u16 {
+    DEFAULT_AUDIT_MINIMUM_RETENTION_DAYS
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
@@ -3010,6 +3038,11 @@ fn install_schema_constraints(schema: &mut Value) {
             86_400,
         ),
         ("/$defs/RawCursorConfig/properties/maxAgeSeconds", 1, 86_400),
+        (
+            "/$defs/RawAuditConfig/properties/minimumRetentionDays",
+            1,
+            u64::from(MAX_AUDIT_MINIMUM_RETENTION_DAYS),
+        ),
         (
             "/$defs/RawEventDeliveryConfig/properties/payloadRetentionDays",
             1,

@@ -845,8 +845,28 @@ struct AuditPruneArgs {
     before: String,
 
     /// Report what the boundary would remove without removing it.
+    ///
+    /// A dry run needs neither `--export` nor `--acknowledge-irreversible`;
+    /// given an export, it also checks that the export holds what the
+    /// boundary would remove.
     #[arg(long)]
     dry_run: bool,
+
+    /// Absolute JSON Lines file an earlier `audit export` wrote.
+    ///
+    /// A prune that removes records requires it. The export must verify under
+    /// the deployment audit key and hold every record the prune removes; its
+    /// SHA-256 digest is written into the retention record. A path holding a
+    /// `..` component or a symbolic link is refused.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    export: Option<PathBuf>,
+
+    /// Acknowledge that pruning cannot be undone.
+    ///
+    /// Without this flag a prune that is not a dry run is refused before any
+    /// file is read or any database connection is opened.
+    #[arg(long)]
+    acknowledge_irreversible: bool,
 }
 
 #[derive(Debug, Args)]
@@ -2561,8 +2581,28 @@ fn audit_export(args: &AuditExportArgs) -> Result<AuditExportSuccessReport, Fail
 }
 
 fn audit_prune(args: &AuditPruneArgs) -> Result<AuditPruneSuccessReport, FailureReport> {
-    let outcome = audit_lifecycle::prune(&args.runtime_config, &args.before, args.dry_run)
-        .map_err(|error| audit_failure("audit prune", error))?;
+    if !args.dry_run && !args.acknowledge_irreversible {
+        return Err(FailureReport {
+            ok: false,
+            command: "audit prune",
+            diagnostics: vec![tool_diagnostic(
+                diagnostic(
+                    "audit.prune.acknowledgement.required",
+                    "acknowledgeIrreversible",
+                    "pruning is irreversible: removed audit records survive only in the export; pass --acknowledge-irreversible to proceed, or --dry-run to preview",
+                ),
+                DiagnosticArtifact::CommandArguments,
+                SuggestedAction::CorrectCommandUsage,
+            )],
+        });
+    }
+    let outcome = audit_lifecycle::prune(
+        &args.runtime_config,
+        &args.before,
+        args.export.as_deref(),
+        args.dry_run,
+    )
+    .map_err(|error| audit_failure("audit prune", error))?;
     Ok(AuditPruneSuccessReport {
         ok: true,
         command: "audit prune",
@@ -2618,6 +2658,35 @@ fn audit_failure(command: &'static str, error: AuditCliError) -> FailureReport {
             "audit.boundary.future",
             "audit",
             "the audit retention boundary is later than the database transaction time",
+        ),
+        AuditCliError::BoundaryInsideMinimumRetention { minimum_days } => diagnostic(
+            "audit.boundary.inside_minimum_retention",
+            "before",
+            &format!(
+                "the audit retention boundary falls inside the minimum retention of {minimum_days} days set by `audit.minimumRetentionDays`; choose an earlier --before"
+            ),
+        ),
+        AuditCliError::ExportUnreadable => diagnostic(
+            "audit.export.unreadable",
+            "export",
+            "the export must be an existing regular file reached without a symbolic link",
+        ),
+        AuditCliError::ExportRequired => diagnostic(
+            "audit.export.required",
+            "export",
+            "removing audit records requires --export naming a file `bregctl audit export` wrote; export the journal first",
+        ),
+        AuditCliError::ExportInvalid { position } => diagnostic(
+            "audit.export.invalid",
+            "export",
+            &format!(
+                "the export does not verify under this deployment's audit key at record {position}; export the journal again"
+            ),
+        ),
+        AuditCliError::ExportDoesNotCover => diagnostic(
+            "audit.export.not_covering",
+            "export",
+            "the export does not hold every record this prune would remove; export the journal again and prune with the new export",
         ),
     };
     FailureReport {
@@ -8717,7 +8786,7 @@ fn artifact_report(path: &str, media_type: &str, bytes: &[u8]) -> ArtifactReport
     }
 }
 
-fn hex_lower(bytes: &[u8]) -> String {
+pub(crate) fn hex_lower(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
 
     let mut encoded = String::with_capacity(bytes.len() * 2);
@@ -12219,6 +12288,7 @@ fn write_audit_export_success(
             if let Some(hash) = &export.last_hash {
                 pairs.push(("last hash", hash.clone()));
             }
+            pairs.push(("sha256", report.outcome.sha256.clone()));
             render_report(
                 &format!(
                     "Exported the audit chain. {} written.",
@@ -12255,6 +12325,9 @@ fn write_audit_prune_success(
             }
             if let Some(envelope_id) = &prune.first_retained_envelope_id {
                 pairs.push(("first retained envelope", envelope_id.clone()));
+            }
+            if let Some(sha256) = &prune.export_sha256 {
+                pairs.push(("export sha256", sha256.clone()));
             }
             render_report(
                 &format!(

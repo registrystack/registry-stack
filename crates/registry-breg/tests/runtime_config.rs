@@ -3179,3 +3179,32 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
         RuntimeConfigError::Document
     );
 }
+
+#[test]
+fn audit_minimum_retention_defaults_to_one_year_and_refuses_zero() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let config = parse_runtime_config(&base).expect("the default runtime parses");
+    assert_eq!(config.audit().minimum_retention_days(), 365);
+    let with_floor = |days: u32| {
+        base.replace(
+            "  hashKeyRef: secret:file/audit-key\n",
+            &format!("  hashKeyRef: secret:file/audit-key\n  minimumRetentionDays: {days}\n"),
+        )
+    };
+    for days in [1_u32, 30, 36_500] {
+        let config = parse_runtime_config(&with_floor(days)).expect("a bounded floor parses");
+        assert_eq!(u32::from(config.audit().minimum_retention_days()), days);
+    }
+    for days in [0_u32, 36_501] {
+        assert_eq!(
+            parse_runtime_config(&with_floor(days)).err(),
+            Some(RuntimeConfigError::InvalidAudit),
+            "a floor of {days} days is refused"
+        );
+    }
+}

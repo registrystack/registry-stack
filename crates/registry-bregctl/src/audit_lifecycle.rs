@@ -9,7 +9,7 @@
 
 use std::ffi::OsString;
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::{BufReader, BufWriter, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
@@ -20,6 +20,7 @@ use registry_breg::audit_tooling::{
     AuditVerification,
 };
 use serde::Serialize;
+use sha2::{Digest as _, Sha256};
 
 use crate::safe_path::{SafeDir, SafeEntry, SafePathError};
 
@@ -41,6 +42,16 @@ pub(crate) enum AuditCliError {
     HeadMismatch,
     Unreachable,
     BoundaryInFuture,
+    BoundaryInsideMinimumRetention {
+        minimum_days: u16,
+    },
+    /// The `--export` file could not be opened as a regular file.
+    ExportUnreadable,
+    ExportRequired,
+    ExportInvalid {
+        position: u64,
+    },
+    ExportDoesNotCover,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -55,6 +66,8 @@ pub(crate) struct AuditVerifyOutcome {
 pub(crate) struct AuditExportOutcome {
     #[serde(flatten)]
     pub export: AuditExport,
+    /// SHA-256 of the exported bytes, the digest a later prune records.
+    pub sha256: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -88,33 +101,101 @@ pub(crate) fn export(
     // the parent descriptor it resolves, so the pathname is never reached a
     // second time to ask the same question.
     let mut staged = create_export_file(output)?;
-    let export = {
-        let mut sink = BufWriter::new(&mut staged.file);
+    let (export, sha256) = {
+        let mut sink = HashingWriter::new(BufWriter::new(&mut staged.file));
         let export = runtime.block_on(async {
             let service = service(runtime_config).await?;
             service.export(&mut sink).await.map_err(map_error)
         });
-        export.and_then(|export| finish_export_file(sink).map(|()| export))?
+        let (sink, sha256) = sink.finish();
+        export.and_then(|export| finish_export_file(sink).map(|()| (export, sha256)))?
     };
     publish_export_file(staged)?;
-    Ok(AuditExportOutcome { export })
+    Ok(AuditExportOutcome { export, sha256 })
 }
 
+/// Prune the audit journal up to `before`.
+///
+/// `export` names the file an earlier `audit export` wrote. It is opened
+/// before the runtime configuration loads and verified under the deployment
+/// audit key before the prune transaction opens; the runtime then refuses a
+/// prune that would remove records the export does not hold.
 pub(crate) fn prune(
     runtime_config: &Path,
     before: &str,
+    export: Option<&Path>,
     dry_run: bool,
 ) -> Result<AuditPruneOutcome, AuditCliError> {
-    if !runtime_config.is_absolute() {
+    if !runtime_config.is_absolute() || export.is_some_and(|export| !export.is_absolute()) {
         return Err(AuditCliError::Operator);
     }
     let boundary = AuditPruneBoundary::parse_rfc3339(before).map_err(map_error)?;
+    let export_file = export.map(open_export_file).transpose()?;
     let runtime = operator_runtime()?;
     let prune = runtime.block_on(async {
         let service = service(runtime_config).await?;
-        service.prune(boundary, dry_run).await.map_err(map_error)
+        let coverage = export_file
+            .map(|file| {
+                service
+                    .verify_export(&mut BufReader::new(file))
+                    .map_err(map_error)
+            })
+            .transpose()?;
+        service
+            .prune(boundary, coverage.as_ref(), dry_run)
+            .await
+            .map_err(map_error)
     })?;
     Ok(AuditPruneOutcome { prune })
+}
+
+/// Open an export for reading through descriptor-relative resolution, which
+/// refuses a symbolic link at every component, and accept only a regular file.
+fn open_export_file(path: &Path) -> Result<File, AuditCliError> {
+    let file = SafeEntry::resolve(path)
+        .map_err(|_| AuditCliError::ExportUnreadable)?
+        .open_read()
+        .map_err(|_| AuditCliError::ExportUnreadable)?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| AuditCliError::ExportUnreadable)?;
+    if !metadata.is_file() {
+        return Err(AuditCliError::ExportUnreadable);
+    }
+    Ok(file)
+}
+
+/// A writer that hashes every byte its inner writer accepted.
+struct HashingWriter<W> {
+    inner: W,
+    digest: Sha256,
+}
+
+impl<W: Write> HashingWriter<W> {
+    fn new(inner: W) -> Self {
+        Self {
+            inner,
+            digest: Sha256::new(),
+        }
+    }
+
+    /// The inner writer and the lowercase hexadecimal SHA-256 of everything
+    /// written through this one.
+    fn finish(self) -> (W, String) {
+        (self.inner, crate::hex_lower(&self.digest.finalize()))
+    }
+}
+
+impl<W: Write> Write for HashingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let written = self.inner.write(buf)?;
+        self.digest.update(&buf[..written]);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 async fn service(runtime_config: &Path) -> Result<AuditOperatorService, AuditCliError> {
@@ -263,6 +344,12 @@ fn map_error(error: AuditToolingError) -> AuditCliError {
         AuditToolingError::HeadMismatch => AuditCliError::HeadMismatch,
         AuditToolingError::Unreachable { .. } => AuditCliError::Unreachable,
         AuditToolingError::BoundaryInFuture => AuditCliError::BoundaryInFuture,
+        AuditToolingError::BoundaryInsideMinimumRetention { minimum_days } => {
+            AuditCliError::BoundaryInsideMinimumRetention { minimum_days }
+        }
+        AuditToolingError::ExportRequired => AuditCliError::ExportRequired,
+        AuditToolingError::ExportInvalid { position } => AuditCliError::ExportInvalid { position },
+        AuditToolingError::ExportDoesNotCover => AuditCliError::ExportDoesNotCover,
         AuditToolingError::Unavailable => AuditCliError::Operator,
     }
 }
@@ -277,7 +364,6 @@ fn operator_runtime() -> Result<tokio::runtime::Runtime, AuditCliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
 
     #[test]
     fn export_is_hidden_until_an_owner_only_file_is_published() {
@@ -406,9 +492,52 @@ mod tests {
             AuditCliError::Operator
         );
         assert_eq!(
-            prune(relative, "2024-03-01T00:00:00Z", true).unwrap_err(),
+            prune(relative, "2024-03-01T00:00:00Z", None, true).unwrap_err(),
             AuditCliError::Operator
         );
+        assert_eq!(
+            prune(
+                Path::new("/registry/runtime.yaml"),
+                "2024-03-01T00:00:00Z",
+                Some(relative),
+                true
+            )
+            .unwrap_err(),
+            AuditCliError::Operator
+        );
+    }
+
+    #[test]
+    fn the_export_digest_covers_exactly_the_bytes_written() {
+        let mut writer = HashingWriter::new(Vec::new());
+        writer.write_all(b"first\n").unwrap();
+        writer.write_all(b"second\n").unwrap();
+        writer.flush().unwrap();
+        let (bytes, sha256) = writer.finish();
+        assert_eq!(bytes, b"first\nsecond\n");
+        assert_eq!(
+            sha256,
+            crate::hex_lower(&Sha256::digest(b"first\nsecond\n"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_prune_export_behind_a_symbolic_link_is_refused() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let real = root.join("audit.jsonl");
+        std::fs::write(&real, b"").unwrap();
+        let linked = root.join("linked.jsonl");
+        symlink(&real, &linked).unwrap();
+
+        assert_eq!(
+            open_export_file(&linked).unwrap_err(),
+            AuditCliError::ExportUnreadable
+        );
+        assert!(open_export_file(&real).is_ok());
     }
 
     #[test]
@@ -465,7 +594,13 @@ mod tests {
     #[test]
     fn a_boundary_that_is_not_one_rfc_3339_instant_is_refused() {
         assert_eq!(
-            prune(Path::new("/registry/runtime.yaml"), "2024-03-01", true).unwrap_err(),
+            prune(
+                Path::new("/registry/runtime.yaml"),
+                "2024-03-01",
+                None,
+                true
+            )
+            .unwrap_err(),
             AuditCliError::Operator
         );
     }
@@ -491,6 +626,22 @@ mod tests {
         assert_eq!(
             map_error(AuditToolingError::BoundaryInFuture),
             AuditCliError::BoundaryInFuture
+        );
+        assert_eq!(
+            map_error(AuditToolingError::BoundaryInsideMinimumRetention { minimum_days: 365 }),
+            AuditCliError::BoundaryInsideMinimumRetention { minimum_days: 365 }
+        );
+        assert_eq!(
+            map_error(AuditToolingError::ExportRequired),
+            AuditCliError::ExportRequired
+        );
+        assert_eq!(
+            map_error(AuditToolingError::ExportInvalid { position: 4 }),
+            AuditCliError::ExportInvalid { position: 4 }
+        );
+        assert_eq!(
+            map_error(AuditToolingError::ExportDoesNotCover),
+            AuditCliError::ExportDoesNotCover
         );
         assert_eq!(
             map_error(AuditToolingError::Unavailable),

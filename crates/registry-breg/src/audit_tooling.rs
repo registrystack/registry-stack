@@ -17,12 +17,16 @@
 //! boundary, so what remains is a suffix that still verifies and whose first
 //! record names the boundary. It runs under the migration authority with the
 //! head row locked, so runtime appends wait instead of racing the delete.
+//! The boundary never reaches into the deployment's minimum retention, and a
+//! prune that removes records requires an export that verifies under the
+//! deployment audit key and holds every record it removes. The retention
+//! record names that export by its SHA-256 digest.
 //!
 //! Every path here reads envelope bytes, references, and hashes. None of them
 //! reads a record value, and none of them writes to the journal except the one
 //! retention record a committed prune appends.
 
-use std::io::Write;
+use std::io::{BufRead, Read as _, Write};
 use std::path::Path;
 
 use registry_platform_audit::{
@@ -30,6 +34,7 @@ use registry_platform_audit::{
 };
 use serde::Serialize;
 use serde_json::json;
+use sha2::{Digest as _, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use tokio_postgres::IsolationLevel;
@@ -47,6 +52,9 @@ use crate::runtime_config::load_runtime_config;
 const PRUNE_OPERATION_ID: &str = "audit.retention.prune";
 const CHAIN_CURSOR: &str = "registry_audit_chain";
 const CHAIN_FETCH_BATCH: usize = 1000;
+/// The longest export line read before the line is refused. An envelope is a
+/// bounded, value-free record, so a line this long is not one.
+const EXPORT_LINE_LIMIT: u64 = 16 * 1024 * 1024;
 
 /// Recover chain order from the links. The walk starts at the head hash and
 /// steps to the row whose `record_hash` is the current envelope's `prev_hash`,
@@ -123,6 +131,18 @@ pub enum AuditToolingError {
     Unreachable { records: u64 },
     #[error("the audit retention boundary is later than the current transaction time")]
     BoundaryInFuture,
+    #[error(
+        "the audit retention boundary falls inside the minimum retention of {minimum_days} days"
+    )]
+    BoundaryInsideMinimumRetention { minimum_days: u16 },
+    #[error("removing audit records requires a verified export that holds them")]
+    ExportRequired,
+    #[error(
+        "the audit export does not verify under the deployment audit key at record {position}"
+    )]
+    ExportInvalid { position: u64 },
+    #[error("the audit export does not hold every record the prune would remove")]
+    ExportDoesNotCover,
     #[error("the audit journal is unavailable")]
     Unavailable,
 }
@@ -159,6 +179,35 @@ pub struct AuditPrune {
     pub retained_records: u64,
     pub boundary_hash: Option<String>,
     pub first_retained_envelope_id: Option<String>,
+    /// SHA-256 of the export the prune checked, when one was given.
+    pub export_sha256: Option<String>,
+}
+
+/// An audit export that verified under the deployment audit key.
+///
+/// Only [`AuditOperatorService::verify_export`] builds one, so a prune can
+/// trust that the records it names were read back from an export and chain
+/// under this deployment's key.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuditExportCoverage {
+    records: u64,
+    first_hash: Option<[u8; 32]>,
+    last_hash: Option<[u8; 32]>,
+    sha256: [u8; 32],
+}
+
+impl AuditExportCoverage {
+    /// Records the export holds.
+    #[must_use]
+    pub fn records(&self) -> u64 {
+        self.records
+    }
+
+    /// SHA-256 of the export bytes, as lowercase hexadecimal.
+    #[must_use]
+    pub fn sha256(&self) -> String {
+        hex::encode(self.sha256)
+    }
 }
 
 /// The instant a prune keeps from: a record created at or after it stays, and
@@ -209,6 +258,7 @@ pub struct AuditOperatorService {
     runtime_role: SqlIdentifier,
     timeouts: HistoryMaintenanceTimeouts,
     audit_profile: AuditProfile,
+    minimum_retention_days: u16,
 }
 
 impl AuditOperatorService {
@@ -245,6 +295,7 @@ impl AuditOperatorService {
         let audit_profile = config
             .audit_profile()
             .map_err(|_| AuditToolingError::Unavailable)?;
+        let minimum_retention_days = config.audit().minimum_retention_days();
         let timeouts = HistoryMaintenanceTimeouts::new(
             config.operational_timeouts().migration_lock,
             config.operational_timeouts().migration_statement,
@@ -259,6 +310,7 @@ impl AuditOperatorService {
             runtime_role: config.database().roles().runtime().clone(),
             timeouts,
             audit_profile,
+            minimum_retention_days,
         })
     }
 
@@ -289,7 +341,17 @@ impl AuditOperatorService {
             )
             .expect("bounded test timeouts are valid"),
             audit_profile,
+            minimum_retention_days: crate::runtime_config::DEFAULT_AUDIT_MINIMUM_RETENTION_DAYS,
         }
+    }
+
+    /// Replace the default minimum retention, as a deployment configures it.
+    #[cfg(feature = "postgres-test")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_minimum_retention_days_for_test(mut self, days: u16) -> Self {
+        self.minimum_retention_days = days;
+        self
     }
 
     /// Verify the reachable chain against the head and the table.
@@ -317,6 +379,63 @@ impl AuditOperatorService {
         })
     }
 
+    /// Read an export back and verify it under the deployment audit key.
+    ///
+    /// The export is streamed in batches the way the journal walk reads the
+    /// database, so an export larger than memory still verifies. What comes
+    /// back is the export's first and last record hash, its record count, and
+    /// the SHA-256 of every byte read. The caller owns the reader; this never
+    /// opens a file.
+    pub fn verify_export(&self, reader: &mut dyn BufRead) -> Result<AuditExportCoverage> {
+        if !profile_is_keyed(&self.audit_profile) {
+            return Err(AuditToolingError::Unavailable);
+        }
+        let hasher = self.audit_profile.chain_hasher();
+        let mut digest = Sha256::new();
+        let mut coverage = ExportWalk::default();
+        let mut batch: Vec<AuditEnvelope> = Vec::with_capacity(CHAIN_FETCH_BATCH);
+        let mut line = Vec::new();
+        loop {
+            let position = coverage
+                .records
+                .checked_add(
+                    u64::try_from(batch.len()).map_err(|_| AuditToolingError::Unavailable)?,
+                )
+                .and_then(|position| position.checked_add(1))
+                .ok_or(AuditToolingError::Unavailable)?;
+            line.clear();
+            let read = (&mut *reader)
+                .take(EXPORT_LINE_LIMIT + 1)
+                .read_until(b'\n', &mut line)
+                .map_err(|_| AuditToolingError::ExportInvalid { position })?;
+            if read == 0 {
+                break;
+            }
+            if u64::try_from(line.len()).map_or(true, |length| length > EXPORT_LINE_LIMIT) {
+                return Err(AuditToolingError::ExportInvalid { position });
+            }
+            digest.update(&line);
+            let content = line.trim_ascii();
+            if content.is_empty() {
+                continue;
+            }
+            let envelope: AuditEnvelope = serde_json::from_slice(content)
+                .map_err(|_| AuditToolingError::ExportInvalid { position })?;
+            batch.push(envelope);
+            if batch.len() == CHAIN_FETCH_BATCH {
+                coverage.extend(&batch, &hasher)?;
+                batch.clear();
+            }
+        }
+        coverage.extend(&batch, &hasher)?;
+        Ok(AuditExportCoverage {
+            records: coverage.records,
+            first_hash: coverage.first_hash,
+            last_hash: coverage.last_hash,
+            sha256: digest.finalize().into(),
+        })
+    }
+
     /// Remove the longest prefix of the chain whose records were all created
     /// before the boundary, and record what went.
     ///
@@ -324,7 +443,16 @@ impl AuditOperatorService {
     /// the first record in chain order created at or after the boundary, even
     /// when a later record carries an earlier timestamp, so what remains is a
     /// suffix whose first record still links to the last removed one.
-    pub async fn prune(&self, boundary: AuditPruneBoundary, dry_run: bool) -> Result<AuditPrune> {
+    ///
+    /// A boundary inside the minimum retention is refused, dry run or not. A
+    /// prune that removes records requires `export`, and a given export must
+    /// hold every record the plan removes, which a dry run checks too.
+    pub async fn prune(
+        &self,
+        boundary: AuditPruneBoundary,
+        export: Option<&AuditExportCoverage>,
+        dry_run: bool,
+    ) -> Result<AuditPrune> {
         if !profile_is_keyed(&self.audit_profile) {
             return Err(AuditToolingError::Unavailable);
         }
@@ -390,6 +518,19 @@ impl AuditOperatorService {
         if future.get::<_, bool>(0) {
             return Err(AuditToolingError::BoundaryInFuture);
         }
+        let inside_retention = transaction
+            .query_one(
+                "SELECT $1::text::timestamptz
+                        > transaction_timestamp() - make_interval(days => $2::int)",
+                &[&before, &i32::from(self.minimum_retention_days)],
+            )
+            .await
+            .map_err(|_| AuditToolingError::Unavailable)?;
+        if inside_retention.get::<_, bool>(0) {
+            return Err(AuditToolingError::BoundaryInsideMinimumRetention {
+                minimum_days: self.minimum_retention_days,
+            });
+        }
 
         let plan = transaction
             .query_one(
@@ -406,10 +547,23 @@ impl AuditOperatorService {
                             (SELECT ordered.envelope_id
                                FROM ordered
                               WHERE ordered.position = boundary.first_retained)
-                                AS first_retained_envelope_id
+                                AS first_retained_envelope_id,
+                            (SELECT ordered.position
+                               FROM ordered
+                              WHERE ordered.record_hash = $3::bytea)
+                                AS export_first_position,
+                            (SELECT ordered.position
+                               FROM ordered
+                              WHERE ordered.record_hash = $4::bytea)
+                                AS export_last_position
                        FROM boundary"
                 ),
-                &[&total, &before],
+                &[
+                    &total,
+                    &before,
+                    &export.and_then(|export| export.first_hash.map(Vec::from)),
+                    &export.and_then(|export| export.last_hash.map(Vec::from)),
+                ],
             )
             .await
             .map_err(|_| AuditToolingError::Unavailable)?;
@@ -421,6 +575,21 @@ impl AuditOperatorService {
             .transpose()?
             .map(hex::encode);
         let first_retained_envelope_id = plan.get::<_, Option<String>>(3);
+        if removed_records > 0 {
+            match export {
+                None if !dry_run => return Err(AuditToolingError::ExportRequired),
+                None => {}
+                Some(export) => {
+                    let first_position = plan.get::<_, Option<i64>>(4);
+                    let last_position = plan.get::<_, Option<i64>>(5);
+                    if !export_covers_prefix(export, first_position, last_position, removed_records)
+                    {
+                        return Err(AuditToolingError::ExportDoesNotCover);
+                    }
+                }
+            }
+        }
+        let export_sha256 = export.map(AuditExportCoverage::sha256);
 
         if !dry_run && removed_records > 0 {
             let deleted = transaction
@@ -453,6 +622,7 @@ impl AuditOperatorService {
                     "retainedRecords": retained_records,
                     "boundaryHash": &boundary_hash,
                     "before": before,
+                    "exportSha256": &export_sha256,
                 }),
             )
             .await?;
@@ -475,6 +645,7 @@ impl AuditOperatorService {
             retained_records,
             boundary_hash,
             first_retained_envelope_id,
+            export_sha256,
         })
     }
 
@@ -701,6 +872,72 @@ async fn walk_chain(
         .await
         .map_err(|_| AuditToolingError::Unavailable)?;
     Ok(walk)
+}
+
+/// Whether a verified export holds every record in the chain prefix a prune
+/// removes, positions counted from the oldest retained record.
+///
+/// Both the export and the journal are chains under one key, so a record hash
+/// found in both names the same record and the same records before it. The
+/// export holds the whole prefix when its newest record sits at or after the
+/// last removed position, and its oldest record is either the journal's
+/// oldest record or one an earlier prune already removed. An oldest record
+/// found later in the journal leaves the records before it outside the export.
+fn export_covers_prefix(
+    export: &AuditExportCoverage,
+    first_position: Option<i64>,
+    last_position: Option<i64>,
+    removed_records: u64,
+) -> bool {
+    if export.records == 0 {
+        return false;
+    }
+    let reaches_boundary = last_position
+        .and_then(|position| u64::try_from(position).ok())
+        .is_some_and(|position| position >= removed_records);
+    let starts_early_enough = matches!(first_position, None | Some(1));
+    reaches_boundary && starts_early_enough
+}
+
+/// The running verification of an export read in batches.
+#[derive(Default)]
+struct ExportWalk {
+    records: u64,
+    first_hash: Option<[u8; 32]>,
+    last_hash: Option<[u8; 32]>,
+}
+
+impl ExportWalk {
+    fn extend(&mut self, batch: &[AuditEnvelope], hasher: &AuditChainHasher) -> Result<()> {
+        let Some(first) = batch.first() else {
+            return Ok(());
+        };
+        let invalid = |error: AuditToolingError| match error {
+            AuditToolingError::ChainBroken { position }
+            | AuditToolingError::InvalidEnvelope { position } => {
+                AuditToolingError::ExportInvalid { position }
+            }
+            _ => AuditToolingError::ExportInvalid {
+                position: self.records + 1,
+            },
+        };
+        let verified = verify_chain(batch, hasher)
+            .map_err(|error| invalid(chain_position_error(self.records, &error)))?;
+        if self.records == 0 {
+            self.first_hash = Some(first.record_hash);
+        } else if verified.start_prev_hash != self.last_hash {
+            return Err(AuditToolingError::ExportInvalid {
+                position: self.records + 1,
+            });
+        }
+        let length = u64::try_from(batch.len()).map_err(|_| AuditToolingError::Unavailable)?;
+        self.records = self
+            .records
+            .checked_add(length)
+            .ok_or(AuditToolingError::Unavailable)?;
+        self.last_hash = verified.last_hash;
+        Ok(())
+    }
 }
 
 fn chain_position_error(base: u64, error: &ChainVerificationError) -> AuditToolingError {

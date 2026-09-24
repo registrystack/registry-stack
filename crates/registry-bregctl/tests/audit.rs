@@ -83,6 +83,21 @@ fn audit_commands_share_one_value_free_refusal() {
             relative.as_os_str(),
             OsStr::new("--before"),
             OsStr::new("2024-03-01T00:00:00Z"),
+            OsStr::new("--acknowledge-irreversible"),
+        ],
+        vec![
+            OsStr::new("bregctl"),
+            OsStr::new("--format"),
+            OsStr::new("json"),
+            OsStr::new("audit"),
+            OsStr::new("prune"),
+            OsStr::new("--runtime-config"),
+            OsStr::new("/registry/audit-runtime-that-does-not-exist.yaml"),
+            OsStr::new("--before"),
+            OsStr::new("2024-03-01T00:00:00Z"),
+            OsStr::new("--export"),
+            relative_output.as_os_str(),
+            OsStr::new("--dry-run"),
         ],
         vec![
             OsStr::new("bregctl"),
@@ -117,10 +132,73 @@ fn a_boundary_that_is_not_one_rfc_3339_instant_is_refused_before_any_dependency(
         "/registry/audit-runtime-that-does-not-exist.yaml",
         "--before",
         BOUNDARY_VALUE_CANARY,
+        "--acknowledge-irreversible",
     ]);
 
     assert_eq!(status, 1);
     assert_value_free_refusal(&stdout, &stderr);
+}
+
+#[test]
+fn a_prune_that_removes_records_is_refused_without_the_acknowledgement() {
+    let (status, stdout, stderr) = run([
+        "bregctl",
+        "--format",
+        "json",
+        "audit",
+        "prune",
+        "--runtime-config",
+        "/registry/audit-runtime-that-does-not-exist.yaml",
+        "--before",
+        "2024-03-01T00:00:00Z",
+        "--export",
+        "/registry/audit-export-that-does-not-exist.jsonl",
+    ]);
+
+    assert_eq!(status, 1);
+    assert!(stderr.is_empty());
+    let report: Value = serde_json::from_str(&stdout).expect("failure is JSON");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "audit.prune.acknowledgement.required"
+    );
+    assert_eq!(report["diagnostics"][0]["path"], "acknowledgeIrreversible");
+    assert_eq!(report["diagnostics"][0]["artifact"], "command_arguments");
+    assert!(!stdout.contains("audit-export-that-does-not-exist"));
+}
+
+#[test]
+fn a_prune_export_that_cannot_be_read_is_refused_before_the_runtime_configuration_loads() {
+    let root = std::env::temp_dir().join(format!("bregctl-audit-prune-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir(&root).expect("test directory is created");
+    let root = root.canonicalize().expect("test directory canonicalizes");
+    let missing = root.join(OUTPUT_VALUE_CANARY);
+    let directory = root.join("a-directory");
+    std::fs::create_dir(&directory).expect("directory export creates");
+
+    for export in [&missing, &directory] {
+        let (status, stdout, stderr) = run([
+            OsStr::new("bregctl"),
+            OsStr::new("--format"),
+            OsStr::new("json"),
+            OsStr::new("audit"),
+            OsStr::new("prune"),
+            OsStr::new("--runtime-config"),
+            OsStr::new("/registry/audit-runtime-that-does-not-exist.yaml"),
+            OsStr::new("--before"),
+            OsStr::new("2024-03-01T00:00:00Z"),
+            OsStr::new("--export"),
+            export.as_os_str(),
+            OsStr::new("--acknowledge-irreversible"),
+        ]);
+
+        assert_eq!(status, 1);
+        assert_value_free_diagnostic(&stdout, &stderr, "audit.export.unreadable", "export");
+        assert!(!stdout.contains(&display(&root)));
+    }
+
+    std::fs::remove_dir_all(&root).expect("test directory is removed");
 }
 
 #[test]
@@ -224,6 +302,8 @@ fn audit_help_describes_the_bounded_operator_contract() {
     assert!(stdout.contains("--runtime-config <ABSOLUTE_FILE>"));
     assert!(stdout.contains("--before <RFC3339>"));
     assert!(stdout.contains("--dry-run"));
+    assert!(stdout.contains("--export <ABSOLUTE_FILE>"));
+    assert!(stdout.contains("--acknowledge-irreversible"));
 }
 
 fn display(path: &Path) -> String {

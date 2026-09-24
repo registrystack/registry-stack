@@ -107,3 +107,6 @@ traceability:
   - {id: BREG-SEC-104, state: enforced, negativeId: BREG-NEG-104, negativeTest: {path: crates/registry-breg/tests/postgres_import_authority.rs, name: every_chunk_counts_against_the_authority_until_it_is_exhausted}}
   - {id: BREG-SEC-105, state: enforced, negativeId: BREG-NEG-105, negativeTest: {path: crates/registry-breg/tests/postgres_import_authority.rs, name: the_runtime_role_cannot_open_close_or_reopen_an_authority}}
   - {id: BREG-SEC-106, state: enforced, negativeId: BREG-NEG-106, negativeTest: {path: crates/registry-breg/tests/import_grant_compiler.rs, name: batch_is_still_refused_on_a_controlled_entity_and_the_message_suggests_import}}
+  - {id: BREG-SEC-107, state: enforced, negativeId: BREG-NEG-107, negativeTest: {path: crates/registry-breg/tests/postgres_audit_tooling.rs, name: prune_refuses_a_boundary_inside_the_minimum_retention}}
+  - {id: BREG-SEC-108, state: enforced, negativeId: BREG-NEG-108, negativeTest: {path: crates/registry-breg/tests/postgres_audit_tooling.rs, name: prune_removes_only_records_a_verified_export_holds}}
+  - {id: BREG-SEC-109, state: enforced, negativeId: BREG-NEG-109, negativeTest: {path: crates/registry-breg/tests/postgres_audit_tooling.rs, name: an_export_that_does_not_verify_under_the_deployment_key_is_refused}}

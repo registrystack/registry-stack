@@ -646,6 +646,10 @@ mod tests {
                 Value::from(7_u64),
             ),
             (
+                "/$defs/RawAuditConfig/properties/minimumRetentionDays/default",
+                Value::from(365_u64),
+            ),
+            (
                 "/properties/operationalTimeouts/default/httpRequestMilliseconds",
                 Value::from(10_000_u64),
             ),
@@ -733,6 +737,13 @@ mod tests {
             "payload retention above runtime maximum",
             |instance| {
                 instance["eventDelivery"] = serde_json::json!({"payloadRetentionDays": 31});
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "audit minimum retention must be positive",
+            |instance| {
+                instance["audit"]["minimumRetentionDays"] = Value::from(0_u64);
             },
         );
         assert_schema_rejects_parser_refused_runtime(

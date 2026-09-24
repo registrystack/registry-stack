@@ -300,6 +300,14 @@
           "minLength": 1,
           "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
           "type": "string"
+        },
+        "minimumRetentionDays": {
+          "default": 365,
+          "description": "Days of journal `bregctl audit prune` may never remove, counted back\nfrom the time of the prune. Defaults to 365; between 1 and 36500.",
+          "format": "uint16",
+          "maximum": 36500,
+          "minimum": 1,
+          "type": "integer"
         }
       },
       "required": [

@@ -406,6 +406,29 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-bregctl/src/import_authority_lifecycle.rs;
     crates/registry-bregctl/src/data_lifecycle.rs, a_run_blocked_by_its_import_authority_names_that_reason. */}
 
+- BREAKING: `bregctl audit prune` removes audit records only with
+  `--export`, naming a file an earlier `bregctl audit export` wrote that
+  verifies under the deployment audit key and holds every record the prune
+  removes, and only with `--acknowledge-irreversible` unless it is a
+  `--dry-run`. A boundary inside the new runtime setting
+  `audit.minimumRetentionDays` (default `365`, from `1` to `36500`) is
+  refused as `audit.boundary.inside_minimum_retention`, so a prune that used
+  to succeed with a recent boundary is now refused until the floor is
+  lowered in `runtime.yaml`. The floor guards against a mistaken boundary,
+  not against whoever holds the runtime configuration and the migration
+  credential. `audit export` reports the SHA-256 digest of the
+  file it writes, and the retention record a prune appends carries it as
+  `exportSha256`. New refusals: `audit.prune.acknowledgement.required`,
+  `audit.export.required`, `audit.export.unreadable`, `audit.export.invalid`,
+  and `audit.export.not_covering`. See
+  [keep the audit journal](../operate/breg-retention/#keep-the-audit-journal).
+
+{/* Evidence: crates/registry-breg/src/audit_tooling.rs, verify_export() and prune();
+    crates/registry-breg/src/runtime_config.rs, AuditConfig;
+    crates/registry-breg/tests/postgres_audit_tooling.rs;
+    crates/registry-bregctl/src/audit_lifecycle.rs;
+    crates/registry-bregctl/tests/audit.rs. */}
+
 ## v0.34.0 beta-46
 
 - `bregctl apply` reports a migration database it could not reach, or an

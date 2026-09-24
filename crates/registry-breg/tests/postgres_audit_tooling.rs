@@ -11,7 +11,9 @@ use std::future::Future;
 use std::time::{Duration, Instant};
 
 use postgres_harness::TestDatabase;
-use registry_breg::audit_tooling::{AuditOperatorService, AuditPruneBoundary, AuditToolingError};
+use registry_breg::audit_tooling::{
+    AuditExportCoverage, AuditOperatorService, AuditPruneBoundary, AuditToolingError,
+};
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::postgres::{
@@ -20,6 +22,9 @@ use registry_breg::postgres::{
 };
 use registry_platform_audit::{verify_jsonl_lines_with_hasher, AuditEnvelope, AuditProfile};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 const PACKAGE_ID: &str = "audit-tooling";
 const PACKAGE_REVISION: &str =
@@ -211,7 +216,7 @@ async fn prune_removes_the_qualifying_prefix_and_records_what_went() {
     assert_eq!(
         fixture
             .service()
-            .prune(boundary("2999-01-01T00:00:00Z"), false)
+            .prune(boundary("2999-01-01T00:00:00Z"), None, false)
             .await
             .err(),
         Some(AuditToolingError::BoundaryInFuture),
@@ -220,7 +225,7 @@ async fn prune_removes_the_qualifying_prefix_and_records_what_went() {
 
     let nothing = fixture
         .service()
-        .prune(boundary("2020-01-01T00:00:00Z"), false)
+        .prune(boundary("2020-01-01T00:00:00Z"), None, false)
         .await
         .expect("a boundary older than every record succeeds");
     assert_eq!(nothing.removed_records, 0);
@@ -238,7 +243,7 @@ async fn prune_removes_the_qualifying_prefix_and_records_what_went() {
 
     let dry_run = fixture
         .service()
-        .prune(retention_boundary, true)
+        .prune(retention_boundary, None, true)
         .await
         .expect("a dry run reports the plan");
     assert!(dry_run.dry_run);
@@ -258,9 +263,10 @@ async fn prune_removes_the_qualifying_prefix_and_records_what_went() {
         "a dry run leaves every record in place"
     );
 
+    let (export_bytes, export) = exported(&fixture.service()).await;
     let pruned = fixture
         .service()
-        .prune(retention_boundary, false)
+        .prune(retention_boundary, Some(&export), false)
         .await
         .expect("the qualifying prefix is removed");
     assert!(!pruned.dry_run);
@@ -291,6 +297,11 @@ async fn prune_removes_the_qualifying_prefix_and_records_what_went() {
     assert_eq!(record["retainedRecords"], 2);
     assert_eq!(record["boundaryHash"], hex::encode(chain[1].record_hash));
     assert_eq!(record["before"], "2024-03-01T00:00:00Z");
+    assert_eq!(
+        record["exportSha256"],
+        hex::encode(Sha256::digest(&export_bytes)),
+        "the retention record names the export that holds what went"
+    );
 
     let verified = fixture
         .service()
@@ -324,7 +335,7 @@ async fn prune_refuses_an_unverified_journal_before_deleting_records() {
     assert_eq!(
         fixture
             .service()
-            .prune(boundary("2025-01-01T00:00:00Z"), false)
+            .prune(boundary("2025-01-01T00:00:00Z"), None, false)
             .await
             .err(),
         Some(AuditToolingError::ChainBroken { position: 2 })
@@ -338,7 +349,7 @@ async fn prune_refuses_an_unverified_journal_before_deleting_records() {
     assert_eq!(
         fixture
             .service()
-            .prune(boundary("2025-01-01T00:00:00Z"), false)
+            .prune(boundary("2025-01-01T00:00:00Z"), None, false)
             .await
             .err(),
         Some(AuditToolingError::HeadMismatch)
@@ -353,7 +364,7 @@ async fn prune_refuses_an_unverified_journal_before_deleting_records() {
     assert_eq!(
         fixture
             .service()
-            .prune(boundary("2025-01-01T00:00:00Z"), false)
+            .prune(boundary("2025-01-01T00:00:00Z"), None, false)
             .await
             .err(),
         Some(AuditToolingError::Unreachable { records: 1 })
@@ -381,9 +392,10 @@ async fn prune_stops_at_the_first_record_the_boundary_retains() {
             .await;
     }
 
+    let (_, export) = exported(&fixture.service()).await;
     let pruned = fixture
         .service()
-        .prune(boundary("2024-03-01T00:00:00Z"), false)
+        .prune(boundary("2024-03-01T00:00:00Z"), Some(&export), false)
         .await
         .expect("the prefix before the straddling record is removed");
     assert_eq!(
@@ -404,6 +416,211 @@ async fn prune_stops_at_the_first_record_the_boundary_retains() {
         .expect("the retained journal still verifies");
     assert_eq!(verified.records, 3);
     assert_eq!(verified.start_prev_hash, pruned.boundary_hash);
+
+    fixture.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn prune_refuses_a_boundary_inside_the_minimum_retention() {
+    let fixture = Fixture::create().await;
+    fixture.seed(2).await;
+    let service = fixture.service();
+
+    for dry_run in [true, false] {
+        assert_eq!(
+            service.prune(days_ago(30), None, dry_run).await.err(),
+            Some(AuditToolingError::BoundaryInsideMinimumRetention { minimum_days: 365 }),
+            "a boundary thirty days back is inside the default floor (dry run {dry_run})"
+        );
+    }
+    assert_eq!(
+        service.prune(days_ago(364), None, true).await.err(),
+        Some(AuditToolingError::BoundaryInsideMinimumRetention { minimum_days: 365 }),
+        "the floor is a whole year"
+    );
+    let outside = service
+        .prune(days_ago(366), None, true)
+        .await
+        .expect("a boundary past the floor is planned");
+    assert_eq!(outside.removed_records, 0);
+    assert_eq!(fixture.record_count().await, 2);
+
+    let short = fixture.service().with_minimum_retention_days_for_test(7);
+    assert_eq!(
+        short.prune(days_ago(3), None, true).await.err(),
+        Some(AuditToolingError::BoundaryInsideMinimumRetention { minimum_days: 7 }),
+        "a configured floor is enforced the same way"
+    );
+    let month_ago = rfc3339(OffsetDateTime::now_utc() - time::Duration::days(30));
+    for envelope in fixture.chain().await {
+        fixture
+            .set_created_at(&envelope.envelope_id, &month_ago)
+            .await;
+    }
+    let (_, export) = exported(&short).await;
+    let pruned = short
+        .prune(days_ago(10), Some(&export), false)
+        .await
+        .expect("records older than a shorter configured floor are pruned");
+    assert_eq!(pruned.removed_records, 2);
+
+    fixture.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn prune_removes_only_records_a_verified_export_holds() {
+    let fixture = Fixture::create().await;
+    let service = fixture.service();
+    fixture.seed(2).await;
+    let (_, early) = exported(&service).await;
+    fixture.seed(2).await;
+    let chain = fixture.chain().await;
+    assert_eq!(chain.len(), 4);
+    for (index, envelope) in chain.iter().enumerate() {
+        let created_at = if index < 2 {
+            "2024-01-01T00:00:00Z"
+        } else {
+            "2024-06-01T00:00:00Z"
+        };
+        fixture
+            .set_created_at(&envelope.envelope_id, created_at)
+            .await;
+    }
+    let first_boundary = boundary("2024-03-01T00:00:00Z");
+    let second_boundary = boundary("2025-01-01T00:00:00Z");
+
+    assert_eq!(
+        service.prune(second_boundary, None, false).await.err(),
+        Some(AuditToolingError::ExportRequired),
+        "removing records without an export is refused"
+    );
+    let plan = service
+        .prune(second_boundary, None, true)
+        .await
+        .expect("a dry run without an export still reports the plan");
+    assert_eq!(plan.removed_records, 4);
+    assert_eq!(plan.export_sha256, None);
+
+    for dry_run in [true, false] {
+        assert_eq!(
+            service
+                .prune(second_boundary, Some(&early), dry_run)
+                .await
+                .err(),
+            Some(AuditToolingError::ExportDoesNotCover),
+            "an export taken before the newest removed records does not cover them (dry run {dry_run})"
+        );
+    }
+
+    let (full_bytes, full) = exported(&service).await;
+    let without_oldest: Vec<u8> = full_bytes
+        .split_inclusive(|byte| *byte == b'\n')
+        .skip(1)
+        .flatten()
+        .copied()
+        .collect();
+    let suffix = service
+        .verify_export(&mut without_oldest.as_slice())
+        .expect("a suffix of the chain still verifies");
+    assert_eq!(suffix.records(), 3);
+    assert_eq!(
+        service
+            .prune(second_boundary, Some(&suffix), false)
+            .await
+            .err(),
+        Some(AuditToolingError::ExportDoesNotCover),
+        "an export missing the oldest record does not cover it"
+    );
+    let empty = service
+        .verify_export(&mut b"".as_slice())
+        .expect("an empty export verifies and holds nothing");
+    assert_eq!(
+        service
+            .prune(second_boundary, Some(&empty), false)
+            .await
+            .err(),
+        Some(AuditToolingError::ExportDoesNotCover)
+    );
+    assert_eq!(
+        fixture.record_count().await,
+        4,
+        "no refusal removed a record"
+    );
+
+    let digest = hex::encode(Sha256::digest(&full_bytes));
+    assert_eq!(full.sha256(), digest);
+    let first = service
+        .prune(first_boundary, Some(&full), false)
+        .await
+        .expect("the full export covers the first prefix");
+    assert_eq!(first.removed_records, 2);
+    assert_eq!(first.export_sha256, Some(digest.clone()));
+    let second = service
+        .prune(second_boundary, Some(&full), false)
+        .await
+        .expect(
+            "the export still covers what the first prune left, though its oldest records are gone",
+        );
+    assert_eq!(second.removed_records, 2);
+
+    let retained = fixture.chain().await;
+    assert_eq!(retained.len(), 2, "the two retention records remain");
+    for record in &retained {
+        assert_eq!(record.record["schema"], "breg-audit-retention-audit/v1");
+        assert_eq!(record.record["exportSha256"], digest);
+    }
+    fixture
+        .service()
+        .verify()
+        .await
+        .expect("the retained journal still verifies");
+
+    fixture.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_export_that_does_not_verify_under_the_deployment_key_is_refused() {
+    let fixture = Fixture::create().await;
+    fixture.seed(3).await;
+    let service = fixture.service();
+    let (bytes, _) = exported(&service).await;
+    let lines: Vec<&[u8]> = bytes.split_inclusive(|byte| *byte == b'\n').collect();
+    assert_eq!(lines.len(), 3);
+
+    let mut tampered: Value = serde_json::from_slice(lines[1]).expect("the line is JSON");
+    tampered["record"]["operationId"] = Value::String("records.membership.list".to_owned());
+    let mut rewritten = lines[0].to_vec();
+    rewritten.extend(serde_json::to_vec(&tampered).expect("the tampered envelope serializes"));
+    rewritten.push(b'\n');
+    rewritten.extend_from_slice(lines[2]);
+    assert_eq!(
+        service.verify_export(&mut rewritten.as_slice()).err(),
+        Some(AuditToolingError::ExportInvalid { position: 2 }),
+        "a rewritten record is refused where it was rewritten"
+    );
+
+    let mut reordered = lines[1].to_vec();
+    reordered.extend_from_slice(lines[0]);
+    assert_eq!(
+        service.verify_export(&mut reordered.as_slice()).err(),
+        Some(AuditToolingError::ExportInvalid { position: 2 }),
+        "records out of chain order are refused"
+    );
+
+    assert_eq!(
+        service.verify_export(&mut b"not json\n".as_slice()).err(),
+        Some(AuditToolingError::ExportInvalid { position: 1 })
+    );
+
+    let other_key = fixture.service_with_profile(
+        AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into())
+            .expect("another keyed audit profile"),
+    );
+    assert_eq!(
+        other_key.verify_export(&mut bytes.as_slice()).err(),
+        Some(AuditToolingError::ExportInvalid { position: 1 }),
+        "an export from another deployment key does not verify here"
+    );
 
     fixture.cleanup().await;
 }
@@ -445,7 +662,7 @@ async fn verify_export_and_prune_report_malformed_links_as_unreadable_envelopes(
 
         assert_eq!(
             bounded(
-                service.prune(boundary("2025-01-01T00:00:00Z"), false),
+                service.prune(boundary("2025-01-01T00:00:00Z"), None, false),
                 shape
             )
             .await
@@ -729,6 +946,30 @@ fn boundary(value: &str) -> AuditPruneBoundary {
     AuditPruneBoundary::parse_rfc3339(value).expect("the test boundary parses")
 }
 
+fn days_ago(days: i64) -> AuditPruneBoundary {
+    boundary(&rfc3339(
+        OffsetDateTime::now_utc() - time::Duration::days(days),
+    ))
+}
+
+fn rfc3339(instant: OffsetDateTime) -> String {
+    instant.format(&Rfc3339).expect("the instant formats")
+}
+
+/// Export the journal the way `bregctl audit export` does and read the file
+/// back the way `bregctl audit prune --export` does.
+async fn exported(service: &AuditOperatorService) -> (Vec<u8>, AuditExportCoverage) {
+    let mut written = Vec::new();
+    service
+        .export(&mut written)
+        .await
+        .expect("the journal exports");
+    let coverage = service
+        .verify_export(&mut written.as_slice())
+        .expect("a fresh export verifies");
+    (written, coverage)
+}
+
 struct Fixture {
     database: TestDatabase,
     migration: tokio_postgres::Client,
@@ -774,6 +1015,10 @@ impl Fixture {
     }
 
     fn service(&self) -> AuditOperatorService {
+        self.service_with_profile(self.audit_profile.clone())
+    }
+
+    fn service_with_profile(&self, audit_profile: AuditProfile) -> AuditOperatorService {
         AuditOperatorService::new_for_test(
             self.identity.clone(),
             ExpectedManagedCatalog::compiled(&self.registry),
@@ -782,7 +1027,7 @@ impl Fixture {
             self.database.runtime_config.clone(),
             self.database.migration_role.clone(),
             self.database.runtime_role.clone(),
-            self.audit_profile.clone(),
+            audit_profile,
         )
     }
 
