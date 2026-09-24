@@ -1062,9 +1062,9 @@ fn insert_entity_hook(text: &str, entity_id: &str, event_field: &str) -> Result<
         end
     };
     let block = if hooks.is_some() {
-        format!("{}- id: casework-lifecycle-v1\n{}  phase: after\n{}  trigger: request_lifecycle\n{}  projection: [{event_field}]\n{}  handler: {{kind: url, destinationId: casework}}\n", " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2))
+        format!("{}- id: casework-lifecycle-v1\n{}  phase: after\n{}  trigger: request_lifecycle\n{}  projection: [{}]\n{}  handler: {{kind: url, destinationId: casework}}\n", " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), yaml_string(event_field), " ".repeat(field_indent + 2))
     } else {
-        format!("{}hooks:\n{}- id: casework-lifecycle-v1\n{}  phase: after\n{}  trigger: request_lifecycle\n{}  projection: [{event_field}]\n{}  handler: {{kind: url, destinationId: casework}}\n", " ".repeat(field_indent), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2))
+        format!("{}hooks:\n{}- id: casework-lifecycle-v1\n{}  phase: after\n{}  trigger: request_lifecycle\n{}  projection: [{}]\n{}  handler: {{kind: url, destinationId: casework}}\n", " ".repeat(field_indent), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), yaml_string(event_field), " ".repeat(field_indent + 2))
     };
     Ok(insert_at_line(&lines, insertion, &block))
 }
@@ -1078,6 +1078,7 @@ fn insert_access_profile(text: &str, entity_id: &str, reader: &ReaderGrant) -> R
 fn reader_permission_yaml(indent: usize, entity_id: &str, reader: &ReaderGrant) -> Result<String> {
     let fields = serde_json::to_string(&reader.fields)?;
     let pad = " ".repeat(indent);
+    let entity_id = yaml_string(entity_id);
     Ok(format!("{pad}- entity: {entity_id}\n{pad}  operations: [get, list]\n{pad}  readableFields: {fields}\n{pad}  readableRequestFields: [review_state]\n{pad}  rowBoundaries: []\n"))
 }
 
@@ -2818,6 +2819,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(serde_norway::from_str::<Value>(&patched).unwrap(), expected);
+    }
+
+    #[test]
+    fn narrow_yaml_patch_quotes_a_lifecycle_field_yaml_reads_as_another_type() {
+        let input = "entities:\n  - id: request\n    route: requests\naccessProfiles:\n  - id: reader\n    permissions: []\n";
+        let metadata = json!({"effects":[target(json!({"kind":"existing","fromField":{"field":"null","apiName":"null"}}))]});
+        let reader = reader_grant(&metadata, &[]).unwrap();
+        let mut expected: Value = serde_norway::from_str(input).unwrap();
+        apply_breg_candidate(&mut expected, "request", &reader).unwrap();
+        let patched = render_candidate_preserving_authored_text(
+            input.as_bytes(),
+            "request",
+            &expected,
+            &reader,
+        )
+        .unwrap();
+        assert_eq!(serde_norway::from_str::<Value>(&patched).unwrap(), expected);
+    }
+
+    #[test]
+    fn reader_permission_yaml_quotes_an_entity_yaml_reads_as_another_type() {
+        let rendered = reader_permission_yaml(0, "true", &record_reader(&[])).unwrap();
+        let permissions: Value = serde_norway::from_str(&rendered).unwrap();
+        assert_eq!(permissions[0]["entity"], "true");
     }
 
     #[test]
