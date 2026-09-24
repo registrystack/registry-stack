@@ -34,7 +34,6 @@ const DESCRIPTION_API_VERSION_REQUESTS: &str =
     "registry.registrystack.org/casework-source-description/v1alpha2";
 const DESCRIPTION_KIND: &str = "BRegCaseworkSourceDescription";
 const DESCRIPTION_ORIGIN: &str = "bregctl explain change-requests";
-const DEFAULT_EVENT_TYPE: &str = "casework-lifecycle-v1";
 const DEFAULT_REQUEST_TIMEOUT_MILLISECONDS: u64 = 30_000;
 const DEFAULT_CONNECT_TIMEOUT_MILLISECONDS: u64 = 10_000;
 const MAXIMUM_TIMEOUT_MILLISECONDS: u64 = 300_000;
@@ -68,8 +67,6 @@ pub struct BregBinding {
     pub client_assertion_key_ref: String,
     pub webhook_secret_ref: String,
     pub event_source: String,
-    #[serde(default = "default_event_type")]
-    pub event_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trusted_root_certificates_ref: Option<String>,
     #[serde(default = "default_request_timeout")]
@@ -101,7 +98,6 @@ impl fmt::Debug for BregBinding {
             .field("client_assertion_key_ref", &"[REDACTED]")
             .field("webhook_secret_ref", &"[REDACTED]")
             .field("event_source", &self.event_source)
-            .field("event_type", &self.event_type)
             .finish_non_exhaustive()
     }
 }
@@ -178,7 +174,6 @@ pub fn build_adapter(
             binding_generation: generation,
             reader_profile: binding.reader_profile.clone(),
             event_source: binding.event_source.clone(),
-            event_type: binding.event_type.clone(),
         },
         reader,
         webhook_secret.expose_secret().to_vec(),
@@ -208,7 +203,6 @@ fn source_token_config(
 
 fn validate_binding(binding: &BregBinding) -> Result<(), SourceAdapterError> {
     if !valid_scalar(&binding.reader_profile, 512)
-        || !valid_scalar(&binding.event_type, 512)
         || binding.request_timeout_milliseconds == 0
         || binding.connect_timeout_milliseconds == 0
         || binding.request_timeout_milliseconds > MAXIMUM_TIMEOUT_MILLISECONDS
@@ -561,9 +555,6 @@ fn binding_generation(
     Ok(sha256_uri(&identity))
 }
 
-fn default_event_type() -> String {
-    DEFAULT_EVENT_TYPE.to_owned()
-}
 const fn default_request_timeout() -> u64 {
     DEFAULT_REQUEST_TIMEOUT_MILLISECONDS
 }
@@ -614,7 +605,6 @@ mod tests {
             client_assertion_key_ref: "secret:file/client-key.jwk".into(),
             webhook_secret_ref: "secret:file/webhook".into(),
             event_source: "urn:registrystack:registry:package:instance:pilot".into(),
-            event_type: DEFAULT_EVENT_TYPE.into(),
             trusted_root_certificates_ref: None,
             request_timeout_milliseconds: 30_000,
             connect_timeout_milliseconds: 10_000,
@@ -641,6 +631,15 @@ mod tests {
             binding.reconciliation_interval_milliseconds,
             DEFAULT_RECONCILIATION_INTERVAL_MILLISECONDS
         );
+    }
+
+    /// The lifecycle event type is derived from each paired request entity,
+    /// so a binding that still names one is refused rather than ignored.
+    #[test]
+    fn a_binding_that_names_an_event_type_is_refused() {
+        let mut value = minimal_binding_json();
+        value["eventType"] = json!("casework-lifecycle-v1");
+        assert!(serde_json::from_value::<BregBinding>(value).is_err());
     }
 
     #[test]
@@ -699,7 +698,6 @@ mod tests {
         }
         assert!(rendered.contains(&binding.reader_profile));
         assert!(rendered.contains(&binding.event_source));
-        assert!(rendered.contains(&binding.event_type));
     }
 
     #[test]
@@ -1014,13 +1012,6 @@ mod tests {
                 "webhookSecretRef",
                 BregBinding {
                     webhook_secret_ref: "secret:env/CASEWORK_WEBHOOK_2".into(),
-                    ..binding()
-                },
-            ),
-            (
-                "eventType",
-                BregBinding {
-                    event_type: "casework-lifecycle-v1-staging".into(),
                     ..binding()
                 },
             ),

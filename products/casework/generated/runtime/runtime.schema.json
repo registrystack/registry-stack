@@ -61,10 +61,6 @@
         "eventSource": {
           "type": "string"
         },
-        "eventType": {
-          "default": "casework-lifecycle-v1",
-          "type": "string"
-        },
         "readerProfile": {
           "type": "string"
         },

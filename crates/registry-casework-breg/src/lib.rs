@@ -35,6 +35,17 @@ pub struct BregRequestConfig {
     pub display_reference: Option<RoutingFieldDescriptor>,
 }
 
+/// The prefix of the lifecycle hook identifier `caseworkctl source add` writes
+/// on each paired request entity. BReg hook identifiers are unique across a
+/// registry, so every paired entity carries its own.
+pub const LIFECYCLE_EVENT_TYPE_PREFIX: &str = "casework-lifecycle-v1-";
+
+/// The lifecycle hook identifier of one paired request entity, which BReg
+/// sends as the event's `ce-type`.
+pub fn lifecycle_event_type(entity: &str) -> String {
+    format!("{LIFECYCLE_EVENT_TYPE_PREFIX}{entity}")
+}
+
 /// The imported request entries of one source and the single reader binding
 /// they share. This does not grant source access.
 #[derive(Clone, Debug)]
@@ -45,7 +56,6 @@ pub struct BregSourceConfig {
     pub expected_registry_revision: String,
     pub reader_profile: String,
     pub event_source: String,
-    pub event_type: String,
 }
 
 /// Where discovery resumes: the request entity whose listing is being read
@@ -109,8 +119,6 @@ impl BregAdapter {
                 .event_source
                 .starts_with("urn:registrystack:registry:")
             || config.event_source.len() > 512
-            || config.event_type.is_empty()
-            || config.event_type.len() > 512
         {
             return Err(SourceAdapterError::Invalid);
         }
@@ -745,9 +753,17 @@ impl SourceAdapter for BregAdapter {
                 .copied()
                 .ok_or(SourceAdapterError::Invalid)
         };
+        // Each paired request entity has its own lifecycle hook, so the type
+        // must be one a paired entity derives before the signature is checked,
+        // and the one the event's own entity derives once the body is read.
+        let event_type = h("ce-type")?;
         if h("ce-specversion")? != "1.0"
             || h("ce-source")? != self.config.event_source
-            || h("ce-type")? != self.config.event_type
+            || !self
+                .config
+                .requests
+                .iter()
+                .any(|request| lifecycle_event_type(&request.entity) == event_type)
         {
             return Err(SourceAdapterError::Invalid);
         }
@@ -803,6 +819,9 @@ impl SourceAdapter for BregAdapter {
                 .and_then(Value::as_str)
                 .ok_or(SourceAdapterError::Invalid)?,
         )?;
+        if lifecycle_event_type(&entry.entity) != event_type {
+            return Err(SourceAdapterError::Invalid);
+        }
         let subject = self.subject(
             entry,
             body.get("recordId")
