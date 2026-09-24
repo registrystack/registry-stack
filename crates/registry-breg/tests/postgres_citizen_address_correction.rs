@@ -507,6 +507,80 @@ async fn address_changes_only_after_approval_and_apply() {
     fixture.finish().await;
 }
 
+/// The review page reads a draft's target under the citizen's own token and
+/// offers submission only when that read succeeds. The citizen review profile
+/// therefore reads the citizen's linked address and nobody else's, even when a
+/// draft the citizen owns names another person's address.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn review_page_reads_only_the_linked_target_of_a_draft() {
+    let fixture = RunningFixture::start().await;
+    let citizen_a = fixture.seed_citizen("P-0001", CITIZEN_A).await;
+    let citizen_b = fixture.seed_citizen("P-0002", CITIZEN_B).await;
+    let review_a = fixture.review_page_token(CITIZEN_A);
+    let review_b = fixture.review_page_token(CITIZEN_B);
+
+    let own = fixture
+        .review_address_read(&citizen_a.address, &review_a)
+        .await;
+    assert_eq!(own.status, StatusCode::OK, "{}", own.body);
+    assert_eq!(
+        own.body["data"]["domainData"],
+        json!({"addressLine": "1 Harbour Road", "locality": "Port Selene", "postalCode": "PS-100"})
+    );
+    let own_b = fixture
+        .review_address_read(&citizen_b.address, &review_b)
+        .await;
+    assert_eq!(own_b.status, StatusCode::OK, "{}", own_b.body);
+    let foreign = fixture
+        .review_address_read(&citizen_a.address, &review_b)
+        .await;
+    assert_refused(&foreign, "review page reading another citizen's address");
+
+    // The registry does not bind a draft's target to the owner's link, so a
+    // draft naming another person's address may be accepted. Whether it is
+    // or not, that target must stay unreadable to the draft's owner.
+    let created = fixture
+        .call(
+            Method::POST,
+            "/v1/records/address-correction-requests?accessProfile=citizen-agent",
+            Some(json!({"data": draft_data(&citizen_a.address, CITIZEN_B, "8 Mismatch Road")})),
+            &[("idempotency-key", "foreign-target")],
+            &fixture.agent_token(CITIZEN_B),
+        )
+        .await;
+    if created.status == StatusCode::CREATED {
+        let id = created.body["data"]["recordIdentifier"]
+            .as_str()
+            .expect("draft has an identifier");
+        let draft = fixture
+            .call(
+                Method::GET,
+                &format!(
+                    "/v1/records/address-correction-requests/{id}?accessProfile=citizen-review"
+                ),
+                None,
+                &[],
+                &review_b,
+            )
+            .await;
+        assert_eq!(draft.status, StatusCode::OK, "{}", draft.body);
+        let target = draft.body["data"]["domainData"]["address"]
+            .as_str()
+            .expect("the draft names its target");
+        assert_eq!(target, citizen_a.address);
+        let target_read = fixture.review_address_read(target, &review_b).await;
+        assert_refused(&target_read, "review page reading a draft's foreign target");
+    } else {
+        assert!(
+            created.status.is_client_error(),
+            "{} {}",
+            created.status,
+            created.body
+        );
+    }
+    fixture.finish().await;
+}
+
 /// A retried create and a retried submission, each under its own key, answer
 /// with the first result and leave exactly one draft and one submission.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -963,6 +1037,17 @@ impl RunningFixture {
             id,
             etag: created.etag,
         }
+    }
+
+    async fn review_address_read(&self, address: &str, token: &str) -> Answer {
+        self.call(
+            Method::GET,
+            &format!("/v1/records/person-addresses/{address}?accessProfile=citizen-review"),
+            None,
+            &[],
+            token,
+        )
+        .await
     }
 
     async fn request_view(&self, draft: &Draft, profile: &str, token: &str) -> Value {

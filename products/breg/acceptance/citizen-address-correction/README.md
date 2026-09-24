@@ -25,7 +25,7 @@ exact requester clients.
 | Profile | Actor kind and client | Grants |
 | --- | --- | --- |
 | `citizen-agent` | `agent`, `citizen-gateway`, no task grant | `get` on `person-address` through a membership boundary on the active `self-service-link` for the caller, reading only the three address fields; `create`, `get`, and `patch` on `address-correction-request`, bound to rows whose `owner` equals `sub`, with `requestVisibility: owner` |
-| `citizen-review` | `human`, `citizen-review-page` | `get`, `patch`, `submit_request`, and `cancel_request` on `address-correction-request`, with the same owner row boundary and request visibility; `owner` is not writable |
+| `citizen-review` | `human`, `citizen-review-page` | `get`, `patch`, `submit_request`, and `cancel_request` on `address-correction-request`, with the same owner row boundary and request visibility; `owner` is not writable. `get` on `person-address` through the same `self-service-link` membership boundary, limited to the same three address fields |
 | `reviewer` | `human`, `registry-staff-console` | `get` and `list` on `address-correction-request` |
 | `applier` | `human`, `registry-staff-console` | `get` and `apply_request` on `address-correction-request`, with `person-address` as its apply target |
 | `steward` | `human`, `registry-staff-console` | creates and reads persons and addresses, and creates, reads, and patches self-service links |
@@ -49,8 +49,18 @@ lifecycle, and `submitterTargets` requires a same-profile read without
 membership checks. The request's `address` reference is therefore not bound to
 the caller's own link: a citizen could draft a correction naming another
 person's address identifier, although the agent cannot read that address.
-Staff review must confirm that the address belongs to the requester before
-approving.
+Four layers close that gap around the registry:
+
+1. The gateway derives the target from the citizen's own linked address and
+   takes no target identifier from tool arguments.
+2. The review page reads the draft's target under the citizen's own token and
+   refuses to offer submission when that read fails. The `citizen-review`
+   profile reads only the citizen's linked address, so a draft naming anyone
+   else's address cannot be submitted from the page.
+3. Casework staff review confirms that the address belongs to the requester
+   before approving.
+4. Binding the target to the requester's link inside the registry is a tracked
+   follow-up.
 
 ## Run it
 

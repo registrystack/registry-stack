@@ -141,6 +141,12 @@ accessProfiles:
         readableFields: [address, new-address-line, new-locality, new-postal-code]
         writableFields: [new-address-line, new-locality, new-postal-code]
         requestVisibility: owner
+      - entity: person-address
+        rowBoundaries: []
+        membershipBoundaries:
+          - {field: subject, membershipEntity: self-service-link, membershipKeyField: subject, principalField: principal, activeField: active}
+        operations: [get]
+        readableFields: [address-line, locality, postal-code]
   - id: reviewer
     principalClaim: sub
     actorKind: human
