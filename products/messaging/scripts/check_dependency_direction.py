@@ -26,6 +26,14 @@ MESSAGING_PREFIX = "registry-messaging"
 # reach either of them.
 MESSAGING_RUNTIME = ("registry-messaging", "registry-messagingctl")
 
+# The Rust client and its Node.js and Python bindings. They reach the runtime
+# over its public HTTP contract only, never through a dependency.
+MESSAGING_CLIENT_PREFIX = "registry-messaging-client"
+
+# The unified client facade composes every product client. Like a product
+# crate, it may use the Messaging client but never the runtime.
+UNIFIED_CLIENT_PREFIX = "registry-stack-client"
+
 
 def package_graph(metadata: dict) -> tuple[dict[str, str], dict[str, set[str]]]:
     names = {package["id"]: package["name"] for package in metadata["packages"]}
@@ -87,14 +95,15 @@ def internal_violations(
                 "registry-messaging-core transitively depends on Messaging crate(s): "
                 f"{', '.join(internal)}"
             )
-    if name == "registry-messaging-client":
-        # The client may share the core, never the runtime or adopter tooling.
+    if name.startswith(MESSAGING_CLIENT_PREFIX):
+        # The client and its bindings may share the core, never the runtime or
+        # adopter tooling.
         reaching_runtime = sorted(
             {names[item] for item in reached if names[item] in MESSAGING_RUNTIME}
         )
         if reaching_runtime:
             failures.append(
-                "registry-messaging-client transitively depends on runtime crate(s): "
+                f"{name} transitively depends on runtime crate(s): "
                 f"{', '.join(reaching_runtime)}"
             )
     return failures
@@ -108,10 +117,10 @@ def violations(metadata: dict) -> list[str]:
             failures.extend(product_violations(package_name, package_id, names, edges))
             failures.extend(internal_violations(package_name, package_id, names, edges))
 
-    # The boundary runs both ways: no other runtime product may reach the
-    # Messaging runtime through a dependency either.
+    # The boundary runs both ways: no other runtime product, and no unified
+    # client, may reach the Messaging runtime through a dependency either.
     for package_id, package_name in sorted(names.items(), key=lambda item: item[1]):
-        if not package_name.startswith(PRODUCT_PREFIXES):
+        if not package_name.startswith((*PRODUCT_PREFIXES, UNIFIED_CLIENT_PREFIX)):
             continue
         forbidden = sorted(
             {

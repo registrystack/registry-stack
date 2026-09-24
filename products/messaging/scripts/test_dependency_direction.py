@@ -13,6 +13,9 @@ SPEC.loader.exec_module(MODULE)
 NAMES = {
     "core": "registry-messaging-core",
     "client": "registry-messaging-client",
+    "client-node": "registry-messaging-client-node",
+    "client-py": "registry-messaging-client-py",
+    "stack-client": "registry-stack-client",
     "runtime": "registry-messaging",
     "ctl": "registry-messagingctl",
     "breg": "registry-breg",
@@ -28,6 +31,9 @@ NAMES = {
 INTENDED = {
     "core": ["platform", "serde"],
     "client": ["core", "platform"],
+    "client-node": ["client", "serde"],
+    "client-py": ["client", "serde"],
+    "stack-client": ["client", "evidence-client", "relay-client"],
     "runtime": ["core", "platform"],
     "ctl": ["runtime", "core"],
     "breg": [],
@@ -69,6 +75,8 @@ class DependencyDirectionTests(unittest.TestCase):
         for crate in (
             "registry-messaging-core",
             "registry-messaging-client",
+            "registry-messaging-client-node",
+            "registry-messaging-client-py",
             "registry-messaging",
             "registry-messagingctl",
         ):
@@ -105,6 +113,59 @@ class DependencyDirectionTests(unittest.TestCase):
             "registry-messaging",
             failures,
         )
+
+    def test_a_binding_reaching_the_runtime_or_tooling_is_rejected(self):
+        # The tooling itself depends on the runtime, so reaching it reaches both.
+        for binding in ("client-node", "client-py"):
+            for runtime, reached in (
+                ("runtime", "registry-messaging"),
+                ("ctl", "registry-messaging, registry-messagingctl"),
+            ):
+                with self.subTest(binding=binding, runtime=runtime):
+                    failures = "\n".join(
+                        MODULE.violations(metadata(**{binding: ["client", runtime]}))
+                    )
+                    self.assertIn(
+                        f"{NAMES[binding]} transitively depends on runtime crate(s): "
+                        f"{reached}",
+                        failures,
+                    )
+
+    def test_a_binding_reaching_the_runtime_through_its_client_is_rejected(self):
+        failures = "\n".join(MODULE.violations(metadata(client=["core", "runtime"])))
+        for binding in ("client-node", "client-py"):
+            self.assertIn(
+                f"{NAMES[binding]} transitively depends on runtime crate(s): "
+                "registry-messaging",
+                failures,
+            )
+
+    def test_a_binding_reaching_another_product_is_rejected(self):
+        for binding in ("client-node", "client-py"):
+            with self.subTest(binding=binding):
+                failures = "\n".join(
+                    MODULE.violations(metadata(**{binding: ["client", "casework-core"]}))
+                )
+                self.assertIn(
+                    f"{NAMES[binding]} transitively depends on other-product "
+                    "package(s): registry-casework-core",
+                    failures,
+                )
+
+    def test_the_unified_client_reaching_the_messaging_runtime_is_rejected(self):
+        for runtime, reached in (
+            ("runtime", "registry-messaging"),
+            ("ctl", "registry-messaging, registry-messagingctl"),
+        ):
+            with self.subTest(runtime=runtime):
+                failures = "\n".join(
+                    MODULE.violations(metadata(**{"stack-client": ["client", runtime]}))
+                )
+                self.assertIn(
+                    "registry-stack-client transitively depends on Messaging runtime "
+                    f"package(s): {reached}",
+                    failures,
+                )
 
     def test_a_product_reaching_the_messaging_runtime_is_rejected(self):
         for product in ("breg", "scheduling-core", "relay-client"):

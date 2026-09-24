@@ -26,6 +26,11 @@ swept_crates=(
   registry-messagingctl
 )
 
+swept_bindings=(
+  registry-messaging-client-node
+  registry-messaging-client-py
+)
+
 build_pristine_tree() {
   local root="$sandbox_root/pristine"
   rm -rf "$root"
@@ -39,6 +44,17 @@ build_pristine_tree() {
     printf '/// Sends one message through the configured provider.\npub fn dispatch() -> bool {\n    true\n}\n' \
       >"$root/crates/$crate/src/lib.rs"
   done
+
+  local binding
+  for binding in "${swept_bindings[@]}"; do
+    mkdir -p "$root/crates/$binding/src"
+    printf 'pub fn bind() -> bool {\n    true\n}\n' >"$root/crates/$binding/src/lib.rs"
+  done
+  printf '/** Sends one message through the configured provider. */\nexport declare function submit(): void;\n' \
+    >"$root/crates/registry-messaging-client-node/client.d.ts"
+  mkdir -p "$root/crates/registry-messaging-client-py/python/registry_messaging_client"
+  printf '"""Send one message through the configured provider."""\n' \
+    >"$root/crates/registry-messaging-client-py/python/registry_messaging_client/__init__.py"
 
   printf '{"openapi": "3.1.0", "info": {"title": "Registry Messaging", "version": "1"}}\n' \
     >"$root/products/messaging/generated/registry-messaging.openapi.json"
@@ -115,6 +131,37 @@ plant_vendor_word_as_a_substring() {
   printf 'pub fn sinchronize() -> bool {\n    true\n}\n' >>"$1/crates/registry-messaging/src/lib.rs"
 }
 
+plant_vendor_name_in_binding_rust() {
+  printf 'pub const PROVIDER: &str = "Mailgun";\n' >>"$1/crates/registry-messaging-client-node/src/lib.rs"
+}
+
+plant_vendor_name_in_a_node_declaration() {
+  printf '/** Accepts a Twilio status callback. */\nexport declare function note(): void;\n' \
+    >>"$1/crates/registry-messaging-client-node/client.d.ts"
+}
+
+plant_vendor_name_in_a_python_facade() {
+  printf 'PROVIDER = "postmark"\n' \
+    >>"$1/crates/registry-messaging-client-py/python/registry_messaging_client/__init__.py"
+}
+
+plant_vendor_name_in_installed_dependencies() {
+  mkdir -p "$1/crates/registry-messaging-client-node/node_modules/example"
+  printf 'module.exports = "twilio";\n' \
+    >"$1/crates/registry-messaging-client-node/node_modules/example/index.js"
+}
+
+remove_a_named_binding_root() {
+  rm -rf "$1/crates/registry-messaging-client-py"
+}
+
+empty_every_binding_source() {
+  local binding
+  for binding in "${swept_bindings[@]}"; do
+    find "$1/crates/$binding" -type f -delete
+  done
+}
+
 remove_a_named_source_root() {
   rm -rf "$1/crates/registry-messaging-client"
 }
@@ -143,6 +190,18 @@ run_case 'a mixed-case vendor name fails' \
   fail plant_mixed_case_vendor_name
 run_case 'a vendor name embedded in a longer identifier passes' \
   pass plant_vendor_word_as_a_substring
+run_case 'a vendor name in binding Rust fails' \
+  fail plant_vendor_name_in_binding_rust
+run_case 'a vendor name in a Node binding declaration fails' \
+  fail plant_vendor_name_in_a_node_declaration
+run_case 'a vendor name in a Python binding facade fails' \
+  fail plant_vendor_name_in_a_python_facade
+run_case 'a vendor name in installed binding dependencies passes' \
+  pass plant_vendor_name_in_installed_dependencies
+run_case 'a named binding root that no longer exists fails' \
+  fail remove_a_named_binding_root
+run_case 'a tree with no binding source left to search fails' \
+  fail empty_every_binding_source
 run_case 'a named source root that no longer exists fails' \
   fail remove_a_named_source_root
 run_case 'a tree with no runtime Rust left to search fails' \

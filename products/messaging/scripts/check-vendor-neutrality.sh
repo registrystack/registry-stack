@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Messaging's runtime, its generated configuration and OpenAPI document, and
-# its routes stay free of any provider vendor name. A vendor package is
+# Messaging's runtime, its client and that client's Node.js and Python
+# bindings, its generated configuration and OpenAPI document, and its routes
+# stay free of any provider vendor name. A vendor package is
 # example adopter material under products/messaging/examples/providers/,
 # proven against MockHttpUpstream: it never becomes a Rust type, a config
 # schema enum member, or a route.
@@ -30,6 +31,15 @@ swept_crate_roots=(
   "$repository_root/crates/registry-messagingctl"
 )
 
+# The bindings carry hand-written JavaScript, TypeScript declarations, and
+# Python facades beside their Rust, and a caller reads those first, so every
+# language source file in them is swept. Installed dependencies and build
+# outputs are not the bindings' own source and are pruned.
+swept_binding_roots=(
+  "$repository_root/crates/registry-messaging-client-node"
+  "$repository_root/crates/registry-messaging-client-py"
+)
+
 published_roots=(
   "$repository_root/products/messaging/generated"
 )
@@ -39,7 +49,7 @@ fail() {
   exit 1
 }
 
-for named_root in "${swept_crate_roots[@]}" "${published_roots[@]}"; do
+for named_root in "${swept_crate_roots[@]}" "${swept_binding_roots[@]}" "${published_roots[@]}"; do
   [[ -d "$named_root" ]] ||
     fail "This gate sweeps $named_root, which no longer exists: update the list it appears in."
 done
@@ -51,6 +61,20 @@ done < <(find "${swept_crate_roots[@]}" -type f -name '*.rs' | sort)
 
 if [[ "${#sources[@]}" -eq 0 ]]; then
   fail 'The vendor-neutrality sweep found no Messaging runtime Rust to search.'
+fi
+
+binding_sources=()
+while IFS= read -r binding_file; do
+  binding_sources+=("$binding_file")
+done < <(
+  find "${swept_binding_roots[@]}" \
+    \( -name node_modules -o -name target -o -name __pycache__ \) -prune -o \
+    -type f \( -name '*.rs' -o -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \
+    -o -name '*.ts' -o -name '*.py' -o -name '*.pyi' \) -print | sort
+)
+
+if [[ "${#binding_sources[@]}" -eq 0 ]]; then
+  fail 'The vendor-neutrality sweep found no Messaging client binding source to search.'
 fi
 
 published_files=()
@@ -91,6 +115,10 @@ sweep() {
 sweep \
   'Messaging runtime Rust contains a provider vendor name. Vendor packages belong only under products/messaging/examples/providers/.' \
   "${sources[@]}"
+
+sweep \
+  'Messaging client binding source contains a provider vendor name. Vendor packages belong only under products/messaging/examples/providers/.' \
+  "${binding_sources[@]}"
 
 sweep \
   'Messaging generated configuration or OpenAPI contains a provider vendor name.' \
