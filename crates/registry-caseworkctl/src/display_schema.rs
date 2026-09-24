@@ -32,6 +32,10 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 const MAXIMUM_SCHEMA_DEPTH: usize = 16;
+/// The longest array witness built. A source's minItems is an unbounded
+/// number, so an array it requires to be longer is left to the runtime check
+/// rather than materialized here.
+const MAXIMUM_WITNESS_ITEMS: u64 = 64;
 
 /// Refuse a described request whose bound source-context review kind cannot
 /// display what the request's projected fields disclose. A request that
@@ -347,7 +351,7 @@ fn witnesses(schema: &Value, depth: usize) -> Vec<(Value, Value)> {
                 witnesses.push((Value::Array(vec![item.clone()]), item.clone()));
                 continue;
             }
-            if maximum.is_some_and(|maximum| minimum > maximum) {
+            if minimum > MAXIMUM_WITNESS_ITEMS || maximum.is_some_and(|maximum| minimum > maximum) {
                 continue;
             }
             let mut array = vec![item.clone()];
@@ -399,4 +403,27 @@ fn witnesses_of(schema: &Value, depth: usize) -> Vec<Value> {
         }
     }
     values
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // A source description's minItems is an unbounded number, so a witness
+    // that repeats an item to reach it must not be materialized past a small
+    // bound: a description with a huge minItems would otherwise exhaust
+    // memory before the witness is ever checked.
+    #[test]
+    fn a_repeated_array_witness_is_not_built_past_the_witness_bound() {
+        let schema =
+            json!({"type":"array","items":{"type":"string","enum":["example"]},"minItems":100_000});
+
+        let longest = witnesses(&schema, 0)
+            .into_iter()
+            .filter_map(|(value, _)| value.as_array().map(Vec::len))
+            .max();
+
+        assert_eq!(longest, None);
+    }
 }
