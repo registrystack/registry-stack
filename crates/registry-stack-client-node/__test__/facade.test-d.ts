@@ -1,4 +1,4 @@
-import { breg, casework, discovery, evidence, relay } from '..'
+import { breg, casework, discovery, evidence, messaging, relay } from '..'
 
 const bregClient = new breg.BaseRegistryClient({ baseUrl: 'https://registry.example.invalid/' })
 const discoveryClient = new discovery.DiscoveryClient({ baseUrl: 'https://discovery.example.invalid/' })
@@ -10,6 +10,7 @@ const evidenceClient = new evidence.EvidenceClient({
 })
 const relayClient = new relay.RelayClient({ baseUrl: 'https://relay.example.invalid/' })
 const caseworkClient = new casework.CaseworkClient({ baseUrl: 'https://casework.example.invalid/' })
+const messagingClient = new messaging.MessagingClient({ baseUrl: 'https://messaging.example.invalid/' })
 
 bregClient.listRecords('people', { top: 25 })
 breg.verifyWebhookDelivery({
@@ -41,6 +42,18 @@ void caseworkClient.saveReviewTaskDraft(
 void caseworkClient.deleteReviewTaskDraft(
   'header.payload.signature', 'staff', 'task-1', 2, 'draft-2', 'source-reviewer',
 )
+
+async function sendNotice(): Promise<messaging.MessageStatus> {
+  const receipt = await messagingClient.submit('header.payload.signature', 'notice-1', {
+    senderProfile: 'notices',
+    to: { email: 'person@example.invalid' },
+    template: { id: 'notice', version: '1' },
+    locale: 'en',
+  })
+  const view = await messagingClient.message('header.payload.signature', receipt.value.id)
+  return view.value.status
+}
+void sendNotice
 
 // The progressive request surface refines the generated declaration: it names
 // the request shape and discriminates the result on its response format.
