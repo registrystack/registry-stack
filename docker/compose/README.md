@@ -82,7 +82,7 @@ python3 docker/runtime-preflight.py \
 
 The native check runs under a bounded deadline of 1800 seconds. Add
 `--native-check-timeout-seconds SECONDS` to select another deadline from 30 to
-21600 seconds when a retained audit chain needs longer, or when the deployment
+21600 seconds when a slow dependency needs longer, or when the deployment
 requires a shorter one. The preflight starts no Compose services or declared
 dependencies. It runs the selected native check with `docker compose run --rm
 --no-deps`, so any runtime dependency must already be available in the

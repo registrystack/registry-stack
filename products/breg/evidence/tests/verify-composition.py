@@ -74,7 +74,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
     settings = yaml.safe_load((project / "targets/local/settings.yaml").read_text())
     settings["runtime"]["bundleDirectory"] = str(candidate / "bundle")
     settings["runtime"]["secretProviders"]["file"]["root"] = str(project / "secrets")
-    settings["runtime"]["auditStorage"]["path"] = str(workspace / "audit/evidence.jsonl")
+    settings["runtime"]["audit"]["path"] = str(workspace / "audit/evidence.jsonl")
     settings_path = workspace / "resolved-settings.json"
     settings_path.write_text(json.dumps(settings))
     run(binaries["evidencectl"], "target", "new", target, "--settings", settings_path,
@@ -187,7 +187,7 @@ def verify_default_init(workspace: Path, binaries: dict[str, Path]) -> dict[str,
     settings = yaml.safe_load((project / "targets/local/settings.yaml").read_text())
     settings["runtime"]["bundleDirectory"] = str(candidate / "bundle")
     settings["runtime"]["secretProviders"]["file"]["root"] = str(project / "secrets")
-    settings["runtime"]["auditStorage"]["path"] = str(project / "audit/evidence.jsonl")
+    settings["runtime"]["audit"]["path"] = str(project / "audit/evidence.jsonl")
     settings_path = workspace / "resolved-settings.json"
     settings_path.write_text(json.dumps(settings))
     run(binaries["evidencectl"], "target", "new", target, "--settings", settings_path,
@@ -562,7 +562,7 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
             source_authentication["scope"] = " ".join(source["scopes"])
             settings["runtime"]["bundleDirectory"] = str(candidate / "bundle")
             settings["runtime"]["secretProviders"]["file"]["root"] = str(project / "secrets")
-            settings["runtime"]["auditStorage"]["path"] = str(project / "audit/evidence.jsonl")
+            settings["runtime"]["audit"]["path"] = str(project / "audit/evidence.jsonl")
             settings_path = workspace / "settings.json"
             settings_path.write_text(json.dumps(settings))
             command("evidencectl", "target", "new", target, "--settings", settings_path,

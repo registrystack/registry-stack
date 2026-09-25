@@ -15,7 +15,7 @@ authentication:
   evidenceAudienceClaim: evidence_audience
   maximumTokenLifetimeSeconds: 300
   revokedKeyIds: []
-audit: {format: keyed-jsonl, hashSecretRef: secret:file/audit-hash-key, hashKeyVersion: 1, failClosed: true}
+audit: {hashKeyRef: secret:file/audit-hash-key, hashKeyVersion: 1}
 subjectBinding: {secretRef: secret:file/subject-binding-key, keyVersion: 1}
 rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
 signing:

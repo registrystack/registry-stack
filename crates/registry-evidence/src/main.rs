@@ -18,10 +18,7 @@ use p256::ecdsa::SigningKey;
 use rand_core::OsRng;
 use registry_evidence::cli::{Cli, Command, ExplainFormat};
 use registry_evidence::{
-    audit::{
-        verified_last_local_audit_operation, verify_audit_chain, AuditChainSummary,
-        EvidenceAuditError,
-    },
+    audit::{last_local_audit_operation, EvidenceAuditError},
     bundle::{
         ArtifactFault, Bundle, BundleError, DeploymentInputs, RuntimeDocument, SourceExtract,
     },
@@ -68,10 +65,7 @@ use registry_evidence::{
         HolderBoundPresentationPolicyDocument, VerificationError,
     },
 };
-use registry_platform_audit::{
-    require_audit_under, AuditChainHasher, AuditChainProfile, AuditHashSecret, OptionalHashHex,
-    PersistentRootFault,
-};
+use registry_platform_audit::{require_audit_under, PersistentRootFault};
 use registry_platform_crypto::{canonicalize_json, parse_json_strict, LocalJwkSigner, PrivateJwk};
 use serde_json::{Map as JsonMap, Value};
 use zeroize::Zeroizing;
@@ -113,9 +107,9 @@ enum CommandError {
     StaleExtracts(Vec<String>),
     /// The audit boundary refused, with the value-free cause it reported.
     ///
-    /// It is the one startup boundary that separates its causes, because a
-    /// permission bit, a chain that no longer verifies, and a second writer
-    /// holding the sink lock have nothing in common but the moment they fail.
+    /// It is the one startup boundary that separates its causes, because an
+    /// out-of-range destination, a permission bit, and a second writer holding
+    /// the destination lock have nothing in common but the moment they fail.
     Audit(&'static str, AuditInitializationFault),
     /// The configured audit destination was not proven persistent.
     ///
@@ -192,8 +186,9 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                 return Err(CommandError::StaleExtracts(stale_sources));
             }
             // Deployment secret material is validated exactly as startup
-            // validates it, without opening the audit chain, so a deployment
-            // the server would refuse fails check instead of first start.
+            // validates it, without opening the audit destination, so a
+            // deployment the server would refuse fails check instead of first
+            // start.
             // Source credentials stay unresolved: readiness owns them.
             let secrets = SecretResolver::new(
                 [SecretProvider::File],
@@ -205,11 +200,16 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                 .map_err(runtime_initialization_error)?;
             if require_runtime_dependencies {
                 // The deployment owns storage persistence and declares the root
-                // it mounts; Evidence owns where the sink resolves. Proving
-                // containment before the chain opens keeps the two boundaries
-                // separate and never relaxes the writability proof below.
+                // it mounts; Evidence owns where the audit file resolves.
+                // Proving containment before the writer opens keeps the two
+                // boundaries separate and never relaxes the writability proof
+                // below. A stdout destination has no file to contain, so the
+                // flag is refused rather than silently satisfied.
                 if let Some(root) = audit_root.as_deref() {
-                    require_audit_under(Path::new(&runtime.config.audit_storage.path), root)
+                    let audit_path = runtime.config.audit.path.as_deref().ok_or(CliError(
+                        "--require-audit-under needs a file audit destination; this runtime writes audit to stdout",
+                    ))?;
+                    require_audit_under(Path::new(audit_path), root)
                         .map_err(CommandError::AuditRoot)?;
                 }
                 let serving = EvidenceRuntime::initialize_from(deployment)
@@ -427,7 +427,6 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             &policy,
             at.as_deref(),
         )?),
-        Command::VerifyAudit => run_verify_audit(&cli.runtime),
         Command::PrepareLocalRelyingProcedure { input } => {
             prepare_local_relying_procedure_command(&cli.runtime, &input).await
         }
@@ -681,7 +680,8 @@ fn install_operational_logging() {
 /// A service manager and a container runtime both stop a process with
 /// SIGTERM, and an interactive operator uses Ctrl-C. Both resolve here, so the
 /// same drain runs either way: the server stops accepting, finishes its
-/// in-flight evaluations, and closes the audit chain before the process exits.
+/// in-flight evaluations, and flushes the audit destination before the process
+/// exits.
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
@@ -814,29 +814,25 @@ fn write_canonical_json_line<T: serde::Serialize>(
 
 /// Inspect the last local audit operation only after the writer has stopped.
 ///
-/// Every failure is deliberately collapsed to one value-free class. A chain
-/// that verified and holds no operation exits with its own status. The view
-/// is written only after the entire retained chain and its native events have
-/// verified, so stdout can never contain a partial or unverified operation.
+/// The reader takes the audit destination lock, so it refuses while a server
+/// still writes. Every failure is deliberately collapsed to one value-free
+/// class. Retained files that read and hold no operation exit with their own
+/// status. The view is written only after every retained file and its native
+/// entries have parsed, so stdout can never contain a partial operation.
+/// A `stdout` destination retains nothing locally and is refused.
 fn local_audit_last_operation_command(runtime_path: &Path) -> Result<ExitCode, CommandError> {
     let deployment = DeploymentInputs::load(runtime_path).map_err(|_| LOCAL_AUDIT_FAILED)?;
     if deployment.bundle().config.assurance_profile != AssuranceProfile::Local {
         return Err(LOCAL_AUDIT_FAILED.into());
     }
-    let secrets = SecretResolver::new(
-        [SecretProvider::File],
-        &deployment.runtime().config.secret_providers.file.root,
-    )
-    .map_err(|_| LOCAL_AUDIT_FAILED)?;
-    let audit_secret = secrets
-        .resolve(deployment.bundle().config.audit.hash_secret_ref.as_str())
-        .map_err(|_| LOCAL_AUDIT_FAILED)?;
-    let master_secret =
-        derived_audit_chain_secret(audit_secret.expose_secret()).map_err(|_| LOCAL_AUDIT_FAILED)?;
-    let view = match verified_last_local_audit_operation(
-        Path::new(&deployment.runtime().config.audit_storage.path),
-        &master_secret,
-    ) {
+    let audit_path = deployment
+        .runtime()
+        .config
+        .audit
+        .path
+        .as_deref()
+        .ok_or(LOCAL_AUDIT_FAILED)?;
+    let view = match last_local_audit_operation(Path::new(audit_path)) {
         Ok(view) => view,
         Err(EvidenceAuditError::NoOperation) => {
             return Ok(ExitCode::from(LOCAL_AUDIT_NO_OPERATION_EXIT_CODE))
@@ -1054,108 +1050,6 @@ fn verification_error_class(error: VerificationError) -> CliError {
         VerificationError::KeyBinding => {
             CliError("stored response verification failed (key-binding)")
         }
-    }
-}
-
-/// Run a full out-of-band audit verification pass for the deployment named by
-/// one closed operator runtime file.
-///
-/// The audit storage path and hash secret are read from the same runtime
-/// document and secret provider the serving process uses; this command takes
-/// no path or secret flags of its own, so it can never be pointed at an audit
-/// chain the deployment does not own.
-fn run_verify_audit(runtime_path: &Path) -> Result<ExitCode, CommandError> {
-    let deployment = DeploymentInputs::load(runtime_path).map_err(deployment_load_error)?;
-    let secrets = SecretResolver::new(
-        [SecretProvider::File],
-        &deployment.runtime().config.secret_providers.file.root,
-    )
-    .map_err(|_| CliError("audit verification secret resolver failed"))?;
-    let audit_secret = secrets
-        .resolve(deployment.bundle().config.audit.hash_secret_ref.as_str())
-        .map_err(|_| CliError("audit verification secret resolution failed"))?;
-    let master_secret = derived_audit_chain_secret(audit_secret.expose_secret())
-        .map_err(|_| CliError("audit verification secret is invalid"))?;
-    verify_audit_with_secret(
-        Path::new(&deployment.runtime().config.audit_storage.path),
-        &master_secret,
-    )
-}
-
-/// Verify one audit chain and print the operator report.
-///
-/// Split from [`run_verify_audit`] so the report and the failure
-/// classification can be exercised directly against a constructed chain,
-/// without a full deployment bundle and runtime document on disk.
-fn verify_audit_with_secret(
-    audit_path: &Path,
-    master_secret: &AuditHashSecret,
-) -> Result<ExitCode, CommandError> {
-    match verify_audit_chain(audit_path, master_secret) {
-        Ok(summary) => {
-            println!("{}", audit_chain_report(&summary));
-            Ok(ExitCode::SUCCESS)
-        }
-        Err(error) => {
-            let (detail, class) = audit_verification_failure(error);
-            println!("{detail}");
-            Err(CommandError::Cli(class))
-        }
-    }
-}
-
-fn derived_audit_chain_secret(master_secret: &[u8]) -> Result<AuditHashSecret, ()> {
-    let profile =
-        AuditChainProfile::production_from_secret_bytes(Zeroizing::new(master_secret.to_vec()))
-            .map_err(|_| ())?;
-    match profile.hasher() {
-        AuditChainHasher::Keyed(secret) => Ok(secret),
-        AuditChainHasher::UnkeyedDevOnly => Err(()),
-    }
-}
-
-/// Render an out-of-band audit verification result for an operator.
-///
-/// The head hash and the segment and record counts carry no request content,
-/// so they are safe to print; nothing secret-derived beyond the chain head
-/// appears here. When the active segment could not be verified, the report
-/// says so plainly rather than reading as a pass of the whole chain.
-fn audit_chain_report(summary: &AuditChainSummary) -> String {
-    let sealed_sequence = match (summary.first_sequence, summary.last_sequence) {
-        (Some(first), Some(last)) => format!("{first}-{last}"),
-        _ => "none".to_owned(),
-    };
-    let active_segment = if summary.active_verified {
-        "verified".to_owned()
-    } else {
-        "not verified: a running writer holds it, so only sealed history was proven".to_owned()
-    };
-    format!(
-        "segments: {}\nrecords: {}\nsealed-sequence: {sealed_sequence}\nhead: {}\nactive-segment: {active_segment}",
-        summary.segments,
-        summary.records,
-        OptionalHashHex(summary.head),
-    )
-}
-
-/// Classify an audit verification failure for the operator report and exit.
-///
-/// A gap in the sealed sequence is archived-or-missing history, not a hash
-/// break, so it is reported in those terms and kept distinguishable from
-/// every other verification failure, which is corruption.
-fn audit_verification_failure(error: EvidenceAuditError) -> (String, CliError) {
-    match error {
-        EvidenceAuditError::SegmentMissing { sequence } => (
-            format!(
-                "sealed segment {sequence} is archived or missing from the chain; \
-                 this is not corruption"
-            ),
-            CliError("audit chain is missing sealed history"),
-        ),
-        _ => (
-            "audit chain verification failed".to_owned(),
-            CliError("audit chain verification failed"),
-        ),
     }
 }
 
@@ -5140,11 +5034,7 @@ fn safe_fixture_name(path: &Path) -> Result<&str, CliError> {
 mod tests {
     use super::*;
     use clap::CommandFactory as _;
-    use registry_evidence::audit::{
-        audit_segment_paths, AuditAuthority, AuditDecision, AuditPhase, AuditSubject,
-        AuthorityKind, EvidenceAuditEvent, EvidenceAuditLog, ResponseProtection,
-    };
-    use registry_evidence::config::{AssuranceProfile, SubjectBindingMode};
+    use registry_evidence::config::SubjectBindingMode;
     use registry_evidence::verifier::{ExpectedListItemForm, ExpectedValueForm};
     use std::fs;
 
@@ -6437,193 +6327,6 @@ mod tests {
             .map(|_| ()),
             Err(CliError("source plan compilation failed").into())
         );
-    }
-
-    fn test_audit_secret() -> AuditHashSecret {
-        derived_audit_chain_secret(b"0123456789abcdef0123456789abcdef")
-            .expect("audit chain secret derives")
-    }
-
-    fn test_audit_event(log: &EvidenceAuditLog) -> EvidenceAuditEvent {
-        EvidenceAuditEvent::new(
-            AssuranceProfile::EvidenceGrade,
-            "01K1EXAMPLE0000000000000000".to_owned(),
-            AuditPhase::AccessAttempt,
-            "urn:example:requirement:v1".to_owned(),
-            format!("sha256:{}", "0".repeat(64)),
-            "casework".to_owned(),
-            log.pseudonym("requester-v1", "urn:example:trust", b"principal-canary")
-                .expect("pseudonym builds"),
-            AuditAuthority {
-                kind: AuthorityKind::Statutory,
-                grant_pseudonym: None,
-                approver_pseudonym: None,
-            },
-            vec![AuditSubject {
-                role: "subject".to_owned(),
-                selector_profile: "person-v1".to_owned(),
-                selector_bundle_pseudonym: Some(
-                    log.pseudonym("subject-v1", "casework", b"selector-canary")
-                        .expect("pseudonym builds"),
-                ),
-            }],
-            ResponseProtection::Signed,
-            AuditDecision::Authorized,
-            5,
-        )
-    }
-
-    /// Change one byte of a record without changing its length, so the
-    /// record no longer matches the hash the chain recorded for it.
-    fn corrupt_audit_line(line: &str) -> String {
-        let mut bytes = line.as_bytes().to_vec();
-        for byte in bytes.iter_mut() {
-            if byte.is_ascii_lowercase() {
-                *byte = if *byte == b'z' { b'y' } else { *byte + 1 };
-                break;
-            }
-        }
-        String::from_utf8(bytes).expect("a corrupted record stays UTF-8")
-    }
-
-    #[tokio::test]
-    async fn verify_audit_reports_a_clean_multi_segment_chain() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("audit.jsonl");
-        {
-            let log = EvidenceAuditLog::initialize(
-                &path,
-                2048,
-                b"0123456789abcdef0123456789abcdef".to_vec(),
-                1,
-            )
-            .await
-            .expect("audit initializes");
-            for _ in 0..48 {
-                log.append(test_audit_event(&log))
-                    .await
-                    .expect("event appends");
-            }
-        }
-        let segments = audit_segment_paths(&path).expect("segments enumerate");
-        assert!(
-            segments.len() >= 4,
-            "the fixture needs several sealed segments plus the active one"
-        );
-
-        let secret = test_audit_secret();
-        let summary =
-            verify_audit_chain(&path, &secret).expect("a clean multi-segment chain verifies");
-        assert_eq!(summary.records, 48);
-        assert_eq!(summary.segments, segments.len());
-        assert!(summary.active_verified);
-        assert_eq!(summary.first_sequence, Some(1));
-
-        assert!(verify_audit_with_secret(&path, &secret).is_ok());
-    }
-
-    /// Startup verification only replays the active segment; this pins the
-    /// counterpart it exists for: corruption planted in an already sealed
-    /// segment passes startup and is only caught by the out-of-band verifier.
-    #[tokio::test]
-    async fn verify_audit_fails_on_sealed_segment_corruption() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("audit.jsonl");
-        {
-            let log = EvidenceAuditLog::initialize(
-                &path,
-                4096,
-                b"0123456789abcdef0123456789abcdef".to_vec(),
-                1,
-            )
-            .await
-            .expect("audit initializes");
-            for _ in 0..24 {
-                log.append(test_audit_event(&log))
-                    .await
-                    .expect("event appends");
-            }
-        }
-
-        let segments = audit_segment_paths(&path).expect("segments enumerate");
-        let oldest_sealed = segments[0].clone();
-        let contents = fs::read_to_string(&oldest_sealed).expect("sealed segment reads");
-        let mut lines: Vec<String> = contents.lines().map(str::to_owned).collect();
-        assert!(
-            lines.len() > 1,
-            "the corrupted record must not be the sealed tail"
-        );
-        lines[0] = corrupt_audit_line(&lines[0]);
-        let mut rewritten = lines.join("\n");
-        rewritten.push('\n');
-        fs::write(&oldest_sealed, rewritten).expect("segment rewrites");
-
-        let restarted = EvidenceAuditLog::initialize(
-            &path,
-            4096,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("startup does not replay sealed history");
-        assert!(restarted.ready().await);
-        drop(restarted);
-
-        assert!(
-            verify_audit_with_secret(&path, &test_audit_secret()).is_err(),
-            "the out-of-band verifier must catch sealed-segment corruption"
-        );
-    }
-
-    /// A gap in sealed history is an operator archiving a segment, not
-    /// tampering, so it must be reported by sequence rather than folded into
-    /// the generic corruption message.
-    #[tokio::test]
-    async fn verify_audit_reports_an_archived_segment_as_missing_not_corrupt() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("audit.jsonl");
-        {
-            let log = EvidenceAuditLog::initialize(
-                &path,
-                2048,
-                b"0123456789abcdef0123456789abcdef".to_vec(),
-                1,
-            )
-            .await
-            .expect("audit initializes");
-            for _ in 0..48 {
-                log.append(test_audit_event(&log))
-                    .await
-                    .expect("event appends");
-            }
-        }
-        let segments = audit_segment_paths(&path).expect("segments enumerate");
-        assert!(
-            segments.len() >= 4,
-            "the fixture needs a sealed segment that is neither first nor last"
-        );
-        fs::remove_file(&segments[1]).expect("a middle segment is archived away");
-
-        let error = verify_audit_chain(&path, &test_audit_secret())
-            .expect_err("a gap in sealed history must fail verification");
-        let sequence = match &error {
-            EvidenceAuditError::SegmentMissing { sequence } => *sequence,
-            other => panic!("expected a missing-segment error, got {other:?}"),
-        };
-        assert_eq!(sequence, 2);
-
-        let (detail, _) = audit_verification_failure(error);
-        assert!(
-            detail.contains(&format!("segment {sequence}"))
-                && detail.contains("archived or missing"),
-            "the report must name the sequence and describe archival: {detail}"
-        );
-        assert!(
-            detail.contains("not corruption"),
-            "the report must state plainly that this is not corruption: {detail}"
-        );
-
-        assert!(verify_audit_with_secret(&path, &test_audit_secret()).is_err());
     }
 
     /// The offline harness must serve the fetch-set form as completely as it

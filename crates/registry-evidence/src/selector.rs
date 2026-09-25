@@ -218,7 +218,7 @@ impl ResolvedSubject {
     /// holder-bound input binds no scope component at all: the holder key
     /// thumbprint stays out of audit entirely, so the pseudonym is stable
     /// across issuances for one subject and carries nothing that could pick
-    /// one wallet key's activity out of the audit chain.
+    /// one wallet key's activity out of the audit log.
     pub fn audit_pseudonym_input(
         &self,
         scope: &ResolvedSubjectScope,
@@ -1412,7 +1412,7 @@ mod tests {
 
     /// A holder-bound audit pseudonym names one subject under one purpose, and
     /// nothing about the wallet that asked. Two holders of the same subject
-    /// material must therefore canonicalize identically, or the audit chain
+    /// material must therefore canonicalize identically, or the audit log
     /// would carry a per-wallet handle for that subject.
     #[test]
     fn a_holder_bound_audit_input_is_the_same_for_every_holder() {

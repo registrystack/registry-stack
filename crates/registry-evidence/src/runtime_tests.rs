@@ -20,9 +20,7 @@ use axum_test::TestServer;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Utc};
 use jsonwebtoken::{jwk::JwkSet, Algorithm};
-use registry_platform_audit::{
-    verify_jsonl_lines_with_hasher, AuditChainHasher, AuditChainProfile,
-};
+use registry_platform_audit::{AuditDestination, FileDestination};
 use registry_platform_crypto::{
     sign, KeyReadiness, LocalJwkSigner, PrivateJwk, PublicJwk, SigningAlgorithm, SigningError,
     SigningProvider,
@@ -2033,7 +2031,7 @@ fn local_procedure_policy(
 }
 
 #[tokio::test]
-async fn admitted_evaluation_survives_client_disconnect_and_keeps_audit_chain_usable() {
+async fn admitted_evaluation_survives_client_disconnect_and_keeps_audit_writer_usable() {
     let fixture = acceptance_runtime().await;
     mount_adult_source(&fixture.server, Some(Duration::from_millis(750))).await;
 
@@ -2079,7 +2077,7 @@ async fn admitted_evaluation_survives_client_disconnect_and_keeps_audit_chain_us
             &adult_request(),
         )
         .await
-        .expect("a later evaluation can append to the same audit chain");
+        .expect("a later evaluation can append to the same audit file");
     let audit = wait_for_audit_counts(&fixture.audit_path, 2, 2).await;
     assert_eq!(audit.matches("\"phase\":\"access-attempt\"").count(), 2);
     assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 2);
@@ -2245,7 +2243,7 @@ async fn readiness_fails_for_missing_credentials_tampered_audit_and_unready_sign
     fs::write(&prepared.audit_path, b"{}\n").expect("audit is tampered");
     assert!(
         !runtime.ready().await,
-        "invalid audit chain denies readiness"
+        "an externally modified audit file denies readiness"
     );
 
     let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
@@ -2409,13 +2407,14 @@ async fn authorization_refusal_is_minimally_audited() {
             "reason",
             "requesterPseudonym",
             "safeErrorCategory",
-            "schema",
         ])
     );
     assert_eq!(
-        record["schema"],
-        json!("registry.evidence.audit.authorization-refusal/v1")
+        event["schema"],
+        json!("registry.evidence.audit.authorization-refusal/v2")
     );
+    assert_eq!(event["phase"], json!("response"));
+    assert_eq!(event["correlation"], record["operation"]);
     assert_eq!(record["phase"], json!("denial"));
     assert_eq!(record["decision"], json!("not-authorized"));
     assert_eq!(record["safeErrorCategory"], json!("not-authorized"));
@@ -3263,9 +3262,10 @@ async fn request_batch_later_authorization_refusal_precedes_missing_source_crede
     )
     .expect("authorization refusal parses");
     assert_eq!(
-        refusal["record"]["schema"],
-        json!("registry.evidence.audit.authorization-refusal/v1")
+        refusal["schema"],
+        json!("registry.evidence.audit.authorization-refusal/v2")
     );
+    assert!(refusal["record"].get("schema").is_none());
     assert_eq!(refusal["record"]["decision"], json!("not-authorized"));
     assert!(!audit.contains("access-attempt"));
     assert!(!audit.contains("terminal-failure"));
@@ -4945,7 +4945,7 @@ async fn a_missing_holder_key_is_answered_after_authorization_not_before_it() {
     let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
     assert!(
         !audit.contains("holder-key"),
-        "the audit chain names the withheld request member"
+        "the audit log names the withheld request member"
     );
     for canary in privacy_canaries() {
         assert!(!audit.contains(canary));
@@ -5017,12 +5017,12 @@ async fn a_holder_bound_requirement_binds_its_subjects_under_the_presented_key()
     let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
     assert!(
         !audit.contains("3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4"),
-        "the audit chain records holder key material"
+        "the audit log records holder key material"
     );
     for binding in &bindings {
         assert!(
             !audit.contains(binding.as_str()),
-            "the audit chain records a released subject binding"
+            "the audit log records a released subject binding"
         );
     }
     for canary in privacy_canaries() {
@@ -5480,7 +5480,7 @@ async fn holder_key_material_reaches_only_the_signed_confirmation() {
     for value in material {
         assert!(
             !audit.contains(value),
-            "the audit chain records presented key material"
+            "the audit log records presented key material"
         );
     }
     for canary in privacy_canaries() {
@@ -5608,12 +5608,12 @@ async fn every_coequal_definition_issues_under_the_holder_bound_mode() {
     let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
     assert!(
         !audit.contains("3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4"),
-        "the audit chain records holder key material"
+        "the audit log records holder key material"
     );
     for binding in &bindings {
         assert!(
             !audit.contains(binding.as_str()),
-            "the audit chain records a released subject binding"
+            "the audit log records a released subject binding"
         );
     }
     for canary in privacy_canaries() {
@@ -5951,10 +5951,7 @@ async fn a_batch_release_issues_one_independent_credential_for_each_presented_ke
         );
     }
     for (x, _) in BATCH_HOLDER_COORDINATES {
-        assert!(
-            !audit.contains(x),
-            "the audit chain records holder material"
-        );
+        assert!(!audit.contains(x), "the audit log records holder material");
     }
     for canary in privacy_canaries() {
         assert!(!audit.contains(canary));
@@ -7995,11 +7992,12 @@ async fn every_runtime_applicable_acceptance_case_reaches_terminal_audit_and_ver
     );
 }
 
-/// Many simultaneous evaluations must leave exactly one verifiable audit chain:
-/// two records per released assertion, no forked or interleaved hash links, and
-/// one distinct evidence identity per request.
+/// Many simultaneous evaluations must write every audit entry exactly once:
+/// one `request` and one `response` entry per released assertion, correlated
+/// by operation, with no torn or interleaved lines, and one distinct evidence
+/// identity per request.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn concurrent_evidence_requests_keep_one_verifiable_audit_chain() {
+async fn concurrent_evidence_requests_write_every_audit_entry_once() {
     let load = LoadFixture::start().await;
     let outcomes = load.run(LOAD_CONCURRENCY, LOAD_CONCURRENCY).await;
     assert_eq!(
@@ -8024,9 +8022,7 @@ async fn concurrent_evidence_requests_keep_one_verifiable_audit_chain() {
         "concurrent releases must not share an evidence identity"
     );
 
-    let verification = verify_jsonl_lines_with_hasher(audit.lines(), &acceptance_audit_hasher())
-        .expect("the concurrently written audit chain verifies under the deployment key");
-    assert_eq!(verification.records, LOAD_CONCURRENCY * 2);
+    assert_eq!(assert_paired_audit_entries(&audit), LOAD_CONCURRENCY * 2);
 }
 
 /// Report sustained request throughput against the two candidate ceilings, so
@@ -8099,9 +8095,7 @@ async fn soak_reports_request_throughput_against_the_audit_ceiling() {
         expected_releases
     );
     assert_eq!(released_evidence_ids(&audit).len(), expected_releases);
-    let verification = verify_jsonl_lines_with_hasher(audit.lines(), &acceptance_audit_hasher())
-        .expect("the audit chain written under sustained load verifies");
-    assert_eq!(verification.records, expected_releases * 2);
+    assert_eq!(assert_paired_audit_entries(&audit), expected_releases * 2);
 }
 
 fn acceptance_case_time(
@@ -9470,12 +9464,12 @@ async fn initialize_from_opens_the_deployment_it_was_handed_not_the_runtime_path
         .await
         .expect("the captured deployment initializes");
     assert_eq!(
-        runtime.runtime_config().audit_storage.path,
-        prepared.audit_path.display().to_string()
+        runtime.runtime_config().audit.path,
+        Some(prepared.audit_path.display().to_string())
     );
     assert!(
         prepared.audit_path.exists(),
-        "audit storage opens where the captured runtime document points"
+        "the audit file opens where the captured runtime document points"
     );
     assert!(
         !redirected_audit.exists(),
@@ -9489,8 +9483,8 @@ async fn initialize_from_opens_the_deployment_it_was_handed_not_the_runtime_path
         .await
         .expect("the rewritten runtime file initializes from its pathname");
     assert_eq!(
-        reread.runtime_config().audit_storage.path,
-        redirected_audit.display().to_string()
+        reread.runtime_config().audit.path,
+        Some(redirected_audit.display().to_string())
     );
     assert!(redirected_audit.exists());
 }
@@ -11208,7 +11202,7 @@ fn enable_source_batch_acquisition(runtime_path: &Path) {
 /// deployment posture.
 struct FixtureCeilings {
     maximum_concurrent_requests: u32,
-    audit_maximum_file_bytes: u64,
+    audit_rotate_bytes: u64,
     requests_per_principal_per_minute: u64,
     burst_per_principal: u64,
     source_concurrency_limit: u16,
@@ -11220,7 +11214,7 @@ impl FixtureCeilings {
     fn deployment_defaults() -> Self {
         Self {
             maximum_concurrent_requests: 64,
-            audit_maximum_file_bytes: 10_485_760,
+            audit_rotate_bytes: 10_485_760,
             requests_per_principal_per_minute: 60,
             burst_per_principal: 10,
             source_concurrency_limit: 8,
@@ -11284,9 +11278,9 @@ secretProviders:
 signer:
   kind: local-jwk
   privateKeyRef: secret:file/signing-key
-auditStorage:
+audit:
   path: {}
-  maximumFileBytes: {}
+  rotateBytes: {}
 outboundTls:
   systemRoots: true
   trustProfiles: {{}}
@@ -11295,7 +11289,7 @@ outboundTls:
         ceilings.maximum_concurrent_requests,
         secret_root.display(),
         audit_path.display(),
-        ceilings.audit_maximum_file_bytes,
+        ceilings.audit_rotate_bytes,
     );
     fs::write(runtime_path, document).expect("immutable runtime configuration is written");
 }
@@ -11684,14 +11678,17 @@ impl LoadFixture {
         requests as f64 / started.elapsed().as_secs_f64()
     }
 
-    /// Append through a real keyed sink on the same filesystem as the runtime's
-    /// own audit file. Appends are serialized by the chain, so this is a
-    /// sequential measurement by construction, not by choice of harness.
+    /// Append through a real file writer on the same filesystem as the
+    /// runtime's own audit file. Each append here waits for its own durable
+    /// write before the next starts, so this is the sequential floor: the
+    /// runtime's concurrent appends share durable writes and can exceed it.
     async fn measure_audit_append_rate(&self, appends: usize) -> f64 {
         let path = self.probe_directory.join("audit-throughput-probe.jsonl");
+        let destination = FileDestination::new(&path)
+            .and_then(|file| file.with_rotate_bytes(AUDIT_PROBE_MAXIMUM_BYTES))
+            .expect("the audit throughput probe destination is valid");
         let log = EvidenceAuditLog::initialize(
-            &path,
-            AUDIT_PROBE_MAXIMUM_BYTES,
+            AuditDestination::File(destination),
             b"audit-hash-secret-canary-32-bytes-minimum".to_vec(),
             1,
         )
@@ -11748,7 +11745,7 @@ fn adult_source_request() -> Value {
 }
 
 /// A valid access-attempt event shaped like the ones the runtime writes, so the
-/// probe measures the real serialization, hashing, and fsync path.
+/// probe measures the real serialization and fsync path.
 fn audit_probe_event(index: usize) -> EvidenceAuditEvent {
     EvidenceAuditEvent::new(
         AssuranceProfile::EvidenceGrade,
@@ -11774,12 +11771,48 @@ fn audit_probe_event(index: usize) -> EvidenceAuditEvent {
     )
 }
 
-fn acceptance_audit_hasher() -> AuditChainHasher {
-    AuditChainProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
-        b"audit-hash-secret-canary-32-bytes-minimum".to_vec(),
-    ))
-    .expect("the acceptance audit chain key derives")
-    .hasher()
+/// Check that every audit line is a `registry.evidence.audit/v2` entry whose
+/// envelope phase and correlation agree with its record, that entry
+/// identifiers are unique, and that each operation has exactly one `request`
+/// entry and one `response` entry. Returns the number of entries.
+fn assert_paired_audit_entries(audit: &str) -> usize {
+    let mut phases: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    let mut entry_ids = BTreeSet::new();
+    let mut entries = 0;
+    for line in audit.lines().filter(|line| !line.trim().is_empty()) {
+        let entry: Value = serde_json::from_str(line).expect("an audit line is JSON");
+        assert_eq!(entry["schema"], json!("registry.evidence.audit/v2"));
+        let record = &entry["record"];
+        let correlation = entry["correlation"]
+            .as_str()
+            .expect("the correlation is text");
+        assert_eq!(
+            record["operation"],
+            json!(correlation),
+            "the correlation is the record's operation"
+        );
+        assert!(
+            entry_ids.insert(
+                entry["eventId"]
+                    .as_str()
+                    .expect("the entry identifier is text")
+                    .to_owned()
+            ),
+            "entry identifiers are unique"
+        );
+        let counts = phases.entry(correlation.to_owned()).or_default();
+        match (entry["phase"].as_str(), record["phase"].as_str()) {
+            (Some("request"), Some("access-attempt")) => counts.0 += 1,
+            (Some("response"), Some("disclosure-release")) => counts.1 += 1,
+            other => panic!("unexpected entry and record phases {other:?}"),
+        }
+        entries += 1;
+    }
+    assert!(
+        phases.values().all(|counts| *counts == (1, 1)),
+        "every operation has exactly one request and one response entry"
+    );
+    entries
 }
 
 /// Distinct evidence identities across every disclosure-release record.
@@ -11852,14 +11885,14 @@ const CONSTANT_SOURCE_BODY: &str = r#"{"total":1,"date_of_birth":"2000-01-01"}"#
 ///   offers, so an unlifted run measures admission queueing.
 /// - `concurrencyLimit: 8` per source caps outbound calls in flight, so an
 ///   unlifted run measures the source semaphore.
-/// - `maximumFileBytes: 10485760` rotates the audit segment several times
-///   inside a measured window, so an unlifted run measures segment rotation.
+/// - `rotateBytes: 10485760` rotates the audit file several times inside a
+///   measured window, so an unlifted run measures file rotation.
 ///
 /// Deployments should keep the tracked defaults and tune from real traffic.
 fn sustained_ceilings() -> FixtureCeilings {
     FixtureCeilings {
         maximum_concurrent_requests: 512,
-        audit_maximum_file_bytes: 1_073_741_824,
+        audit_rotate_bytes: 1_073_741_824,
         requests_per_principal_per_minute: 1_000_000,
         burst_per_principal: 100_000,
         source_concurrency_limit: 256,

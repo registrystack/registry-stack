@@ -18,5 +18,5 @@ signer:
   keyName: evidence-signing
   keyVersion: 7
   timeoutMilliseconds: 2000
-auditStorage: {path: /var/lib/registry-evidence/staging/evidence.jsonl, maximumFileBytes: 1073741824}
+audit: {path: /var/lib/registry-evidence/staging/evidence.jsonl}
 outboundTls: {systemRoots: true, trustProfiles: {}}

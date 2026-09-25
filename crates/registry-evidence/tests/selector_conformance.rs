@@ -1172,9 +1172,15 @@ async fn prepare_service_for_actor(
         })
         .collect::<Result<BTreeMap<_, _>, _>>()
         .expect("fixed selector source executors initialize");
-    let audit = EvidenceAuditLog::initialize(&audit_path, 10_485_760, AUDIT_KEY.to_vec(), 1)
-        .await
-        .expect("selector audit initializes");
+    let destination = registry_platform_audit::FileDestination::new(&audit_path)
+        .expect("selector audit destination is valid");
+    let audit = EvidenceAuditLog::initialize(
+        registry_platform_audit::AuditDestination::File(destination),
+        AUDIT_KEY.to_vec(),
+        1,
+    )
+    .await
+    .expect("selector audit initializes");
     let private = PrivateJwk::parse(EVIDENCE_PRIVATE_JWK).expect("Evidence test key parses");
     let provider: Arc<dyn SigningProvider> =
         Arc::new(LocalJwkSigner::new(private).expect("Evidence signer builds"));
@@ -1730,9 +1736,8 @@ fn write_runtime(runtime_path: &Path, bundle_root: &Path, secret_root: &Path, au
             "signer:\n",
             "  kind: local-jwk\n",
             "  privateKeyRef: secret:file/signing-key\n",
-            "auditStorage:\n",
+            "audit:\n",
             "  path: {}\n",
-            "  maximumFileBytes: 10485760\n",
             "outboundTls:\n",
             "  systemRoots: true\n",
             "  trustProfiles: {{}}\n"

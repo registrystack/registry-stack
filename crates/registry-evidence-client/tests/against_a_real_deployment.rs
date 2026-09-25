@@ -3111,9 +3111,8 @@ secretProviders:
 signer:
   kind: local-jwk
   privateKeyRef: secret:file/signing-key
-auditStorage:
+audit:
   path: {audit}
-  maximumFileBytes: 10485760
 outboundTls:
   systemRoots: true
   trustProfiles: {{}}

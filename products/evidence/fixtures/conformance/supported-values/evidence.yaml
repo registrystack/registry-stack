@@ -18,10 +18,8 @@ authentication:
   maximumTokenLifetimeSeconds: 300
   revokedKeyIds: []
 audit:
-  format: keyed-jsonl
-  hashSecretRef: secret:file/audit-hash-key
+  hashKeyRef: secret:file/audit-hash-key
   hashKeyVersion: 1
-  failClosed: true
 subjectBinding:
   secretRef: secret:file/subject-binding-key
   keyVersion: 1
