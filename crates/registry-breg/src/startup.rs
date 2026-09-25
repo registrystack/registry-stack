@@ -56,6 +56,10 @@ pub enum StartupError {
     DatabaseConnection,
     #[error("the Registry database is not ready for this package")]
     DatabaseUnready,
+    /// The database is not the physical instance the Registry's instance
+    /// claim names, as a restored copy is until an operator adopts it.
+    #[error("the Registry database is not the instance its claim names")]
+    InstanceClaimMismatch,
     /// Authored field address only, never the expression or database diagnostic.
     #[error("a persisted field pattern has invalid PostgreSQL syntax")]
     FieldPatternSyntax { entity_id: String, field_id: String },
@@ -328,6 +332,9 @@ impl StartupError {
             Self::PackageRefused(_) => "the Registry package was refused",
             Self::DatabaseConnection => "the Registry database connection was refused",
             Self::DatabaseUnready => "the Registry database is not ready for this package",
+            Self::InstanceClaimMismatch => {
+                "the Registry database is not the instance its claim names; adopt a restored copy with bregctl instance-claim adopt"
+            }
             Self::FieldPatternSyntax { .. } => {
                 "a persisted field pattern has invalid PostgreSQL syntax"
             }
@@ -803,6 +810,11 @@ async fn prepare_database_startup(
         .await
         .map_err(|_| StartupError::DatabaseConnection)?;
     let startup = verify_opened_startup(package, &mut client, migration_role, runtime_role).await?;
+    // Only the serving runtime checks the claim. Operator tooling opens the
+    // same verified startup and must keep working on a copy, so the copy can
+    // be inspected, verified, and adopted.
+    let pg_client: &Client = &client;
+    verify_instance_claim(pg_client).await?;
     let advisories = inspect_baseline(&client, pool.status().max_size).await;
     drop(client);
     Ok((pool, startup, advisories))
@@ -1650,6 +1662,7 @@ impl DynamicRuntimeReadiness {
         )
         .await
         .map_err(|_| StartupError::DatabaseUnready)?;
+        verify_instance_claim(&*transaction).await?;
         transaction
             .commit()
             .await
@@ -1659,6 +1672,15 @@ impl DynamicRuntimeReadiness {
             .await
             .map_err(|_| StartupError::Oidc)?;
         Ok(())
+    }
+}
+
+/// Refuse a database the instance claim does not name, by name.
+async fn verify_instance_claim(client: &impl GenericClient) -> Result<()> {
+    match crate::instance_claim::check(client).await {
+        crate::instance_claim::ClaimCheck::Current => Ok(()),
+        crate::instance_claim::ClaimCheck::Mismatch => Err(StartupError::InstanceClaimMismatch),
+        crate::instance_claim::ClaimCheck::Unavailable => Err(StartupError::DatabaseUnready),
     }
 }
 

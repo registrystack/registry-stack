@@ -738,6 +738,243 @@ async fn prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays
     database.cleanup().await;
 }
 
+/// A logical restore carries the original instance claim into a database with
+/// another physical identity. The copy refuses to serve by name, and readiness
+/// fails on a running server, until an operator adopts it.
+#[cfg(feature = "tooling")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restored_copy_refuses_to_serve_until_adopted() {
+    restored_copy_journey(false).await;
+}
+
+/// A managed PostgreSQL service may withhold `pg_control_system()` from
+/// ordinary roles. The claim then compares the database oid alone, so the
+/// Registry still installs, serves, refuses a copy, and adopts one.
+#[cfg(feature = "tooling")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_database_that_withholds_its_system_identifier_still_serves_and_refuses_a_copy() {
+    restored_copy_journey(true).await;
+}
+
+#[cfg(feature = "tooling")]
+async fn restored_copy_journey(withhold_system_identifier: bool) {
+    use registry_breg::audit_tooling::AuditOperatorService;
+    use registry_breg::instance_claim::{InstanceClaimError, InstanceClaimService};
+    use registry_breg::postgres::RegistryLockKey;
+    use registry_platform_audit::AuditProfile;
+
+    const AUDIT_KEY: &str = "0123456789abcdef0123456789abcdef";
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
+    let database = TestDatabase::create(4).await;
+    if withhold_system_identifier {
+        // The function catalog belongs to this disposable database, so the
+        // revocation reaches no other database in the cluster.
+        database
+            .admin
+            .batch_execute("REVOKE EXECUTE ON FUNCTION pg_catalog.pg_control_system() FROM PUBLIC")
+            .await
+            .expect("test withholds the system identifier");
+        for role in [&database.migration_role, &database.runtime_role] {
+            let readable: bool = database
+                .admin
+                .query_one(
+                    "SELECT pg_catalog.has_function_privilege(
+                         $1, 'pg_catalog.pg_control_system()', 'EXECUTE')",
+                    &[&role.as_str()],
+                )
+                .await
+                .expect("function privilege reads")
+                .get(0);
+            assert!(
+                !readable,
+                "the fixture roles cannot read the system identifier"
+            );
+        }
+    }
+    let (migration, migration_task) = database.connect_migration().await;
+    let fixture = StartupFixture::new();
+    let signing =
+        generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("fixture signing key generates");
+    let provisional = PackageFixture::build(&fixture.root, fingerprint(1), &signing);
+    let provisional_context = provisional.context(PackageIntent::InitialActivation);
+    let verified_provisional = load_package(&provisional.root, &provisional_context)
+        .expect("provisional package loads enough to install schema");
+    install_compiled_schema(
+        &migration,
+        verified_provisional.registry(),
+        &database.runtime_role,
+    )
+    .await
+    .expect("compiled schema installs");
+    let expected_catalog = ExpectedManagedCatalog::compiled(verified_provisional.registry());
+    let schema_fingerprint =
+        managed_schema_fingerprint(&migration, &database.runtime_role, &expected_catalog)
+            .await
+            .expect("compiled schema fingerprints");
+    drop(provisional);
+
+    let package = PackageFixture::build(&fixture.root, schema_fingerprint.clone(), &signing);
+    let context = package.context(PackageIntent::InitialActivation);
+    let verified = load_package(&package.root, &context).expect("final package verifies");
+    let manifest = verified.manifest();
+    let package_sequence = i64::try_from(manifest.sequence).expect("fixture sequence fits");
+    initialize_registry_state_for_catalog_test(
+        &migration,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(verified.registry()),
+        RegistryStateTestIdentity {
+            package_id: &manifest.package_id,
+            environment: &manifest.environment,
+            instance_id: &manifest.instance_id,
+            database_id: &manifest.database_id,
+            package_revision: &manifest.package_revision,
+            package_sequence,
+        },
+    )
+    .await
+    .expect("Registry state initializes");
+    migration_task.abort();
+
+    let idp = MockIdp::start().await;
+    let config_path = fixture.write_static_jwks_config(
+        &package,
+        &database.migration_role,
+        &database.runtime_role,
+        &idp,
+        Some(AUDIT_KEY),
+    );
+    let prepared =
+        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+            .expect("the database that recorded the claim serves");
+    assert_ready(&prepared, StatusCode::OK).await;
+
+    let claims = InstanceClaimService::new(AuditOperatorService::new_for_test(
+        ExpectedRegistryIdentity {
+            package_id: manifest.package_id.clone(),
+            environment: manifest.environment.clone(),
+            instance_id: manifest.instance_id.clone(),
+            database_id: manifest.database_id.clone(),
+            package_revision: manifest.package_revision.clone(),
+            schema_fingerprint: manifest.schema_fingerprint.clone(),
+            package_sequence,
+        },
+        ExpectedManagedCatalog::compiled(verified.registry()),
+        RegistryLockKey::derive(&manifest.package_id).expect("lock key derives"),
+        database.migration_config.clone(),
+        database.runtime_config.clone(),
+        database.migration_role.clone(),
+        database.runtime_role.clone(),
+        AuditProfile::production_from_secret_bytes(AUDIT_KEY.as_bytes().to_vec().into())
+            .expect("test audit profile is keyed"),
+    ));
+    let original = claims.status().await.expect("the claim reads");
+    assert!(
+        original.matches,
+        "the installing database holds its own claim"
+    );
+    assert_eq!(
+        original.live.system_identifier.is_none(),
+        withhold_system_identifier,
+        "the status names a system identifier exactly when it is readable"
+    );
+    assert_eq!(
+        original
+            .claim
+            .as_ref()
+            .map(|claim| claim.identity.system_identifier.is_none()),
+        Some(withhold_system_identifier),
+        "the claim records a system identifier exactly when it was readable"
+    );
+    assert_eq!(original.claim.map(|claim| claim.epoch), Some(1));
+    assert_eq!(
+        claims.adopt().await.err(),
+        Some(InstanceClaimError::AlreadyCurrent),
+        "the database the claim names has nothing to adopt"
+    );
+
+    // A logical restore keeps every row, so the copy holds the claim the
+    // original recorded while the database it lands in has another oid.
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_instance_claim
+                SET database_oid = 1
+              WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("test simulates a restored copy");
+    assert_ready(&prepared, StatusCode::SERVICE_UNAVAILABLE).await;
+    assert_eq!(
+        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+            .err(),
+        Some(StartupError::InstanceClaimMismatch),
+        "a copy the claim does not name refuses to serve by name"
+    );
+    let copied = claims.status().await.expect("the operator reads the claim");
+    assert!(!copied.matches);
+    assert_eq!(copied.claim.map(|claim| claim.epoch), Some(1));
+
+    let adoption = claims.adopt().await.expect("the operator adopts the copy");
+    assert_eq!(adoption.previous.map(|claim| claim.epoch), Some(1));
+    assert_eq!(adoption.current.epoch, 2);
+    let adopted = claims.status().await.expect("the adopted claim reads");
+    assert!(adopted.matches);
+    assert_eq!(adopted.claim.map(|claim| claim.epoch), Some(2));
+    assert_ready(&prepared, StatusCode::OK).await;
+    // One runtime holds the script engine at a time, so the running server
+    // stops before the adopted copy starts afresh.
+    drop(prepared);
+    prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+        .await
+        .expect("the adopted copy serves");
+
+    let audit: Vec<Vec<u8>> = database
+        .admin
+        .query(
+            "SELECT envelope FROM registry_internal.registry_audit ORDER BY created_at",
+            &[],
+        )
+        .await
+        .expect("audit journal reads")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    let adoptions: Vec<serde_json::Value> = audit
+        .iter()
+        .map(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).expect("envelope parses"))
+        .map(|envelope| envelope["record"].clone())
+        .filter(|record| record["schema"] == "breg-instance-claim-audit/v1")
+        .collect();
+    assert_eq!(adoptions.len(), 1, "one adoption leaves one audit record");
+    assert_eq!(adoptions[0]["event"], "adopted");
+    assert_eq!(adoptions[0]["previous"]["epoch"], 1);
+    assert_eq!(adoptions[0]["previous"]["databaseOid"], 1);
+    assert_eq!(adoptions[0]["current"]["epoch"], 2);
+    if withhold_system_identifier {
+        // A claim recorded without the system identifier still names the
+        // database once the identifier becomes readable.
+        database
+            .admin
+            .batch_execute("GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO PUBLIC")
+            .await
+            .expect("test restores the default function privilege");
+        let readable = claims.status().await.expect("the claim reads");
+        assert!(readable.live.system_identifier.is_some());
+        assert!(
+            readable.matches,
+            "an unrecorded identifier compares the oid"
+        );
+        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+            .expect("the claim without an identifier keeps serving");
+    }
+    idp.stop().await;
+    database.cleanup().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn live_old_server_drains_apply_and_exact_successor_restart_becomes_ready() {
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;

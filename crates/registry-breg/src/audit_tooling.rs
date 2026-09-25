@@ -43,6 +43,10 @@ use crate::history_maintenance::{
     append_audit_envelope, profile_is_keyed, set_local_timeouts, HistoryMaintenanceError,
     HistoryMaintenanceTimeouts,
 };
+use crate::instance_claim::{
+    adopt_in as adopt_instance_claim_in, read_status as read_instance_claim_status,
+    InstanceClaimAdoption, InstanceClaimError, InstanceClaimStatus,
+};
 use crate::postgres::{
     verify_catalog_identity_for_catalog, verify_migration_role, ConnectionConfig,
     ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey, SqlIdentifier,
@@ -647,6 +651,123 @@ impl AuditOperatorService {
             first_retained_envelope_id,
             export_sha256,
         })
+    }
+
+    /// Read the instance claim beside the database the runtime role reaches,
+    /// in a read-only transaction that first closes the catalog identity.
+    pub(crate) async fn read_instance_claim(
+        &self,
+    ) -> std::result::Result<InstanceClaimStatus, InstanceClaimError> {
+        let pool = self
+            .runtime_connection
+            .build_pool()
+            .map_err(|_| InstanceClaimError::Unavailable)?;
+        let mut client = pool
+            .get()
+            .await
+            .map_err(|_| InstanceClaimError::Unavailable)?;
+        let pg_client: &mut tokio_postgres::Client = &mut client;
+        let transaction = pg_client
+            .build_transaction()
+            .read_only(true)
+            .start()
+            .await
+            .map_err(|_| InstanceClaimError::Unavailable)?;
+        set_local_timeouts(&transaction, self.timeouts)
+            .await
+            .map_err(|_| InstanceClaimError::Unavailable)?;
+        verify_catalog_identity_for_catalog(
+            &transaction,
+            &self.expected,
+            &self.expected_catalog,
+            &self.migration_role,
+            &self.runtime_role,
+        )
+        .await
+        .map_err(|_| InstanceClaimError::Unavailable)?;
+        let status = read_instance_claim_status(&transaction, false).await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| InstanceClaimError::Unavailable)?;
+        Ok(status)
+    }
+
+    /// Move the instance claim to the connected database under the migration
+    /// authority. The Registry lock and the audit head are taken, and the
+    /// chain must verify, before the claim row is read or written, so no
+    /// runtime append and no other maintenance interleaves with the move.
+    pub(crate) async fn adopt_instance_claim(
+        &self,
+    ) -> std::result::Result<InstanceClaimAdoption, InstanceClaimError> {
+        if !profile_is_keyed(&self.audit_profile) {
+            return Err(InstanceClaimError::Unavailable);
+        }
+        let pool = self
+            .migration_connection
+            .build_pool()
+            .map_err(|_| InstanceClaimError::Unavailable)?;
+        let mut client = pool
+            .get()
+            .await
+            .map_err(|_| InstanceClaimError::Unavailable)?;
+        let pg_client: &mut tokio_postgres::Client = &mut client;
+        verify_migration_role(pg_client, &self.migration_role)
+            .await
+            .map_err(|_| InstanceClaimError::Unavailable)?;
+        let transaction = pg_client
+            .transaction()
+            .await
+            .map_err(|_| InstanceClaimError::Unavailable)?;
+        set_local_timeouts(&transaction, self.timeouts)
+            .await
+            .map_err(|_| InstanceClaimError::Unavailable)?;
+        transaction
+            .execute(
+                "SELECT pg_catalog.pg_advisory_xact_lock($1)",
+                &[&self.lock_key.get()],
+            )
+            .await
+            .map_err(|_| InstanceClaimError::Unavailable)?;
+        verify_catalog_identity_for_catalog(
+            &transaction,
+            &self.expected,
+            &self.expected_catalog,
+            &self.migration_role,
+            &self.runtime_role,
+        )
+        .await
+        .map_err(|_| InstanceClaimError::Unavailable)?;
+        transaction
+            .query_opt(
+                "SELECT last_hash
+                   FROM registry_internal.registry_audit_head
+                  WHERE singleton
+                  FOR UPDATE",
+                &[],
+            )
+            .await
+            .map_err(|_| InstanceClaimError::Unavailable)?;
+        verify_chain_snapshot(&transaction, &self.audit_profile.chain_hasher(), None)
+            .await
+            .map_err(|error| match error {
+                AuditToolingError::Unavailable => InstanceClaimError::Unavailable,
+                chain => InstanceClaimError::AuditChain(chain),
+            })?;
+        let (adoption, record) = adopt_instance_claim_in(
+            &transaction,
+            &self.audit_profile,
+            &self.expected.package_revision,
+        )
+        .await?;
+        append_audit_envelope(&transaction, &self.audit_profile, record)
+            .await
+            .map_err(|_| InstanceClaimError::Unavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| InstanceClaimError::Unavailable)?;
+        Ok(adoption)
     }
 
     /// Append one record to the journal over the runtime connection, so a test

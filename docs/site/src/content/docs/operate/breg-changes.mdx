@@ -1,6 +1,6 @@
 ---
 title: Change an active registry
-description: Compare an edited project with the active package, test and sign the successor against the active baseline, activate it with reviewed migration evidence, recover a registry that a failed activation pinned, and undo a change by rolling forward or restoring a backup.
+description: Compare an edited project with the active package, test and sign the successor against the active baseline, activate it with reviewed migration evidence, recover a registry that a failed activation pinned, undo a change by rolling forward or restoring a backup, and adopt a restored database before it serves.
 status: current
 owner: registry-docs
 source_repos:
@@ -345,7 +345,12 @@ reported `unresolvable`, or a reviewed migration changed rows in a way no succes
    after the backup are kept outside the database.
 2. Restore the database from the backup you took before the `apply`, with your PostgreSQL tooling.
 3. Point the runtime file at the package that was active when the backup was taken, with its
-   directory, revision, and sequence, run `bregctl verify`, and start the server.
+   directory, revision, and sequence, and run `bregctl verify`.
+4. A logical restore is a new database, so the server refuses to serve it until you adopt it:
+   run `bregctl instance-claim adopt` as
+   [back up and restore the database](#back-up-and-restore-the-database) describes, then start
+   the server. The adopt supersedes every import authority the backup held open; open again
+   only the ones you still need.
 
 A restore discards every write, activation, and audit record committed after the backup, and it
 brings back history that a later `history erase` removed: repeat those erasures before the
@@ -358,6 +363,119 @@ next successor needs a sequence above the restored active package, not above the
     crates/registry-breg/tests/postgres_package.rs, activation_refuses_an_older_package_as_a_rollback;
     crates/registry-bregctl/tests/cli/reviewed_migrations.rs,
     apply_refuses_an_older_package_and_points_at_the_roll_forward_procedure. */}
+
+## Back up and restore the database
+
+Take a logical backup of the serving database with the PostgreSQL tools, as an administrator, before
+every activation:
+
+```sh
+pg_dump --format=custom --file=/srv/backup/registry-before-build-2.dump registry
+```
+
+To restore it, stop every `breg` process that serves the registry, then recreate the database with
+the database-level statements from [provision PostgreSQL](../breg/#provision-postgresql), which a
+dump does not carry, and restore the dump into it as an administrator:
+
+```sql
+CREATE DATABASE registry_restored;
+REVOKE ALL ON DATABASE registry_restored FROM PUBLIC;
+GRANT CONNECT ON DATABASE registry_restored TO registry_migration, registry_runtime;
+```
+
+```sh
+pg_restore --exit-on-error --dbname=registry_restored /srv/backup/registry-before-build-2.dump
+```
+
+For a spatial project, also repeat the `REVOKE CREATE ON DATABASE` statement. Point the runtime
+file's database references at the restored database, then check it before anything serves from
+it:
+
+```sh
+bregctl verify --runtime-config /etc/breg/runtime.yaml
+bregctl --format json audit verify --runtime-config /etc/breg/runtime.yaml
+bregctl --format json instance-claim status --runtime-config /etc/breg/runtime.yaml
+```
+
+If the restored database is pinned in maintenance, run
+[`migration reconcile`](#recover-a-failed-activation) before going further.
+
+Every registry database holds an instance claim: the PostgreSQL system identifier and database
+object identifier of the database the registry serves from, recorded at the first apply. A restored
+copy carries the claim of the database it was dumped from, so `instance-claim status` reports
+`"matches": false`, `breg` refuses to start with `startup.instance_claim.mismatch`, and `GET /ready`
+answers `503`. The refusal exists because two databases serving one registry each accept writes
+and each extend their own audit chain from the backup onward, and nothing can merge the two chains
+afterwards.
+
+The first apply records the claim only into a database whose audit journal is empty. A registry
+that already holds audit records when the claim table is first installed, which is every registry
+upgraded from a release without the claim and every copy restored from a backup taken before it,
+records none: `instance-claim status` reports that no claim is recorded, and `breg` refuses in the
+same way until you adopt it once. After upgrading, run the adopt below after the first `apply`
+and before starting the server.
+
+The claim is checked when `breg` starts and on every `GET /ready`, not on each request. A process
+that keeps running while its database host name is repointed at a restored copy keeps serving
+requests on the connections it opens until something acts on its readiness `503`. Gate traffic
+on `GET /ready`, or restart every `breg` process, whenever the database behind the registry
+changes.
+
+The system identifier comes from `pg_control_system()`. PostgreSQL grants it to every role, but a
+managed service may withhold it. When the migration role cannot call it, the claim is recorded
+without a system identifier; when either side lacks one, the claim compares the database object
+identifier alone, and `instance-claim status` shows the system identifier as not readable. The
+object identifier alone still tells another database in the same cluster apart, but a copy
+restored into a new cluster can receive the same object identifier and is not refused. On such a
+service the rule that the original is stopped before a copy serves is the only control, so keep
+it, and grant `EXECUTE` on `pg_control_system()` to both roles where the service allows it.
+
+Once the database the claim names is stopped for good, adopt the copy:
+
+```sh
+bregctl --format json instance-claim adopt \
+  --runtime-config /etc/breg/runtime.yaml \
+  --acknowledge-original-retired
+```
+
+`adopt` runs under the migration credential. It verifies the copy's audit chain under the same lock
+an activation takes, refuses with `instance_claim.audit_chain.unverified` when the chain does not
+verify, moves the claim to this database with its epoch raised by one, supersedes every open
+[import authority](../breg-data/#load-a-governed-entity-through-an-import-window) with its own
+audit record, and appends an audit record naming the previous and the adopted claim and the
+authorities it superseded, all in one transaction. A backup holds the authorities that were open
+when it was taken, including any you closed afterwards, so no authority survives an adopt: open
+again the ones you still need. It refuses with
+`instance_claim.already_current` when the claim already names this database, and without
+`--acknowledge-original-retired` it refuses before it opens a connection. Then run `bregctl doctor`,
+start the server, and check `GET /ready`.
+
+:::caution[Adopting does not stop the original]
+The claim tells a logical restore from its original, not a physical one. A base backup, a
+point-in-time recovery, a volume snapshot, or a promoted replica keeps the original's system
+identifier and database object identifier, so it serves without an adopt: keeping the original
+stopped, or fenced from clients, while such a copy serves is your job. An adopt changes only the
+copy's claim, so an original that is still running keeps serving. Pass
+`--acknowledge-original-retired` only once no client can reach it.
+:::
+
+An upgrade with `pg_upgrade` moves the registry into a new cluster with a new system identifier,
+so it needs the same adopt once the old cluster is stopped. A failover to a streaming replica
+keeps the system identifier and needs none.
+
+{/* Evidence: crates/registry-breg/src/instance_claim.rs, install(), check(), live_identity(),
+    adopt_in();
+    crates/registry-breg/src/import_authority.rs, supersede_every_open();
+    crates/registry-breg/src/audit_tooling.rs, adopt_instance_claim();
+    crates/registry-breg/src/startup.rs, verify_instance_claim();
+    crates/registry-bregctl/src/lib.rs, InstanceClaimAdoptArgs and instance_claim_failure();
+    crates/registry-breg/tests/postgres_startup.rs, a_restored_copy_refuses_to_serve_until_adopted
+    and a_database_that_withholds_its_system_identifier_still_serves_and_refuses_a_copy;
+    crates/registry-breg/tests/postgres_audit_tooling.rs,
+    adopting_a_copy_refuses_an_audit_chain_that_does_not_verify and
+    installing_the_claim_beside_audit_records_leaves_the_database_to_adopt;
+    crates/registry-breg/tests/postgres_import_authority.rs,
+    adopting_a_restored_copy_supersedes_every_open_authority. */}
 
 ## Inspect the migration plan
 
@@ -396,6 +514,9 @@ server binary, and earlier packages keep verifying under their recorded rules.
 | `apply` reports `apply.package.binding_mismatch` | The package, or the active package at `package.root`, is bound to a different deployment than the runtime file. The report path names the runtime key that differs (`identity.environment`, `identity.databaseInitializationEnvironment`, `identity.instanceId`, `identity.databaseId`, `package.compilerSourceRevision`, `package.activeRevision`, or `package.activeSequence`) and never either value. A `package.activeSequence` mismatch means the target is a different package at the active sequence: build it as a successor of the active package. Nothing was changed. |
 | `apply` reports `apply.package.active_mismatch` | The runtime file names the target as the active package, but the database does not record it as active and ready. Set `package.activeRevision` and `package.activeSequence` to the package the database runs and apply again. If the database has never been activated, apply with `--initial`. If the database is pinned in maintenance, run `migration reconcile`. Nothing was changed. |
 | `apply` reports `apply.history.coverage_incomplete` | Retained history coverage does not admit a successor: a `field-encryption erase-history` run has not finished, or an erasure reached the coverage baseline or left a gap the audit journal does not record. Finish the erase-history run, or run [`history rebaseline`](../breg-retention/#restore-snapshot-coverage-after-an-erasure), then apply the same package again. Maintenance state was not changed, so there is nothing to reconcile. |
+| `breg` refuses to start, or `doctor` reports `startup.instance_claim.mismatch` | The database is not the one the registry's instance claim names, as after a logical restore or a `pg_upgrade`, or it holds no claim, as after the first apply of an upgrade from a release without one. Stop the database the claim names for good, then run `instance-claim adopt` as [back up and restore the database](#back-up-and-restore-the-database) describes. |
+| `instance-claim adopt` reports `instance_claim.audit_chain.unverified` | The copy's audit journal does not verify, so the claim did not move. Run `audit verify` to name the fault, then restore a backup whose journal verifies. |
+| `instance-claim adopt` reports `instance_claim.already_current` | The claim already names this database, so it serves without an adopt. Nothing was changed. |
 | `migration reconcile` reports `in_progress` | Another session holds the migration lock. Wait for it to finish, then assess again. |
 | The process still serves the old package after `apply` | Activation changes the database, not the process. Update the runtime file and restart the server. |
 

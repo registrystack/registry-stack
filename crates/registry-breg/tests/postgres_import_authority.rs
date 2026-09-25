@@ -30,6 +30,7 @@ use registry_breg::import_authority::{
     ImportAuthority, ImportAuthorityCloseRequest, ImportAuthorityError, ImportAuthorityOpenRequest,
     ImportAuthorityOperatorService, ImportAuthorityStatus, DEFAULT_IMPORT_AUTHORITY_WINDOW,
 };
+use registry_breg::instance_claim::InstanceClaimService;
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema, ExpectedManagedCatalog,
     ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
@@ -1180,4 +1181,59 @@ async fn a_close_racing_a_chunk_waits_for_it_and_stops_the_next() {
         .expect("the close commits");
     assert_eq!(closed.status, ImportAuthorityStatus::Closed);
     harness.blocked_chunk(&run_id, &load, 0).await;
+}
+
+/// A restored copy carries every authority that was open when its backup was
+/// taken, including one an operator closed afterwards. Adopting the copy
+/// supersedes each open authority in the adopting transaction, so the copy
+/// admits no import until an operator opens a new authority.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn adopting_a_restored_copy_supersedes_every_open_authority() {
+    let harness = Harness::create().await;
+    let widget = harness.open("widget", "loader", 10, &[]).await;
+    let gadget = harness.open("gadget", "loader", 10, &[]).await;
+    harness.close(gadget.authority_id).await;
+    harness
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_instance_claim
+                SET database_oid = 1
+              WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("test simulates a restored copy");
+
+    let adoption = InstanceClaimService::new(harness.audit())
+        .adopt()
+        .await
+        .expect("the operator adopts the copy");
+    assert_eq!(
+        adoption.superseded_import_authorities,
+        [widget.authority_id],
+        "the adoption names the authorities it superseded"
+    );
+    assert_eq!(harness.authority(widget.authority_id).await.0, "superseded");
+    assert_eq!(harness.authority(gadget.authority_id).await.0, "closed");
+    let transitions: Vec<Value> = harness
+        .authority_records(widget.authority_id)
+        .await
+        .iter()
+        .map(|record| record["transition"].clone())
+        .collect();
+    assert_eq!(transitions, [json!("opened"), json!("superseded")]);
+    assert_eq!(
+        harness.authority_records(gadget.authority_id).await.len(),
+        2,
+        "an authority already closed gains no record"
+    );
+    harness
+        .audit()
+        .verify()
+        .await
+        .expect("the journal still verifies after the adoption");
+    harness
+        .refused_run("widgets", "loader", &plan("after-restore", 1))
+        .await;
 }

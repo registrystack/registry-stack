@@ -417,6 +417,9 @@ pub async fn install_mutation_schema(
     crate::ingestion_store::install(migration, runtime_role)
         .await
         .map_err(|_| MutationError::Unavailable)?;
+    crate::instance_claim::install(migration, runtime_role)
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
     install_history_commit_schema(migration, runtime_role)
         .await
         .map_err(MutationError::from)?;

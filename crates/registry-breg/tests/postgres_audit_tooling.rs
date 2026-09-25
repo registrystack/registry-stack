@@ -16,6 +16,8 @@ use registry_breg::audit_tooling::{
 };
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
+use registry_breg::instance_claim::{InstanceClaimError, InstanceClaimService};
+use registry_breg::mutation::install_mutation_schema;
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema, ExpectedManagedCatalog,
     ExpectedRegistryIdentity, RegistryLockKey, RegistryStateTestIdentity,
@@ -933,6 +935,167 @@ fn malformed_envelopes(original: &[u8]) -> Vec<MalformedEnvelope> {
     ]
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn adopting_a_copy_refuses_an_audit_chain_that_does_not_verify() {
+    let fixture = Fixture::create().await;
+    fixture.seed(3).await;
+    let chain = fixture.chain().await;
+    fixture.simulate_restored_copy().await;
+    let claims = fixture.claims();
+
+    let original = fixture.envelope_bytes(&chain[1].envelope_id).await;
+    let mut tampered: Value = serde_json::from_slice(&original).expect("the envelope is JSON");
+    tampered["record"]["operationId"] = Value::String("records.membership.list".to_owned());
+    fixture
+        .set_envelope_bytes(
+            &chain[1].envelope_id,
+            &serde_json::to_vec(&tampered).expect("the tampered envelope serializes"),
+        )
+        .await;
+    assert_eq!(
+        claims.adopt().await.err(),
+        Some(InstanceClaimError::AuditChain(
+            AuditToolingError::ChainBroken { position: 2 }
+        )),
+        "a copy whose journal does not verify is never adopted"
+    );
+    let refused = claims.status().await.expect("the claim reads");
+    assert!(
+        !refused.matches,
+        "a refused adoption leaves the claim as it was"
+    );
+    assert_eq!(refused.claim.map(|claim| claim.epoch), Some(1));
+
+    fixture
+        .set_envelope_bytes(&chain[1].envelope_id, &original)
+        .await;
+    let adoption = claims.adopt().await.expect("a verified copy is adopted");
+    assert_eq!(adoption.previous.map(|claim| claim.epoch), Some(1));
+    assert_eq!(adoption.current.epoch, 2);
+    let verified = fixture
+        .service()
+        .verify()
+        .await
+        .expect("the adoption extends a verified chain");
+    assert_eq!(verified.records, 4, "the adoption appends one audit record");
+
+    fixture.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_missing_claim_is_reported_and_adopting_records_a_fresh_one() {
+    let fixture = Fixture::create().await;
+    fixture
+        .migration
+        .execute("DELETE FROM registry_internal.registry_instance_claim", &[])
+        .await
+        .expect("the owning role can remove the claim");
+    let claims = fixture.claims();
+
+    let missing = claims
+        .status()
+        .await
+        .expect("a missing claim still reports");
+    assert_eq!(missing.claim, None);
+    assert!(!missing.matches, "no claim names this database");
+
+    let adoption = claims
+        .adopt()
+        .await
+        .expect("the operator claims the database");
+    assert_eq!(adoption.previous, None);
+    assert_eq!(adoption.current.epoch, 1);
+    assert_eq!(adoption.current.identity, missing.live);
+    assert!(claims.status().await.expect("the claim reads").matches);
+
+    fixture.cleanup().await;
+}
+
+/// A database whose audit journal already holds records is either a Registry
+/// installed before the claim existed or a copy restored from a backup taken
+/// before it. Installing the claim there records none, so the database waits
+/// for an operator to adopt it instead of claiming itself.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn installing_the_claim_beside_audit_records_leaves_the_database_to_adopt() {
+    let fixture = Fixture::create().await;
+    fixture.seed(2).await;
+    fixture
+        .migration
+        .batch_execute("DROP TABLE registry_internal.registry_instance_claim")
+        .await
+        .expect("the owning role can drop the claim table");
+    install_mutation_schema(&fixture.migration, &fixture.database.runtime_role)
+        .await
+        .expect("the mutation schema installs again");
+    let claims = fixture.claims();
+
+    let unclaimed = claims.status().await.expect("the claim table reads");
+    assert_eq!(unclaimed.claim, None, "no claim is recorded beside history");
+    assert!(!unclaimed.matches);
+
+    let adoption = claims
+        .adopt()
+        .await
+        .expect("the operator claims the database");
+    assert_eq!(adoption.previous, None);
+    assert_eq!(adoption.current.epoch, 1);
+    install_mutation_schema(&fixture.migration, &fixture.database.runtime_role)
+        .await
+        .expect("the mutation schema installs again");
+    assert_eq!(
+        claims
+            .status()
+            .await
+            .expect("the claim reads")
+            .claim
+            .map(|claim| claim.epoch),
+        Some(1),
+        "a later install leaves the adopted claim in place"
+    );
+
+    fixture.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_runtime_role_cannot_rewrite_or_remove_the_instance_claim() {
+    let fixture = Fixture::create().await;
+    let (runtime, runtime_task) = fixture.database.connect_admin().await;
+    runtime
+        .batch_execute(&format!(
+            "SET ROLE \"{}\"",
+            fixture.database.runtime_role.as_str()
+        ))
+        .await
+        .expect("the session takes the runtime role");
+    let claimed: i64 = runtime
+        .query_one(
+            "SELECT epoch FROM registry_internal.registry_instance_claim WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("the runtime role reads the claim")
+        .get(0);
+    assert_eq!(claimed, 1);
+    for statement in [
+        "UPDATE registry_internal.registry_instance_claim
+            SET database_oid = (SELECT oid FROM pg_database WHERE datname = current_database())",
+        "UPDATE registry_internal.registry_instance_claim SET epoch = epoch + 1",
+        "DELETE FROM registry_internal.registry_instance_claim",
+        "INSERT INTO registry_internal.registry_instance_claim
+             (singleton, system_identifier, database_oid)
+         VALUES (true, 1, 1)",
+    ] {
+        assert!(
+            runtime.execute(statement, &[]).await.is_err(),
+            "the runtime role cannot move its own claim: {statement}"
+        );
+    }
+    drop(runtime);
+    runtime_task.abort();
+
+    fixture.cleanup().await;
+}
+
 async fn bounded<T>(
     operation: impl Future<Output = Result<T, AuditToolingError>>,
     shape: &str,
@@ -1140,6 +1303,24 @@ impl Fixture {
             )
             .await
             .expect("the owning role can rewrite the audit head");
+    }
+
+    fn claims(&self) -> InstanceClaimService {
+        InstanceClaimService::new(self.service())
+    }
+
+    /// A logical restore keeps every row, so a copy holds the claim its
+    /// original recorded while the database it lands in has another oid.
+    async fn simulate_restored_copy(&self) {
+        self.migration
+            .execute(
+                "UPDATE registry_internal.registry_instance_claim
+                    SET database_oid = 1
+                  WHERE singleton",
+                &[],
+            )
+            .await
+            .expect("the owning role can rewrite the claim");
     }
 
     async fn delete_record(&self, envelope_id: &str) {

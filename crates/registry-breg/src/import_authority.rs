@@ -466,6 +466,47 @@ async fn settle_open(
     Ok((open, transitioned))
 }
 
+/// Supersede every open authority inside the caller's transaction, which
+/// holds the registry lock, appending one transition record for each, and
+/// answer the authorities it moved. Adopting a restored copy calls this, so
+/// an authority the copy carries from its backup, even one an operator
+/// closed after the backup was taken, admits no work until an operator
+/// opens a new one.
+#[cfg(feature = "tooling")]
+pub(crate) async fn supersede_every_open(
+    transaction: &Transaction<'_>,
+    profile: &AuditProfile,
+    package_revision: &str,
+) -> Result<Vec<Uuid>, ImportAuthorityError> {
+    let rows = transaction
+        .query(
+            "SELECT authority_id
+               FROM registry_internal.registry_import_authorities
+              WHERE status = 'open'
+              ORDER BY authority_id
+              FOR UPDATE",
+            &[],
+        )
+        .await
+        .map_err(|_| ImportAuthorityError::Unavailable)?;
+    let mut superseded = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let authority_id: Uuid = row.get(0);
+        transition(
+            transaction,
+            profile,
+            authority_id,
+            ImportAuthorityStatus::Superseded,
+            package_revision,
+            None,
+        )
+        .await?
+        .ok_or(ImportAuthorityError::Unavailable)?;
+        superseded.push(authority_id);
+    }
+    Ok(superseded)
+}
+
 /// Decide whether one import run may be created, inside the run-creation
 /// transaction. Every transition already due is recorded first, so the
 /// caller must commit this transaction even when it refuses the run.
