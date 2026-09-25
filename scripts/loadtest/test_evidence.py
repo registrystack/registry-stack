@@ -19,6 +19,30 @@ SPEC.loader.exec_module(evidence)
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_empty_db_wait_samples_do_not_claim_zero_waits(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "waits.jsonl"
+            path.touch()
+            result = evidence._db_wait_summary(path)
+            self.assertEqual(result["samples"], 0)
+            self.assertIsNone(result["lockWaitersPeak"])
+            self.assertIsNone(result["blockedBackendsPeak"])
+
+    def test_db_wait_summary_rejects_missing_required_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "waits.jsonl"
+            path.write_text('{"lockWaiters": 2}\n', encoding="utf-8")
+            with self.assertRaisesRegex(evidence.EvidenceError, "blockedBackends"):
+                evidence._db_wait_summary(path)
+
+    def test_db_wait_summary_preserves_optional_review_history_metric(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "waits.jsonl"
+            path.write_text('{"reviewHistoryLockWaiters": 2, "lockWaiters": 3, "blockedBackends": 1}\n', encoding="utf-8")
+            result = evidence._db_wait_summary(path)
+            self.assertEqual(result["reviewHistoryLockWaitersPeak"], 2)
+            self.assertNotIn("auditLockWaitersPeak", result)
+
     def test_command_output_accepts_a_successful_command_with_no_output(self) -> None:
         self.assertEqual(evidence._command_output(["python3", "-c", "pass"]), "")
 
@@ -325,9 +349,9 @@ class EvidenceTests(unittest.TestCase):
                 )
             ]
             samples.write_text("".join(json.dumps(item) + "\n" for item in sample_items), encoding="utf-8")
-            db_after.write_text(json.dumps({"auditRows": 10}), encoding="utf-8")
+            db_after.write_text(json.dumps({"tableSizes": [{"name": "breg_e_records", "liveRows": 10}]}), encoding="utf-8")
             db_waits.write_text(
-                json.dumps({"auditLockWaiters": 2, "lockWaiters": 3, "blockedBackends": 1}) + "\n",
+                json.dumps({"lockWaiters": 3, "blockedBackends": 1}) + "\n",
                 encoding="utf-8",
             )
             safety.write_text(json.dumps({"safe": True}), encoding="utf-8")
@@ -357,7 +381,8 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(result["phases"]["steady"]["latency"]["count"], 4)
             self.assertNotIn("byPhase", result["latency"])
             self.assertNotIn("execution", result)
-            self.assertEqual(result["database"]["waits"]["auditLockWaitersPeak"], 2)
+            self.assertNotIn("auditLockWaitersPeak", result["database"]["waits"])
+            self.assertEqual(result["database"]["waits"]["lockWaitersPeak"], 3)
             self.assertTrue(result["pass"])
 
     def test_sweep_counts_a_held_rate_without_a_result_as_failed(self) -> None:

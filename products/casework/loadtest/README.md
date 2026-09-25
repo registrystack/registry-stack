@@ -175,7 +175,7 @@ products/casework/loadtest/dbstats.sh sample 1
 products/casework/loadtest/dbstats.sh analyze
 ```
 
-`auditLockWaiters` counts lock waits on statements that touch
+`reviewHistoryLockWaiters` counts lock waits on statements that touch
 `casework_review_history`. Review mutations append their accountability rows
 to `casework_review_history` inside the mutating transaction. Audit entries go
 to the runtime's audit destination, which `caseworkctl dev` places in the
