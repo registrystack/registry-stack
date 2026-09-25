@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use axum::body::{to_bytes, Body};
 use http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, LINK};
 use http::{Method, Request, StatusCode};
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use registry_platform_audit::{AuditChainHasher, AuditEnvelope, AuditError, AuditSink, ChainState};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier};
@@ -1430,7 +1430,7 @@ fn exact_generated_response_schema(
     artifacts: &ArtifactSet,
     operation_identifier: &str,
     media_type: &str,
-) -> JSONSchema {
+) -> Validator {
     let openapi = artifact_json(artifacts, "openapi.full.yaml");
     let matches = openapi["paths"]
         .as_object()
@@ -1458,7 +1458,7 @@ fn exact_generated_response_schema(
             .expect("operation exists")["x-registry-responseProfile"],
         REGISTRY_RECORD_PROFILE_ID
     );
-    let mut options = JSONSchema::options();
+    let mut options = Validator::options();
     options
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true);
@@ -1470,15 +1470,19 @@ fn exact_generated_response_schema(
         let schema: Value =
             serde_json::from_slice(&artifact.content).expect("generated schema parses");
         if let Some(identifier) = schema.get("$id").and_then(Value::as_str) {
-            options.with_document(identifier.to_owned(), schema);
+            options.with_resource(
+                identifier.to_owned(),
+                jsonschema::Resource::from_contents(schema.clone())
+                    .expect("generated schema is a valid resource"),
+            );
         }
     }
     options
-        .compile(&matches.into_iter().next().expect("one response schema"))
+        .build(&matches.into_iter().next().expect("one response schema"))
         .expect("exact generated response schema compiles locally")
 }
 
-fn assert_meta_constant_mutations_are_rejected(validator: &JSONSchema, document: &Value) {
+fn assert_meta_constant_mutations_are_rejected(validator: &Validator, document: &Value) {
     for member in [
         "registryIdentifier",
         "datasetIdentifier",
@@ -1493,15 +1497,15 @@ fn assert_meta_constant_mutations_are_rejected(validator: &JSONSchema, document:
     }
 }
 
-fn shared_base_validator() -> JSONSchema {
+fn shared_base_validator() -> Validator {
     let schema: Value = serde_json::from_str(include_str!(
         "../../../products/registry-record/schema/registry-record-v1.schema.json"
     ))
     .expect("shared Registry Record schema is JSON");
-    JSONSchema::options()
+    Validator::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
-        .compile(&schema)
+        .build(&schema)
         .expect("shared Registry Record schema compiles locally")
 }
 

@@ -734,6 +734,7 @@ async fn record_collection(
         &access.access_profile,
         &query.selected_fields,
         &result.source_revision,
+        None,
     );
     if matches!(
         query.response_format,
@@ -847,6 +848,7 @@ pub async fn record_read(
         SingleRequest {
             headers: &headers,
             query_text: uri.query(),
+            self_href: Some(absolute(&service.registry.base_uri, uri.path())),
             query: OperationQuery {
                 record_identifier: Some(record_identifier),
                 ..OperationQuery::default()
@@ -1017,6 +1019,7 @@ pub async fn record_lookup(
         SingleRequest {
             headers: &parts.headers,
             query_text: parts.uri.query(),
+            self_href: None,
             query: OperationQuery {
                 selectors,
                 ..OperationQuery::default()
@@ -1043,6 +1046,7 @@ pub async fn not_found(
 struct SingleRequest<'a> {
     headers: &'a HeaderMap,
     query_text: Option<&'a str>,
+    self_href: Option<String>,
     query: OperationQuery,
     prevalidated: Option<(ResponseFormat, Vec<String>)>,
     quota_admitted: bool,
@@ -1163,6 +1167,7 @@ async fn single_operation(
         &access.access_profile,
         &fields,
         &result.source_revision,
+        request.self_href.as_deref(),
     );
     if matches!(
         representation,
@@ -2624,8 +2629,13 @@ fn record_meta(
     access_profile: &CompiledAccessProfile,
     selected: &[String],
     source_revision: &SourceRevision,
+    self_href: Option<&str>,
 ) -> Value {
     let pattern = operation_pattern(&operation.kind);
+    let self_href = self_href.map_or_else(
+        || operation_href(service, resource, operation),
+        str::to_owned,
+    );
     json!({
         "operationIdentifier": operation.identifier,
         "accessProfile": access_profile.id,
@@ -2636,7 +2646,7 @@ fn record_meta(
         "sourceRevision": source_revision_value(source_revision),
         "selectedFields": selected,
         "links": {
-            "self": operation_href(service, resource, operation),
+            "self": self_href,
             "context": access_profile.context_reference,
             "schema": access_profile.schema_reference,
             "semanticModel": access_profile.semantic_model_reference,

@@ -2872,7 +2872,7 @@ mod tests {
             ["/v2/resources/record/records/{recordIdentifier}"]["get"]["responses"]["200"]
             ["content"]["application/ld+json"]["schema"];
 
-        let mut options = jsonschema::JSONSchema::options();
+        let mut options = jsonschema::Validator::options();
         options.with_draft(jsonschema::Draft::Draft202012);
         for artifact in generated
             .artifacts
@@ -2882,14 +2882,18 @@ mod tests {
             let schema: Value =
                 serde_json::from_slice(&artifact.content).expect("generated schema parses");
             if let Some(identifier) = schema.get("$id").and_then(Value::as_str) {
-                options.with_document(identifier.to_owned(), schema);
+                options.with_resource(
+                    identifier.to_owned(),
+                    jsonschema::Resource::from_contents(schema.clone())
+                        .expect("generated schema is a valid resource"),
+                );
             }
         }
         let validator = options
-            .compile(operation_schema)
+            .build(operation_schema)
             .expect("the exact operation schema compiles with generated references");
         let json_ld_validator = options
-            .compile(json_ld_operation_schema)
+            .build(json_ld_operation_schema)
             .expect("the exact JSON-LD operation schema compiles with generated references");
         let operation = &registry.resources[0].operations[0];
         let access_profile = &operation.access_profiles[0];
@@ -3027,7 +3031,7 @@ mod tests {
         list_operation.identifier = "record.list".into();
         list_operation.kind = OperationKind::List;
 
-        let mut options = jsonschema::JSONSchema::options();
+        let mut options = jsonschema::Validator::options();
         options.with_draft(jsonschema::Draft::Draft202012);
         for artifact in generated
             .artifacts
@@ -3037,7 +3041,11 @@ mod tests {
             let schema: Value =
                 serde_json::from_slice(&artifact.content).expect("generated schema parses");
             if let Some(identifier) = schema.get("$id").and_then(Value::as_str) {
-                options.with_document(identifier.to_owned(), schema);
+                options.with_resource(
+                    identifier.to_owned(),
+                    jsonschema::Resource::from_contents(schema.clone())
+                        .expect("generated schema is a valid resource"),
+                );
             }
         }
 
@@ -3049,10 +3057,10 @@ mod tests {
             let json_ld_schema =
                 operation_response_schema(&registry, resource, operation, &access_profiles, true);
             let validator = options
-                .compile(&json_schema)
+                .build(&json_schema)
                 .expect("the exact JSON operation schema compiles");
             let json_ld_validator = options
-                .compile(&json_ld_schema)
+                .build(&json_ld_schema)
                 .expect("the exact JSON-LD operation schema compiles");
             let record = json!({
                 "recordIdentifier": "record-1",

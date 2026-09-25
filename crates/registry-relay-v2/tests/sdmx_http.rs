@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use axum::body::{to_bytes, Body};
 use http::header::{ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG};
 use http::{HeaderMap, HeaderValue, Request, Response, StatusCode};
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use registry_platform_audit::{AuditChainHasher, AuditEnvelope, AuditError, AuditSink, ChainState};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier};
@@ -288,15 +288,15 @@ async fn generated_sdmx_outputs_validate_against_digest_locked_official_schemas(
         "https://json.sdmx.org/2.1/sdmx-json-structure-schema.json",
     )
     .await;
-    let data_validator = JSONSchema::options()
+    let data_validator = Validator::options()
         .with_draft(Draft::Draft7)
         .should_validate_formats(true)
-        .compile(&data_schema)
+        .build(&data_schema)
         .expect("official SDMX data schema compiles");
-    let structure_validator = JSONSchema::options()
+    let structure_validator = Validator::options()
         .with_draft(Draft::Draft7)
         .should_validate_formats(true)
-        .compile(&structure_schema)
+        .build(&structure_schema)
         .expect("official SDMX structure schema compiles");
     assert!(data_validator.is_valid(&data.json()));
     assert!(structure_validator.is_valid(&dataflow.json()));

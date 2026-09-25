@@ -14,7 +14,7 @@ mod postgres_harness;
 
 use axum::body::Body;
 use axum::http::{Method, Response, StatusCode};
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use pilot_acceptance_harness::{response_bytes, response_json, PilotHarness};
 use registry_breg_client::{
     BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey, BRegListRequest, BRegPatchRequest,
@@ -815,7 +815,7 @@ fn exact_response_validator(
     path: &str,
     method: &str,
     media_type: &str,
-) -> JSONSchema {
+) -> Validator {
     let response =
         openapi["paths"][path][method]["responses"]["200"]["content"][media_type]["schema"].clone();
     assert_eq!(
@@ -828,14 +828,14 @@ fn exact_response_validator(
         "$defs": {"response": response},
         "components": openapi["components"].clone()
     });
-    JSONSchema::options()
+    Validator::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
-        .compile(&schema)
+        .build(&schema)
         .expect("exact caller-filtered response schema compiles locally")
 }
 
-fn assert_meta_constant_mutations_are_rejected(validator: &JSONSchema, document: &Value) {
+fn assert_meta_constant_mutations_are_rejected(validator: &Validator, document: &Value) {
     for member in [
         "registryIdentifier",
         "datasetIdentifier",
@@ -850,15 +850,15 @@ fn assert_meta_constant_mutations_are_rejected(validator: &JSONSchema, document:
     }
 }
 
-fn shared_base_validator() -> JSONSchema {
+fn shared_base_validator() -> Validator {
     let schema: Value = serde_json::from_str(include_str!(
         "../../../products/registry-record/schema/registry-record-v1.schema.json"
     ))
     .expect("shared Registry Record schema is JSON");
-    JSONSchema::options()
+    Validator::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
-        .compile(&schema)
+        .build(&schema)
         .expect("shared Registry Record schema compiles locally")
 }
 

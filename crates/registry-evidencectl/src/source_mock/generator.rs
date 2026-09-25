@@ -18,7 +18,7 @@ use fake::faker::lorem::en::Word;
 use fake::faker::name::en::{FirstName, LastName, Name};
 use fake::faker::phone_number::en::PhoneNumber;
 use fake::Fake as _;
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use rand::Rng as _;
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
@@ -1651,12 +1651,12 @@ fn schema_accepts(schema: &Value, value: &Value) -> bool {
     compiled.is_valid(value) && schema_format_accepts(schema, value)
 }
 
-fn compile_validator(schema: &Value) -> Result<JSONSchema, ()> {
-    let mut options = JSONSchema::options();
+fn compile_validator(schema: &Value) -> Result<Validator, ()> {
+    let mut options = Validator::options();
     options
         .with_draft(Draft::Draft202012)
         .should_validate_formats(false);
-    options.compile(schema).map_err(|_| ())
+    options.build(schema).map_err(|_| ())
 }
 
 fn schema_format_accepts(schema: &Value, value: &Value) -> bool {

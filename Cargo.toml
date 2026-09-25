@@ -177,7 +177,7 @@ ipnet = { version = "2" }
 # Default features pull an HTTP client for remote $ref resolution and a command
 # line parser for the bundled CLI. Every consumer here compiles schemas it
 # already holds in memory, so neither belongs in the dependency graph.
-jsonschema = { version = "0.18", default-features = false, features = ["draft202012"] }
+jsonschema = { version = "0.24", default-features = false, features = ["draft202012"] }
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
 napi = { version = "3.12.0", features = ["async", "serde-json"] }
 napi-build = { version = "2.4.0" }

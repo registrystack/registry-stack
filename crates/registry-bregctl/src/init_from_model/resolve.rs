@@ -1360,9 +1360,9 @@ mod tests {
     /// Whether `schema` accepts `value` under the options the compiler
     /// checks a structured value with, which do not assert `format`.
     fn accepts(schema: &Value, value: Value) -> bool {
-        jsonschema::JSONSchema::options()
+        jsonschema::Validator::options()
             .with_draft(jsonschema::Draft::Draft202012)
-            .compile(schema)
+            .build(schema)
             .expect("the schema compiles")
             .is_valid(&value)
     }

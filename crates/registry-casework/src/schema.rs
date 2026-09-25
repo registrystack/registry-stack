@@ -283,15 +283,15 @@ fn set_const(schema: &mut Value, property: &str, expected: &str) {
 mod tests {
     use super::*;
     use crate::RuntimeConfigError;
-    use jsonschema::{Draft, JSONSchema};
+    use jsonschema::{Draft, Validator};
 
-    fn runtime_schema() -> JSONSchema {
+    fn runtime_schema() -> Validator {
         let documents = runtime_documents().expect("the runtime schema generates");
         let document: Value = serde_json::from_str(&documents[RUNTIME_CONFIG_SCHEMA_FILE])
             .expect("the runtime schema is JSON");
-        JSONSchema::options()
+        Validator::options()
             .with_draft(Draft::Draft202012)
-            .compile(&document)
+            .build(&document)
             .expect("the runtime schema compiles as Draft 2020-12")
     }
 

@@ -7,7 +7,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use registry_platform_crypto::{
     canonicalize_json, PublicJwk, SigningAlgorithm as ProviderSigningAlgorithm,
 };
@@ -1622,10 +1622,10 @@ fn load_fact_schema(
     let schema: JsonValue = serde_norway::from_str(text)
         .map_err(|_| invalid_artifact("fact schema YAML is invalid"))?;
     validate_closed_schema(&schema, role)?;
-    JSONSchema::options()
+    Validator::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
-        .compile(&schema)
+        .build(&schema)
         .map_err(|_| invalid_artifact("fact schema is not valid JSON Schema"))?;
     Ok(schema)
 }
@@ -1646,10 +1646,10 @@ fn validate_adapter_parameters(
     let schema = schemas
         .get(schema_path.as_str())
         .ok_or(invalid_artifact("missing adapter-parameter schema"))?;
-    let compiled = JSONSchema::options()
+    let compiled = Validator::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
-        .compile(schema)
+        .build(schema)
         .map_err(|_| invalid_artifact("adapter-parameter schema is not valid JSON Schema"))?;
     let parameters = serde_json::to_value(source.adapter_parameters())
         .map_err(|_| invalid_artifact("adapter parameters are not JSON-compatible"))?;

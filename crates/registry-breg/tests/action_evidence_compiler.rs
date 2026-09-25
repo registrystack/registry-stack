@@ -318,9 +318,9 @@ fn published_authoring_schema_accepts_farmer_v2_and_rejects_unknown_abi() {
     let schema: Value =
         serde_json::from_str(&documents[registry_breg::schema::REGISTRY_PROJECT_SCHEMA_FILE])
             .unwrap();
-    let validator = jsonschema::JSONSchema::options()
+    let validator = jsonschema::Validator::options()
         .with_draft(jsonschema::Draft::Draft202012)
-        .compile(&schema)
+        .build(&schema)
         .unwrap();
     let mut farmer: Value = serde_norway::from_str(include_str!(
         "../../../products/breg/acceptance/farmer-landholding-evidence/registry.yaml"

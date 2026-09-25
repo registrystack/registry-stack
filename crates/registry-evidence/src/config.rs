@@ -7439,29 +7439,29 @@ mod tests {
         }
     }
 
-    fn bundle_contract_validator() -> jsonschema::JSONSchema {
+    fn bundle_contract_validator() -> jsonschema::Validator {
         let schema: serde_norway::Value = serde_norway::from_slice(include_bytes!(
             "../../../products/evidence/contracts/bundle.schema.yaml"
         ))
         .expect("bundle contract is YAML");
         let schema = serde_json::to_value(schema).expect("bundle contract converts to JSON");
-        jsonschema::JSONSchema::options()
+        jsonschema::Validator::options()
             .with_draft(jsonschema::Draft::Draft202012)
             .should_validate_formats(true)
-            .compile(&schema)
+            .build(&schema)
             .expect("bundle contract compiles")
     }
 
-    fn runtime_contract_validator() -> jsonschema::JSONSchema {
+    fn runtime_contract_validator() -> jsonschema::Validator {
         let schema: serde_norway::Value = serde_norway::from_slice(include_bytes!(
             "../../../products/evidence/contracts/runtime.schema.yaml"
         ))
         .expect("runtime contract is YAML");
         let schema = serde_json::to_value(schema).expect("runtime contract converts to JSON");
-        jsonschema::JSONSchema::options()
+        jsonschema::Validator::options()
             .with_draft(jsonschema::Draft::Draft202012)
             .should_validate_formats(true)
-            .compile(&schema)
+            .build(&schema)
             .expect("runtime contract compiles")
     }
 

@@ -205,9 +205,9 @@ fn fixed_optional_from_input_is_typed_and_rejects_null_at_http_admission() {
     let complete = br#"{"input":{"displayLabel":"A label"}}"#;
     let null = br#"{"input":{"displayLabel":null}}"#;
     let schema = crate::artifacts::openapi_action_input_schema(action);
-    let validator = jsonschema::JSONSchema::options()
+    let validator = jsonschema::Validator::options()
         .with_draft(jsonschema::Draft::Draft202012)
-        .compile(&schema)
+        .build(&schema)
         .unwrap();
     assert!(validator.is_valid(&serde_json::from_slice::<Value>(complete).unwrap()));
     assert!(!validator.is_valid(&serde_json::from_slice::<Value>(null).unwrap()));
@@ -802,7 +802,7 @@ fn fixed_action_optional_values_reject_explicit_null_in_schema_and_admission() {
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
     let action = &registry.actions().actions[0];
     let schema = crate::artifacts::openapi_action_input_schema(action);
-    let validator = jsonschema::JSONSchema::compile(&schema).unwrap();
+    let validator = jsonschema::Validator::new(&schema).unwrap();
     let mut body = json!({
         "input": {"caseId": "00000000-0000-4000-8000-000000000001"},
         "preconditions": {"caseId": {"ifMatch": "\"opaque\""}}

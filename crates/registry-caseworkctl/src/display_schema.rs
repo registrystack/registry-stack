@@ -34,7 +34,7 @@
 //! applies to them.
 
 use anyhow::{bail, Result};
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use registry_casework_core::{CaseworkProject, ReviewContextStrategy, SourcePolicy};
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -316,10 +316,10 @@ fn property_mismatch(
     ))
 }
 
-fn compile(schema: &Value) -> Option<JSONSchema> {
-    JSONSchema::options()
+fn compile(schema: &Value) -> Option<Validator> {
+    Validator::options()
         .with_draft(Draft::Draft202012)
-        .compile(schema)
+        .build(schema)
         .ok()
 }
 

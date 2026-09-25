@@ -12,7 +12,7 @@ use std::{
     sync::OnceLock,
 };
 
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use registry_evidence_verifier::contracts::{
     evidence_schema, ContractValidationError, EVIDENCE_SCHEMA_ID, REQUEST_NONCE_PATTERN,
     SCHEMA_DIALECT,
@@ -133,10 +133,10 @@ const PROBLEM_VARIANTS: [(&str, u16, &str, &str); 10] = [
 ];
 
 static SERVED_OPENAPI: OnceLock<Option<String>> = OnceLock::new();
-static REQUEST_VALIDATOR: OnceLock<Result<JSONSchema, ContractValidationError>> = OnceLock::new();
-static REQUEST_BATCH_VALIDATOR: OnceLock<Result<JSONSchema, ContractValidationError>> =
+static REQUEST_VALIDATOR: OnceLock<Result<Validator, ContractValidationError>> = OnceLock::new();
+static REQUEST_BATCH_VALIDATOR: OnceLock<Result<Validator, ContractValidationError>> =
     OnceLock::new();
-static DEFINITIONS_VALIDATOR: OnceLock<Result<JSONSchema, ContractValidationError>> =
+static DEFINITIONS_VALIDATOR: OnceLock<Result<Validator, ContractValidationError>> =
     OnceLock::new();
 
 #[derive(Debug, Error)]
@@ -272,14 +272,14 @@ pub(crate) fn definitions_contract_accepts(value: &Value) -> Result<bool, Contra
 }
 
 fn contract_validator(
-    cell: &'static OnceLock<Result<JSONSchema, ContractValidationError>>,
+    cell: &'static OnceLock<Result<Validator, ContractValidationError>>,
     schema: fn() -> Value,
-) -> Result<&'static JSONSchema, ContractValidationError> {
+) -> Result<&'static Validator, ContractValidationError> {
     match cell.get_or_init(|| {
-        JSONSchema::options()
+        Validator::options()
             .with_draft(Draft::Draft202012)
             .should_validate_formats(true)
-            .compile(&schema())
+            .build(&schema())
             .map_err(|_| ContractValidationError)
     }) {
         Ok(validator) => Ok(validator),
@@ -1559,21 +1559,25 @@ mod tests {
             problem_schema(),
             jwks_schema(),
         ] {
-            JSONSchema::options()
+            Validator::options()
                 .with_draft(Draft::Draft202012)
                 .should_validate_formats(true)
-                .compile(&schema)
+                .build(&schema)
                 .expect("generated schema compiles");
         }
 
         // The unsigned envelope references the Evidence payload schema by its
         // canonical identifier, so that document is registered for offline
         // compilation.
-        JSONSchema::options()
+        Validator::options()
             .with_draft(Draft::Draft202012)
             .should_validate_formats(true)
-            .with_document(EVIDENCE_SCHEMA_ID.to_string(), evidence_schema())
-            .compile(&unsigned_envelope_schema())
+            .with_resource(
+                EVIDENCE_SCHEMA_ID,
+                jsonschema::Resource::from_contents(evidence_schema())
+                    .expect("generated Evidence schema is a valid resource"),
+            )
+            .build(&unsigned_envelope_schema())
             .expect("generated unsigned envelope schema compiles");
     }
 
@@ -1595,10 +1599,10 @@ mod tests {
             json!(MAXIMUM_HOLDER_BOUND_BATCH_SIZE)
         );
 
-        let compiled = JSONSchema::options()
+        let compiled = Validator::options()
             .with_draft(Draft::Draft202012)
             .should_validate_formats(true)
-            .compile(&schema)
+            .build(&schema)
             .expect("definitions schema compiles");
         let mut document = json!({
             "schema": "registry.evidence-definitions/v1",
@@ -1624,10 +1628,10 @@ mod tests {
 
     #[test]
     fn definitions_publish_closed_optional_and_list_verification_policy() {
-        let compiled = JSONSchema::options()
+        let compiled = Validator::options()
             .with_draft(Draft::Draft202012)
             .should_validate_formats(true)
-            .compile(&definitions_schema())
+            .build(&definitions_schema())
             .expect("definitions schema compiles");
         let mut document = json!({
             "schema": "registry.evidence-definitions/v1",
@@ -2056,10 +2060,10 @@ mod tests {
         ];
 
         for (schema, instance) in cases {
-            let compiled = JSONSchema::options()
+            let compiled = Validator::options()
                 .with_draft(Draft::Draft202012)
                 .should_validate_formats(true)
-                .compile(&schema)
+                .build(&schema)
                 .expect("generated schema compiles");
             assert!(compiled.is_valid(&instance), "instance: {instance}");
         }
@@ -2068,10 +2072,10 @@ mod tests {
     #[test]
     fn problem_schema_rejects_mismatched_code_status_and_title() {
         let schema = problem_schema();
-        let compiled = JSONSchema::options()
+        let compiled = Validator::options()
             .with_draft(Draft::Draft202012)
             .should_validate_formats(true)
-            .compile(&schema)
+            .build(&schema)
             .expect("problem schema compiles");
         let mismatched = json!({
             "type": "https://id.registrystack.org/problems/registry-evidence/source/unavailable",
@@ -2102,9 +2106,9 @@ mod tests {
             ),
         ] {
             let schema = json!({"type": "string", "pattern": pattern});
-            let compiled = JSONSchema::options()
+            let compiled = Validator::options()
                 .with_draft(Draft::Draft202012)
-                .compile(&schema)
+                .build(&schema)
                 .expect("trace pattern compiles");
             assert!(compiled.is_valid(&json!(valid)));
             for value in invalid {

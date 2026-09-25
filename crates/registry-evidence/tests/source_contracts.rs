@@ -1468,15 +1468,15 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
             )
             .expect("fact schema parses");
             let fact_schema =
-                jsonschema::JSONSchema::compile(&fact_schema_value).expect("fact schema compiles");
+                jsonschema::Validator::new(&fact_schema_value).expect("fact schema compiles");
             let response_schema_value: Value = serde_norway::from_str(
                 &fs::read_to_string(directory.join(source.response_schema().as_str()))
                     .expect("response schema is readable"),
             )
             .expect("response schema parses");
-            let response_schema = jsonschema::JSONSchema::options()
+            let response_schema = jsonschema::Validator::options()
                 .should_validate_formats(true)
-                .compile(&response_schema_value)
+                .build(&response_schema_value)
                 .expect("response schema compiles");
             let parameters = serde_json::to_value(source.adapter_parameters())
                 .expect("adapter parameters serialize");
@@ -2119,7 +2119,7 @@ async fn every_acquisition_posture_fixture_executes_with_one_bounded_request() {
             .iter()
             .map(|fact| (fact.clone(), json!({})))
             .collect::<serde_json::Map<String, Value>>();
-        let schema = jsonschema::JSONSchema::compile(&json!({
+        let schema = jsonschema::Validator::new(&json!({
             "type": "object",
             "additionalProperties": false,
             "required": declared_facts,

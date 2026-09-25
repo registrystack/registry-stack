@@ -1519,9 +1519,9 @@ mod tests {
             "../../../products/evidence/contracts/request-batch-audit-event.schema.yaml"
         ))
         .expect("request-batch audit event schema parses");
-        let validator = jsonschema::JSONSchema::options()
+        let validator = jsonschema::Validator::options()
             .with_draft(jsonschema::Draft::Draft202012)
-            .compile(&schema)
+            .build(&schema)
             .expect("request-batch audit event schema compiles as Draft 2020-12");
 
         let mut access = request_batch_event(
@@ -1953,9 +1953,9 @@ mod tests {
             "../../../products/evidence/contracts/audit-event.schema.yaml"
         ))
         .expect("audit event schema parses");
-        let validator = jsonschema::JSONSchema::options()
+        let validator = jsonschema::Validator::options()
             .with_draft(jsonschema::Draft::Draft202012)
-            .compile(&schema)
+            .build(&schema)
             .expect("audit event schema compiles as Draft 2020-12");
         let fixture: serde_json::Value = serde_norway::from_slice(include_bytes!(
             "../../../products/evidence/fixtures/conformance/audit-events.yaml"
@@ -2310,9 +2310,9 @@ mod tests {
             "../../../products/evidence/contracts/audit-event.schema.yaml"
         ))
         .expect("audit event schema parses");
-        let validator = jsonschema::JSONSchema::options()
+        let validator = jsonschema::Validator::options()
             .with_draft(jsonschema::Draft::Draft202012)
-            .compile(&schema)
+            .build(&schema)
             .expect("audit event schema compiles as Draft 2020-12");
 
         let batch =

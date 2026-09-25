@@ -17,7 +17,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context as _, Result};
-use jsonschema::{error::ValidationErrorKind, Draft, JSONSchema};
+use jsonschema::{error::ValidationErrorKind, Draft, Validator};
 use registry_platform_crypto::{canonicalize_json, domain_separated_sha256};
 use serde_json::{json, Map, Value};
 use url::{Host, Url};
@@ -671,10 +671,10 @@ fn validate_compiled_bundle_shape(bundle: &Value) -> Result<()> {
                 "$defs": schema["$defs"],
                 "$ref": branch,
             });
-            let source_validator = JSONSchema::options()
+            let source_validator = Validator::options()
                 .with_draft(Draft::Draft202012)
                 .should_validate_formats(true)
-                .compile(&source_schema)
+                .build(&source_schema)
                 .map_err(|_| anyhow!("the embedded Evidence source schema could not compile"))?;
             if let Err(errors) = source_validator.validate(source) {
                 if let Some((instance_path, member)) = errors
@@ -702,10 +702,10 @@ fn validate_compiled_bundle_shape(bundle: &Value) -> Result<()> {
             };
         }
     }
-    let validator = JSONSchema::options()
+    let validator = Validator::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
-        .compile(&schema)
+        .build(&schema)
         .map_err(|_| anyhow!("the embedded Evidence bundle schema could not compile"))?;
     if let Err(mut errors) = validator.validate(bundle) {
         let error = errors.next().expect("schema validation returned one error");

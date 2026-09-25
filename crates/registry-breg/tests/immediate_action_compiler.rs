@@ -44,9 +44,9 @@ fn invoke_schema_requires_fixed_patch_targets_even_when_the_input_is_optional() 
             .bytes,
     )
     .unwrap();
-    let validator = jsonschema::JSONSchema::options()
+    let validator = jsonschema::Validator::options()
         .with_draft(jsonschema::Draft::Draft202012)
-        .compile(&schema)
+        .build(&schema)
         .unwrap();
     let mut input = serde_json::json!({
         "input": {
@@ -113,9 +113,9 @@ fn handler_response_schema_accepts_omitted_slots_across_overlapping_grant_result
             .bytes,
     )
     .unwrap();
-    let validator = jsonschema::JSONSchema::options()
+    let validator = jsonschema::Validator::options()
         .with_draft(jsonschema::Draft::Draft202012)
-        .compile(&schema)
+        .build(&schema)
         .unwrap();
     let reference =
         json!({"entity":"person", "recordId":"550e8400-e29b-41d4-a716-446655440000", "revision":1});

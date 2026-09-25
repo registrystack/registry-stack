@@ -13,7 +13,7 @@
     {
       "purpose": "Draft 2020-12 and closed Rust parser parity over every positive fixture and shared negative-corpus case",
       "implementation": "jsonschema",
-      "version": "0.18.3",
+      "version": "0.24.3",
       "path": "crates/registry-discoveryctl/tests/schema_contract.rs",
       "test": "every_positive_fixture_satisfies_draft_2020_12_and_the_closed_rust_parser"
     },

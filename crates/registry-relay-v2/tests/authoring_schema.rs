@@ -8,11 +8,11 @@ use std::{fs, path::Path};
 use registry_relay_v2::schema::{documents, REGISTRY_SCHEMA_FILE, RUNTIME_SCHEMA_FILE};
 use serde_json::Value;
 
-fn validator(document: &str) -> jsonschema::JSONSchema {
+fn validator(document: &str) -> jsonschema::Validator {
     let schema: Value = serde_json::from_str(document).unwrap();
-    jsonschema::JSONSchema::options()
+    jsonschema::Validator::options()
         .with_draft(jsonschema::Draft::Draft202012)
-        .compile(&schema)
+        .build(&schema)
         .unwrap()
 }
 

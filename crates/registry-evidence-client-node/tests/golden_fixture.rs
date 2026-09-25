@@ -246,10 +246,10 @@ fn the_committed_policy_conforms_to_the_verification_policy_contract() {
     ))
     .expect("the verification policy contract is YAML");
     let contract = serde_json::to_value(contract).expect("the contract converts to JSON");
-    let validator = jsonschema::JSONSchema::options()
+    let validator = jsonschema::Validator::options()
         .with_draft(jsonschema::Draft::Draft202012)
         .should_validate_formats(true)
-        .compile(&contract)
+        .build(&contract)
         .expect("the verification policy contract compiles");
 
     let policy: serde_json::Value = serde_json::from_slice(

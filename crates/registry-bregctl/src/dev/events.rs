@@ -61,7 +61,7 @@ struct Delivery {
     destination_id: String,
     data_schema: String,
     source: String,
-    schema: jsonschema::JSONSchema,
+    schema: jsonschema::Validator,
 }
 
 impl Delivery {
@@ -72,10 +72,10 @@ impl Delivery {
             .context("compiled local event schema is missing")?;
         let schema =
             parse_json_strict(&artifact.bytes).context("compiled local event schema is invalid")?;
-        let schema = jsonschema::JSONSchema::options()
+        let schema = jsonschema::Validator::options()
             .with_draft(jsonschema::Draft::Draft202012)
             .should_validate_formats(true)
-            .compile(&schema)
+            .build(&schema)
             .map_err(|_| anyhow::anyhow!("compiled local event schema cannot be validated"))?;
         Ok(Self {
             id: delivery.id.clone(),

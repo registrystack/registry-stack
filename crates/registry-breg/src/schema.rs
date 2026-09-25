@@ -92,7 +92,7 @@ fn render(value: Value) -> Result<String, serde_json::Error> {
 mod tests {
     use std::{fs, path::Path};
 
-    use jsonschema::{Draft, JSONSchema};
+    use jsonschema::{Draft, Validator};
     use serde_json::Value;
 
     use super::{
@@ -121,11 +121,11 @@ mod tests {
             .expect("the RegistryProject schema is generated")
     }
 
-    fn compile(document: &str) -> JSONSchema {
+    fn compile(document: &str) -> Validator {
         let value: Value = serde_json::from_str(document).expect("a generated schema is JSON");
-        JSONSchema::options()
+        Validator::options()
             .with_draft(Draft::Draft202012)
-            .compile(&value)
+            .build(&value)
             .expect("a generated schema compiles as 2020-12")
     }
 
@@ -218,7 +218,7 @@ mod tests {
 
     #[cfg(feature = "runtime")]
     fn assert_schema_rejects_parser_refused_runtime(
-        schema: &JSONSchema,
+        schema: &Validator,
         label: &str,
         mutate: impl FnOnce(&mut Value),
     ) {

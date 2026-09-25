@@ -96,9 +96,9 @@ pub trait FactSchemaValidator {
     fn is_valid(&self, facts: &Value) -> bool;
 }
 
-impl FactSchemaValidator for jsonschema::JSONSchema {
+impl FactSchemaValidator for jsonschema::Validator {
     fn is_valid(&self, facts: &Value) -> bool {
-        jsonschema::JSONSchema::is_valid(self, facts)
+        jsonschema::Validator::is_valid(self, facts)
     }
 }
 
@@ -3378,7 +3378,7 @@ mod tests {
                 "#,
             )
             .expect("compiles");
-        let schema = jsonschema::JSONSchema::compile(&json!({
+        let schema = jsonschema::Validator::new(&json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["code"],
@@ -3437,7 +3437,7 @@ fn extract(response, selectors, context) {
 "#,
             )
             .expect("selector-aware extraction compiles");
-        let schema = jsonschema::JSONSchema::compile(&json!({
+        let schema = jsonschema::Validator::new(&json!({
             "type":"object", "additionalProperties":false, "required":["active"],
             "properties":{"active":{"type":"boolean"}}
         }))
@@ -3530,7 +3530,7 @@ fn extract(response, selectors, context) {
 "#,
             )
             .expect("the exported adapter shape compiles");
-        let schema = jsonschema::JSONSchema::compile(&json!({
+        let schema = jsonschema::Validator::new(&json!({
             "type":"object", "additionalProperties":false, "required":["active"],
             "properties":{"active":{"type":"boolean"}}
         }))

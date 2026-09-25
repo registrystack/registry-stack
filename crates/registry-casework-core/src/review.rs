@@ -5,7 +5,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use registry_review_protocol::{ContentDigest, PolicyBinding, ReviewResultStatus, SubjectBinding};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
@@ -1109,9 +1109,9 @@ fn check_closed_object_schema(schema: &Value) -> Result<(), ReviewPolicyError> {
         || !object_schemas_are_closed(schema)
         || !registry_platform_canonical_json::canonicalize_json(schema)
             .is_ok_and(|bytes| bytes.len() <= MAXIMUM_REVIEW_SCHEMA_BYTES)
-        || JSONSchema::options()
+        || Validator::options()
             .with_draft(Draft::Draft202012)
-            .compile(schema)
+            .build(schema)
             .is_err()
     {
         return Err(ReviewPolicyError::Schema);
@@ -1140,9 +1140,9 @@ fn validate_display(schema: &Value, display: &Value) -> Result<(), ReviewValidat
             ReviewValidationReason::MaximumBytesExceeded,
         ));
     }
-    let compiled = JSONSchema::options()
+    let compiled = Validator::options()
         .with_draft(Draft::Draft202012)
-        .compile(schema)
+        .build(schema)
         .map_err(|_| {
             ReviewValidationError::new("$.display", ReviewValidationReason::SchemaMismatch)
         })?;
@@ -1188,9 +1188,9 @@ fn validate_result(schema: &Value, result: &Value) -> Result<(), ReviewValidatio
             ReviewValidationReason::MaximumBytesExceeded,
         ));
     }
-    let compiled = JSONSchema::options()
+    let compiled = Validator::options()
         .with_draft(Draft::Draft202012)
-        .compile(schema)
+        .build(schema)
         .map_err(|_| {
             ReviewValidationError::result_error(RESULT_PATH, ReviewValidationReason::SchemaMismatch)
         })?;
@@ -1255,9 +1255,9 @@ fn validate_result_constraints(
     if let Some(object) = relaxed.as_object_mut() {
         object.remove("required");
     }
-    let compiled = JSONSchema::options()
+    let compiled = Validator::options()
         .with_draft(Draft::Draft202012)
-        .compile(&relaxed)
+        .build(&relaxed)
         .map_err(|_| constraint_invalid(RESULT_CONSTRAINTS_PATH))?;
     for (field, constraint) in constraints.as_object().expect("checked as an object above") {
         let field_path = result_field_path(RESULT_CONSTRAINTS_PATH, field);
@@ -1408,7 +1408,7 @@ fn check_constraint_bounds(
     Ok(())
 }
 
-fn validate_constraint_value(compiled: &JSONSchema, field: &str, value: &Value) -> Result<(), ()> {
+fn validate_constraint_value(compiled: &Validator, field: &str, value: &Value) -> Result<(), ()> {
     let mut instance = serde_json::Map::new();
     instance.insert(field.to_owned(), value.clone());
     compiled.validate(&Value::Object(instance)).map_err(|_| ())

@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Number, Value};
 use uuid::Uuid;
@@ -2078,9 +2078,9 @@ fn valid_action_structured_schema(schema: Value) -> bool {
         .is_ok_and(|bytes| bytes.len() <= 64 * 1024)
         && action_schema_refs_are_local(&schema)
         && action_object_schemas_are_closed(&schema)
-        && JSONSchema::options()
+        && Validator::options()
             .with_draft(Draft::Draft202012)
-            .compile(&schema)
+            .build(&schema)
             .is_ok()
 }
 

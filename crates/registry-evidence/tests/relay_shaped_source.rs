@@ -418,7 +418,7 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
             "projection let raw record material past the source boundary"
         );
     }
-    let response_schema = jsonschema::JSONSchema::compile(&json!({
+    let response_schema = jsonschema::Validator::new(&json!({
         "type": "object",
         "additionalProperties": false,
         "required": ["items", "pageInfo"],
@@ -458,7 +458,7 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
     );
 
     // Reviewed extraction produces exactly the one declared fact.
-    let fact_schema = jsonschema::JSONSchema::compile(&json!({
+    let fact_schema = jsonschema::Validator::new(&json!({
         "type": "object",
         "additionalProperties": false,
         "required": ["official_residence_code"],

@@ -17,7 +17,7 @@
 
 #![cfg(feature = "schema")]
 
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use registry_evidence_authoring::{
     model::Question,
     schema::{documents, PROJECT_MARKER_SCHEMA_FILE, QUESTION_SCHEMA_FILE},
@@ -242,11 +242,11 @@ const REJECTED_MARKERS: &[(&str, &str)] = &[
     ("a missing project kind", "version: 1\n"),
 ];
 
-fn compile(document: &str) -> JSONSchema {
+fn compile(document: &str) -> Validator {
     let value: Value = serde_json::from_str(document).expect("a generated schema is JSON");
-    JSONSchema::options()
+    Validator::options()
         .with_draft(Draft::Draft202012)
-        .compile(&value)
+        .build(&value)
         .expect("a generated schema compiles as 2020-12")
 }
 

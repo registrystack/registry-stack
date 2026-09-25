@@ -212,7 +212,7 @@ def check_standards_and_offline_rdf() -> None:
             "crates/registry-discoveryctl/tests/schema_contract.rs",
             "every_positive_fixture_satisfies_draft_2020_12_and_the_closed_rust_parser",
             "jsonschema",
-            "0.18.3",
+            "0.24.3",
         ),
         (
             "products/discovery/scripts/test_standards_oracle.py",

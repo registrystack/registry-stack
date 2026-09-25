@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use serde_json::{json, Value};
 
 const API_VERSION: &str = "registry.registrystack.org/breg-explain/v1alpha3";
@@ -155,11 +155,11 @@ fn explain_with_scenario(project: &Path, scenario: &Path) -> Value {
     report["explanation"].clone()
 }
 
-fn load_schema(kind: &str) -> JSONSchema {
+fn load_schema(kind: &str) -> Validator {
     let schema = load_schema_document(kind);
-    JSONSchema::options()
+    Validator::options()
         .with_draft(Draft::Draft202012)
-        .compile(&schema)
+        .build(&schema)
         .unwrap_or_else(|error| panic!("schema {kind} compiles: {error}"))
 }
 
