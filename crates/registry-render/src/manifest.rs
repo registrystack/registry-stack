@@ -147,6 +147,18 @@ impl Manifest {
                 format!("manifest.yaml is not valid: {err}"),
             )
         })?;
+        let text = std::str::from_utf8(bytes).map_err(|_| {
+            RenderProblem::new(
+                ProblemKind::ManifestInvalid,
+                "manifest.yaml is not valid UTF-8",
+            )
+        })?;
+        registry_platform_config::reject_environment_expressions_in_authored_yaml(text).map_err(
+            |error| {
+                RenderProblem::new(ProblemKind::ManifestInvalid, error.message())
+                    .with_locations(vec![MANIFEST_FILE.to_owned()])
+            },
+        )?;
         if manifest.api_version != MANIFEST_API_VERSION {
             return Err(RenderProblem::new(
                 ProblemKind::ManifestInvalid,
@@ -373,5 +385,23 @@ mod tests {
             PdfStandardSpec::V1_7.to_typst(),
             typst_pdf::PdfStandard::V_1_7
         );
+    }
+
+    #[test]
+    fn an_authored_manifest_carrying_an_environment_expression_is_refused() {
+        let manifest = b"apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: receipt\n    version: 1\n    entry: templates/${DOCUMENT}.typ\n";
+        let problem = Manifest::parse(manifest).expect_err("expression refused");
+        assert!(matches!(problem.kind, ProblemKind::ManifestInvalid));
+        assert!(
+            problem.detail.contains("documents.0.entry"),
+            "{}",
+            problem.detail
+        );
+        assert!(
+            problem.detail.contains("runtime.yaml only"),
+            "{}",
+            problem.detail
+        );
+        assert_eq!(problem.locations, vec![MANIFEST_FILE.to_owned()]);
     }
 }

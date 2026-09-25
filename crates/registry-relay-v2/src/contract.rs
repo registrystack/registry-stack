@@ -140,15 +140,53 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for OrderedMap<T> {
 }
 
 #[derive(Debug, Error)]
-#[error("contract YAML is not valid")]
-pub struct ContractParseError {
-    #[source]
-    source: serde_norway::Error,
+pub enum ContractParseError {
+    #[error("contract YAML is not valid")]
+    Invalid(#[source] serde_norway::Error),
+    /// The contract holds a `${...}` environment expression. Substitution
+    /// applies to `runtime.yaml` only, so the reviewed contract is the one
+    /// that runs.
+    #[error("{0}")]
+    EnvironmentExpression(registry_platform_config::RuntimeConfigError),
 }
 
 impl ContractParseError {
-    pub fn detail(&self) -> &serde_norway::Error {
-        &self.source
+    pub fn detail(&self) -> Option<&serde_norway::Error> {
+        match self {
+            Self::Invalid(source) => Some(source),
+            Self::EnvironmentExpression(_) => None,
+        }
+    }
+
+    /// The dotted contract field holding an environment expression.
+    pub fn environment_expression_field(&self) -> Option<&str> {
+        match self {
+            Self::Invalid(_) => None,
+            Self::EnvironmentExpression(error) => Some(error.field()),
+        }
+    }
+
+    /// The single diagnostic every authoring surface reports for this
+    /// refusal, located in `registry.yaml`.
+    pub(crate) fn diagnostic(&self) -> crate::model::Diagnostic {
+        let (code, location, message) = match self {
+            Self::Invalid(_) => (
+                "contract.yaml_invalid",
+                "registry.yaml".to_owned(),
+                "the governed contract is not valid strict YAML".to_owned(),
+            ),
+            Self::EnvironmentExpression(error) => (
+                "contract.environment_expression",
+                format!("registry.yaml.{}", error.field()),
+                error.message().to_owned(),
+            ),
+        };
+        crate::model::Diagnostic {
+            severity: crate::model::DiagnosticSeverity::Error,
+            code: code.into(),
+            location,
+            message,
+        }
     }
 }
 
@@ -194,7 +232,10 @@ pub struct Publication {
 
 impl RegistryContract {
     pub fn parse_yaml(input: &str) -> Result<Self, ContractParseError> {
-        serde_norway::from_str(input).map_err(|source| ContractParseError { source })
+        let contract = serde_norway::from_str(input).map_err(ContractParseError::Invalid)?;
+        registry_platform_config::reject_environment_expressions_in_authored_yaml(input)
+            .map_err(ContractParseError::EnvironmentExpression)?;
+        Ok(contract)
     }
 }
 
@@ -2163,5 +2204,34 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
                 "unsupported statistical authoring shape must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn an_authored_contract_carrying_an_environment_expression_is_refused() {
+        let yaml = crate::compiler::tests::valid_contract();
+        let error = RegistryContract::parse_yaml(&yaml.replacen(
+            "title: Records}",
+            "title: \"${REGISTRY_TITLE}\"}",
+            1,
+        ))
+        .expect_err("an environment expression in the contract is refused");
+        assert_eq!(error.environment_expression_field(), Some("metadata.title"));
+        assert!(error.detail().is_none());
+
+        let report = crate::compiler::compile_yaml(
+            &yaml.replacen("name: Records", "name: ${REGISTRY_NAME:-Records}", 1),
+            &[],
+            crate::model::CompileProfile::Authoring,
+        )
+        .expect_err("compilation refuses it");
+        assert_eq!(report.diagnostics.len(), 1);
+        let diagnostic = &report.diagnostics[0];
+        assert_eq!(diagnostic.code, "contract.environment_expression");
+        assert_eq!(diagnostic.location, "registry.yaml.registry.name");
+        assert!(diagnostic.message.contains("runtime.yaml only"));
+
+        let invalid = RegistryContract::parse_yaml("kind: [").expect_err("invalid YAML");
+        assert!(invalid.environment_expression_field().is_none());
+        assert!(invalid.detail().is_some());
     }
 }

@@ -1261,13 +1261,9 @@ fn compile_project(
     let contract_yaml = read_utf8(&root.join("registry.yaml"))?;
     let contract = match RegistryContract::parse_yaml(&contract_yaml) {
         Ok(contract) => contract,
-        Err(_) => {
+        Err(error) => {
             return Ok(ProjectCompilation::Refused(CompileReport {
-                diagnostics: vec![diagnostic(
-                    "contract.yaml_invalid",
-                    "registry.yaml",
-                    "the governed contract is not valid strict YAML",
-                )],
+                diagnostics: vec![error.diagnostic()],
             }));
         }
     };
