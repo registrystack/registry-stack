@@ -29,6 +29,8 @@ use registry_breg::import_authority::{
     ImportAuthority, ImportAuthorityCloseRequest, ImportAuthorityError, ImportAuthorityOpenRequest,
     ImportAuthorityOperatorService, ImportAuthorityStatus, DEFAULT_IMPORT_AUTHORITY_WINDOW,
 };
+use registry_breg::instance_claim::{InstanceClaimError, InstanceClaimService};
+use registry_breg::mutation::install_mutation_schema;
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema, ExpectedManagedCatalog,
     ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
@@ -175,6 +177,32 @@ impl Harness {
             self.database.audit(self.audit_profile.clone()),
             self.registry.clone(),
         )
+    }
+
+    fn claims(&self) -> InstanceClaimService {
+        InstanceClaimService::new_for_test(
+            self.identity.clone(),
+            ExpectedManagedCatalog::compiled(&self.registry),
+            self.lock_key,
+            self.database.migration_config.clone(),
+            self.database.runtime_config.clone(),
+            self.database.migration_role.clone(),
+            self.database.runtime_role.clone(),
+            self.database.audit(self.audit_profile.clone()),
+        )
+    }
+
+    async fn simulate_restored_copy(&self) {
+        self.database
+            .admin
+            .execute(
+                "UPDATE registry_internal.registry_instance_claim
+                    SET database_oid = 1
+                  WHERE singleton",
+                &[],
+            )
+            .await
+            .expect("test simulates a restored copy");
     }
 
     async fn open(
@@ -1140,4 +1168,195 @@ async fn a_close_racing_a_chunk_waits_for_it_and_stops_the_next() {
         .expect("the close commits");
     assert_eq!(closed.status, ImportAuthorityStatus::Closed);
     harness.blocked_chunk(&run_id, &load, 0).await;
+}
+
+/// A restored copy carries every authority that was open when its backup was
+/// taken, including one an operator closed afterwards. Adopting the copy
+/// supersedes each open authority in the adopting transaction, so the copy
+/// admits no import until an operator opens a new authority.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn adopting_a_restored_copy_supersedes_every_open_authority() {
+    let harness = Harness::create().await;
+    let widget = harness.open("widget", "loader", 10, &[]).await;
+    let gadget = harness.open("gadget", "loader", 10, &[]).await;
+    harness.close(gadget.authority_id).await;
+    harness.simulate_restored_copy().await;
+
+    let adoption = harness
+        .claims()
+        .adopt()
+        .await
+        .expect("the operator adopts the copy");
+    assert_eq!(
+        adoption.superseded_import_authorities,
+        [widget.authority_id],
+        "the adoption names the authorities it superseded"
+    );
+    assert_eq!(harness.authority(widget.authority_id).await.0, "superseded");
+    assert_eq!(harness.authority(gadget.authority_id).await.0, "closed");
+    let transitions: Vec<Value> = harness
+        .authority_records(widget.authority_id)
+        .await
+        .iter()
+        .map(|record| record["transition"].clone())
+        .collect();
+    assert_eq!(transitions, [json!("opened"), json!("superseded")]);
+    assert_eq!(
+        harness.authority_records(gadget.authority_id).await.len(),
+        2,
+        "an authority already closed gains no record"
+    );
+    let adoptions: Vec<Value> = harness
+        .database
+        .audit_entries()
+        .into_iter()
+        .filter(|entry| entry["schema"] == "breg-instance-claim-audit/v1")
+        .collect();
+    assert_eq!(adoptions.len(), 2, "one request and one response");
+    assert_eq!(adoptions[0]["phase"], "request");
+    assert_eq!(adoptions[1]["phase"], "response");
+    assert_eq!(adoptions[0]["correlation"], adoptions[1]["correlation"]);
+    assert_eq!(
+        adoptions[1]["record"]["supersededImportAuthorities"],
+        json!([widget.authority_id.to_string()])
+    );
+    harness
+        .refused_run("widgets", "loader", &plan("after-restore", 1))
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_missing_claim_is_reported_and_adopting_records_a_fresh_one() {
+    let harness = Harness::create().await;
+    harness
+        .database
+        .admin
+        .execute("DELETE FROM registry_internal.registry_instance_claim", &[])
+        .await
+        .expect("the owning role can remove the claim");
+    let claims = harness.claims();
+
+    let missing = claims
+        .status()
+        .await
+        .expect("a missing claim still reports");
+    assert_eq!(missing.claim, None);
+    assert!(!missing.matches, "no claim names this database");
+
+    let adoption = claims
+        .adopt()
+        .await
+        .expect("the operator claims the database");
+    assert_eq!(adoption.previous, None);
+    assert_eq!(adoption.current.epoch, 1);
+    assert_eq!(adoption.current.identity, missing.live);
+    assert!(claims.status().await.expect("the claim reads").matches);
+    assert_eq!(
+        claims.adopt().await.err(),
+        Some(InstanceClaimError::AlreadyCurrent),
+        "the database the claim names has nothing to adopt"
+    );
+    let adoptions: Vec<(Value, Value)> = harness
+        .database
+        .audit_entries()
+        .into_iter()
+        .filter(|entry| entry["schema"] == "breg-instance-claim-audit/v1")
+        .map(|entry| (entry["phase"].clone(), entry["record"]["outcome"].clone()))
+        .collect();
+    assert_eq!(
+        adoptions,
+        [
+            (json!("request"), Value::Null),
+            (json!("response"), json!("committed")),
+            (json!("request"), Value::Null),
+            (json!("response"), json!("refused")),
+        ],
+        "each adoption answers its request once"
+    );
+}
+
+/// A database that already holds committed history is either a Registry
+/// installed before the claim existed or a copy restored from a backup taken
+/// before it. Installing the claim there records none, so the database waits
+/// for an operator to adopt it instead of claiming itself.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn installing_the_claim_beside_committed_history_leaves_the_database_to_adopt() {
+    let harness = Harness::create().await;
+    harness.open("widget", "loader", 2, &[]).await;
+    let load = plan("history", 2);
+    let run_id = harness.created_run("widgets", "loader", &load).await;
+    harness.committed_chunk(&run_id, &load, 0).await;
+    let (migration, migration_task) = harness.database.connect_migration().await;
+    migration
+        .batch_execute("DROP TABLE registry_internal.registry_instance_claim")
+        .await
+        .expect("the owning role can drop the claim table");
+    install_mutation_schema(&migration, &harness.database.runtime_role, false)
+        .await
+        .expect("the mutation schema installs again");
+    let claims = harness.claims();
+
+    let unclaimed = claims.status().await.expect("the claim table reads");
+    assert_eq!(unclaimed.claim, None, "no claim is recorded beside history");
+    assert!(!unclaimed.matches);
+
+    let adoption = claims
+        .adopt()
+        .await
+        .expect("the operator claims the database");
+    assert_eq!(adoption.previous, None);
+    assert_eq!(adoption.current.epoch, 1);
+    install_mutation_schema(&migration, &harness.database.runtime_role, false)
+        .await
+        .expect("the mutation schema installs again");
+    assert_eq!(
+        claims
+            .status()
+            .await
+            .expect("the claim reads")
+            .claim
+            .map(|claim| claim.epoch),
+        Some(1),
+        "a later install leaves the adopted claim in place"
+    );
+    drop(migration);
+    migration_task.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_runtime_role_cannot_rewrite_or_remove_the_instance_claim() {
+    let harness = Harness::create().await;
+    let (runtime, runtime_task) = harness.database.connect_admin().await;
+    runtime
+        .batch_execute(&format!(
+            "SET ROLE \"{}\"",
+            harness.database.runtime_role.as_str()
+        ))
+        .await
+        .expect("the session takes the runtime role");
+    let claimed: i64 = runtime
+        .query_one(
+            "SELECT epoch FROM registry_internal.registry_instance_claim WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("the runtime role reads the claim")
+        .get(0);
+    assert_eq!(claimed, 1);
+    for statement in [
+        "UPDATE registry_internal.registry_instance_claim
+            SET database_oid = (SELECT oid FROM pg_database WHERE datname = current_database())",
+        "UPDATE registry_internal.registry_instance_claim SET epoch = epoch + 1",
+        "DELETE FROM registry_internal.registry_instance_claim",
+        "INSERT INTO registry_internal.registry_instance_claim
+             (singleton, system_identifier, database_oid)
+         VALUES (true, 1, 1)",
+    ] {
+        assert!(
+            runtime.execute(statement, &[]).await.is_err(),
+            "the runtime role cannot move its own claim: {statement}"
+        );
+    }
+    drop(runtime);
+    runtime_task.abort();
 }

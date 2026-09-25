@@ -448,6 +448,11 @@ pub async fn install_mutation_schema(
     install_history_commit_schema(migration, runtime_role)
         .await
         .map_err(MutationError::from)?;
+    // The claim reads the revision and commit head tables to decide whether
+    // this database is fresh, so it installs after them.
+    crate::instance_claim::install(migration, runtime_role)
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
     Ok(())
 }
 

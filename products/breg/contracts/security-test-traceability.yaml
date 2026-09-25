@@ -114,3 +114,7 @@ traceability:
   - {id: BREG-SEC-111, state: enforced, negativeId: BREG-NEG-111, negativeTest: {path: crates/registry-breg/tests/postgres_import_authority.rs, name: every_chunk_counts_against_the_authority_until_it_is_exhausted}}
   - {id: BREG-SEC-112, state: enforced, negativeId: BREG-NEG-112, negativeTest: {path: crates/registry-breg/tests/postgres_import_authority.rs, name: the_runtime_role_cannot_open_close_or_reopen_an_authority}}
   - {id: BREG-SEC-113, state: enforced, negativeId: BREG-NEG-113, negativeTest: {path: crates/registry-breg/tests/import_grant_compiler.rs, name: batch_is_still_refused_on_a_controlled_entity_and_the_message_suggests_import}}
+  - {id: BREG-SEC-114, state: enforced, negativeId: BREG-NEG-114, negativeTest: {path: crates/registry-breg/tests/postgres_startup.rs, name: a_restored_copy_refuses_to_serve_until_adopted}}
+  - {id: BREG-SEC-115, state: enforced, negativeId: BREG-NEG-115, negativeTest: {path: crates/registry-breg/tests/postgres_import_authority.rs, name: the_runtime_role_cannot_rewrite_or_remove_the_instance_claim}}
+  - {id: BREG-SEC-116, state: enforced, negativeId: BREG-NEG-116, negativeTest: {path: crates/registry-breg/tests/postgres_import_authority.rs, name: adopting_a_restored_copy_supersedes_every_open_authority}}
+  - {id: BREG-SEC-117, state: enforced, negativeId: BREG-NEG-117, negativeTest: {path: crates/registry-breg/tests/postgres_import_authority.rs, name: installing_the_claim_beside_committed_history_leaves_the_database_to_adopt}}

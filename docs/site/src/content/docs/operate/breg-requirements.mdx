@@ -34,13 +34,19 @@ on your machine.
   signer produces a detached Ed25519 signature over it, and the runtime accepts a package only when
   enough of the keys in its trust anchor have signed. Who holds those keys, and how they sign, is
   your decision.
-- **A backup of the database before every activation.** The product restores nothing itself.
+- **A backup of the database before every activation.** The product restores nothing itself,
+  and it refuses to serve a logically restored copy until an operator adopts it, as
+  [back up and restore the database](../breg-changes/#back-up-and-restore-the-database)
+  describes. That check reads the cluster's system identifier through `pg_control_system()`,
+  which PostgreSQL grants to every role; on a managed service that withholds it, the check falls
+  back to the database object identifier alone and still starts.
 
 {/* Evidence: crates/registry-breg/src/postgres/schema.rs; crates/registry-breg/src/postgres/roles.rs,
     verify_postgres_16_or_newer and postgis_version_supported;
     crates/registry-breg/src/runtime_config.rs, SqlRoles and PublicOrigin;
     crates/registry-breg/src/auth.rs, RegistryAuthenticator;
-    crates/registry-breg/src/package.rs, validate_signature_policy; products/breg/README.md;
+    crates/registry-breg/src/package.rs, validate_signature_policy;
+    crates/registry-breg/src/instance_claim.rs; products/breg/README.md;
     products/breg/DECISIONS.md. */}
 
 ## What it does not need

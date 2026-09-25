@@ -51,6 +51,7 @@ mod history_erasure_lifecycle;
 mod history_rebaseline_lifecycle;
 mod import_authority_lifecycle;
 mod init_from_model;
+mod instance_claim_lifecycle;
 mod package_inspection;
 mod package_lifecycle;
 mod project_migration;
@@ -81,6 +82,7 @@ use history_rebaseline_lifecycle::{
     HistoryRebaselineLifecycleRequest,
 };
 use import_authority_lifecycle::ImportAuthorityCliError;
+use instance_claim_lifecycle::InstanceClaimCliError;
 use package_inspection::{
     inspect_runtime_package, inspect_runtime_predecessor_package,
     inspect_runtime_predecessor_rehearsal_baseline, RuntimePackageInspectionError,
@@ -181,6 +183,8 @@ enum Command {
     EvidenceRetention(EvidenceRetentionArgs),
     /// Open, close, and list the authorities that bound `import` runs.
     ImportAuthority(ImportAuthorityArgs),
+    /// Inspect and adopt the claim naming the database the Registry serves from.
+    InstanceClaim(InstanceClaimArgs),
     /// Maintain field-encryption key material.
     FieldEncryption(FieldEncryptionArgs),
 }
@@ -734,6 +738,43 @@ enum ImportAuthorityCommand {
     CloseExpired(ImportAuthorityRuntimeArgs),
     /// List the newest authorities, after recording every transition already due.
     List(ImportAuthorityRuntimeArgs),
+}
+
+#[derive(Debug, Args)]
+struct InstanceClaimArgs {
+    #[command(subcommand)]
+    command: InstanceClaimCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum InstanceClaimCommand {
+    /// Report the claimed database beside the one the runtime role reaches.
+    Status(InstanceClaimStatusArgs),
+    /// Make the connected database, such as a restored copy, the one the claim names.
+    Adopt(InstanceClaimAdoptArgs),
+}
+
+#[derive(Debug, Args)]
+struct InstanceClaimStatusArgs {
+    /// Absolute Base Registry Engine runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct InstanceClaimAdoptArgs {
+    /// Absolute Base Registry Engine runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Acknowledge that the database the claim names today no longer serves
+    /// and never will again.
+    ///
+    /// Two databases serving one Registry become divergent writers of its
+    /// records, import authorities, and outbox work. Without this
+    /// flag adoption is refused before any database connection is opened.
+    #[arg(long)]
+    acknowledge_original_retired: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1311,6 +1352,7 @@ enum DiagnosticArtifact {
     ReviewRecoveryOperation,
     EvidenceRetentionOperation,
     ImportAuthority,
+    InstanceClaim,
     HistoryErasure,
     HistoryRebaseline,
     FieldEncryption,
@@ -1363,6 +1405,7 @@ enum SuggestedAction {
     VerifyEvidenceRetentionOperation,
     CorrectImportAuthorityRequest,
     VerifyImportAuthority,
+    VerifyInstanceClaim,
     PrepareHistoryErasureRequest,
     PrepareHistoryRebaselineRequest,
     ReviewRetainedHistory,
@@ -2288,6 +2331,42 @@ where
                 ),
             };
         }
+        Command::InstanceClaim(args) => {
+            return match args.command {
+                InstanceClaimCommand::Status(args) => {
+                    match instance_claim_lifecycle::status(&args.runtime_config) {
+                        Ok(status) => write_instance_claim_status(&status, format, stdout, stderr),
+                        Err(error) => write_failure(
+                            &instance_claim_failure("instance-claim status", error),
+                            format,
+                            stdout,
+                            stderr,
+                        ),
+                    }
+                }
+                InstanceClaimCommand::Adopt(args) => {
+                    if !args.acknowledge_original_retired {
+                        return write_failure(
+                            &instance_claim_acknowledgement_required(),
+                            format,
+                            stdout,
+                            stderr,
+                        );
+                    }
+                    match instance_claim_lifecycle::adopt(&args.runtime_config) {
+                        Ok(adoption) => {
+                            write_instance_claim_adoption(&adoption, format, stdout, stderr)
+                        }
+                        Err(error) => write_failure(
+                            &instance_claim_failure("instance-claim adopt", error),
+                            format,
+                            stdout,
+                            stderr,
+                        ),
+                    }
+                }
+            };
+        }
         Command::FieldEncryption(args) => {
             return match args.command {
                 FieldEncryptionCommand::Keygen(args) => {
@@ -2542,6 +2621,155 @@ fn import_authority_failure(
             action,
         )],
     }
+}
+
+fn instance_claim_acknowledgement_required() -> FailureReport {
+    FailureReport {
+        ok: false,
+        command: "instance-claim adopt",
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(
+                "instance_claim.acknowledgement.required",
+                "acknowledgeOriginalRetired",
+                "adopting moves the Registry to this database for good, and two databases serving one Registry become divergent writers of it: stop and retire the database the claim names, then pass --acknowledge-original-retired",
+            ),
+            DiagnosticArtifact::CommandArguments,
+            SuggestedAction::CorrectCommandUsage,
+        )],
+    }
+}
+
+fn instance_claim_failure(command: &'static str, error: InstanceClaimCliError) -> FailureReport {
+    use registry_breg::instance_claim::InstanceClaimError;
+    let (failure_diagnostic, artifact, action) = match error {
+        InstanceClaimCliError::RuntimeConfigPath => (
+            diagnostic(
+                "instance_claim.runtime_config.invalid",
+                "runtimeConfig",
+                "the runtime configuration must be an absolute path",
+            ),
+            DiagnosticArtifact::CommandArguments,
+            SuggestedAction::CorrectCommandUsage,
+        ),
+        InstanceClaimCliError::Claim(InstanceClaimError::AlreadyCurrent) => (
+            diagnostic(
+                "instance_claim.already_current",
+                "instanceClaim",
+                "the instance claim already names this database; there is nothing to adopt",
+            ),
+            DiagnosticArtifact::InstanceClaim,
+            SuggestedAction::VerifyInstanceClaim,
+        ),
+        InstanceClaimCliError::Claim(InstanceClaimError::Unavailable) => (
+            diagnostic(
+                "instance_claim.unavailable",
+                "instanceClaim",
+                "the instance claim is unavailable; verify the runtime configuration, both database roles, the active package binding, and a keyed audit profile, and apply the package if the claim table is not yet installed",
+            ),
+            DiagnosticArtifact::InstanceClaim,
+            SuggestedAction::VerifyInstanceClaim,
+        ),
+    };
+    FailureReport {
+        ok: false,
+        command,
+        diagnostics: vec![tool_diagnostic(failure_diagnostic, artifact, action)],
+    }
+}
+
+/// A system identifier the role could not read is named as such, so the
+/// operator sees that the claim compares the database oid alone.
+fn system_identifier_text(value: Option<&str>) -> String {
+    value.map_or_else(
+        || "not readable (the claim compares the database oid alone)".to_owned(),
+        str::to_owned,
+    )
+}
+
+fn instance_claim_pairs(
+    claim: &registry_breg::instance_claim::InstanceClaim,
+) -> Vec<(&'static str, String)> {
+    vec![
+        (
+            "system identifier",
+            system_identifier_text(claim.identity.system_identifier.as_deref()),
+        ),
+        ("database oid", claim.identity.database_oid.to_string()),
+        ("epoch", claim.epoch.to_string()),
+        ("claimed at", claim.claimed_at.to_rfc3339()),
+    ]
+}
+
+fn write_instance_claim_status(
+    status: &registry_breg::instance_claim::InstanceClaimStatus,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        let body = json!({"ok": true, "command": "instance-claim status", "status": status});
+        serde_json::to_writer_pretty(&mut *stdout, &body)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        let lead = match (&status.claim, status.matches) {
+            (_, true) => "The instance claim names this database.",
+            (Some(_), false) => {
+                "The instance claim names another database. Once that database is retired, adopt this one with bregctl instance-claim adopt."
+            }
+            (None, false) => {
+                "No instance claim is recorded. Claim this database with bregctl instance-claim adopt."
+            }
+        };
+        let mut lines = report::Lines::new();
+        lines.lead(lead);
+        lines.blank();
+        lines.pairs(&[
+            (
+                "this database system identifier",
+                system_identifier_text(status.live.system_identifier.as_deref()),
+            ),
+            ("this database oid", status.live.database_oid.to_string()),
+        ]);
+        if let Some(claim) = &status.claim {
+            lines.blank();
+            lines.pairs(&instance_claim_pairs(claim));
+        }
+        stdout.write_all(lines.finish().as_bytes())
+    };
+    write_result(result, stderr)
+}
+
+fn write_instance_claim_adoption(
+    adoption: &registry_breg::instance_claim::InstanceClaimAdoption,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        let body = json!({"ok": true, "command": "instance-claim adopt", "adoption": adoption});
+        serde_json::to_writer_pretty(&mut *stdout, &body)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        let mut lines = report::Lines::new();
+        lines.lead(&format!(
+            "Adopted this database. The instance claim is at epoch {}.",
+            adoption.current.epoch
+        ));
+        lines.blank();
+        lines.pairs(&instance_claim_pairs(&adoption.current));
+        if !adoption.superseded_import_authorities.is_empty() {
+            lines.heading(
+                "Superseded import authorities the copy carried open; open a new one before importing again",
+            );
+            for authority_id in &adoption.superseded_import_authorities {
+                lines.bullet(&authority_id.to_string());
+            }
+        }
+        stdout.write_all(lines.finish().as_bytes())
+    };
+    write_result(result, stderr)
 }
 
 fn write_import_authority_success(
@@ -13435,6 +13663,7 @@ mod tests {
                 "review-recovery",
                 "evidence-retention",
                 "import-authority",
+                "instance-claim",
                 "field-encryption"
             ]
         );

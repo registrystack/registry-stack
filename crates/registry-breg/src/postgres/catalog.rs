@@ -258,6 +258,14 @@ impl ExpectedManagedCatalog {
                 Some((false, false)),
             );
         }
+        for (table, privileges) in crate::instance_claim::INSTANCE_CLAIM_TABLES {
+            catalog.table(
+                &format!("registry_internal.{table}"),
+                privileges.iter().copied(),
+                std::iter::empty::<&str>(),
+                Some((false, false)),
+            );
+        }
         for (table, privileges) in crate::import_authority::IMPORT_AUTHORITY_TABLES {
             let name = format!("registry_internal.{table}");
             catalog.table(

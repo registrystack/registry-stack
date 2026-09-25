@@ -485,7 +485,7 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
 /// A description the audit writer gives for a torn audit file.
 const AUDIT_DESTINATION_REASON: &str = "the audit file could not be opened: audit file has an incomplete final entry; archive it and restart with a fresh path";
 
-fn startup_errors() -> [StartupError; 18] {
+fn startup_errors() -> [StartupError; 19] {
     [
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
@@ -494,6 +494,7 @@ fn startup_errors() -> [StartupError; 18] {
         StartupError::PackageRefused(PackageError::Integrity),
         StartupError::DatabaseConnection,
         StartupError::DatabaseUnready,
+        StartupError::InstanceClaimMismatch,
         StartupError::FieldPatternSyntax {
             entity_id: "pattern-private-entity".to_owned(),
             field_id: "pattern-private-field".to_owned(),
@@ -634,6 +635,9 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::PackageRefused(_) => "the Registry package was refused",
         StartupError::DatabaseConnection => "the Registry database connection was refused",
         StartupError::DatabaseUnready => "the Registry database is not ready for this package",
+        StartupError::InstanceClaimMismatch => {
+            "the Registry database is not the instance its claim names; adopt a restored copy with bregctl instance-claim adopt"
+        }
         StartupError::FieldPatternSyntax { .. } => {
             "a persisted field pattern has invalid PostgreSQL syntax"
         }
