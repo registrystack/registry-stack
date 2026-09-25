@@ -398,8 +398,8 @@ runtime file's `identity.databaseInitializationEnvironment` is `local`, and `bre
     field_encryption_refusal(); crates/registry-breg/src/startup.rs, FieldEncryptionCustody;
     crates/registry-bregctl/src/doctor.rs, startup_diagnostic(). */}
 
-`issuer` must be an `https` URL without credentials or fragment; plain `http` is accepted only on
-an IPv4 loopback host, for local development. `audience` is at most 512 characters. `jwksSource`
+`issuer` must be an `https` URL without credentials, query, or fragment; plain `http` is accepted
+only on an IPv4 loopback host, for local development. `audience` is at most 512 characters. `jwksSource`
 takes one of three kinds: `discovery` (the default) reads the key set location from the issuer's
 discovery document, `uri` names it directly with a `uri` member under the same URL rule, and
 `static` pins a document through `documentRef`.
