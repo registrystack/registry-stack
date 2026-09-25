@@ -84,7 +84,12 @@ pub struct CaseworkProject {
 impl CaseworkProject {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigLoadError> {
         let bytes = std::fs::read(path).map_err(ConfigLoadError::Read)?;
-        let deserializer = serde_norway::Deserializer::from_slice(&bytes);
+        Self::from_slice(&bytes)
+    }
+
+    /// Decode and validate one captured Casework project document.
+    pub fn from_slice(bytes: &[u8]) -> Result<Self, ConfigLoadError> {
+        let deserializer = serde_norway::Deserializer::from_slice(bytes);
         let project: Self = serde_path_to_error::deserialize(deserializer).map_err(|error| {
             let path = error.path().to_string();
             ConfigLoadError::Parse {

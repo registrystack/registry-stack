@@ -9,7 +9,7 @@ use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDest
 pub(crate) use registry_platform_config::describe_secret_failure;
 use registry_platform_config::package::is_envelope_file;
 use registry_platform_config::{
-    is_sha256_label, reject_environment_expressions_in_authored_yaml, ConfigBlockError,
+    is_sha256_label, reject_environment_expressions_in_authored_yaml, sha256_uri, ConfigBlockError,
     PackageConfig, PackageDigestMismatch, PackageError, PackageErrorKind, PackageLimits,
     RemovedKey, RuntimeConfigErrorKind, RuntimeConfigLoader, RuntimeEnvelope, SecretResolver,
     VerifiedPackage, REMOVED_OIDC_JWKS_URI,
@@ -96,6 +96,14 @@ pub fn verify_casework_package(
     package: &RuntimePackageConfig,
     project: &CaseworkProject,
 ) -> Result<VerifiedPackage, RuntimeConfigError> {
+    let verified = verify_casework_envelope(package)?;
+    verify_casework_contents(project, &verified)?;
+    Ok(verified)
+}
+
+fn verify_casework_envelope(
+    package: &RuntimePackageConfig,
+) -> Result<VerifiedPackage, RuntimeConfigError> {
     if std::fs::symlink_metadata(package.root.join(RETIRED_PACKAGE_MANIFEST_FILE)).is_ok() {
         return Err(RuntimeConfigError::RetiredPackageManifest);
     }
@@ -108,6 +116,13 @@ pub fn verify_casework_package(
             }
             _ => RuntimeConfigError::Package(error),
         })?;
+    Ok(verified)
+}
+
+fn verify_casework_contents(
+    project: &CaseworkProject,
+    verified: &VerifiedPackage,
+) -> Result<(), RuntimeConfigError> {
     let expected = package_inputs(project)?;
     let found = verified
         .files()
@@ -120,7 +135,14 @@ pub fn verify_casework_package(
             extra: found.difference(&expected).cloned().collect(),
         });
     }
-    Ok(verified)
+    Ok(())
+}
+
+#[derive(Debug)]
+pub(crate) struct LoadedCaseworkPackage {
+    pub(crate) digest: String,
+    pub(crate) project: CaseworkProject,
+    pub(crate) source_descriptions: BTreeMap<String, Vec<u8>>,
 }
 
 fn normalized_relative_path(value: &str) -> Option<PathBuf> {
@@ -145,6 +167,25 @@ fn read_bounded_file(path: &Path, maximum: usize) -> Option<Vec<u8>> {
         return None;
     }
     std::fs::read(path).ok()
+}
+
+fn capture_verified_file(
+    root: &Path,
+    verified: &VerifiedPackage,
+    relative: &str,
+) -> Result<Vec<u8>, RuntimeConfigError> {
+    let bytes =
+        read_bounded_file(&root.join(relative), MAXIMUM_PACKAGE_FILE_BYTES).ok_or_else(|| {
+            RuntimeConfigError::PackageFileChanged {
+                path: relative.to_owned(),
+            }
+        })?;
+    if verified.file_digest(relative).as_deref() != Some(sha256_uri(&bytes).as_str()) {
+        return Err(RuntimeConfigError::PackageFileChanged {
+            path: relative.to_owned(),
+        });
+    }
+    Ok(bytes)
 }
 
 /// Validate one imported BReg description through the adapter's owning strict
@@ -741,6 +782,39 @@ impl RuntimeConfig {
             .to_owned())
     }
 
+    /// Verify and capture the exact package bytes the runtime will serve.
+    pub(crate) fn load_package(&self) -> Result<LoadedCaseworkPackage, RuntimeConfigError> {
+        self.load_package_after_verification(|| {})
+    }
+
+    fn load_package_after_verification(
+        &self,
+        after_verification: impl FnOnce(),
+    ) -> Result<LoadedCaseworkPackage, RuntimeConfigError> {
+        let verified = verify_casework_envelope(&self.package)?;
+        after_verification();
+
+        let policy_bytes = capture_verified_file(&self.package.root, &verified, POLICY_FILE)?;
+        reject_authored_environment_expressions_bytes(&policy_bytes)?;
+        let project =
+            CaseworkProject::from_slice(&policy_bytes).map_err(RuntimeConfigError::Project)?;
+        verify_casework_contents(&project, &verified)?;
+
+        let mut source_descriptions = BTreeMap::new();
+        for source in &project.sources {
+            let bytes =
+                capture_verified_file(&self.package.root, &verified, source.description.as_str())?;
+            source_descriptions.insert(source.description.clone(), bytes);
+        }
+        validate_project_source_description_bytes(&project, &source_descriptions)?;
+
+        Ok(LoadedCaseworkPackage {
+            digest: verified.digest().to_owned(),
+            project,
+            source_descriptions,
+        })
+    }
+
     fn validate_secret_references(&self) -> Result<(), RuntimeConfigError> {
         let mut references: Vec<(String, &str)> = self
             .database
@@ -912,6 +986,21 @@ fn validate_project_source_inputs(
     project: &CaseworkProject,
 ) -> Result<(), RuntimeConfigError> {
     let root = project_path.parent().ok_or(RuntimeConfigError::Invalid)?;
+    let mut descriptions = BTreeMap::new();
+    for source in &project.sources {
+        let relative = normalized_relative_path(&source.description)
+            .ok_or(RuntimeConfigError::SourceDescription)?;
+        let bytes = read_bounded_file(&root.join(relative), MAXIMUM_PACKAGE_FILE_BYTES)
+            .ok_or(RuntimeConfigError::SourceDescription)?;
+        descriptions.insert(source.description.clone(), bytes);
+    }
+    validate_project_source_description_bytes(project, &descriptions)
+}
+
+fn validate_project_source_description_bytes(
+    project: &CaseworkProject,
+    descriptions: &BTreeMap<String, Vec<u8>>,
+) -> Result<(), RuntimeConfigError> {
     let queues = project
         .queues
         .iter()
@@ -924,11 +1013,10 @@ fn validate_project_source_inputs(
         {
             return Err(RuntimeConfigError::SourceDescription);
         }
-        let relative = normalized_relative_path(&source.description)
+        let bytes = descriptions
+            .get(&source.description)
             .ok_or(RuntimeConfigError::SourceDescription)?;
-        let bytes = read_bounded_file(&root.join(relative), MAXIMUM_PACKAGE_FILE_BYTES)
-            .ok_or(RuntimeConfigError::SourceDescription)?;
-        let metadata = validate_breg_source_description(source, &bytes)
+        let metadata = validate_breg_source_description(source, bytes)
             .map_err(|_| RuntimeConfigError::SourceDescription)?;
         for request in &source.requests {
             check_routing_policy(
@@ -954,7 +1042,11 @@ fn validate_project_source_inputs(
 fn reject_authored_environment_expressions(policy_path: &Path) -> Result<(), RuntimeConfigError> {
     let bytes = read_bounded_file(policy_path, MAXIMUM_PACKAGE_FILE_BYTES)
         .ok_or(RuntimeConfigError::PolicyUnreadable)?;
-    let text = String::from_utf8_lossy(&bytes);
+    reject_authored_environment_expressions_bytes(&bytes)
+}
+
+fn reject_authored_environment_expressions_bytes(bytes: &[u8]) -> Result<(), RuntimeConfigError> {
+    let text = String::from_utf8_lossy(bytes);
     reject_environment_expressions_in_authored_yaml(&text).map_err(|error| {
         if error.kind() == RuntimeConfigErrorKind::AuthoredSyntax {
             RuntimeConfigError::Load(error)
@@ -1740,6 +1832,35 @@ reviewProducers:
     }
 
     #[test]
+    fn final_package_load_binds_captured_policy_and_source_bytes_to_the_verified_digest() {
+        for (changed_path, replacement) in [
+            ("casework.yaml", b"changed policy\n".as_slice()),
+            (
+                "sources/professional.json",
+                b"{\"changed\":true}\n".as_slice(),
+            ),
+        ] {
+            let root = canonical_tempdir();
+            let (package, operator, _) =
+                packaged_operator(root.path(), "operator-controlled-upstream");
+            let config = RuntimeConfig::load(&operator).expect("the original package loads");
+
+            let error = config
+                .load_package_after_verification(|| {
+                    std::fs::write(package.join(changed_path), replacement).unwrap();
+                })
+                .expect_err("bytes replaced after verification are refused");
+            assert!(
+                matches!(
+                    error,
+                    RuntimeConfigError::PackageFileChanged { ref path } if path == changed_path
+                ),
+                "{changed_path}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_missing_or_extra_package_file_is_refused_by_name() {
         let root = canonical_tempdir();
         let (package, operator, _) = packaged_operator(root.path(), "operator-controlled-upstream");
@@ -2522,6 +2643,10 @@ pub enum RuntimeConfigError {
         extra: Vec<String>,
     },
     #[error(
+        "the packaged file {path} changed after package verification; rebuild it with `caseworkctl package`"
+    )]
+    PackageFileChanged { path: String },
+    #[error(
         "package.root holds casework.package.json, which Casework no longer reads; rebuild the package with `caseworkctl package`, which writes SHA256SUMS"
     )]
     RetiredPackageManifest,
@@ -2609,9 +2734,10 @@ impl RuntimeConfigError {
             }
             Self::Project(_) => "package.root/casework.yaml",
             Self::PolicyUnreadable => "package.root/casework.yaml",
-            Self::Package(_) | Self::PackageContents { .. } | Self::RetiredPackageManifest => {
-                "package.root"
-            }
+            Self::Package(_)
+            | Self::PackageContents { .. }
+            | Self::PackageFileChanged { .. }
+            | Self::RetiredPackageManifest => "package.root",
             Self::PackageDigest(_) => "package.expectedDigest",
             Self::InvalidStrandedWorkAcknowledgement => "package.acknowledgeStrandedWork",
             Self::Invalid => "/",
