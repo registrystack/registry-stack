@@ -748,14 +748,19 @@ relation it found, the number of records the audit file held after the database'
 database that recorded no head, the records before the audit file's last one that the database
 still listed as pending), and both heads, and makes that record the new head. Its report carries
 the same fields. A database and audit file that already agree are reported as `consistent` and left
-untouched, so running it twice is harmless. Start Casework again afterwards.
+untouched, so running it twice is harmless. An acknowledgement that stops part way is safe to run
+again: the rerun appends its own record, and its `markedPublished` leaves out the records the
+interrupted run already marked. Start Casework again afterwards.
 
 An acknowledged restore resumes publication; it does not recover what the restore lost. Work done
 after the database backup is gone from the database while the audit file still records it, and
 the source was not told. Idempotency keys used after the backup are gone too, so a client that
 retries one of those requests has it run again as a new request. When the database was behind,
 read the records the report counts after `databaseHead` in the audit file to see which operations
-to check with their callers and the source.
+to check with their callers and the source. When the audit file was behind, the records the
+database had already published and the restored file lacks are not appended again: acknowledging
+accepts, for good, that this file's chain omits them. Keep the audit file or backup that holds them
+before you acknowledge. Records the database still lists as pending are appended as usual.
 
 {/* Evidence: crates/registry-casework/migrations/0018_audit_publication_head.sql;
     crates/registry-casework/src/store.rs, AuditPublicationLease::mark_published(), head(),
