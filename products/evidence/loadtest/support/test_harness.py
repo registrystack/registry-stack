@@ -503,26 +503,74 @@ class EvidenceHarnessTests(unittest.TestCase):
                 with self.assertRaises(loadenv.LoadtestError):
                     loadenv.write_environment(root, report, evidencectl, "release", "", 4242, 4711, 3)
 
-    def test_runner_refuses_to_disable_thresholds(self) -> None:
+    def test_runner_refuses_to_disable_thresholds_or_replace_the_offered_load(self) -> None:
         runner = LOADTEST / "run.sh"
         environment = {name: value for name, value in os.environ.items() if not name.startswith("K6_")}
-        for arguments, variables, message in (
-            (["--no-thresholds"], {}, "--no-thresholds is disabled"),
-            (["--no-thresholds=true"], {}, "--no-thresholds=true is disabled"),
-            ([], {"K6_NO_THRESHOLDS": "true"}, "K6_NO_THRESHOLDS is disabled"),
+        load_changed = "without the manifest recording it"
+        with tempfile.TemporaryDirectory() as directory:
+            # Only dirname is on PATH, so an argument the runner fails to refuse
+            # stops at the missing k6 instead of starting a run.
+            os.symlink(shutil.which("dirname"), Path(directory) / "dirname")
+            environment["PATH"] = directory
+            for arguments, variables, message, reason in (
+                (["--no-thresholds"], {}, "--no-thresholds is disabled", "a run without thresholds has no verdict"),
+                (["--no-thresholds=true"], {}, "--no-thresholds=true is disabled", "a run without thresholds has no verdict"),
+                ([], {"K6_NO_THRESHOLDS": "true"}, "K6_NO_THRESHOLDS is disabled", "a run without thresholds has no verdict"),
+                (["-d", "30s"], {}, "-d is disabled", load_changed),
+                (["-d30s"], {}, "-d30s is disabled", load_changed),
+                (["-i", "5"], {}, "-i is disabled", load_changed),
+                (["-i5"], {}, "-i5 is disabled", load_changed),
+                (["--iterations=5"], {}, "--iterations=5 is disabled", load_changed),
+                (["-u", "10"], {}, "-u is disabled", load_changed),
+                (["--vus", "10"], {}, "--vus is disabled", load_changed),
+                (["-s", "10s:5"], {}, "-s is disabled", load_changed),
+                (["--stage=10s:5"], {}, "--stage=10s:5 is disabled", load_changed),
+                (["--execution-segment", "0:1/2"], {}, "--execution-segment is disabled", load_changed),
+                (["--execution-segment-sequence=0,1/2,1"], {}, "--execution-segment-sequence=0,1/2,1 is disabled", load_changed),
+                (["--rps=10"], {}, "--rps=10 is disabled", load_changed),
+                (["-e", "OPS=500"], {}, "-e is disabled", load_changed),
+                (["-eDURATION=1h"], {}, "-eDURATION=1h is disabled", load_changed),
+                (["--env", "OPS=500"], {}, "--env is disabled", load_changed),
+                (["--env=DURATION=1h"], {}, "--env=DURATION=1h is disabled", load_changed),
+                ([], {"K6_VUS": "10"}, "K6_VUS", load_changed),
+                ([], {"K6_ITERATIONS": "5"}, "K6_ITERATIONS", load_changed),
+                ([], {"K6_DURATION": "1h"}, "K6_DURATION", load_changed),
+                ([], {"K6_STAGES": "10s:5"}, "K6_STAGES", load_changed),
+                ([], {"K6_RPS": "10"}, "K6_RPS", load_changed),
+            ):
+                with self.subTest(arguments=arguments, variables=variables):
+                    result = subprocess.run(
+                        [shutil.which("bash"), str(runner), "--profile", "smoke", *arguments],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=False,
+                        env={**environment, **variables},
+                    )
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertIn(message, result.stderr)
+                    self.assertIn(reason, result.stderr)
+
+    def test_runner_takes_ops_and_duration_in_either_form_and_keeps_them_from_k6(self) -> None:
+        runner = (LOADTEST / "run.sh").read_text(encoding="utf-8")
+        start = runner.index("pass_through=()\n")
+        parse = runner[start : runner.index("\ndone\n", start) + 6]
+        report = 'printf \'%s|%s|%s\\n\' "${OPS-unset}" "${DURATION-unset}" "${pass_through[*]-}"\n'
+        for arguments in (
+            ["--ops", "75", "--duration", "90s", "--quiet"],
+            ["--ops=75", "--duration=90s", "--quiet"],
         ):
-            with self.subTest(arguments=arguments, variables=variables):
+            with self.subTest(arguments=arguments):
                 result = subprocess.run(
-                    ["bash", str(runner), "--profile", "smoke", *arguments],
+                    ["bash", "-c", f"set -euo pipefail\nusage() {{ exit 2; }}\n{parse}{report}", "_", *arguments],
                     capture_output=True,
                     text=True,
                     timeout=10,
                     check=False,
-                    env={**environment, **variables},
+                    env={name: value for name, value in os.environ.items() if name not in ("OPS", "DURATION")},
                 )
-                self.assertEqual(result.returncode, 2, result.stderr)
-                self.assertIn(message, result.stderr)
-                self.assertIn("a run without thresholds has no verdict", result.stderr)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, "75|90s|--quiet\n")
 
     def test_shell_entrypoints_parse_and_keep_their_safety_contracts(self) -> None:
         for script in ("up.sh", "down.sh", "run.sh"):

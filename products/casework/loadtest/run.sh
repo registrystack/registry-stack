@@ -32,6 +32,20 @@ while [[ $# -gt 0 ]]; do
       export DURATION="$2"
       shift 2
       ;;
+    --ops=*)
+      export OPS="${1#--ops=}"
+      shift
+      ;;
+    --duration=*)
+      export DURATION="${1#--duration=}"
+      shift
+      ;;
+    # k6 lets these replace the profile's scenarios, cap its rate, or override
+    # the exported parameters, so the result would not match the manifest.
+    -d*|-i*|-u*|-s*|-e*|--vus|--vus=*|--iterations|--iterations=*|--stage|--stage=*|--execution-segment*|--rps|--rps=*|--env|--env=*)
+      printf '%s\n' "$1 is disabled because k6 would change the offered load without the manifest recording it; use --ops, --duration, or the profile environment variables." >&2
+      exit 2
+      ;;
     --http-debug|--http-debug=*|--system-tags|--system-tags=*)
       printf '%s\n' "$1 is disabled because it can expose credentials, cursors, or record identifiers." >&2
       exit 2
@@ -53,6 +67,10 @@ if [[ -n "${K6_HTTP_DEBUG:-}" || -n "${K6_SYSTEM_TAGS:-}" ]]; then
 fi
 if [[ -n "${K6_NO_THRESHOLDS:-}" ]]; then
   printf '%s\n' 'K6_NO_THRESHOLDS is disabled because a run without thresholds has no verdict.' >&2
+  exit 2
+fi
+if [[ -n "${K6_VUS:-}" || -n "${K6_ITERATIONS:-}" || -n "${K6_DURATION:-}" || -n "${K6_STAGES:-}" || -n "${K6_RPS:-}" ]]; then
+  printf '%s\n' 'K6_VUS, K6_ITERATIONS, K6_DURATION, K6_STAGES, and K6_RPS overrides are disabled because k6 would change the offered load without the manifest recording it.' >&2
   exit 2
 fi
 case "$profile" in
