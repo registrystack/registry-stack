@@ -581,6 +581,30 @@ async fn prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays
         .message()
         .contains("shared_preload_libraries"));
     drop(prepared);
+
+    // A configured pg_stat_statements.max without the preload is only a
+    // placeholder: current_setting() returns it, but the module never ran.
+    database
+        .admin
+        .batch_execute(&format!(
+            "ALTER ROLE {} SET pg_stat_statements.max = '5000'",
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("the test role carries a placeholder pg_stat_statements setting");
+    let prepared =
+        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+            .expect("startup accepts a placeholder pg_stat_statements setting");
+    let pg_stat_statements = prepared
+        .postgres_advisories()
+        .iter()
+        .find(|advisory| advisory.code() == "postgres.pg_stat_statements.unavailable")
+        .expect("a placeholder setting does not mean the module is loaded");
+    assert!(pg_stat_statements
+        .message()
+        .contains("shared_preload_libraries"));
+    drop(prepared);
     idp.stop().await;
     database.cleanup().await;
 }

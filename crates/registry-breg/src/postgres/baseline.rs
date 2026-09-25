@@ -12,12 +12,14 @@ use tokio_postgres::{Client, Row};
 
 /// One read of every input the advisories are decided from. The settings are
 /// read with `missing_ok`, so a server without one reports it as absent
-/// instead of failing the whole read. `pg_stat_statements.max` is read for
-/// the same reason: `CREATE EXTENSION pg_stat_statements` succeeds whether or
-/// not the module is in `shared_preload_libraries`, but its `_PG_init`
-/// defines the extension's custom settings only when it runs from there, so
-/// reading one back tells the two cases apart without the superuser-only
-/// `shared_preload_libraries` setting itself.
+/// instead of failing the whole read. `CREATE EXTENSION pg_stat_statements`
+/// succeeds whether or not the module is in `shared_preload_libraries`, but
+/// its `_PG_init` defines the extension's custom settings only when it runs
+/// from there, so a `pg_settings` row for `pg_stat_statements.max` tells the
+/// two cases apart without the superuser-only `shared_preload_libraries`
+/// setting itself. `current_setting` cannot: a configured value for a module
+/// that never loaded is kept as a placeholder it still returns, while
+/// `pg_settings` lists only defined settings.
 const BASELINE_QUERY: &str = "SELECT
     pg_catalog.current_setting('max_connections', true),
     pg_catalog.current_setting('superuser_reserved_connections', true),
@@ -27,7 +29,9 @@ const BASELINE_QUERY: &str = "SELECT
     EXISTS (
         SELECT FROM pg_catalog.pg_extension WHERE extname = 'pg_stat_statements'
     ),
-    pg_catalog.current_setting('pg_stat_statements.max', true)";
+    EXISTS (
+        SELECT FROM pg_catalog.pg_settings WHERE name = 'pg_stat_statements.max'
+    )";
 
 /// Whether an advisory names something an operator should change or only
 /// something worth knowing.
@@ -130,13 +134,7 @@ fn settings_from_row(row: &Row) -> BaselineSettings {
         autovacuum: text(3),
         track_counts: text(4),
         pg_stat_statements_installed: row.try_get::<_, Option<bool>>(5).ok().flatten(),
-        // `Ok(Some(_))` means the setting exists (loaded), `Ok(None)` means the
-        // query ran but found no such setting (not loaded), and `Err` means the
-        // column itself could not be read.
-        pg_stat_statements_loaded: row
-            .try_get::<_, Option<String>>(6)
-            .ok()
-            .map(|value| value.is_some()),
+        pg_stat_statements_loaded: row.try_get::<_, Option<bool>>(6).ok().flatten(),
     }
 }
 
