@@ -4066,6 +4066,37 @@ class RegistryReleaseTest(TestCase):
             )
         )
 
+    def test_configure_line_buffered_stdout_sets_line_buffering(self) -> None:
+        registry_release = load_registry_release()
+        with mock.patch.object(registry_release.sys.stdout, "reconfigure") as reconfigure:
+            registry_release.configure_line_buffered_stdout()
+
+        reconfigure.assert_called_once_with(line_buffering=True)
+
+    def test_main_enables_line_buffering_before_dispatch(self) -> None:
+        registry_release = load_registry_release()
+        with tempfile.TemporaryDirectory() as empty_manifest_dir:
+            with (
+                mock.patch.object(
+                    registry_release.sys,
+                    "argv",
+                    [
+                        "registry-release",
+                        "validate-current",
+                        "--manifest-dir",
+                        empty_manifest_dir,
+                    ],
+                ),
+                mock.patch.object(
+                    registry_release, "configure_line_buffered_stdout"
+                ) as configure,
+                redirect_stderr(io.StringIO()),
+            ):
+                exit_code = registry_release.main()
+
+        configure.assert_called_once_with()
+        self.assertEqual(1, exit_code)
+
 
 def run_tool(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(

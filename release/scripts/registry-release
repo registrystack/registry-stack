@@ -4039,7 +4039,20 @@ def verify_candidate_for_tag(
     return 0
 
 
+def configure_line_buffered_stdout() -> None:
+    """Flush status output line by line.
+
+    Python fully buffers stdout once it is not a terminal, such as when a
+    caller redirects it to a log file. Without line buffering, a long wait
+    loop's status prints (for example a pending environment approval) can sit
+    unflushed in the buffer for the life of the process, so a watcher reading
+    the log sees nothing until the command exits.
+    """
+    sys.stdout.reconfigure(line_buffering=True)
+
+
 def main() -> int:
+    configure_line_buffered_stdout()
     parser = argparse.ArgumentParser(prog="registry-release")
     subparsers = parser.add_subparsers(dest="command", required=True)
     validate_parser = subparsers.add_parser("validate")
