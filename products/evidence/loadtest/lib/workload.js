@@ -168,12 +168,16 @@ export class Workload {
     return response;
   }
 
-  // Drives one principal past its burst; both outcomes are expected.
+  // Drives one principal past its burst; both outcomes are expected. A 429
+  // proves the limiter only as the contract's evidence.rate_limited problem
+  // with Retry-After: 1.
   assertLimited(authorization) {
     const subject = subjects[Math.floor(this.random() * subjects.length)];
     const response = this.request(subject, authorization, 'evidence_limited', [200, 429]);
     check(response, {
       'limited status is 200 or 429': (r) => r.status === 200 || r.status === 429,
+      'limited 429 is evidence.rate_limited with Retry-After 1': (r) =>
+        r.status !== 429 || (problemCode(r) === 'evidence.rate_limited' && r.headers['Retry-After'] === '1'),
     });
     return response;
   }

@@ -66,7 +66,9 @@ def _write_environment(root: Path, executable: Path, **overrides: object) -> dic
 class EvidenceStub:
     """A loopback stand-in for Evidence that records only what the tests assert on."""
 
-    def __init__(self, limit_after: int | None = None) -> None:
+    def __init__(
+        self, limit_after: int | None = None, limited_code: str = "evidence.rate_limited", retry_after: str = "1"
+    ) -> None:
         self.requests: list[dict[str, object]] = []
         self.lock = threading.Lock()
         stub = self
@@ -82,7 +84,7 @@ class EvidenceStub:
                     count = len(stub.requests)
                 subject = body["subjects"][0]["selector"]["values"]["person_id"]
                 if limit_after is not None and count > limit_after:
-                    self._reply(429, "application/problem+json", {"code": "rate_limited"})
+                    self._reply(429, "application/problem+json", {"code": limited_code}, {"Retry-After": retry_after})
                 elif subject.startswith("lt-absent-"):
                     self._reply(503, "application/problem+json", {"code": "source.unavailable"})
                 else:
@@ -96,11 +98,13 @@ class EvidenceStub:
                         },
                     )
 
-            def _reply(self, status: int, content_type: str, value: object) -> None:
+            def _reply(self, status: int, content_type: str, value: object, headers: dict[str, str] | None = None) -> None:
                 payload = json.dumps(value).encode()
                 self.send_response(status)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(payload)))
+                for name, header in (headers or {}).items():
+                    self.send_header(name, header)
                 self.end_headers()
                 self.wfile.write(payload)
 
@@ -230,6 +234,18 @@ class EvidenceHarnessTests(unittest.TestCase):
             self._run_profile("limiter", stub.origin, Path(directory))
         self.assertEqual(len(stub.requests), 20)
         self.assertEqual(len({request["authorization"] for request in stub.requests}), 1)
+
+    @unittest.skipUnless(shutil.which("k6"), "k6 is not installed")
+    def test_limiter_fails_when_the_refusal_is_not_evidence_rate_limited(self) -> None:
+        # A 429 with another problem code or retry delay does not prove the Evidence limiter.
+        for name, stub_options in (
+            ("problem code", {"limited_code": "service.unavailable"}),
+            ("retry delay", {"retry_after": "5"}),
+        ):
+            with self.subTest(name):
+                with EvidenceStub(limit_after=10, **stub_options) as stub, tempfile.TemporaryDirectory() as directory:
+                    with self.assertRaises(AssertionError):
+                        self._run_profile("limiter", stub.origin, Path(directory))
 
     @unittest.skipUnless(shutil.which("k6"), "k6 is not installed")
     def test_smoke_fails_when_an_unknown_subject_is_answered(self) -> None:
