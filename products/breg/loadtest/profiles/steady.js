@@ -20,6 +20,7 @@ export const options = {
   },
   thresholds: {
     dropped_iterations: ['count==0'],
+    checks: ['rate==1'],
     http_req_failed: ['rate==0'],
     http_req_duration: ['p(99)<250'],
     'http_req_duration{name:lookup_by_code}': ['p(99)<250'],
