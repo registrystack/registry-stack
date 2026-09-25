@@ -522,10 +522,14 @@ impl Integrations {
     }
 }
 
-/// Check the existing adapter contract entirely offline. The staging resolver
-/// reads generated secrets before the session is atomically installed.
+/// Check the existing adapter contract entirely offline against the authored
+/// project. The staging resolver reads generated secrets before the session is
+/// atomically installed, and before its start builds the package the runtime
+/// verifies, so the operator document is read without that verification.
 pub(super) fn validate_bindings(root: &Path, project: &Path) -> Result<()> {
-    let mut config = registry_casework::RuntimeConfig::load(root.join("operator.yaml"))?;
+    let mut config = registry_casework::RuntimeConfig::loader()
+        .load::<registry_casework::RuntimeConfig>(&root.join("operator.yaml"))?
+        .config;
     config
         .secret_providers
         .file

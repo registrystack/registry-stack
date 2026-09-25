@@ -6,10 +6,12 @@ use std::time::Duration;
 use jsonwebtoken::Algorithm;
 use registry_casework_core::{check_routing_policy, CaseworkProject};
 pub(crate) use registry_platform_config::describe_secret_failure;
+use registry_platform_config::package::is_envelope_file;
 use registry_platform_config::{
-    reject_environment_expressions_in_authored_yaml, ConfigBlockError, RemovedKey,
-    RuntimeConfigErrorKind, RuntimeConfigLoader, RuntimeEnvelope, SecretResolver,
-    REMOVED_OIDC_JWKS_URI,
+    is_sha256_label, reject_environment_expressions_in_authored_yaml, ConfigBlockError,
+    PackageConfig, PackageDigestMismatch, PackageError, PackageErrorKind, PackageLimits,
+    RemovedKey, RuntimeConfigErrorKind, RuntimeConfigLoader, RuntimeEnvelope, SecretResolver,
+    VerifiedPackage, REMOVED_OIDC_JWKS_URI,
 };
 pub use registry_platform_config::{
     AuditKeyConfig, DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
@@ -20,14 +22,14 @@ use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery, parse_static_jwks, JwksFetcher, JwksFetcherConfig,
     OidcDiscoveryConfig, TokenVerifierConfig,
 };
-use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
+use serde::Deserialize;
 use thiserror::Error;
 
-pub const POLICY_PACKAGE_API_VERSION: &str =
-    "registry.registrystack.org/casework-policy-package/v1alpha1";
-pub const POLICY_PACKAGE_KIND: &str = "CaseworkPolicyPackage";
-pub const POLICY_PACKAGE_MANIFEST_FILE: &str = "casework.package.json";
+/// The command that builds a Casework package, named in every package refusal.
+pub const PACKAGE_COMMAND: &str = "caseworkctl package";
+/// The manifest earlier Casework packages carried. A package root holding it
+/// is refused, naming the command that writes the current package.
+pub const RETIRED_PACKAGE_MANIFEST_FILE: &str = "casework.package.json";
 pub const RUNTIME_CONFIG_API_VERSION: &str = "registry.registrystack.org/casework-runtime/v1alpha1";
 pub const RUNTIME_CONFIG_KIND: &str = "CaseworkRuntimeConfig";
 pub const POLICY_FILE: &str = "casework.yaml";
@@ -46,13 +48,16 @@ pub const CASEWORK_REMOVED_KEYS: &[RemovedKey] = &[
         path: "authentication.oidc.principalClaim",
         replacement: "declare accessProfiles[].principalClaim in casework.yaml",
     },
+    RemovedKey {
+        path: "package.expectedPolicyDigest",
+        replacement: "package.expectedDigest, the digest `caseworkctl package` reports",
+    },
 ];
 /// The RFC 9068 access-token media type this runtime verifies. The pair of
 /// spellings it admits is derived from this one value, never authored, so no
 /// deployment can widen it to an ordinary JWT.
 const CASEWORK_ACCESS_TOKEN_TYPE: &str = "at+jwt";
-const MAXIMUM_POLICY_PACKAGE_FILE_BYTES: usize = 1024 * 1024;
-const MAXIMUM_POLICY_PACKAGE_MANIFEST_BYTES: usize = 1024 * 1024;
+const MAXIMUM_PACKAGE_FILE_BYTES: usize = 1024 * 1024;
 pub(crate) const MINIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS: u64 = 100;
 pub(crate) const MAXIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS: u64 = 30_000;
 pub(crate) const MINIMUM_REVIEW_COMPLETION_ATTEMPTS: u32 = 1;
@@ -60,163 +65,61 @@ pub(crate) const MAXIMUM_REVIEW_COMPLETION_ATTEMPTS: u32 = 100;
 pub(crate) const MINIMUM_REVIEW_COMPLETION_RETRY_SECONDS: u64 = 1;
 pub(crate) const MAXIMUM_REVIEW_COMPLETION_RETRY_SECONDS: u64 = 86_400;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PolicyPackageManifest {
-    pub api_version: String,
-    pub kind: String,
-    pub policy_digest: String,
-    pub files: Vec<PolicyPackageFile>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PolicyPackageFile {
-    pub path: String,
-    pub sha256: String,
-    pub bytes: u64,
-}
-
-impl PolicyPackageManifest {
-    /// Build the immutable identity for already validated policy inputs.
-    pub fn build(
-        files: impl IntoIterator<Item = (String, Vec<u8>)>,
-    ) -> Result<Self, PolicyPackageError> {
-        let mut files = files
-            .into_iter()
-            .map(|(path, bytes)| {
-                if normalized_relative_path(&path).is_none()
-                    || bytes.len() > MAXIMUM_POLICY_PACKAGE_FILE_BYTES
-                {
-                    return Err(PolicyPackageError::Invalid);
-                }
-                Ok(PolicyPackageFile {
-                    path,
-                    sha256: sha256_bytes(&bytes),
-                    bytes: u64::try_from(bytes.len()).map_err(|_| PolicyPackageError::Invalid)?,
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        files.sort_by(|left, right| left.path.cmp(&right.path));
-        if !files.iter().any(|file| file.path == POLICY_FILE)
-            || files.windows(2).any(|pair| pair[0].path == pair[1].path)
-        {
-            return Err(PolicyPackageError::Invalid);
-        }
-        let policy_digest =
-            package_digest(POLICY_PACKAGE_API_VERSION, POLICY_PACKAGE_KIND, &files)?;
-        Ok(Self {
-            api_version: POLICY_PACKAGE_API_VERSION.to_owned(),
-            kind: POLICY_PACKAGE_KIND.to_owned(),
-            policy_digest,
-            files,
-        })
-    }
-
-    pub fn verify(&self, root: &Path, project: &CaseworkProject) -> Result<(), PolicyPackageError> {
-        if self.api_version != POLICY_PACKAGE_API_VERSION
-            || self.kind != POLICY_PACKAGE_KIND
-            || self.files.is_empty()
-            || self
-                .files
-                .windows(2)
-                .any(|pair| pair[0].path >= pair[1].path)
-            || self.policy_digest != package_digest(&self.api_version, &self.kind, &self.files)?
-        {
-            return Err(PolicyPackageError::Invalid);
-        }
-
-        let mut expected = BTreeSet::from([POLICY_FILE.to_owned()]);
-        for source in &project.sources {
-            if normalized_relative_path(&source.description).is_none()
-                || !expected.insert(source.description.clone())
-            {
-                return Err(PolicyPackageError::Invalid);
-            }
-        }
-        let declared = self
-            .files
-            .iter()
-            .map(|file| file.path.clone())
-            .collect::<BTreeSet<_>>();
-        if declared != expected {
-            return Err(PolicyPackageError::Invalid);
-        }
-
-        for file in &self.files {
-            let relative =
-                normalized_relative_path(&file.path).ok_or(PolicyPackageError::Invalid)?;
-            let bytes = read_bounded_file(&root.join(relative), MAXIMUM_POLICY_PACKAGE_FILE_BYTES)?;
-            if file.bytes != u64::try_from(bytes.len()).map_err(|_| PolicyPackageError::Invalid)?
-                || file.sha256 != sha256_bytes(&bytes)
-            {
-                return Err(PolicyPackageError::Invalid);
-            }
-        }
-
-        let mut on_disk = package_files_on_disk(root)?;
-        on_disk.remove(POLICY_PACKAGE_MANIFEST_FILE);
-        if on_disk != expected {
-            return Err(PolicyPackageError::Invalid);
-        }
-        Ok(())
+/// The bounds a Casework package holds to: each file at most one MiB.
+#[must_use]
+pub fn package_limits() -> PackageLimits {
+    PackageLimits {
+        max_file_bytes: MAXIMUM_PACKAGE_FILE_BYTES as u64,
+        ..PackageLimits::default()
     }
 }
 
-/// Verify a package next to `casework.yaml`, returning its immutable identity.
-/// An absent manifest is distinguished so local authored development remains usable.
-pub fn verify_policy_package(
-    project_path: &Path,
+/// The files a Casework package holds besides `SHA256SUMS` and `REVISION`:
+/// `casework.yaml` and every source description the project names.
+pub fn package_inputs(project: &CaseworkProject) -> Result<BTreeSet<String>, RuntimeConfigError> {
+    let mut inputs = BTreeSet::from([POLICY_FILE.to_owned()]);
+    for source in &project.sources {
+        if normalized_relative_path(&source.description).is_none()
+            || !inputs.insert(source.description.clone())
+        {
+            return Err(RuntimeConfigError::SourceDescription);
+        }
+    }
+    Ok(inputs)
+}
+
+/// Verify the Casework package at `package.root` and its pin. Every listener
+/// mode serves a package: a directory without `SHA256SUMS` is refused with the
+/// packaging command, whether or not a digest is pinned.
+pub fn verify_casework_package(
+    package: &RuntimePackageConfig,
     project: &CaseworkProject,
-) -> Result<Option<String>, PolicyPackageError> {
-    if project_path.file_name().and_then(|name| name.to_str()) != Some(POLICY_FILE) {
-        return Err(PolicyPackageError::Invalid);
+) -> Result<VerifiedPackage, RuntimeConfigError> {
+    if std::fs::symlink_metadata(package.root.join(RETIRED_PACKAGE_MANIFEST_FILE)).is_ok() {
+        return Err(RuntimeConfigError::RetiredPackageManifest);
     }
-    let root = project_path.parent().ok_or(PolicyPackageError::Invalid)?;
-    let manifest_path = root.join(POLICY_PACKAGE_MANIFEST_FILE);
-    if !manifest_path.exists() {
-        return Ok(None);
+    let verified = package
+        .shared()
+        .verify_package(&package_limits(), PACKAGE_COMMAND)
+        .map_err(|error| match error.kind() {
+            PackageErrorKind::DigestMismatch(mismatch) => {
+                RuntimeConfigError::PackageDigest(mismatch.clone())
+            }
+            _ => RuntimeConfigError::Package(error),
+        })?;
+    let expected = package_inputs(project)?;
+    let found = verified
+        .files()
+        .filter(|path| !is_envelope_file(path))
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>();
+    if found != expected {
+        return Err(RuntimeConfigError::PackageContents {
+            missing: expected.difference(&found).cloned().collect(),
+            extra: found.difference(&expected).cloned().collect(),
+        });
     }
-    let bytes = read_bounded_file(&manifest_path, MAXIMUM_POLICY_PACKAGE_MANIFEST_BYTES)?;
-    let manifest: PolicyPackageManifest =
-        serde_json::from_slice(&bytes).map_err(|_| PolicyPackageError::Invalid)?;
-    manifest.verify(root, project)?;
-    Ok(Some(manifest.policy_digest))
-}
-
-fn package_digest(
-    api_version: &str,
-    kind: &str,
-    files: &[PolicyPackageFile],
-) -> Result<String, PolicyPackageError> {
-    let identity = serde_json::json!({
-        "apiVersion": api_version,
-        "kind": kind,
-        "files": files,
-    });
-    let canonical = registry_platform_canonical_json::canonicalize_json(&identity)
-        .map_err(|_| PolicyPackageError::Invalid)?;
-    Ok(sha256_bytes(&canonical))
-}
-
-fn valid_policy_digest(value: &str) -> bool {
-    value.strip_prefix("sha256:").is_some_and(|hex| {
-        hex.len() == 64
-            && hex
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    })
-}
-
-fn sha256_bytes(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    format!(
-        "sha256:{}",
-        digest
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    )
+    Ok(verified)
 }
 
 fn normalized_relative_path(value: &str) -> Option<PathBuf> {
@@ -234,55 +137,13 @@ fn normalized_relative_path(value: &str) -> Option<PathBuf> {
     (normalized.to_str() == Some(value)).then_some(normalized)
 }
 
-fn read_bounded_file(path: &Path, maximum: usize) -> Result<Vec<u8>, PolicyPackageError> {
-    let metadata = std::fs::symlink_metadata(path).map_err(PolicyPackageError::Read)?;
-    if !metadata.file_type().is_file()
-        || metadata.file_type().is_symlink()
-        || metadata.len() > maximum as u64
-    {
-        return Err(PolicyPackageError::Invalid);
+/// Read a regular file of at most `maximum` bytes, refusing a link.
+fn read_bounded_file(path: &Path, maximum: usize) -> Option<Vec<u8>> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if !metadata.file_type().is_file() || metadata.len() > maximum as u64 {
+        return None;
     }
-    std::fs::read(path).map_err(PolicyPackageError::Read)
-}
-
-fn package_files_on_disk(root: &Path) -> Result<BTreeSet<String>, PolicyPackageError> {
-    let mut pending = vec![root.to_path_buf()];
-    let mut files = BTreeSet::new();
-    while let Some(directory) = pending.pop() {
-        for entry in std::fs::read_dir(directory).map_err(PolicyPackageError::Read)? {
-            let entry = entry.map_err(PolicyPackageError::Read)?;
-            let metadata =
-                std::fs::symlink_metadata(entry.path()).map_err(PolicyPackageError::Read)?;
-            if metadata.file_type().is_symlink() {
-                return Err(PolicyPackageError::Invalid);
-            }
-            if metadata.is_dir() {
-                pending.push(entry.path());
-            } else if metadata.is_file() {
-                let relative = entry
-                    .path()
-                    .strip_prefix(root)
-                    .map_err(|_| PolicyPackageError::Invalid)?
-                    .to_str()
-                    .ok_or(PolicyPackageError::Invalid)?
-                    .to_owned();
-                if normalized_relative_path(&relative).is_none() || !files.insert(relative) {
-                    return Err(PolicyPackageError::Invalid);
-                }
-            } else {
-                return Err(PolicyPackageError::Invalid);
-            }
-        }
-    }
-    Ok(files)
-}
-
-#[derive(Debug, Error)]
-pub enum PolicyPackageError {
-    #[error("the Casework policy package could not be read")]
-    Read(#[source] std::io::Error),
-    #[error("the Casework policy package is invalid or does not match its exact inputs")]
-    Invalid,
+    std::fs::read(path).ok()
 }
 
 /// Validate one imported BReg description through the adapter's owning strict
@@ -513,18 +374,30 @@ pub struct TaskAuthorityConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimePackageConfig {
+    /// Absolute path of the package directory.
     pub root: PathBuf,
-    /// The `policyDigest` of the one reviewed package this runtime may load.
-    /// When set, a package whose manifest names any other digest, or a
-    /// directory with no manifest, is refused before the runtime starts.
+    /// `sha256:` label of the package digest, the digest of the package's
+    /// `SHA256SUMS` file. When set, the runtime refuses to start on any other
+    /// package, and on an authored project that has no `SHA256SUMS`.
     #[serde(default)]
-    pub expected_policy_digest: Option<String>,
-    /// The `policyDigest` of a package the operator has accepted will strand
+    pub expected_digest: Option<String>,
+    /// The package digest of a package the operator has accepted will strand
     /// in-flight work pinned under an earlier package. Startup and `doctor`
     /// refuse such a package unless this names its exact digest, so an
     /// acknowledgement never carries over to a later package.
     #[serde(default)]
     pub acknowledge_stranded_work: Option<String>,
+}
+
+impl RuntimePackageConfig {
+    /// The shared `package.root` and `package.expectedDigest` block.
+    #[must_use]
+    pub fn shared(&self) -> PackageConfig {
+        PackageConfig {
+            root: self.root.clone(),
+            expected_digest: self.expected_digest.clone(),
+        }
+    }
 }
 
 /// Operator-private listener for `/metrics` and `/version`.
@@ -664,9 +537,7 @@ impl RuntimeConfig {
         if self.kind != RUNTIME_CONFIG_KIND {
             return Err(RuntimeConfigError::InvalidKind);
         }
-        if !self.package.root.is_absolute() {
-            return Err(RuntimeConfigError::RelativeOperatedPath("package.root"));
-        }
+        self.package.shared().check()?;
         self.secret_providers.check()?;
         if !self.audit.path.is_absolute() {
             return Err(RuntimeConfigError::RelativeOperatedPath("audit.path"));
@@ -684,32 +555,15 @@ impl RuntimeConfig {
             return Err(error);
         }
         let project = CaseworkProject::load(&policy_path).map_err(RuntimeConfigError::Project)?;
-        let package_digest = verify_policy_package(&policy_path, &project)
-            .map_err(RuntimeConfigError::PolicyPackage)?;
-        if self.listener.tls_termination == TlsTermination::OperatorControlledUpstream
-            && package_digest.is_none()
-        {
-            return Err(RuntimeConfigError::ProductionPolicyPackageRequired);
-        }
         if self
             .package
             .acknowledge_stranded_work
             .as_deref()
-            .is_some_and(|acknowledged| !valid_policy_digest(acknowledged))
+            .is_some_and(|acknowledged| !is_sha256_label(acknowledged))
         {
             return Err(RuntimeConfigError::InvalidStrandedWorkAcknowledgement);
         }
-        if let Some(expected) = &self.package.expected_policy_digest {
-            if !valid_policy_digest(expected) {
-                return Err(RuntimeConfigError::InvalidExpectedPolicyDigest);
-            }
-            if package_digest.as_deref() != Some(expected.as_str()) {
-                return Err(RuntimeConfigError::PolicyDigestMismatch {
-                    expected: expected.clone(),
-                    actual: package_digest,
-                });
-            }
-        }
+        verify_casework_package(&self.package, &project)?;
         validate_project_source_inputs(&policy_path, &project)?;
         let declared_sources = project
             .sources
@@ -850,12 +704,13 @@ impl RuntimeConfig {
         Ok(())
     }
 
-    /// Return the verified deployment policy identity, if this is a packaged
-    /// local-development configuration. Production configurations always have one.
-    pub fn policy_package_digest(&self) -> Result<Option<String>, RuntimeConfigError> {
-        let policy_path = self.policy_path();
-        let project = CaseworkProject::load(&policy_path).map_err(RuntimeConfigError::Project)?;
-        verify_policy_package(&policy_path, &project).map_err(RuntimeConfigError::PolicyPackage)
+    /// Verify the package at `package.root` again and return its digest.
+    pub fn package_digest(&self) -> Result<String, RuntimeConfigError> {
+        let project =
+            CaseworkProject::load(self.policy_path()).map_err(RuntimeConfigError::Project)?;
+        Ok(verify_casework_package(&self.package, &project)?
+            .digest()
+            .to_owned())
     }
 
     fn validate_secret_references(&self) -> Result<(), RuntimeConfigError> {
@@ -1043,8 +898,8 @@ fn validate_project_source_inputs(
         }
         let relative = normalized_relative_path(&source.description)
             .ok_or(RuntimeConfigError::SourceDescription)?;
-        let bytes = read_bounded_file(&root.join(relative), MAXIMUM_POLICY_PACKAGE_FILE_BYTES)
-            .map_err(|_| RuntimeConfigError::SourceDescription)?;
+        let bytes = read_bounded_file(&root.join(relative), MAXIMUM_PACKAGE_FILE_BYTES)
+            .ok_or(RuntimeConfigError::SourceDescription)?;
         let metadata = validate_breg_source_description(source, &bytes)
             .map_err(|_| RuntimeConfigError::SourceDescription)?;
         for request in &source.requests {
@@ -1069,8 +924,8 @@ fn validate_project_source_inputs(
 /// Substitution applies to `runtime.yaml` only; `casework.yaml` is reviewed
 /// and packaged as written.
 fn reject_authored_environment_expressions(policy_path: &Path) -> Result<(), RuntimeConfigError> {
-    let bytes = read_bounded_file(policy_path, MAXIMUM_POLICY_PACKAGE_FILE_BYTES)
-        .map_err(RuntimeConfigError::PolicyPackage)?;
+    let bytes = read_bounded_file(policy_path, MAXIMUM_PACKAGE_FILE_BYTES)
+        .ok_or(RuntimeConfigError::PolicyUnreadable)?;
     let text = String::from_utf8_lossy(&bytes);
     reject_environment_expressions_in_authored_yaml(&text).map_err(|error| {
         if error.kind() == RuntimeConfigErrorKind::AuthoredSyntax {
@@ -1092,7 +947,7 @@ mod tests {
     use super::*;
     use registry_platform_config::{
         MAX_ASSERTION_ISSUERS_PER_CLIENT, MAX_ASSERTION_ISSUER_BYTES, MAX_ASSERTION_ISSUER_CLIENTS,
-        MAX_ASSERTION_ISSUER_CLIENT_BYTES,
+        MAX_ASSERTION_ISSUER_CLIENT_BYTES, SUM_FILE,
     };
     use registry_platform_oidc::is_access_token_typ_pair;
 
@@ -1187,22 +1042,12 @@ reviewProducers:
 }
 "#;
 
-    fn write_package_with_project(root: &Path, project: &str) -> PolicyPackageManifest {
+    fn write_package_with_project(root: &Path, project: &str) -> VerifiedPackage {
         std::fs::create_dir_all(root.join("sources")).unwrap();
         std::fs::write(root.join("casework.yaml"), project).unwrap();
         std::fs::write(root.join("sources/professional.json"), SOURCE_DESCRIPTION).unwrap();
-        let manifest = PolicyPackageManifest::build([
-            ("casework.yaml".to_owned(), project.as_bytes().to_vec()),
-            (
-                "sources/professional.json".to_owned(),
-                SOURCE_DESCRIPTION.as_bytes().to_vec(),
-            ),
-        ])
-        .unwrap();
-        let mut bytes = serde_json::to_vec_pretty(&manifest).unwrap();
-        bytes.push(b'\n');
-        std::fs::write(root.join(POLICY_PACKAGE_MANIFEST_FILE), bytes).unwrap();
-        manifest
+        registry_platform_config::write_sum_file(root, None, &package_limits(), PACKAGE_COMMAND)
+            .unwrap()
     }
 
     fn canonical_tempdir() -> tempfile::TempDir {
@@ -1215,7 +1060,7 @@ reviewProducers:
         operator
     }
 
-    fn write_package(root: &Path) -> PolicyPackageManifest {
+    fn write_package(root: &Path) -> VerifiedPackage {
         write_package_with_project(root, SOURCE_PROJECT)
     }
 
@@ -1825,69 +1670,174 @@ reviewProducers:
         ));
     }
 
-    #[test]
-    fn package_identity_covers_exact_policy_and_imported_inputs() {
-        let package = canonical_tempdir();
-        let manifest = write_package(package.path());
-        let project = CaseworkProject::load(package.path().join("casework.yaml")).unwrap();
-        assert_eq!(
-            verify_policy_package(&package.path().join("casework.yaml"), &project).unwrap(),
-            Some(manifest.policy_digest)
-        );
-
-        std::fs::write(package.path().join("sources/stale.json"), b"stale").unwrap();
-        assert!(verify_policy_package(&package.path().join("casework.yaml"), &project).is_err());
-        std::fs::remove_file(package.path().join("sources/stale.json")).unwrap();
-        std::fs::write(package.path().join("sources/professional.json"), b"changed").unwrap();
-        assert!(verify_policy_package(&package.path().join("casework.yaml"), &project).is_err());
+    fn packaged_operator(root: &Path, tls: &str) -> (PathBuf, PathBuf, VerifiedPackage) {
+        let package = root.join("package");
+        std::fs::create_dir(&package).unwrap();
+        let verified = write_package(&package);
+        let operator = write_operator(root, &operator_value(&package, tls));
+        (package, operator, verified)
     }
 
     #[test]
-    fn production_requires_a_verified_package_while_loopback_accepts_authoring() {
+    fn a_packaged_project_is_verified_against_its_sum_file() {
         let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let operator = root.path().join("operator.yaml");
-        std::fs::write(
-            &operator,
-            operator_document(&package, "operator-controlled-upstream"),
-        )
-        .unwrap();
+        let (package, operator, verified) =
+            packaged_operator(root.path(), "operator-controlled-upstream");
         let config = RuntimeConfig::load(&operator).unwrap();
-        assert!(config.policy_package_digest().unwrap().is_some());
+        assert_eq!(config.package_digest().unwrap(), verified.digest());
 
-        std::fs::remove_file(package.join(POLICY_PACKAGE_MANIFEST_FILE)).unwrap();
-        assert!(matches!(
-            RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::ProductionPolicyPackageRequired)
-        ));
-        std::fs::write(
-            &operator,
-            operator_document(&package, "development-loopback"),
-        )
-        .unwrap();
-        assert!(RuntimeConfig::load(&operator).is_ok());
+        std::fs::write(package.join("sources/professional.json"), b"changed").unwrap();
+        let error = RuntimeConfig::load(&operator).expect_err("a changed file is refused");
+        assert_eq!(error.path(), "package.root");
+        let message = error.to_string();
+        assert!(
+            message.contains("changed: sources/professional.json"),
+            "{message}"
+        );
+        assert!(message.contains(PACKAGE_COMMAND), "{message}");
     }
 
     #[test]
-    fn an_expected_policy_digest_admits_only_the_package_it_names() {
+    fn a_missing_or_extra_package_file_is_refused_by_name() {
+        let root = canonical_tempdir();
+        let (package, operator, _) = packaged_operator(root.path(), "operator-controlled-upstream");
+        std::fs::write(package.join("sources/stale.json"), b"stale").unwrap();
+        let message = RuntimeConfig::load(&operator)
+            .expect_err("an extra file is refused")
+            .to_string();
+        assert!(message.contains("extra: sources/stale.json"), "{message}");
+        std::fs::remove_file(package.join("sources/stale.json")).unwrap();
+
+        std::fs::remove_file(package.join("sources/professional.json")).unwrap();
+        let message = RuntimeConfig::load(&operator)
+            .expect_err("a missing file is refused")
+            .to_string();
+        assert!(
+            message.contains("missing: sources/professional.json"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_package_holds_exactly_the_policy_and_its_source_descriptions() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        std::fs::create_dir_all(package.join("sources")).unwrap();
+        std::fs::write(package.join("casework.yaml"), SOURCE_PROJECT).unwrap();
+        std::fs::write(
+            package.join("sources/professional.json"),
+            SOURCE_DESCRIPTION,
+        )
+        .unwrap();
+        std::fs::write(package.join("notes.txt"), b"not an input").unwrap();
+        registry_platform_config::write_sum_file(
+            &package,
+            None,
+            &package_limits(),
+            PACKAGE_COMMAND,
+        )
+        .unwrap();
+        let operator = write_operator(
+            root.path(),
+            &operator_value(&package, "operator-controlled-upstream"),
+        );
+        let error = RuntimeConfig::load(&operator).expect_err("a stray input is refused");
+        assert!(matches!(
+            &error,
+            RuntimeConfigError::PackageContents { missing, extra }
+                if missing.is_empty() && extra == &["notes.txt".to_owned()]
+        ));
+        assert!(error.to_string().contains("extra: notes.txt"), "{error}");
+    }
+
+    #[test]
+    fn a_retired_package_manifest_is_refused_with_its_replacement() {
         let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
-        let manifest = write_package(&package);
-        let operator = root.path().join("operator.yaml");
+        std::fs::create_dir_all(package.join("sources")).unwrap();
+        std::fs::write(package.join("casework.yaml"), SOURCE_PROJECT).unwrap();
+        std::fs::write(
+            package.join("sources/professional.json"),
+            SOURCE_DESCRIPTION,
+        )
+        .unwrap();
+        std::fs::write(package.join(RETIRED_PACKAGE_MANIFEST_FILE), b"{}").unwrap();
+        let operator = write_operator(
+            root.path(),
+            &operator_value(&package, "development-loopback"),
+        );
+        let error = RuntimeConfig::load(&operator).expect_err("the retired manifest is refused");
+        assert!(matches!(error, RuntimeConfigError::RetiredPackageManifest));
+        assert!(error.to_string().contains(PACKAGE_COMMAND), "{error}");
+    }
+
+    #[test]
+    fn every_listener_mode_verifies_the_package_without_a_pin() {
+        for tls in ["operator-controlled-upstream", "development-loopback"] {
+            let root = canonical_tempdir();
+            let (package, operator, verified) = packaged_operator(root.path(), tls);
+            let config = RuntimeConfig::load(&operator).expect("the package is admitted");
+            assert!(config.package.expected_digest.is_none());
+            assert_eq!(config.package_digest().unwrap(), verified.digest());
+
+            let refusal = |expected: &str| {
+                let error = RuntimeConfig::load(&operator).expect_err(expected);
+                assert_eq!(error.path(), "package.root", "{tls}: {error}");
+                let message = error.to_string();
+                assert!(message.contains(expected), "{tls}: {message}");
+                assert!(message.contains(PACKAGE_COMMAND), "{tls}: {message}");
+            };
+
+            std::fs::write(
+                package.join("casework.yaml"),
+                format!("{SOURCE_PROJECT}\n# changed\n"),
+            )
+            .unwrap();
+            refusal("changed: casework.yaml");
+            std::fs::write(package.join("casework.yaml"), SOURCE_PROJECT).unwrap();
+
+            std::fs::write(package.join("sources/stale.json"), b"stale").unwrap();
+            refusal("extra: sources/stale.json");
+            std::fs::remove_file(package.join("sources/stale.json")).unwrap();
+
+            std::fs::remove_file(package.join("sources/professional.json")).unwrap();
+            refusal("missing: sources/professional.json");
+            std::fs::write(
+                package.join("sources/professional.json"),
+                SOURCE_DESCRIPTION,
+            )
+            .unwrap();
+            assert!(RuntimeConfig::load(&operator).is_ok(), "{tls}");
+
+            std::fs::remove_file(package.join(SUM_FILE)).unwrap();
+            let error = RuntimeConfig::load(&operator).expect_err("an authored project is refused");
+            assert!(matches!(
+                &error,
+                RuntimeConfigError::Package(error)
+                    if matches!(error.kind(), PackageErrorKind::SumFileMissing)
+            ));
+            assert!(error.to_string().contains("has no SHA256SUMS"), "{error}");
+            assert!(error.to_string().contains(PACKAGE_COMMAND), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_package_digest_mismatch_is_refused_in_the_shared_shape() {
+        let root = canonical_tempdir();
+        let (package, operator, verified) =
+            packaged_operator(root.path(), "operator-controlled-upstream");
         let write = |expected: &str| {
             let mut document = operator_value(&package, "operator-controlled-upstream");
-            document["package"]["expectedPolicyDigest"] = serde_json::json!(expected);
-            std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
+            document["package"]["expectedDigest"] = serde_json::json!(expected);
+            write_operator(root.path(), &document);
         };
 
-        write(&manifest.policy_digest);
+        write(verified.digest());
         let config = RuntimeConfig::load(&operator).expect("the pinned package is admitted");
         assert_eq!(
-            config.package.expected_policy_digest.as_deref(),
-            Some(manifest.policy_digest.as_str())
+            config.package.expected_digest.as_deref(),
+            Some(verified.digest())
         );
 
         let pinned = format!("sha256:{}", "0".repeat(64));
@@ -1895,64 +1845,76 @@ reviewProducers:
         let error = RuntimeConfig::load(&operator).expect_err("a different package is refused");
         assert!(matches!(
             &error,
-            RuntimeConfigError::PolicyDigestMismatch { expected, actual }
-                if expected == &pinned && actual.as_deref() == Some(manifest.policy_digest.as_str())
+            RuntimeConfigError::PackageDigest(PackageDigestMismatch { expected, found })
+                if expected == &pinned && found == verified.digest()
         ));
-        assert_eq!(error.path(), "package.expectedPolicyDigest");
-        let message = error.to_string();
-        assert!(message.contains(&pinned), "{message}");
-        assert!(message.contains(&manifest.policy_digest), "{message}");
+        assert_eq!(error.path(), "package.expectedDigest");
+        assert_eq!(
+            error.to_string(),
+            PackageDigestMismatch {
+                expected: pinned,
+                found: verified.digest().to_owned(),
+            }
+            .to_string()
+        );
     }
 
     #[test]
-    fn an_expected_policy_digest_refuses_an_unpackaged_project() {
+    fn an_expected_digest_refuses_an_unpackaged_project() {
         let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        let manifest = write_package(&package);
-        std::fs::remove_file(package.join(POLICY_PACKAGE_MANIFEST_FILE)).unwrap();
-        let operator = root.path().join("operator.yaml");
+        let (package, _, verified) = packaged_operator(root.path(), "development-loopback");
+        std::fs::remove_file(package.join(SUM_FILE)).unwrap();
         let mut document = operator_value(&package, "development-loopback");
-        document["package"]["expectedPolicyDigest"] = serde_json::json!(manifest.policy_digest);
-        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
+        document["package"]["expectedDigest"] = serde_json::json!(verified.digest());
+        let operator = write_operator(root.path(), &document);
 
         let error = RuntimeConfig::load(&operator).expect_err("an unpackaged project is refused");
         assert!(matches!(
             &error,
-            RuntimeConfigError::PolicyDigestMismatch { expected, actual: None }
-                if expected == &manifest.policy_digest
+            RuntimeConfigError::Package(error)
+                if matches!(error.kind(), PackageErrorKind::SumFileMissing)
         ));
-        assert_eq!(error.path(), "package.expectedPolicyDigest");
-        assert!(error.to_string().contains(&manifest.policy_digest));
+        assert_eq!(error.path(), "package.root");
     }
 
     #[test]
-    fn a_malformed_expected_policy_digest_is_refused() {
+    fn a_malformed_expected_digest_is_refused() {
         let root = canonical_tempdir();
-        let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        let manifest = write_package(&package);
-        let operator = root.path().join("operator.yaml");
+        let (package, _, verified) = packaged_operator(root.path(), "operator-controlled-upstream");
         for malformed in [
             String::new(),
-            manifest.policy_digest.to_uppercase(),
-            manifest
-                .policy_digest
-                .trim_start_matches("sha256:")
-                .to_owned(),
-            format!("{}0", manifest.policy_digest),
+            verified.digest().to_uppercase(),
+            verified.digest().trim_start_matches("sha256:").to_owned(),
+            format!("{}0", verified.digest()),
             format!("sha512:{}", "0".repeat(64)),
         ] {
             let mut document = operator_value(&package, "operator-controlled-upstream");
-            document["package"]["expectedPolicyDigest"] = serde_json::json!(malformed);
-            std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
+            document["package"]["expectedDigest"] = serde_json::json!(malformed);
+            let operator = write_operator(root.path(), &document);
             let error = RuntimeConfig::load(&operator).expect_err("a malformed digest is refused");
             assert!(
-                matches!(error, RuntimeConfigError::InvalidExpectedPolicyDigest),
+                matches!(error, RuntimeConfigError::Block(_)),
                 "{malformed}: {error:?}"
             );
-            assert_eq!(error.path(), "package.expectedPolicyDigest");
+            assert_eq!(error.path(), "package.expectedDigest");
         }
+    }
+
+    #[test]
+    fn the_retired_expected_policy_digest_key_names_its_replacement() {
+        let root = canonical_tempdir();
+        let (package, _, verified) = packaged_operator(root.path(), "operator-controlled-upstream");
+        let mut document = operator_value(&package, "operator-controlled-upstream");
+        document["package"]["expectedPolicyDigest"] = serde_json::json!(verified.digest());
+        let operator = write_operator(root.path(), &document);
+        let message = RuntimeConfig::load(&operator)
+            .expect_err("the retired key is refused")
+            .to_string();
+        assert!(
+            message.contains("package.expectedPolicyDigest"),
+            "{message}"
+        );
+        assert!(message.contains("package.expectedDigest"), "{message}");
     }
 
     #[test]
@@ -1968,11 +1930,11 @@ reviewProducers:
             std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
         };
 
-        write(&manifest.policy_digest);
+        write(manifest.digest());
         let config = RuntimeConfig::load(&operator).expect("a digest acknowledgement loads");
         assert_eq!(
             config.package.acknowledge_stranded_work.as_deref(),
-            Some(manifest.policy_digest.as_str())
+            Some(manifest.digest())
         );
 
         for malformed in ["yes", "sha256:ABC"] {
@@ -2434,28 +2396,14 @@ reviewProducers:
     fn startup_redecodes_packaged_source_metadata_instead_of_trusting_its_hash() {
         let root = canonical_tempdir();
         let package = root.path().join("package");
-        std::fs::create_dir(&package).unwrap();
-        write_package(&package);
-        let invalid_description = b"{}\n";
-        std::fs::write(
-            package.join("sources/professional.json"),
-            invalid_description,
-        )
-        .unwrap();
-        let manifest = PolicyPackageManifest::build([
-            (
-                "casework.yaml".to_owned(),
-                SOURCE_PROJECT.as_bytes().to_vec(),
-            ),
-            (
-                "sources/professional.json".to_owned(),
-                invalid_description.to_vec(),
-            ),
-        ])
-        .unwrap();
-        std::fs::write(
-            package.join(POLICY_PACKAGE_MANIFEST_FILE),
-            serde_json::to_vec_pretty(&manifest).unwrap(),
+        std::fs::create_dir_all(package.join("sources")).unwrap();
+        std::fs::write(package.join("casework.yaml"), SOURCE_PROJECT).unwrap();
+        std::fs::write(package.join("sources/professional.json"), b"{}\n").unwrap();
+        registry_platform_config::write_sum_file(
+            &package,
+            None,
+            &package_limits(),
+            PACKAGE_COMMAND,
         )
         .unwrap();
         let operator = root.path().join("operator.yaml");
@@ -2514,25 +2462,27 @@ pub enum RuntimeConfigError {
         "{field} in the authored Casework project holds an environment expression; ${{...}} substitution applies to runtime.yaml only, so write the value in casework.yaml directly"
     )]
     PolicyEnvironmentExpression { field: String },
-    #[error("the Casework policy package is invalid")]
-    PolicyPackage(#[source] PolicyPackageError),
-    #[error("operator-controlled production requires a verified Casework policy package")]
-    ProductionPolicyPackageRequired,
     #[error(
-        "package.expectedPolicyDigest must be sha256: followed by 64 lowercase hexadecimal digits"
+        "package.root/casework.yaml must be a regular file of at most one MiB; rebuild the package with `caseworkctl package`"
     )]
-    InvalidExpectedPolicyDigest,
+    PolicyUnreadable,
+    #[error(transparent)]
+    Package(PackageError),
+    #[error(transparent)]
+    PackageDigest(PackageDigestMismatch),
     #[error(
-        "package.expectedPolicyDigest is {expected}, but package.root holds {}",
-        actual.as_deref().map_or_else(
-            || "no casework.package.json".to_owned(),
-            |actual| format!("the package with policy digest {actual}"),
-        )
+        "the package at package.root must hold exactly casework.yaml and the source descriptions it names{}{}; rebuild it with `caseworkctl package`",
+        if missing.is_empty() { String::new() } else { format!("; missing: {}", missing.join(", ")) },
+        if extra.is_empty() { String::new() } else { format!("; extra: {}", extra.join(", ")) },
     )]
-    PolicyDigestMismatch {
-        expected: String,
-        actual: Option<String>,
+    PackageContents {
+        missing: Vec<String>,
+        extra: Vec<String>,
     },
+    #[error(
+        "package.root holds casework.package.json, which Casework no longer reads; rebuild the package with `caseworkctl package`, which writes SHA256SUMS"
+    )]
+    RetiredPackageManifest,
     #[error(
         "package.acknowledgeStrandedWork must be sha256: followed by 64 lowercase hexadecimal digits"
     )]
@@ -2599,10 +2549,11 @@ impl RuntimeConfigError {
                 "package.root/casework.yaml"
             }
             Self::Project(_) => "package.root/casework.yaml",
-            Self::PolicyPackage(_) | Self::ProductionPolicyPackageRequired => "package.root",
-            Self::InvalidExpectedPolicyDigest | Self::PolicyDigestMismatch { .. } => {
-                "package.expectedPolicyDigest"
+            Self::PolicyUnreadable => "package.root/casework.yaml",
+            Self::Package(_) | Self::PackageContents { .. } | Self::RetiredPackageManifest => {
+                "package.root"
             }
+            Self::PackageDigest(_) => "package.expectedDigest",
             Self::InvalidStrandedWorkAcknowledgement => "package.acknowledgeStrandedWork",
             Self::Invalid => "/",
         }

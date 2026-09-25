@@ -506,7 +506,7 @@ fn generated_secrets_are_nul_free_lowercase_hexadecimal() {
 }
 
 #[test]
-fn generated_operator_config_loads_through_the_runtime_contract() {
+fn each_start_packages_the_authored_project_the_runtime_verifies() {
     let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     let state = session(&project);
@@ -517,13 +517,78 @@ fn generated_operator_config_loads_through_the_runtime_contract() {
     let path = session_root.join("operator.yaml");
     config::write_yaml(&path, &config::operator(&state)).unwrap();
 
+    // The session never serves the authored project directly.
+    let error = RuntimeConfig::load(&path).expect_err("an unpackaged session is refused");
+    assert!(error.to_string().contains("caseworkctl package"), "{error}");
+
+    // A staging directory an interrupted start left behind is replaced.
+    fs::create_dir(session_root.join(".package-staged")).unwrap();
+    package_session(&session_root, &project).unwrap();
+    assert!(!session_root.join(".package-staged").exists());
+    assert!(!session_root.join(".package-retired").exists());
+    let first = RuntimeConfig::load(&path)
+        .unwrap()
+        .package_digest()
+        .unwrap();
+    let package = session_root.join(SESSION_PACKAGE);
+    assert_eq!(
+        fs::read(package.join("casework.yaml")).unwrap(),
+        STANDALONE_YAML.as_bytes()
+    );
+
+    // An edit to the authored project reaches the runtime only through the
+    // next start's package, and a package changed in place is refused.
+    fs::write(
+        project.join("casework.yaml"),
+        format!("{STANDALONE_YAML}\n# edited\n"),
+    )
+    .unwrap();
+    assert_eq!(
+        RuntimeConfig::load(&path)
+            .unwrap()
+            .package_digest()
+            .unwrap(),
+        first
+    );
+    fs::write(
+        package.join("casework.yaml"),
+        format!("{STANDALONE_YAML}\n# edited\n"),
+    )
+    .unwrap();
+    let error = RuntimeConfig::load(&path).expect_err("a changed package is refused");
+    assert!(
+        error.to_string().contains("changed: casework.yaml"),
+        "{error}"
+    );
+
+    package_session(&session_root, &project).unwrap();
+    let second = RuntimeConfig::load(&path)
+        .unwrap()
+        .package_digest()
+        .unwrap();
+    assert_ne!(first, second);
+}
+
+#[test]
+fn generated_operator_config_loads_through_the_runtime_contract() {
+    let root = crate::canonical_tempdir();
+    let project = standalone(root.path());
+    let state = session(&project);
+    let session_root = state.root();
+    fs::create_dir_all(&session_root).unwrap();
+    fs::set_permissions(project.join(".casework"), fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&session_root, fs::Permissions::from_mode(0o700)).unwrap();
+    let path = session_root.join("operator.yaml");
+    config::write_yaml(&path, &config::operator(&state)).unwrap();
+    package_session(&session_root, &project).unwrap();
+
     let config = RuntimeConfig::load(&path).unwrap();
     assert_eq!(
         config.api_version,
         registry_casework::RUNTIME_CONFIG_API_VERSION
     );
     assert_eq!(config.kind, registry_casework::RUNTIME_CONFIG_KIND);
-    assert_eq!(config.package.root, project);
+    assert_eq!(config.package.root, session_root.join(SESSION_PACKAGE));
     assert_eq!(config.listener.bind, "127.0.0.1:8092".parse().unwrap());
     // The local issuer emits one space-delimited `scope` claim.
     assert_eq!(config.authentication.oidc.scope_claim, "scope");

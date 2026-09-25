@@ -156,8 +156,8 @@ kind: CaseworkRuntimeConfig
 package:
   # The selected package always contains the policy at casework.yaml.
   root: /etc/registry-casework/package
-  # Optional: the policyDigest of the package you reviewed; any other package is refused.
-  expectedPolicyDigest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  # Optional: the packageDigest of the package you reviewed; any other package is refused.
+  expectedDigest: sha256:0000000000000000000000000000000000000000000000000000000000000000
 listener:
   # The proxy in front of this private listener terminates TLS.
   bind: 10.42.0.7:8100
@@ -203,7 +203,7 @@ sources:
 
 | Section | What it binds |
 | --- | --- |
-| `package` | The absolute root of the package containing `casework.yaml`, its manifest, and exact source descriptions, and optionally the one policy digest the runtime may load from it. |
+| `package` | The absolute root of the package containing `casework.yaml`, its `SHA256SUMS`, and exact source descriptions, and optionally the one package digest the runtime may load from it. |
 | `listener` | The listener address and the transport boundary the deployment declares for it. |
 | `metricsListener` | Optional. A second, operator-private address for `/metrics` and `/version`; see [Scrape metrics and the running version](#scrape-metrics-and-the-running-version). |
 | `secretProviders` | The explicitly enabled file and environment secret providers. |
@@ -225,7 +225,7 @@ The listener boundary is checked, not advisory. With `operator-controlled-upstre
 `private-address`, the address must be loopback or private (IPv4 private range or IPv6 unique
 local); `container-private` also accepts a wildcard bind for a container on a private network.
 `development-loopback` accepts only a loopback address with `private-address`, and it is the one
-mode that serves an authored project with no manifest beside it. Apply HSTS on the proxy's TLS
+mode that serves an authored project with no `SHA256SUMS`. Apply HSTS on the proxy's TLS
 responses; the runtime adds its remaining security headers and `Cache-Control: no-store` to every
 response it returns.
 
@@ -345,44 +345,46 @@ from the audit storage, and keep both for as long as the records must stay prova
 ## Verify the package before it opens the listener
 
 The runtime verifies the package every time it loads the runtime file, before it opens the
-database, contacts the issuer, or binds the listener. It reads `casework.package.json` beside
-`casework.yaml`, recomputes the policy digest over the sorted file list, checks every file's
-SHA-256 digest and byte count, and refuses a package directory holding any file the manifest does
-not declare or any symbolic link. A start that verifies the package records the policy digest in
-the runtime log before anything else happens.
+database, contacts the issuer, or binds the listener. It reads `SHA256SUMS` at `package.root`,
+recomputes the SHA-256 digest of every file it lists, and refuses a changed, missing, or extra
+file by name, and any symbolic link. The package must hold exactly `casework.yaml` and the source
+descriptions it names. A start that verifies the package records the package digest, the SHA-256
+digest of `SHA256SUMS`, in the runtime log before anything else happens.
 
-With `tlsTermination: operator-controlled-upstream`, an absent manifest is a refusal rather than a
-fallback to the authored project.
+With `tlsTermination: operator-controlled-upstream`, an absent `SHA256SUMS` is a refusal rather
+than a fallback to the authored project. A directory that still holds `casework.package.json` is
+refused and names `caseworkctl package` as the command that rebuilds it.
 
-A verified package proves its files match its own manifest, not that it is the package you
-reviewed. Set `package.expectedPolicyDigest` to the `policyDigest` that `caseworkctl package`
-reported for the reviewed package, and the runtime starts only on that package: a package naming
-another digest, or a directory with no manifest, is refused with both digests named, so a
-replaced package directory cannot change the policy a restart loads.
+A verified package proves its files match its own `SHA256SUMS`, not that it is the package you
+reviewed. Set `package.expectedDigest` to the `packageDigest` that `caseworkctl package` reported
+for the reviewed package, and the runtime starts only on that package: any other package, or a
+directory with no `SHA256SUMS`, is refused with both digests named, so a replaced package directory
+cannot change the policy a restart loads.
 
 Each of these refusals is one run's entire output on standard error, written before the listener
 binds, and each exits non-zero:
 
 ```text
-casework: operator-controlled production requires a verified Casework policy package
-casework: the Casework policy package is invalid
-casework: package.expectedPolicyDigest is sha256:4f0c…, but package.root holds the package with policy digest sha256:9b2e…
+casework: the directory at /etc/registry-casework/package has no SHA256SUMS, so it is not a package; build one with `caseworkctl package`
+casework: the package at /etc/registry-casework/package does not match its SHA256SUMS; changed: casework.yaml; rebuild the package with `caseworkctl package` and deploy the whole directory
+casework: package.expectedDigest is sha256:4f0c… but the package at package.root is sha256:9b2e…; deploy the pinned package or update package.expectedDigest
 casework: the Casework runtime configuration is not valid YAML
 casework: the Casework runtime configuration is invalid
 casework: the Casework secret-provider configuration is invalid; secretProviders.file.root must be an absolute path
 ```
 
-The first line reports a production configuration with no manifest. The second reports a manifest
-whose digests, byte counts, or file set do not match the directory. The third reports a verified
-package other than the one `package.expectedPolicyDigest` names, shown here with both digests
+The first line reports a production configuration with no `SHA256SUMS`. The second reports a
+package whose files do not match its `SHA256SUMS`, naming each changed, missing, or extra file. The
+third reports a verified package other than the one `package.expectedDigest` names, shown here with both digests
 shortened. The fourth and fifth report the runtime file itself: unparseable YAML, and a
 configuration the checks refuse, which covers an invalid listener boundary, an empty issuer or
 claim name, a human-identity claim equal to the scope claim, an access profile using the
 human-identity claim as its principal claim, and a `sources` map that does not match the declared
 source ids exactly. The sixth reports a secret provider root the resolver cannot use.
 
-{/* Evidence: crates/registry-casework/src/config.rs, verify_policy_package(),
-    PolicyPackageManifest, RuntimeConfig::check(), and RuntimeConfigError;
+{/* Evidence: crates/registry-casework/src/config.rs, verify_casework_package(),
+    RuntimeConfig::check(), and RuntimeConfigError;
+    crates/registry-platform-config/src/package.rs, verify_package() and PackageError;
     crates/registry-casework/src/runtime.rs, serve_from_path() and RuntimeError;
     crates/registry-casework/src/main.rs. */}
 
@@ -415,9 +417,8 @@ that package, so the next package is compared afresh.
 
 To preview the comparison before a restart, point `caseworkctl doctor` at a runtime file whose
 `package.root` holds the next package. Its `pinnedWork` check fails with the same sentence, and its
-report lists the conflicts it found under `pinnedWork.conflicts` with the verdict `clear`,
-`acknowledged`, or `development`. A development-loopback project with no manifest has no digest to
-acknowledge; the runtime logs the conflicts and starts.
+report lists the conflicts it found under `pinnedWork.conflicts` with the verdict `clear` or
+`acknowledged`.
 
 {/* Evidence: crates/registry-casework/src/pinned_work.rs, stranded_pinned_work(),
     pinned_work_verdict(), and stranded_work_refusal();
@@ -595,7 +596,7 @@ use refuses startup, and the metrics listener stops with the API listener. Witho
 telemetry socket opens.
 
 `GET /version` answers JSON with the running `version` and the `packageDigest` of the verified
-policy package, `null` for an unpackaged local project, so a rollout can confirm which package each
+policy package, so a rollout can confirm which package each
 replica serves. `GET /metrics` answers the Prometheus text format, read at scrape time:
 
 | Series | Meaning |
@@ -869,7 +870,7 @@ class, and when a pass last succeeded. The audit check verifies the sealed audit
 active file too when no runtime holds its lock, so run it with the runtime stopped to prove a key
 against the whole chain; it refuses a chain the configured key does not verify. A run that reaches
 the end prints a report naming each check, the digest of the package `package.root` holds
-(`packageDigest`, `null` for an unpackaged local project), each source it contacted with its
+(`packageDigest`), each source it contacted with its
 reconciliation health, and the audit records and files it verified.
 
 `doctor` answers whether the deployment is ready to do work. It does not summarize an individual
@@ -941,7 +942,7 @@ the generation and the work items.
 
 :::caution[Editing a package in place changes nothing the process is serving]
 A running process keeps the policy it verified at startup, so files replaced under it leave the
-deployment serving a package that no longer matches its own manifest, and the next restart refuses
+deployment serving a package that no longer matches its own `SHA256SUMS`, and the next restart refuses
 the directory. Install the successor beside the current package and restart.
 :::
 
@@ -956,7 +957,7 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 
 {/* Evidence: products/casework/README.md;
     products/casework/generated/registry-casework.openapi.json;
-    crates/registry-casework/src/config.rs, verify_policy_package();
+    crates/registry-casework/src/config.rs, verify_casework_package();
     crates/registry-casework/migrations/0016_occurrence_identity_excludes_superseded.sql;
     crates/registry-casework/tests/postgres_transactions.rs,
     returning_to_an_earlier_binding_generation_opens_a_fresh_occurrence;
@@ -967,7 +968,7 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 
 | Symptom | Next move |
 | --- | --- |
-| `operator-controlled production requires a verified Casework policy package`, or `the Casework policy package is invalid` | The first names a production configuration with no manifest, the second a package directory whose files disagree with the manifest. Point `package.root` at the installed package, and reinstall it from the reviewed artifact rather than editing it. |
+| `has no SHA256SUMS, so it is not a package`, or `does not match its SHA256SUMS` | The first names a configuration whose `package.root` is not a package, such as an authored project, the second a package directory whose files disagree with `SHA256SUMS`, naming each changed, missing, or extra file. Point `package.root` at the installed package, and reinstall it from the reviewed artifact rather than editing it. |
 | `the Casework runtime configuration is invalid` | Check the listener against `tlsTermination` and `networkExposure`, the non-empty issuer and claim names, the human-identity claim against `scopeClaim` and the package's profiles, and `sources` against the declared source ids. |
 | `the Casework secret-provider configuration is invalid` | The file provider root is relative or unusable. Write an absolute `root`. |
 | A secret reference is refused | The named file must be a regular file owned by the running user, mode `0400` or `0600`, one link, no symbolic link, non-empty, and free of NUL bytes. |

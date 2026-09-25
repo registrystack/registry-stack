@@ -2,9 +2,9 @@
 
 use anyhow::{bail, Context, Result};
 use registry_casework::{
-    secret_resolver, validate_breg_source_description, verify_audit_journal, verify_policy_package,
-    PolicyPackageManifest, PostgresStore, RuntimeConfig, SourceReconciliationHealth,
-    POLICY_PACKAGE_MANIFEST_FILE, RECONCILIATION_FAILURE_THRESHOLD,
+    package_limits, secret_resolver, validate_breg_source_description, verify_audit_journal,
+    PostgresStore, RuntimeConfig, SourceReconciliationHealth, PACKAGE_COMMAND,
+    RECONCILIATION_FAILURE_THRESHOLD,
 };
 use registry_casework_breg::MAXIMUM_REQUEST_ENTITIES;
 use registry_casework_core::{
@@ -12,8 +12,12 @@ use registry_casework_core::{
     AttemptUncertainMarkingReport, CaseworkProject, ReviewContextStrategy, ReviewKindPurpose,
     SourcePolicy, SourceRequestPolicy, SourceRetentionReport, SourceRetentionSelector,
 };
-use registry_platform_config::{SecretError, SecretProvider, SecretReference, SecretResolver};
+use registry_platform_config::{
+    plan_package, sha256_uri, write_package, SecretError, SecretProvider, SecretReference,
+    SecretResolver,
+};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::DirBuilderExt as _;
 use std::path::{Path, PathBuf};
@@ -23,8 +27,12 @@ const CASEWORK_YAML: &str = include_str!("../templates/professional-review/casew
 const RUNTIME_SCHEMA: &str =
     include_str!("../../../products/casework/generated/runtime/runtime.schema.json");
 
+/// Where the generated runtime example expects the package
+/// `caseworkctl package . --output .casework/package` writes.
+pub(crate) const LOCAL_PACKAGE_DIRECTORY: &str = ".casework/package";
+
 fn runtime_example(project: &Path, include_source: bool) -> Result<String> {
-    let package_root = if project.is_absolute() {
+    let project_root = if project.is_absolute() {
         project.to_path_buf()
     } else {
         std::env::current_dir()?.join(project)
@@ -32,9 +40,9 @@ fn runtime_example(project: &Path, include_source: bool) -> Result<String> {
     let mut document = json!({
         "apiVersion": "registry.registrystack.org/casework-runtime/v1alpha1",
         "kind": "CaseworkRuntimeConfig",
-        "package": {"root": &package_root},
+        "package": {"root": project_root.join(LOCAL_PACKAGE_DIRECTORY)},
         "listener": {"bind": "127.0.0.1:8100", "tlsTermination": "development-loopback", "networkExposure": "private-address"},
-        "secretProviders": {"file": {"root": package_root.join("secrets")}},
+        "secretProviders": {"file": {"root": project_root.join("secrets")}},
         "database": {"runtimeUrlRef": "secret:file/runtime-database-url", "migrationUrlRef": "secret:file/migration-database-url"},
         "authentication": {"oidc": {
             "issuer": "https://identity.example.test/realms/registry",
@@ -42,7 +50,7 @@ fn runtime_example(project: &Path, include_source: bool) -> Result<String> {
             "scopeClaim": "scope",
             "humanIdentity": {"claim": "registry_actor_kind", "value": "human"}
         }},
-        "audit": {"path": package_root.join("state/audit.ndjson"), "hashKeyRef": "secret:file/casework-audit-key"},
+        "audit": {"path": project_root.join("state/audit.ndjson"), "hashKeyRef": "secret:file/casework-audit-key"},
         "sources": {}
     });
     if include_source {
@@ -548,49 +556,61 @@ pub(super) fn simulate(project: &Path, fixture: &Path) -> Result<Value> {
 /// `package_dry_run` share before any filesystem write.
 struct PackageContents {
     project: PathBuf,
-    manifest: PolicyPackageManifest,
-    inputs: Vec<(String, Vec<u8>)>,
+    inputs: BTreeMap<String, Vec<u8>>,
 }
 
 /// Canonicalize the project, run every package validation, and assemble the
-/// exact inputs and identity a package would carry. Performs no writes, so
-/// both `package` and `package_dry_run` can share it.
+/// exact inputs a package would carry. Performs no writes, so both `package`
+/// and `package_dry_run` can share it.
 fn compute_package(project: &Path) -> Result<PackageContents> {
     let project = fs::canonicalize(project).context("resolving the Casework authoring project")?;
     let policy = load_and_check_policy(&project)?;
     check_source_descriptions(&project)?;
     crate::policy::check(&project, &policy)?;
 
-    let mut inputs = vec![(
+    let mut inputs = BTreeMap::from([(
         "casework.yaml".to_owned(),
         read_package_input(&project.join("casework.yaml"))?,
-    )];
+    )]);
     for source in &policy.sources {
         let path = project_input_path(&project, &source.description)?;
-        inputs.push((source.description.clone(), read_package_input(&path)?));
+        inputs.insert(source.description.clone(), read_package_input(&path)?);
     }
-    let manifest = PolicyPackageManifest::build(inputs.clone())
-        .context("building the Casework policy package identity")?;
-    Ok(PackageContents {
-        project,
-        manifest,
-        inputs,
-    })
+    Ok(PackageContents { project, inputs })
 }
 
-/// Report the exact `policyDigest` and `files` a package of this project
+fn package_files(inputs: &BTreeMap<String, Vec<u8>>) -> Vec<Value> {
+    inputs
+        .iter()
+        .map(|(path, bytes)| {
+            json!({
+                "path": path,
+                "sha256": sha256_uri(bytes),
+                "bytes": bytes.len(),
+            })
+        })
+        .collect()
+}
+
+/// Report the exact `packageDigest` and `files` a package of this project
 /// would carry, without writing anything.
-pub(super) fn package_dry_run(project: &Path) -> Result<Value> {
-    let PackageContents {
-        project, manifest, ..
-    } = compute_package(project)?;
+pub(super) fn package_dry_run(project: &Path, revision: Option<&str>) -> Result<Value> {
+    let PackageContents { project, inputs } = compute_package(project)?;
+    let digest = plan_package(
+        &project,
+        &inputs,
+        revision,
+        &package_limits(),
+        PACKAGE_COMMAND,
+    )?;
     Ok(json!({
         "ok": true,
         "command": "package",
         "project": project,
         "dryRun": true,
-        "policyDigest": manifest.policy_digest,
-        "files": manifest.files,
+        "packageDigest": digest,
+        "revision": revision,
+        "files": package_files(&inputs),
         "runtimeConfigurationIncluded": false,
         "secretsIncluded": false,
         "networkAccess": false,
@@ -598,57 +618,24 @@ pub(super) fn package_dry_run(project: &Path) -> Result<Value> {
     }))
 }
 
-pub(super) fn package(project: &Path, output: &Path) -> Result<Value> {
-    let PackageContents {
-        project,
-        manifest,
-        inputs,
-    } = compute_package(project)?;
-
-    if output.exists() {
-        bail!("policy package output already exists");
-    }
-    if let Some(parent) = output
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::create_dir_all(parent).context("creating the policy package parent directory")?;
-    }
-    fs::create_dir(output).context("creating the new policy package directory")?;
-    let published = (|| -> Result<()> {
-        for (relative, bytes) in &inputs {
-            let target = output.join(relative);
-            if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent).context("creating policy package directories")?;
-            }
-            fs::write(&target, bytes).context("writing a policy package input")?;
-        }
-        let mut manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
-        manifest_bytes.push(b'\n');
-        fs::write(output.join(POLICY_PACKAGE_MANIFEST_FILE), manifest_bytes)
-            .context("writing the policy package manifest")?;
-        let loaded = CaseworkProject::load(output.join("casework.yaml"))
-            .context("loading the staged Casework policy")?;
-        let verified = verify_policy_package(&output.join("casework.yaml"), &loaded)
-            .context("verifying the staged Casework policy package")?;
-        if verified.as_deref() != Some(manifest.policy_digest.as_str()) {
-            bail!("staged Casework policy package identity changed");
-        }
-        Ok(())
-    })();
-    if let Err(error) = published {
-        let _ = fs::remove_dir_all(output);
-        return Err(error);
-    }
-
+pub(super) fn package(project: &Path, output: &Path, revision: Option<&str>) -> Result<Value> {
+    let PackageContents { project, inputs } = compute_package(project)?;
+    let written = write_package(
+        output,
+        &inputs,
+        revision,
+        &package_limits(),
+        PACKAGE_COMMAND,
+    )?;
     Ok(json!({
         "ok": true,
         "command": "package",
         "project": project,
         "output": output,
         "dryRun": false,
-        "policyDigest": manifest.policy_digest,
-        "files": manifest.files,
+        "packageDigest": written.digest(),
+        "revision": written.revision(),
+        "files": package_files(&inputs),
         "runtimeConfigurationIncluded": false,
         "secretsIncluded": false,
         "networkAccess": false,
@@ -1038,7 +1025,7 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
     let package_root = fs::canonicalize(&config.package.root)
         .context("resolving the configured Casework package root")?;
     let package_digest = config
-        .policy_package_digest()
+        .package_digest()
         .context("verifying the configured Casework package")?;
     check_source_descriptions(&package_root).map_err(|error| {
         doctor_check_failure(
@@ -1137,7 +1124,7 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
         .map_err(|error| database_failure(error.into()))?;
     let pinned_work = doctor_pinned_work(
         conflicts,
-        package_digest.as_deref(),
+        &package_digest,
         config.package.acknowledge_stranded_work.as_deref(),
     )?;
     runtime
@@ -1217,7 +1204,7 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
 /// failure when the operator has not acknowledged that exact package.
 fn doctor_pinned_work(
     conflicts: Vec<registry_casework::StrandedWork>,
-    package_digest: Option<&str>,
+    package_digest: &str,
     acknowledged: Option<&str>,
 ) -> Result<Value> {
     use registry_casework::PinnedWorkVerdict;
@@ -1226,15 +1213,10 @@ fn doctor_pinned_work(
         match registry_casework::pinned_work_verdict(&conflicts, package_digest, acknowledged) {
             PinnedWorkVerdict::Clear => "clear",
             PinnedWorkVerdict::Acknowledged => "acknowledged",
-            PinnedWorkVerdict::Development => "development",
             PinnedWorkVerdict::Refused => {
                 return Err(anyhow::Error::new(DoctorCheckFailure {
                     check: "pinnedWork",
-                    // Only a packaged project is refused, so the digest is present.
-                    message: registry_casework::stranded_work_refusal(
-                        &conflicts,
-                        package_digest.unwrap_or_default(),
-                    ),
+                    message: registry_casework::stranded_work_refusal(&conflicts, package_digest),
                     action: DOCTOR_PINNED_WORK_ACTION,
                 }));
             }
@@ -1581,7 +1563,14 @@ fn async_runtime() -> Result<tokio::runtime::Runtime> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use registry_platform_config::ConfigBlockErrorKind;
+    use registry_platform_config::{verify_package, ConfigBlockErrorKind, SUM_FILE};
+
+    /// Package the authored project where the generated runtime example
+    /// selects it, as `caseworkctl package . --output .casework/package` does.
+    fn package_locally(project: &Path) {
+        fs::create_dir_all(project.join(".casework")).unwrap();
+        package(project, &project.join(LOCAL_PACKAGE_DIRECTORY), None).unwrap();
+    }
 
     #[test]
     fn template_has_only_checkpoint_capabilities() {
@@ -1768,22 +1757,18 @@ mod tests {
         }];
 
         assert_eq!(
-            doctor_pinned_work(Vec::new(), Some(&digest), None).unwrap(),
+            doctor_pinned_work(Vec::new(), &digest, None).unwrap(),
             json!({"verdict": "clear", "conflicts": []})
         );
         assert_eq!(
-            doctor_pinned_work(conflicts.clone(), Some(&digest), Some(&digest)).unwrap(),
+            doctor_pinned_work(conflicts.clone(), &digest, Some(&digest)).unwrap(),
             json!({
                 "verdict": "acknowledged",
                 "conflicts": [{"reason": "queue-removed", "queue": "intake", "reviews": 2, "workItems": 1}]
             })
         );
-        assert_eq!(
-            doctor_pinned_work(conflicts.clone(), None, None).unwrap()["verdict"],
-            "development"
-        );
 
-        let error = doctor_pinned_work(conflicts, Some(&digest), None).unwrap_err();
+        let error = doctor_pinned_work(conflicts, &digest, None).unwrap_err();
         let failure = error.downcast_ref::<DoctorCheckFailure>().unwrap();
         assert_eq!(failure.check, "pinnedWork");
         assert_eq!(
@@ -1849,6 +1834,7 @@ mod tests {
             runtime_example(directory.path(), true).unwrap(),
         )
         .unwrap();
+        package_locally(directory.path());
         let secrets = directory.path().join("secrets");
         fs::create_dir(&secrets).unwrap();
         fs::set_permissions(&secrets, fs::Permissions::from_mode(0o700)).unwrap();
@@ -2113,6 +2099,7 @@ mod tests {
         let root = crate::canonical_tempdir();
         let project = root.path().join("standalone");
         init(&project, "standalone-decision").unwrap();
+        package_locally(&project);
         let secrets = project.join("secrets");
         fs::create_dir(&secrets).unwrap();
         let audit = secrets.join("casework-audit-key");
@@ -2163,6 +2150,7 @@ mod tests {
         let root = crate::canonical_tempdir();
         let project = root.path().join("standalone");
         init(&project, "standalone-decision").unwrap();
+        package_locally(&project);
         let secrets = project.join("secrets");
         fs::create_dir(&secrets).unwrap();
         for name in ["casework-audit-key", "receiver-token", "notifier-key"] {
@@ -2229,6 +2217,7 @@ mod tests {
         let root = crate::canonical_tempdir();
         let project = root.path().join("standalone");
         init(&project, "standalone-decision").unwrap();
+        package_locally(&project);
         let actual_secrets = root.path().join("actual-secrets");
         fs::create_dir(&actual_secrets).unwrap();
         let migration = actual_secrets.join("migration-database-url");
@@ -2378,6 +2367,7 @@ mod tests {
         value["review"]["display"]["undeclared"] = json!("synthetic");
         fs::write(&fixture, serde_norway::to_string(&value).unwrap()).unwrap();
         assert!(test(&project).is_err());
+        package_locally(&project);
         let runtime = RuntimeConfig::load(project.join("runtime.example.yaml")).unwrap();
         assert!(runtime.sources.is_empty());
         assert_eq!(
@@ -2400,23 +2390,28 @@ mod tests {
         let output = root.path().join("deployment/policy");
         init(&project, "standalone-decision").unwrap();
 
-        let report = package(&project, &output).unwrap();
+        let report = package(&project, &output, None).unwrap();
         assert_eq!(report["command"], "package");
-        assert!(report["policyDigest"]
-            .as_str()
-            .unwrap()
-            .starts_with("sha256:"));
+        let digest = report["packageDigest"].as_str().unwrap();
+        assert!(digest.starts_with("sha256:"));
+        assert_eq!(report["revision"], Value::Null);
         assert_eq!(report["runtimeConfigurationIncluded"], false);
         assert_eq!(report["secretsIncluded"], false);
         assert!(output.join("casework.yaml").is_file());
-        assert!(output.join(POLICY_PACKAGE_MANIFEST_FILE).is_file());
+        assert!(output.join(SUM_FILE).is_file());
+        assert!(!output.join("casework.package.json").exists());
         assert!(!output.join("runtime.example.yaml").exists());
         assert!(!output.join("fixtures").exists());
-        assert!(package(&project, &output).is_err());
+        let verified = verify_package(&output, &package_limits(), PACKAGE_COMMAND).unwrap();
+        assert_eq!(verified.digest(), digest);
+        assert!(package(&project, &output, None).is_err());
 
         fs::write(output.join("undeclared-input.json"), "{}\n").unwrap();
-        let policy = CaseworkProject::load(output.join("casework.yaml")).unwrap();
-        assert!(verify_policy_package(&output.join("casework.yaml"), &policy).is_err());
+        let error = verify_package(&output, &package_limits(), PACKAGE_COMMAND).unwrap_err();
+        assert!(
+            error.to_string().contains("undeclared-input.json"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -2432,16 +2427,43 @@ mod tests {
         )
         .unwrap();
 
-        package(&project, &output).unwrap();
+        package(&project, &output, None).unwrap();
         assert!(output.join("sources/professional-licences.json").is_file());
-        let policy = CaseworkProject::load(output.join("casework.yaml")).unwrap();
-        assert!(
-            verify_policy_package(&output.join("casework.yaml"), &policy)
-                .unwrap()
-                .is_some()
-        );
+        verify_package(&output, &package_limits(), PACKAGE_COMMAND).unwrap();
         fs::write(output.join("sources/professional-licences.json"), "{}\n").unwrap();
-        assert!(verify_policy_package(&output.join("casework.yaml"), &policy).is_err());
+        let error = verify_package(&output, &package_limits(), PACKAGE_COMMAND).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("sources/professional-licences.json"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn packaging_twice_gives_the_same_digest_and_a_revision_changes_it() {
+        let root = crate::canonical_tempdir();
+        let project = root.path().join("standalone");
+        init(&project, "standalone-decision").unwrap();
+
+        let first = package(&project, &root.path().join("first"), None).unwrap();
+        let second = package(&project, &root.path().join("second"), None).unwrap();
+        assert_eq!(first["packageDigest"], second["packageDigest"]);
+
+        let revised = package(
+            &project,
+            &root.path().join("revised"),
+            Some("2026-09 intake"),
+        )
+        .unwrap();
+        assert_eq!(revised["revision"], "2026-09 intake");
+        assert_ne!(revised["packageDigest"], first["packageDigest"]);
+        assert_eq!(
+            fs::read_to_string(root.path().join("revised/REVISION")).unwrap(),
+            "2026-09 intake\n"
+        );
+        assert!(package(&project, &root.path().join("bad"), Some("two\nlines")).is_err());
+        assert!(!root.path().join("bad").exists());
     }
 
     #[test]
@@ -2465,17 +2487,20 @@ mod tests {
         let files_before = count_files(&project);
 
         let output = root.path().join("package");
-        let dry = package_dry_run(&project).unwrap();
+        let dry = package_dry_run(&project, None).unwrap();
         assert_eq!(dry["command"], "package");
         assert_eq!(dry["dryRun"], true);
-        assert!(dry["policyDigest"].as_str().unwrap().starts_with("sha256:"));
+        assert!(dry["packageDigest"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:"));
         assert!(dry.get("output").is_none());
         assert!(!output.exists());
         assert_eq!(count_files(&project), files_before);
 
-        let real = package(&project, &output).unwrap();
+        let real = package(&project, &output, None).unwrap();
         assert_eq!(real["dryRun"], false);
-        assert_eq!(real["policyDigest"], dry["policyDigest"]);
+        assert_eq!(real["packageDigest"], dry["packageDigest"]);
         assert_eq!(real["files"], dry["files"]);
     }
 
@@ -2489,8 +2514,8 @@ mod tests {
         std::os::unix::fs::symlink(&actual_policy, project.join("casework.yaml")).unwrap();
 
         let output = root.path().join("package");
-        let real_error = format!("{:#}", package(&project, &output).unwrap_err());
-        let dry_run_error = format!("{:#}", package_dry_run(&project).unwrap_err());
+        let real_error = format!("{:#}", package(&project, &output, None).unwrap_err());
+        let dry_run_error = format!("{:#}", package_dry_run(&project, None).unwrap_err());
         assert_eq!(real_error, dry_run_error);
         assert!(dry_run_error.contains("regular file"), "{dry_run_error}");
         assert!(!output.exists());
@@ -2515,6 +2540,12 @@ mod tests {
         .unwrap();
         let runtime = directory.path().join("runtime.yaml");
         fs::write(&runtime, runtime_example(directory.path(), true).unwrap()).unwrap();
+        let unpackaged = RuntimeConfig::load(&runtime).expect_err("the runtime serves a package");
+        assert!(
+            unpackaged.to_string().contains("caseworkctl package"),
+            "{unpackaged}"
+        );
+        package_locally(directory.path());
         let config = RuntimeConfig::load(runtime).unwrap();
         assert_eq!(config.listener.bind, "127.0.0.1:8100".parse().unwrap());
         assert!(config.sources.contains_key("professional-licences"));

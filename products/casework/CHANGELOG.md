@@ -30,8 +30,29 @@
 - BREAKING: `audit.hashKeyRef` must be an exact secret reference when the
   document is read. A refused `authentication.oidc.assertionIssuers` map is
   reported at that field; its bounds are unchanged.
-- `package.expectedPolicyDigest` keeps its meaning and form under the shared
-  loader.
+- BREAKING: a Casework package is the shared Registry Stack package format.
+  `caseworkctl package` writes `SHA256SUMS`, one `sha256sum` line per file
+  sorted by path, in place of `casework.package.json`, and reports
+  `packageDigest`, the SHA-256 digest of `SHA256SUMS`, in place of
+  `policyDigest`. `--revision TEXT` records one free-text line in a
+  `REVISION` file the digest covers. At startup the runtime refuses a changed,
+  missing, or extra file by name, and refuses a `package.root` that still
+  holds `casework.package.json`, naming `caseworkctl package`; rebuild every
+  deployed package with it.
+- BREAKING: `package.expectedPolicyDigest` is renamed `package.expectedDigest`
+  and pins the package digest. The retired key is refused with its
+  replacement named, and a mismatch is refused in the shape every Registry
+  Stack runtime shares:
+  `package.expectedDigest is <pin> but the package at package.root is <found>`.
+- BREAKING: the runtime verifies `package.root` as a package in every listener
+  mode, with or without `package.expectedDigest`. A local
+  `development-loopback` runtime no longer serves an authored project: a
+  directory without `SHA256SUMS` is refused naming `caseworkctl package`.
+  `caseworkctl dev` packages the authored project under `.casework/dev/package`
+  on every start and serves that package, and the `runtime.example.yaml`
+  `caseworkctl init` writes serves `.casework/package`. The doctor
+  `pinnedWork` verdict `development` is removed, and `/version` and doctor
+  always report `packageDigest` as a digest, never `null`.
 - The metrics listener no longer lets the scrape rate set the database load.
   Scrapes within five seconds of a database reading reuse it, concurrent
   scrapes wait for the one reading in flight, and a reading that takes longer

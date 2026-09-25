@@ -387,15 +387,17 @@ caseworkctl package ./casework --output ./casework-policy-package
 ```
 
 The package contains only `casework.yaml`, its exact declared source
-descriptions, and `casework.package.json`. The v1alpha1 manifest records the
-policy digest and a sorted path, SHA-256 digest, and byte count for every
-included file. Keep operator bindings and secrets outside the package. In the
-production runtime configuration, set `package.root` to the absolute path of
-the installed package directory. The runtime selects only the fixed
-`casework.yaml` inside that directory. The service requires and verifies the
-adjacent manifest when `listener.tlsTermination` is
-`operator-controlled-upstream`. Local `development-loopback` can use the
-authored project directory as `package.root`. `source add --apply` updates reviewed authoring
+descriptions, and `SHA256SUMS`, one `sha256sum` line per file sorted by path.
+The package digest is the SHA-256 digest of `SHA256SUMS`, and `--revision TEXT`
+records one free-text line in a `REVISION` file the digest covers. Keep operator bindings and secrets outside the package. In the
+runtime configuration, set `package.root` to the absolute path of the
+installed package directory. The runtime selects only the fixed
+`casework.yaml` inside that directory, and verifies `SHA256SUMS` at every
+start in every listener mode; it refuses an authored project directory and
+names `caseworkctl package`. The `runtime.example.yaml` that `caseworkctl init`
+writes selects `.casework/package` in the project, which
+`caseworkctl package . --output .casework/package` builds, and
+`caseworkctl dev` packages the project on each start. `source add --apply` updates reviewed authoring
 inputs; it does not activate a production package. The deployment operator
 installs and atomically selects the reviewed package, then restarts or rolls out
 Casework. Activating a new package does not rewrite running clock occurrences;

@@ -466,15 +466,15 @@
       "properties": {
         "acknowledgeStrandedWork": {
           "default": null,
-          "description": "The `policyDigest` of a package the operator has accepted will strand\nin-flight work pinned under an earlier package. Startup and `doctor`\nrefuse such a package unless this names its exact digest, so an\nacknowledgement never carries over to a later package.",
+          "description": "The package digest of a package the operator has accepted will strand\nin-flight work pinned under an earlier package. Startup and `doctor`\nrefuse such a package unless this names its exact digest, so an\nacknowledgement never carries over to a later package.",
           "type": [
             "string",
             "null"
           ]
         },
-        "expectedPolicyDigest": {
+        "expectedDigest": {
           "default": null,
-          "description": "The `policyDigest` of the one reviewed package this runtime may load.\nWhen set, a package whose manifest names any other digest, or a\ndirectory with no manifest, is refused before the runtime starts.",
+          "description": "`sha256:` label of the package digest, the digest of the package's\n`SHA256SUMS` file. When set, the runtime refuses to start on any other\npackage, and on an authored project that has no `SHA256SUMS`.",
           "pattern": "^sha256:[0-9a-f]{64}$",
           "type": [
             "string",
@@ -482,6 +482,7 @@
           ]
         },
         "root": {
+          "description": "Absolute path of the package directory.",
           "pattern": "^/",
           "type": "string"
         }

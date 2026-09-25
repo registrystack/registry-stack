@@ -333,6 +333,7 @@ fn db_migrate_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
         OsString::from("standalone-decision"),
     ]);
     assert_eq!(exit, ExitCode::SUCCESS);
+    package_locally(&project);
     std::fs::create_dir(project.join("secrets")).expect("secret root");
     let mut runtime: Value = serde_norway::from_slice(
         &std::fs::read(project.join("runtime.example.yaml")).expect("runtime example reads"),
@@ -393,6 +394,20 @@ fn db_migrate_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
     execute_in_test_database(&base, &format!("DROP SCHEMA {schema} CASCADE"));
 }
 
+/// Package an initialized project where its generated runtime example
+/// selects the package.
+fn package_locally(project: &Path) {
+    let (exit, report) = invoke(vec![
+        OsString::from("package"),
+        project.as_os_str().to_owned(),
+        OsString::from("--output"),
+        project
+            .join(crate::project::LOCAL_PACKAGE_DIRECTORY)
+            .into_os_string(),
+    ]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report:#?}");
+}
+
 const AUDIT_FIXTURE_KEY: &[u8] = b"caseworkctl-audit-fixture-secret-32-bytes";
 
 /// A runtime configuration whose audit journal holds `records` synthetic
@@ -421,6 +436,7 @@ fn audit_fixture(records: usize) -> (tempfile::TempDir, PathBuf, PathBuf) {
         OsString::from("standalone-decision"),
     ]);
     assert_eq!(exit, ExitCode::SUCCESS, "{init:#?}");
+    package_locally(&project);
     let mut runtime: Value = serde_norway::from_slice(
         &std::fs::read(project.join("runtime.example.yaml")).expect("runtime example reads"),
     )

@@ -80,7 +80,7 @@ impl MetricsReadings for PostgresStore {
 struct MetricsInner {
     store: Arc<dyn MetricsReadings>,
     source_ids: Vec<String>,
-    package_digest: Option<String>,
+    package_digest: String,
     audit_health: AuditPublisherHealth,
     read_timeout: std::time::Duration,
     /// The last readings and when they were taken. Held across a reading, so
@@ -92,7 +92,7 @@ impl MetricsState {
     pub(crate) fn new(
         store: Arc<dyn MetricsReadings>,
         source_ids: Vec<String>,
-        package_digest: Option<String>,
+        package_digest: String,
         audit_health: AuditPublisherHealth,
     ) -> Self {
         Self::with_read_timeout(
@@ -107,7 +107,7 @@ impl MetricsState {
     fn with_read_timeout(
         store: Arc<dyn MetricsReadings>,
         source_ids: Vec<String>,
-        package_digest: Option<String>,
+        package_digest: String,
         audit_health: AuditPublisherHealth,
         read_timeout: std::time::Duration,
     ) -> Self {
@@ -188,7 +188,7 @@ async fn metrics(State(state): State<MetricsState>) -> Response {
     let database = inner.readings().await;
     let body = render(
         registry_platform_buildinfo::DISPLAY_VERSION,
-        inner.package_digest.as_deref(),
+        &inner.package_digest,
         inner.audit_health.is_ready(),
         inner.audit_health.is_leader(),
         database
@@ -207,7 +207,7 @@ async fn metrics(State(state): State<MetricsState>) -> Response {
 /// Casework database, which `casework_database_up` reports as `0`.
 fn render(
     version: &str,
-    package_digest: Option<&str>,
+    package_digest: &str,
     audit_publisher_ready: bool,
     audit_publisher_leader: bool,
     database: Option<(&[SourceReconciliationHealth], i64)>,
@@ -223,7 +223,7 @@ fn render(
         out,
         "casework_build_info{{version=\"{}\",package_digest=\"{}\"}} 1",
         escape(version),
-        escape(package_digest.unwrap_or(""))
+        escape(package_digest)
     );
     gauge(
         &mut out,
@@ -330,14 +330,7 @@ mod tests {
             source("permits", 0, Some(now - chrono::Duration::seconds(90))),
             source("licences", 4, None),
         ];
-        let rendered = render(
-            "1.2.3",
-            Some("sha256:abc"),
-            true,
-            true,
-            Some((&health, 7)),
-            now,
-        );
+        let rendered = render("1.2.3", "sha256:abc", true, true, Some((&health, 7)), now);
         for line in [
             "casework_build_info{version=\"1.2.3\",package_digest=\"sha256:abc\"} 1",
             "casework_audit_publisher_up 1",
@@ -364,7 +357,7 @@ mod tests {
     fn a_scrape_without_the_database_reports_it_down_and_omits_database_series() {
         let rendered = render(
             "1.2.3",
-            None,
+            "sha256:abc",
             false,
             false,
             None,
@@ -373,7 +366,7 @@ mod tests {
         assert!(rendered.contains("casework_database_up 0\n"));
         assert!(rendered.contains("casework_audit_publisher_up 0\n"));
         assert!(rendered.contains("casework_audit_publisher_leader 0\n"));
-        assert!(rendered.contains("package_digest=\"\"} 1\n"));
+        assert!(rendered.contains("package_digest=\"sha256:abc\"} 1\n"));
         assert!(!rendered.contains("casework_audit_outbox_pending"));
         assert!(!rendered.contains("casework_source_reconciliation"));
     }
@@ -411,7 +404,7 @@ mod tests {
         MetricsState::with_read_timeout(
             readings,
             vec!["permits".to_owned()],
-            Some("sha256:abc".to_owned()),
+            "sha256:abc".to_owned(),
             AuditPublisherHealth::default(),
             read_timeout,
         )

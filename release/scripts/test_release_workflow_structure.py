@@ -758,7 +758,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             assemble,
         )
 
-    def test_candidate_checks_the_casework_package_manifest_it_emits(self) -> None:
+    def test_candidate_checks_the_casework_package_sum_file_it_emits(self) -> None:
         _, document = workflow("release-candidate.yml")
         assemble = step_run(
             document,
@@ -766,7 +766,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "Assemble public payload and validate version-appropriate install inputs",
         )
         self.assertIn(
-            'test -f "${casework_package}/casework.package.json"',
+            'test -f "${casework_package}/SHA256SUMS"',
             assemble,
         )
         self.assertNotIn('test -f "${casework_package}/package.json"', assemble)

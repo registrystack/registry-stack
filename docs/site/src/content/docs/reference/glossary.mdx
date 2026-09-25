@@ -309,7 +309,7 @@ Product names are always in English, including on future translated pages.
   <dd>The Base Registry Engine maintenance run that restores snapshot coverage after a history <a href="#erasure">erasure</a>, by proving every live row still matches its retained journal head and installing one baseline commit at that head.</dd>
 
   <dt id="policy-package">policy package</dt>
-  <dd>In Registry Casework, the directory `caseworkctl package` writes from a verified project: the policy file, the exact imported source descriptions, and a manifest of their digests. The `casework` runtime rebuilds the manifest at startup and refuses to serve a package with a changed byte, a missing file, or an extra file, so the package is what an operator deploys and what a policy change replaces whole.</dd>
+  <dd>In Registry Casework, the directory `caseworkctl package` writes from a verified project: the policy file, the exact imported source descriptions, and a `SHA256SUMS` file listing their digests. The `casework` runtime rechecks every digest at startup and refuses to serve a package with a changed byte, a missing file, or an extra file, so the package is what an operator deploys and what a policy change replaces whole.</dd>
 
   <dt id="record-context">record context</dt>
   <dd>The four bindings every Registry Relay resource declares so a caller can tell one answer from another over time: the record identifier, the revision identifier, the lifecycle state with the codelist that constrains it, and the recorded-at instant. Record context is required, not optional metadata: a resource cannot be published without it, and it is what lets a consumer say which version of a record it acted on.</dd>
