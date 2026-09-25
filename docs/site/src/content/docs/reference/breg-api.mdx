@@ -358,7 +358,9 @@ at the next chunk, which commits nothing and answers `409 ingestion.run_blocked`
 uncommitted remainder in a successor run under a new authority.
 
 `lastAttempt.outcome` classifies the last submission as `committed`, `replayed`, `invalidItem`,
-`refused`, `bindingChanged`, `chunkMismatch`, `runNotOpen`, or `unavailable`. `invalidItem` and
+`refused`, `bindingChanged`, `importAuthorityClosed`, `chunkMismatch`, `runNotOpen`, or
+`unavailable`. `bindingChanged` is the attempt that blocked a run on a package activation, and
+`importAuthorityClosed` the attempt that blocked it on its import authority. `invalidItem` and
 `refused` leave the checkpoint where it was; the corrective move is a successor run, not a retry
 with different bytes and not a skipped row.
 

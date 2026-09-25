@@ -124,6 +124,9 @@ pub(crate) enum IngestionAttemptOutcome {
     InvalidItem,
     Refused,
     BindingChanged,
+    /// The import authority the run consumes admitted no further chunk, so
+    /// the run blocked.
+    ImportAuthorityClosed,
     ChunkMismatch,
     RunNotOpen,
     Unavailable,
@@ -137,6 +140,7 @@ impl IngestionAttemptOutcome {
             Self::InvalidItem => "invalid_item",
             Self::Refused => "refused",
             Self::BindingChanged => "binding_changed",
+            Self::ImportAuthorityClosed => "import_authority_closed",
             Self::ChunkMismatch => "chunk_mismatch",
             Self::RunNotOpen => "run_not_open",
             Self::Unavailable => "unavailable",
@@ -151,6 +155,7 @@ impl IngestionAttemptOutcome {
             Self::InvalidItem => "invalidItem",
             Self::Refused => "refused",
             Self::BindingChanged => "bindingChanged",
+            Self::ImportAuthorityClosed => "importAuthorityClosed",
             Self::ChunkMismatch => "chunkMismatch",
             Self::RunNotOpen => "runNotOpen",
             Self::Unavailable => "unavailable",
@@ -164,6 +169,7 @@ impl IngestionAttemptOutcome {
             "invalid_item" => Some(Self::InvalidItem),
             "refused" => Some(Self::Refused),
             "binding_changed" => Some(Self::BindingChanged),
+            "import_authority_closed" => Some(Self::ImportAuthorityClosed),
             "chunk_mismatch" => Some(Self::ChunkMismatch),
             "run_not_open" => Some(Self::RunNotOpen),
             "unavailable" => Some(Self::Unavailable),
@@ -478,7 +484,8 @@ pub(crate) async fn install(
                      CONSTRAINT registry_ingestion_runs_attempt_values
                      CHECK (last_attempt_outcome IS NULL OR last_attempt_outcome IN
                          ('committed', 'replayed', 'invalid_item', 'refused',
-                          'binding_changed', 'chunk_mismatch', 'run_not_open', 'unavailable')),
+                          'binding_changed', 'import_authority_closed', 'chunk_mismatch',
+                          'run_not_open', 'unavailable')),
                  last_attempt_chunk_index bigint
                      CHECK (last_attempt_chunk_index IS NULL OR last_attempt_chunk_index >= 0),
                  created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
@@ -532,7 +539,8 @@ pub(crate) async fn install(
                      (record_id, record_revision);
              -- KERNEL INTERNAL SCHEMA MIGRATION (import authorities): a run
              -- table created before import authorities gains the authority
-             -- reference and the `import_authority_closed` blocked reason.
+             -- reference and the `import_authority_closed` blocked reason and
+             -- attempt outcome.
              ALTER TABLE registry_internal.registry_ingestion_runs
                  ADD COLUMN IF NOT EXISTS import_authority_id uuid
                      REFERENCES registry_internal.registry_import_authorities(authority_id);
@@ -550,6 +558,21 @@ pub(crate) async fn install(
                          ADD CONSTRAINT registry_ingestion_runs_blocked_reason_values
                          CHECK (blocked_reason IS NULL OR blocked_reason IN
                              ('active_package_changed', 'import_authority_closed'));
+                 END IF;
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid = 'registry_internal.registry_ingestion_runs'::regclass
+                        AND conname = 'registry_ingestion_runs_attempt_values'
+                        AND pg_catalog.pg_get_constraintdef(oid)
+                            LIKE '%import_authority_closed%'
+                 ) THEN
+                     ALTER TABLE registry_internal.registry_ingestion_runs
+                         DROP CONSTRAINT IF EXISTS registry_ingestion_runs_attempt_values,
+                         ADD CONSTRAINT registry_ingestion_runs_attempt_values
+                         CHECK (last_attempt_outcome IS NULL OR last_attempt_outcome IN
+                             ('committed', 'replayed', 'invalid_item', 'refused',
+                              'binding_changed', 'import_authority_closed', 'chunk_mismatch',
+                              'run_not_open', 'unavailable'));
                  END IF;
              END
              $registry_ingestion_import_authority_upgrade$;

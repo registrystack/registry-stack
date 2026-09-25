@@ -31,6 +31,7 @@ use registry_breg::import_authority::{
     ImportAuthorityOperatorService, ImportAuthorityStatus, DEFAULT_IMPORT_AUTHORITY_WINDOW,
 };
 use registry_breg::instance_claim::InstanceClaimService;
+use registry_breg::mutation::install_mutation_schema;
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema, ExpectedManagedCatalog,
     ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
@@ -398,8 +399,8 @@ impl Harness {
     }
 
     /// Submit the chunk and prove the run blocked on its authority: the
-    /// refusal is `ingestion.run_blocked`, the run reports
-    /// `importAuthorityClosed`, and no widget was written by the chunk.
+    /// refusal is `ingestion.run_blocked`, the run and its last attempt both
+    /// report `importAuthorityClosed`, and no widget was written by the chunk.
     async fn blocked_chunk(&self, run_id: &str, plan: &Plan, index: usize) {
         let before = self.widget_count().await;
         let response = self.submit("widgets", "loader", run_id, plan, index).await;
@@ -428,6 +429,11 @@ impl Harness {
         };
         assert_eq!(run["status"], "blocked", "{run}");
         assert_eq!(run["blockedReason"], "importAuthorityClosed");
+        assert_eq!(
+            run["lastAttempt"]["outcome"], "importAuthorityClosed",
+            "{run}"
+        );
+        assert_eq!(run["lastAttempt"]["chunkIndex"], index);
     }
 
     async fn widget_count(&self) -> i64 {
@@ -1294,4 +1300,35 @@ async fn adopting_a_restored_copy_supersedes_every_open_authority() {
     harness
         .refused_run("widgets", "loader", &plan("after-restore", 1))
         .await;
+}
+
+/// A run table created before the authority attempt outcome existed accepts
+/// it after the next schema install, so a run blocked by its authority on an
+/// upgraded registry records the outcome instead of failing the chunk.
+#[tokio::test]
+async fn an_upgraded_run_table_records_the_authority_attempt_outcome() {
+    let harness = Harness::create().await;
+    let (migration, migration_task) = harness.database.connect_migration().await;
+    migration
+        .batch_execute(
+            "ALTER TABLE registry_internal.registry_ingestion_runs
+                 DROP CONSTRAINT registry_ingestion_runs_attempt_values,
+                 ADD CONSTRAINT registry_ingestion_runs_attempt_values
+                 CHECK (last_attempt_outcome IS NULL OR last_attempt_outcome IN
+                     ('committed', 'replayed', 'invalid_item', 'refused',
+                      'binding_changed', 'chunk_mismatch', 'run_not_open', 'unavailable'))",
+        )
+        .await
+        .expect("the test restores the earlier attempt vocabulary");
+    install_mutation_schema(&migration, &harness.database.runtime_role)
+        .await
+        .expect("the install upgrades the attempt vocabulary");
+    migration_task.abort();
+
+    let authority = harness.open("widget", "loader", 10, &[]).await;
+    let load = plan("upgraded-attempt-vocabulary", 6);
+    let run_id = harness.created_run("widgets", "loader", &load).await;
+    harness.committed_chunk(&run_id, &load, 0).await;
+    harness.close(authority.authority_id).await;
+    harness.blocked_chunk(&run_id, &load, 1).await;
 }

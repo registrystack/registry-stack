@@ -388,7 +388,10 @@ relevant product pages on this site rather than duplicating release notes.
 - BREAKING: the ingestion-run `blockedReason` gains the value
   `importAuthorityClosed`, and the Rust `BRegIngestionBlockedReason` enum
   gains `ImportAuthorityClosed`; a client that matched the only previous value
-  exhaustively must handle the new one. The `ingestion.run_blocked` problem
+  exhaustively must handle the new one. The attempt that blocks a run on its
+  authority is recorded as `lastAttempt.outcome` `importAuthorityClosed`, not
+  `bindingChanged`, so the Rust `BRegIngestionAttemptOutcome` enum and the
+  Node.js `BRegIngestionAttemptOutcome` type gain the same value. The `ingestion.run_blocked` problem
   detail now reads "The ingestion run is blocked and refuses further chunks."
   because the run's `blockedReason`, not the detail, names the cause.
 

@@ -130,7 +130,10 @@ stale instance answers an outage instead of closing a run its successor can
 still resume.
 The last attempt is classified as
 `committed`, `replayed`, `invalidItem`, `refused`, `bindingChanged`,
-`chunkMismatch`, `runNotOpen`, or `unavailable`.
+`importAuthorityClosed`, `chunkMismatch`, `runNotOpen`, or `unavailable`.
+`bindingChanged` and `importAuthorityClosed` are the attempts that blocked a
+run, and match its `activePackageChanged` and `importAuthorityClosed` blocked
+reasons.
 
 ## Value-free surfaces
 
