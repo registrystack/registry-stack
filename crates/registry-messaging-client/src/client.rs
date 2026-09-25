@@ -14,7 +14,7 @@ use registry_platform_httputil::client::{
     ServiceBaseUrl,
 };
 use registry_platform_httputil::{
-    read_bounded, url::append_path_segments, validate_response_headers,
+    read_bounded, retry_after_seconds, url::append_path_segments, validate_response_headers,
 };
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Response, StatusCode, Url};
@@ -25,6 +25,13 @@ use crate::{MessagingClientConfig, MessagingClientError, MessagingProtocolFailur
 const JSON_MEDIA_TYPE: &str = "application/json";
 const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 const MAXIMUM_PROBLEM_BYTES: u64 = 8 * 1024;
+
+/// Longest `Retry-After` wait, in whole seconds, this client reports on a
+/// 429 refusal. A daily limit clears as the profile's oldest counted
+/// acceptance leaves its 24-hour window, so one day is the longest wait the
+/// runtime can honestly ask for. A longer value, or one outside the
+/// delta-seconds grammar, is reported as no wait; the refusal stays typed.
+pub const MAXIMUM_RETRY_AFTER_SECONDS: u64 = 24 * 60 * 60;
 
 /// One completed call: the answered value and the response's validated trace
 /// identifier, so a caller correlates the answer with its own trace context
@@ -304,6 +311,9 @@ impl MessagingClient {
     async fn problem_or_status(&self, response: Response) -> MessagingClientError {
         let status = response.status();
         let trace = response_trace(status, response.headers()).ok();
+        let retry_after = (status == StatusCode::TOO_MANY_REQUESTS)
+            .then(|| retry_after_seconds(response.headers(), MAXIMUM_RETRY_AFTER_SECONDS))
+            .flatten();
         if !exact_media_type(response.headers(), PROBLEM_MEDIA_TYPE) {
             return protocol(status, MessagingProtocolFailure::Status, trace);
         }
@@ -319,7 +329,7 @@ impl MessagingClient {
             Ok(value) => value,
             Err(_) => return protocol(status, MessagingProtocolFailure::Problem, trace),
         };
-        domain_problem(status, trace.as_deref(), &document)
+        domain_problem(status, trace.as_deref(), &document, retry_after)
     }
 }
 
@@ -336,10 +346,14 @@ impl MessagingClient {
 /// caller reads its own pinned copies through `code.title()` and
 /// `code.detail()`, so an editorial change on the deployment never turns a
 /// refusal the code already named into an unrecoverable protocol failure.
+///
+/// `retry_after` is the bounded `Retry-After` wait read from a 429 answer;
+/// it rides on the typed problem only, never on a protocol failure.
 pub(crate) fn domain_problem(
     status: StatusCode,
     header_trace: Option<&str>,
     document: &ProblemDocument,
+    retry_after: Option<u64>,
 ) -> MessagingClientError {
     let trace_id = header_trace.map(str::to_owned);
     let Some(code) = ProblemCode::from_code(&document.code) else {
@@ -356,6 +370,7 @@ pub(crate) fn domain_problem(
         status: status.as_u16(),
         code,
         trace_id,
+        retry_after_seconds: retry_after.filter(|_| status == StatusCode::TOO_MANY_REQUESTS),
     }
 }
 

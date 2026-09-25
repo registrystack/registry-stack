@@ -24,7 +24,9 @@
 //! redirects or retries, reads every response under a bounded
 //! byte ceiling, and lands every failure in one named shape: a configuration
 //! defect, a transport failure, a protocol failure, or a validated product
-//! problem surfaced as its typed code.
+//! problem surfaced as its typed code. A 429 limit refusal also carries the
+//! bounded wait its `Retry-After` asked for; waiting and retrying stay the
+//! caller's decision.
 
 #![deny(unsafe_code)]
 
@@ -32,7 +34,7 @@ mod client;
 mod config;
 mod error;
 
-pub use client::{MessagingClient, MessagingComplete};
+pub use client::{MessagingClient, MessagingComplete, MAXIMUM_RETRY_AFTER_SECONDS};
 pub use config::MessagingClientConfig;
 pub use error::{MessagingClientError, MessagingProtocolFailure};
 pub use registry_messaging_core::{

@@ -57,6 +57,11 @@ pub enum MessagingClientError {
         status: u16,
         code: ProblemCode,
         trace_id: Option<String>,
+        /// The wait, in whole seconds, a 429 refusal asked for in
+        /// `Retry-After`, bounded by `MAXIMUM_RETRY_AFTER_SECONDS`. Always
+        /// `None` on any other status, and on a 429 whose header was absent
+        /// or outside the bound. The client never waits or retries itself.
+        retry_after_seconds: Option<u64>,
     },
     #[error("Registry Messaging returned an invalid response")]
     Protocol {
@@ -101,11 +106,12 @@ mod tests {
     fn every_pinned_problem_document_is_its_typed_code() {
         for code in ProblemCode::ALL {
             let status = StatusCode::from_u16(code.http_status()).expect("a pinned status");
-            match domain_problem(status, Some(TRACE_ID), &document(*code)) {
+            match domain_problem(status, Some(TRACE_ID), &document(*code), None) {
                 MessagingClientError::Problem {
                     status: answered,
                     code: typed,
                     trace_id,
+                    retry_after_seconds: None,
                 } => {
                     assert_eq!(answered, code.http_status());
                     assert_eq!(typed, *code);
@@ -131,7 +137,7 @@ mod tests {
         ];
         for answer in reworded {
             assert!(matches!(
-                domain_problem(StatusCode::NOT_FOUND, Some(TRACE_ID), &answer),
+                domain_problem(StatusCode::NOT_FOUND, Some(TRACE_ID), &answer, None),
                 MessagingClientError::Problem {
                     code: ProblemCode::MessageNotVisible,
                     ..
@@ -164,7 +170,7 @@ mod tests {
         for mismatch in mismatches {
             assert!(
                 matches!(
-                    domain_problem(StatusCode::NOT_FOUND, Some(TRACE_ID), &mismatch),
+                    domain_problem(StatusCode::NOT_FOUND, Some(TRACE_ID), &mismatch, None),
                     MessagingClientError::Protocol {
                         status: 404,
                         failure: MessagingProtocolFailure::Problem,
@@ -176,7 +182,7 @@ mod tests {
         }
         // A code whose pinned status differs from the answered status.
         assert!(matches!(
-            domain_problem(StatusCode::FORBIDDEN, Some(TRACE_ID), &pinned),
+            domain_problem(StatusCode::FORBIDDEN, Some(TRACE_ID), &pinned, None),
             MessagingClientError::Protocol {
                 failure: MessagingProtocolFailure::Problem,
                 ..
@@ -185,7 +191,7 @@ mod tests {
         // The response trace header must match the document's own trace.
         for header in [None, Some("ffffffffffffffffffffffffffffffff")] {
             assert!(matches!(
-                domain_problem(StatusCode::NOT_FOUND, header, &pinned),
+                domain_problem(StatusCode::NOT_FOUND, header, &pinned, None),
                 MessagingClientError::Protocol {
                     failure: MessagingProtocolFailure::Problem,
                     ..
@@ -195,11 +201,41 @@ mod tests {
     }
 
     #[test]
+    fn a_wait_rides_only_on_a_typed_too_many_requests_problem() {
+        let pinned = document(ProblemCode::MessageNotVisible);
+        assert!(matches!(
+            domain_problem(StatusCode::NOT_FOUND, Some(TRACE_ID), &pinned, Some(5)),
+            MessagingClientError::Problem {
+                retry_after_seconds: None,
+                ..
+            }
+        ));
+        let mismatch = ProblemDocument {
+            status: 429,
+            ..pinned
+        };
+        assert!(matches!(
+            domain_problem(
+                StatusCode::TOO_MANY_REQUESTS,
+                Some(TRACE_ID),
+                &mismatch,
+                Some(5)
+            ),
+            MessagingClientError::Protocol {
+                status: 429,
+                failure: MessagingProtocolFailure::Problem,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn display_names_the_product_and_the_typed_code() {
         let problem = domain_problem(
             StatusCode::SERVICE_UNAVAILABLE,
             Some(TRACE_ID),
             &document(ProblemCode::ServiceUnavailable),
+            None,
         );
         assert_eq!(
             problem.to_string(),

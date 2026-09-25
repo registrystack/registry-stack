@@ -14,8 +14,8 @@ use registry_messaging_client::{
     type_uri, BearerToken, MessageDispatch, MessageReport, MessageStatus, MessagingClient,
     MessagingClientConfig, MessagingClientError, MessagingProtocolFailure, ProblemCode, Recipient,
     SmsEncoding, SubmitMessageRequest, TemplatePreviewRequest, TemplateReference, TransportKind,
-    HEALTH_PATH, IDEMPOTENCY_KEY_HEADER, MESSAGES_PATH, MESSAGE_CANCEL_PATH, MESSAGE_PATH,
-    READY_PATH, TEMPLATE_PREVIEW_PATH,
+    HEALTH_PATH, IDEMPOTENCY_KEY_HEADER, MAXIMUM_RETRY_AFTER_SECONDS, MESSAGES_PATH,
+    MESSAGE_CANCEL_PATH, MESSAGE_PATH, READY_PATH, TEMPLATE_PREVIEW_PATH,
 };
 use url::Url;
 
@@ -34,6 +34,7 @@ struct Fixture {
     content_type: Option<&'static str>,
     body: String,
     traced: bool,
+    retry_after: Option<&'static str>,
 }
 
 impl Fixture {
@@ -44,6 +45,7 @@ impl Fixture {
             content_type,
             body: body.to_owned(),
             traced: true,
+            retry_after: None,
         }
     }
 
@@ -61,6 +63,11 @@ impl Fixture {
 
     fn untraced(mut self) -> Self {
         self.traced = false;
+        self
+    }
+
+    fn retry_after(mut self, value: &'static str) -> Self {
+        self.retry_after = Some(value);
         self
     }
 }
@@ -127,6 +134,12 @@ fn token() -> BearerToken {
     BearerToken::new(TOKEN).expect("fixture token")
 }
 
+/// A limit refusal's code, named as the published catalogue names it.
+fn limit_code(name: &str) -> ProblemCode {
+    ProblemCode::from_code(name)
+        .unwrap_or_else(|| panic!("{name} is not in the core's closed problem vocabulary"))
+}
+
 fn problem_body(code: &str, status: u16) -> String {
     let pinned = ProblemCode::from_code(code);
     format!(
@@ -154,6 +167,9 @@ async fn answer(
     }
     if fixture.traced {
         response.insert("traceparent", HeaderValue::from_static(TRACEPARENT));
+    }
+    if let Some(retry_after) = fixture.retry_after {
+        response.insert("retry-after", HeaderValue::from_static(retry_after));
     }
     (fixture.status, response, fixture.body)
 }
@@ -307,9 +323,113 @@ async fn a_reused_idempotency_key_is_the_typed_key_reused_problem() {
             status: 409,
             code: ProblemCode::IdempotencyKeyReused,
             trace_id,
+            retry_after_seconds: None,
         }) => assert_eq!(trace_id.as_deref(), Some(TRACE_ID)),
         other => panic!("expected the typed idempotency.key-reused problem, got {other:?}"),
     }
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_submission_over_the_request_rate_is_the_typed_rate_limit_problem_with_its_wait() {
+    let code = limit_code("rate-limit.exceeded");
+    let (client, server) = serve("", &Fixture::problem(code).retry_after("2")).await;
+    match client
+        .submit(&token(), IDEMPOTENCY_KEY, &submission())
+        .await
+    {
+        Err(MessagingClientError::Problem {
+            status: 429,
+            code: answered,
+            trace_id,
+            retry_after_seconds: Some(2),
+        }) => {
+            assert_eq!(answered, code);
+            assert_eq!(trace_id.as_deref(), Some(TRACE_ID));
+        }
+        other => panic!("expected the typed rate-limit.exceeded problem, got {other:?}"),
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_submission_over_the_daily_limit_is_the_typed_quota_problem_with_its_wait() {
+    let code = limit_code("quota.exceeded");
+    let (client, server) = serve("", &Fixture::problem(code).retry_after("3600")).await;
+    match client
+        .submit(&token(), IDEMPOTENCY_KEY, &submission())
+        .await
+    {
+        Err(MessagingClientError::Problem {
+            status: 429,
+            code: answered,
+            trace_id,
+            retry_after_seconds: Some(3600),
+        }) => {
+            assert_eq!(answered, code);
+            assert_eq!(trace_id.as_deref(), Some(TRACE_ID));
+        }
+        other => panic!("expected the typed quota.exceeded problem, got {other:?}"),
+    }
+    server.abort();
+}
+
+/// The daily limit is the longest wait the runtime can honestly ask for, so
+/// a full day is reported and anything past it, or outside the delta-seconds
+/// grammar, is reported as no wait while the refusal stays typed.
+#[tokio::test]
+async fn a_limit_wait_outside_the_bound_or_the_grammar_is_not_reported() {
+    assert_eq!(MAXIMUM_RETRY_AFTER_SECONDS, 86_400);
+    let code = limit_code("quota.exceeded");
+    let answers: [(Option<&'static str>, Option<u64>); 7] = [
+        (Some("86400"), Some(86_400)),
+        (Some("86401"), None),
+        (Some("0"), None),
+        (Some("1.5"), None),
+        (Some("-1"), None),
+        (Some("Wed, 21 Oct 2026 07:28:00 GMT"), None),
+        (None, None),
+    ];
+    for (header, expected) in answers {
+        let mut fixture = Fixture::problem(code);
+        if let Some(value) = header {
+            fixture = fixture.retry_after(value);
+        }
+        let (client, server) = serve("", &fixture).await;
+        match client
+            .submit(&token(), IDEMPOTENCY_KEY, &submission())
+            .await
+        {
+            Err(MessagingClientError::Problem {
+                status: 429,
+                code: answered,
+                retry_after_seconds,
+                ..
+            }) => {
+                assert_eq!(answered, code);
+                assert_eq!(retry_after_seconds, expected, "Retry-After {header:?}");
+            }
+            other => panic!("expected the typed quota.exceeded problem, got {other:?}"),
+        }
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn a_wait_on_a_refusal_that_is_not_a_limit_is_not_reported() {
+    let fixture = Fixture::problem(ProblemCode::IdempotencyKeyReused).retry_after("5");
+    let (client, server) = serve("", &fixture).await;
+    assert!(matches!(
+        client
+            .submit(&token(), IDEMPOTENCY_KEY, &submission())
+            .await,
+        Err(MessagingClientError::Problem {
+            status: 409,
+            code: ProblemCode::IdempotencyKeyReused,
+            retry_after_seconds: None,
+            ..
+        })
+    ));
     server.abort();
 }
 
@@ -420,6 +540,7 @@ async fn a_runtime_that_is_not_ready_is_the_typed_service_unavailable() {
             status: 503,
             code: ProblemCode::ServiceUnavailable,
             trace_id,
+            retry_after_seconds: None,
         }) => assert_eq!(trace_id.as_deref(), Some(TRACE_ID)),
         other => panic!("expected the typed service.unavailable problem, got {other:?}"),
     }
@@ -573,6 +694,7 @@ async fn a_cancellation_that_lost_the_race_is_its_typed_conflict() {
                 status: 409,
                 code: answered,
                 trace_id,
+                retry_after_seconds: None,
             }) => {
                 assert_eq!(answered, code);
                 assert_eq!(trace_id.as_deref(), Some(TRACE_ID));
@@ -697,6 +819,7 @@ async fn a_template_refusal_is_its_typed_problem() {
                 status,
                 code: answered,
                 trace_id,
+                retry_after_seconds: None,
             }) => {
                 assert_eq!(answered, code);
                 assert_eq!(status, code.http_status());

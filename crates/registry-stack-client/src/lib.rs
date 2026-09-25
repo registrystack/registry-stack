@@ -70,8 +70,8 @@ pub mod messaging {
         MessagingProtocolFailure, ProblemCode, Recipient, RenderedParts, SegmentCount, SmsEncoding,
         SubmitMessageRequest, TemplatePreview, TemplatePreviewRequest, TemplateReference,
         TransportKind, HEALTH_PATH, IDEMPOTENCY_KEY_HEADER, MAXIMUM_IDEMPOTENCY_KEY_BYTES,
-        MESSAGES_PATH, MESSAGE_CANCEL_PATH, MESSAGE_PATH, MESSAGING_PROBLEM_TYPE_BASE, READY_PATH,
-        TEMPLATE_PREVIEW_PATH,
+        MAXIMUM_RETRY_AFTER_SECONDS, MESSAGES_PATH, MESSAGE_CANCEL_PATH, MESSAGE_PATH,
+        MESSAGING_PROBLEM_TYPE_BASE, READY_PATH, TEMPLATE_PREVIEW_PATH,
     };
 }
 
