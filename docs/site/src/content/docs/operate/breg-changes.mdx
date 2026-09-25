@@ -143,11 +143,14 @@ reviewed directory root, starting with `modules/<module-id>/migrations/<migratio
   changed, in one history commit, so snapshot and as-of reads agree with the backfilled rows.
   `field_encryption_backfill` carries no SQL; the engine seals the covered fields chunk by chunk
   and journals each chunk the same way. A journaled step is one `UPDATE`, after any leading
-  comments, and may not write record metadata (`record_revision`, `record_lifecycle`,
-  `active_package_revision`, `created_at`, `updated_at`). Outside comments and plain string
-  literals, its text may not contain a second statement or another statement word such as `drop`
-  or `delete`, and a `transactional_sql` step may not name `record_id`. A dollar-quoted body or a
-  literal holding a backslash is read as written, so a statement word inside it refuses the step.
+  comments, and may not name a record metadata column (`record_revision`, `record_lifecycle`,
+  `active_package_revision`, `created_at`, `updated_at`) anywhere in the statement, even to read
+  it. Outside comments and plain string literals, its text may not contain a second statement or
+  another statement word such as `drop` or `delete`, and a `transactional_sql` step may not name
+  `record_id`. A dollar-quoted body or a literal holding a backslash is read as written, so a
+  statement word inside it refuses the step. A Unicode-escape identifier or string (`U&"..."`,
+  `U&'...'`, with or without `UESCAPE`) refuses the step wherever it appears. The journal also
+  refuses a step that changed any record metadata column.
   Each step lists the `objects` (schema, table, entity, kind, member, physical name) its SQL may
   touch.
 - An assertion is one `SELECT` returning exactly one boolean column. Pre-assertions run against
@@ -375,7 +378,7 @@ server binary, and earlier packages keep verifying under their recorded rules.
 | `test` or `package` reports `migration.review.refused` | A precondition failed before the reviewed directory was read, such as the prior revision or the baseline binding. Check the baseline arguments and the fingerprints in the rehearsal receipt. |
 | `test` or `package` reports `migration.review.fingerprint_mismatch` | The rehearsal receipt was taken for a different candidate or baseline. Rehearse the exact candidate again. |
 | `test` reports `migration.rehearsal.step_failed`, `migration.rehearsal.assertion_failed`, or `migration.rehearsal.compiler_statement_failed` | PostgreSQL refused the named step, assertion, or generated statement when `test` rehearsed the successor over the predecessor schema, so `apply` would refuse it too. The message names the SQLSTATE, its class, and the object. Correct the reviewed SQL or the project, then repeat test and package. |
-| `test` reports `migration.rehearsal.history_step_refused` | The named step changes rows, and `apply` journals every row it changes, but the step's SQL is not an update the journal can record: it does not start with `UPDATE` once leading comments are set aside, it holds a second statement or a semicolon before its end, it names a record metadata column (`record_revision`, `record_lifecycle`, `active_package_revision`, `created_at`, `updated_at`), a transactional step names `record_id`, it uses a refused statement word (`insert`, `delete`, `truncate`, `alter`, `drop`, `create`, `merge`) outside a comment or plain string literal, or inside a dollar-quoted body or a literal holding a backslash, or its objects span more than the step's entity. Correct the reviewed SQL, then repeat test and package. |
+| `test` reports `migration.rehearsal.history_step_refused` | The named step changes rows, and `apply` journals every row it changes, but the step's SQL is not an update the journal can record: it does not start with `UPDATE` once leading comments are set aside, it holds a second statement or a semicolon before its end, it names a record metadata column (`record_revision`, `record_lifecycle`, `active_package_revision`, `created_at`, `updated_at`) anywhere, even in a read, it uses a Unicode-escape identifier or string (`U&"..."` or `U&'...'`), a transactional step names `record_id`, it uses a refused statement word (`insert`, `delete`, `truncate`, `alter`, `drop`, `create`, `merge`) outside a comment or plain string literal, or inside a dollar-quoted body or a literal holding a backslash, or its objects span more than the step's entity. Correct the reviewed SQL, then repeat test and package. |
 | `test` reports `migration.rehearsal.schema_mismatch` | The rehearsed migration does not reach the candidate schema, for example a required field the reviewed steps never constrain. Activation would refuse it. |
 | `test` reports `migration.rehearsal.baseline_unavailable` or `migration.rehearsal.baseline_not_reproducible` | This `bregctl` cannot rebuild the active package's schema from its signed sources. Run `test` with a `bregctl` release that compiles the predecessor, or report the mismatch. |
 | `apply` reports `apply.migration.statement_failed` | PostgreSQL refused a statement after maintenance began. The message names the SQLSTATE, its class, and the table, column, or constraint PostgreSQL reported, for example `23502` for stored rows a new `NOT NULL` refuses or `22P02` for a value a reviewed step cannot convert. Fix that cause and retry the same target, or run `migration reconcile` as for `apply.migration.failed`. |
