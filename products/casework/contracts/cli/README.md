@@ -26,6 +26,9 @@ wire contract.
 |---|---|---|
 | `attempt settle` | `AttemptSettlementReport` | `AttemptSettlementReport.schema.json` |
 | `attempt mark-uncertain` | `AttemptUncertainMarkingReport` | `AttemptUncertainMarkingReport.schema.json` |
+| `audit acknowledge-restore` | `AuditRestoreAcknowledgementReport` | `AuditRestoreAcknowledgementReport.schema.json` |
+| `audit export` | `AuditExportReport` | `AuditExportReport.schema.json` |
+| `audit verify` | `AuditVerifyReport` | `AuditVerifyReport.schema.json` |
 | `check` | `CheckReport` | `CheckReport.schema.json` |
 | `db migrate` | `DatabaseMigrationReport` | `DatabaseMigrationReport.schema.json` |
 | `doctor` | `DoctorReport` | `DoctorReport.schema.json` |
