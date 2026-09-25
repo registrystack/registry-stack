@@ -191,6 +191,33 @@ async fn refuse_to_drop_unpublished_audit(
     }
 }
 
+/// Bound how long a database connection takes to notice a server that
+/// stopped answering, for every setting the database URL leaves unset.
+///
+/// A connection that hangs on a dead server must fail within seconds instead
+/// of the operating system's hours, so a request, a worker pass, or a
+/// readiness probe waiting on it fails visibly. Keepalive probes find a silent peer on an
+/// idle connection; the TCP user timeout, which Linux honours, fails a
+/// connection whose sent data stays unacknowledged. A URL that sets any of
+/// these, or turns keepalives off, keeps its own choice.
+fn bound_database_connection(postgres: &mut PgConfig) {
+    if postgres.get_connect_timeout().is_none() {
+        postgres.connect_timeout(Duration::from_secs(5));
+    }
+    if postgres.get_keepalives_idle() == PgConfig::new().get_keepalives_idle() {
+        postgres.keepalives_idle(Duration::from_secs(15));
+    }
+    if postgres.get_keepalives_interval().is_none() {
+        postgres.keepalives_interval(Duration::from_secs(5));
+    }
+    if postgres.get_keepalives_retries().is_none() {
+        postgres.keepalives_retries(3);
+    }
+    if postgres.get_tcp_user_timeout().is_none() {
+        postgres.tcp_user_timeout(Duration::from_secs(30));
+    }
+}
+
 /// Serializes operator-run migrations on one session lock. A second migrator
 /// waits here instead of racing the ledger primary key. The key spells the
 /// ASCII bytes of "casework".
@@ -271,6 +298,7 @@ impl PostgresStore {
         if postgres.get_user().is_none() || postgres.get_dbname().is_none() {
             return Err(StoreError::Configuration);
         }
+        bound_database_connection(&mut postgres);
         let manager_config = ManagerConfig {
             recycling_method: RecyclingMethod::Verified,
         };
@@ -3958,9 +3986,15 @@ mod tests {
         files.sort();
         let versions: Vec<i64> = MIGRATIONS.iter().map(|(version, _)| *version).collect();
         let expected: Vec<i64> = (1..=i64::try_from(MIGRATIONS.len()).unwrap()).collect();
-        assert_eq!(versions, expected, "the ledger versions run 1..=N without a gap");
         assert_eq!(
-            files.iter().map(|(version, _)| *version).collect::<Vec<_>>(),
+            versions, expected,
+            "the ledger versions run 1..=N without a gap"
+        );
+        assert_eq!(
+            files
+                .iter()
+                .map(|(version, _)| *version)
+                .collect::<Vec<_>>(),
             expected,
             "every migration file has its own version and the ledger names each one"
         );
@@ -3971,6 +4005,49 @@ mod tests {
             AUDIT_WRITER_MIGRATION,
             "the outbox drop version is the migration that installs the audit writer"
         );
+    }
+
+    #[test]
+    fn database_connections_detect_a_dead_server_unless_the_url_says_otherwise() {
+        let mut bounded =
+            PgConfig::from_str("postgresql://casework@db.example/casework").expect("database url");
+        bound_database_connection(&mut bounded);
+        assert_eq!(bounded.get_connect_timeout(), Some(&Duration::from_secs(5)));
+        assert!(bounded.get_keepalives());
+        assert_eq!(bounded.get_keepalives_idle(), Duration::from_secs(15));
+        assert_eq!(
+            bounded.get_keepalives_interval(),
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(bounded.get_keepalives_retries(), Some(3));
+        assert_eq!(
+            bounded.get_tcp_user_timeout(),
+            Some(&Duration::from_secs(30))
+        );
+
+        let mut chosen = PgConfig::from_str(
+            "postgresql://casework@db.example/casework?connect_timeout=3&keepalives_idle=60\
+             &keepalives_interval=7&keepalives_retries=9&tcp_user_timeout=90",
+        )
+        .expect("database url");
+        bound_database_connection(&mut chosen);
+        assert_eq!(chosen.get_connect_timeout(), Some(&Duration::from_secs(3)));
+        assert_eq!(chosen.get_keepalives_idle(), Duration::from_secs(60));
+        assert_eq!(
+            chosen.get_keepalives_interval(),
+            Some(Duration::from_secs(7))
+        );
+        assert_eq!(chosen.get_keepalives_retries(), Some(9));
+        assert_eq!(
+            chosen.get_tcp_user_timeout(),
+            Some(&Duration::from_secs(90))
+        );
+
+        let mut disabled =
+            PgConfig::from_str("postgresql://casework@db.example/casework?keepalives=0")
+                .expect("database url");
+        bound_database_connection(&mut disabled);
+        assert!(!disabled.get_keepalives());
     }
 
     #[test]

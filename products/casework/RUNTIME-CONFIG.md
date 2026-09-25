@@ -70,7 +70,12 @@ from one provider to another. The maintained example uses mounted files.
 `database.migrationUrlRef` supplies the operator-run migration connection.
 `database.trustedRootCertificateRef` is optional. Plaintext PostgreSQL is
 available only to builds with the `postgres-test` feature and an explicit
-`testOnlyPlaintext: true` setting.
+`testOnlyPlaintext: true` setting. Unless a database URL sets them, every
+Casework connection uses `connect_timeout=5`, `keepalives_idle=15`,
+`keepalives_interval=5`, `keepalives_retries=3`, and `tcp_user_timeout=30`,
+all in seconds as Casework reads the URL (unlike libpq, which reads
+`tcp_user_timeout` in milliseconds), so a connection to a server that stopped
+answering fails within seconds. The TCP user timeout applies on Linux only.
 
 `authentication.oidc` requires `issuer` and `audience`. `jwksSource` defaults to
 discovery and can instead select a static `documentRef`. `scopeClaim` defaults
