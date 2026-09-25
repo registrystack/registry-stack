@@ -77,6 +77,9 @@
 - Add the runtime configuration conformance gate,
   `products/platform/scripts/check-config-conformance.py`, run in root CI. It
   fails when a runtime's generated schema re-declares a shared block, when a
+  runtime without a generated schema stops holding a shared block type in its
+  runtime struct, when a hand-written schema copy of a shared block widens it,
+  when no non-test code reads `runtime.yaml` through the shared loader, when a
   runtime still expands its configuration outside the shared loader, when the
   tests proving `*Ref` fields and authored files refuse `${VAR}` go missing, or
   when the committed canonical schema differs from its generator.
