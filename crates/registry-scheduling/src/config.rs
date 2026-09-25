@@ -13,7 +13,7 @@ pub(crate) use registry_platform_config::describe_secret_failure;
 use registry_platform_config::{
     redact_refused_values, reject_environment_expressions_in_authored_yaml, sha256_uri,
     ConfigBlockError, PackageDigestMismatch, RemovedKey, RuntimeConfigErrorKind,
-    RuntimeConfigLoader, RuntimeEnvelope, SecretResolver,
+    RuntimeConfigLoader, RuntimeEnvelope, SecretResolver, REMOVED_OIDC_JWKS_URI,
 };
 pub use registry_platform_config::{
     AuditKeyConfig, DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
@@ -59,10 +59,7 @@ pub const SCHEDULING_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
 
 /// Keys an earlier Scheduling runtime configuration accepted, each refused
 /// with the key that replaced it.
-pub const SCHEDULING_REMOVED_KEYS: &[RemovedKey] = &[RemovedKey {
-    path: "authentication.oidc.jwksUri",
-    replacement: "declare authentication.oidc.jwksSource with kind: uri and uri: <https URL>",
-}];
+pub const SCHEDULING_REMOVED_KEYS: &[RemovedKey] = &[REMOVED_OIDC_JWKS_URI];
 
 /// The operator runtime configuration document.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

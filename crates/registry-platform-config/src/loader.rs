@@ -55,6 +55,13 @@ pub struct RemovedKey {
     pub replacement: &'static str,
 }
 
+/// The single-URL JWKS key the shared OIDC issuer block replaced with
+/// `jwksSource`, for a runtime whose issuer block sits at `authentication.oidc`.
+pub const REMOVED_OIDC_JWKS_URI: RemovedKey = RemovedKey {
+    path: "authentication.oidc.jwksUri",
+    replacement: "declare authentication.oidc.jwksSource with kind: uri and uri: <https URL>",
+};
+
 /// What kind of rule a runtime configuration broke.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeConfigErrorKind {
