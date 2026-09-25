@@ -12,7 +12,7 @@ waves:
     outcome: "Real PostgreSQL feasibility kernel with roles, RLS, locks, and pool isolation."
     exitCriteria: [BREG-AP-04, BREG-AP-05, BREG-AP-09, BREG-AP-10, BREG-AP-12, BREG-AP-13]
   - id: W3
-    outcome: "Real REST record path with atomic revisions, audit, idempotency, and outbox."
+    outcome: "Real REST record path with atomic revisions, idempotency, and outbox, plus audit gates before protected I/O and response release."
     exitCriteria: [BREG-AP-03, BREG-AP-06, BREG-AP-07, BREG-AP-08, BREG-AP-16]
   - id: W4
     outcome: "Verified package activation, migration recovery, and startup integrity."
