@@ -4063,9 +4063,10 @@ mod tests {
         );
     }
 
-    // RFC 7638 section 3.1 publishes this vector for its RSA example key; the
-    // ES256 and Ed25519 vectors below were computed independently over the RFC
-    // 7517 appendix A.1 P-256 key and the RFC 8037 appendix A.3 Ed25519 key.
+    // RFC 7638 section 3.1 publishes this vector for its RSA example key, and
+    // RFC 8037 appendix A.3 publishes the Ed25519 vector below for its example
+    // key. The ES256 vector was computed independently over the RFC 7517
+    // appendix A.1 P-256 key.
     #[test]
     fn public_jwk_thumbprint_matches_rfc_7638_rsa_vector() {
         let public = PublicJwk::parse(
