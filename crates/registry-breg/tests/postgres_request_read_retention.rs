@@ -29,7 +29,7 @@ use registry_breg::postgres::{
     RegistryLockKey, RegistryStateTestIdentity,
 };
 use registry_breg::request_retention::{
-    RequestDetailErasureScope, RequestRetentionOperatorService,
+    RequestDetailErasureScope, RequestRetentionError, RequestRetentionOperatorService,
 };
 use registry_breg_client::{BRegRecordOptions, BRegRequestMetadata};
 use registry_platform_audit::AuditProfile;
@@ -697,6 +697,163 @@ async fn snapshot_reads_exclude_soft_erased_request_revisions() {
     );
 
     database.cleanup().await;
+}
+
+/// A request-detail erasure appends its request entry before its
+/// transaction opens: a writer that refuses that entry answers an outage and
+/// leaves the detail retained. A working writer then records the request and
+/// the committed response under one correlation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn request_detail_erasure_changes_nothing_when_the_audit_writer_refuses_its_request_entry() {
+    let database = TestDatabase::create(6).await;
+    let registry = Arc::new(compiled_registry());
+    let identity = install_registry(&database, &registry).await;
+    let app = request_router(&database, registry.clone(), identity.clone());
+    let operator = claims("operator", "operator-principal");
+    let request_id = applied_correction_request(&app, operator, "audit-refused-erasure").await;
+    let scope = RequestDetailErasureScope {
+        request_entity_id: "correction-request",
+        request_id: Uuid::parse_str(&request_id).expect("request id parses"),
+        proposal_version: 1,
+    };
+    let retention_with = |audit| {
+        RequestRetentionOperatorService::new_for_test(
+            registry.as_ref().clone(),
+            identity.clone(),
+            ExpectedManagedCatalog::compiled(&registry),
+            RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives"),
+            database.migration_config.clone(),
+            database.migration_role.clone(),
+            database.runtime_role.clone(),
+            audit,
+        )
+    };
+    let profile = || {
+        AuditProfile::production_from_secret_bytes(vec![0x8c; 32].into())
+            .expect("test audit profile is keyed")
+    };
+    let (audit, capture) = registry_breg::audit::test_support::capturing(profile());
+
+    capture.fail_after(0);
+    let refused = retention_with(audit)
+        .erase(scope.clone())
+        .await
+        .expect_err("a refused request entry refuses the erasure");
+    assert_eq!(refused, RequestRetentionError::Unavailable);
+    capture.restore();
+    assert!(capture.entries().is_empty());
+
+    let retained = retention_with(capture.audit(profile()));
+    let plan = retained
+        .dry_run(scope.clone())
+        .await
+        .expect("the retained detail still plans");
+    assert!(!plan.detail_erased, "the refused erasure erased nothing");
+
+    retained
+        .erase(scope)
+        .await
+        .expect("a working writer lets the erasure proceed");
+    let entries = capture.entries();
+    let phases = entries
+        .iter()
+        .map(|entry| entry["phase"].as_str().expect("phase"))
+        .collect::<Vec<_>>();
+    assert_eq!(phases, ["request", "response"]);
+    assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
+    assert_eq!(entries[0]["record"]["phase"], "attempt");
+    assert_eq!(
+        entries[0]["record"]["recordReference"],
+        entries[1]["record"]["recordReference"]
+    );
+    assert!(!serde_json::Value::Array(entries)
+        .to_string()
+        .contains(&request_id));
+
+    database.cleanup().await;
+}
+
+/// Create, submit, and apply one correction request, returning its id.
+async fn applied_correction_request(
+    app: &axum::Router,
+    operator: VerifiedRequestClaims,
+    label: &str,
+) -> String {
+    let old_site = create_record(
+        app,
+        "/v1/records/sites?accessProfile=operator",
+        operator.clone(),
+        &format!("{label}-old-site"),
+        json!({"tenant": TENANT, "name": "old"}),
+    )
+    .await;
+    let new_site = create_record(
+        app,
+        "/v1/records/sites?accessProfile=operator",
+        operator.clone(),
+        &format!("{label}-new-site"),
+        json!({"tenant": TENANT, "name": "new"}),
+    )
+    .await;
+    let placement = create_record(
+        app,
+        "/v1/records/placements?accessProfile=operator",
+        operator.clone(),
+        &format!("{label}-placement"),
+        json!({"tenant": TENANT, "site": old_site.id}),
+    )
+    .await;
+    let request = create_record(
+        app,
+        "/v1/records/correction-requests?accessProfile=operator",
+        operator.clone(),
+        &format!("{label}-request"),
+        json!({
+            "tenant": TENANT,
+            "placement": placement.id,
+            "proposedSite": new_site.id,
+            "reason": "erase this request detail"
+        }),
+    )
+    .await;
+    let submitted = run_action(
+        app,
+        &request.id,
+        "submit_request",
+        &format!("{label}-submit"),
+        operator.clone(),
+        |_| json!({}),
+    )
+    .await;
+    let effect_digest = submitted["request"]["effectDigest"]
+        .as_str()
+        .expect("submission has effect digest")
+        .to_owned();
+    let before_apply = get_record(
+        app,
+        &format!(
+            "/v1/records/correction-requests/{}?accessProfile=operator",
+            request.id
+        ),
+        operator.clone(),
+    )
+    .await;
+    let apply_action = action(&before_apply.body, "apply_request");
+    let applied = send_action(
+        app,
+        &apply_action,
+        &format!("{label}-apply"),
+        operator,
+        json!({"proposalVersion": 1, "effectDigest": effect_digest}),
+    )
+    .await;
+    assert_eq!(
+        applied.status,
+        StatusCode::OK,
+        "apply_request failed with {}",
+        applied.body
+    );
+    request.id
 }
 
 async fn install_registry(
