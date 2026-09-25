@@ -246,10 +246,13 @@ async fn fixture_with_source(
         trusted_root_certificate_ref: None,
         test_only_plaintext: true,
     };
-    let migration =
-        PostgresStore::connect_migration(&database_config, &secrets).expect("migration store");
+    let migration = PostgresStore::connect_migration(&database_config, &secrets)
+        .expect("migration store")
+        .with_audit(registry_casework::CaseworkAudit::capture().0);
     migration.migrate().await.expect("casework migrations");
-    let store = PostgresStore::connect_runtime(&database_config, &secrets).expect("runtime store");
+    let store = PostgresStore::connect_runtime(&database_config, &secrets)
+        .expect("runtime store")
+        .with_audit(registry_casework::CaseworkAudit::capture().0);
     let (database, connection) = tokio_postgres::connect(&scoped_url, NoTls)
         .await
         .expect("connect scoped inbox database");

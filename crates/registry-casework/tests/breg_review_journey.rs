@@ -431,6 +431,7 @@ async fn casework_fixture_with_source(
     };
     PostgresStore::connect_migration(&database_config, &secrets)
         .expect("Casework migration store")
+        .with_audit(registry_casework::CaseworkAudit::capture().0)
         .migrate()
         .await
         .expect("Casework migrations");
@@ -445,7 +446,9 @@ async fn casework_fixture_with_source(
         .expect("Casework directory");
     project.check().expect("Casework project");
     let service = CaseworkService::new(
-        PostgresStore::connect_runtime(&database_config, &secrets).expect("Casework runtime store"),
+        PostgresStore::connect_runtime(&database_config, &secrets)
+            .expect("Casework runtime store")
+            .with_audit(registry_casework::CaseworkAudit::capture().0),
         project.clone(),
         [source],
     )

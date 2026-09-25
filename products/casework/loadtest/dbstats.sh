@@ -55,8 +55,9 @@ if [[ "$action" == analyze ]]; then
 fi
 
 # Casework appends review accountability to casework_review_history inside
-# each mutating transaction, and publishes audit through casework_audit_outbox.
-# Both count as the audit path for the auditLockWaiters sample.
+# each mutating transaction; that table is the audit path for the
+# auditLockWaiters sample. Audit entries go to the runtime's audit destination,
+# not to the database.
 if [[ "$action" == snapshot ]]; then
   psql_exec -At <<'SQL'
 WITH table_sizes AS (
@@ -65,7 +66,7 @@ WITH table_sizes AS (
          n_live_tup AS "liveRows",
          n_dead_tup AS "deadRows"
   FROM pg_stat_user_tables
-  WHERE strpos(relname, 'casework_review_') = 1 OR relname = 'casework_audit_outbox'
+  WHERE strpos(relname, 'casework_review_') = 1
   ORDER BY pg_total_relation_size(relid) DESC
   LIMIT 20
 ), current_waits AS (
@@ -87,7 +88,6 @@ SELECT json_build_object(
   'reviewRequests', (SELECT count(*) FROM casework_review_requests),
   'reviewTaskStates', COALESCE((SELECT json_agg(task_states) FROM task_states), '[]'::json),
   'reviewHistoryRows', (SELECT count(*) FROM casework_review_history),
-  'auditOutboxRows', (SELECT count(*) FROM casework_audit_outbox),
   'backends', (SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid())
 )::jsonb::text;
 SQL
@@ -100,8 +100,7 @@ WITH activity AS (
   SELECT wait_event_type,
          wait_event,
          state,
-         (strpos(lower(query), 'casework_review_history') > 0
-           OR strpos(lower(query), 'casework_audit_outbox') > 0) AS audit_query,
+         strpos(lower(query), 'casework_review_history') > 0 AS audit_query,
          cardinality(pg_blocking_pids(pid)) > 0 AS blocked
   FROM pg_stat_activity
   WHERE datname = current_database() AND pid <> pg_backend_pid()

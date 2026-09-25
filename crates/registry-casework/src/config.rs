@@ -6,6 +6,7 @@ use std::time::Duration;
 use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
 use jsonwebtoken::Algorithm;
 use registry_casework_core::{check_routing_policy, CaseworkProject};
+use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
 use registry_platform_config::{
     SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,
 };
@@ -707,8 +708,37 @@ fn default_human_identity_value() -> String {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuditConfig {
-    pub path: PathBuf,
     pub hash_key_ref: String,
+    /// Where audit entries go: a rotated `file` (the default) or `stdout`.
+    #[serde(default)]
+    pub destination: AuditDestinationKind,
+    /// The active audit file. Required for, and only allowed with, `file`.
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+    /// Rotate the active file once it reaches this many bytes (default 100 MiB).
+    #[serde(default)]
+    pub rotate_bytes: Option<u64>,
+    /// Delete rotated files older than this many days (default 90).
+    #[serde(default)]
+    pub retain_days: Option<u32>,
+}
+
+impl AuditConfig {
+    /// The destination this configuration names, with the shared defaults.
+    pub fn destination(&self) -> Result<AuditDestination, RuntimeConfigError> {
+        AuditDestination::from_settings(
+            self.destination,
+            self.path.clone(),
+            self.rotate_bytes,
+            self.retain_days,
+        )
+        .map_err(|error| match error {
+            AuditDestinationError::RelativePath => {
+                RuntimeConfigError::RelativeOperatedPath("audit.path")
+            }
+            error => RuntimeConfigError::InvalidAuditDestination(error),
+        })
+    }
 }
 
 impl RuntimeConfig {
@@ -771,9 +801,7 @@ impl RuntimeConfig {
                 "secretProviders.file.root",
             ));
         }
-        if !self.audit.path.is_absolute() {
-            return Err(RuntimeConfigError::RelativeOperatedPath("audit.path"));
-        }
+        self.audit.destination()?;
         if self.secret_providers.file.is_none() && self.secret_providers.environment.is_none() {
             return Err(RuntimeConfigError::InvalidSecretProviders);
         }
@@ -2349,6 +2377,8 @@ pub enum RuntimeConfigError {
     InvalidDatabaseReference,
     #[error("audit.hashKeyRef must be a non-empty secret reference")]
     InvalidAuditReference,
+    #[error("{0}")]
+    InvalidAuditDestination(#[source] AuditDestinationError),
     #[error("sources must exactly match the source ids declared by package.root/casework.yaml")]
     InvalidSourceBindings,
     #[error(
@@ -2389,6 +2419,21 @@ impl RuntimeConfigError {
             Self::InvalidListener => "listener",
             Self::InvalidDatabaseReference | Self::PlaintextDatabase => "database",
             Self::InvalidAuditReference => "audit.hashKeyRef",
+            Self::InvalidAuditDestination(error) => match error {
+                AuditDestinationError::MissingPath | AuditDestinationError::RelativePath => {
+                    "audit.path"
+                }
+                AuditDestinationError::FileOnlyField { field: "path" } => "audit.path",
+                AuditDestinationError::FileOnlyField {
+                    field: "rotateBytes",
+                }
+                | AuditDestinationError::RotateBytesOutOfRange { .. } => "audit.rotateBytes",
+                AuditDestinationError::FileOnlyField {
+                    field: "retainDays",
+                }
+                | AuditDestinationError::RetainDaysOutOfRange { .. } => "audit.retainDays",
+                _ => "audit",
+            },
             Self::InvalidSourceBindings | Self::SourceDescription => "sources",
             Self::InactiveReviewSourceNamespace => "package.root/casework.yaml",
             Self::Project(_) => "package.root/casework.yaml",

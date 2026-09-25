@@ -25,7 +25,9 @@ async fn template_versions_are_immutable_and_retirement_cannot_revive_existing_g
         trusted_root_certificate_ref: None,
         test_only_plaintext: true,
     };
-    let store = PostgresStore::connect_migration(&config, &secrets).unwrap();
+    let store = PostgresStore::connect_migration(&config, &secrets)
+        .unwrap()
+        .with_audit(crate::CaseworkAudit::capture().0);
     store.migrate().await.unwrap();
     std::env::remove_var(secret);
     let template: TaskTemplate = serde_json::from_value(json!({

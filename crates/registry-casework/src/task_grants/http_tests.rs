@@ -152,6 +152,7 @@ struct Fixture {
     admin: tokio_postgres::Client,
     schema: String,
     store: PostgresStore,
+    audit: crate::AuditCapture,
 }
 async fn fixture(lifetime: u64) -> Fixture {
     fixture_for_role(lifetime, CaseworkRole::Staff).await
@@ -186,7 +187,10 @@ async fn fixture_for_role(lifetime: u64, role: CaseworkRole) -> Fixture {
         trusted_root_certificate_ref: None,
         test_only_plaintext: true,
     };
-    let store = PostgresStore::connect_migration(&config, &secrets).unwrap();
+    let (audit, audit_capture) = crate::CaseworkAudit::capture();
+    let store = PostgresStore::connect_migration(&config, &secrets)
+        .unwrap()
+        .with_audit(audit);
     store.migrate().await.unwrap();
     std::env::remove_var(name);
     let template:TaskTemplate=serde_json::from_value(json!({"id":"summary","version":"1","label":"Prepare summary","eligibleTeams":["team"],"eligibleProfiles":[profile_id],"source":"source","itemKinds":["request"],"itemStates":["claimed"],"agent":{"issuer":ISSUER,"subject":"agent"},"client":"agent-client","resource":"urn:breg:test","purpose":"prepare-summary","scopes":["records:get"],"bounds":{"type":"breg","permissions":[{"collection":"people","operations":["get"]}]},"subjects":{"person_reference":"person-reference"},"lifetimeSeconds":lifetime})).unwrap();
@@ -271,6 +275,7 @@ async fn fixture_for_role(lifetime: u64, role: CaseworkRole) -> Fixture {
         admin,
         schema,
         store,
+        audit: audit_capture,
     }
 }
 
@@ -1220,16 +1225,13 @@ async fn review_task_grants_bind_holder_revision_subject_and_revocation() {
         .unwrap()
         .get(0);
     assert_eq!(revocations, 1, "the first revocation is recorded once");
-    let audited: i64 = db
-        .query_one(
-            "SELECT count(*) FROM casework_audit_outbox
-             WHERE audit_record->>'grantId'=$1
-               AND audit_record->>'event'='casework.task_grant_revoked'",
-            &[&revoked_id],
-        )
-        .await
-        .unwrap()
-        .get(0);
+    let grant = f.audit.reference("grantId", revoked_id);
+    let audited = f
+        .audit
+        .responses("task_grant_revoked")
+        .into_iter()
+        .filter(|record| record["grantPseudonym"] == grant.as_str())
+        .count();
     assert_eq!(audited, 1, "the revocation is audited");
     assert_eq!(
         request_with_profiles(&f, "POST", &revoke_path, &revoker, true, false, None, None)
@@ -1364,21 +1366,20 @@ async fn review_task_grants_bind_holder_revision_subject_and_revocation() {
         eligibility_history, 1,
         "the first eligibility invalidation is recorded like every other loss of authority"
     );
-    let eligibility_audited: i64 = db
-        .query_one(
-            "SELECT count(*) FROM casework_audit_outbox
-             WHERE audit_record->>'grantId'=$1
-               AND audit_record->>'event'='casework.task_grant_invalidated'
-               AND audit_record->>'reason'='eligibility'
-               AND audit_record->>'profileId'='system:task-grants'",
-            &[&first_id],
-        )
-        .await
-        .unwrap()
-        .get(0);
+    let grant = f.audit.reference("grantId", first_id);
+    let eligibility_audited = f
+        .audit
+        .responses("task_grant_invalidated")
+        .into_iter()
+        .filter(|record| {
+            record["grantPseudonym"] == grant.as_str()
+                && record["profileId"] == "system:task-grants"
+                && record.get("principalPseudonym").is_none()
+        })
+        .count();
     assert_eq!(
         eligibility_audited, 1,
-        "the eligibility invalidation reaches the external audit stream"
+        "the eligibility invalidation is written to the audit destination"
     );
     assert_eq!(
         request(&f, "GET", &status_path, &resource, false, None, None)
@@ -1619,22 +1620,21 @@ async fn review_task_grant_approval_reaches_history_and_audit() {
         approvals, 1,
         "the approval is recorded once, bound to the approving actor"
     );
-    let audited: i64 = db
-        .query_one(
-            "SELECT count(*) FROM casework_audit_outbox
-             WHERE audit_record->>'grantId'=$1
-               AND audit_record->>'event'='casework.task_grant_approved'
-               AND audit_record->>'profileId'=$2
-               AND audit_record->'actor'->>'issuer'=$3
-               AND audit_record->'actor'->>'subject'='human'",
-            &[&grant_id, &f.profile_id, &ISSUER],
-        )
-        .await
-        .unwrap()
-        .get(0);
+    let grant = f.audit.reference("grantId", grant_id);
+    let approver = f.audit.principal(ISSUER, "human");
+    let audited = f
+        .audit
+        .responses("task_grant_approved")
+        .into_iter()
+        .filter(|record| {
+            record["grantPseudonym"] == grant.as_str()
+                && record["profileId"] == f.profile_id
+                && record["principalPseudonym"] == approver.as_str()
+        })
+        .count();
     assert_eq!(
         audited, 1,
-        "the approval reaches the external audit stream under the approver's profile"
+        "the approval is written to the audit destination under the approver's profile"
     );
 
     let (_, replay) = request(

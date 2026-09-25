@@ -56,8 +56,22 @@ Principal selection belongs exclusively to each authored
 `accessProfiles[].principalClaim` in `casework.yaml`. The removed runtime field
 `authentication.oidc.principalClaim` is refused with that replacement.
 
-`audit.path` is the absolute JSONL journal path. `audit.hashKeyRef` supplies its
-keyed-chain secret. `sources` is keyed by the exact source ids declared by the
+`audit` selects where Casework writes its audit entries and the key that
+pseudonymizes the principals and identifiers they name. `audit.hashKeyRef` is
+that key's secret reference. `audit.destination` is `file` (the default) or
+`stdout`. A `file` destination requires the absolute `audit.path` of the active
+file and accepts `audit.rotateBytes` (default 104857600, at least 1048576) and
+`audit.retainDays` (default 90, at most 36500); `stdout` refuses all three. A
+`caseworkctl` command that writes audit, such as an applied erasure or
+settlement, writes to a sibling file named for its process role beside
+`audit.path`, `audit.caseworkctl.ndjson` for `audit.ndjson`, or to standard
+output with a `stdout` destination. Every entry carries the schema
+`registry-casework-audit/v1`, a phase, and a correlation shared by an
+operation's request entry and its response entries. The runtime writes the
+request entry before it opens the operation's transaction, and the response
+entries after that transaction commits; a destination that refuses either
+fails the request with `service.unavailable`, and a refused response leaves the
+committed change in place. The database holds no audit state. `sources` is keyed by the exact source ids declared by the
 selected policy; missing, extra, or empty ids are refused. Source access remains
 bound to each source's configured reader profile and does not grant a caller a
 Casework access profile.

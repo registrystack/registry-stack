@@ -656,9 +656,13 @@ async fn fixture_with_source(source: MockSource, inbox: InboxPolicy) -> Fixture 
         trusted_root_certificate_ref: None,
         test_only_plaintext: true,
     };
-    let migration = PostgresStore::connect_migration(&database, &resolver).unwrap();
+    let migration = PostgresStore::connect_migration(&database, &resolver)
+        .unwrap()
+        .with_audit(registry_casework::CaseworkAudit::capture().0);
     migration.migrate().await.unwrap();
-    let store = PostgresStore::connect_runtime(&database, &resolver).unwrap();
+    let store = PostgresStore::connect_runtime(&database, &resolver)
+        .unwrap()
+        .with_audit(registry_casework::CaseworkAudit::capture().0);
     store
         .register_source_generation(SOURCE_ID, GENERATION)
         .await
@@ -3532,9 +3536,13 @@ async fn http_authentication_and_directory_authority_are_enforced() {
         trusted_root_certificate_ref: None,
         test_only_plaintext: true,
     };
-    let migration = PostgresStore::connect_migration(&database, &resolver).unwrap();
+    let migration = PostgresStore::connect_migration(&database, &resolver)
+        .unwrap()
+        .with_audit(registry_casework::CaseworkAudit::capture().0);
     migration.migrate().await.unwrap();
-    let store = PostgresStore::connect_runtime(&database, &resolver).unwrap();
+    let store = PostgresStore::connect_runtime(&database, &resolver)
+        .unwrap()
+        .with_audit(registry_casework::CaseworkAudit::capture().0);
     let item_subject = Uuid::from_u128(6);
     let (source, prepare_calls, execute_calls) =
         MockSource::with_successful_action(item_subject, CallerRead::Visible("authorized"));

@@ -242,10 +242,14 @@ async fn source_erasure_scrubs_payloads_fences_rehydration_and_preserves_expired
     };
     PostgresStore::connect_migration(&config, &secrets)
         .expect("migration store")
+        .with_audit(registry_casework::CaseworkAudit::capture().0)
         .migrate()
         .await
         .expect("migrations");
-    let store = PostgresStore::connect_runtime(&config, &secrets).expect("runtime store");
+    let (audit, audit_capture) = registry_casework::CaseworkAudit::capture();
+    let store = PostgresStore::connect_runtime(&config, &secrets)
+        .expect("runtime store")
+        .with_audit(audit);
     let administrator = actor(
         "administrator",
         CaseworkRole::Administrator,
@@ -318,26 +322,23 @@ async fn source_erasure_scrubs_payloads_fences_rehydration_and_preserves_expired
         .await
         .expect("completed decision");
     assert!(decision.1.is_some());
-    for table_and_column in [
-        ("casework_history", "detail"),
-        ("casework_audit_outbox", "audit_record"),
-    ] {
-        let contains_reference: bool = database
-            .query_one(
-                &format!(
-                    "SELECT EXISTS(SELECT 1 FROM {} WHERE {}::text LIKE $1)",
-                    table_and_column.0, table_and_column.1
-                ),
-                &[&format!("%{REFERENCE_CANARY}%")],
-            )
-            .await
-            .expect("inspect protected event storage")
-            .get(0);
-        assert!(
-            !contains_reference,
-            "the retained lookup candidate must not enter history or audit"
-        );
-    }
+    let contains_reference: bool = database
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM casework_history WHERE detail::text LIKE $1)",
+            &[&format!("%{REFERENCE_CANARY}%")],
+        )
+        .await
+        .expect("inspect protected event storage")
+        .get(0);
+    assert!(
+        !contains_reference,
+        "the retained lookup candidate must not enter history"
+    );
+    let audit_text = serde_json::to_string(&audit_capture.entries()).expect("audit entries");
+    assert!(
+        !audit_text.contains(REFERENCE_CANARY),
+        "the retained lookup candidate must not enter audit"
+    );
 
     let selected_clock = Uuid::new_v4();
     let other_clock = Uuid::new_v4();
@@ -361,25 +362,6 @@ async fn source_erasure_scrubs_payloads_fences_rehydration_and_preserves_expired
     database.execute("INSERT INTO casework_idempotency(issuer,subject,profile_id,operation,resource,idempotency_key,request_hash,response,created_at) VALUES($1,$2,$3,'clock.recompute.apply',$4,'clock-apply','sha256:preview',$5,now())", &[&administrator.principal.issuer,&administrator.principal.subject,&administrator.profile_id,&preview_id.to_string(),&json!({"occurrences":[selected_clock,other_clock],"canary":CANARY})]).await.expect("clock replay");
     database.execute("INSERT INTO casework_cursors(cursor_id,issuer,subject,casework_profile_id,source_profile_id,context,last_passive_due_at,last_item_id,expires_at) VALUES($1,$2,$3,$4,'reader','retention-cursor',now(),$5,now()+interval '15 minutes')", &[&Uuid::new_v4(),&staff.principal.issuer,&staff.principal.subject,&staff.profile_id,&item.item_id]).await.expect("source cursor");
     database.execute("INSERT INTO casework_assignment_cursors(cursor_id,issuer,subject,profile_id,context_hash,last_item_id,expires_at) VALUES($1,$2,$3,$4,'sha256:cursor',$5,now()+interval '15 minutes')", &[&Uuid::new_v4(),&staff.principal.issuer,&staff.principal.subject,&staff.profile_id,&item.item_id]).await.expect("assignment cursor");
-    let history_event: Uuid = database
-        .query_one(
-            "SELECT event_id FROM casework_history WHERE item_id=$1 ORDER BY occurred_at LIMIT 1",
-            &[&item.item_id],
-        )
-        .await
-        .expect("history event")
-        .get(0);
-    database
-        .execute(
-            "UPDATE casework_audit_outbox SET audit_record=$2 WHERE event_id=$1",
-            &[
-                &history_event,
-                &json!({"detail":CANARY,"reason":CANARY,"sourceReceipt":CANARY}),
-            ],
-        )
-        .await
-        .expect("audit canary");
-
     for offset in 0..105_i64 {
         database
             .execute(
@@ -528,16 +510,17 @@ async fn source_erasure_scrubs_payloads_fences_rehydration_and_preserves_expired
     assert_eq!(retained_links.get::<_, i64>(1), 0);
     assert_eq!(retained_links.get::<_, i64>(2), 0);
     assert_eq!(retained_links.get::<_, i64>(3), 0);
-    let audit_text: String = database
-        .query_one(
-            "SELECT COALESCE(string_agg(audit_record::text,''),'') FROM casework_audit_outbox",
-            &[],
-        )
-        .await
-        .expect("audit records")
-        .get(0);
+    let audit_text = serde_json::to_string(&audit_capture.entries()).expect("audit entries");
     assert!(!audit_text.contains(CANARY));
-    assert!(audit_text.contains("casework.source_retention_erased"));
+    assert!(
+        !audit_text.contains(&request_id),
+        "the erasure selector does not enter audit"
+    );
+    assert_eq!(
+        audit_capture.responses("source_retention_erased").len(),
+        1,
+        "the erasure is audited once"
+    );
     database.execute("INSERT INTO casework_history_cursors(cursor_id,issuer,subject,casework_profile_id,source_profile_id,item_id,last_occurred_at,last_event_id,expires_at) VALUES($1,$2,$3,$4,'reader',$5,now(),$6,now()-interval '1 minute')", &[&Uuid::new_v4(),&staff.principal.issuer,&staff.principal.subject,&staff.profile_id,&item.item_id,&Uuid::new_v4()]).await.expect("expired history cursor");
     assert_eq!(
         service
@@ -547,7 +530,9 @@ async fn source_erasure_scrubs_payloads_fences_rehydration_and_preserves_expired
         1
     );
 
-    let restarted = PostgresStore::connect_runtime(&config, &secrets).expect("restarted store");
+    let restarted = PostgresStore::connect_runtime(&config, &secrets)
+        .expect("restarted store")
+        .with_audit(registry_casework::CaseworkAudit::capture().0);
     assert!(matches!(
         restarted.item(item.item_id).await,
         Err(StoreError::NotFound)
@@ -818,10 +803,13 @@ async fn cursor_retention_fixture() -> (CaseworkService, tokio_postgres::Client)
     };
     PostgresStore::connect_migration(&config, &secrets)
         .expect("migration store")
+        .with_audit(registry_casework::CaseworkAudit::capture().0)
         .migrate()
         .await
         .expect("migrations");
-    let store = PostgresStore::connect_runtime(&config, &secrets).expect("runtime store");
+    let store = PostgresStore::connect_runtime(&config, &secrets)
+        .expect("runtime store")
+        .with_audit(registry_casework::CaseworkAudit::capture().0);
     let service = CaseworkService::new(
         store,
         project(),

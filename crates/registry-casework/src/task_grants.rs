@@ -72,6 +72,7 @@ impl PostgresStore {
         &self,
         templates: &[TaskTemplate],
     ) -> Result<(), StoreError> {
+        let mut audit = self.begin_background_audit().await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         transaction
@@ -103,7 +104,15 @@ impl PostgresStore {
         let rows = transaction.query("SELECT i.*,g.grant_id FROM casework_task_grants g JOIN casework_items i ON i.item_id=g.item_id WHERE g.invalidated_at IS NULL AND g.expires_at>now() AND NOT EXISTS(SELECT 1 FROM casework_task_templates t WHERE t.active AND t.document=g.record->'template') ORDER BY i.item_id,g.grant_id FOR UPDATE OF i", &[]).await?;
         for row in rows {
             let item = crate::store::row_to_item(&row)?;
-            invalidate(&transaction, &item, row.get("grant_id"), "template", None).await?;
+            invalidate(
+                &transaction,
+                &mut audit,
+                &item,
+                row.get("grant_id"),
+                "template",
+                None,
+            )
+            .await?;
         }
         let review_rows = transaction
             .query(
@@ -134,6 +143,7 @@ impl PostgresStore {
             if first_invalidation {
                 review_grant_event(
                     &transaction,
+                    &mut audit,
                     &grant,
                     id,
                     "task_grant_invalidated",
@@ -143,7 +153,7 @@ impl PostgresStore {
                 .await?;
             }
         }
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(())
     }
 
@@ -182,6 +192,14 @@ impl PostgresStore {
         key: &str,
         grant: TaskGrant,
     ) -> Result<StoredTaskGrant, StoreError> {
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                "task_approved",
+                Some(actor),
+                &actor.profile_id,
+                json!({"itemId": grant.item_id, "grantId": grant.id}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         transaction
@@ -244,8 +262,16 @@ impl PostgresStore {
         }
         let approver_role = membership_kind(actor.role).ok_or(StoreError::Forbidden)?;
         transaction.execute("INSERT INTO casework_task_grants(grant_id,item_id,approver_issuer,approver_subject,approver_profile,approver_role,idempotency_key,request_hash,record,approved_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)", &[&grant.id,&item.item_id,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&approver_role,&key,&hash,&record,&approved,&expires]).await?;
-        task_event(&transaction, &item, "task_approved", Some(actor), grant.id).await?;
-        transaction.commit().await?;
+        task_event(
+            &transaction,
+            &mut audit,
+            &item,
+            "task_approved",
+            Some(actor),
+            grant.id,
+        )
+        .await?;
+        audit.commit(transaction).await?;
         Ok(StoredTaskGrant {
             grant,
             invalidated: false,
@@ -277,6 +303,7 @@ impl PostgresStore {
         template: &TaskTemplate,
         configured_approver_role: Option<CaseworkRole>,
     ) -> Result<bool, StoreError> {
+        let mut audit = self.begin_background_audit().await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         transaction
@@ -310,7 +337,15 @@ impl PostgresStore {
             && eligible(&transaction, &actor, &item, template).await?
             && TaskProposalIdentity::from(&item.binding) == grant.proposal;
         if !valid {
-            invalidate(&transaction, &item, grant.id, "eligibility", None).await?;
+            invalidate(
+                &transaction,
+                &mut audit,
+                &item,
+                grant.id,
+                "eligibility",
+                None,
+            )
+            .await?;
         }
         let row = transaction
             .query_opt(
@@ -319,7 +354,7 @@ impl PostgresStore {
             )
             .await?;
         let active = valid && row.is_some_and(|row| row.get::<_, bool>(0));
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(active)
     }
 
@@ -332,6 +367,17 @@ impl PostgresStore {
         if !matches!(reason, "revoked" | "eligibility" | "template" | "source") {
             return Err(StoreError::Invalid);
         }
+        let mut audit = self
+            .begin_audit_for(
+                actor,
+                if reason == "revoked" {
+                    "task_revoked"
+                } else {
+                    "task_invalidated"
+                },
+                json!({"grantId": id}),
+            )
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         transaction
@@ -355,8 +401,8 @@ impl PostgresStore {
                 return Err(StoreError::Forbidden);
             }
         }
-        invalidate(&transaction, &item, id, reason, actor).await?;
-        transaction.commit().await?;
+        invalidate(&transaction, &mut audit, &item, id, reason, actor).await?;
+        audit.commit(transaction).await?;
         Ok(())
     }
 
@@ -451,6 +497,14 @@ impl PostgresStore {
         if key.is_empty() || key.len() > 256 {
             return Err(StoreError::Invalid);
         }
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                "task_grant_approved",
+                Some(actor),
+                &actor.profile_id,
+                json!({"grantId": grant.id}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         transaction
@@ -520,7 +574,7 @@ impl PostgresStore {
             if previous.get::<_, String>(0) != hash {
                 return Err(StoreError::IdempotencyConflict);
             }
-            transaction.commit().await?;
+            audit.commit(transaction).await?;
             return Ok(StoredReviewTaskGrant {
                 grant: serde_json::from_value(previous.get(1))?,
                 invalidated: previous.get(2),
@@ -583,10 +637,11 @@ impl PostgresStore {
                 ],
             )
             .await?;
-        // The approval is part of the same chained audit stream as later
-        // revocations and invalidations, bound to the approving actor.
+        // The approval is audited like later revocations and invalidations,
+        // bound to the approving actor.
         review_grant_event(
             &transaction,
+            &mut audit,
             &grant,
             grant.id,
             "task_grant_approved",
@@ -594,7 +649,7 @@ impl PostgresStore {
             Some(actor),
         )
         .await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(StoredReviewTaskGrant {
             grant,
             invalidated: false,
@@ -669,6 +724,7 @@ impl PostgresStore {
             profile_id: grant.approver_profile.clone(),
             role,
         };
+        let mut audit = self.begin_background_audit().await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         transaction
@@ -706,6 +762,7 @@ impl PostgresStore {
             if first_invalidation {
                 review_grant_event(
                     &transaction,
+                    &mut audit,
                     grant,
                     grant.id,
                     "task_grant_invalidated",
@@ -724,7 +781,7 @@ impl PostgresStore {
                 )
                 .await?
                 .get::<_, bool>(0);
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(active)
     }
 
@@ -737,6 +794,17 @@ impl PostgresStore {
         if !matches!(reason, "revoked" | "source" | "template") {
             return Err(StoreError::Invalid);
         }
+        let mut audit = self
+            .begin_audit_for(
+                actor,
+                if reason == "revoked" {
+                    "task_grant_revoked"
+                } else {
+                    "task_grant_invalidated"
+                },
+                json!({"grantId": id}),
+            )
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         transaction
@@ -808,15 +876,25 @@ impl PostgresStore {
             } else {
                 "task_grant_invalidated"
             };
-            review_grant_event(&transaction, &grant, id, kind, Some(reason), actor).await?;
+            review_grant_event(
+                &transaction,
+                &mut audit,
+                &grant,
+                id,
+                kind,
+                Some(reason),
+                actor,
+            )
+            .await?;
         }
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(())
     }
 }
 
 async fn review_grant_event(
     transaction: &Transaction<'_>,
+    audit: &mut crate::audit::AuditOperation,
     grant: &ReviewTaskGrant,
     id: Uuid,
     kind: &str,
@@ -860,13 +938,7 @@ async fn review_grant_event(
     if let Some(reason) = reason {
         audit_record["reason"] = json!(reason);
     }
-    transaction
-        .execute(
-            "INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)",
-            &[&event, &audit_record],
-        )
-        .await?;
-    Ok(())
+    audit.record(event, audit_record)
 }
 
 fn template_digest(template: &TaskTemplate) -> Result<ContentDigest, StoreError> {
@@ -886,18 +958,20 @@ async fn template_active(
 
 async fn invalidate(
     transaction: &Transaction<'_>,
+    audit: &mut crate::audit::AuditOperation,
     item: &WorkItem,
     id: Uuid,
     reason: &str,
     actor: Option<&ActorContext>,
 ) -> Result<(), StoreError> {
     if transaction.execute("UPDATE casework_task_grants SET invalidated_at=now(),invalidation_reason=$2 WHERE grant_id=$1 AND invalidated_at IS NULL", &[&id,&reason]).await? == 1 {
-        task_event(transaction,item,if reason=="revoked" {"task_revoked"} else {"task_invalidated"},actor,id).await?;
+        task_event(transaction,audit,item,if reason=="revoked" {"task_revoked"} else {"task_invalidated"},actor,id).await?;
     }
     Ok(())
 }
 async fn task_event(
     transaction: &Transaction<'_>,
+    audit: &mut crate::audit::AuditOperation,
     item: &WorkItem,
     kind: &str,
     actor: Option<&ActorContext>,
@@ -910,8 +984,10 @@ async fn task_event(
     let profile = actor.map_or("system:task-grants", |actor| actor.profile_id.as_str());
     let detail = json!({"grantId":grant});
     transaction.execute("INSERT INTO casework_history(event_id,item_id,item_revision,kind,occurred_at,actor_issuer,actor_subject,profile_id,detail) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)", &[&event,&item.item_id,&item.revision,&kind,&now,&issuer,&subject,&profile,&detail]).await?;
-    transaction.execute("INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)", &[&event,&json!({"event":format!("casework.{kind}"),"eventId":event,"itemId":item.item_id,"actor":actor.map(|actor|json!({"issuer":actor.principal.issuer,"subject":actor.principal.subject})),"grantId":grant,"profileId":profile})]).await?;
-    Ok(())
+    audit.record(
+        event,
+        json!({"event":format!("casework.{kind}"),"eventId":event,"itemId":item.item_id,"actor":actor.map(|actor|json!({"issuer":actor.principal.issuer,"subject":actor.principal.subject})),"grantId":grant,"profileId":profile}),
+    )
 }
 
 pub(crate) struct TaskAuthority {
