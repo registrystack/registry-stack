@@ -5017,6 +5017,28 @@ outboundTls:
             .expect("an enabled environment provider binds the reference");
     }
 
+    /// Only the operator's runtime file enables a secret provider. A bundle
+    /// that declares one itself is refused before any reference is bound, so
+    /// the authority to read the process environment never travels with the
+    /// governed package.
+    #[test]
+    fn a_bundle_cannot_enable_a_secret_provider_itself() {
+        const ACCEPTANCE: &str = include_str!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        );
+        EvidenceConfig::parse_yaml(ACCEPTANCE.as_bytes()).expect("the fixture validates");
+        let self_enabling = format!("{ACCEPTANCE}secretProviders:\n  environment: {{}}\n");
+        let error = EvidenceConfig::parse_yaml(self_enabling.as_bytes())
+            .expect_err("a bundle may not declare a secret provider");
+        let appended_line = ACCEPTANCE.lines().count() + 1;
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("unknown field (line {appended_line} column 1)")),
+            "{error}"
+        );
+    }
+
     /// The runtime revision of a runtime document read with no environment and
     /// no CA bundles or source extracts.
     fn runtime_revision_of(bytes: &[u8]) -> String {
