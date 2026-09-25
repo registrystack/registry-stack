@@ -13,8 +13,9 @@
 //! migration lock an apply holds, so it cannot observe a half-applied package,
 //! and it compares the live managed catalog with the exact verification an
 //! activation performs. Execution performs only the one transition the
-//! assessment named, through the same interlock an apply uses, and records it
-//! in the audit journal once the transition's own transaction commits.
+//! assessment named, through the same interlock an apply uses. Its request
+//! entry is accepted by the audit journal before the transition runs, and its
+//! response entry once the transition's own transaction commits.
 //!
 //! This is not a repair tool. It never writes DDL, never edits catalog
 //! objects, never rewrites a ledger row, and never decides that a mismatched
@@ -341,6 +342,11 @@ async fn reconcile_under_lock(
     match report.outcome {
         ReconcileOutcome::Completable => {
             let entry = audit_entry(request, target, ledger, "completed", &report)?;
+            append_request(
+                request.audit,
+                request_entry(request, target, ledger, "completed")?,
+            )
+            .await?;
             connection
                 .activate_verified_package(
                     Some(request.current),
@@ -357,6 +363,11 @@ async fn reconcile_under_lock(
         }
         ReconcileOutcome::Revertible => {
             let entry = audit_entry(request, target, ledger, "reverted", &report)?;
+            append_request(
+                request.audit,
+                request_entry(request, target, ledger, "reverted")?,
+            )
+            .await?;
             connection
                 .revert_failed_package(
                     request.current,
@@ -414,8 +425,18 @@ fn unresolvable_reason(progress: Option<ReviewedMigrationProgress>) -> &'static 
     }
 }
 
-/// Append the reconciliation's entry after its transition committed. A
-/// refused entry reports the reconciliation unavailable even though the
+/// Append the reconciliation's request entry before its transition runs. A
+/// refused entry reports the reconciliation unavailable and leaves the pinned
+/// target exactly as the assessment found it.
+async fn append_request(audit: &RegistryAudit, entry: AuditEntry) -> Result<(), ReconcileError> {
+    audit
+        .append(entry)
+        .await
+        .map_err(|_| ReconcileError::Unavailable)
+}
+
+/// Append the reconciliation's response entry after its transition committed.
+/// A refused entry reports the reconciliation unavailable even though the
 /// transition is durable; a rerun then finds the Registry ready.
 async fn append_after_commit(
     audit: &RegistryAudit,
@@ -425,6 +446,32 @@ async fn append_after_commit(
         .append(entry)
         .await
         .map_err(|_| ReconcileError::Unavailable)
+}
+
+/// Records the transition about to run: identities, the plan shape, and the
+/// keyed operator reference, and nothing the response entry does not also
+/// record. It shares the response entry's correlation.
+fn request_entry(
+    request: &ReconcileRequest<'_>,
+    target: &ExpectedRegistryIdentity,
+    ledger: &MigrationLedgerEntry,
+    action: &'static str,
+) -> Result<AuditEntry, ReconcileError> {
+    Ok(AuditEntry::request(
+        MIGRATION_RECONCILE_AUDIT_SCHEMA,
+        target.package_revision.clone(),
+        json!({
+            "phase": "attempt",
+            "outcome": "started",
+            "operationId": AUDIT_OPERATION_ID,
+            "action": action,
+            "packageRevision": request.current.package_revision,
+            "targetPackageRevision": target.package_revision,
+            "packageSequence": target.package_sequence,
+            "planKind": ledger.plan_kind.as_str(),
+            "operatorReference": operator_reference(request)?,
+        }),
+    ))
 }
 
 /// Records identities, the plan shape, and counts. The operator's reference is
@@ -437,16 +484,7 @@ fn audit_entry(
     action: &'static str,
     report: &ReconcileReport,
 ) -> Result<AuditEntry, ReconcileError> {
-    let operator_reference = request
-        .audit
-        .profile()
-        .key_hasher()
-        .audit_reference_hash(
-            "breg-migration-reconcile-operator-v1",
-            &request.current.package_revision,
-            request.operator_reference,
-        )
-        .map_err(|_| ReconcileError::InvalidInput)?;
+    let operator_reference = operator_reference(request)?;
     Ok(AuditEntry::response(
         MIGRATION_RECONCILE_AUDIT_SCHEMA,
         target.package_revision.clone(),
@@ -467,6 +505,19 @@ fn audit_entry(
             "activeCatalogVerified": report.active_catalog_finding.is_none(),
         }),
     ))
+}
+
+fn operator_reference(request: &ReconcileRequest<'_>) -> Result<String, ReconcileError> {
+    request
+        .audit
+        .profile()
+        .key_hasher()
+        .audit_reference_hash(
+            "breg-migration-reconcile-operator-v1",
+            &request.current.package_revision,
+            request.operator_reference,
+        )
+        .map_err(|_| ReconcileError::InvalidInput)
 }
 
 fn validate_request(request: &ReconcileRequest<'_>) -> Result<(), ReconcileError> {

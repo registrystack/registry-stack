@@ -824,6 +824,74 @@ async fn real_postgres_reconciliation_completes_reverts_or_refuses_a_pinned_targ
     reconciliation_assessment_writes_nothing().await;
 }
 
+/// Reconciliation executes a maintenance transition, so its request entry must
+/// be accepted before that transition runs. A writer that refuses the request
+/// entry leaves the pinned target, the ledger, and the journal as they were,
+/// and a later writer can still revert the same target.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_reconciliation_changes_nothing_when_the_audit_writer_refuses_its_request_entry(
+) {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs extension");
+    let base = compile_variant(Variant::Base, 1);
+    let fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &fingerprint);
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("refusal scenario initial package activates");
+    seed_backfill_rows(&database, &base, 5).await;
+    let required = compile_variant(Variant::RankRequired, 2);
+    let target_fingerprint = required_target_fingerprint(&database, &required).await;
+    let package = prepare_and_load_reviewed(
+        2,
+        &active,
+        &base,
+        Variant::RankRequired,
+        &target_fingerprint,
+        backfill_source(BackfillSourceRequest {
+            id: "reconcile-refused-request",
+            current: &active,
+            prior: &base,
+            candidate: &required,
+            final_fingerprint: &target_fingerprint,
+            pre: AssertionMode::False,
+            post: AssertionMode::True,
+            rehearsed_rows: 5,
+        }),
+    );
+    let refused = apply(
+        &database,
+        &package,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await;
+    assert_value_free(refused.err(), MigrationError::ApplyFailed);
+
+    let before = durable_snapshot(&database).await;
+    database.audit_capture().fail_after(0);
+    assert_eq!(
+        reconcile(&database, &package, &active, &base, true)
+            .await
+            .expect_err("a refused request entry stops the revert"),
+        ReconcileError::Unavailable
+    );
+    assert_eq!(durable_snapshot(&database).await, before);
+    assert_non_ready_target(&database, &active, &package, "failed").await;
+
+    database.audit_capture().restore();
+    let reverted = reconcile(&database, &package, &active, &base, true)
+        .await
+        .expect("a later writer reverts the same target");
+    assert!(reverted.executed);
+    assert_ready_target(&database, &active).await;
+    assert_reconcile_audit_is_minimized(&database, "reverted").await;
+    database.cleanup().await;
+}
+
 /// A reviewed apply whose every durable step closed, failing only because an
 /// administrator left an unmanaged object behind. While the object is there
 /// the reconciliation is unresolvable and refuses to execute; once it is gone
@@ -913,6 +981,17 @@ async fn reconciliation_completes_a_target_the_catalog_already_reached() {
     assert_eq!(completable.target_catalog_finding, None);
     assert_eq!(completable.reviewed_plan_closed, Some(true));
     assert!(!completable.executed);
+
+    let before_refusal = durable_snapshot(&database).await;
+    database.audit_capture().fail_after(0);
+    assert_eq!(
+        reconcile(&database, &package, &active, &base, true)
+            .await
+            .expect_err("a refused request entry stops the completion"),
+        ReconcileError::Unavailable
+    );
+    assert_eq!(durable_snapshot(&database).await, before_refusal);
+    database.audit_capture().restore();
 
     let completed = reconcile(&database, &package, &active, &base, true)
         .await
@@ -3870,20 +3949,28 @@ async fn durable_snapshot(
     )
 }
 
-/// The reconciliation audit record carries identities, the plan shape, and
-/// counts. The operator's own reference must reach it only as a keyed hash.
+/// The reconciliation audit records carry identities, the plan shape, and
+/// counts: one request entry before the transition and one correlated response
+/// entry after it commits. The operator's own reference must reach them only
+/// as a keyed hash.
 async fn assert_reconcile_audit_is_minimized(database: &TestDatabase, action: &str) {
-    let mut matched = 0;
+    let mut matched = Vec::new();
     for entry in database.audit_entries() {
         let text = entry.to_string();
         assert!(!text.contains(RECONCILE_OPERATOR_CANARY));
         if entry["schema"] == "breg-migration-reconcile-audit/v2" {
-            assert_eq!(entry["phase"], "response");
             assert!(text.contains(&format!("\"action\":\"{action}\"")));
-            matched += 1;
+            matched.push(entry);
         }
     }
-    assert_eq!(matched, 1);
+    assert_eq!(
+        matched
+            .iter()
+            .map(|entry| entry["phase"].as_str().expect("phase is a string"))
+            .collect::<Vec<_>>(),
+        ["request", "response"]
+    );
+    assert_eq!(matched[0]["correlation"], matched[1]["correlation"]);
 }
 
 fn assert_value_free(actual: Option<MigrationError>, expected: MigrationError) {
