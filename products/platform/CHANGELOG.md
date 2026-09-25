@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add `AuditWriter`, the one audit writer every product uses. It appends a
+  plain JSON envelope (`schema`, `eventId`, `time`, `phase`, `correlation`,
+  `record`) to an owner-only file with fsync and group commit, size rotation,
+  and age-based retention, or writes one flushed line to stdout. A failed write
+  stops the writer until restart so the caller fails closed. The file
+  destination refuses a second writer on the same path and a directory that is
+  group- or world-writable.
+
 ## v0.34.0 - 2026-09-25
 
 - The shared platform crates have no user-visible changes in this release.

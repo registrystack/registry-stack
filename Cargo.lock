@@ -5637,6 +5637,7 @@ dependencies = [
  "hmac 0.13.0",
  "registry-platform-canonical-json",
  "rustix 1.1.5",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -5648,6 +5649,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ulid",
+ "uuid",
  "zeroize",
 ]
 
