@@ -10,9 +10,18 @@ pub use persistent_root::{require_audit_under, PersistentRootFault};
 #[cfg(unix)]
 mod segmented_jsonl;
 #[cfg(unix)]
+mod writer;
+#[cfg(unix)]
 pub use segmented_jsonl::{
     segmented_audit_paths, verify_segmented_audit_chain, visit_stopped_segmented_audit_chain,
     DurableSegmentedAuditLog, DurableSegmentedJsonlSink, SegmentedAuditSummary,
+};
+#[cfg(unix)]
+pub use writer::{
+    AuditDestination, AuditDestinationError, AuditDestinationKind, AuditEntry, AuditPhase,
+    AuditUnavailable, AuditUnavailableReason, AuditWriter, FileDestination,
+    DEFAULT_AUDIT_RETAIN_DAYS, DEFAULT_AUDIT_ROTATE_BYTES, MAX_AUDIT_RETAIN_DAYS,
+    MIN_AUDIT_ROTATE_BYTES,
 };
 
 use std::{

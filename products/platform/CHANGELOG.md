@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Refuse to reopen an audit file ending in an incomplete JSONL entry, preserving
+  its bytes for operator archival before starting a fresh stream.
+- Keep queued stream appends stopped after an earlier write fails, and finish
+  accepted file writes when their request task is canceled. Group commits retain
+  every waiting entry and update the pinned file state before accepting later
+  writes.
+
+- Add `AuditWriter`, the one audit writer every product uses. It appends a
+  plain JSON envelope (`schema`, `eventId`, `time`, `phase`, `correlation`,
+  `record`) to an owner-only file with fsync and group commit, size rotation,
+  and age-based retention, or writes one flushed line to stdout. A failed write
+  stops the writer until restart so the caller fails closed. The file
+  destination refuses a second writer on the same path and a directory that is
+  group- or world-writable.
+
 ## v0.34.0 - 2026-09-25
 
 - The shared platform crates have no user-visible changes in this release.
