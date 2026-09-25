@@ -768,6 +768,13 @@ fn runtime_diagnostic_location(error: &RuntimeConfigError) -> (&'static str, Str
     } else {
         format!("runtime.yaml:/{}", error.path().trim_start_matches('/'))
     };
+    if matches!(error, RuntimeConfigError::AllowedClientsRequired) {
+        return (
+            "runtime_configuration",
+            path,
+            "List every client identifier this deployment admits in authentication.oidc.allowedClients, then retry.",
+        );
+    }
     let action = match removed_key {
         Some("authentication.oidc.principalClaim") => {
             "Remove authentication.oidc.principalClaim and configure accessProfiles[].principalClaim in casework.yaml."
@@ -1612,6 +1619,26 @@ mod tests {
                 "{diagnostic}"
             );
         }
+    }
+
+    #[test]
+    fn a_production_runtime_without_allowed_clients_names_the_field_to_fill() {
+        let error = anyhow::Error::new(RuntimeConfigError::AllowedClientsRequired);
+        let (exit, diagnostic) = classify_failure(CommandKind::Operational, &error);
+
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(diagnostic["code"], "casework.runtime-configuration.invalid");
+        assert_eq!(
+            diagnostic["path"],
+            "runtime.yaml:/authentication.oidc.allowedClients"
+        );
+        assert!(
+            diagnostic["suggestedAction"]
+                .as_str()
+                .unwrap()
+                .contains("List every client identifier"),
+            "{diagnostic}"
+        );
     }
 
     #[test]

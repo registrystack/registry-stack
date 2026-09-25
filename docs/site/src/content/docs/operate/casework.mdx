@@ -181,6 +181,8 @@ authentication:
   oidc:
     issuer: https://identity.example.org/realms/registry
     audience: urn:example:casework
+    # Every client whose tokens this deployment admits; required in production.
+    allowedClients: [casework-console]
     scopeClaim: scope
     humanIdentity:
       claim: registry_actor_kind
@@ -246,6 +248,13 @@ configured to mint the access-token type.
 
 `issuer` must be an `https` URL without credentials, query, or fragment; plain `http` is accepted
 only for an IPv4 loopback address under `development-loopback`. `audience` is at most 512 characters.
+
+`allowedClients` names the clients whose tokens the runtime admits, matched against the token's
+`azp` claim or, when it has none, its `client_id` claim. With `operator-controlled-upstream` the list
+must name at least one client, and the runtime refuses to start at
+`authentication.oidc.allowedClients` otherwise: an empty list admits every client the issuer
+verifies, including an unrelated application registered in the same realm. `development-loopback`
+still accepts an empty list. A configured `taskAuthority` requires a non-empty list in either mode.
 
 With the discovery source, the default, the runtime reads the issuer's discovery document at
 startup and fetches its keys from the `jwks_uri` that document names. `kind: uri` with `uri` fetches

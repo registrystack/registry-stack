@@ -17,6 +17,11 @@
   without credentials, query, or fragment, or IPv4-loopback `http` under
   `development-loopback`, and `authentication.oidc.audience` is at most 512
   characters.
+- BREAKING: under `operator-controlled-upstream`,
+  `authentication.oidc.allowedClients` must name at least one client; an
+  empty list admitted every client the issuer verifies and is now refused at
+  that field. `development-loopback` still accepts an empty list, and a
+  configured `taskAuthority` still requires a non-empty list in either mode.
 - BREAKING: `authentication.oidc.jwksUri` is removed. Declare
   `jwksSource` with `kind: uri` and the same `https` URL as `uri`; that
   source fetches the key set from the fixed address without reading the
