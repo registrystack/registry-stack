@@ -184,13 +184,18 @@ active segment; once no writer holds it, the newest segment is verified too. The
 target/release/registry-render audit-verify --runtime-config /etc/registry-render/runtime.yaml
 ```
 
+The hash key resolves through the secret providers the runtime file declares. To verify a copy of
+the ledger, such as one moved to an evidence store, add `--dir` with the copy's directory; the key
+still comes from the runtime file.
+
 The command prints the record and segment counts. If it reports zero records against a non-empty
 ledger, it says so: either the process is still running, or the chain is not what you expect, and
 both are worth knowing before an audit depends on it. One event per render, value-free: hashes,
 versions, the caller's key fingerprint, and the trace and correlation ids, never data values or
 image bytes.
 
-{/* Evidence: crates/registry-render/src/audit.rs, verify_chain and RenderAuditEvent. */}
+{/* Evidence: crates/registry-render/src/audit.rs, verify_chain and RenderAuditEvent;
+    crates/registry-render/tests/scaffold.rs, audit_verify_checks_a_copied_ledger_with_the_runtime_key. */}
 
 ## Upgrade discipline
 

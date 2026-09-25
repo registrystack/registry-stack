@@ -337,13 +337,17 @@ relevant product pages on this site rather than duplicating release notes.
   declared under `secretProviders`. Paths must be absolute, and a removed
   key is refused with the name of its replacement. `serve` and
   `healthcheck` take `--runtime-config FILE` and no longer read a default
-  path or the `REGISTRY_RENDER_RUNTIME` variable. An environment
+  path or the `REGISTRY_RENDER_RUNTIME` variable. `audit-verify` requires
+  `--runtime-config FILE` and resolves the hash key only through the
+  providers that file declares; `--key` is removed, and `--dir` now names
+  a ledger, such as a copy, to verify with that key. An environment
   expression such as `${VAR}` in the authored bundle `manifest.yaml` is
   refused with the field that holds it. See
   [run Registry Render in serve mode](../operate/registry-render/).
 
 {/* Evidence: crates/registry-render/src/runtime.rs, RENDER_REMOVED_KEYS and load();
-    crates/registry-render/src/cli.rs, Command::Serve;
+    crates/registry-render/src/cli.rs, Command::Serve and Command::AuditVerify;
+    crates/registry-render/tests/scaffold.rs, audit_verify_reads_its_key_only_through_the_runtime_providers;
     crates/registry-render/src/runtime.rs, removed_keys_name_their_replacements;
     crates/registry-render/src/manifest.rs, an_authored_manifest_carrying_an_environment_expression_is_refused. */}
 

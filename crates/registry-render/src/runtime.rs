@@ -258,28 +258,6 @@ pub fn resolve_secret(runtime: &RenderRuntime, reference: &str) -> Result<Vec<u8
     Ok(secret.expose_secret().to_vec())
 }
 
-/// Resolve the `--key` reference `audit-verify --dir` takes without a
-/// runtime file: environment references, and file references under the
-/// ledger directory's parent.
-pub fn resolve_offline_secret(
-    ledger_dir: &Path,
-    reference: &str,
-) -> Result<Vec<u8>, RenderProblem> {
-    use registry_platform_config::{SecretProvider, SecretResolver};
-    let parent = ledger_dir
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
-    let root = std::fs::canonicalize(&parent).unwrap_or(parent);
-    let resolver = SecretResolver::new([SecretProvider::Environment, SecretProvider::File], root)
-        .map_err(|err| invalid(format!("{err}")))?;
-    let secret = resolver
-        .resolve(reference)
-        .map_err(|err| invalid(format!("{err}")))?;
-    Ok(secret.expose_secret().to_vec())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

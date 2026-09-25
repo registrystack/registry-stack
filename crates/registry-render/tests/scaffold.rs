@@ -553,6 +553,95 @@ fn tampered_ledger_fails_audit_verify() {
     );
 }
 
+#[test]
+fn audit_verify_reads_its_key_only_through_the_runtime_providers() {
+    let (home, _runtime, _) = serve_deployment();
+    // Without a runtime file there are no declared providers, so a key named
+    // on the command line is refused rather than read from the environment
+    // or from a file root the tool would have to guess.
+    let out = render_bin()
+        .args([
+            "audit-verify",
+            "--dir",
+            home.join("audit").to_str().unwrap(),
+            "--key",
+            "secret:env/RENDER_TEST_AUDIT_KEY",
+        ])
+        .env("RENDER_TEST_AUDIT_KEY", AUDIT_KEY)
+        .output()
+        .expect("spawn render");
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "a key outside the runtime providers is refused"
+    );
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("audit chain verified"));
+
+    let out = run(&[
+        "audit-verify",
+        "--dir",
+        home.join("audit").to_str().unwrap(),
+    ]);
+    assert_ne!(out.status.code(), Some(0), "--dir alone names no key");
+}
+
+#[test]
+fn audit_verify_checks_a_copied_ledger_with_the_runtime_key() {
+    let (home, runtime, _) = serve_deployment();
+    let server = start_server(&runtime);
+    let data = std::fs::read_to_string(fixtures_receipt()).unwrap();
+    let body = format!(r#"{{"issuedAt":"2026-09-16T10:32:00Z","data":{data}}}"#);
+    let reply = request(
+        server.port,
+        "POST",
+        "/v1/render/receipt",
+        &[
+            ("Authorization", &format!("Bearer {}", API_KEY)),
+            ("Content-Type", "application/json"),
+        ],
+        Some(&body),
+    );
+    assert_eq!(reply.status, 200);
+    drop(server);
+    let copy = home.join("ledger-copy");
+    copy_dir(&home.join("audit"), &copy);
+    let verify = |dir: Option<&Path>| {
+        let mut args = vec![
+            "audit-verify",
+            "--runtime-config",
+            runtime.to_str().unwrap(),
+        ];
+        if let Some(dir) = dir {
+            args.extend(["--dir", dir.to_str().unwrap()]);
+        }
+        run(&args)
+    };
+    let out = verify(Some(&copy));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let ledger = copy.join("ledger.jsonl");
+    let mut bytes = std::fs::read(&ledger).unwrap();
+    if let Some(position) = bytes.iter().position(|b| *b == b'"') {
+        bytes[position] = b'X';
+    }
+    std::fs::write(&ledger, bytes).unwrap();
+    assert_ne!(
+        verify(Some(&copy)).status.code(),
+        Some(0),
+        "the copy is what is verified"
+    );
+    assert_eq!(
+        verify(None).status.code(),
+        Some(0),
+        "the configured ledger is untouched"
+    );
+}
+
 // ---------- tiny serve helpers shared with the serve suite ----------
 
 use std::io::{Read, Write};
