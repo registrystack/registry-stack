@@ -94,6 +94,40 @@ impl std::fmt::Display for ReviewConfigurationError {
 
 impl std::error::Error for ReviewConfigurationError {}
 
+/// Why retained review work cannot be served by the candidate runtime
+/// bindings. The missing-authority case carries only the authored logical
+/// identifier and an aggregate count; request identifiers and stored review
+/// values remain outside startup diagnostics.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RetainedReviewBindingError {
+    MissingAuthority {
+        authority: String,
+        retained_submissions: u64,
+    },
+    Refused,
+    Unavailable,
+}
+
+impl std::fmt::Display for RetainedReviewBindingError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingAuthority {
+                authority,
+                retained_submissions,
+            } => write!(
+                formatter,
+                "review authority {authority} is required by {retained_submissions} retained submissions"
+            ),
+            Self::Refused => formatter.write_str("retained review bindings were refused"),
+            Self::Unavailable => {
+                formatter.write_str("retained review bindings could not be inspected")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RetainedReviewBindingError {}
+
 pub struct ReviewExecutorClient {
     executor: String,
     http: reqwest::Client,
@@ -246,12 +280,17 @@ pub async fn verify_retained_bindings(
     pool: &crate::postgres::RuntimePool,
     authorities: Option<&ReviewAuthorityRegistry>,
     executors: Option<&ReviewExecutorRegistry>,
-) -> Result<(), MutationError> {
-    let client = pool.get().await.map_err(|_| MutationError::Unavailable)?;
+) -> Result<(), RetainedReviewBindingError> {
+    let client = pool
+        .get()
+        .await
+        .map_err(|_| RetainedReviewBindingError::Unavailable)?;
     let authority_rows = client
         .query(
             &format!(
-                "SELECT DISTINCT authority,producer_id
+                "SELECT authority,
+                        array_agg(DISTINCT producer_id ORDER BY producer_id),
+                        count(*)::bigint
                FROM registry_internal.registry_request_review_submissions s
               WHERE state IN ('pending','submitting','uncertain','cancelling')
                  OR (state='accepted' AND NOT EXISTS (
@@ -274,21 +313,35 @@ pub async fn verify_retained_bindings(
                          SELECT 1 FROM registry_internal.registry_request_state w
                           WHERE (w.request_entity_id,w.request_id,w.proposal_version)=
                                 (s.request_entity_id,s.request_id,s.proposal_version)
-                            AND w.state='submitted'))"
+                            AND w.state='submitted'))
+              GROUP BY authority
+              ORDER BY authority"
             ),
             &[],
         )
         .await
-        .map_err(|_| MutationError::Unavailable)?;
-    if authority_rows.iter().any(|row| {
-        authorities.is_none_or(|configured| {
-            !configured.contains_binding(
-                row.get::<_, String>(0).as_str(),
-                row.get::<_, String>(1).as_str(),
-            )
-        })
-    }) {
-        return Err(MutationError::PreconditionFailed);
+        .map_err(|_| RetainedReviewBindingError::Unavailable)?;
+    for row in &authority_rows {
+        let authority = row.get::<_, String>(0);
+        let retained_submissions = u64::try_from(row.get::<_, i64>(2))
+            .map_err(|_| RetainedReviewBindingError::Unavailable)?;
+        if authorities.is_none_or(|configured| !configured.contains(&authority)) {
+            return Err(RetainedReviewBindingError::MissingAuthority {
+                authority,
+                retained_submissions,
+            });
+        }
+    }
+    for row in &authority_rows {
+        let authority = row.get::<_, String>(0);
+        let producer_ids = row.get::<_, Vec<String>>(1);
+        let configured = authorities.ok_or(RetainedReviewBindingError::Refused)?;
+        if producer_ids
+            .iter()
+            .any(|producer_id| !configured.contains_binding(&authority, producer_id))
+        {
+            return Err(RetainedReviewBindingError::Refused);
+        }
     }
     let executor_rows = client
         .query(
@@ -301,7 +354,7 @@ pub async fn verify_retained_bindings(
             &[],
         )
         .await
-        .map_err(|_| MutationError::Unavailable)?;
+        .map_err(|_| RetainedReviewBindingError::Unavailable)?;
     if executor_rows.iter().any(|row| {
         executors.is_none_or(|configured| {
             !configured.contains_binding(
@@ -310,7 +363,7 @@ pub async fn verify_retained_bindings(
             )
         })
     }) {
-        return Err(MutationError::PreconditionFailed);
+        return Err(RetainedReviewBindingError::Refused);
     }
     Ok(())
 }
