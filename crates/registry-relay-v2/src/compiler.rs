@@ -148,13 +148,8 @@ pub fn compile_yaml(
     observed: &[ObservedSourceSchema],
     profile: CompileProfile,
 ) -> Result<CompiledRegistry, CompileReport> {
-    let contract = RegistryContract::parse_yaml(yaml).map_err(|_| CompileReport {
-        diagnostics: vec![Diagnostic {
-            severity: DiagnosticSeverity::Error,
-            code: "contract.yaml_invalid".into(),
-            location: "registry.yaml".into(),
-            message: "the governed contract is not valid strict YAML".into(),
-        }],
+    let contract = RegistryContract::parse_yaml(yaml).map_err(|error| CompileReport {
+        diagnostics: vec![error.diagnostic()],
     })?;
     compile_contract(&contract, observed, profile)
 }

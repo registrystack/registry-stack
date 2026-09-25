@@ -31,13 +31,9 @@ pub fn check_project_documents(
 ) -> CompileReport {
     let contract = match RegistryContract::parse_yaml(registry_yaml) {
         Ok(contract) => contract,
-        Err(_) => {
+        Err(error) => {
             return CompileReport {
-                diagnostics: vec![diagnostic(
-                    "contract.yaml_invalid",
-                    "registry.yaml",
-                    "the governed contract is not valid strict YAML",
-                )],
+                diagnostics: vec![error.diagnostic()],
             };
         }
     };

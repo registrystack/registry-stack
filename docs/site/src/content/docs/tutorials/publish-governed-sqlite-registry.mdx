@@ -893,6 +893,7 @@ rm -rf business-registry
 | --- | --- | --- |
 | `project.destination_not_empty` from `relayctl init` | The target directory already has files | Initialize into a new directory name. |
 | `contract.yaml_invalid` from `relayctl check` | A required key is missing, an unknown key is present, or the YAML does not parse | Every key in the contract above is required. `registry.alignmentTargets` needs at least one entry. |
+| `contract.environment_expression` from `relayctl check` | A value in `registry.yaml` holds an environment expression such as `${VAR}` | Substitution applies to `runtime.yaml` only. Write the value in `registry.yaml` directly. |
 | `resource.view_unknown` | `source.view` names something that is not a view in the database | Relay binds to views only. Add a `CREATE VIEW` for the columns you intend to publish. |
 | `source.schema_fingerprint_invalid` | `expectedSchemaFingerprint` is not a `sha256:` digest, usually because it was only partly pasted | Run `relayctl inspect registry.sqlite` and paste the whole value it prints. |
 | `source.schema_fingerprint_mismatch` | The contract holds a fingerprint from a different schema, usually because the SQL was retyped rather than copied | Run `relayctl inspect registry.sqlite` again and paste the current value. |
