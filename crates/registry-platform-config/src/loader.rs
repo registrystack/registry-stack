@@ -15,7 +15,9 @@
 //! 5. `apiVersion` and `kind` must be literally the product's envelope;
 //! 6. `${VAR}`, `${VAR:-default}` and `${VAR:?message}` are substituted in
 //!    string values only, after parsing, and refused in every field whose name
-//!    ends in `Ref` or `Refs`;
+//!    ends in `Ref` or `Refs` and everywhere under `secretProviders`. There is
+//!    no escape syntax: a literal `${` reaches the configuration as the value of
+//!    a variable, because substitution is a single pass;
 //! 7. the result is deserialized into the product's typed configuration.
 //!
 //! No refusal repeats a configured or substituted value.
@@ -79,6 +81,11 @@ pub enum RuntimeConfigErrorKind {
     SubstitutionInReference,
     /// A value does not satisfy the product's typed configuration.
     InvalidValue,
+    /// An authored project file holds an environment expression.
+    AuthoredExpression,
+    /// An authored project file is not YAML the environment-expression check
+    /// can read.
+    AuthoredSyntax,
 }
 
 impl RuntimeConfigErrorKind {
@@ -97,6 +104,8 @@ impl RuntimeConfigErrorKind {
             Self::Substitution => "runtime_config.substitution",
             Self::SubstitutionInReference => "runtime_config.substitution_in_reference",
             Self::InvalidValue => "runtime_config.invalid_value",
+            Self::AuthoredExpression => "authored_config.environment_expression",
+            Self::AuthoredSyntax => "authored_config.syntax",
         }
     }
 }
@@ -360,18 +369,28 @@ pub fn contains_environment_expression(text: &str) -> bool {
 ///
 /// Environment substitution applies to `runtime.yaml` only. An authored file
 /// is reviewed and packaged as written, so an expression in it would either be
-/// taken literally or make the reviewed text differ from what runs. Text that
-/// does not parse as YAML is left to the product's own parser to report.
+/// taken literally or make the reviewed text differ from what runs. Text this
+/// check cannot read as YAML is refused, so a file never passes unchecked
+/// because a product's parser accepts what this reader does not.
+///
+/// There is no escape for a literal `${NAME}` in an authored file.
 pub fn reject_environment_expressions_in_authored_yaml(
     text: &str,
 ) -> Result<(), RuntimeConfigError> {
-    let Ok(document) = serde_norway::from_str::<serde_norway::Value>(text) else {
-        return Ok(());
-    };
+    let document = serde_norway::from_str::<serde_norway::Value>(text).map_err(|error| {
+        RuntimeConfigError::new(
+            RuntimeConfigErrorKind::AuthoredSyntax,
+            "/",
+            format!(
+                "the authored file is not valid YAML: {}",
+                redact_refused_values(&error.to_string())
+            ),
+        )
+    })?;
     let mut path = Vec::new();
     match find_authored_expression(&document, &mut path) {
         Some(field) => Err(RuntimeConfigError::new(
-            RuntimeConfigErrorKind::SubstitutionInReference,
+            RuntimeConfigErrorKind::AuthoredExpression,
             field.clone(),
             format!(
                 "{field} holds an environment expression; ${{...}} substitution applies to \
@@ -545,45 +564,70 @@ fn is_reference_field(name: &str) -> bool {
     name.ends_with("Ref") || name.ends_with("Refs")
 }
 
+/// Whether a field of this name configures the secret providers. A provider
+/// setting chooses which secret a reference resolves to, so substitution is
+/// refused under it as it is in a reference.
+fn is_secret_provider_field(name: &str) -> bool {
+    name == "secretProviders"
+}
+
+/// Why substitution is refused at a field.
+#[derive(Clone, Copy)]
+enum Literal {
+    Reference,
+    SecretProvider,
+}
+
 fn substitute_environment(
     document: &mut Value,
     lookup: &impl Fn(&str) -> Option<String>,
 ) -> Result<(), RuntimeConfigError> {
-    substitute_value(document, &mut Vec::new(), false, lookup)
+    substitute_value(document, &mut Vec::new(), None, lookup)
 }
 
 fn substitute_value(
     value: &mut Value,
     path: &mut Vec<String>,
-    in_reference: bool,
+    literal: Option<Literal>,
     lookup: &impl Fn(&str) -> Option<String>,
 ) -> Result<(), RuntimeConfigError> {
     match value {
         Value::String(text) if text.contains("${") => {
             let field = dotted(path);
-            if in_reference {
-                return Err(RuntimeConfigError::new(
-                    RuntimeConfigErrorKind::SubstitutionInReference,
-                    field.clone(),
-                    format!(
-                        "{field} is a secret reference and does not take ${{...}} substitution; \
-                         write secret:env/NAME or secret:file/name instead"
-                    ),
-                ));
-            }
-            *text = substitute_string(text, &field, lookup)?;
+            let message = match literal {
+                None => {
+                    *text = substitute_string(text, &field, lookup)?;
+                    return Ok(());
+                }
+                Some(Literal::Reference) => format!(
+                    "{field} is a secret reference and does not take ${{...}} substitution; \
+                     write secret:env/NAME or secret:file/name instead"
+                ),
+                Some(Literal::SecretProvider) => format!(
+                    "{field} configures a secret provider and does not take ${{...}} \
+                     substitution; write the setting in runtime.yaml directly"
+                ),
+            };
+            return Err(RuntimeConfigError::new(
+                RuntimeConfigErrorKind::SubstitutionInReference,
+                field,
+                message,
+            ));
         }
         Value::Array(items) => {
             for (index, item) in items.iter_mut().enumerate() {
                 path.push(index.to_string());
-                substitute_value(item, path, in_reference, lookup)?;
+                substitute_value(item, path, literal, lookup)?;
                 path.pop();
             }
         }
         Value::Object(map) => {
             for (key, item) in map.iter_mut() {
                 path.push(key.clone());
-                substitute_value(item, path, in_reference || is_reference_field(key), lookup)?;
+                let literal = literal
+                    .or_else(|| is_reference_field(key).then_some(Literal::Reference))
+                    .or_else(|| is_secret_provider_field(key).then_some(Literal::SecretProvider));
+                substitute_value(item, path, literal, lookup)?;
                 path.pop();
             }
         }

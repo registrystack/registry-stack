@@ -37,6 +37,17 @@ struct Example {
     audit: Option<Audit>,
     #[serde(default)]
     sources: BTreeMap<String, BTreeMap<String, String>>,
+    #[serde(default)]
+    mode: Option<Mode>,
+    #[serde(default)]
+    secret_providers: Option<BTreeMap<String, BTreeMap<String, String>>>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+enum Mode {
+    Strict,
+    Relaxed,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -145,7 +156,11 @@ fn substitution_supports_default_and_required_message_forms() {
     .expect_err("required message form refuses");
     assert_eq!(error.kind(), RuntimeConfigErrorKind::Substitution);
     assert_eq!(error.field(), "name");
-    assert!(error.message().contains("set MISSING to the counter name"));
+    // The operator-authored message is configuration too, so the refusal
+    // names the variable and withholds the message.
+    assert!(error.message().contains("MISSING"), "{error}");
+    assert!(error.message().contains("withheld"), "{error}");
+    assert!(!error.message().contains("counter name"), "{error}");
 }
 
 #[test]
@@ -317,6 +332,64 @@ fn a_substitution_refusal_never_echoes_a_value() {
 }
 
 #[test]
+fn no_refusal_echoes_an_invalid_name_or_an_unknown_variant() {
+    let error = parse(&format!("{}name: \"${{DO_NOT DISCLOSE}}\"\n", header()))
+        .expect_err("invalid name refuses");
+    assert_eq!(error.kind(), RuntimeConfigErrorKind::Substitution);
+    assert!(!error.to_string().contains("DISCLOSE"), "{error}");
+
+    let error = parse(&format!("{}mode: DO_NOT_DISCLOSE\n", header()))
+        .expect_err("unknown variant refuses");
+    assert_eq!(error.field(), "mode");
+    assert!(error.message().contains("unknown variant"), "{error}");
+    assert!(error.message().contains("strict"), "{error}");
+    assert!(!error.to_string().contains("DISCLOSE"), "{error}");
+
+    let error = loader()
+        .parse_str::<Example>(
+            &format!("{}mode: ${{MODE}}\n", header()),
+            env(&[("MODE", "DO_NOT_DISCLOSE")]),
+        )
+        .expect_err("a substituted unknown variant refuses");
+    assert!(!error.to_string().contains("DISCLOSE"), "{error}");
+}
+
+#[test]
+fn substitution_is_refused_under_secret_providers() {
+    // A provider setting chooses which secret a reference resolves to, so the
+    // environment may not redirect it any more than it may rewrite a reference.
+    for (text, field) in [
+        (
+            "secretProviders:\n  file:\n    root: \"${NAME}\"\n",
+            "secretProviders.file.root",
+        ),
+        (
+            "secretProviders:\n  file:\n    root: \"/run/${NAME}/secrets\"\n",
+            "secretProviders.file.root",
+        ),
+        (
+            "secretProviders:\n  env:\n    prefix: \"${MISSING:-X}\"\n",
+            "secretProviders.env.prefix",
+        ),
+    ] {
+        let error = parse(&format!("{}{text}", header())).expect_err("provider refuses");
+        assert_eq!(
+            error.kind(),
+            RuntimeConfigErrorKind::SubstitutionInReference,
+            "{text}"
+        );
+        assert_eq!(error.field(), field);
+        assert!(error.message().contains("secret provider"), "{error}");
+    }
+    let loaded = parse(&format!(
+        "{}secretProviders:\n  file:\n    root: /run/secrets\n",
+        header()
+    ))
+    .expect("a literal provider setting loads");
+    assert!(loaded.config.secret_providers.is_some());
+}
+
+#[test]
 fn the_effective_digest_ignores_layout_and_comments() {
     let compact = parse(&format!("{}name: north\n", header())).expect("loads");
     let spaced = parse(&format!(
@@ -348,6 +421,29 @@ fn environment_expressions_are_detected_in_authored_yaml() {
     let error = reject_environment_expressions_in_authored_yaml("\"${HOST}\": x\n")
         .expect_err("key refuses");
     assert_eq!(error.field(), "${HOST}");
+    assert_eq!(error.kind(), RuntimeConfigErrorKind::AuthoredExpression);
+    assert_eq!(error.code(), "authored_config.environment_expression");
+}
+
+#[test]
+fn the_authored_check_fails_closed_on_text_that_does_not_parse() {
+    // An authored file the check cannot read is refused, never waved through
+    // to a parser that might accept what this reader could not.
+    for text in [
+        "a: [unterminated ${HOST}\n",
+        "a: b\n  c: d\n",
+        "a: 1\na: 2\n",
+    ] {
+        let error =
+            reject_environment_expressions_in_authored_yaml(text).expect_err("unparsed refuses");
+        assert_eq!(
+            error.kind(),
+            RuntimeConfigErrorKind::AuthoredSyntax,
+            "{text}"
+        );
+        assert_eq!(error.code(), "authored_config.syntax");
+        assert!(!error.message().contains("HOST"), "{error}");
+    }
 }
 
 mod files {

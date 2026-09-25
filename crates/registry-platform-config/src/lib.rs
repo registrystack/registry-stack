@@ -85,10 +85,12 @@ fn resolve_config_env_expression(
     } else {
         (expression, "", "")
     };
+    // Neither an invalid name nor a `:?` message is repeated: both are
+    // configured text, and a refusal reaches the operator's log.
     if !valid_env_key(name) {
-        return Err(ConfigEnvExpansionError(format!(
-            "invalid env var name in config expression: {name}"
-        )));
+        return Err(ConfigEnvExpansionError(
+            "a config expression names an invalid environment variable".to_string(),
+        ));
     }
 
     match lookup(name) {
@@ -100,7 +102,9 @@ fn resolve_config_env_expression(
                     "required env var {name} is unset or empty"
                 )))
             } else {
-                Err(ConfigEnvExpansionError(fallback.to_string()))
+                Err(ConfigEnvExpansionError(format!(
+                    "required env var {name} is unset or empty; its configured message is withheld"
+                )))
             }
         }
         _ => Err(ConfigEnvExpansionError(format!(
@@ -216,15 +220,15 @@ pub fn sha256_uri(bytes: &[u8]) -> String {
 /// Keep the parts of a serde refusal an operator acts on, the member, the
 /// reason and the location, while the refused value stays out of the message.
 ///
-/// serde reports the offending value inside an `invalid type:` or an
-/// `invalid value:` clause. Only the shape word that opens such a clause
-/// survives, so the message still says a string arrived where a number was
+/// serde reports the offending value inside an `invalid type:`, an
+/// `invalid value:` or an `unknown variant` clause. Only the shape word that
+/// opens such a clause survives, so the message still says a string arrived where a number was
 /// required without repeating the string. A runtime configuration names
 /// secret references, database URLs and destinations, and a startup refusal
 /// is written to the operator's log.
 #[must_use]
 pub fn redact_refused_values(message: &str) -> String {
-    const CLAUSES: [&str; 2] = ["invalid type: ", "invalid value: "];
+    const CLAUSES: [&str; 3] = ["invalid type: ", "invalid value: ", "unknown variant"];
     let mut redacted = String::with_capacity(message.len());
     let mut rest = message;
     loop {
@@ -359,13 +363,17 @@ mod tests {
                 name: "required message applies to an unset value",
                 expression: "${VALUE:?configure VALUE}",
                 value: None,
-                expected: Err("configure VALUE"),
+                expected: Err(
+                    "required env var VALUE is unset or empty; its configured message is withheld",
+                ),
             },
             Case {
                 name: "required message applies to an empty value",
                 expression: "${VALUE:?configure VALUE}",
                 value: Some(""),
-                expected: Err("configure VALUE"),
+                expected: Err(
+                    "required env var VALUE is unset or empty; its configured message is withheld",
+                ),
             },
             Case {
                 name: "blank required message identifies an unset value",
@@ -383,7 +391,7 @@ mod tests {
                 name: "unsupported syntax remains invalid",
                 expression: "${VALUE-fallback}",
                 value: Some("configured"),
-                expected: Err("invalid env var name in config expression: VALUE-fallback"),
+                expected: Err("a config expression names an invalid environment variable"),
             },
         ] {
             let actual = expand_config_env_vars_with(case.expression, |_| {
@@ -508,6 +516,12 @@ mod redaction_tests {
         assert_eq!(
             redact_refused_values("invalid value: integer `70000`, expected u16"),
             "invalid value: integer, expected u16"
+        );
+        assert_eq!(
+            redact_refused_values(
+                "mode: unknown variant `DO_NOT_DISCLOSE`, expected one of `a`, `b` at line 3"
+            ),
+            "mode: unknown variant, expected one of `a`, `b` at line 3"
         );
     }
 }
