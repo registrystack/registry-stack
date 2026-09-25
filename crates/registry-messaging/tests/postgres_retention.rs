@@ -20,11 +20,15 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use axum::http::StatusCode;
+use registry_messaging::messages::MESSAGE_ACCEPTED_EVENT;
 use registry_messaging::retention::{
     erase_expired, RetentionActor, RetentionError, RetentionSweep, RETENTION_ERASED_EVENT,
 };
 use serde_json::Value;
-use support::{assert_absent, assert_logs_clean, email_submission, sender_token, Harness};
+use support::{
+    assert_absent, assert_logs_clean, email_submission, sender_token, Harness, ISSUER,
+    SENDER_PRINCIPAL,
+};
 use tokio::sync::watch;
 use uuid::Uuid;
 
@@ -270,13 +274,56 @@ async fn a_record_is_deleted_record_days_after_a_terminal_state_with_everything_
     assert_eq!(rows_of(&harness, unknown).await, [1, 1, 1, 0, 0, 1]);
     assert!(!payload_erased(&harness, unknown).await);
 
-    // With its record gone, the key names nothing and a new submission
-    // under it is a new message.
-    let (status, again) = harness
-        .submit(&sender_token(), &key, &email_submission())
+    // With its record gone, the key stays spent: the row keeps the key
+    // under the caller's keyed pseudonym and nothing else, and a retry
+    // under it, with the same body or another, is refused as expired and
+    // sends nothing.
+    let retained = harness
+        .isolated
+        .admin
+        .query_one(
+            "SELECT to_jsonb(key)::text, message_id IS NULL AND request_hash IS NULL \
+                    AND status_code IS NULL AND receipt IS NULL AND erased_at IS NOT NULL \
+               FROM messaging_idempotency AS key WHERE idempotency_key = $1",
+            &[&key],
+        )
+        .await
+        .unwrap();
+    assert!(
+        retained.get::<_, bool>(1),
+        "the retained key holds no record"
+    );
+    let retained: String = retained.get(0);
+    for value in [ISSUER, SENDER_PRINCIPAL, receipt["id"].as_str().unwrap()] {
+        assert!(!retained.contains(value), "the retained key holds {value}");
+    }
+    let messages = harness
+        .count("SELECT count(*) FROM messaging_messages")
         .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{again}");
-    assert_ne!(again["id"], receipt["id"]);
+    let accepted = accepted_records(&harness).await;
+    let mut other = email_submission();
+    other["correlationId"] = serde_json::json!("another-body");
+    for body in [email_submission(), other] {
+        let (status, again) = harness.submit(&sender_token(), &key, &body).await;
+        assert_eq!(status, StatusCode::GONE, "{again}");
+        assert_eq!(again["code"], "idempotency.expired");
+    }
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_messages")
+            .await,
+        messages
+    );
+    assert_eq!(accepted_records(&harness).await, accepted);
+}
+
+async fn accepted_records(harness: &Harness) -> usize {
+    harness
+        .outbox()
+        .await
+        .iter()
+        .filter(|record| record["event"] == MESSAGE_ACCEPTED_EVENT)
+        .count()
 }
 
 #[tokio::test]

@@ -9,11 +9,12 @@
 //!   (`delivered`, `dead_lettered`, `expired`, or `cancelled`), and the
 //!   content-free message record stays;
 //! - the message record is deleted `recordDays` after that terminal state,
-//!   and its payload, job, attempts, delivery receipts, and idempotency
-//!   record go with it;
+//!   and its payload, job, attempts, and delivery receipts go with it; its
+//!   idempotency record stays, holding only the caller's keyed pseudonym,
+//!   the key, and its times, so the key stays spent;
 //! - a submission receipt, the stored answer an idempotent replay returns,
 //!   is erased when its `submissionReceiptDays` end, and its key stays
-//!   spent until the record goes.
+//!   spent.
 //!
 //! A message still pending, leased, or in an unknown outcome is never
 //! erased, whatever its age: its payload may yet be sent, requeued, or
@@ -292,8 +293,9 @@ async fn expire_submission_receipts(
 }
 
 /// Delete every message record past its period. The payload, the job, the
-/// attempts, and the receipts cascade; the idempotency record has no
-/// foreign key and is deleted by the message it names.
+/// attempts, and the receipts cascade. The idempotency record is kept with
+/// its message, request hash, and any receipt nulled, so a retry under its
+/// key is refused as expired rather than accepted as a new message.
 async fn delete_records(
     transaction: &Transaction<'_>,
     before: SystemTime,
@@ -304,8 +306,12 @@ async fn delete_records(
         .execute(
             &format!(
                 "WITH due AS ({due}), \
-                      keys AS (DELETE FROM messaging_idempotency AS key \
-                                USING due WHERE key.message_id = due.message_id) \
+                      keys AS (UPDATE messaging_idempotency AS key \
+                                  SET message_id = NULL, request_hash = NULL, \
+                                      status_code = NULL, receipt = NULL, \
+                                      erased_at = coalesce(key.erased_at, \
+                                                           transaction_timestamp()) \
+                                 FROM due WHERE key.message_id = due.message_id) \
                  DELETE FROM messaging_messages AS message \
                   USING due \
                   WHERE message.message_id = due.message_id"

@@ -110,8 +110,8 @@ async fn an_idempotency_key_replays_one_request_and_refuses_another() {
     harness
         .execute(
             "UPDATE messaging_idempotency SET expires_at = now() - interval '1 second' \
-              WHERE idempotency_key = 'key-1' AND subject = $1",
-            &[&support::SENDER_PRINCIPAL],
+              WHERE message_id = $1",
+            &[&Uuid::parse_str(first.1["id"].as_str().unwrap()).unwrap()],
         )
         .await;
     // An expired key answers expired whether or not the body matches.

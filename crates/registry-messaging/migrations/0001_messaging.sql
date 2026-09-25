@@ -261,25 +261,32 @@ CREATE TABLE messaging_receipts (
 CREATE UNIQUE INDEX messaging_receipts_distinct_idx
     ON messaging_receipts (message_id, report, coalesce(code, ''));
 
--- The idempotency record of one submission. The request hash binds the key
--- to one body; the stored receipt answers a retry until retention erases it,
--- after which the row stays so the key stays spent.
+-- The idempotency record of one submission, keyed by the caller's keyed
+-- audit pseudonym rather than its issuer and subject. The request hash binds
+-- the key to one body; the stored receipt answers a retry until retention
+-- erases it, and the row stays so the key stays spent. When retention
+-- deletes the message, it nulls the message and the request hash too: the
+-- row then holds the pseudonym, the key, and its times, and a retry under
+-- the key is still refused as expired.
 CREATE TABLE messaging_idempotency (
-    issuer text NOT NULL CHECK (length(issuer) BETWEEN 1 AND 2048),
-    subject text NOT NULL CHECK (length(subject) BETWEEN 1 AND 1024),
+    principal text NOT NULL CHECK (principal ~ '^(hmac-sha256|sha256):[0-9a-f]{64}$'),
     operation text NOT NULL CHECK (operation IN ('submit-message')),
     idempotency_key text NOT NULL CHECK (octet_length(idempotency_key) BETWEEN 1 AND 128),
-    request_hash text NOT NULL CHECK (request_hash ~ '^sha256:[0-9a-f]{64}$'),
-    message_id uuid NOT NULL,
+    request_hash text CHECK (request_hash ~ '^sha256:[0-9a-f]{64}$'),
+    message_id uuid,
     status_code smallint,
     receipt jsonb,
     created_at timestamptz NOT NULL,
     expires_at timestamptz NOT NULL,
     erased_at timestamptz,
-    PRIMARY KEY (issuer, subject, operation, idempotency_key),
+    PRIMARY KEY (principal, operation, idempotency_key),
     CONSTRAINT messaging_idempotency_erasure CHECK (
         (erased_at IS NULL AND status_code IS NOT NULL AND receipt IS NOT NULL)
         OR (erased_at IS NOT NULL AND status_code IS NULL AND receipt IS NULL)
+    ),
+    CONSTRAINT messaging_idempotency_record CHECK (
+        (message_id IS NOT NULL AND request_hash IS NOT NULL)
+        OR (message_id IS NULL AND request_hash IS NULL AND erased_at IS NOT NULL)
     )
 );
 
@@ -287,10 +294,11 @@ CREATE INDEX messaging_idempotency_expiry_idx
     ON messaging_idempotency (expires_at)
     WHERE erased_at IS NULL;
 
--- A deleted record takes its idempotency record with it; the key has no
--- foreign key, so retention finds it by the message it names.
+-- Retention finds the record of a deleted message by the message it names;
+-- the key has no foreign key, since it outlives the message.
 CREATE INDEX messaging_idempotency_message_idx
-    ON messaging_idempotency (message_id);
+    ON messaging_idempotency (message_id)
+    WHERE message_id IS NOT NULL;
 
 -- Audit records written in the transaction whose change they record, and
 -- appended to the keyed journal by the runtime's publisher. The sequence

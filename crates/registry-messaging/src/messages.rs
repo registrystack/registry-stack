@@ -784,11 +784,11 @@ impl std::fmt::Debug for MessageService {
 
 /// The idempotency record a key already holds.
 struct StoredKey {
-    request_hash: String,
+    request_hash: Option<String>,
     spent: bool,
     status: Option<i16>,
     receipt: Option<Value>,
-    message_id: Uuid,
+    message_id: Option<Uuid>,
 }
 
 impl MessageService {
@@ -882,7 +882,8 @@ impl MessageService {
             .query_one("SELECT transaction_timestamp()", &[])
             .await?
             .try_get(0)?;
-        if let Some(stored) = lookup_key(&transaction, &caller.identity, key).await? {
+        if let Some(stored) = lookup_key(&transaction, &references.principal_pseudonym, key).await?
+        {
             transaction.commit().await?;
             return replay(stored, submission).map(Some);
         }
@@ -901,13 +902,12 @@ impl MessageService {
         let inserted = transaction
             .execute(
                 "INSERT INTO messaging_idempotency \
-                     (issuer, subject, operation, idempotency_key, request_hash, message_id, \
+                     (principal, operation, idempotency_key, request_hash, message_id, \
                       status_code, receipt, created_at, expires_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, 202, $7, transaction_timestamp(), $8) \
+                 VALUES ($1, $2, $3, $4, $5, 202, $6, transaction_timestamp(), $7) \
                  ON CONFLICT DO NOTHING",
                 &[
-                    &caller.identity.issuer,
-                    &caller.identity.subject,
+                    &references.principal_pseudonym,
                     &SUBMIT_OPERATION,
                     &key,
                     &submission.request_hash,
@@ -1084,9 +1084,13 @@ async fn check_daily_limit(
 /// The advisory-lock name prefix a profile's daily count is taken under.
 const DAILY_LIMIT_LOCK_NAMESPACE: &str = "registry-messaging.daily-limit:";
 
+/// The idempotency record `key` has under the caller's keyed pseudonym.
+/// The record is found by the pseudonym, not by the verified issuer and
+/// subject, so a record retention keeps after deleting its message holds
+/// nothing that names the caller outside the audit's own key.
 async fn lookup_key(
     transaction: &tokio_postgres::Transaction<'_>,
-    identity: &CallerIdentity,
+    principal_pseudonym: &str,
     key: &str,
 ) -> Result<Option<StoredKey>, Refusal> {
     let row = transaction
@@ -1095,8 +1099,8 @@ async fn lookup_key(
                     erased_at IS NOT NULL OR expires_at <= transaction_timestamp(), \
                     status_code, receipt, message_id \
                FROM messaging_idempotency \
-              WHERE issuer = $1 AND subject = $2 AND operation = $3 AND idempotency_key = $4",
-            &[&identity.issuer, &identity.subject, &SUBMIT_OPERATION, &key],
+              WHERE principal = $1 AND operation = $2 AND idempotency_key = $3",
+            &[&principal_pseudonym, &SUBMIT_OPERATION, &key],
         )
         .await?;
     row.map(|row| {
@@ -1115,17 +1119,18 @@ fn replay(stored: StoredKey, submission: &PreparedSubmission) -> Result<Submissi
     if stored.spent {
         return Err(Refusal::Problem(ProblemCode::IdempotencyExpired));
     }
-    if stored.request_hash != submission.request_hash {
+    if stored.request_hash.as_deref() != Some(submission.request_hash.as_str()) {
         return Err(Refusal::Problem(ProblemCode::IdempotencyKeyReused));
     }
     match (
         stored.status.and_then(|status| u16::try_from(status).ok()),
         stored.receipt,
+        stored.message_id,
     ) {
-        (Some(status), Some(receipt)) => Ok(SubmissionAnswer {
+        (Some(status), Some(receipt), Some(message_id)) => Ok(SubmissionAnswer {
             status,
             receipt,
-            message_id: stored.message_id,
+            message_id,
             replayed: true,
         }),
         _ => Err(Refusal::Problem(ProblemCode::IdempotencyExpired)),

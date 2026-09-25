@@ -240,16 +240,24 @@ decisions:
     evidence:
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_payload_is_erased_payload_days_after_a_terminal_state_and_never_while_sending_or_unknown}
   - id: MESSAGING-DEC-17
-    subject: A deleted record frees its idempotency key
+    subject: A deleted record keeps its idempotency key spent
     decision: >-
-      When a record is deleted its idempotency row goes with it, so after
-      recordDays a caller may use the key again and gets a new message.
-      Until then an expired key is refused with idempotency.expired.
+      An idempotency row is keyed by the caller's keyed audit pseudonym, the
+      operation, and the key, never by the caller's issuer and subject. When
+      a record is deleted its row stays with the message, the request hash,
+      and any stored receipt nulled, holding only the pseudonym, the key, and
+      its times, so a repeat of the key after recordDays is refused with
+      idempotency.expired, the refusal every spent key gets.
     reasoning: >-
-      Keeping the key row would keep the caller's issuer, subject, and
-      request hash beyond the record they describe, which is the data the
-      record period exists to bound. Callers reuse keys only by mistake, and
-      the record period is months.
+      Freeing the key would turn a caller's mistaken retry after the record
+      period into a second message sent to the same recipient, which is the
+      duplicate the key exists to prevent. Keeping the raw issuer, subject,
+      and request hash would keep what the record period exists to bound;
+      the pseudonym names the caller only under the audit hash key, which
+      the journal already relies on. Rotating that key re-keys every
+      pseudonym, so the keys spent under the previous one stop being
+      recognized and can be used again; rotation is rare and deliberate,
+      and the journal carries the same boundary.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_record_is_deleted_record_days_after_a_terminal_state_with_everything_it_holds}
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_submission_receipt_expires_after_its_period_and_its_key_stays_spent}

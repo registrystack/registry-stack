@@ -237,7 +237,9 @@ with an unknown member, a missing required member, a recipient of the wrong
 channel, or a malformed or out-of-window instant is
 `422 request.unprocessable`, as in Scheduling and the preview route; nothing
 is recorded either way. The `Idempotency-Key` header is required and bounded, and is scoped to the
-caller's issuer and subject, so a caller cannot probe another caller's keys.
+caller's keyed pseudonym of its issuer and subject, so a caller cannot probe
+another caller's keys and the stored key names the caller only under the
+audit hash key.
 The request hash covers the canonical request body: the same key with
 another body is `409 idempotency.key-reused`, and a key older than
 `retention.submissionReceiptDays` is `410 idempotency.expired`. A replay is
@@ -659,9 +661,12 @@ message's dispatch job reached a terminal state, `delivered`,
 erased, whatever its age. A submission's `expiresAt` stays capped at
 acceptance plus `payloadDays`. Past `payloadDays` the recipient and the
 rendered parts are nulled and the content-free record stays; past
-`recordDays` the record is deleted with its payload, job, attempts, delivery
-receipts, and idempotency row, so its key can be used again
-(MESSAGING-DEC-17). Past `submissionReceiptDays` the stored receipt is
+`recordDays` the record is deleted with its payload, job, attempts, and
+delivery receipts; its idempotency row stays with the message, the request
+hash, and any stored receipt nulled, holding only the caller's keyed
+pseudonym and the key, so a repeat is still `410 idempotency.expired`
+(MESSAGING-DEC-17). Rotating the audit hash key re-keys the pseudonyms and
+so frees the keys spent under the previous one. Past `submissionReceiptDays` the stored receipt is
 dropped and a repeat of its key is `410 idempotency.expired`.
 
 One run is one transaction under a transaction advisory lock, with a

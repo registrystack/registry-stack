@@ -102,7 +102,9 @@
   is never erased. The runtime sweeps at start and hourly and journals
   `messaging.retention.erased`; `messagingctl retention erase-expired
   --before` runs the same sweep on demand, previewing unless `--apply` is
-  given. A deleted record frees its idempotency key.
+  given. A deleted record keeps its idempotency key spent: the key
+  row stays under the caller's keyed pseudonym, and a repeat is
+  `410 idempotency.expired`.
 - Answer `/ready` with `503` once the package ledger names a package other
   than the one the runtime serves, until the runtime is restarted onto it.
 - Add `registry-messaging-client` with health, readiness, and
