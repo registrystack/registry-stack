@@ -520,3 +520,72 @@ fn a_secret_reference_reads_and_writes_as_its_text() {
         ["secret:file/a", "secret:file/b"]
     );
 }
+
+fn clients(yaml: &str) -> OidcClientsConfig {
+    serde_norway::from_str(yaml).expect("clients parse")
+}
+
+#[test]
+fn oidc_clients_default_to_no_rule_and_bound_the_assertion_issuer_map() {
+    let field = "authentication.oidc";
+    let empty = clients("{}");
+    assert!(empty.allowed_clients.is_empty());
+    assert!(empty.assertion_issuers.is_empty());
+    empty.check(field).expect("no rule");
+    clients("allowedClients: [portal]\nassertionIssuers: {portal: [https://assert.example.test]}")
+        .check(field)
+        .expect("one client, one authority");
+
+    let many_clients = (0..=MAX_ASSERTION_ISSUER_CLIENTS)
+        .map(|index| format!("c{index}: []"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let many_issuers = (0..=MAX_ASSERTION_ISSUERS_PER_CLIENT)
+        .map(|index| format!("https://a{index}.example.test"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    for (reason, yaml) in [
+        (
+            "too many clients",
+            format!("assertionIssuers: {{{many_clients}}}"),
+        ),
+        ("an empty client", "assertionIssuers: {'': []}".to_owned()),
+        (
+            "an oversized client",
+            format!(
+                "assertionIssuers: {{{}: []}}",
+                "c".repeat(MAX_ASSERTION_ISSUER_CLIENT_BYTES + 1)
+            ),
+        ),
+        (
+            "too many issuers for one client",
+            format!("assertionIssuers: {{portal: [{many_issuers}]}}"),
+        ),
+        (
+            "an empty issuer",
+            "assertionIssuers: {portal: ['']}".to_owned(),
+        ),
+        (
+            "an oversized issuer",
+            format!(
+                "assertionIssuers: {{portal: [{}]}}",
+                "i".repeat(MAX_ASSERTION_ISSUER_BYTES + 1)
+            ),
+        ),
+        (
+            "a repeated issuer",
+            "assertionIssuers: {portal: [https://a.example.test, https://a.example.test]}"
+                .to_owned(),
+        ),
+    ] {
+        let error = clients(&yaml).check(field).expect_err(reason);
+        assert_eq!(
+            error.kind(),
+            ConfigBlockErrorKind::InvalidAssertionIssuers,
+            "{reason}"
+        );
+        assert_eq!(error.field(), "authentication.oidc.assertionIssuers");
+        assert!(!error.to_string().contains("example.test"), "{reason}");
+    }
+    assert!(serde_norway::from_str::<OidcClientsConfig>("allowedClients: portal").is_err());
+}
