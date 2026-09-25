@@ -5,8 +5,10 @@
 //! `package`, `audit.hashKeyRef` and `authentication.oidc` the same way in
 //! every product, and one implementation checks them. Product-specific
 //! siblings stay in the product's own configuration types: the audit key and
-//! the OIDC issuer are embedded with `#[serde(flatten)]` beside them.
+//! the OIDC issuer and clients are embedded with `#[serde(flatten)]` beside
+//! them.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
@@ -42,6 +44,9 @@ pub enum ConfigBlockErrorKind {
     InvalidUri,
     /// An OIDC audience is empty, too long, or holds a control character.
     InvalidAudience,
+    /// `assertionIssuers` exceeds a bound, names an empty value, or repeats
+    /// an issuer for one client.
+    InvalidAssertionIssuers,
 }
 
 /// A shared block refusal naming its field and never a configured value.
@@ -474,6 +479,86 @@ impl OidcIssuerConfig {
         }
         self.jwks_source
             .check(&format!("{field}.jwksSource"), allow_loopback_http)
+    }
+}
+
+/// The most clients `authentication.oidc.assertionIssuers` may list.
+pub const MAX_ASSERTION_ISSUER_CLIENTS: usize = 64;
+/// The longest client key in `assertionIssuers`, in bytes.
+pub const MAX_ASSERTION_ISSUER_CLIENT_BYTES: usize = 128;
+/// The most assertion issuers one client may list.
+pub const MAX_ASSERTION_ISSUERS_PER_CLIENT: usize = 16;
+/// The longest assertion issuer, in bytes.
+pub const MAX_ASSERTION_ISSUER_BYTES: usize = 512;
+
+/// The OAuth clients a runtime admits access tokens for, and the assertion
+/// authorities each client may exchange a subject token from, written under
+/// `authentication.oidc` beside the issuer.
+// A product's `authentication.oidc` block embeds this with
+// `#[serde(flatten)]`, so the bounds on the authored map hold in every
+// product that exchanges tokens.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OidcClientsConfig {
+    /// Client identifiers whose access tokens are admitted. A runtime decides
+    /// whether an empty list is acceptable in production.
+    #[serde(default)]
+    pub allowed_clients: Vec<String>,
+    /// Assertion authorities each client may exchange a subject token from,
+    /// keyed by client identifier. An empty map applies no rule. Once a
+    /// client is listed, a token it exchanged is accepted only for one of
+    /// that client's declared authorities.
+    #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend(
+            "maxProperties" = MAX_ASSERTION_ISSUER_CLIENTS,
+            "propertyNames" = {"minLength": 1, "maxLength": MAX_ASSERTION_ISSUER_CLIENT_BYTES},
+            "additionalProperties" = {
+                "type": "array",
+                "maxItems": MAX_ASSERTION_ISSUERS_PER_CLIENT,
+                "uniqueItems": true,
+                "items": {"type": "string", "minLength": 1, "maxLength": MAX_ASSERTION_ISSUER_BYTES}
+            }
+        ))
+    )]
+    pub assertion_issuers: BTreeMap<String, Vec<String>>,
+}
+
+impl OidcClientsConfig {
+    /// Refuse an assertion-issuer map with too many clients, an empty or
+    /// oversized client key or issuer, too many issuers for one client, or an
+    /// issuer repeated within one client's list, so one operator document
+    /// cannot become an unbounded verifier input. `field` is the dotted path
+    /// of the block, such as `authentication.oidc`.
+    pub fn check(&self, field: &str) -> Result<(), ConfigBlockError> {
+        let within_bounds = self.assertion_issuers.len() <= MAX_ASSERTION_ISSUER_CLIENTS
+            && self.assertion_issuers.iter().all(|(client, issuers)| {
+                let mut seen = BTreeSet::new();
+                !client.is_empty()
+                    && client.len() <= MAX_ASSERTION_ISSUER_CLIENT_BYTES
+                    && issuers.len() <= MAX_ASSERTION_ISSUERS_PER_CLIENT
+                    && issuers.iter().all(|issuer| {
+                        !issuer.is_empty()
+                            && issuer.len() <= MAX_ASSERTION_ISSUER_BYTES
+                            && seen.insert(issuer)
+                    })
+            });
+        if within_bounds {
+            return Ok(());
+        }
+        let field = format!("{field}.assertionIssuers");
+        Err(ConfigBlockError::new(
+            ConfigBlockErrorKind::InvalidAssertionIssuers,
+            &field,
+            format!(
+                "{field} must list at most {MAX_ASSERTION_ISSUER_CLIENTS} non-empty client \
+                 identifiers of at most {MAX_ASSERTION_ISSUER_CLIENT_BYTES} bytes, each with at \
+                 most {MAX_ASSERTION_ISSUERS_PER_CLIENT} distinct non-empty issuers of at most \
+                 {MAX_ASSERTION_ISSUER_BYTES} bytes"
+            ),
+        ))
     }
 }
 
