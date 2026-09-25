@@ -7,7 +7,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
 use jsonwebtoken::Algorithm;
 pub(crate) use registry_platform_config::describe_secret_failure;
 use registry_platform_config::{
@@ -16,13 +15,13 @@ use registry_platform_config::{
     RuntimeConfigLoader, RuntimeEnvelope, SecretResolver,
 };
 pub use registry_platform_config::{
-    DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig, JwksSource,
-    ListenerNetworkExposure, PackageConfig, PrivateListenerConfig as ListenerConfig,
-    SecretProvidersConfig, TlsTermination,
+    AuditKeyConfig, DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
+    JwksSource, ListenerNetworkExposure, OidcClientsConfig, OidcIssuerConfig, PackageConfig,
+    PrivateListenerConfig as ListenerConfig, SecretProvidersConfig, TlsTermination,
 };
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
-    TokenVerifierConfig,
+    access_token_typ_set, fetch_discovery, parse_static_jwks, JwksFetcher, JwksFetcherConfig,
+    OidcDiscoveryConfig, TokenVerifierConfig,
 };
 use registry_scheduling_core::{
     parse_policy_yaml, SchedulingPolicy, AUTHORED_POLICY_FILE, SCHEDULING_PACKAGE_MANIFEST_FILE,
@@ -89,26 +88,23 @@ pub struct AuthenticationConfig {
     pub oidc: OidcConfig,
 }
 
+/// The access tokens this runtime accepts: the issuer and its keys, the
+/// clients admitted, and the scopes each route family requires.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OidcConfig {
-    #[serde(default)]
-    pub allowed_clients: Vec<String>,
-    /// The assertion authorities each client may exchange a subject token
-    /// from, keyed by client identifier.
-    ///
-    /// A deployment that performs no token exchange leaves this empty. Once a
-    /// client is listed, a token it exchanged is accepted only for one of that
-    /// client's declared authorities, so an assertion minted by an unrelated
-    /// authority the issuer happens to federate cannot become a booking
-    /// credential here.
-    #[serde(default)]
-    pub assertion_issuers: BTreeMap<String, Vec<String>>,
-    pub issuer: String,
-    pub audience: String,
-    #[serde(default)]
-    pub jwks_source: JwksSource,
+    /// The exact issuer, the one audience every token carries, and where the
+    /// issuer's signing keys come from.
+    #[serde(flatten)]
+    pub provider: OidcIssuerConfig,
+    /// The clients admitted and the assertion authorities each may exchange
+    /// a subject token from. A deployment that performs no token exchange
+    /// leaves `assertionIssuers` empty; once a client is listed, an assertion
+    /// minted by an unrelated authority the issuer happens to federate cannot
+    /// become a booking credential here.
+    #[serde(flatten)]
+    pub clients: OidcClientsConfig,
     #[serde(default = "default_scope_claim")]
     pub scope_claim: String,
     /// The scope every listing and availability read requires.
@@ -124,14 +120,6 @@ pub struct OidcConfig {
 /// it to an ordinary JWT.
 const SCHEDULING_ACCESS_TOKEN_TYPE: &str = "at+jwt";
 
-/// Bounds on the authored assertion-issuer map, matching the Casework
-/// runtime's. They keep one operator document from becoming an unbounded
-/// verifier input.
-pub(crate) const MAXIMUM_ASSERTION_ISSUER_CLIENTS: usize = 64;
-pub(crate) const MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES: usize = 128;
-pub(crate) const MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT: usize = 16;
-pub(crate) const MAXIMUM_ASSERTION_ISSUER_BYTES: usize = 512;
-
 fn default_scope_claim() -> String {
     "registry_scopes".to_owned()
 }
@@ -142,12 +130,15 @@ fn default_explain_scope() -> String {
     "scheduling-explain".to_owned()
 }
 
+/// The audit journal: where it is written and the key its hashes use.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuditConfig {
     pub path: PathBuf,
-    pub hash_key_ref: String,
+    /// The secret keying the audit journal's hashes, `hashKeyRef`.
+    #[serde(flatten)]
+    pub key: AuditKeyConfig,
 }
 
 /// Where due reminder and lifecycle-hook intents are dispatched. An absent
@@ -394,35 +385,33 @@ impl RuntimeConfig {
         if !self.listener.is_valid() {
             return Err(RuntimeConfigError::InvalidListener);
         }
-        self.authentication.oidc.jwks_source.check(
-            "authentication.oidc.jwksSource",
+        self.authentication.oidc.provider.check(
+            "authentication.oidc",
             self.listener.tls_termination == TlsTermination::DevelopmentLoopback,
         )?;
-        if self.authentication.oidc.issuer.is_empty()
-            || self.authentication.oidc.audience.is_empty()
-            || self.authentication.oidc.scope_claim.is_empty()
+        self.authentication
+            .oidc
+            .clients
+            .check("authentication.oidc")?;
+        if self.authentication.oidc.scope_claim.is_empty()
             || self.authentication.oidc.reads_scope.is_empty()
             || self.authentication.oidc.explain_scope.is_empty()
             || self.authentication.oidc.explain_scope == self.authentication.oidc.reads_scope
         {
             return Err(RuntimeConfigError::InvalidOidc);
         }
-        self.validate_assertion_issuers()?;
         // An empty client list admits every client the issuer verifies, so a
         // deployment that simply forgot the field would accept a token minted
         // for an unrelated application in the same realm. Development loopback
         // keeps that convenience; a deployment behind an operator-controlled
         // terminator must name the clients it admits.
         if self.listener.tls_termination == TlsTermination::OperatorControlledUpstream
-            && self.authentication.oidc.allowed_clients.is_empty()
+            && self.authentication.oidc.clients.allowed_clients.is_empty()
         {
             return Err(RuntimeConfigError::InvalidOidc);
         }
         if self.database.runtime_url_ref.is_empty() || self.database.migration_url_ref.is_empty() {
             return Err(RuntimeConfigError::InvalidDatabaseReference);
-        }
-        if self.audit.hash_key_ref.is_empty() {
-            return Err(RuntimeConfigError::InvalidAuditReference);
         }
         if self.retention.attempt_receipt_days == 0
             || !(1..=30).contains(&self.retention.hook_payload_days)
@@ -478,36 +467,6 @@ impl RuntimeConfig {
         Ok(())
     }
 
-    /// Refuse an assertion-issuer map with too many clients, an oversized
-    /// client key or issuer string, too many issuers listed for one client, or
-    /// a repeated issuer within one client's list. This runs at configuration
-    /// load, before any verifier is built, so an operator sees the refusal
-    /// without the runtime ever starting.
-    fn validate_assertion_issuers(&self) -> Result<(), RuntimeConfigError> {
-        let assertion_issuers = &self.authentication.oidc.assertion_issuers;
-        if assertion_issuers.len() > MAXIMUM_ASSERTION_ISSUER_CLIENTS {
-            return Err(RuntimeConfigError::InvalidOidc);
-        }
-        for (client, issuers) in assertion_issuers {
-            if client.is_empty()
-                || client.len() > MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES
-                || issuers.len() > MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT
-            {
-                return Err(RuntimeConfigError::InvalidOidc);
-            }
-            let mut seen = BTreeSet::new();
-            for issuer in issuers {
-                if issuer.is_empty()
-                    || issuer.len() > MAXIMUM_ASSERTION_ISSUER_BYTES
-                    || !seen.insert(issuer)
-                {
-                    return Err(RuntimeConfigError::InvalidOidc);
-                }
-            }
-        }
-        Ok(())
-    }
-
     fn validate_secret_references(&self) -> Result<(), RuntimeConfigError> {
         let mut references: Vec<(String, &str)> = self
             .database
@@ -515,8 +474,11 @@ impl RuntimeConfig {
             .into_iter()
             .map(|(field, reference)| (field.to_owned(), reference))
             .collect();
-        references.push(("audit.hashKeyRef".to_owned(), &self.audit.hash_key_ref));
-        if let Some(document_ref) = self.authentication.oidc.jwks_source.document_ref() {
+        references.push((
+            "audit.hashKeyRef".to_owned(),
+            self.audit.key.hash_key_ref.as_str(),
+        ));
+        if let Some(document_ref) = self.authentication.oidc.provider.jwks_source.document_ref() {
             references.push((
                 "authentication.oidc.jwksSource.documentRef".to_owned(),
                 document_ref,
@@ -547,17 +509,18 @@ impl RuntimeConfig {
         secrets: &SecretResolver,
     ) -> Result<(TokenVerifierConfig, std::sync::Arc<JwksFetcher>), RuntimeConfigError> {
         let discovery_config = OidcDiscoveryConfig {
-            issuer: self.authentication.oidc.issuer.clone(),
+            issuer: self.authentication.oidc.provider.issuer.clone(),
             jwks_uri_override: self
                 .authentication
                 .oidc
+                .provider
                 .jwks_source
                 .uri()
                 .map(str::to_owned),
             discovery_timeout: Duration::from_secs(5),
             max_doc_bytes: 1024 * 1024,
         };
-        let fetcher = match &self.authentication.oidc.jwks_source {
+        let fetcher = match &self.authentication.oidc.provider.jwks_source {
             JwksSource::Uri { uri } => JwksFetcher::new(uri.clone(), JwksFetcherConfig::defaults()),
             JwksSource::Discovery {} => {
                 let discovery = fetch_discovery(&discovery_config)
@@ -573,7 +536,8 @@ impl RuntimeConfig {
                         &error,
                     ))
                 })?;
-                let jwks = parse_static_jwks(document.expose_secret())?;
+                let jwks = parse_static_jwks(document.expose_secret())
+                    .map_err(|_| RuntimeConfigError::Oidc)?;
                 JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
             }
         };
@@ -592,14 +556,14 @@ impl RuntimeConfig {
     /// another purpose book, reschedule or cancel an appointment.
     pub(crate) fn verifier_profile(&self) -> TokenVerifierConfig {
         TokenVerifierConfig::access_token_profile(
-            self.authentication.oidc.issuer.clone(),
-            vec![self.authentication.oidc.audience.clone()],
+            self.authentication.oidc.provider.issuer.clone(),
+            vec![self.authentication.oidc.provider.audience.clone()],
             vec![Algorithm::RS256, Algorithm::ES256],
             access_token_typ_set(SCHEDULING_ACCESS_TOKEN_TYPE),
         )
         .with_scope_claim(self.authentication.oidc.scope_claim.clone())
-        .with_allowed_clients(self.authentication.oidc.allowed_clients.clone())
-        .with_assertion_issuers(self.authentication.oidc.assertion_issuers.clone())
+        .with_allowed_clients(self.authentication.oidc.clients.allowed_clients.clone())
+        .with_assertion_issuers(self.authentication.oidc.clients.assertion_issuers.clone())
     }
 }
 
@@ -646,26 +610,6 @@ fn valid_logical_destination_id(value: &str) -> bool {
         && value.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
         })
-}
-
-fn parse_static_jwks(bytes: &[u8]) -> Result<JwkSet, RuntimeConfigError> {
-    let jwks: JwkSet = serde_json::from_slice(bytes).map_err(|_| RuntimeConfigError::Oidc)?;
-    let mut kids = BTreeSet::new();
-    if jwks.keys.is_empty()
-        || jwks.keys.iter().any(|key| {
-            !matches!(
-                key.algorithm,
-                AlgorithmParameters::RSA(_) | AlgorithmParameters::EllipticCurve(_)
-            ) || key
-                .common
-                .key_id
-                .as_ref()
-                .is_none_or(|kid| kid.is_empty() || !kids.insert(kid.clone()))
-        })
-    {
-        return Err(RuntimeConfigError::Oidc);
-    }
-    Ok(jwks)
 }
 
 /// Name where a YAML document was refused and why, so an operator reading a
@@ -725,8 +669,6 @@ pub enum RuntimeConfigError {
         "database.runtimeUrlRef and database.migrationUrlRef must be non-empty secret references"
     )]
     InvalidDatabaseReference,
-    #[error("audit.hashKeyRef must be a non-empty secret reference")]
-    InvalidAuditReference,
     #[error("retention.attemptReceiptDays must be at least one day")]
     InvalidRetention,
     #[error("destinations.reminders.url is not a valid destination URL")]
@@ -756,7 +698,6 @@ impl RuntimeConfigError {
             Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",
             Self::InvalidListener => "listener",
             Self::InvalidDatabaseReference | Self::PlaintextDatabase => "database",
-            Self::InvalidAuditReference => "audit.hashKeyRef",
             Self::InvalidRetention => "retention",
             Self::InvalidDestination => "destinations.reminders.url",
             Self::InvalidHookDestination | Self::HookDestinationInventoryMismatch => {
@@ -774,6 +715,10 @@ impl RuntimeConfigError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_config::{
+        MAX_ASSERTION_ISSUERS_PER_CLIENT, MAX_ASSERTION_ISSUER_BYTES, MAX_ASSERTION_ISSUER_CLIENTS,
+        MAX_ASSERTION_ISSUER_CLIENT_BYTES,
+    };
     use registry_platform_oidc::is_access_token_typ_pair;
     use registry_scheduling_core::{SCHEDULING_POLICY_API_VERSION, SCHEDULING_POLICY_KIND};
 
@@ -1064,7 +1009,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
             serde_json::json!({"kind": "uri", "uri": "https://identity.example.test/jwks"});
         let config = RuntimeConfig::load(write_operator(root.path(), document)).unwrap();
         assert_eq!(
-            config.authentication.oidc.jwks_source.uri(),
+            config.authentication.oidc.provider.jwks_source.uri(),
             Some("https://identity.example.test/jwks")
         );
     }
@@ -1079,7 +1024,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
             serde_json::json!("${SCHEDULING_TEST_AUDIENCE:-urn:example:substituted}");
         let config = RuntimeConfig::load(write_operator(root.path(), document)).unwrap();
         assert_eq!(
-            config.authentication.oidc.audience,
+            config.authentication.oidc.provider.audience,
             "urn:example:substituted"
         );
 
@@ -1354,10 +1299,10 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
         let root = canonical_tempdir();
         let package = root.path().join("package");
         write_policy(&package);
-        let oversized_client = "c".repeat(MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES + 1);
-        let oversized_issuer = format!("https://{}", "a".repeat(MAXIMUM_ASSERTION_ISSUER_BYTES));
+        let oversized_client = "c".repeat(MAX_ASSERTION_ISSUER_CLIENT_BYTES + 1);
+        let oversized_issuer = format!("https://{}", "a".repeat(MAX_ASSERTION_ISSUER_BYTES));
         let too_many_clients: serde_json::Map<String, serde_json::Value> = (0
-            ..=MAXIMUM_ASSERTION_ISSUER_CLIENTS)
+            ..=MAX_ASSERTION_ISSUER_CLIENTS)
             .map(|index| {
                 (
                     format!("client-{index}"),
@@ -1365,7 +1310,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
                 )
             })
             .collect();
-        let too_many_issuers: Vec<String> = (0..=MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT)
+        let too_many_issuers: Vec<String> = (0..=MAX_ASSERTION_ISSUERS_PER_CLIENT)
             .map(|index| format!("https://authority-{index}.test"))
             .collect();
         for refused in [
@@ -1380,12 +1325,37 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
             let mut document = operator_value(&package, "development-loopback");
             document["authentication"]["oidc"]["assertionIssuers"] = refused.clone();
             let operator = write_operator(root.path(), document);
-            let outcome = RuntimeConfig::load(&operator);
-            assert!(
-                matches!(outcome, Err(RuntimeConfigError::InvalidOidc)),
+            let error = RuntimeConfig::load(&operator).expect_err(&format!(
                 "an assertion-issuer map outside its bounds was accepted: {refused}"
+            ));
+            assert!(
+                matches!(error, RuntimeConfigError::Block(_)),
+                "{refused}: {error:?}"
             );
+            assert_eq!(error.path(), "authentication.oidc.assertionIssuers");
         }
+    }
+
+    #[test]
+    fn the_oidc_issuer_and_clients_are_the_shared_blocks() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        write_policy(&package);
+
+        let mut document = operator_value(&package, "development-loopback");
+        document["authentication"]["oidc"]["issuer"] =
+            serde_json::json!("http://identity.example.test");
+        let operator = write_operator(root.path(), document);
+        let error = RuntimeConfig::load(&operator).expect_err("a remote http issuer");
+        assert_eq!(error.path(), "authentication.oidc.issuer");
+
+        // The flattened blocks leave the enclosing block closed.
+        let mut document = operator_value(&package, "development-loopback");
+        document["authentication"]["oidc"]["issuerr"] =
+            serde_json::json!("https://identity.example.test");
+        let operator = write_operator(root.path(), document);
+        let error = RuntimeConfig::load(&operator).expect_err("an unknown oidc member");
+        assert!(error.to_string().contains("issuerr"), "{error}");
     }
 
     #[test]
@@ -1457,22 +1427,5 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
             RuntimeConfig::load(&operator),
             Err(RuntimeConfigError::InvalidListener)
         ));
-    }
-
-    #[test]
-    fn static_jwks_requires_unique_named_asymmetric_keys() {
-        assert!(parse_static_jwks(
-            br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#
-        )
-        .is_ok());
-        for invalid in [
-            br#"{}"#.as_slice(),
-            br#"{"keys":[]}"#,
-            br#"{"keys":[{"kty":"oct","kid":"one","k":"AA"}]}"#,
-            br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"},{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#,
-            b"not-json",
-        ] {
-            assert!(parse_static_jwks(invalid).is_err());
-        }
     }
 }

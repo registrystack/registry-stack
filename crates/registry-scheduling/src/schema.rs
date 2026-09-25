@@ -25,10 +25,7 @@ use registry_scheduling_core::{
 
 use registry_platform_config::blocks::SECRET_PROVIDER_PATTERN;
 
-use crate::config::{
-    RuntimeConfig, MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT, MAXIMUM_ASSERTION_ISSUER_BYTES,
-    MAXIMUM_ASSERTION_ISSUER_CLIENTS, MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES,
-};
+use crate::config::RuntimeConfig;
 
 pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
     let mut derived = serde_json::to_value(schemars::schema_for!(RuntimeConfig))?;
@@ -70,7 +67,6 @@ fn install_runtime_constraints(schema: &mut Value) {
         Value::String("^/".to_owned()),
     );
     for (definition, property) in [
-        ("AuditConfig", "hashKeyRef"),
         ("ReminderDestinationConfig", "bearerTokenRef"),
         ("HookDestinationConfig", "hmacSha256KeyRef"),
     ] {
@@ -82,7 +78,6 @@ fn install_runtime_constraints(schema: &mut Value) {
             Value::String(SECRET_PROVIDER_PATTERN.to_owned()),
         );
     }
-    set_assertion_issuer_bounds(schema);
     if let Some(root) = schema.as_object_mut() {
         root.insert(
             "allOf".to_owned(),
@@ -90,40 +85,6 @@ fn install_runtime_constraints(schema: &mut Value) {
                 secret_provider_requirement("^secret:env/", "environment"),
                 secret_provider_requirement("^secret:file/", "file")
             ]),
-        );
-    }
-}
-
-/// State the assertion-issuer map's authored bounds, the ones
-/// `RuntimeConfig::check` refuses a document for exceeding.
-fn set_assertion_issuer_bounds(schema: &mut Value) {
-    if let Some(property) = schema
-        .pointer_mut("/$defs/OidcConfig/properties/assertionIssuers")
-        .and_then(Value::as_object_mut)
-    {
-        property.insert(
-            "maxProperties".to_owned(),
-            Value::from(MAXIMUM_ASSERTION_ISSUER_CLIENTS),
-        );
-        property.insert(
-            "propertyNames".to_owned(),
-            serde_json::json!({
-                "minLength": 1,
-                "maxLength": MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES,
-            }),
-        );
-        property.insert(
-            "additionalProperties".to_owned(),
-            serde_json::json!({
-                "type": "array",
-                "maxItems": MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT,
-                "uniqueItems": true,
-                "items": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": MAXIMUM_ASSERTION_ISSUER_BYTES,
-                },
-            }),
         );
     }
 }
@@ -248,7 +209,6 @@ mod tests {
             ("DatabaseConfig", "runtimeUrlRef"),
             ("DatabaseConfig", "migrationUrlRef"),
             ("DatabaseConfig", "trustedRootCertificateRef"),
-            ("AuditConfig", "hashKeyRef"),
             ("ReminderDestinationConfig", "bearerTokenRef"),
             ("HookDestinationConfig", "hmacSha256KeyRef"),
         ] {
@@ -269,6 +229,23 @@ mod tests {
         assert_eq!(
             document["$defs"]["JwksSource"]["oneOf"][2]["properties"]["documentRef"]["pattern"],
             SECRET_REFERENCE_PATTERN
+        );
+        // The shared blocks carry their own bounds into this schema.
+        assert_eq!(
+            document["$defs"]["AuditConfig"]["properties"]["hashKeyRef"]["$ref"],
+            "#/$defs/SecretReference"
+        );
+        let assertion_issuers = &document["$defs"]["OidcConfig"]["properties"]["assertionIssuers"];
+        assert_eq!(assertion_issuers["maxProperties"], 64);
+        assert_eq!(assertion_issuers["propertyNames"]["maxLength"], 128);
+        assert_eq!(assertion_issuers["additionalProperties"]["maxItems"], 16);
+        assert_eq!(
+            assertion_issuers["additionalProperties"]["items"]["maxLength"],
+            512
+        );
+        assert_eq!(
+            document["$defs"]["OidcConfig"]["properties"]["issuer"]["pattern"],
+            "^https?://"
         );
     }
 

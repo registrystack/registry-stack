@@ -19,6 +19,15 @@
   `secretProviders`.
 - Add the optional `package.expectedDigest` pin, compared with the verified
   package's policy digest at startup.
+- BREAKING: `authentication.oidc.issuer` must be an absolute `https` URL
+  without credentials or fragment, or a loopback `http` URL under
+  `development-loopback`, and `authentication.oidc.audience` is at most 512
+  characters without control characters. Both are checked by the shared OIDC
+  issuer block, the same one the other runtimes use.
+- A refused `authentication.oidc.assertionIssuers` map is now reported at that
+  field rather than at `authentication.oidc`. Its bounds are unchanged.
+- `audit.hashKeyRef` must be an exact secret reference when the document is
+  read, not only when its provider is checked.
 
 ## v0.34.0 - 2026-09-25
 

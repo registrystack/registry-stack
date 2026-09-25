@@ -233,7 +233,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     // The journal is keyed and verified before the policy revision can move,
     // so a mis-provisioned deployment never advances state it cannot hold to
     // account.
-    let audit_secret = resolve_audit_secret(&secrets, &config.audit.hash_key_ref)?;
+    let audit_secret = resolve_audit_secret(&secrets, config.audit.key.hash_key_ref.as_str())?;
     // One master secret, two independently HKDF-derived sub-keys: the chain
     // integrity key and the identifier-hash key never share key material
     // (AUDIT-03), so one leaked sub-key reveals neither its sibling nor the

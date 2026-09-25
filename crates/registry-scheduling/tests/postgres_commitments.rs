@@ -26,7 +26,9 @@ use registry_platform_hooks::delivery::DeliveryOutcome;
 use registry_platform_hooks::{EnvelopeLimits, HookEnvelope, HookHandlerSource};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
 use registry_scheduling::auth::SchedulingAuthenticator;
-use registry_scheduling::config::{DatabaseConfig, JwksSource, OidcConfig};
+use registry_scheduling::config::{
+    DatabaseConfig, JwksSource, OidcClientsConfig, OidcConfig, OidcIssuerConfig,
+};
 use registry_scheduling::config::{HookDestinationConfig, ReminderDestinationConfig};
 use registry_scheduling::hooks::{ActivatedHooks, HookRuntimeIdentity};
 use registry_scheduling::http::{router, HttpState};
@@ -412,11 +414,15 @@ async fn fixture_publishing_with_hook_url(
 
 fn authenticator() -> SchedulingAuthenticator {
     let oidc = OidcConfig {
-        allowed_clients: vec![CLIENT.to_owned()],
-        assertion_issuers: std::collections::BTreeMap::new(),
-        issuer: ISSUER.to_owned(),
-        audience: AUDIENCE.to_owned(),
-        jwks_source: JwksSource::Discovery {},
+        provider: OidcIssuerConfig {
+            issuer: ISSUER.to_owned(),
+            audience: AUDIENCE.to_owned(),
+            jwks_source: JwksSource::Discovery {},
+        },
+        clients: OidcClientsConfig {
+            allowed_clients: vec![CLIENT.to_owned()],
+            assertion_issuers: std::collections::BTreeMap::new(),
+        },
         scope_claim: "registry_scopes".to_owned(),
         reads_scope: "scheduling-read".to_owned(),
         explain_scope: "scheduling-explain".to_owned(),
