@@ -337,7 +337,10 @@ async fn a_selective_reference_filter_uses_the_reference_index() {
         active.clone(),
         RegistryLockKey::derive(&active.package_id).expect("bounded lock key"),
         Duration::from_secs(2),
-        AuditProfile::production_from_secret_bytes(vec![0x42; 32].into()).expect("keyed audit"),
+        registry_breg::audit::test_support::capturing(
+            AuditProfile::production_from_secret_bytes(vec![0x42; 32].into()).expect("keyed audit"),
+        )
+        .0,
         cursors.clone(),
     )
     .with_query_plan_for_test(plans.clone());
