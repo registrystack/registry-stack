@@ -233,8 +233,8 @@ fn prepare_and_verify_delegate_exactly_and_publish_only_safe_artifacts() {
     let evidence_args = fs::read_to_string(fixture.evidence.with_extension("prepare.args"))
         .expect("Evidence prepare argv");
     let evidence_args = evidence_args.lines().collect::<Vec<_>>();
-    assert_eq!(evidence_args[0], "--runtime");
-    assert_eq!(evidence_args[2], "prepare-local-relying-procedure");
+    assert_eq!(evidence_args[0], "prepare-local-relying-procedure");
+    assert_eq!(evidence_args[1], "--runtime-config");
     assert_eq!(evidence_args[3], "--input");
     assert!(evidence_args[4].ends_with("/procedure-input.json"));
     assert!(!evidence_args.join(" ").contains(TOKEN));
@@ -920,7 +920,7 @@ impl Fixture {
         let evidence = temporary.path().join("evidence-stub");
         executable(
             &evidence,
-            b"#!/bin/sh\ncase \"$1\" in\n  --runtime)\n    printf '%s\\n' \"$@\" > \"$0.prepare.args\"\n    [ \"$3\" = 'prepare-local-relying-procedure' ] || exit 40\n    [ \"$4\" = '--input' ] || exit 41\n    cp \"$5\" \"$0.input\" || exit 42\n    if IFS= read -r unexpected; then exit 43; fi\n    printf 'stdin-empty\\n' > \"$0.prepare.stdin\"\n    [ ! -f \"$0.fail-prepare\" ] || exit 44\n    cat \"$0.procedure\"\n    ;;\n  *) exit 45 ;;\nesac\n",
+            b"#!/bin/sh\ncase \"$1\" in\n  prepare-local-relying-procedure)\n    printf '%s\\n' \"$@\" > \"$0.prepare.args\"\n    [ \"$2\" = '--runtime-config' ] || exit 40\n    [ \"$4\" = '--input' ] || exit 41\n    cp \"$5\" \"$0.input\" || exit 42\n    if IFS= read -r unexpected; then exit 43; fi\n    printf 'stdin-empty\\n' > \"$0.prepare.stdin\"\n    [ ! -f \"$0.fail-prepare\" ] || exit 44\n    cat \"$0.procedure\"\n    ;;\n  *) exit 45 ;;\nesac\n",
         );
         Self {
             _temporary: temporary,

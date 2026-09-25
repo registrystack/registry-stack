@@ -183,11 +183,11 @@ fn happy_path_runs_check_then_each_fixture_and_reports_pass() {
     assert_eq!(
         invocations,
         vec![
-            vec!["--runtime", runtime_path, "check"],
+            vec!["check", "--runtime-config", runtime_path],
             vec![
-                "--runtime",
-                runtime_path,
                 "evaluate",
+                "--runtime-config",
+                runtime_path,
                 "--fixture",
                 "fixtures/a.yaml",
                 "--explain",
@@ -195,9 +195,9 @@ fn happy_path_runs_check_then_each_fixture_and_reports_pass() {
                 "json"
             ],
             vec![
-                "--runtime",
-                runtime_path,
                 "evaluate",
+                "--runtime-config",
+                runtime_path,
                 "--fixture",
                 "fixtures/b.yaml",
                 "--explain",
@@ -244,11 +244,11 @@ fn fixture_selection_runs_only_one_exact_referenced_fixture() {
     assert_eq!(
         read_argv_log(&argv_log),
         vec![
-            vec!["--runtime", runtime_path, "check"],
+            vec!["check", "--runtime-config", runtime_path],
             vec![
-                "--runtime",
-                runtime_path,
                 "evaluate",
+                "--runtime-config",
+                runtime_path,
                 "--fixture",
                 "fixtures/a.yaml",
                 "--case",
@@ -912,11 +912,11 @@ fn explain_is_asked_of_every_evaluation_and_the_trace_is_relayed() {
     assert_eq!(
         invocations,
         vec![
-            vec!["--runtime", runtime_path, "check"],
+            vec!["check", "--runtime-config", runtime_path],
             vec![
-                "--runtime",
-                runtime_path,
                 "evaluate",
+                "--runtime-config",
+                runtime_path,
                 "--fixture",
                 "fixtures/a.yaml",
                 "--explain",
@@ -924,9 +924,9 @@ fn explain_is_asked_of_every_evaluation_and_the_trace_is_relayed() {
                 "json"
             ],
             vec![
-                "--runtime",
-                runtime_path,
                 "evaluate",
+                "--runtime-config",
+                runtime_path,
                 "--fixture",
                 "fixtures/b.yaml",
                 "--explain",
@@ -1066,13 +1066,13 @@ fn unresolvable_evidence_binary_errors_clearly() {
 }
 
 #[test]
-fn fixtures_are_discovered_at_a_relative_bundle_directory_named_in_runtime_yaml() {
+fn fixtures_are_discovered_at_a_relative_package_root_named_in_runtime_yaml() {
     let dir = tempfile::tempdir().expect("tempdir");
     let project = dir.path().join("project");
     fs::create_dir_all(project.join("custom-bundle")).expect("create custom bundle dir");
     fs::write(
         project.join("runtime.yaml"),
-        b"placeholder: true\nbundleDirectory: custom-bundle\n",
+        b"placeholder: true\npackage:\n  root: custom-bundle\n",
     )
     .expect("write runtime.yaml");
     fs::write(
@@ -1102,7 +1102,7 @@ fn fixtures_are_discovered_at_a_relative_bundle_directory_named_in_runtime_yaml(
 }
 
 #[test]
-fn fixtures_are_discovered_at_an_absolute_bundle_directory_named_in_runtime_yaml() {
+fn fixtures_are_discovered_at_an_absolute_package_root_named_in_runtime_yaml() {
     let dir = tempfile::tempdir().expect("tempdir");
     let project = dir.path().join("project");
     fs::create_dir_all(&project).expect("create project dir");
@@ -1110,7 +1110,7 @@ fn fixtures_are_discovered_at_an_absolute_bundle_directory_named_in_runtime_yaml
     fs::create_dir_all(&bundle_directory).expect("create bundle dir");
 
     let runtime_yaml = format!(
-        "placeholder: true\nbundleDirectory: {}\n",
+        "placeholder: true\npackage:\n  root: {}\n",
         bundle_directory.to_str().expect("bundle directory is utf8")
     );
     fs::write(project.join("runtime.yaml"), runtime_yaml).expect("write runtime.yaml");

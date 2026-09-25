@@ -11,9 +11,9 @@ and serves those items at its own paths.
 The `evidence` binary takes a runtime file and one subcommand:
 
 ```text
-evidence --runtime <path> check
-evidence --runtime <path> evaluate --fixture <bundle-relative path>
-evidence --runtime <path> serve
+evidence check --runtime-config <path>
+evidence evaluate --runtime-config <path> --fixture <bundle-relative path>
+evidence serve --runtime-config <path>
 evidence verify --jws <file> --jwks <file> --policy <file> [--at <rfc3339-utc>]
 ```
 

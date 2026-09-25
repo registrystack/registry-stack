@@ -812,9 +812,10 @@ fn prepare_local_relying_procedure(
     input: &Path,
 ) -> Result<LocalRelyingProcedure> {
     let mut child = Command::new(evidence)
-        .arg("--runtime")
-        .arg(runtime)
         .arg("prepare-local-relying-procedure")
+        .arg("--runtime-config")
+        .arg(runtime)
+        .env_remove("REGISTRY_EVIDENCE_RUNTIME")
         .arg("--input")
         .arg(input)
         .stdin(Stdio::null())

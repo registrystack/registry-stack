@@ -199,7 +199,7 @@ fn run_inner(
         bail!("candidate output must remain outside the editable project");
     }
     if require_deployable_assurance {
-        verify_bundle_directory_matches_candidate(&target.runtime, &candidate)?;
+        verify_package_root_matches_candidate(&target.runtime, &candidate)?;
     }
     let evidence_bin = crate::evidence_binary::resolve_matching(None)?;
 
@@ -488,7 +488,7 @@ fn prepare_candidate(
 }
 
 /// Refuse a packaged candidate whose deployment runtime would load a bundle
-/// left behind by a different `package` invocation. `bundleDirectory` is the
+/// left behind by a different `package` invocation. `package.root` is the
 /// one path the running process trusts at startup, so a candidate that copies
 /// a `runtime.yaml` naming another directory would report this build's bundle
 /// revision while quietly serving whatever bundle already sits at that other
@@ -497,22 +497,22 @@ fn prepare_candidate(
 /// `evidencectl doctor --runtime-config` and the `evidence` binary itself, so
 /// a runtime document that is otherwise malformed is still caught there
 /// rather than reported twice.
-fn verify_bundle_directory_matches_candidate(runtime_bytes: &[u8], candidate: &Path) -> Result<()> {
+fn verify_package_root_matches_candidate(runtime_bytes: &[u8], candidate: &Path) -> Result<()> {
     let Ok(document) = serde_norway::from_slice::<Value>(runtime_bytes) else {
         return Ok(());
     };
-    let Some(bundle_directory) = document.get("bundleDirectory").and_then(Value::as_str) else {
+    let Some(package_root) = document.pointer("/package/root").and_then(Value::as_str) else {
         return Ok(());
     };
     let expected = candidate.join("bundle");
-    if Path::new(bundle_directory) == expected {
+    if Path::new(package_root) == expected {
         return Ok(());
     }
     Err(TargetDocumentDiagnostic {
-        code: "evidence.package.bundle-directory-mismatch",
-        path: "runtime.yaml:/bundleDirectory".to_owned(),
+        code: "evidence.package.root-mismatch",
+        path: "runtime.yaml:/package/root".to_owned(),
         message: format!(
-            "deployment runtime bundleDirectory {bundle_directory} does not resolve to this candidate's own bundle path {}",
+            "deployment runtime package.root {package_root} does not resolve to this candidate's own bundle path {}",
             expected.display()
         ),
     }
@@ -1113,7 +1113,8 @@ authorityProfiles:
         .expect("governance");
         fs::write(
             target.join("runtime.yaml"),
-            r#"version: 1
+            r#"apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+kind: EvidenceRuntimeConfig
 outboundTls:
   systemRoots: true
   trustProfiles:

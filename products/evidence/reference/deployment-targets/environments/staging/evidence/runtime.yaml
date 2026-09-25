@@ -1,8 +1,9 @@
-version: 1
-bundleDirectory: /srv/registry-evidence/staging/bundle
+apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+kind: EvidenceRuntimeConfig
+package:
+  root: /srv/registry-evidence/staging/bundle
 listener:
-  bindHost: 127.0.0.1
-  port: 8080
+  bind: 127.0.0.1:8080
   tlsTermination: operator-controlled-upstream
   trustProxyIdentityHeaders: false
   maximumRequestBytes: 65536

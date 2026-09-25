@@ -1787,11 +1787,11 @@ fn failure_cases() -> Vec<FailureCase> {
             break_deployment: |deployment| {
                 deployment.replace(
                     "bundle/evidence.yaml",
-                    "  principalClaim: sub\n",
-                    &format!("  principalClaim: sub\n  unknownField: {CANARY}\n"),
+                    "    principalClaim: sub\n",
+                    &format!("    principalClaim: sub\n    unknownField: {CANARY}\n"),
                 );
             },
-            prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: unknown field at authentication (line ",
+            prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: unknown field at authentication.oidc (line ",
             suffix: ")\n",
             needs_runtime: false,
         },
@@ -1815,11 +1815,11 @@ fn failure_cases() -> Vec<FailureCase> {
             break_deployment: |deployment| {
                 deployment.replace(
                     "bundle/evidence.yaml",
-                    "  kind: oidc-access-token\n",
-                    &format!("  kind: {CANARY}\n"),
+                    "  format: flattened-jws-json\n",
+                    &format!("  format: {CANARY}\n"),
                 );
             },
-            prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: field value is not one of the accepted variants at authentication.kind (line ",
+            prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: field value is not one of the accepted variants at signing.format (line ",
             suffix: ")\n",
             needs_runtime: false,
         },
@@ -1945,8 +1945,8 @@ fn failure_cases() -> Vec<FailureCase> {
             break_deployment: |deployment| {
                 deployment.append("runtime.yaml", &format!("unknownField: {CANARY}\n"));
             },
-            prefix: "evidence: deployment configuration is invalid: artifact runtime.yaml: unknown field (line ",
-            suffix: ")\n",
+            prefix: "evidence: deployment configuration is invalid: artifact runtime.yaml: unknown field at unknownField\n",
+            suffix: "",
             needs_runtime: true,
         },
         FailureCase {
@@ -1955,12 +1955,12 @@ fn failure_cases() -> Vec<FailureCase> {
             break_deployment: |deployment| {
                 deployment.replace(
                     "runtime.yaml",
-                    "  port: 8080\n",
-                    &format!("  port: \"{CANARY}\"\n"),
+                    "  maximumRequestBytes: 65536\n",
+                    &format!("  maximumRequestBytes: \"{CANARY}\"\n"),
                 );
             },
-            prefix: "evidence: deployment configuration is invalid: artifact runtime.yaml: field has the wrong type at listener.port (line ",
-            suffix: ")\n",
+            prefix: "evidence: deployment configuration is invalid: artifact runtime.yaml: field has the wrong type at listener.maximumRequestBytes\n",
+            suffix: "",
             needs_runtime: true,
         },
         FailureCase {
@@ -1969,13 +1969,39 @@ fn failure_cases() -> Vec<FailureCase> {
             break_deployment: |deployment| {
                 deployment.replace_line(
                     "runtime.yaml",
-                    "bundleDirectory: ",
-                    &format!("bundleDirectory: relative/{CANARY}\n"),
+                    "  root: ",
+                    &format!("  root: relative/{CANARY}\n"),
                 );
             },
-            prefix: "evidence: deployment configuration is invalid: artifact runtime.yaml: absolute operator path is invalid\n",
+            prefix: "evidence: deployment configuration is invalid: artifact runtime.yaml: package root must be an absolute path (package.root)\n",
             suffix: "",
             needs_runtime: true,
+        },
+        // A key an earlier runtime grammar accepted is refused with the key
+        // that replaced it, and the value it carried is never echoed.
+        FailureCase {
+            label: "removed runtime key",
+            bundle: "all-definitions",
+            break_deployment: |deployment| {
+                deployment.append("runtime.yaml", &format!("bundleDirectory: /{CANARY}\n"));
+            },
+            prefix: "evidence: deployment configuration is invalid: artifact runtime.yaml: key is no longer accepted at bundleDirectory; declare package.root as the absolute path of the bundle directory\n",
+            suffix: "",
+            needs_runtime: true,
+        },
+        FailureCase {
+            label: "removed bundle key",
+            bundle: "all-definitions",
+            break_deployment: |deployment| {
+                deployment.replace(
+                    "bundle/evidence.yaml",
+                    "    principalClaim: sub\n",
+                    &format!("    principalClaim: sub\n    audiences: [{CANARY}]\n"),
+                );
+            },
+            prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: key is no longer accepted at authentication.oidc.audiences; declare the one accepted audience as authentication.oidc.audience\n",
+            suffix: "",
+            needs_runtime: false,
         },
         // Nothing is broken here: an operator runtime file that says nothing
         // about acquisition capabilities enables nothing beyond the frozen
@@ -3362,11 +3388,12 @@ impl Deployment {
 
     fn runtime_document(&self) -> String {
         format!(
-            "version: 1
-bundleDirectory: {bundle}
+            "apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+kind: EvidenceRuntimeConfig
+package:
+  root: {bundle}
 listener:
-  bindHost: 127.0.0.1
-  port: {port}
+  bind: 127.0.0.1:{port}
   tlsTermination: operator-controlled-upstream
   trustProxyIdentityHeaders: false
   maximumRequestBytes: 65536
@@ -3466,8 +3493,8 @@ outboundTls:
         );
         self.replace(
             "bundle/evidence.yaml",
-            "  jwksUri: https://identity.invalid/.well-known/jwks.json\n",
-            &format!("  jwksUri: {origin}/.well-known/jwks.json\n"),
+            "      uri: https://identity.invalid/.well-known/jwks.json\n",
+            &format!("      uri: {origin}/.well-known/jwks.json\n"),
         );
     }
 
@@ -3482,13 +3509,13 @@ outboundTls:
             fs::read_to_string(self.path("bundle/evidence.yaml")).expect("read staged bundle");
         let jwks_line = text
             .lines()
-            .find(|line| line.starts_with("  jwksUri: "))
+            .find(|line| line.starts_with("      uri: "))
             .expect("the bundle names a JWKS URI")
             .to_owned();
         self.replace(
             "bundle/evidence.yaml",
             &format!("{jwks_line}\n"),
-            &format!("{jwks_line}\n  tlsTrustProfile: {profile}\n"),
+            &format!("{jwks_line}\n    tlsTrustProfile: {profile}\n"),
         );
         self.replace(
             "runtime.yaml",
@@ -3517,9 +3544,9 @@ outboundTls:
     /// Start `serve` against the sealed deployment.
     fn serve(&self) -> Child {
         Command::new(env!("CARGO_BIN_EXE_evidence"))
-            .arg("--runtime")
-            .arg(self.path("runtime.yaml"))
             .arg("serve")
+            .arg("--runtime-config")
+            .arg(self.path("runtime.yaml"))
             .env_remove("REGISTRY_EVIDENCE_RUNTIME")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -3632,9 +3659,9 @@ fn write_private_json(path: &Path, value: &Value) {
 
 fn invoke_local_relying_procedure(runtime: &Path, input: &Path, stdin: &[u8]) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_evidence"))
-        .arg("--runtime")
-        .arg(runtime)
         .arg("prepare-local-relying-procedure")
+        .arg("--runtime-config")
+        .arg(runtime)
         .arg("--input")
         .arg(input)
         .env_remove("REGISTRY_EVIDENCE_RUNTIME")
@@ -3651,19 +3678,57 @@ fn invoke_local_relying_procedure(runtime: &Path, input: &Path, stdin: &[u8]) ->
     child.wait_with_output().expect("evidence command exits")
 }
 
+#[test]
+fn the_removed_runtime_inputs_are_refused_with_their_replacement_named() {
+    let flag = Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .args(["check", "--runtime", "/etc/registry-evidence/runtime.yaml"])
+        .env_remove("REGISTRY_EVIDENCE_RUNTIME")
+        .output()
+        .expect("evidence binary starts");
+    assert!(!flag.status.success(), "the removed flag was accepted");
+    assert_eq!(
+        std::str::from_utf8(&flag.stderr).expect("stderr is UTF-8"),
+        "evidence: --runtime is no longer accepted; pass --runtime-config FILE\n"
+    );
+    assert!(flag.stdout.is_empty(), "the refusal wrote to stdout");
+
+    let environment = Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .args([
+            "check",
+            "--runtime-config",
+            "/etc/registry-evidence/runtime.yaml",
+        ])
+        .env(
+            "REGISTRY_EVIDENCE_RUNTIME",
+            "/etc/registry-evidence/runtime.yaml",
+        )
+        .output()
+        .expect("evidence binary starts");
+    assert!(
+        !environment.status.success(),
+        "the removed environment variable was ignored"
+    );
+    assert_eq!(
+        std::str::from_utf8(&environment.stderr).expect("stderr is UTF-8"),
+        "evidence: REGISTRY_EVIDENCE_RUNTIME is no longer read; unset it and pass --runtime-config FILE\n"
+    );
+}
+
+/// Run one runtime subcommand, `arguments[0]`, against `runtime`.
 fn invoke(runtime: &Path, arguments: &[&str]) -> Output {
+    let (command, rest) = arguments.split_first().expect("a subcommand is named");
     Command::new(env!("CARGO_BIN_EXE_evidence"))
-        .arg("--runtime")
+        .arg(command)
+        .arg("--runtime-config")
         .arg(runtime)
-        .args(arguments)
+        .args(rest)
         .env_remove("REGISTRY_EVIDENCE_RUNTIME")
         .output()
         .expect("evidence binary starts")
 }
 
 /// Run `bundle-check` against a bundle directory, with no runtime document at
-/// all: the global `--runtime` argument has a default value this subcommand
-/// never reads.
+/// all: the subcommand takes no runtime configuration.
 fn invoke_bundle_check(bundle: &Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_evidence"))
         .arg("bundle-check")

@@ -78,7 +78,7 @@ evidencectl package "<deployment-repository>/shared/evidence-project" \
   --target "<deployment-repository>/environments/<environment>/evidence" \
   --output "<new-candidate-directory>"
 evidencectl test "<new-candidate-directory>"
-evidence check --runtime "<new-candidate-directory>/runtime.yaml"
+evidence check --runtime-config "<new-candidate-directory>/runtime.yaml"
 ```
 
 Give consumers the new public key, `kid`, provider identity, activation window, and overlap period

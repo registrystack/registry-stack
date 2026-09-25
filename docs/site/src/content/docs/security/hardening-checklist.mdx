@@ -147,8 +147,8 @@ bundle, or the sealed Relay package. It assumes you have already configured your
 
   ```sh
   chmod -R a-w bundle && chmod 444 runtime.yaml
-  evidence --runtime runtime.yaml check
-  evidence --runtime runtime.yaml evaluate --fixture "bundle/fixtures/<cases>.yaml"
+  evidence check --runtime-config runtime.yaml
+  evidence evaluate --runtime-config runtime.yaml --fixture "bundle/fixtures/<cases>.yaml"
   ```
 
 - Review the complete simultaneously enabled bundle as one disclosure surface before deployment,

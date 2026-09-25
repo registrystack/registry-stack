@@ -531,7 +531,7 @@ async fn real_router_serves_all_definitions_concurrently_without_crossing_bounda
         protected_resource.json::<Value>(),
         json!({
             "resource": fixture.runtime.bundle().config.service.public_origin,
-            "authorization_servers": [fixture.runtime.bundle().config.authentication.issuer],
+            "authorization_servers": [fixture.runtime.bundle().config.authentication.oidc.issuer()],
             "jwks_uri": format!(
                 "{}{}",
                 fixture.runtime.bundle().config.service.public_origin,
@@ -989,12 +989,12 @@ async fn a_configured_metrics_listener_serves_beside_the_evidence_listener() {
         fs::read_to_string(&prepared.runtime_path).expect("runtime configuration is readable");
     replace_exact(
         &mut document,
-        "port: 8080",
-        &format!("port: {evidence_port}"),
+        "bind: 127.0.0.1:8080",
+        &format!("bind: 127.0.0.1:{evidence_port}"),
         1,
     );
     document.push_str(&format!(
-        "metricsListener:\n  bindHost: 127.0.0.1\n  port: {metrics_port}\n"
+        "metricsListener:\n  bind: 127.0.0.1:{metrics_port}\n"
     ));
     // The prepared document is already read-only, as deployment requires, so
     // this variant is written before the runtime captures it.
@@ -1811,8 +1811,8 @@ async fn local_runtime_prepares_a_bearer_free_procedure_and_keeps_the_real_secur
     );
     replace_exact(
         &mut local,
-        "jwksUri: https://identity.invalid/.well-known/jwks.json",
-        &format!("jwksUri: {local_issuer}/.well-known/jwks.json"),
+        "uri: https://identity.invalid/.well-known/jwks.json",
+        &format!("uri: {local_issuer}/.well-known/jwks.json"),
         1,
     );
     fs::write(&configuration_path, local).expect("local configuration is written");
@@ -9444,6 +9444,50 @@ async fn search_then_fetch_release_still_omits_source_arrays() {
     assert!(events[2]["record"].get("adapterIds").is_none());
 }
 
+/// An operator who pins the bundle revision starts only on that bundle.
+#[tokio::test]
+async fn an_expected_package_digest_admits_only_the_bundle_it_names() {
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    let revision = DeploymentInputs::load(&prepared.runtime_path)
+        .expect("the immutable deployment loads")
+        .bundle()
+        .revision()
+        .to_owned();
+    let original =
+        fs::read_to_string(&prepared.runtime_path).expect("runtime configuration is readable");
+    let root_line = format!("  root: {}\n", prepared.bundle_root.display());
+
+    let pin = |digest: &str| {
+        let mut pinned = original.clone();
+        replace_exact(
+            &mut pinned,
+            &root_line,
+            &format!("{root_line}  expectedDigest: {digest}\n"),
+            1,
+        );
+        make_file_writable(&prepared.runtime_path);
+        fs::write(&prepared.runtime_path, pinned).expect("runtime configuration is rewritten");
+        make_file_read_only(&prepared.runtime_path);
+    };
+
+    pin(&revision);
+    DeploymentInputs::load(&prepared.runtime_path).expect("the pinned bundle loads");
+
+    let other = format!("sha256:{}", "0".repeat(64));
+    assert_ne!(other, revision);
+    pin(&other);
+    let refused = DeploymentInputs::load(&prepared.runtime_path)
+        .expect_err("a different bundle revision is refused");
+    let fault = refused
+        .artifact_fault()
+        .expect("the refusal names the runtime file");
+    assert_eq!(fault.artifact(), "runtime.yaml");
+    assert_eq!(
+        fault.fault().cause(),
+        "package.expectedDigest does not match the revision of the bundle at package.root"
+    );
+}
+
 #[tokio::test]
 async fn initialize_from_opens_the_deployment_it_was_handed_not_the_runtime_pathname() {
     let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
@@ -11267,11 +11311,12 @@ fn write_runtime_config(
     ceilings: &FixtureCeilings,
 ) {
     let document = format!(
-        r#"version: 1
-bundleDirectory: {}
+        r#"apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+kind: EvidenceRuntimeConfig
+package:
+  root: {}
 listener:
-  bindHost: 127.0.0.1
-  port: 8080
+  bind: 127.0.0.1:8080
   tlsTermination: operator-controlled-upstream
   trustProxyIdentityHeaders: false
   maximumRequestBytes: 65536

@@ -55,7 +55,7 @@ anti-rollback state, and no separate consultation database. Relay V1 had all fou
 | Store | What it can contain | Expiry or rotation | Operator control |
 |---|---|---|---|
 | Relay OIDC JWKS cache | Issuer signing keys and negative lookup entries, not subject records. Applies only when `authentication.oidc` is configured; a package where every access profile is public can run without it and with no cache at all. | In process only. Relay V2 exposes no cache-lifetime override, so the shared platform defaults apply: `600` second positive cache TTL and `60` second negative cache TTL. | Restart clears the cache. |
-| Evidence Gateway OIDC JWKS cache | Issuer signing keys and negative lookup entries for the configured `authentication.jwksUri`, not subject records. | In process only. Evidence Gateway exposes no product-level override, so the shared platform defaults apply: `600` second positive cache TTL and `60` second negative cache TTL. | Restart clears the cache. An unreachable key set is retried and reported at a bounded interval rather than silently ignored. |
+| Evidence Gateway OIDC JWKS cache | Issuer signing keys and negative lookup entries for the configured `authentication.oidc.jwksSource.uri`, not subject records. | In process only. Evidence Gateway exposes no product-level override, so the shared platform defaults apply: `600` second positive cache TTL and `60` second negative cache TTL. | Restart clears the cache. An unreachable key set is retried and reported at a bounded interval rather than silently ignored. |
 | Relay response headers | No stored response cache. Relay validates certain public snapshot responses with a strong `ETag` and answers a matching conditional request with `304 Not Modified`; every other response, including metadata, defaults to `Cache-Control: no-store`. | Not time-bound; validators change when the underlying package, source revision, or requested representation changes. | Not configurable. Behavior follows the source profile and access profile compiled into the package. |
 | Relay pagination cursors | Client-held, authenticated, and encrypted cursor payloads binding the source and contract revisions, operation, access profile, disclosure profile, filters, order, selected fields, and authorization context. No plaintext filter, order, or bbox value. | Not stored server-side. Each cursor carries an expiry checked against `cursor.maximumAgeSeconds`, which the runtime defaults to `300` seconds only when the whole `cursor` section is absent, and becomes invalid immediately if the bound request context no longer matches. Cursors apply to snapshot-source list and search operations alike; live read-only sources do not support pagination. | Configure `cursor.integrityKeyRef` and, optionally, `cursor.maximumAgeSeconds` in `runtime.yaml`. Treat cursor tokens as opaque, client-held request context. |
 
@@ -129,7 +129,7 @@ chain it is copying.
 Archive the oldest sealed segments first, and verify before removing anything:
 
 ```sh
-evidence verify-audit --runtime /etc/registry-evidence/runtime.yaml
+evidence verify-audit --runtime-config /etc/registry-evidence/runtime.yaml
 cp /var/lib/registry-evidence/audit/evidence.jsonl.00000001 "$ARCHIVE/"
 rm /var/lib/registry-evidence/audit/evidence.jsonl.00000001
 ```

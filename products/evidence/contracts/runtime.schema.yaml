@@ -4,24 +4,44 @@ title: Evidence closed operator runtime configuration Version 1
 type: object
 additionalProperties: false
 required:
-  - version
-  - bundleDirectory
+  - apiVersion
+  - kind
+  - package
   - listener
   - secretProviders
   - signer
   - auditStorage
   - outboundTls
 properties:
-  version:
+  apiVersion:
     description: >-
-      Pins the runtime document to Version 1 of this grammar; the loader rejects any other
+      Names the grammar this runtime document is written in; the loader refuses any other
       value, so a future incompatible runtime shape is never read as if it were this one.
-    const: 1
-  bundleDirectory:
+    const: registry.registrystack.org/evidence-runtime/v1alpha1
+  kind:
     description: >-
-      Selects the one governed bundle directory this process loads at startup; no alternate,
-      overlay, or fallback bundle path exists for a running deployment.
-    $ref: '#/$defs/absolute-path'
+      Names the document type; together with `apiVersion` it tells an Evidence runtime file
+      apart from any other product's runtime configuration.
+    const: EvidenceRuntimeConfig
+  package:
+    description: >-
+      Selects the one governed bundle this process loads at startup; no alternate, overlay,
+      or fallback bundle path exists for a running deployment.
+    type: object
+    additionalProperties: false
+    required:
+      - root
+    properties:
+      root:
+        description: >-
+          Absolute path of the governed bundle directory this process loads.
+        $ref: '#/$defs/absolute-path'
+      expectedDigest:
+        description: >-
+          Optional `sha256:` bundle revision the operator expects at `package.root`. When set,
+          startup is refused unless the bundle found there computes exactly this revision.
+        type: string
+        pattern: ^sha256:[0-9a-f]{64}$
   listener:
     description: >-
       Groups the network binding and per-request admission limits for the process's evidence
@@ -30,8 +50,7 @@ properties:
     type: object
     additionalProperties: false
     required:
-      - bindHost
-      - port
+      - bind
       - tlsTermination
       - trustProxyIdentityHeaders
       - maximumRequestBytes
@@ -39,19 +58,20 @@ properties:
       - requestTimeoutMilliseconds
       - shutdownGraceMilliseconds
     properties:
-      bindHost:
+      bind:
         description: >-
-          Numeric listener address. The default `private-address` exposure accepts loopback,
-          RFC 1918 private IPv4, or RFC 4193 unique-local IPv6. The explicit
+          Numeric socket address the evidence API listens on, written `host:port`, with an
+          IPv6 host in brackets (`[addr]:port`). The default `private-address` exposure accepts
+          a loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6 host. The explicit
           `container-private` exposure additionally accepts the unspecified IPv4 or IPv6
           wildcard for a container network confined by the operator. Multicast, public, and
-          hostname values are prohibited in both modes.
-        type: string
-        minLength: 2
-        maxLength: 64
+          hostname values are prohibited in both modes, and port `0`, which would ask the
+          kernel for an arbitrary ephemeral port instead of naming one, is refused.
+        $ref: '#/$defs/socket-address'
         x-runtime-validation: >-
-          Parsed as an IP address and checked together with listener.networkExposure. Wildcards
-          require the explicit container-private value; public addresses remain prohibited.
+          Parsed as a socket address and its host checked together with
+          listener.networkExposure. Wildcards require the explicit container-private value;
+          public addresses remain prohibited.
       networkExposure:
         description: >-
           Declares the operator-owned network boundary around the listener. Absent preserves
@@ -63,14 +83,6 @@ properties:
           - private-address
           - container-private
         default: private-address
-      port:
-        description: >-
-          TCP port the process binds for the evidence API alongside `listener.bindHost`; port
-          `0`, which would ask the kernel for an arbitrary ephemeral port instead of naming
-          one, is refused.
-        type: integer
-        minimum: 1
-        maximum: 65535
       tlsTermination:
         description: >-
           Declares that TLS terminates at an operator-controlled upstream in front of this
@@ -122,43 +134,34 @@ properties:
     type: object
     additionalProperties: false
     required:
-      - bindHost
-      - port
+      - bind
     properties:
-      bindHost:
+      bind:
         description: >-
-          Numeric loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6 address.
-          Unspecified, multicast, public, and hostname values are prohibited.
-        type: string
-        minLength: 2
-        maxLength: 64
+          Numeric socket address for the optional metrics listener, written `host:port`. The
+          host must be a loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6
+          address; unspecified, multicast, public, and hostname values are prohibited, port
+          `0` is refused, and the address must not repeat the evidence listener's binding.
+        $ref: '#/$defs/socket-address'
         x-runtime-validation: >-
-          Parsed as an IP address and accepted only when Rust classifies it as loopback, private
-          IPv4, or unique-local IPv6.
-      port:
-        description: >-
-          TCP port for the optional metrics listener; paired with `metricsListener.bindHost`,
-          it must not repeat the evidence listener's exact host-and-port binding.
-        type: integer
-        minimum: 1
-        maximum: 65535
+          Parsed as a socket address and accepted only when Rust classifies its host as
+          loopback, private IPv4, or unique-local IPv6.
     x-runtime-validation: >-
-      Rejected at startup when bindHost and port together repeat the evidence listener binding.
+      Rejected at startup when the bind address repeats the evidence listener binding.
   secretProviders:
     description: >-
-      Configures how a `secret:file/...` reference resolves to bytes at startup; it supplies
-      the storage location only, and which secret each governed field names is fixed by the
-      bundle, not by this section.
+      Enables the providers a secret reference may resolve through; it supplies storage
+      locations only, and which secret each governed field names is fixed by the bundle, not
+      by this section. At least one provider is declared, and a bundle reference naming a
+      provider this section does not enable is refused at startup.
     type: object
     additionalProperties: false
-    required:
-      - file
+    minProperties: 1
     properties:
       file:
         description: >-
-          Declares the file-based secret provider and its root directory; Version 1 defines
-          no other provider kind, so every `secret:file/name` reference resolves through this
-          one path.
+          Enables the file-based secret provider and names its root directory; every
+          `secret:file/name` reference resolves beneath this one path.
         type: object
         additionalProperties: false
         required:
@@ -171,6 +174,14 @@ properties:
               opened file is checked for type, ownership, mode, and link count before its
               bytes are read.
             $ref: '#/$defs/absolute-path'
+      environment:
+        description: >-
+          Enables `secret:env/NAME` references, read from the process environment when a
+          request needs them. It takes no settings and is written `environment: {}`; absent
+          means no reference may name the environment.
+        type: object
+        additionalProperties: false
+        maxProperties: 0
   signer:
     description: >-
       Binds the process to the private-key transport that produces every signature over the
@@ -364,7 +375,15 @@ $defs:
     pattern: ^[a-z][a-z0-9._-]{0,127}$
   secret-ref:
     type: string
-    pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$
+    pattern: ^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$
+  socket-address:
+    description: >-
+      A numeric `host:port` socket address with a non-zero port, the host in brackets when
+      it is IPv6.
+    type: string
+    minLength: 1
+    maxLength: 128
+    pattern: ^(?:[0-9]{1,3}(?:\.[0-9]{1,3}){3}|\[[0-9A-Fa-f:.]+\]):(?!0+$)[0-9]{1,5}$
   absolute-path:
     type: string
     minLength: 2
@@ -373,10 +392,10 @@ $defs:
 ownership:
   governed_fields: prohibited
   allowed:
-    - bundle directory
+    - bundle package root and optional expected revision
     - listener binding and process limits
     - optional operator metrics listener binding
-    - file-secret root
+    - enabled secret providers and the file-secret root
     - signer binding to a local private JWK or workload-local Transit proxy
     - audit path and rotation bound
     - logical private-CA file bindings
@@ -390,9 +409,13 @@ startup:
   mutability: >-
     runtime.yaml and bound CA files are captured read-only once; reload, merge, fallback,
     and partial serving are prohibited
+  substitution: >-
+    `${NAME}` and `${NAME:-default}` expressions in string values are substituted from the
+    process environment after parsing; they are refused inside secret references and inside
+    secretProviders
   digest: >-
-    independent SHA-256 revision over exact runtime.yaml bytes plus logical trust-profile
-    names and exact CA bytes
+    independent SHA-256 revision over exact runtime.yaml bytes, the canonical digest of the
+    document after substitution, logical trust-profile names and exact CA bytes
   trust_profiles: >-
     names must exactly equal the logical tlsTrustProfile names the governed bundle's sources
     and authentication use

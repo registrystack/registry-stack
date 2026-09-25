@@ -324,14 +324,18 @@ allOf:
       properties:
         authentication:
           properties:
-            issuer:
-              pattern: ^(?:https://.*|http://127\.0\.0\.1:[1-9][0-9]{0,4})$
-            jwksUri:
-              # Local development permits a supervised issuer on the exact
-              # canonical loopback origin, serving its JWKS from that origin at
-              # any absolute path without query or fragment. The route is the
-              # issuer's to choose; the origin is not.
-              pattern: ^(?:https://.*|http://127\.0\.0\.1:[1-9][0-9]{0,4}/[^\s?#]*)$
+            oidc:
+              properties:
+                issuer:
+                  pattern: ^(?:https://.*|http://127\.0\.0\.1:[1-9][0-9]{0,4})$
+                jwksSource:
+                  properties:
+                    uri:
+                      # Local development permits a supervised issuer on the exact
+                      # canonical loopback origin, serving its JWKS from that origin at
+                      # any absolute path without query or fragment. The route is the
+                      # issuer's to choose; the origin is not.
+                      pattern: ^(?:https://.*|http://127\.0\.0\.1:[1-9][0-9]{0,4}/[^\s?#]*)$
   - if:
       properties:
         assuranceProfile:
@@ -342,10 +346,14 @@ allOf:
       properties:
         authentication:
           properties:
-            issuer:
-              pattern: ^https://
-            jwksUri:
-              pattern: ^https://
+            oidc:
+              properties:
+                issuer:
+                  pattern: ^https://
+                jwksSource:
+                  properties:
+                    uri:
+                      pattern: ^https://
         requirements:
           items:
             required:
@@ -454,7 +462,7 @@ $defs:
       - holder-bound
   secret-ref:
     type: string
-    pattern: ^secret:file/[a-z][a-z0-9._-]{0,127}$
+    pattern: ^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$
   relative-path:
     type: string
     pattern: ^(adapters|derivations|schemas|codelists|fixtures)/[A-Za-z0-9._/-]+$
@@ -471,22 +479,28 @@ $defs:
     type: object
     additionalProperties: false
     required:
-      - kind
+      - oidc
+    properties:
+      oidc:
+        description: >-
+          The one OpenID Connect issuer whose access tokens this deployment accepts, and the
+          rules a token from it must satisfy.
+        $ref: '#/$defs/oidc-authentication'
+  oidc-authentication:
+    type: object
+    additionalProperties: false
+    required:
       - issuer
-      - audiences
+      - audience
       - tokenTypes
       - algorithms
-      - jwksUri
+      - jwksSource
       - principalClaim
       - requesterTagsClaim
       - evidenceAudienceClaim
       - maximumTokenLifetimeSeconds
       - revokedKeyIds
     properties:
-      kind:
-        description: >-
-          Selects the inbound credential model, and Version 1 defines exactly one such profile.
-        const: oidc-access-token
       issuer:
         description: >-
           Exact token issuer an inbound access token must declare, with path-based issuers
@@ -494,18 +508,13 @@ $defs:
         type: string
         pattern: ^https?://
         maxLength: 512
-      audiences:
+      audience:
         description: >-
-          Exact allowlist of audience values an inbound access token must carry to be accepted.
-        type: array
-        minItems: 1
-        maxItems: 16
-        uniqueItems: true
-        items:
-          description: One exact audience value an inbound access token may carry.
-          type: string
-          minLength: 1
-          maxLength: 512
+          The one exact audience value an inbound access token must carry to be accepted; it is
+          also the resource this deployment advertises in its protected-resource metadata.
+        type: string
+        minLength: 1
+        maxLength: 512
       tokenTypes:
         description: >-
           Allowlist of the exact `typ` value an inbound token's protected JWT header must
@@ -535,20 +544,35 @@ $defs:
             - EdDSA
             - ES256
             - RS256
-      jwksUri:
+      jwksSource:
         description: >-
-          Fixed endpoint the verifier fetches issuer signing keys from; the endpoint may resolve
-          to a public or private address, so DNS is pinned for each fetch, ambient proxies
-          are disabled, and cloud-metadata destinations remain prohibited.
-        type: string
-        pattern: ^https?://
-        maxLength: 512
+          Where the verifier fetches issuer signing keys. Evidence accepts only `kind: uri`, a
+          fixed endpoint named in the governed bundle; discovery and static key sets are
+          refused.
+        type: object
+        additionalProperties: false
+        required:
+          - kind
+          - uri
+        properties:
+          kind:
+            description: >-
+              Selects the fixed-endpoint key source, the only one Evidence accepts.
+            const: uri
+          uri:
+            description: >-
+              Fixed endpoint the verifier fetches issuer signing keys from; the endpoint may
+              resolve to a public or private address, so DNS is pinned for each fetch, ambient
+              proxies are disabled, and cloud-metadata destinations remain prohibited.
+            type: string
+            pattern: ^https?://
+            maxLength: 512
       tlsTrustProfile:
         description: >-
           Logical name resolved to an exact private certificate authority file bound in
-          `runtime.yaml`, trusted beside the system roots for the `jwksUri` connection alone.
-          Omission trusts only the system roots, and the profile is rejected outright when
-          `jwksUri` is a local HTTP origin.
+          `runtime.yaml`, trusted beside the system roots for the `jwksSource.uri` connection
+          alone. Omission trusts only the system roots, and the profile is rejected outright
+          when `jwksSource.uri` is a local HTTP origin.
         $ref: '#/$defs/local-id'
       principalClaim:
         description: >-
@@ -660,10 +684,12 @@ $defs:
           pattern: ^[\x21\x23-\x5B\x5D-\x7E]+$
     if:
       required:
-        - jwksUri
+        - jwksSource
       properties:
-        jwksUri:
-          pattern: ^http://
+        jwksSource:
+          properties:
+            uri:
+              pattern: ^http://
     then:
       not:
         required:
@@ -673,7 +699,7 @@ $defs:
     additionalProperties: false
     required:
       - format
-      - hashSecretRef
+      - hashKeyRef
       - hashKeyVersion
       - failClosed
     properties:
@@ -682,10 +708,10 @@ $defs:
           Fixes the audit record form to the keyed JSONL chain, whose sealed segments an operator
           replays out of band to prove retained history.
         const: keyed-jsonl
-      hashSecretRef:
+      hashKeyRef:
         description: >-
-          Points at the file secret Rust separates into the audit chain and identifier subkeys;
-          the same reference cannot also serve `subjectBinding.secretRef`.
+          Points at the secret Rust separates into the audit chain and identifier subkeys; the
+          same reference cannot also serve `subjectBinding.secretRef`.
         $ref: '#/$defs/secret-ref'
       hashKeyVersion:
         description: >-
@@ -709,7 +735,7 @@ $defs:
     properties:
       secretRef:
         description: >-
-          Points at the file secret keying every subject binding; that reference and its resolved
+          Points at the secret keying every subject binding; that reference and its resolved
           bytes must both differ from the audit master, and a match fails startup.
         $ref: '#/$defs/secret-ref'
       keyVersion:
@@ -3258,7 +3284,9 @@ startup_checks:
     and cross-referenced to the exact authorized role/profile/field set.
 secret_policy:
   permitted: >-
-    File-provider logical names matching the exact secret-reference grammar only.
+    Secret references matching the exact secret-reference grammar only: `secret:file/name`
+    logical names, and `secret:env/NAME` variable names, which resolve only when the runtime
+    enables secretProviders.environment.
   prohibited: >-
     private key, password, bearer token, client secret, or expanded environment value in any
     bundle file
@@ -3267,8 +3295,16 @@ secret_policy:
     There is no query-string placement, so no credential can reach a token URL, and the token
     URL, body, response, and debug output are still fully redacted.
   file_provider_rule: >-
-    Resolve secret:file logical names beneath the configured owner-controlled fileRoot, reject
+    Resolve secret:file logical names beneath the configured owner-controlled file root, reject
     symlinks and path traversal, require regular owner-only files, and parse values as data.
+  environment_provider_rule: >-
+    Resolve secret:env names from the process environment only when the runtime declares
+    secretProviders.environment; a bundle reference naming the environment is refused at
+    startup otherwise, and values are parsed as data.
+  environment_expression_rule: >-
+    The bundle is parsed as written. A `${...}` environment expression in any bundle key or
+    string value is refused at startup, naming the field and never the expression;
+    substitution applies to runtime.yaml only.
 deployment_rules:
   authentication: >-
     Evidence independently validates the bearer token against exact configured issuer, audience,

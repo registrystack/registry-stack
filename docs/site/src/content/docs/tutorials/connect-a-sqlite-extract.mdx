@@ -146,7 +146,7 @@ evidencectl package registry-status \
 
 evidencectl doctor --runtime-config "$(pwd)/candidate-staging/runtime.yaml"
 evidencectl test candidate-staging
-evidence --runtime candidate-staging/runtime.yaml check
+evidence check --runtime-config candidate-staging/runtime.yaml
 ```
 
 The last command opens the bound extract, validates its metadata and fixed statement, and refuses

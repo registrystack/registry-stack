@@ -29,7 +29,7 @@ use crate::config::{
     is_http_token_byte, is_uri_byte, validate_local_unauthenticated_source_origin,
     validate_oauth_resource, AcquisitionPosture, CredentialPlacement, DeclaredUnresolvedProblem,
     EvidenceConfig, FixedRequest, HttpMethod, OutboundTlsConfig, PathBindingConfig,
-    PreparationChannelPolicy, SchemaFault, SecretRef, SelectorInput, SourceAuthentication,
+    PreparationChannelPolicy, SchemaFault, SecretReference, SelectorInput, SourceAuthentication,
     SourceConfig, SourceConnectionConfig, SourceSelectorSet, SqliteParameterBinding, SqliteRequest,
     RESERVED_SQL_PARAMETER,
 };
@@ -625,16 +625,16 @@ enum PathBindingPlan {
 enum AuthenticationPlan {
     None,
     Basic {
-        username_ref: SecretRef,
-        password_ref: SecretRef,
+        username_ref: SecretReference,
+        password_ref: SecretReference,
     },
     StaticAuthorization {
-        token_ref: SecretRef,
+        token_ref: SecretReference,
         scheme: String,
     },
     StaticApiKey {
         header_name: HeaderName,
-        value_ref: SecretRef,
+        value_ref: SecretReference,
     },
     Oauth2(Box<OauthPlan>),
 }
@@ -645,11 +645,11 @@ enum AuthenticationPlan {
 /// is where that alternation becomes a choice the runtime cannot get wrong.
 enum OauthClientAuthentication {
     ClientSecret {
-        secret_ref: SecretRef,
+        secret_ref: SecretReference,
         placement: CredentialPlacement,
     },
     PrivateKeyJwt {
-        key_ref: SecretRef,
+        key_ref: SecretReference,
         /// Resolved at compile time to the configured audience or, when the
         /// bundle names none, the token endpoint.
         audience: String,
@@ -658,7 +658,7 @@ enum OauthClientAuthentication {
 
 struct OauthPlan {
     token_endpoint: Url,
-    client_id_ref: SecretRef,
+    client_id_ref: SecretReference,
     client_authentication: OauthClientAuthentication,
     scope: Option<String>,
     audience: Option<String>,
@@ -2281,7 +2281,7 @@ impl OauthPlan {
     fn client_assertion(
         &self,
         secrets: &SecretResolver,
-        key_ref: &SecretRef,
+        key_ref: &SecretReference,
         audience: &str,
         client_id: &str,
     ) -> Result<Zeroizing<String>, SourceError> {
@@ -2437,7 +2437,7 @@ fn project_value(value: &JsonValue, node: &ProjectionNode) -> Result<JsonValue, 
 
 fn resolve(
     resolver: &SecretResolver,
-    reference: &SecretRef,
+    reference: &SecretReference,
 ) -> Result<ProtectedSecret, SourceError> {
     resolver
         .resolve(reference.as_str())
@@ -3698,10 +3698,10 @@ mod tests {
         let plan = OauthPlan {
             token_endpoint: Url::parse("http://127.0.0.1:1/token")
                 .expect("synthetic endpoint parses"),
-            client_id_ref: SecretRef::parse("secret:file/missing-client-id")
+            client_id_ref: SecretReference::parse("secret:file/missing-client-id")
                 .expect("secret reference parses"),
             client_authentication: OauthClientAuthentication::ClientSecret {
-                secret_ref: SecretRef::parse("secret:file/missing-client-secret")
+                secret_ref: SecretReference::parse("secret:file/missing-client-secret")
                     .expect("secret reference parses"),
                 placement: CredentialPlacement::FormBody,
             },
@@ -3778,10 +3778,10 @@ mod tests {
         let plan = OauthPlan {
             token_endpoint: Url::parse(&format!("{}/token", server.uri()))
                 .expect("token endpoint parses"),
-            client_id_ref: SecretRef::parse("secret:file/oauth-client-id")
+            client_id_ref: SecretReference::parse("secret:file/oauth-client-id")
                 .expect("secret reference parses"),
             client_authentication: OauthClientAuthentication::ClientSecret {
-                secret_ref: SecretRef::parse("secret:file/oauth-client-secret")
+                secret_ref: SecretReference::parse("secret:file/oauth-client-secret")
                     .expect("secret reference parses"),
                 placement: CredentialPlacement::FormBody,
             },

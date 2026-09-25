@@ -20,7 +20,11 @@ use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{build, evidence_binary, source_import::ProjectLock};
+use crate::{
+    build,
+    evidence_binary::{self, EVIDENCE_RUNTIME_API_VERSION, EVIDENCE_RUNTIME_KIND},
+    source_import::ProjectLock,
+};
 use registry_platform_crypto::{PublicJwk, SigningAlgorithm};
 
 const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
@@ -109,8 +113,9 @@ struct TargetSettings {
 // deserializing is the whole check, so nothing reads them afterwards.
 #[allow(dead_code)]
 struct TargetRuntime {
-    version: u32,
-    bundle_directory: String,
+    api_version: String,
+    kind: String,
+    package: Value,
     listener: Value,
     #[serde(default)]
     metrics_listener: Option<Value>,
@@ -342,9 +347,10 @@ pub(crate) fn create_local_target(
     let mut governance = crate::authoring::local_target_governance(&relative)?;
     governance["sourceConnections"] = source_connections;
     let mut runtime = serde_json::json!({
-        "version": 1,
+        "apiVersion": EVIDENCE_RUNTIME_API_VERSION,
+        "kind": EVIDENCE_RUNTIME_KIND,
         "listener": {
-            "bindHost": "127.0.0.1", "port": 8080,
+            "bind": "127.0.0.1:8080",
             "tlsTermination": "operator-controlled-upstream", "trustProxyIdentityHeaders": false,
             "maximumRequestBytes": 65536, "maximumConcurrentRequests": 64,
             "requestTimeoutMilliseconds": 10000, "shutdownGraceMilliseconds": 30000,
@@ -414,7 +420,7 @@ fn fill_local_paths(project: &Path, governance: &Value, runtime: &mut Value) -> 
     let secrets = project.join(crate::authoring::SECRETS_DIRECTORY);
     let local = project.join(".evidence/dev");
     for (components, path) in [
-        (vec!["bundleDirectory"], local.join("bundle")),
+        (vec!["package", "root"], local.join("bundle")),
         (vec!["secretProviders", "file", "root"], secrets),
         (
             vec!["auditStorage", "path"],
@@ -466,8 +472,11 @@ fn validate_settings_documents(governance: &Value, runtime: &Value) -> Result<()
         .context("target settings governance is not the closed deployment governance shape")?
         .into_bundle()
         .context("target settings governance is not the closed deployment governance shape")?;
-    if runtime.get("version").and_then(Value::as_u64) != Some(1) {
-        bail!("target settings runtime.version must be 1");
+    if runtime.get("apiVersion").and_then(Value::as_str) != Some(EVIDENCE_RUNTIME_API_VERSION) {
+        bail!("target settings runtime.apiVersion must be {EVIDENCE_RUNTIME_API_VERSION}");
+    }
+    if runtime.get("kind").and_then(Value::as_str) != Some(EVIDENCE_RUNTIME_KIND) {
+        bail!("target settings runtime.kind must be {EVIDENCE_RUNTIME_KIND}");
     }
     for section in [
         "service",
@@ -482,11 +491,12 @@ fn validate_settings_documents(governance: &Value, runtime: &Value) -> Result<()
         require_nonempty_mapping(governance, section, "target settings governance")?;
     }
     if runtime
-        .get("bundleDirectory")
+        .get("package")
+        .and_then(|package| package.get("root"))
         .and_then(Value::as_str)
         .is_none_or(str::is_empty)
     {
-        bail!("target settings runtime.bundleDirectory must be a string");
+        bail!("target settings runtime.package.root must be a string");
     }
     for section in [
         "listener",
@@ -929,7 +939,8 @@ governance:
   issuer:
     id: urn:example:issuer
   authentication:
-    kind: oidc-access-token
+    oidc:
+      issuer: https://issuer.example
   audit:
     format: keyed-jsonl
   subjectBinding:
@@ -942,10 +953,12 @@ governance:
     local:
       kind: explicit-request
 runtime:
-  version: 1
-  bundleDirectory: /tmp/evidence/bundle
+  apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+  kind: EvidenceRuntimeConfig
+  package:
+    root: /tmp/evidence/bundle
   listener:
-    bindHost: 127.0.0.1
+    bind: 127.0.0.1:8080
   secretProviders:
     file:
       root: /tmp/evidence/secrets
@@ -968,7 +981,7 @@ runtime:
         let mut runtime = serde_json::json!({});
         fill_local_paths(&project, &local, &mut runtime).unwrap();
         assert_eq!(
-            runtime["bundleDirectory"],
+            runtime["package"]["root"],
             project
                 .join(".evidence/dev/bundle")
                 .to_string_lossy()
@@ -985,7 +998,7 @@ runtime:
                 .to_string_lossy()
                 .as_ref()
         );
-        runtime["bundleDirectory"] = Value::String("/srv/reviewed/bundle".to_owned());
+        runtime["package"]["root"] = Value::String("/srv/reviewed/bundle".to_owned());
         runtime["secretProviders"]["file"]["root"] =
             Value::String("/srv/reviewed/secrets".to_owned());
         runtime["auditStorage"]["path"] = Value::String("/srv/reviewed/audit.jsonl".to_owned());
@@ -1402,7 +1415,8 @@ governance:
   issuer:
     id: urn:example:issuer
   authentication:
-    kind: oidc-access-token
+    oidc:
+      issuer: https://issuer.example
   audit:
     format: keyed-jsonl
   subjectBinding:
@@ -1416,7 +1430,8 @@ governance:
     local:
       kind: explicit-request
 runtime:
-  version: 1
+  apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+  kind: EvidenceRuntimeConfig
 publicKeys:
   _QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json: active.jwk.json
 "#,
@@ -1453,7 +1468,8 @@ governance:
   issuer:
     id: urn:example:issuer
   authentication:
-    kind: oidc-access-token
+    oidc:
+      issuer: https://issuer.example
   audit:
     format: keyed-jsonl
   subjectBinding:
@@ -1468,7 +1484,8 @@ governance:
       kind: explicit-request
   unexpectedField: true
 runtime:
-  version: 1
+  apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+  kind: EvidenceRuntimeConfig
 "#,
         )
         .expect("settings");
@@ -1584,11 +1601,11 @@ runtime:
 
     /// A value the mirror can deserialize for the contract property `name`. The
     /// mirror leaves the interior of each section to the runtime, so only
-    /// `version` and `bundleDirectory` need a shape of their own.
+    /// `apiVersion` and `kind` need a shape of their own.
     fn sample_runtime_value(name: &str) -> Value {
         match name {
-            "version" => serde_json::json!(1),
-            "bundleDirectory" => serde_json::json!("/tmp/evidence/bundle"),
+            "apiVersion" => serde_json::json!(EVIDENCE_RUNTIME_API_VERSION),
+            "kind" => serde_json::json!(EVIDENCE_RUNTIME_KIND),
             _ => serde_json::json!({}),
         }
     }
@@ -1609,7 +1626,8 @@ governance:
   issuer:
     id: urn:example:issuer
   authentication:
-    kind: oidc-access-token
+    oidc:
+      issuer: https://issuer.example
   audit:
     format: keyed-jsonl
   subjectBinding:
@@ -1623,7 +1641,8 @@ governance:
     local:
       kind: explicit-request
 runtime:
-  version: 1
+  apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+  kind: EvidenceRuntimeConfig
 "#,
         )
         .expect("settings");

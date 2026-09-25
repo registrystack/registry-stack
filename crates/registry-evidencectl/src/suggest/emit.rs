@@ -344,7 +344,7 @@ fn write_new_authoring_file(path: &Path, contents: &[u8]) -> Result<()> {
         .with_context(|| format!("persisting {}", path.display()))
 }
 
-/// Run `evidence --runtime <project>/runtime.yaml check` and classify the
+/// Run `evidence check --runtime-config <project>/runtime.yaml` and classify the
 /// result. `evidence_bin` resolves the same way as the other `evidencectl`
 /// subcommands that shell out to the runtime binary: an explicit path, else
 /// `EVIDENCE_BIN`, else the first `evidence` found on `PATH`, and the
@@ -357,9 +357,10 @@ pub fn verify(project: &Path, evidence_bin: Option<&Path>) -> Result<CheckClassi
     let runtime_path = project.join("runtime.yaml");
 
     let output = Command::new(&evidence_bin)
-        .arg("--runtime")
-        .arg(&runtime_path)
         .arg("check")
+        .arg("--runtime-config")
+        .arg(&runtime_path)
+        .env_remove("REGISTRY_EVIDENCE_RUNTIME")
         .output()
         .with_context(|| format!("failed to run {}", evidence_bin.display()))?;
 

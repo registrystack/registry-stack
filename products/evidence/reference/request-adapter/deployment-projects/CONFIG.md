@@ -165,32 +165,53 @@ artifact, or alternate evaluator is introduced by the assurance profile.
 | `service.publicOrigin` | yes | Exact canonical public Evidence origin used by RFC 9728 metadata. HTTPS is required outside the numeric-loopback local profile. |
 | `service.trustDomain` | yes | One operator-controlled trust-domain URI for the process. |
 | `issuer.id` | yes | Legal issuer URI placed in evidence. Governance must authorize the provider to act for it. |
-| `authentication.kind` | yes | Exactly `oidc-access-token`. |
-| `authentication.issuer`, `authentication.jwksUri` | yes | Exact HTTPS token issuer and JWKS endpoint. Path-based issuers are supported. The fixed JWKS endpoint may resolve to a public or private HTTPS address; DNS is pinned for each fetch, ambient proxies are disabled, and cloud-metadata destinations remain prohibited. |
-| `authentication.audiences` | yes | Non-empty exact audience allowlist. |
-| `authentication.tokenTypes` | yes | Non-empty allowlist containing only `at+jwt` and/or `application/at+jwt`. |
-| `authentication.algorithms` | yes | Non-empty allowlist containing only `EdDSA`, `ES256`, and/or `RS256`. No algorithm fallback is permitted. |
-| `authentication.principalClaim` | yes | The only claim used for the principal. Its absence denies; `client_id`, `azp`, request data, and proxy headers are not fallbacks. |
-| `authentication.requesterTagsClaim` | yes | Claim containing the requester tags matched against an authority profile. |
-| `authentication.evidenceAudienceClaim` | yes | Claim containing the exact evidence audience. The public request cannot choose another audience. |
-| `authentication.claims` | no | Direct claim-name mapping for shared actor, purpose, grant id, authority, source issuer, client, resource, expiration, bounds, and approver claims. Omission uses the documented `registry_*` names. The names must be distinct from each other, Evidence product claims, and registered authentication claims. `registry_assertion_issuer` is deliberately not among them, and is reserved against being used as one of these names: the issuer derives it from the verified subject token rather than any deployment minting it, so there is no foreign vocabulary to adapt to, and a name changed at one end only would leave `authentication.assertionIssuers` reading a claim the token does not carry, which applies no rule rather than refusing. |
-| `authentication.maximumTokenLifetimeSeconds` | yes | Positive maximum accepted `exp - iat`, up to 86,400 seconds. Its presence requires `iat`, `exp > iat`, and an interval within the maximum. |
-| `authentication.revokedKeyIds` | yes | Explicit emergency denylist, including an empty list. It is checked before cached JWKS key selection. |
-| `authentication.allowedClients` | no | Explicit machine-client admission, matched against the verified token's `client_id`/`azp` and never `sub`. Omission keeps the issuer-vouched-client behavior. A stated list must be non-empty, unique, and bounded (at most 32 entries of 1..=128 bytes). Audience plus static issuer-governed attributes alone cannot establish that a client was granted this resource's permission, which is what `requiredScopes` closes. |
-| `authentication.assertionIssuers` | no | Per-client assertion-authority admission for a token carrying the platform verifier's `registry_assertion_issuer` claim, keyed by the client the token's `client_id`/`azp` names and naming the issuers that client may present the claim as. Omission applies no rule, so a claim-bearing token is admitted regardless of its value. A stated map must be non-empty and bounded (at most 32 client keys of 1..=128 bytes), and each client's issuer list must be non-empty, unique, and bounded (at most 8 entries of 1..=512 bytes). A token carrying no such claim is never affected by this admission. |
-| `authentication.requiredScopes` | no | Scopes every inbound token must carry, read from the verified token's scope set after signature verification and before any authority claim is read. Omission keeps the no-scope-gate behavior. A stated list must be non-empty, unique RFC 6749 scope-tokens (at most 32 entries of 1..=256 bytes). A missing scope is never inferred from tags, principal, roles, `sub`, or request fields. |
-| `authentication.actorClaim` | no | Optional verified actor claim. Omission does not enable a fallback actor source. |
-| `authentication.tlsTrustProfile` | no | Logical profile name bound by `runtime.yaml` to a private CA file trusted beside the system roots for the `jwksUri` connection alone. Omission uses system roots only. Refused when `jwksUri` is a local HTTP origin. |
+| `authentication.oidc` | yes | The one OpenID Connect issuer whose access tokens this deployment accepts, and the rules a token from it must satisfy. Evidence accepts no other inbound credential. |
+| `authentication.oidc.issuer`, `authentication.oidc.jwksSource` | yes | Exact HTTPS token issuer and the fixed JWKS endpoint, written `jwksSource: {kind: uri, uri: <JWKS URL>}`. `uri` is the only key-source kind Evidence accepts; discovery and static key sets are refused. Path-based issuers are supported. The fixed JWKS endpoint may resolve to a public or private HTTPS address; DNS is pinned for each fetch, ambient proxies are disabled, and cloud-metadata destinations remain prohibited. |
+| `authentication.oidc.audience` | yes | The one exact audience an inbound token must carry. It is also the resource the deployment advertises in its protected-resource metadata. |
+| `authentication.oidc.tokenTypes` | yes | Non-empty allowlist containing only `at+jwt` and/or `application/at+jwt`. |
+| `authentication.oidc.algorithms` | yes | Non-empty allowlist containing only `EdDSA`, `ES256`, and/or `RS256`. No algorithm fallback is permitted. |
+| `authentication.oidc.principalClaim` | yes | The only claim used for the principal. Its absence denies; `client_id`, `azp`, request data, and proxy headers are not fallbacks. |
+| `authentication.oidc.requesterTagsClaim` | yes | Claim containing the requester tags matched against an authority profile. |
+| `authentication.oidc.evidenceAudienceClaim` | yes | Claim containing the exact evidence audience. The public request cannot choose another audience. |
+| `authentication.oidc.claims` | no | Direct claim-name mapping for shared actor, purpose, grant id, authority, source issuer, client, resource, expiration, bounds, and approver claims. Omission uses the documented `registry_*` names. The names must be distinct from each other, Evidence product claims, and registered authentication claims. `registry_assertion_issuer` is deliberately not among them, and is reserved against being used as one of these names: the issuer derives it from the verified subject token rather than any deployment minting it, so there is no foreign vocabulary to adapt to, and a name changed at one end only would leave `authentication.oidc.assertionIssuers` reading a claim the token does not carry, which applies no rule rather than refusing. |
+| `authentication.oidc.maximumTokenLifetimeSeconds` | yes | Positive maximum accepted `exp - iat`, up to 86,400 seconds. Its presence requires `iat`, `exp > iat`, and an interval within the maximum. |
+| `authentication.oidc.revokedKeyIds` | yes | Explicit emergency denylist, including an empty list. It is checked before cached JWKS key selection. |
+| `authentication.oidc.allowedClients` | no | Explicit machine-client admission, matched against the verified token's `client_id`/`azp` and never `sub`. Omission keeps the issuer-vouched-client behavior. A stated list must be non-empty, unique, and bounded (at most 32 entries of 1..=128 bytes). Audience plus static issuer-governed attributes alone cannot establish that a client was granted this resource's permission, which is what `requiredScopes` closes. |
+| `authentication.oidc.assertionIssuers` | no | Per-client assertion-authority admission for a token carrying the platform verifier's `registry_assertion_issuer` claim, keyed by the client the token's `client_id`/`azp` names and naming the issuers that client may present the claim as. Omission applies no rule, so a claim-bearing token is admitted regardless of its value. A stated map must be non-empty and bounded (at most 32 client keys of 1..=128 bytes), and each client's issuer list must be non-empty, unique, and bounded (at most 8 entries of 1..=512 bytes). A token carrying no such claim is never affected by this admission. |
+| `authentication.oidc.requiredScopes` | no | Scopes every inbound token must carry, read from the verified token's scope set after signature verification and before any authority claim is read. Omission keeps the no-scope-gate behavior. A stated list must be non-empty, unique RFC 6749 scope-tokens (at most 32 entries of 1..=256 bytes). A missing scope is never inferred from tags, principal, roles, `sub`, or request fields. |
+| `authentication.oidc.actorClaim` | no | Optional verified actor claim. Omission does not enable a fallback actor source. |
+| `authentication.oidc.tlsTrustProfile` | no | Logical profile name bound by `runtime.yaml` to a private CA file trusted beside the system roots for the `jwksSource.uri` connection alone. Omission uses system roots only. Refused when `jwksSource.uri` is a local HTTP origin. |
+
+A bundle that still writes the access-token rules directly under
+`authentication` (`authentication.kind`, `authentication.issuer`,
+`authentication.audiences`, `authentication.jwksUri`, and the rest), or that
+writes `authentication.oidc.audiences` or `authentication.oidc.jwksUri`, is
+refused at startup. The refusal names the key that replaced it; no old
+spelling is read as an alias.
 
 ### Audit, subject binding, rates, and signing
 
 | Section | Required fields and rule |
 |---|---|
-| `audit` | `format: keyed-jsonl`, file-only `hashSecretRef`, positive `hashKeyVersion`, and `failClosed: true`. The referenced master contains at least 32 raw secret bytes. Rust HKDF-separates chain and identifier subkeys. The runtime file owns storage location. |
-| `subjectBinding` | File-only `secretRef` and positive `keyVersion`. The referenced master contains at least 32 raw secret bytes, uses a distinct reference, and must resolve to bytes distinct from the audit master. Rust derives purpose-scoped bindings over the complete canonical role/profile/value bundle, never per-field hashes. The remaining scope input is the requirement's binding mode: the authenticated audience for an audience-scoped requirement, the presented holder key thumbprint for a holder-bound one. The two derivations are domain-separated, so one mode's binding can never be read as the other's. |
+| `audit` | `format: keyed-jsonl`, `hashKeyRef`, positive `hashKeyVersion`, and `failClosed: true`. The referenced master contains at least 32 raw secret bytes. Rust HKDF-separates chain and identifier subkeys. The runtime file owns storage location. |
+| `subjectBinding` | `secretRef` and positive `keyVersion`. The referenced master contains at least 32 raw secret bytes, uses a distinct reference, and must resolve to bytes distinct from the audit master. Rust derives purpose-scoped bindings over the complete canonical role/profile/value bundle, never per-field hashes. The remaining scope input is the requirement's binding mode: the authenticated audience for an audience-scoped requirement, the presented holder key thumbprint for a holder-bound one. The two derivations are domain-separated, so one mode's binding can never be read as the other's. |
 | `rateLimits` | Positive `requestsPerPrincipalPerMinute`, `burstPerPrincipal`, and `failedSelectorAttemptsPerPrincipalAuthorityPerMinute`. Raw selector values never become rate-limit labels. |
 | `signing` | Exact keys are `format: flattened-jws-json`, `algorithm: ES256`, `activePublicJwkFile`, `publishedPublicJwkFiles`, `revokedKeyIds`, fixed `jwksPath`, `maximumAssertionValiditySeconds`, and `verifierClockSkewSeconds`. Every exact public EC P-256 JWK has a 43-character RFC 7638 thumbprint `kid`; active, published, and revoked sets are disjoint. Missing signing material fails readiness; there is no unsigned fallback. |
 | `responseFormats` | Closed unique list of 1 through 3 entries drawn from `signed-jws`, `unsigned-json`, and `sd-jwt-vc`. `signed-jws` must always be present; a bundle that omits it is rejected at startup. Every other format additionally requires the matched grant to permit it, and signing material must still be ready even for an unsigned response. |
+
+`audit.hashKeyRef` replaced `audit.hashSecretRef`, which is refused at startup
+with its replacement named.
+
+Every secret reference in the bundle uses one of two forms. `secret:file/<name>`
+resolves to a file beneath the runtime's `secretProviders.file.root`.
+`secret:env/<NAME>` resolves to a process environment variable, and only when
+the runtime enables `secretProviders.environment`; otherwise startup refuses the
+bundle. Either way the bundle carries a logical name, never the secret value.
+
+The bundle is parsed as written: a `${...}` environment expression in any bundle
+key or string value is refused at startup, naming the field and never the
+expression. Substitution applies to `runtime.yaml` only, so the reviewed bundle
+is the one that runs.
 
 ### Selector profiles
 
@@ -1208,11 +1229,12 @@ files. Private signing material is never a bundle artifact.
 `runtime.yaml` contains only process-local bindings:
 
 ```yaml
-version: 1
-bundleDirectory: /etc/registry-evidence/bundle
+apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+kind: EvidenceRuntimeConfig
+package:
+  root: /etc/registry-evidence/bundle
 listener:
-  bindHost: 127.0.0.1
-  port: 8080
+  bind: 127.0.0.1:8080
   tlsTermination: operator-controlled-upstream
   trustProxyIdentityHeaders: false
   maximumRequestBytes: 65536
@@ -1244,19 +1266,22 @@ sourceExtracts:
 
 | Key | Required | Meaning and Version 1 bounds |
 |---|---|---|
-| `version` | yes | Literal integer `1`. |
-| `bundleDirectory` | yes | Absolute path to the single governed bundle directory. No alternate, overlay, or fallback bundle exists. |
-| `listener.bindHost` | yes | Numeric listener address, 2 through 64 bytes. Under the default `private-address` exposure, only loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6 is accepted. Under explicit `container-private`, unspecified IPv4 or IPv6 wildcard is also accepted. Hostnames, concrete public addresses, and multicast are always rejected. |
+| `apiVersion` | yes | Literal `registry.registrystack.org/evidence-runtime/v1alpha1`. Names the grammar the document is written in. |
+| `kind` | yes | Literal `EvidenceRuntimeConfig`. Together with `apiVersion` it tells an Evidence runtime file apart from another product's runtime configuration. |
+| `package.root` | yes | Absolute path to the single governed bundle directory. No alternate, overlay, or fallback bundle exists. |
+| `package.expectedDigest` | no | The `sha256:` bundle revision the operator approved. When set, startup is refused unless the bundle at `package.root` computes exactly this revision. Omission loads whatever bundle is there. |
+| `listener.bind` | yes | Numeric socket address written `host:port`, with an IPv6 host in brackets (`[addr]:port`). Port `0` is refused. Under the default `private-address` exposure, the host must be loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6. Under explicit `container-private`, the unspecified IPv4 or IPv6 wildcard is also accepted. Hostnames, concrete public addresses, and multicast are always rejected. |
 | `listener.networkExposure` | no | `private-address` by default. `container-private` permits a wildcard bind only when the operator confines the container network and terminates TLS upstream. It does not enable direct public exposure. |
-| `listener.port` | yes | TCP port 1 through 65535. |
 | `listener.tlsTermination` | yes | Literal `operator-controlled-upstream`. |
 | `listener.trustProxyIdentityHeaders` | yes | Literal `false`; proxy headers never supply authenticated identity or authority. |
 | `listener.maximumRequestBytes` | yes | 1,024 through 1,048,576 bytes. |
 | `listener.maximumConcurrentRequests` | yes | 1 through 4,096. |
 | `listener.requestTimeoutMilliseconds` | yes | 1 through 30,000 milliseconds for admission, concurrency queueing, and request-body collection. Once protected evaluation starts, this timer does not cancel it; source and OIDC boundaries have their own bounds, and the runtime preserves fail-closed audit and release ordering. |
 | `listener.shutdownGraceMilliseconds` | yes | 1 through 120,000 milliseconds. |
-| `metricsListener` | no | Optional operator-only telemetry listener serving `GET /metrics`, a binding separate from the evidence listener above and absent from the public evidence contract. Absence is the default and serves no metrics endpoint. `bindHost` accepts only loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6, and `bindHost`/`port` together must not repeat the evidence listener's exact binding. |
-| `secretProviders.file.root` | yes | Absolute root for logical `secret:file/...` references. Only regular, non-symlink, single-link files owned by the service identity with exact mode `0400` or `0600` are accepted. |
+| `metricsListener` | no | Optional operator-only telemetry listener serving `GET /metrics`, a binding separate from the evidence listener above and absent from the public evidence contract. Absence is the default and serves no metrics endpoint. `metricsListener.bind` is a `host:port` socket address whose host must be loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6; port `0` is refused, and it must not repeat the evidence listener's binding. |
+| `secretProviders` | yes | The providers a secret reference may resolve through, at least one. A bundle reference naming a provider this section does not enable is refused at startup. |
+| `secretProviders.file.root` | when the file provider is used | Absolute root for logical `secret:file/...` references. Only regular, non-symlink, single-link files owned by the service identity with exact mode `0400` or `0600` are accepted. |
+| `secretProviders.environment` | no | Written `environment: {}`, with no settings. Enables `secret:env/NAME` references, read from the process environment. Absence means no reference may name the environment. Use it where the platform injects secrets as environment variables; the file provider keeps its ownership and mode checks, which the environment cannot offer. |
 | `signer` | yes | Closed runtime signer union. `production` and `evidence-grade` require a pinned Transit signer over a workload-local Unix socket. `local` requires `kind: local-jwk` with `privateKeyRef: secret:file/evidence-signing`. Startup validates provider controls and exact public-key agreement, then signs and verifies a challenge. |
 | `auditStorage.path` | yes | Absolute keyed-JSONL audit path on operator-owned durable storage. |
 | `auditStorage.maximumFileBytes` | yes | 1,048,576 through 1,099,511,627,776 bytes. Reaching the bound seals the active segment under an ascending sequence number and opens a fresh empty segment at the configured path for subsequent writes; sealed segments are never deleted. A write or sync failure, not rotation itself, is what fails closed. |
@@ -1267,7 +1292,20 @@ sourceExtracts:
 | `sourceExtracts.<name>.path` | for each name | Absolute path to one read-only regular file. Names must exactly match bundle `extractProfile` references. |
 | `acquisitionCapabilities` | no | Gated acquisition kinds and source optimizations this deployment enables, at most two entries: `search-then-fetch-set` and `source-batch`. Omission and `[]` both enable nothing, so a bundle carrying a source batch block or needing a gated kind is refused before the listener binds. |
 
-`bundleDirectory`, secret roots, audit destinations, and CA files must be
+A runtime file written in the earlier grammar is refused before anything else
+is read, with the replacement named: `version` gives way to `apiVersion` and
+`kind`, `bundleDirectory` to `package.root`, and `listener.bindHost` with
+`listener.port` (and the same pair under `metricsListener`) to one `bind`
+address. No old spelling is read as an alias.
+
+A string value may carry `${NAME}` or `${NAME:-default}`, substituted from the
+process environment after the document is parsed. Substitution is refused
+inside a secret reference and anywhere under `secretProviders`, so an
+environment variable can move a path or an address but can never choose which
+secret a field names. The runtime digest covers both the exact file bytes and
+the document after substitution, so a changed variable changes the digest.
+
+`package.root`, secret roots, audit destinations, and CA files must be
 absolute paths. The runtime rejects symlinks, insecure ownership/modes, missing
 required logical bindings, mutable files, and files outside the configured
 roots according to the operator contract.
@@ -1308,9 +1346,9 @@ initialization failed`, naming neither the artifact nor the cause. Write
 `evidence check` before `evidence serve` so a fault surfaces with its artifact
 and cause instead of only as `runtime bundle initialization failed`.
 
-A bundle source may name one `tlsTrustProfile`, and so may `authentication`
-for the connection that fetches the access-token issuer's key set from
-`jwksUri`. The corresponding bounded PEM file is loaded and validated at
+A bundle source may name one `tlsTrustProfile`, and so may
+`authentication.oidc` for the connection that fetches the access-token issuer's
+key set from `jwksSource.uri`. The corresponding bounded PEM file is loaded and validated at
 startup and is trusted beside the system roots, only for the connection of the
 source or issuer that names it. A source and the issuer may name the same
 profile. Hostname verification and source-origin checks remain mandatory.
@@ -1457,8 +1495,8 @@ bytes, runtime bindings, trust files, or secrets change:
 ```sh
 evidencectl doctor --runtime-config '<candidate>/runtime.yaml'
 evidencectl test '<candidate>'
-evidence --runtime '<candidate>/runtime.yaml' check --require-runtime-dependencies
-evidence --runtime '<candidate>/runtime.yaml' serve
+evidence check --runtime-config '<candidate>/runtime.yaml' --require-runtime-dependencies
+evidence serve --runtime-config '<candidate>/runtime.yaml'
 ```
 
 Then route only after `/ready`, retain one authorized synthetic-subject
@@ -1468,7 +1506,7 @@ a newly reviewed bundle revision and reruns the fixture matrix.
 
 Configure an OIDC issuer independently and register each workload with the exact
 resource, scopes, client identity, and public key required by its approved
-journey. Match the runtime's issuer, JWKS URI, audiences, allowed algorithms,
+journey. Match the bundle's issuer, JWKS URI, audience, allowed algorithms,
 accepted token types, and principal, requester-tag, Evidence-audience, grant,
 and optional actor claim mappings. The maintained local tooling uses stock
 ThunderID. Deployment inspection does not register callers, decide authority,
@@ -1523,43 +1561,44 @@ assuranceProfile
 audit
 audit.failClosed
 audit.format
+audit.hashKeyRef
 audit.hashKeyVersion
-audit.hashSecretRef
 authentication
-authentication.actorClaim
-authentication.algorithms
-authentication.algorithms[]
-authentication.allowedClients
-authentication.allowedClients[]
-authentication.assertionIssuers
-authentication.assertionIssuers.*
-authentication.assertionIssuers.*[]
-authentication.audiences
-authentication.audiences[]
-authentication.claims
-authentication.claims.actorKind
-authentication.claims.approver
-authentication.claims.grantBounds
-authentication.claims.grantClient
-authentication.claims.grantExp
-authentication.claims.grantId
-authentication.claims.grantResource
-authentication.claims.grantSourceIssuer
-authentication.claims.purpose
-authentication.evidenceAudienceClaim
-authentication.issuer
-authentication.jwksUri
-authentication.kind
-authentication.maximumTokenLifetimeSeconds
-authentication.principalClaim
-authentication.requesterTagsClaim
-authentication.requiredScopes
-authentication.requiredScopes[]
-authentication.revokedKeyIds
-authentication.revokedKeyIds[]
-authentication.tlsTrustProfile
-authentication.tokenTypes
-authentication.tokenTypes[]
+authentication.oidc
+authentication.oidc.actorClaim
+authentication.oidc.algorithms
+authentication.oidc.algorithms[]
+authentication.oidc.allowedClients
+authentication.oidc.allowedClients[]
+authentication.oidc.assertionIssuers
+authentication.oidc.assertionIssuers.*
+authentication.oidc.assertionIssuers.*[]
+authentication.oidc.audience
+authentication.oidc.claims
+authentication.oidc.claims.actorKind
+authentication.oidc.claims.approver
+authentication.oidc.claims.grantBounds
+authentication.oidc.claims.grantClient
+authentication.oidc.claims.grantExp
+authentication.oidc.claims.grantId
+authentication.oidc.claims.grantResource
+authentication.oidc.claims.grantSourceIssuer
+authentication.oidc.claims.purpose
+authentication.oidc.evidenceAudienceClaim
+authentication.oidc.issuer
+authentication.oidc.jwksSource
+authentication.oidc.jwksSource.kind
+authentication.oidc.jwksSource.uri
+authentication.oidc.maximumTokenLifetimeSeconds
+authentication.oidc.principalClaim
+authentication.oidc.requesterTagsClaim
+authentication.oidc.requiredScopes
+authentication.oidc.requiredScopes[]
+authentication.oidc.revokedKeyIds
+authentication.oidc.revokedKeyIds[]
+authentication.oidc.tlsTrustProfile
+authentication.oidc.tokenTypes
+authentication.oidc.tokenTypes[]
 authorityProfiles
 authorityProfiles.*
 authorityProfiles.*.actorKind
@@ -1854,29 +1893,32 @@ version
 ```text
 acquisitionCapabilities
 acquisitionCapabilities[]
+apiVersion
 auditStorage
 auditStorage.maximumFileBytes
 auditStorage.path
-bundleDirectory
+kind
 listener
-listener.bindHost
+listener.bind
 listener.maximumConcurrentRequests
 listener.maximumRequestBytes
 listener.networkExposure
-listener.port
 listener.requestTimeoutMilliseconds
 listener.shutdownGraceMilliseconds
 listener.tlsTermination
 listener.trustProxyIdentityHeaders
 metricsListener
-metricsListener.bindHost
-metricsListener.port
+metricsListener.bind
 outboundTls
 outboundTls.systemRoots
 outboundTls.trustProfiles
 outboundTls.trustProfiles.*
 outboundTls.trustProfiles.*.caBundleFile
+package
+package.expectedDigest
+package.root
 secretProviders
+secretProviders.environment
 secretProviders.file
 secretProviders.file.root
 signer
@@ -1890,6 +1932,5 @@ signer.unixSocketPath
 sourceExtracts
 sourceExtracts.*
 sourceExtracts.*.path
-version
 ```
 <!-- evidence-runtime-key-paths:end -->

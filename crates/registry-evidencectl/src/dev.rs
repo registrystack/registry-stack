@@ -2813,9 +2813,10 @@ fn spawn_evidence(binary: &Path, runtime: &Path, log: &Path) -> Result<Child> {
     let stdout = create_private_file(log)?;
     let stderr = stdout.try_clone()?;
     Command::new(binary)
-        .arg("--runtime")
-        .arg(runtime)
         .arg("serve")
+        .arg("--runtime-config")
+        .arg(runtime)
+        .env_remove("REGISTRY_EVIDENCE_RUNTIME")
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))

@@ -2986,14 +2986,14 @@ fn rewrite_for_local_profile(
     );
     replace_exact(
         &mut document,
-        "audiences: [evidence-fixture]",
-        &format!("audiences: [{TOKEN_AUDIENCE}]"),
+        "audience: evidence-fixture",
+        &format!("audience: {TOKEN_AUDIENCE}"),
         1,
     );
     replace_exact(
         &mut document,
-        "jwksUri: https://identity.invalid/.well-known/jwks.json",
-        &format!("jwksUri: {issuer_jwks_uri}"),
+        "uri: https://identity.invalid/.well-known/jwks.json",
+        &format!("uri: {issuer_jwks_uri}"),
         1,
     );
     replace_exact(
@@ -3094,11 +3094,12 @@ fn runtime_document(
     audit_path: &Path,
 ) -> String {
     format!(
-        r#"version: 1
-bundleDirectory: {bundle}
+        r#"apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+kind: EvidenceRuntimeConfig
+package:
+  root: {bundle}
 listener:
-  bindHost: 127.0.0.1
-  port: {port}
+  bind: 127.0.0.1:{port}
   tlsTermination: operator-controlled-upstream
   trustProxyIdentityHeaders: false
   maximumRequestBytes: 65536

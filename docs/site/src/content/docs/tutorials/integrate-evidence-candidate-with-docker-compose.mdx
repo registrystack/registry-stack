@@ -109,7 +109,7 @@ ownership, paths, and trust files are in place:
 
 ```sh
 docker compose run --rm evidence \
-  --runtime /etc/registry-evidence/runtime.yaml check --require-runtime-dependencies
+  check --runtime-config /etc/registry-evidence/runtime.yaml --require-runtime-dependencies
 ```
 
 It prints one line and exits zero:
@@ -151,8 +151,8 @@ docker compose up -d
 docker compose ps
 ```
 
-The service reads its runtime from `REGISTRY_EVIDENCE_RUNTIME`, which the maintained image already
-points at `/etc/registry-evidence/runtime.yaml`, and its default command is `serve`. No further
+The maintained image's default command is `serve --runtime-config
+/etc/registry-evidence/runtime.yaml`, the path the runtime file is mounted at. No further
 arguments are needed.
 
 Evidence Gateway writes line-delimited JSON to stdout. It announces the listener only after every

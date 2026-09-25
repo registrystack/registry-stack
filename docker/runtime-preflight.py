@@ -84,9 +84,9 @@ KNOWN_EPHEMERAL_BIND_ROOTS = tuple(
 # product configuration to answer that question.
 NATIVE_CHECKS = {
     "evidence": [
-        "--runtime",
-        "/etc/registry-evidence/runtime.yaml",
         "check",
+        "--runtime-config",
+        "/etc/registry-evidence/runtime.yaml",
         "--require-runtime-dependencies",
         AUDIT_CONTAINMENT_FLAG,
         AUDIT_PREFIXES["evidence"],
@@ -511,19 +511,11 @@ def validate_service(selection: ServiceSelection, document: dict[str, Any]) -> N
         name in environment for name in ("LD_AUDIT", "LD_LIBRARY_PATH", "LD_PRELOAD")
     ):
         raise PreflightError("service must not override dynamic-loader behavior")
-    fixed_config = {
-        "evidence": (
-            "REGISTRY_EVIDENCE_RUNTIME",
-            "/etc/registry-evidence/runtime.yaml",
-        ),
-    }.get(selection.product)
-    if fixed_config is not None:
-        name, expected = fixed_config
-        configured = environment.get(name)
-        if configured is not None and configured != expected:
-            raise PreflightError(
-                "service must use the official runtime configuration path"
-            )
+    if selection.product == "evidence" and "REGISTRY_EVIDENCE_RUNTIME" in environment:
+        raise PreflightError(
+            "service must not set REGISTRY_EVIDENCE_RUNTIME; the official image "
+            "passes --runtime-config"
+        )
     if "ALL" not in require_string_list(service, "cap_drop"):
         raise PreflightError("service must drop all Linux capabilities")
     cap_add = service.get("cap_add", [])

@@ -10,20 +10,22 @@ issuer:
 # issuer. The extract is a local file, so this is the only network credential
 # contract in the project.
 authentication:
-  kind: oidc-access-token
-  issuer: https://tokens.gov.example
-  audiences: [registry-evidence]
-  tokenTypes: [at+jwt]
-  algorithms: [ES256]
-  jwksUri: https://tokens.gov.example/.well-known/jwks.json
-  principalClaim: sub
-  requesterTagsClaim: evidence_tags
-  evidenceAudienceClaim: evidence_audience
-  maximumTokenLifetimeSeconds: 300
-  revokedKeyIds: []
+  oidc:
+    issuer: https://tokens.gov.example
+    audience: registry-evidence
+    tokenTypes: [at+jwt]
+    algorithms: [ES256]
+    jwksSource:
+      kind: uri
+      uri: https://tokens.gov.example/.well-known/jwks.json
+    principalClaim: sub
+    requesterTagsClaim: evidence_tags
+    evidenceAudienceClaim: evidence_audience
+    maximumTokenLifetimeSeconds: 300
+    revokedKeyIds: []
 audit:
   format: keyed-jsonl
-  hashSecretRef: secret:file/audit-hmac-key
+  hashKeyRef: secret:file/audit-hmac-key
   hashKeyVersion: 1
   failClosed: true
 subjectBinding:

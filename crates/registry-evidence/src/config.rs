@@ -1,8 +1,8 @@
 //! Typed Evidence Version 1 deployment configuration.
 //!
 //! Configuration is trusted deployment data, but it is still parsed as a
-//! closed contract. Secret-bearing fields contain only [`SecretRef`] values;
-//! this module never resolves them.
+//! closed contract. Secret-bearing fields contain only [`SecretReference`]
+//! values; this module never resolves them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -11,6 +11,12 @@ use std::path::{Component, Path};
 use std::str::FromStr;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+pub use registry_platform_config::SecretReference;
+use registry_platform_config::{
+    reject_environment_expressions_in_authored_yaml, AuditKeyConfig, JwksSource, ListenerBind,
+    LoadedRuntimeConfig, OidcIssuerConfig, PackageConfig, RemovedKey, RuntimeConfigError,
+    RuntimeConfigErrorKind, RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig,
+};
 use schemars::JsonSchema;
 use serde::de::{self, MapAccess, Visitor};
 use serde::ser::SerializeMap;
@@ -87,10 +93,38 @@ impl fmt::Display for TextLocation {
 /// for the field it bound, which is structure, not content.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SchemaFault {
-    location: Option<TextLocation>,
-    path: Option<String>,
+    location: Option<CompactLocation>,
+    path: Option<Box<str>>,
     cause: &'static str,
     field: Option<&'static str>,
+    remedy: Option<&'static str>,
+}
+
+/// A text position held in 32-bit fields, keeping `SchemaFault` small enough
+/// to travel inside every error that wraps it. A configuration document is
+/// bounded far below `u32::MAX` lines or columns; a larger value saturates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CompactLocation {
+    line: u32,
+    column: u32,
+}
+
+impl From<TextLocation> for CompactLocation {
+    fn from(location: TextLocation) -> Self {
+        Self {
+            line: u32::try_from(location.line).unwrap_or(u32::MAX),
+            column: u32::try_from(location.column).unwrap_or(u32::MAX),
+        }
+    }
+}
+
+impl From<CompactLocation> for TextLocation {
+    fn from(location: CompactLocation) -> Self {
+        Self {
+            line: location.line as usize,
+            column: location.column as usize,
+        }
+    }
 }
 
 /// The longest schema path a diagnostic will carry.
@@ -140,6 +174,7 @@ impl SchemaFault {
             path: None,
             cause,
             field: None,
+            remedy: None,
         }
     }
 
@@ -160,7 +195,7 @@ impl SchemaFault {
     /// A line and a column are structure, so they are safe to keep. The text
     /// standing at that position is content, and this type never sees it.
     pub fn at(mut self, location: TextLocation) -> Self {
-        self.location = Some(location);
+        self.location = Some(location.into());
         self
     }
 
@@ -179,7 +214,27 @@ impl SchemaFault {
     }
 
     pub fn location(&self) -> Option<TextLocation> {
-        self.location
+        self.location.map(TextLocation::from)
+    }
+
+    /// The fixed sentence telling an operator what to write instead, when the
+    /// refusal has one.
+    pub fn remedy(&self) -> Option<&'static str> {
+        self.remedy
+    }
+
+    /// The same fault, pointing at a schema path. The path is kept only when
+    /// it matches the structural path grammar.
+    fn at_path(mut self, path: &str) -> Self {
+        if is_safe_schema_path(path) {
+            self.path = Some(path.into());
+        }
+        self
+    }
+
+    fn with_remedy(mut self, remedy: &'static str) -> Self {
+        self.remedy = Some(remedy);
+        self
     }
 
     /// Reduce a decoder error to a location, a safe schema path, and a cause.
@@ -187,13 +242,17 @@ impl SchemaFault {
         let rendered = error.to_string();
         let (path, message) = split_schema_path(&rendered);
         Self {
-            location: error.location().map(|location| TextLocation {
-                line: location.line(),
-                column: location.column(),
+            location: error.location().map(|location| {
+                TextLocation {
+                    line: location.line(),
+                    column: location.column(),
+                }
+                .into()
             }),
-            path,
+            path: path.map(String::into_boxed_str),
             cause: classify_decode_cause(message, fallback),
             field: None,
+            remedy: None,
         }
     }
 }
@@ -208,7 +267,10 @@ impl fmt::Display for SchemaFault {
             write!(formatter, " at {path}")?;
         }
         if let Some(location) = self.location {
-            write!(formatter, " ({location})")?;
+            write!(formatter, " ({})", TextLocation::from(location))?;
+        }
+        if let Some(remedy) = self.remedy {
+            write!(formatter, "; {remedy}")?;
         }
         Ok(())
     }
@@ -282,6 +344,220 @@ fn decode_yaml<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, ConfigEr
             "document does not match the closed schema",
         ))
     })
+}
+
+/// Bundle keys an earlier grammar accepted, each refused with the key that
+/// replaced it. The access-token rules moved under `authentication.oidc`.
+const REMOVED_BUNDLE_KEYS: &[(&str, &str)] = &[
+    (
+        "authentication.kind",
+        "Evidence accepts OIDC access tokens only; declare the rules under authentication.oidc",
+    ),
+    (
+        "authentication.issuer",
+        "declare authentication.oidc.issuer instead",
+    ),
+    (
+        "authentication.audiences",
+        "declare the one accepted audience as authentication.oidc.audience",
+    ),
+    (
+        "authentication.jwksUri",
+        "declare authentication.oidc.jwksSource with kind: uri and uri: <JWKS URL>",
+    ),
+    (
+        "authentication.tokenTypes",
+        "declare authentication.oidc.tokenTypes instead",
+    ),
+    (
+        "authentication.algorithms",
+        "declare authentication.oidc.algorithms instead",
+    ),
+    (
+        "authentication.principalClaim",
+        "declare authentication.oidc.principalClaim instead",
+    ),
+    (
+        "authentication.requesterTagsClaim",
+        "declare authentication.oidc.requesterTagsClaim instead",
+    ),
+    (
+        "authentication.evidenceAudienceClaim",
+        "declare authentication.oidc.evidenceAudienceClaim instead",
+    ),
+    (
+        "authentication.claims",
+        "declare authentication.oidc.claims instead",
+    ),
+    (
+        "authentication.maximumTokenLifetimeSeconds",
+        "declare authentication.oidc.maximumTokenLifetimeSeconds instead",
+    ),
+    (
+        "authentication.revokedKeyIds",
+        "declare authentication.oidc.revokedKeyIds instead",
+    ),
+    (
+        "authentication.allowedClients",
+        "declare authentication.oidc.allowedClients instead",
+    ),
+    (
+        "authentication.assertionIssuers",
+        "declare authentication.oidc.assertionIssuers instead",
+    ),
+    (
+        "authentication.requiredScopes",
+        "declare authentication.oidc.requiredScopes instead",
+    ),
+    (
+        "authentication.actorClaim",
+        "declare authentication.oidc.actorClaim instead",
+    ),
+    (
+        "authentication.tlsTrustProfile",
+        "declare authentication.oidc.tlsTrustProfile instead",
+    ),
+    (
+        "authentication.oidc.kind",
+        "Evidence accepts OIDC access tokens only; remove kind",
+    ),
+    (
+        "authentication.oidc.audiences",
+        "declare the one accepted audience as authentication.oidc.audience",
+    ),
+    (
+        "authentication.oidc.jwksUri",
+        "declare authentication.oidc.jwksSource with kind: uri and uri: <JWKS URL>",
+    ),
+    ("audit.hashSecretRef", "declare audit.hashKeyRef instead"),
+];
+
+/// Refuse a bundle key an earlier grammar accepted, naming its replacement.
+///
+/// A document that is not a YAML mapping is left to the closed decoder, which
+/// reports it with a location.
+fn reject_removed_bundle_keys(text: &str) -> Result<(), ConfigError> {
+    let Ok(YamlValue::Mapping(document)) = serde_norway::from_str::<YamlValue>(text) else {
+        return Ok(());
+    };
+    for (path, replacement) in REMOVED_BUNDLE_KEYS {
+        let mut node = Some(&document);
+        let mut segments = path.split('.').peekable();
+        while let (Some(mapping), Some(segment)) = (node, segments.next()) {
+            let Some(value) = mapping.get(segment) else {
+                break;
+            };
+            if segments.peek().is_none() {
+                return Err(ConfigError::InvalidYaml(
+                    SchemaFault::because("key is no longer accepted")
+                        .at_path(path)
+                        .with_remedy(replacement),
+                ));
+            }
+            node = value.as_mapping();
+        }
+    }
+    Ok(())
+}
+
+/// Refuse a `${...}` expression anywhere in the governed bundle.
+///
+/// Substitution applies to `runtime.yaml` only, so the reviewed bundle is the
+/// one that runs. The fault names the field and never the expression. A
+/// document that is not YAML is left to the closed decoder.
+fn reject_bundle_environment_expressions(text: &str) -> Result<(), ConfigError> {
+    match reject_environment_expressions_in_authored_yaml(text) {
+        Err(error) if error.kind() == RuntimeConfigErrorKind::AuthoredExpression => {
+            let fault = SchemaFault::because(
+                "environment expressions are not accepted in the governed bundle",
+            )
+            .with_remedy("write the value in the bundle directly");
+            Err(ConfigError::InvalidYaml(if error.field() == "/" {
+                fault
+            } else {
+                fault.at_path(error.field())
+            }))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Reduce a shared-loader refusal of the runtime file to a value-free fault.
+///
+/// The loader's message is read only for its fixed leading text and then
+/// discarded, like a decoder message: the cause is static, the path is kept
+/// only when it matches the structural path grammar, and a removed key or a
+/// wrong envelope carries the fixed sentence naming what to write instead.
+fn runtime_fault(error: &RuntimeConfigError) -> SchemaFault {
+    let field = error.field();
+    let fault = match error.kind() {
+        RuntimeConfigErrorKind::RemovedKey => {
+            let remedy = EVIDENCE_RUNTIME_REMOVED_KEYS
+                .iter()
+                .find(|removed| removed.path == field)
+                .map_or(EVIDENCE_RUNTIME_ENVELOPE_REMEDY, |removed| {
+                    removed.replacement
+                });
+            SchemaFault::because("key is no longer accepted").with_remedy(remedy)
+        }
+        RuntimeConfigErrorKind::Envelope => {
+            SchemaFault::because("document does not declare the Evidence runtime envelope")
+                .with_remedy(EVIDENCE_RUNTIME_ENVELOPE_REMEDY)
+        }
+        RuntimeConfigErrorKind::Syntax => {
+            let message = error.message();
+            let cause = match message.split_once("is not valid YAML: ") {
+                Some((_, decoder)) => {
+                    classify_decode_cause(decoder, "document is not well-formed YAML")
+                }
+                None if message.ends_with("must be a YAML mapping") => {
+                    "document is not a YAML mapping"
+                }
+                None if message.contains("key that is not a string") => {
+                    "mapping key is not a string"
+                }
+                None if message.contains("YAML tag") => "document carries a YAML tag",
+                None => "document is not well-formed YAML",
+            };
+            SchemaFault::because(cause)
+        }
+        RuntimeConfigErrorKind::Substitution => {
+            SchemaFault::because("environment expression cannot be substituted")
+        }
+        RuntimeConfigErrorKind::SubstitutionInReference => SchemaFault::because(
+            "environment expressions are not accepted in secret references or secretProviders",
+        ),
+        RuntimeConfigErrorKind::InvalidValue => {
+            let reason = error
+                .message()
+                .split_once(" is invalid: ")
+                .map_or("", |(_, reason)| reason);
+            let cause = RUNTIME_VALUE_CAUSES
+                .iter()
+                .find(|(prefix, _)| reason.starts_with(prefix))
+                .map_or_else(
+                    || classify_decode_cause(reason, "document does not match the closed schema"),
+                    |(_, cause)| cause,
+                );
+            SchemaFault::because(cause)
+        }
+        RuntimeConfigErrorKind::Bounds => {
+            SchemaFault::because("document exceeds the Version 1 size limit")
+        }
+        RuntimeConfigErrorKind::Encoding => SchemaFault::because("document is not UTF-8"),
+        RuntimeConfigErrorKind::Path
+        | RuntimeConfigErrorKind::UnsafeFile
+        | RuntimeConfigErrorKind::Unavailable
+        | RuntimeConfigErrorKind::AuthoredExpression
+        | RuntimeConfigErrorKind::AuthoredSyntax => {
+            SchemaFault::because("document could not be read as a runtime configuration")
+        }
+    };
+    if field == "/" {
+        fault
+    } else {
+        fault.at_path(field)
+    }
 }
 
 /// A mapping that rejects duplicate keys and preserves declaration order.
@@ -515,6 +791,8 @@ impl EvidenceConfig {
         }
         let text = std::str::from_utf8(bytes)
             .map_err(|_| ConfigError::InvalidYaml(SchemaFault::because("document is not UTF-8")))?;
+        reject_removed_bundle_keys(text)?;
+        reject_bundle_environment_expressions(text)?;
         let config: Self = decode_yaml(text)?;
         config.validate()?;
         Ok(config)
@@ -534,7 +812,7 @@ impl EvidenceConfig {
         self.authentication.validate(self.assurance_profile)?;
         self.audit.validate()?;
         self.subject_binding.validate()?;
-        if self.audit.hash_secret_ref == self.subject_binding.secret_ref {
+        if self.audit.key.hash_key_ref == self.subject_binding.secret_ref {
             return invalid("audit and subject-binding secret references must be distinct");
         }
         self.rate_limits.validate()?;
@@ -585,6 +863,7 @@ impl EvidenceConfig {
         if !task_grant_profiles.is_empty() {
             let allowed_clients =
                 self.authentication
+                    .oidc
                     .allowed_clients
                     .as_ref()
                     .ok_or(ConfigError::Invalid(
@@ -1239,60 +1518,156 @@ fn validate_publication_identifier(value: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
+/// The `apiVersion` every Evidence runtime file declares.
+pub const EVIDENCE_RUNTIME_API_VERSION: &str =
+    "registry.registrystack.org/evidence-runtime/v1alpha1";
+/// The `kind` every Evidence runtime file declares.
+pub const EVIDENCE_RUNTIME_KIND: &str = "EvidenceRuntimeConfig";
+
+/// The envelope every Evidence runtime file carries.
+pub const EVIDENCE_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
+    api_version: EVIDENCE_RUNTIME_API_VERSION,
+    kind: EVIDENCE_RUNTIME_KIND,
+};
+
+/// What an operator writes when the envelope is missing or wrong.
+const EVIDENCE_RUNTIME_ENVELOPE_REMEDY: &str = "declare apiVersion: \
+     registry.registrystack.org/evidence-runtime/v1alpha1 and kind: EvidenceRuntimeConfig";
+
+/// Keys an earlier Evidence runtime file accepted, each refused with the key
+/// that replaced it.
+pub const EVIDENCE_RUNTIME_REMOVED_KEYS: &[RemovedKey] = &[
+    RemovedKey {
+        path: "version",
+        replacement: "declare apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1 \
+             and kind: EvidenceRuntimeConfig",
+    },
+    RemovedKey {
+        path: "bundleDirectory",
+        replacement: "declare package.root as the absolute path of the bundle directory",
+    },
+    RemovedKey {
+        path: "listener.bindHost",
+        replacement: "declare listener.bind as host:port, such as 127.0.0.1:8080",
+    },
+    RemovedKey {
+        path: "listener.port",
+        replacement: "declare listener.bind as host:port, such as 127.0.0.1:8080",
+    },
+    RemovedKey {
+        path: "metricsListener.bindHost",
+        replacement: "declare metricsListener.bind as host:port, such as 127.0.0.1:9090",
+    },
+    RemovedKey {
+        path: "metricsListener.port",
+        replacement: "declare metricsListener.bind as host:port, such as 127.0.0.1:9090",
+    },
+];
+
+/// Runtime refusals the shared loader reports in its own words, each mapped to
+/// one value-free cause. Only the fixed leading text is read.
+const RUNTIME_VALUE_CAUSES: [(&str, &str); 2] = [
+    (
+        "listener.bind must be host:port",
+        "listener bind must be host:port with an IP address host",
+    ),
+    (
+        "expected an exact secret:env/NAME or secret:file/name reference",
+        "secret reference does not use an exact permitted grammar",
+    ),
+];
+
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeConfig {
-    pub version: u8,
-    pub bundle_directory: String,
+    pub api_version: String,
+    pub kind: String,
+    /// The one governed bundle directory this process loads at startup.
+    pub package: PackageConfig,
     pub listener: ListenerConfig,
     /// Optional operator-only metrics listener. Absent means the deployment
     /// serves no metrics endpoint at all, which is the default posture.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics_listener: Option<MetricsListenerConfig>,
-    pub secret_providers: RuntimeSecretProviders,
+    pub secret_providers: SecretProvidersConfig,
     /// Process-local binding to the signer that controls the governed active
     /// public key. This cannot change the governed key set or algorithm.
     pub signer: RuntimeSignerConfig,
     pub audit_storage: AuditStorageConfig,
     pub outbound_tls: OutboundTlsConfig,
     /// Process-local files bound to the logical extract names the bundle's
-    /// statement sources read. Absent binds none, which is what every runtime
-    /// file written before an extract source existed says.
+    /// statement sources read. Absent binds none, which is what a runtime file
+    /// for a bundle with no extract source says.
     #[serde(default, skip_serializing_if = "OrderedMap::is_empty")]
     pub source_extracts: OrderedMap<SourceExtractBinding>,
     /// Acquisition kinds this deployment enables beyond the frozen Version 1
-    /// forms. Absent enables none of them, which is what every runtime file
-    /// written before a gated form existed says, so adopting a form is a
-    /// deliberate operator decision rather than a consequence of the bundle
-    /// that arrived. A bundle requiring a kind absent here is refused before
-    /// the deployment serves anything.
+    /// forms. Absent enables none of them, so adopting a form is a deliberate
+    /// operator decision rather than a consequence of the bundle that arrived.
+    /// A bundle requiring a kind absent here is refused before the deployment
+    /// serves anything.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub acquisition_capabilities: Vec<String>,
 }
 
 impl RuntimeConfig {
+    /// The shared loader configured with the Evidence envelope and the keys
+    /// it no longer accepts.
+    pub fn loader() -> RuntimeConfigLoader {
+        RuntimeConfigLoader::new(EVIDENCE_RUNTIME_ENVELOPE)
+            .removed_keys(EVIDENCE_RUNTIME_REMOVED_KEYS)
+            .max_bytes(MAX_CONFIG_BYTES as u64)
+    }
+
+    /// Parse and validate one runtime document with no environment: an
+    /// environment expression resolves only through its own default.
     pub fn parse_yaml(bytes: &[u8]) -> Result<Self, ConfigError> {
+        Self::parse_yaml_with(bytes, |_| None).map(|loaded| loaded.config)
+    }
+
+    /// Parse and validate one runtime document, substituting environment
+    /// expressions in string values from `lookup`. The returned digest covers
+    /// the document after substitution.
+    pub fn parse_yaml_with(
+        bytes: &[u8],
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> Result<LoadedRuntimeConfig<Self>, ConfigError> {
         if bytes.len() > MAX_CONFIG_BYTES {
             return Err(ConfigError::TooLarge);
         }
         let text = std::str::from_utf8(bytes)
             .map_err(|_| ConfigError::InvalidYaml(SchemaFault::because("document is not UTF-8")))?;
-        let config: Self = decode_yaml(text)?;
-        config.validate()?;
-        Ok(config)
+        let loaded = Self::loader()
+            .parse_str::<Self>(text, lookup)
+            .map_err(|error| ConfigError::InvalidYaml(runtime_fault(&error)))?;
+        loaded.config.validate()?;
+        Ok(loaded)
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
-        if self.version != 1 {
-            return invalid("runtime version must equal 1");
-        }
-        validate_absolute_path(&self.bundle_directory)?;
+        self.package.check().map_err(|error| match error.kind() {
+            registry_platform_config::ConfigBlockErrorKind::InvalidDigest => {
+                ConfigError::InvalidField(
+                    "package expectedDigest must be sha256: followed by 64 lowercase hex digits",
+                    "package.expectedDigest",
+                )
+            }
+            _ => ConfigError::InvalidField("package root must be an absolute path", "package.root"),
+        })?;
+        validate_absolute_path(&self.package.root.to_string_lossy())?;
         self.listener.validate()?;
         if let Some(metrics) = &self.metrics_listener {
             metrics.validate(&self.listener)?;
         }
-        self.secret_providers.validate()?;
-        self.signer.validate()?;
+        self.secret_providers.check().map_err(|_| {
+            ConfigError::InvalidField(
+                "secretProviders must enable file, environment, or both, and a file root must be absolute",
+                "secretProviders",
+            )
+        })?;
+        if let Some(file) = &self.secret_providers.file {
+            validate_absolute_path(&file.root.to_string_lossy())?;
+        }
+        self.signer.validate(&self.secret_providers)?;
         self.audit_storage.validate()?;
         self.outbound_tls.validate()?;
         validate_named_map(&self.source_extracts, 0, 64, SourceExtractBinding::validate)?;
@@ -1322,7 +1697,7 @@ impl RuntimeConfig {
 pub enum RuntimeSignerConfig {
     LocalJwk {
         #[serde(rename = "privateKeyRef")]
-        private_key_ref: SecretRef,
+        private_key_ref: SecretReference,
     },
     Transit {
         #[serde(rename = "unixSocketPath")]
@@ -1338,9 +1713,16 @@ pub enum RuntimeSignerConfig {
 }
 
 impl RuntimeSignerConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
+    fn validate(&self, secret_providers: &SecretProvidersConfig) -> Result<(), ConfigError> {
         match self {
-            Self::LocalJwk { .. } => Ok(()),
+            Self::LocalJwk { private_key_ref } => secret_providers
+                .check_reference("signer.privateKeyRef", private_key_ref.as_str())
+                .map_err(|_| {
+                    ConfigError::InvalidField(
+                        "the secret reference names a provider secretProviders does not enable",
+                        "signer.privateKeyRef",
+                    )
+                }),
             Self::Transit {
                 unix_socket_path,
                 mount,
@@ -1373,35 +1755,11 @@ impl RuntimeSignerConfig {
         matches!(self, Self::Transit { .. })
     }
 
-    pub fn private_key_ref(&self) -> Option<&SecretRef> {
+    pub fn private_key_ref(&self) -> Option<&SecretReference> {
         match self {
             Self::LocalJwk { private_key_ref } => Some(private_key_ref),
             Self::Transit { .. } => None,
         }
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RuntimeSecretProviders {
-    pub file: FileSecretProvider,
-}
-
-impl RuntimeSecretProviders {
-    fn validate(&self) -> Result<(), ConfigError> {
-        self.file.validate()
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct FileSecretProvider {
-    pub root: String,
-}
-
-impl FileSecretProvider {
-    fn validate(&self) -> Result<(), ConfigError> {
-        validate_absolute_path(&self.root)
     }
 }
 
@@ -1472,10 +1830,10 @@ impl SourceExtractBinding {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListenerConfig {
-    pub bind_host: String,
+    /// Numeric `host:port` the evidence API binds.
+    pub bind: ListenerBind,
     #[serde(default)]
     pub network_exposure: ListenerNetworkExposure,
-    pub port: u16,
     pub tls_termination: TlsTermination,
     pub trust_proxy_identity_headers: bool,
     pub maximum_request_bytes: u64,
@@ -1488,13 +1846,13 @@ impl ListenerConfig {
     fn validate(&self) -> Result<(), ConfigError> {
         match self.network_exposure {
             ListenerNetworkExposure::PrivateAddress => {
-                validate_private_bind_host(&self.bind_host)?;
+                validate_private_bind_host(self.bind.ip())?;
             }
             ListenerNetworkExposure::ContainerPrivate => {
-                validate_container_private_bind_host(&self.bind_host)?;
+                validate_container_private_bind_host(self.bind.ip())?;
             }
         }
-        validate_listener_port(self.port)?;
+        validate_listener_port(self.bind.socket_addr().port())?;
         if self.trust_proxy_identity_headers {
             return invalid("proxy identity headers must not be trusted");
         }
@@ -1547,25 +1905,19 @@ pub enum ListenerNetworkExposure {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MetricsListenerConfig {
-    pub bind_host: String,
-    pub port: u16,
+    /// Numeric `host:port` the metrics endpoint binds.
+    pub bind: ListenerBind,
 }
 
 impl MetricsListenerConfig {
     fn validate(&self, evidence_listener: &ListenerConfig) -> Result<(), ConfigError> {
-        validate_private_bind_host(&self.bind_host)?;
-        validate_listener_port(self.port)?;
+        validate_private_bind_host(self.bind.ip())?;
+        validate_listener_port(self.bind.socket_addr().port())?;
         // Sharing the evidence binding would publish the counters on the
         // listener the public contract describes, which is the separation this
         // block exists to enforce.
-        let metrics_ip: IpAddr = self
-            .bind_host
-            .parse()
-            .expect("validated metrics listener address is numeric");
-        let evidence_ip: IpAddr = evidence_listener
-            .bind_host
-            .parse()
-            .expect("validated evidence listener address is numeric");
+        let metrics_ip = self.bind.ip();
+        let evidence_ip = evidence_listener.bind.ip();
         // Linux commonly creates an IPv6 wildcard socket as dual-stack, so
         // `[::]:port` can also occupy the corresponding IPv4 port. Evidence
         // does not force IPV6_V6ONLY, and configuration validation must be
@@ -1577,7 +1929,9 @@ impl MetricsListenerConfig {
             IpAddr::V6(ip) => ip.is_unspecified(),
         };
         let binding_overlaps = metrics_ip == evidence_ip || wildcard_covers_metrics;
-        if binding_overlaps && self.port == evidence_listener.port {
+        if binding_overlaps
+            && self.bind.socket_addr().port() == evidence_listener.bind.socket_addr().port()
+        {
             return invalid("metricsListener must not share the evidence listener binding");
         }
         Ok(())
@@ -1599,39 +1953,27 @@ fn validate_listener_port(port: u16) -> Result<(), ConfigError> {
 /// Accept only numeric loopback, RFC 1918 private IPv4, and RFC 4193
 /// unique-local IPv6 bindings. Every listener this service opens is an
 /// operator-network listener; TLS and exposure are upstream concerns.
-fn validate_private_bind_host(bind_host: &str) -> Result<(), ConfigError> {
-    if bind_host.len() < 2 || bind_host.len() > 64 {
-        return invalid("listener bindHost length is invalid");
-    }
-    let ip: IpAddr = bind_host
-        .parse()
-        .map_err(|_| ConfigError::Invalid("listener bindHost must be a private numeric IP"))?;
+fn validate_private_bind_host(ip: IpAddr) -> Result<(), ConfigError> {
     let private = match ip {
         IpAddr::V4(ip) => ip.is_loopback() || ip.is_private(),
         IpAddr::V6(ip) => ip.is_loopback() || is_unique_local(ip),
     };
     if !private || ip.is_unspecified() || ip.is_multicast() {
-        return invalid("listener bindHost must be loopback or private");
+        return invalid("listener bind address must be loopback or private");
     }
     Ok(())
 }
 
 /// Accept a wildcard or private numeric address only when the operator has
 /// explicitly placed the listener on a container-private network.
-fn validate_container_private_bind_host(bind_host: &str) -> Result<(), ConfigError> {
-    if bind_host.len() < 2 || bind_host.len() > 64 {
-        return invalid("listener bindHost length is invalid");
-    }
-    let ip: IpAddr = bind_host
-        .parse()
-        .map_err(|_| ConfigError::Invalid("listener bindHost must be a numeric IP"))?;
+fn validate_container_private_bind_host(ip: IpAddr) -> Result<(), ConfigError> {
     let private_or_unspecified = match ip {
         IpAddr::V4(ip) => ip.is_unspecified() || ip.is_loopback() || ip.is_private(),
         IpAddr::V6(ip) => ip.is_unspecified() || ip.is_loopback() || is_unique_local(ip),
     };
     if !private_or_unspecified || ip.is_multicast() {
         return invalid(
-            "container-private listener bindHost must be unspecified, loopback, or private",
+            "container-private listener bind address must be unspecified, loopback, or private",
         );
     }
     Ok(())
@@ -1647,15 +1989,29 @@ pub enum TlsTermination {
     OperatorControlledUpstream,
 }
 
+/// The governed access-token rules. Evidence accepts OIDC access tokens only,
+/// so the block holds exactly one member.
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuthenticationConfig {
-    pub kind: AuthenticationKind,
-    pub issuer: String,
-    pub audiences: Vec<String>,
+    pub oidc: OidcAuthenticationConfig,
+}
+
+impl AuthenticationConfig {
+    fn validate(&self, assurance_profile: AssuranceProfile) -> Result<(), ConfigError> {
+        self.oidc.validate(assurance_profile)
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OidcAuthenticationConfig {
+    /// The exact issuer, the one audience every token carries, and the JWKS
+    /// source. Evidence reads keys only from an explicit `uri` source.
+    #[serde(flatten)]
+    pub provider: OidcIssuerConfig,
     pub token_types: Vec<AccessTokenType>,
     pub algorithms: Vec<AccessTokenAlgorithm>,
-    pub jwks_uri: String,
     pub principal_claim: String,
     pub requester_tags_claim: String,
     pub evidence_audience_claim: String,
@@ -1702,17 +2058,40 @@ pub struct AuthenticationConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_claim: Option<String>,
     /// Logical name of the private certificate authority the runtime file
-    /// binds for the `jwks_uri` connection, trusted beside the system roots
+    /// binds for the JWKS connection, trusted beside the system roots
     /// for that connection alone. Absent trusts the system roots only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls_trust_profile: Option<String>,
 }
 
-impl AuthenticationConfig {
+impl OidcAuthenticationConfig {
+    /// The exact issuer accepted in `iss`.
+    pub fn issuer(&self) -> &str {
+        &self.provider.issuer
+    }
+
+    /// The one audience every accepted token carries in `aud`.
+    pub fn audience(&self) -> &str {
+        &self.provider.audience
+    }
+
+    /// The JWKS URI. Validation refuses every source other than `uri`, so a
+    /// validated configuration always has one; an unvalidated one answers
+    /// with an empty string, which no URL parser accepts.
+    pub fn jwks_uri(&self) -> &str {
+        self.provider.jwks_source.uri().unwrap_or("")
+    }
+
     fn validate(&self, assurance_profile: AssuranceProfile) -> Result<(), ConfigError> {
-        let issuer = Url::parse(&self.issuer)
+        let JwksSource::Uri { .. } = &self.provider.jwks_source else {
+            return Err(ConfigError::InvalidField(
+                "Evidence reads access-token keys only from jwksSource kind uri",
+                "authentication.oidc.jwksSource",
+            ));
+        };
+        let issuer = Url::parse(self.issuer())
             .map_err(|_| ConfigError::Invalid("authentication issuer is invalid"))?;
-        let jwks_uri = Url::parse(&self.jwks_uri)
+        let jwks_uri = Url::parse(self.jwks_uri())
             .map_err(|_| ConfigError::Invalid("authentication JWKS URI is invalid"))?;
         if issuer.scheme() == "http" || jwks_uri.scheme() == "http" {
             if assurance_profile != AssuranceProfile::Local {
@@ -1723,7 +2102,7 @@ impl AuthenticationConfig {
             // JWKS served from that exact origin. It is not a permission for
             // private-network HTTP, and a JWKS origin or port other than the
             // issuer's is not supervised by the issuer that vouches for it.
-            let origin = validate_local_issuer_origin(&self.issuer)?;
+            let origin = validate_local_issuer_origin(self.issuer())?;
             if jwks_uri.scheme() != "http"
                 || jwks_uri.host_str() != Some("127.0.0.1")
                 || jwks_uri.port() != issuer.port()
@@ -1732,7 +2111,7 @@ impl AuthenticationConfig {
                 || jwks_uri.fragment().is_some()
                 || !jwks_uri.username().is_empty()
                 || jwks_uri.password().is_some()
-                || self.jwks_uri != format!("{origin}{}", jwks_uri.path())
+                || self.jwks_uri() != format!("{origin}{}", jwks_uri.path())
             {
                 return invalid(
                     "local authentication JWKS URI must use the exact issuer origin, an absolute path, and no query or fragment",
@@ -1744,9 +2123,20 @@ impl AuthenticationConfig {
                 );
             }
         } else {
-            validate_https_issuer(&self.issuer)?;
-            validate_https_url(&self.jwks_uri, false)?;
+            validate_https_issuer(self.issuer())?;
+            validate_https_url(self.jwks_uri(), false)?;
         }
+        self.provider
+            .check(
+                "authentication.oidc",
+                assurance_profile == AssuranceProfile::Local,
+            )
+            .map_err(|_| {
+                ConfigError::InvalidField(
+                    "the OIDC issuer, audience, or JWKS source is invalid",
+                    "authentication.oidc",
+                )
+            })?;
         if self
             .tls_trust_profile
             .as_deref()
@@ -1754,7 +2144,6 @@ impl AuthenticationConfig {
         {
             return invalid("authentication TLS trust profile identifier is invalid");
         }
-        validate_unique_strings(&self.audiences, 1, 16, 1, 512, "authentication audiences")?;
         validate_unique(&self.token_types, 1, 4, "authentication tokenTypes")?;
         validate_unique(&self.algorithms, 1, 3, "authentication algorithms")?;
         validate_range(
@@ -1865,15 +2254,15 @@ impl AuthenticationConfig {
         if assurance_profile != AssuranceProfile::Local {
             return false;
         }
-        let Ok(issuer) = Url::parse(&self.issuer) else {
+        let Ok(issuer) = Url::parse(self.issuer()) else {
             return false;
         };
-        let Ok(jwks_uri) = Url::parse(&self.jwks_uri) else {
+        let Ok(jwks_uri) = Url::parse(self.jwks_uri()) else {
             return false;
         };
         issuer.scheme() == "http"
             && jwks_uri.scheme() == "http"
-            && validate_local_issuer_origin(&self.issuer).is_ok()
+            && validate_local_issuer_origin(self.issuer()).is_ok()
             && jwks_uri.host_str() == Some("127.0.0.1")
             && jwks_uri.port() == issuer.port()
             && jwks_uri.path().starts_with('/')
@@ -1917,12 +2306,6 @@ fn validate_local_issuer_origin(value: &str) -> Result<&str, ConfigError> {
 }
 
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum AuthenticationKind {
-    OidcAccessToken,
-}
-
-#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum AccessTokenType {
     #[serde(rename = "at+jwt")]
     AtJwt,
@@ -1937,74 +2320,15 @@ pub enum AccessTokenAlgorithm {
     RS256,
 }
 
-#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SecretProvider {
-    Environment,
-    File,
-}
-
-#[derive(Clone, Eq, Ord, PartialEq, PartialOrd, Hash)]
-pub struct SecretRef(String);
-
-impl SecretRef {
-    pub fn parse(value: &str) -> Result<Self, ConfigError> {
-        if let Some(name) = value.strip_prefix("secret:file/") {
-            if valid_file_secret_name(name) {
-                return Ok(Self(value.to_owned()));
-            }
-        }
-        invalid("secret reference does not use an exact permitted grammar")
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    pub fn provider(&self) -> SecretProvider {
-        SecretProvider::File
-    }
-}
-
-impl fmt::Debug for SecretRef {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_tuple("SecretRef").field(&self.0).finish()
-    }
-}
-
-impl<'de> Deserialize<'de> for SecretRef {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Self::parse(&value).map_err(de::Error::custom)
-    }
-}
-
-impl Serialize for SecretRef {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&self.0)
-    }
-}
-
-fn valid_file_secret_name(name: &str) -> bool {
-    let bytes = name.as_bytes();
-    matches!(bytes.first(), Some(b'a'..=b'z'))
-        && bytes.len() <= 128
-        && bytes[1..].iter().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
-        })
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuditConfig {
     pub format: AuditFormat,
-    pub hash_secret_ref: SecretRef,
+    /// The secret keying audit pseudonyms.
+    #[serde(flatten)]
+    pub key: AuditKeyConfig,
+    /// Labels the pseudonym key generation, so a rotated key is told apart
+    /// from the one it replaced.
     pub hash_key_version: u32,
     pub fail_closed: bool,
 }
@@ -2027,7 +2351,7 @@ pub enum AuditFormat {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SubjectBindingConfig {
-    pub secret_ref: SecretRef,
+    pub secret_ref: SecretReference,
     pub key_version: u32,
 }
 
@@ -2627,6 +2951,15 @@ impl SourceConfig {
         }
     }
 
+    /// The credentials an inline HTTP source presents, where the transport
+    /// opens a connection of its own.
+    pub fn authentication(&self) -> Option<&SourceAuthentication> {
+        match self {
+            Self::HttpJson { authentication, .. } => Some(authentication),
+            Self::SqliteExtract { .. } => None,
+        }
+    }
+
     /// The private trust profile an outbound connection uses, where the
     /// transport opens one.
     pub fn tls_trust_profile(&self) -> Option<&str> {
@@ -2910,13 +3243,13 @@ pub enum SourceAuthentication {
     None {},
     Basic {
         #[serde(rename = "usernameRef")]
-        username_ref: SecretRef,
+        username_ref: SecretReference,
         #[serde(rename = "passwordRef")]
-        password_ref: SecretRef,
+        password_ref: SecretReference,
     },
     StaticAuthorization {
         #[serde(rename = "tokenRef")]
-        token_ref: SecretRef,
+        token_ref: SecretReference,
         /// Authentication scheme the resolved token is presented under.
         ///
         /// RFC 9110 section 11.1 lets the origin choose the scheme, and
@@ -2930,13 +3263,13 @@ pub enum SourceAuthentication {
         #[serde(rename = "headerName")]
         header_name: String,
         #[serde(rename = "valueRef")]
-        value_ref: SecretRef,
+        value_ref: SecretReference,
     },
     Oauth2ClientCredentials {
         #[serde(rename = "tokenEndpoint")]
         token_endpoint: String,
         #[serde(rename = "clientIdRef")]
-        client_id_ref: SecretRef,
+        client_id_ref: SecretReference,
         /// Shared client secret, for the RFC 6749 section 2.3.1 form.
         ///
         /// Present with `credentialPlacement` and without
@@ -2946,7 +3279,7 @@ pub enum SourceAuthentication {
             default,
             skip_serializing_if = "Option::is_none"
         )]
-        client_secret_ref: Option<SecretRef>,
+        client_secret_ref: Option<SecretReference>,
         /// Private JWK the client assertion is signed with, for the RFC 7523
         /// section 2.2 form.
         ///
@@ -2957,7 +3290,7 @@ pub enum SourceAuthentication {
             default,
             skip_serializing_if = "Option::is_none"
         )]
-        client_assertion_key_ref: Option<SecretRef>,
+        client_assertion_key_ref: Option<SecretReference>,
         /// Audience claim of the signed assertion; set only with
         /// `clientAssertionKeyRef`, and defaulting to `tokenEndpoint`.
         ///
@@ -3115,7 +3448,7 @@ impl SourceAuthentication {
         }
     }
 
-    pub fn secret_refs(&self) -> Vec<&SecretRef> {
+    pub fn secret_refs(&self) -> Vec<&SecretReference> {
         match self {
             Self::None {} => Vec::new(),
             Self::Basic {
@@ -5848,7 +6181,8 @@ mod tests {
                 match field {
                     "authentication" => {
                         **authentication = SourceAuthentication::StaticAuthorization {
-                            token_ref: SecretRef::parse("secret:file/different-token").unwrap(),
+                            token_ref: SecretReference::parse("secret:file/different-token")
+                                .unwrap(),
                             scheme: None,
                         }
                     }
@@ -6074,13 +6408,19 @@ mod tests {
         ))
         .expect("strict fixture validates");
         config.assurance_profile = AssuranceProfile::Local;
-        config.authentication.issuer = "http://127.0.0.1:8081".to_owned();
-        config.authentication.jwks_uri = "http://127.0.0.1:8081/.well-known/jwks.json".to_owned();
+        config.authentication.oidc.provider.issuer = "http://127.0.0.1:8081".to_owned();
+        config.authentication.oidc.provider.jwks_source =
+            registry_platform_config::JwksSource::Uri {
+                uri: "http://127.0.0.1:8081/.well-known/jwks.json".to_owned(),
+            };
         config
             .validate()
             .expect("local profile accepts the supervised loopback identity");
         // The JWKS path is the configured issuer's to choose.
-        config.authentication.jwks_uri = "http://127.0.0.1:8081/oauth2/jwks".to_owned();
+        config.authentication.oidc.provider.jwks_source =
+            registry_platform_config::JwksSource::Uri {
+                uri: "http://127.0.0.1:8081/oauth2/jwks".to_owned(),
+            };
         config
             .validate()
             .expect("local profile accepts any same-origin absolute JWKS path");
@@ -6096,7 +6436,7 @@ mod tests {
             "http://127.0.0.1:8081/",
         ] {
             let mut candidate = config.clone();
-            candidate.authentication.issuer = invalid.to_owned();
+            candidate.authentication.oidc.provider.issuer = invalid.to_owned();
             assert!(
                 candidate.validate().is_err(),
                 "local assurance accepted issuer {invalid}"
@@ -6116,7 +6456,10 @@ mod tests {
             "http://user@127.0.0.1:8081/oauth2/jwks",
         ] {
             let mut candidate = config.clone();
-            candidate.authentication.jwks_uri = invalid.to_owned();
+            candidate.authentication.oidc.provider.jwks_source =
+                registry_platform_config::JwksSource::Uri {
+                    uri: invalid.to_owned(),
+                };
             assert!(
                 candidate.validate().is_err(),
                 "local assurance accepted JWKS URI {invalid}"
@@ -6145,14 +6488,14 @@ mod tests {
             "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
         ))
         .expect("strict fixture validates");
-        config.authentication.tls_trust_profile = Some("issuer-pki".to_owned());
+        config.authentication.oidc.tls_trust_profile = Some("issuer-pki".to_owned());
         config
             .validate()
             .expect("an HTTPS key set accepts a named trust profile");
 
         for invalid in ["", "Issuer-PKI", "issuer pki", "../issuer"] {
             let mut candidate = config.clone();
-            candidate.authentication.tls_trust_profile = Some(invalid.to_owned());
+            candidate.authentication.oidc.tls_trust_profile = Some(invalid.to_owned());
             assert!(
                 matches!(
                     candidate.validate(),
@@ -6166,8 +6509,11 @@ mod tests {
 
         let mut local = config.clone();
         local.assurance_profile = AssuranceProfile::Local;
-        local.authentication.issuer = "http://127.0.0.1:8081".to_owned();
-        local.authentication.jwks_uri = "http://127.0.0.1:8081/.well-known/jwks.json".to_owned();
+        local.authentication.oidc.provider.issuer = "http://127.0.0.1:8081".to_owned();
+        local.authentication.oidc.provider.jwks_source =
+            registry_platform_config::JwksSource::Uri {
+                uri: "http://127.0.0.1:8081/.well-known/jwks.json".to_owned(),
+            };
         assert!(matches!(
             local.validate(),
             Err(ConfigError::Invalid(
@@ -6189,8 +6535,8 @@ mod tests {
             .validate()
             .expect("absent admission fields keep the existing behavior");
 
-        config.authentication.allowed_clients = Some(vec!["records-reader".to_owned()]);
-        config.authentication.required_scopes = Some(vec!["evidence:invoke".to_owned()]);
+        config.authentication.oidc.allowed_clients = Some(vec!["records-reader".to_owned()]);
+        config.authentication.oidc.required_scopes = Some(vec!["evidence:invoke".to_owned()]);
         config.validate().expect("stated admission validates");
 
         for clients in [
@@ -6201,7 +6547,7 @@ mod tests {
             vec!["reader".to_owned(), "reader".to_owned()],
         ] {
             let mut candidate = config.clone();
-            candidate.authentication.allowed_clients = Some(clients.clone());
+            candidate.authentication.oidc.allowed_clients = Some(clients.clone());
             assert!(
                 candidate.validate().is_err(),
                 "accepted allowedClients {clients:?}"
@@ -6216,7 +6562,7 @@ mod tests {
             vec!["evidence:invoke".to_owned(), "evidence:invoke".to_owned()],
         ] {
             let mut candidate = config.clone();
-            candidate.authentication.required_scopes = Some(scopes.clone());
+            candidate.authentication.oidc.required_scopes = Some(scopes.clone());
             assert!(
                 candidate.validate().is_err(),
                 "accepted requiredScopes {scopes:?}"
@@ -6237,7 +6583,7 @@ mod tests {
             .validate()
             .expect("absent assertionIssuers keeps the existing behavior");
 
-        config.authentication.assertion_issuers = Some(BTreeMap::from([
+        config.authentication.oidc.assertion_issuers = Some(BTreeMap::from([
             (
                 "evidence-task-agent".to_owned(),
                 vec!["https://identity.invalid".to_owned()],
@@ -6268,7 +6614,7 @@ mod tests {
                 .collect(),
         ] {
             let mut candidate = config.clone();
-            candidate.authentication.assertion_issuers = Some(clients.clone());
+            candidate.authentication.oidc.assertion_issuers = Some(clients.clone());
             assert!(
                 candidate.validate().is_err(),
                 "accepted assertionIssuers {clients:?}"
@@ -6285,7 +6631,7 @@ mod tests {
             ],
         ] {
             let mut candidate = config.clone();
-            candidate.authentication.assertion_issuers = Some(BTreeMap::from([(
+            candidate.authentication.oidc.assertion_issuers = Some(BTreeMap::from([(
                 "evidence-task-agent".to_owned(),
                 issuers.clone(),
             )]));
@@ -6546,9 +6892,10 @@ mod tests {
         let mut duplicate = config.clone();
         duplicate
             .authentication
+            .oidc
             .claims
             .grant_id
-            .clone_from(&config.authentication.claims.grant_source_issuer);
+            .clone_from(&config.authentication.oidc.claims.grant_source_issuer);
         assert_eq!(
             duplicate.validate(),
             invalid("contextual authorization claim names are invalid"),
@@ -6556,8 +6903,8 @@ mod tests {
         );
 
         let mut duplicate_actor = config.clone();
-        duplicate_actor.authentication.actor_claim =
-            Some(config.authentication.requester_tags_claim.clone());
+        duplicate_actor.authentication.oidc.actor_claim =
+            Some(config.authentication.oidc.requester_tags_claim.clone());
         assert_eq!(
             duplicate_actor.validate(),
             invalid("authority claim names must be distinct"),
@@ -6565,8 +6912,8 @@ mod tests {
         );
 
         let mut shared_shadows_product = config.clone();
-        shared_shadows_product.authentication.claims.purpose =
-            config.authentication.requester_tags_claim.clone();
+        shared_shadows_product.authentication.oidc.claims.purpose =
+            config.authentication.oidc.requester_tags_claim.clone();
         assert_eq!(
             shared_shadows_product.validate(),
             invalid("authority claim names must be distinct"),
@@ -6582,7 +6929,7 @@ mod tests {
         // to explain why.
         for reserved in ["iss", "aud", "exp", "iat", "nbf", "jti", "client_id", "cnf"] {
             let mut candidate = config.clone();
-            candidate.authentication.claims.grant_source_issuer = reserved.to_owned();
+            candidate.authentication.oidc.claims.grant_source_issuer = reserved.to_owned();
             assert_eq!(
                 candidate.validate(),
                 invalid("contextual authorization claim names are invalid"),
@@ -6593,16 +6940,18 @@ mod tests {
         // `sub` carries the principal, so the principal claim may name it and
         // the fixture does. Any other claim naming it would read the principal.
         let mut principal_is_subject = config.clone();
-        principal_is_subject.authentication.principal_claim = "sub".to_owned();
+        principal_is_subject.authentication.oidc.principal_claim = "sub".to_owned();
         principal_is_subject
             .validate()
             .expect("the principal may be read from sub");
         // Moved off `sub` first, so this proves the shadowing rule rather than
         // colliding with the principal and tripping distinctness instead.
         let mut source_issuer_is_subject = config.clone();
-        source_issuer_is_subject.authentication.principal_claim = "evidence_principal".to_owned();
+        source_issuer_is_subject.authentication.oidc.principal_claim =
+            "evidence_principal".to_owned();
         source_issuer_is_subject
             .authentication
+            .oidc
             .claims
             .grant_source_issuer = "sub".to_owned();
         assert_eq!(
@@ -6612,7 +6961,7 @@ mod tests {
         );
 
         let mut distinct = config.clone();
-        distinct.authentication.actor_claim = Some("evidence_actor".to_owned());
+        distinct.authentication.oidc.actor_claim = Some("evidence_actor".to_owned());
         distinct
             .validate()
             .expect("distinct, unreserved claim names load");
@@ -6640,14 +6989,15 @@ mod tests {
         );
 
         let mut no_global_admission = config.clone();
-        no_global_admission.authentication.allowed_clients = None;
+        no_global_admission.authentication.oidc.allowed_clients = None;
         assert_eq!(
             no_global_admission.validate(),
             invalid("task-grant authority profiles require authentication allowedClients")
         );
 
         let mut client_not_admitted = config;
-        client_not_admitted.authentication.allowed_clients = Some(vec!["other-client".to_owned()]);
+        client_not_admitted.authentication.oidc.allowed_clients =
+            Some(vec!["other-client".to_owned()]);
         assert_eq!(
             client_not_admitted.validate(),
             invalid(
@@ -6667,7 +7017,8 @@ mod tests {
         );
 
         let mut requester_clients = config.clone();
-        requester_clients.authentication.allowed_clients = Some(vec!["evidence-cli".to_owned()]);
+        requester_clients.authentication.oidc.allowed_clients =
+            Some(vec!["evidence-cli".to_owned()]);
         requester_clients.authority_profiles.0[0]
             .1
             .requester_clients = vec!["evidence-cli".to_owned()];
@@ -7653,12 +8004,15 @@ mod tests {
 
     #[test]
     fn exact_secret_reference_grammars_are_closed() {
-        for valid in ["secret:file/a", "secret:file/source-token_v2.json"] {
-            assert!(SecretRef::parse(valid).is_ok(), "{valid}");
+        for valid in [
+            "secret:file/a",
+            "secret:file/source-token_v2.json",
+            "secret:env/SOURCE_2_PASSWORD",
+        ] {
+            assert!(SecretReference::parse(valid).is_ok(), "{valid}");
         }
         for invalid in [
             "secret:env/",
-            "secret:env/SOURCE_2_PASSWORD",
             "secret:env/lower",
             "secret:env/A-B",
             "secret:file/Upper",
@@ -7666,7 +8020,7 @@ mod tests {
             "secret:file/.token",
             "plain-value",
         ] {
-            assert!(SecretRef::parse(invalid).is_err(), "{invalid}");
+            assert!(SecretReference::parse(invalid).is_err(), "{invalid}");
         }
     }
 
@@ -8121,8 +8475,8 @@ mod tests {
         assert_ne!(unexpected, valid, "fixture mutation must remain effective");
         assert!(EvidenceConfig::parse_yaml(unexpected.as_bytes()).is_err());
         let literal_secret = valid.replacen(
-            "hashSecretRef: secret:file/audit-hash-key",
-            "hashSecretRef: literal-audit-key",
+            "hashKeyRef: secret:file/audit-hash-key",
+            "hashKeyRef: literal-audit-key",
             1,
         );
         assert_ne!(
@@ -8382,9 +8736,10 @@ mod tests {
                 EvidenceConfig::parse_yaml(valid.as_bytes()).expect("fixture validates");
             *http_authentication(&mut oauth) = SourceAuthentication::Oauth2ClientCredentials {
                 token_endpoint: format!("https://source.invalid/token{query}"),
-                client_id_ref: SecretRef::parse("secret:file/oauth-client-id").expect("secret ref"),
+                client_id_ref: SecretReference::parse("secret:file/oauth-client-id")
+                    .expect("secret ref"),
                 client_secret_ref: Some(
-                    SecretRef::parse("secret:file/oauth-client-secret").expect("secret ref"),
+                    SecretReference::parse("secret:file/oauth-client-secret").expect("secret ref"),
                 ),
                 client_assertion_key_ref: None,
                 client_assertion_audience: None,
@@ -8469,9 +8824,10 @@ mod tests {
                 EvidenceConfig::parse_yaml(valid.as_bytes()).expect("fixture validates");
             *http_authentication(&mut oauth) = SourceAuthentication::Oauth2ClientCredentials {
                 token_endpoint: "https://source.invalid/token".to_owned(),
-                client_id_ref: SecretRef::parse("secret:file/oauth-client-id").expect("secret ref"),
+                client_id_ref: SecretReference::parse("secret:file/oauth-client-id")
+                    .expect("secret ref"),
                 client_secret_ref: Some(
-                    SecretRef::parse("secret:file/oauth-client-secret").expect("secret ref"),
+                    SecretReference::parse("secret:file/oauth-client-secret").expect("secret ref"),
                 ),
                 client_assertion_key_ref: None,
                 client_assertion_audience: None,
@@ -8910,14 +9266,24 @@ mod tests {
         );
     }
 
+    /// A `listener.bind` value for `host` and `port`, bracketing an IPv6 host.
+    fn bind_of(host: &str, port: u16) -> String {
+        if host.contains(':') {
+            format!("'[{host}]:{port}'")
+        } else {
+            format!("{host}:{port}")
+        }
+    }
+
     #[test]
     fn runtime_document_is_closed_and_contains_no_governed_override_surface() {
         let valid = br#"
-version: 1
-bundleDirectory: /etc/registry-evidence/bundle
+apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+kind: EvidenceRuntimeConfig
+package:
+  root: /etc/registry-evidence/bundle
 listener:
-  bindHost: 127.0.0.1
-  port: 8080
+  bind: 127.0.0.1:8080
   tlsTermination: operator-controlled-upstream
   trustProxyIdentityHeaders: false
   maximumRequestBytes: 65536
@@ -8959,10 +9325,13 @@ outboundTls:
         for rejected_host in ["evidence.internal", "0.0.0.0", "8.8.8.8", "ff02::1"] {
             let candidate = String::from_utf8(valid.to_vec())
                 .expect("runtime fixture is UTF-8")
-                .replace("bindHost: 127.0.0.1", &format!("bindHost: {rejected_host}"));
+                .replace(
+                    "bind: 127.0.0.1:8080",
+                    &format!("bind: {}", bind_of(rejected_host, 8080)),
+                );
             assert!(
                 RuntimeConfig::parse_yaml(candidate.as_bytes()).is_err(),
-                "runtime accepted prohibited bindHost {rejected_host}"
+                "runtime accepted prohibited bind host {rejected_host}"
             );
         }
 
@@ -8970,8 +9339,11 @@ outboundTls:
             let candidate = String::from_utf8(valid.to_vec())
                 .expect("runtime fixture is UTF-8")
                 .replace(
-                    "bindHost: 127.0.0.1",
-                    &format!("bindHost: '{wildcard}'\n  networkExposure: container-private"),
+                    "bind: 127.0.0.1:8080",
+                    &format!(
+                        "bind: {}\n  networkExposure: container-private",
+                        bind_of(wildcard, 8080)
+                    ),
                 );
             let parsed = RuntimeConfig::parse_yaml(candidate.as_bytes())
                 .expect("explicit container-private wildcard parses");
@@ -8985,12 +9357,15 @@ outboundTls:
             let candidate = String::from_utf8(valid.to_vec())
                 .expect("runtime fixture is UTF-8")
                 .replace(
-                    "bindHost: 127.0.0.1",
-                    &format!("bindHost: '{rejected_host}'\n  networkExposure: container-private"),
+                    "bind: 127.0.0.1:8080",
+                    &format!(
+                        "bind: {}\n  networkExposure: container-private",
+                        bind_of(rejected_host, 8080)
+                    ),
                 );
             assert!(
                 RuntimeConfig::parse_yaml(candidate.as_bytes()).is_err(),
-                "container-private mode accepted prohibited bindHost {rejected_host}"
+                "container-private mode accepted prohibited bind host {rejected_host}"
             );
         }
         for governed_key in [
@@ -9018,9 +9393,10 @@ outboundTls:
                 "unknown field",
                 "governed bundle key {governed_key} was rejected for the wrong reason"
             );
-            assert!(
-                fault.location().is_some(),
-                "governed bundle key {governed_key} was rejected without a location"
+            assert_eq!(
+                fault.path(),
+                Some(governed_key),
+                "governed bundle key {governed_key} was rejected without naming it"
             );
             assert!(
                 !validator.is_valid(&bundle_contract_instance(&candidate)),
@@ -9036,11 +9412,12 @@ outboundTls:
     #[test]
     fn the_optional_metrics_listener_is_absent_by_default_and_stays_operator_private() {
         let base = r#"
-version: 1
-bundleDirectory: /etc/registry-evidence/bundle
+apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+kind: EvidenceRuntimeConfig
+package:
+  root: /etc/registry-evidence/bundle
 listener:
-  bindHost: 127.0.0.1
-  port: 8080
+  bind: 127.0.0.1:8080
   tlsTermination: operator-controlled-upstream
   trustProxyIdentityHeaders: false
   maximumRequestBytes: 65536
@@ -9070,28 +9447,29 @@ outboundTls:
             "a deployment that asked for no metrics listener must not get one"
         );
 
-        let configured = format!("{base}metricsListener:\n  bindHost: 127.0.0.1\n  port: 9090\n");
+        let configured = format!("{base}metricsListener:\n  bind: 127.0.0.1:9090\n");
         assert!(validator.is_valid(&bundle_contract_instance(configured.as_bytes())));
         let parsed =
             RuntimeConfig::parse_yaml(configured.as_bytes()).expect("metrics listener parses");
         let metrics = parsed
             .metrics_listener
             .expect("the configured metrics listener is retained");
-        assert_eq!(metrics.bind_host, "127.0.0.1");
-        assert_eq!(metrics.port, 9090);
+        assert_eq!(metrics.bind.socket_addr().to_string(), "127.0.0.1:9090");
 
         for rejected_host in ["evidence.internal", "0.0.0.0", "8.8.8.8", "ff02::1"] {
-            let candidate =
-                format!("{base}metricsListener:\n  bindHost: {rejected_host}\n  port: 9090\n");
+            let candidate = format!(
+                "{base}metricsListener:\n  bind: {}\n",
+                bind_of(rejected_host, 9090)
+            );
             assert!(
                 RuntimeConfig::parse_yaml(candidate.as_bytes()).is_err(),
-                "metrics listener accepted prohibited bindHost {rejected_host}"
+                "metrics listener accepted prohibited bind host {rejected_host}"
             );
         }
 
         // Reusing the evidence binding would put the counters on the listener
         // the public contract describes.
-        let shared = format!("{base}metricsListener:\n  bindHost: 127.0.0.1\n  port: 8080\n");
+        let shared = format!("{base}metricsListener:\n  bind: 127.0.0.1:8080\n");
         assert!(matches!(
             RuntimeConfig::parse_yaml(shared.as_bytes()),
             Err(ConfigError::Invalid(
@@ -9101,11 +9479,16 @@ outboundTls:
 
         for (wildcard, private) in [("0.0.0.0", "10.0.0.10"), ("::", "fd00::10")] {
             let wildcard_base = base.replace(
-                "bindHost: 127.0.0.1",
-                &format!("bindHost: '{wildcard}'\n  networkExposure: container-private"),
+                "bind: 127.0.0.1:8080",
+                &format!(
+                    "bind: {}\n  networkExposure: container-private",
+                    bind_of(wildcard, 8080)
+                ),
             );
-            let shared =
-                format!("{wildcard_base}metricsListener:\n  bindHost: {private}\n  port: 8080\n");
+            let shared = format!(
+                "{wildcard_base}metricsListener:\n  bind: {}\n",
+                bind_of(private, 8080)
+            );
             assert!(matches!(
                 RuntimeConfig::parse_yaml(shared.as_bytes()),
                 Err(ConfigError::Invalid(
@@ -9114,11 +9497,11 @@ outboundTls:
             ));
         }
         let dual_stack_base = base.replace(
-            "bindHost: 127.0.0.1",
-            "bindHost: '::'\n  networkExposure: container-private",
+            "bind: 127.0.0.1:8080",
+            "bind: '[::]:8080'\n  networkExposure: container-private",
         );
         let dual_stack_collision =
-            format!("{dual_stack_base}metricsListener:\n  bindHost: 127.0.0.1\n  port: 8080\n");
+            format!("{dual_stack_base}metricsListener:\n  bind: 127.0.0.1:8080\n");
         assert!(matches!(
             RuntimeConfig::parse_yaml(dual_stack_collision.as_bytes()),
             Err(ConfigError::Invalid(
@@ -9127,9 +9510,8 @@ outboundTls:
         ));
 
         // The block is closed like every other level of the document.
-        let unknown = format!(
-            "{base}metricsListener:\n  bindHost: 127.0.0.1\n  port: 9090\n  path: /telemetry\n"
-        );
+        let unknown =
+            format!("{base}metricsListener:\n  bind: 127.0.0.1:9090\n  path: /telemetry\n");
         assert!(RuntimeConfig::parse_yaml(unknown.as_bytes()).is_err());
         assert!(!validator.is_valid(&bundle_contract_instance(unknown.as_bytes())));
     }
@@ -9142,11 +9524,12 @@ outboundTls:
     #[test]
     fn the_optional_operator_acquisition_capabilities_enable_nothing_by_default() {
         let base = r#"
-version: 1
-bundleDirectory: /etc/registry-evidence/bundle
+apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+kind: EvidenceRuntimeConfig
+package:
+  root: /etc/registry-evidence/bundle
 listener:
-  bindHost: 127.0.0.1
-  port: 8080
+  bind: 127.0.0.1:8080
   tlsTermination: operator-controlled-upstream
   trustProxyIdentityHeaders: false
   maximumRequestBytes: 65536
@@ -9478,11 +9861,12 @@ outboundTls:
     #[test]
     fn a_listener_port_of_zero_is_refused_on_both_listeners() {
         let base = r#"
-version: 1
-bundleDirectory: /etc/registry-evidence/bundle
+apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+kind: EvidenceRuntimeConfig
+package:
+  root: /etc/registry-evidence/bundle
 listener:
-  bindHost: 127.0.0.1
-  port: 8080
+  bind: 127.0.0.1:8080
   tlsTermination: operator-controlled-upstream
   trustProxyIdentityHeaders: false
   maximumRequestBytes: 65536
@@ -9508,7 +9892,7 @@ outboundTls:
         let validator = runtime_contract_validator();
         RuntimeConfig::parse_yaml(base.as_bytes()).expect("the configured ports load");
 
-        let ephemeral_evidence = base.replace("port: 8080", "port: 0");
+        let ephemeral_evidence = base.replace("bind: 127.0.0.1:8080", "bind: 127.0.0.1:0");
         assert!(
             RuntimeConfig::parse_yaml(ephemeral_evidence.as_bytes()).is_err(),
             "the evidence listener accepted an ephemeral port"
@@ -9518,8 +9902,7 @@ outboundTls:
             "the published schema must already refuse this, so Rust is matching it"
         );
 
-        let ephemeral_metrics =
-            format!("{base}metricsListener:\n  bindHost: 127.0.0.1\n  port: 0\n");
+        let ephemeral_metrics = format!("{base}metricsListener:\n  bind: 127.0.0.1:0\n");
         assert!(
             RuntimeConfig::parse_yaml(ephemeral_metrics.as_bytes()).is_err(),
             "the metrics listener accepted an ephemeral port"
@@ -9529,8 +9912,8 @@ outboundTls:
         // Both at zero would compare equal and trip the collision rule instead,
         // so the port rule has to be the one that fires.
         let both = format!(
-            "{}metricsListener:\n  bindHost: 127.0.0.1\n  port: 0\n",
-            base.replace("port: 8080", "port: 0")
+            "{}metricsListener:\n  bind: 127.0.0.1:0\n",
+            base.replace("bind: 127.0.0.1:8080", "bind: 127.0.0.1:0")
         );
         assert!(RuntimeConfig::parse_yaml(both.as_bytes()).is_err());
     }
@@ -9584,17 +9967,353 @@ outboundTls:
             "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
         ))
         .expect("fixture validates");
-        config.authentication.issuer = "https://identity.example.test/realms/registry".to_owned();
+        config.authentication.oidc.provider.issuer =
+            "https://identity.example.test/realms/registry".to_owned();
         assert!(config.validate().is_ok());
-        config.authentication.issuer.push_str("?tenant=wrong");
+        config
+            .authentication
+            .oidc
+            .provider
+            .issuer
+            .push_str("?tenant=wrong");
         assert!(config.validate().is_err());
     }
 
+    /// A runtime document every refusal test below edits one member of.
+    const LOADER_RUNTIME_DOCUMENT: &str =
+        "apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+kind: EvidenceRuntimeConfig
+package:
+  root: /etc/registry-evidence/bundle
+listener:
+  bind: 127.0.0.1:8080
+  tlsTermination: operator-controlled-upstream
+  trustProxyIdentityHeaders: false
+  maximumRequestBytes: 65536
+  maximumConcurrentRequests: 64
+  requestTimeoutMilliseconds: 10000
+  shutdownGraceMilliseconds: 30000
+secretProviders:
+  file: {root: /run/secrets/registry-evidence}
+signer:
+  kind: local-jwk
+  privateKeyRef: secret:file/signing-key
+auditStorage:
+  path: /var/lib/registry-evidence/audit/evidence.jsonl
+  maximumFileBytes: 1073741824
+outboundTls:
+  systemRoots: true
+  trustProfiles: {}
+";
+
+    fn runtime_refusal(text: &str) -> SchemaFault {
+        match RuntimeConfig::parse_yaml(text.as_bytes()) {
+            Err(ConfigError::InvalidYaml(fault)) => fault,
+            other => panic!("the runtime document was not refused as a schema fault: {other:?}"),
+        }
+    }
+
     #[test]
-    fn file_secret_references_are_the_only_governed_secret_form() {
-        assert!(SecretRef::parse("secret:file/source-token").is_ok());
-        assert!(SecretRef::parse("secret:env/SOURCE_TOKEN").is_err());
-        assert!(SecretRef::parse("literal-token").is_err());
+    fn the_runtime_document_declares_the_evidence_envelope() {
+        RuntimeConfig::parse_yaml(LOADER_RUNTIME_DOCUMENT.as_bytes())
+            .expect("the enveloped document loads");
+
+        let unenveloped = LOADER_RUNTIME_DOCUMENT
+            .replace(
+                "apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1\n",
+                "",
+            )
+            .replace("kind: EvidenceRuntimeConfig\n", "");
+        let fault = runtime_refusal(&unenveloped);
+        assert_eq!(
+            fault.cause(),
+            "document does not declare the Evidence runtime envelope"
+        );
+        assert_eq!(fault.remedy(), Some(EVIDENCE_RUNTIME_ENVELOPE_REMEDY));
+
+        let other_kind = LOADER_RUNTIME_DOCUMENT
+            .replace("kind: EvidenceRuntimeConfig", "kind: RelayRuntimeConfig");
+        assert_eq!(
+            runtime_refusal(&other_kind).cause(),
+            "document does not declare the Evidence runtime envelope"
+        );
+    }
+
+    #[test]
+    fn every_removed_runtime_key_is_refused_with_its_replacement_named() {
+        let cases = [
+            ("version: 1\n", "version"),
+            (
+                "bundleDirectory: /etc/registry-evidence/bundle\n",
+                "bundleDirectory",
+            ),
+        ];
+        for (member, path) in cases {
+            let fault = runtime_refusal(&format!("{LOADER_RUNTIME_DOCUMENT}{member}"));
+            assert_eq!(fault.cause(), "key is no longer accepted", "{path}");
+            assert_eq!(fault.path(), Some(path));
+            let expected = EVIDENCE_RUNTIME_REMOVED_KEYS
+                .iter()
+                .find(|removed| removed.path == path)
+                .expect("the key is listed")
+                .replacement;
+            assert_eq!(fault.remedy(), Some(expected), "{path}");
+        }
+        for (listener, path) in [
+            ("listener", "listener.bindHost"),
+            ("listener", "listener.port"),
+        ] {
+            let member = path.rsplit('.').next().expect("a leaf");
+            let value = if member == "port" {
+                "8080"
+            } else {
+                "127.0.0.1"
+            };
+            let text = LOADER_RUNTIME_DOCUMENT.replace(
+                &format!("{listener}:\n  bind: 127.0.0.1:8080\n"),
+                &format!("{listener}:\n  bind: 127.0.0.1:8080\n  {member}: {value}\n"),
+            );
+            let fault = runtime_refusal(&text);
+            assert_eq!(fault.path(), Some(path));
+            assert!(
+                fault
+                    .remedy()
+                    .is_some_and(|remedy| remedy.contains("listener.bind")),
+                "{path}"
+            );
+        }
+        let metrics = format!(
+            "{LOADER_RUNTIME_DOCUMENT}metricsListener:\n  bindHost: 127.0.0.1\n  port: 9090\n"
+        );
+        let fault = runtime_refusal(&metrics);
+        assert!(fault
+            .remedy()
+            .is_some_and(|remedy| remedy.contains("metricsListener.bind")));
+    }
+
+    #[test]
+    fn a_duplicated_runtime_key_is_refused() {
+        let duplicated = format!("{LOADER_RUNTIME_DOCUMENT}kind: EvidenceRuntimeConfig\n");
+        assert!(RuntimeConfig::parse_yaml(duplicated.as_bytes()).is_err());
+    }
+
+    /// Substitution fills operator values from the environment. It never
+    /// reaches a secret reference or the provider configuration, because a
+    /// reference that the environment can rename is no longer the reference
+    /// the file declares.
+    #[test]
+    fn environment_substitution_fills_values_and_never_a_secret_reference() {
+        let templated = LOADER_RUNTIME_DOCUMENT.replace(
+            "path: /var/lib/registry-evidence/audit/evidence.jsonl",
+            "path: ${EVIDENCE_AUDIT_PATH}",
+        );
+        let loaded = RuntimeConfig::parse_yaml_with(templated.as_bytes(), |name| {
+            (name == "EVIDENCE_AUDIT_PATH").then(|| "/srv/audit/evidence.jsonl".to_owned())
+        })
+        .expect("the substituted document loads");
+        assert_eq!(
+            loaded.config.audit_storage.path,
+            std::path::PathBuf::from("/srv/audit/evidence.jsonl")
+        );
+        let plain = RuntimeConfig::parse_yaml_with(LOADER_RUNTIME_DOCUMENT.as_bytes(), |_| None)
+            .expect("the plain document loads");
+        assert_ne!(
+            loaded.effective_digest, plain.effective_digest,
+            "the effective digest covers the substituted value"
+        );
+
+        let unset = RuntimeConfig::parse_yaml_with(templated.as_bytes(), |_| None);
+        assert!(
+            unset.is_err(),
+            "an unset variable without a default is refused"
+        );
+
+        for (from, to) in [
+            (
+                "privateKeyRef: secret:file/signing-key",
+                "privateKeyRef: ${SIGNING_KEY_REF}",
+            ),
+            (
+                "file: {root: /run/secrets/registry-evidence}",
+                "file: {root: \"${SECRET_ROOT}\"}",
+            ),
+        ] {
+            let text = LOADER_RUNTIME_DOCUMENT.replace(from, to);
+            let refused = RuntimeConfig::parse_yaml_with(text.as_bytes(), |_| {
+                Some("secret:file/other".to_owned())
+            });
+            let Err(ConfigError::InvalidYaml(fault)) = refused else {
+                panic!("substitution into {from} was accepted");
+            };
+            assert_eq!(
+                fault.cause(),
+                "environment expressions are not accepted in secret references or secretProviders"
+            );
+        }
+    }
+
+    #[test]
+    fn the_environment_secret_provider_is_enabled_only_by_declaration() {
+        let enabled = LOADER_RUNTIME_DOCUMENT.replace(
+            "file: {root: /run/secrets/registry-evidence}",
+            "file: {root: /run/secrets/registry-evidence}\n  environment: {}",
+        );
+        let config = RuntimeConfig::parse_yaml(enabled.as_bytes()).expect("both providers load");
+        assert!(config.secret_providers.environment.is_some());
+
+        let only_environment = LOADER_RUNTIME_DOCUMENT
+            .replace(
+                "file: {root: /run/secrets/registry-evidence}",
+                "environment: {}",
+            )
+            .replace(
+                "privateKeyRef: secret:file/signing-key",
+                "privateKeyRef: secret:env/EVIDENCE_SIGNING_KEY",
+            );
+        RuntimeConfig::parse_yaml(only_environment.as_bytes())
+            .expect("an environment-only deployment loads");
+
+        let undeclared = LOADER_RUNTIME_DOCUMENT.replace(
+            "privateKeyRef: secret:file/signing-key",
+            "privateKeyRef: secret:env/EVIDENCE_SIGNING_KEY",
+        );
+        assert!(
+            RuntimeConfig::parse_yaml(undeclared.as_bytes()).is_err(),
+            "a runtime reference to a provider the file does not enable is refused"
+        );
+
+        let none = LOADER_RUNTIME_DOCUMENT.replace(
+            "secretProviders:\n  file: {root: /run/secrets/registry-evidence}\n",
+            "secretProviders: {}\n",
+        );
+        assert!(RuntimeConfig::parse_yaml(none.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn an_expected_package_digest_must_be_a_sha256_label() {
+        let pinned = LOADER_RUNTIME_DOCUMENT.replace(
+            "  root: /etc/registry-evidence/bundle\n",
+            "  root: /etc/registry-evidence/bundle\n  expectedDigest: sha256:0000000000000000000000000000000000000000000000000000000000000000\n",
+        );
+        RuntimeConfig::parse_yaml(pinned.as_bytes()).expect("a pinned package loads");
+        let malformed = LOADER_RUNTIME_DOCUMENT.replace(
+            "  root: /etc/registry-evidence/bundle\n",
+            "  root: /etc/registry-evidence/bundle\n  expectedDigest: md5:00\n",
+        );
+        assert!(RuntimeConfig::parse_yaml(malformed.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn every_removed_bundle_authentication_and_audit_key_is_refused_with_its_replacement_named() {
+        let valid = String::from_utf8(
+            include_bytes!(
+                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+            )
+            .to_vec(),
+        )
+        .expect("fixture is UTF-8");
+        EvidenceConfig::parse_yaml(valid.as_bytes()).expect("fixture validates");
+        for (path, replacement) in REMOVED_BUNDLE_KEYS {
+            let mut segments = path.split('.').collect::<Vec<_>>();
+            let leaf = segments.pop().expect("a leaf");
+            let mut value =
+                serde_norway::from_str::<serde_norway::Value>(&valid).expect("fixture parses");
+            let mut parent = &mut value;
+            for segment in &segments {
+                parent = parent
+                    .as_mapping_mut()
+                    .expect("a mapping")
+                    .entry(serde_norway::Value::from(*segment))
+                    .or_insert_with(|| serde_norway::Value::Mapping(Default::default()));
+            }
+            parent.as_mapping_mut().expect("a mapping").insert(
+                serde_norway::Value::from(leaf),
+                serde_norway::Value::from("x"),
+            );
+            let text = serde_norway::to_string(&value).expect("the candidate serializes");
+            let Err(ConfigError::InvalidYaml(fault)) = EvidenceConfig::parse_yaml(text.as_bytes())
+            else {
+                panic!("{path} was not refused as a removed key");
+            };
+            assert_eq!(fault.cause(), "key is no longer accepted", "{path}");
+            assert_eq!(fault.path(), Some(*path));
+            assert_eq!(fault.remedy(), Some(*replacement), "{path}");
+        }
+    }
+
+    #[test]
+    fn an_authored_bundle_carrying_an_environment_expression_is_refused() {
+        let valid = String::from_utf8(
+            include_bytes!(
+                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+            )
+            .to_vec(),
+        )
+        .expect("fixture is UTF-8");
+        let candidate = valid.replace(
+            "publicOrigin: https://evidence.invalid",
+            "publicOrigin: 'https://${EVIDENCE_HOST}'",
+        );
+        assert_ne!(candidate, valid, "the fixture carries the public origin");
+        let Err(ConfigError::InvalidYaml(fault)) = EvidenceConfig::parse_yaml(candidate.as_bytes())
+        else {
+            panic!("an environment expression in the bundle was not refused");
+        };
+        assert_eq!(
+            fault.cause(),
+            "environment expressions are not accepted in the governed bundle"
+        );
+        assert_eq!(fault.path(), Some("service.publicOrigin"));
+        assert!(!fault.to_string().contains("EVIDENCE_HOST"));
+    }
+
+    #[test]
+    fn access_token_keys_come_only_from_a_fixed_jwks_uri() {
+        let valid = String::from_utf8(
+            include_bytes!(
+                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+            )
+            .to_vec(),
+        )
+        .expect("fixture is UTF-8");
+        let config = EvidenceConfig::parse_yaml(valid.as_bytes()).expect("fixture validates");
+        let JwksSource::Uri { uri } = &config.authentication.oidc.provider.jwks_source else {
+            panic!("the fixture names a fixed JWKS URI");
+        };
+        for refused in [
+            JwksSource::Discovery {},
+            JwksSource::Static {
+                document_ref: "secret:file/jwks".to_owned(),
+            },
+        ] {
+            let mut candidate = config.clone();
+            candidate.authentication.oidc.provider.jwks_source = refused;
+            assert_eq!(
+                candidate.validate(),
+                Err(ConfigError::InvalidField(
+                    "Evidence reads access-token keys only from jwksSource kind uri",
+                    "authentication.oidc.jwksSource",
+                ))
+            );
+        }
+        let omitted = valid.replace(
+            &format!("    jwksSource:\n      kind: uri\n      uri: {uri}\n"),
+            "",
+        );
+        assert_ne!(omitted, valid, "fixture mutation must remain effective");
+        assert!(
+            EvidenceConfig::parse_yaml(omitted.as_bytes()).is_err(),
+            "an omitted key source means discovery, which Evidence refuses"
+        );
+    }
+
+    #[test]
+    fn governed_secret_references_name_a_provider_and_never_a_value() {
+        assert!(SecretReference::parse("secret:file/source-token").is_ok());
+        // Whether the runtime enables the environment provider is checked when
+        // the bundle is bound to its runtime configuration.
+        assert!(SecretReference::parse("secret:env/SOURCE_TOKEN").is_ok());
+        assert!(SecretReference::parse("literal-token").is_err());
     }
 
     #[test]

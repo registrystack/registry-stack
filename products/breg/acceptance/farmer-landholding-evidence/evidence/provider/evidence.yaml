@@ -7,23 +7,24 @@ service:
 issuer:
   id: urn:example:farmer-authority
 authentication:
-  kind: oidc-access-token
-  issuer: http://127.0.0.1:9
-  audiences:
-  - farmer-evidence-trial
-  tokenTypes:
-  - at+jwt
-  algorithms:
-  - ES256
-  jwksUri: http://127.0.0.1:9/.well-known/jwks.json
-  principalClaim: sub
-  requesterTagsClaim: evidence_tags
-  evidenceAudienceClaim: evidence_audience
-  maximumTokenLifetimeSeconds: 300
-  revokedKeyIds: []
+  oidc:
+    issuer: http://127.0.0.1:9
+    audience: farmer-evidence-trial
+    tokenTypes:
+    - at+jwt
+    algorithms:
+    - ES256
+    jwksSource:
+      kind: uri
+      uri: http://127.0.0.1:9/.well-known/jwks.json
+    principalClaim: sub
+    requesterTagsClaim: evidence_tags
+    evidenceAudienceClaim: evidence_audience
+    maximumTokenLifetimeSeconds: 300
+    revokedKeyIds: []
 audit:
   format: keyed-jsonl
-  hashSecretRef: secret:file/audit-hash-key
+  hashKeyRef: secret:file/audit-hash-key
   hashKeyVersion: 1
   failClosed: true
 subjectBinding:

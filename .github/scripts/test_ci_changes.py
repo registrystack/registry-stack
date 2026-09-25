@@ -533,6 +533,7 @@ class CiChangesTest(unittest.TestCase):
             "crates/registry-relayctl/schemas/authoring/runtime.schema.json",
             "crates/registry-render/src/manifest.rs",
             "crates/registry-discovery/src/startup.rs",
+            "crates/registry-evidence/src/config.rs",
             "crates/registry-scheduling/src/config.rs",
             "products/platform/generated/runtime-config-blocks.schema.json",
             "products/platform/scripts/check-config-conformance.py",

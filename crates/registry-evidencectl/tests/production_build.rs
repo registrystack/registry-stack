@@ -448,7 +448,7 @@ fn package_names_a_local_target_before_judging_the_output_location() {
 }
 
 #[test]
-fn package_refuses_a_bundle_directory_that_does_not_resolve_to_the_output() {
+fn package_refuses_a_package_root_that_does_not_resolve_to_the_output() {
     for format in ["human", "json"] {
         let fixture = Fixture::new();
 
@@ -463,8 +463,8 @@ fn package_refuses_a_bundle_directory_that_does_not_resolve_to_the_output() {
             "human" => {
                 assert!(output.stdout.is_empty());
                 let message = stderr(&output);
-                assert!(message.contains("evidence.package.bundle-directory-mismatch"));
-                assert!(message.contains("runtime.yaml:/bundleDirectory"));
+                assert!(message.contains("evidence.package.root-mismatch"));
+                assert!(message.contains("runtime.yaml:/package/root"));
                 assert!(message.contains("/srv/evidence/candidate/bundle"));
                 assert!(message.contains(&expected_bundle));
             }
@@ -475,11 +475,11 @@ fn package_refuses_a_bundle_directory_that_does_not_resolve_to_the_output() {
                 assert_eq!(report["status"], "domain-refusal");
                 assert_eq!(
                     report["diagnostics"][0]["code"],
-                    "evidence.package.bundle-directory-mismatch"
+                    "evidence.package.root-mismatch"
                 );
                 assert_eq!(
                     report["diagnostics"][0]["path"],
-                    "runtime.yaml:/bundleDirectory"
+                    "runtime.yaml:/package/root"
                 );
                 let message = report["diagnostics"][0]["message"]
                     .as_str()
@@ -494,14 +494,14 @@ fn package_refuses_a_bundle_directory_that_does_not_resolve_to_the_output() {
 }
 
 #[test]
-fn package_accepts_a_bundle_directory_that_resolves_to_the_output() {
+fn package_accepts_a_package_root_that_resolves_to_the_output() {
     let fixture = Fixture::new();
     let matching_bundle_directory = fixture.output.join("bundle").display().to_string();
     fs::write(
         &fixture.runtime,
         TARGET_RUNTIME.replacen(
-            "bundleDirectory: /srv/evidence/candidate/bundle",
-            &format!("bundleDirectory: {matching_bundle_directory}"),
+            "root: /srv/evidence/candidate/bundle",
+            &format!("root: {matching_bundle_directory}"),
             1,
         ),
     )
@@ -514,8 +514,8 @@ fn package_accepts_a_bundle_directory_that_resolves_to_the_output() {
     assert_eq!(
         fs::read_to_string(fixture.output.join("runtime.yaml")).unwrap(),
         TARGET_RUNTIME.replacen(
-            "bundleDirectory: /srv/evidence/candidate/bundle",
-            &format!("bundleDirectory: {matching_bundle_directory}"),
+            "root: /srv/evidence/candidate/bundle",
+            &format!("root: {matching_bundle_directory}"),
             1,
         )
     );
@@ -713,8 +713,8 @@ fn package_names_the_file_and_rule_of_an_unresolved_review_marker() {
         fs::write(
             &fixture.runtime,
             TARGET_RUNTIME.replacen(
-                "bundleDirectory: /srv/evidence/candidate/bundle",
-                &format!("bundleDirectory: {matching_bundle_directory}"),
+                "root: /srv/evidence/candidate/bundle",
+                &format!("root: {matching_bundle_directory}"),
                 1,
             ),
         )
@@ -1482,18 +1482,18 @@ assuranceProfile: production
 service: {providerId: urn:example:providers:evidence, trustDomain: urn:example:trust-domains:evidence}
 issuer: {id: urn:example:issuers:evidence}
 authentication:
-  kind: oidc-access-token
-  issuer: https://issuer.invalid
-  audiences: [evidence]
-  tokenTypes: [at+jwt]
-  algorithms: [ES256]
-  jwksUri: https://issuer.invalid/.well-known/jwks.json
-  principalClaim: sub
-  requesterTagsClaim: evidence_tags
-  evidenceAudienceClaim: evidence_audience
-  maximumTokenLifetimeSeconds: 300
-  revokedKeyIds: []
-audit: {format: keyed-jsonl, hashSecretRef: 'secret:file/audit-hmac-key', hashKeyVersion: 1, failClosed: true}
+  oidc:
+    issuer: https://issuer.invalid
+    audience: evidence
+    jwksSource: {kind: uri, uri: https://issuer.invalid/.well-known/jwks.json}
+    tokenTypes: [at+jwt]
+    algorithms: [ES256]
+    principalClaim: sub
+    requesterTagsClaim: evidence_tags
+    evidenceAudienceClaim: evidence_audience
+    maximumTokenLifetimeSeconds: 300
+    revokedKeyIds: []
+audit: {format: keyed-jsonl, hashKeyRef: 'secret:file/audit-hmac-key', hashKeyVersion: 1, failClosed: true}
 subjectBinding: {secretRef: 'secret:file/subject-binding-hmac-key', keyVersion: 1}
 rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
 signing:
@@ -1526,11 +1526,12 @@ const PUBLICATION: &str = r#"publication:
   jurisdictions: [urn:example:jurisdictions:governed]
 "#;
 
-const TARGET_RUNTIME: &str = r#"version: 1
-bundleDirectory: /srv/evidence/candidate/bundle
+const TARGET_RUNTIME: &str = r#"apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+kind: EvidenceRuntimeConfig
+package:
+  root: /srv/evidence/candidate/bundle
 listener:
-  bindHost: 127.0.0.1
-  port: 8080
+  bind: 127.0.0.1:8080
   tlsTermination: operator-controlled-upstream
   trustProxyIdentityHeaders: false
   maximumRequestBytes: 65536

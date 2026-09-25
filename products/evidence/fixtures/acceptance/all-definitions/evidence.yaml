@@ -7,19 +7,21 @@ service:
 issuer: {id: urn:example:fixture:issuer:authority}
 publication: {serviceId: urn:example:fixture:service:evidence, title: Synthetic Evidence service, description: Synthetic minimum-disclosure assertions for acceptance testing, endpointUrl: https://evidence.example.invalid, jurisdictions: [urn:example:jurisdiction:acceptance]}
 authentication:
-  kind: oidc-access-token
-  issuer: https://identity.invalid
-  audiences: [evidence-fixture]
-  allowedClients: [evidence-task-agent]
-  tokenTypes: [at+jwt]
-  algorithms: [ES256]
-  jwksUri: https://identity.invalid/.well-known/jwks.json
-  principalClaim: sub
-  requesterTagsClaim: evidence_tags
-  evidenceAudienceClaim: evidence_audience
-  maximumTokenLifetimeSeconds: 300
-  revokedKeyIds: []
-audit: {format: keyed-jsonl, hashSecretRef: secret:file/audit-hash-key, hashKeyVersion: 1, failClosed: true}
+  oidc:
+    issuer: https://identity.invalid
+    audience: evidence-fixture
+    allowedClients: [evidence-task-agent]
+    tokenTypes: [at+jwt]
+    algorithms: [ES256]
+    jwksSource:
+      kind: uri
+      uri: https://identity.invalid/.well-known/jwks.json
+    principalClaim: sub
+    requesterTagsClaim: evidence_tags
+    evidenceAudienceClaim: evidence_audience
+    maximumTokenLifetimeSeconds: 300
+    revokedKeyIds: []
+audit: {format: keyed-jsonl, hashKeyRef: secret:file/audit-hash-key, hashKeyVersion: 1, failClosed: true}
 subjectBinding: {secretRef: secret:file/subject-binding-key, keyVersion: 1}
 rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
 

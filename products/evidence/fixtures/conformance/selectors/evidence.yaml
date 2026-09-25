@@ -6,21 +6,23 @@ service:
   trustDomain: urn:example:fixture:trust-domain:selector-conformance
 issuer: {id: urn:example:fixture:issuer:selector-conformance}
 authentication:
-  kind: oidc-access-token
-  issuer: https://identity.invalid
-  audiences: [selector-conformance]
-  allowedClients: [evidence-task-agent]
-  tokenTypes: [at+jwt]
-  algorithms: [ES256]
-  jwksUri: https://identity.invalid/.well-known/jwks.json
-  principalClaim: sub
-  requesterTagsClaim: evidence_tags
-  evidenceAudienceClaim: evidence_audience
-  maximumTokenLifetimeSeconds: 300
-  revokedKeyIds: []
+  oidc:
+    issuer: https://identity.invalid
+    audience: selector-conformance
+    allowedClients: [evidence-task-agent]
+    tokenTypes: [at+jwt]
+    algorithms: [ES256]
+    jwksSource:
+      kind: uri
+      uri: https://identity.invalid/.well-known/jwks.json
+    principalClaim: sub
+    requesterTagsClaim: evidence_tags
+    evidenceAudienceClaim: evidence_audience
+    maximumTokenLifetimeSeconds: 300
+    revokedKeyIds: []
 audit:
   format: keyed-jsonl
-  hashSecretRef: secret:file/audit-key
+  hashKeyRef: secret:file/audit-key
   hashKeyVersion: 1
   failClosed: true
 subjectBinding:

@@ -108,9 +108,10 @@ fn show(args: ShowArgs, format: OutputFormat) -> Result<ExitCode> {
 /// audit or deployment detail from a substituted binary.
 fn inspect_core(evidence: &Path, runtime: &Path) -> Result<Vec<u8>> {
     let mut child = Command::new(evidence)
-        .arg("--runtime")
-        .arg(runtime)
         .arg("local-audit-last-operation")
+        .arg("--runtime-config")
+        .arg(runtime)
+        .env_remove("REGISTRY_EVIDENCE_RUNTIME")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

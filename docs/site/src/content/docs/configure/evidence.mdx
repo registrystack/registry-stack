@@ -104,20 +104,22 @@ Top-level required fields:
 
 | Field | Binds |
 | --- | --- |
-| `version` | Fixed at `1`. |
-| `bundleDirectory` | Absolute path to the governed `bundle/` directory. |
-| `listener` | `bindHost` (loopback, private IPv4, or unique-local IPv6 only), `port`, `tlsTermination` (fixed at `operator-controlled-upstream`: TLS terminates ahead of Evidence Gateway), `trustProxyIdentityHeaders` (fixed `false`: proxy-supplied identity is never trusted), plus request-size, concurrency, timeout, and shutdown-grace bounds. |
-| `secretProviders.file.root` | The owner-only directory the file secret provider resolves every `secret:file/<name>` reference beneath. |
+| `apiVersion` | Fixed at `registry.registrystack.org/evidence-runtime/v1alpha1`. |
+| `kind` | Fixed at `EvidenceRuntimeConfig`. |
+| `package` | `root`, the absolute path to the governed `bundle/` directory, plus an optional `expectedDigest` the loaded bundle revision must match. |
+| `listener` | `bind` as one `host:port` value (loopback, private IPv4, or unique-local IPv6 only; an IPv6 host goes in brackets), `tlsTermination` (fixed at `operator-controlled-upstream`: TLS terminates ahead of Evidence Gateway), `trustProxyIdentityHeaders` (fixed `false`: proxy-supplied identity is never trusted), plus request-size, concurrency, timeout, and shutdown-grace bounds. |
+| `secretProviders` | The secret providers the deployment enables, at least one. `file.root` is the owner-only directory every `secret:file/<name>` reference resolves beneath; `environment: {}` enables `secret:env/<NAME>` references to operator-named variables. A reference to a provider that is not declared is refused. |
 | `auditStorage` | `path` for the active audit segment and `maximumFileBytes`, a per-segment rotation threshold. |
 | `outboundTls` | `systemRoots` (fixed `true`) plus named `trustProfiles`, each a local id bound to one CA bundle file a source or `authentication` can select through `tlsTrustProfile`. |
 
-An optional `metricsListener` (`bindHost`, `port`) serves `GET /metrics` on a second private
+An optional `metricsListener` (`bind`) serves `GET /metrics` on a second private
 binding; absent by default, it is documented in `products/evidence/OPERATOR-CONTRACT.md` under
 Metrics reference rather than in the public Evidence Gateway contract.
 
 `runtime.yaml` cannot override anything the bundle governs. The schema's `ownership` block closes
-the allowed set to the bundle directory, listener binding and process limits, the optional
-metrics listener binding, the file-secret root, audit path and rotation bound, and logical
+the allowed set to the bundle package root and optional expected revision, listener binding and
+process limits, the optional metrics listener binding, the enabled secret providers and file-secret
+root, audit path and rotation bound, and logical
 private-CA file bindings. Every other field, including service identity, authentication,
 authority, sources, disclosure, and signing policy, belongs to the bundle alone.
 
@@ -129,8 +131,8 @@ atomic revision (`products/evidence/contracts/bundle.schema.yaml`). Its top-leve
 | Section | Declares |
 | --- | --- |
 | `service`, `issuer` | The technical provider and the legal issuing authority, both URIs. |
-| `authentication` | The one trusted OIDC access-token profile: issuer, audiences, token type, algorithms, JWKS URI, maximum token lifetime, revoked key identifiers, and the claim names for principal, requester tags, evidence audience, grant id, and grant authority. An optional `tlsTrustProfile` names the private CA the JWKS URI is served under; see [An issuer behind a private CA](#an-issuer-behind-a-private-ca). |
-| `audit` | Keyed JSONL audit: the hash secret reference, key version, and fixed fail-closed behavior. |
+| `authentication` | `oidc`, the one trusted OIDC access-token issuer: issuer, the single accepted `audience`, token type, algorithms, `jwksSource` (only `kind: uri` with a fixed `uri`), maximum token lifetime, revoked key identifiers, and the claim names for principal, requester tags, evidence audience, grant id, and grant authority. An optional `tlsTrustProfile` names the private CA the key set is served under; see [An issuer behind a private CA](#an-issuer-behind-a-private-ca). |
+| `audit` | Keyed JSONL audit: the `hashKeyRef` secret reference, key version, and fixed fail-closed behavior. |
 | `subjectBinding` | The secret reference and key version behind the audience-scoped entity-reference HMAC. |
 | `rateLimits` | Per-principal request, burst, and failed-selector-attempt bounds. |
 | `signing` | Fixed ES256 signing, governed active and published public JWK files, revoked service key identifiers, the fixed JWKS path, and assertion validity and clock-skew bounds. |
@@ -142,7 +144,7 @@ atomic revision (`products/evidence/contracts/bundle.schema.yaml`). Its top-leve
 
 Configure the OpenID Connect (OIDC) issuer to include `registry_actor_kind` on every Evidence
 access token. The claim name defaults to `registry_actor_kind` and can be changed with
-`authentication.claims.actorKind`. Its value must be exactly `human`, `agent`, or `service`;
+`authentication.oidc.claims.actorKind`. Its value must be exactly `human`, `agent`, or `service`;
 a missing or malformed value causes authentication to fail before Evidence evaluates authority or
 accesses a source.
 
@@ -184,14 +186,17 @@ sources (`products/evidence/contracts/source-contract.yaml`, invariant `V1-I40`)
 ### An issuer behind a private CA
 
 When the access-token issuer serves its key set under a certificate authority that is not in the
-system trust store, name a trust profile on `authentication` and bind it in `runtime.yaml`, exactly
+system trust store, name a trust profile on `authentication.oidc` and bind it in `runtime.yaml`, exactly
 as a source does:
 
 ```yaml
 # bundle (governance.yaml in a production project)
 authentication:
-  jwksUri: https://issuer.internal.example/oauth2/jwks
-  tlsTrustProfile: issuer-pki
+  oidc:
+    jwksSource:
+      kind: uri
+      uri: https://issuer.internal.example/oauth2/jwks
+    tlsTrustProfile: issuer-pki
 ```
 
 ```yaml
@@ -202,19 +207,19 @@ outboundTls:
     issuer-pki: {caBundleFile: /etc/registry-evidence/ca/issuer-pki.pem}
 ```
 
-The CA file is trusted beside the system roots for the `jwksUri` connection alone; it widens no
+The CA file is trusted beside the system roots for the `jwksSource.uri` connection alone; it widens no
 source connection and no other process. Hostname verification stays on, and there is no setting
 that disables verification. The file follows the same rules as a source CA file: an absolute path,
 no write permission for anyone, a bounded PEM bundle, and part of the runtime revision, so changing
 it requires a restart. The binding is exact in both directions, so a runtime file that binds the
 profile without the bundle naming it, or the reverse, is refused. A source and the issuer may share
-one profile. A local HTTP `jwksUri` cannot name a profile. `evidence check
+one profile. A local HTTP `jwksSource.uri` cannot name a profile. `evidence check
 --require-runtime-dependencies` fetches the key set through the profile, so a missing or wrong CA
 is reported before the listener binds.
 
 {/* Evidence: crates/registry-evidence/src/runtime.rs, issuer_trust_roots();
     crates/registry-evidence/src/bundle.rs, validate_runtime_bindings();
-    products/evidence/contracts/bundle.schema.yaml, authentication.tlsTrustProfile. */}
+    products/evidence/contracts/bundle.schema.yaml, authentication.oidc.tlsTrustProfile. */}
 
 ## What Rhai scripts may and may not do
 
@@ -395,8 +400,8 @@ restore write permission, make the change, and freeze it again before the next `
 Two offline commands prove a project before it ever binds a port:
 
 ```sh
-evidence --runtime runtime.yaml check
-evidence --runtime runtime.yaml evaluate --fixture "bundle/fixtures/<cases>.yaml"
+evidence check --runtime-config runtime.yaml
+evidence evaluate --runtime-config runtime.yaml --fixture "bundle/fixtures/<cases>.yaml"
 ```
 
 `evidence check` loads, compiles, and validates the complete bundle and runtime file together:

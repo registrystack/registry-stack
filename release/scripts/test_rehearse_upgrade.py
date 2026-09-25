@@ -193,6 +193,67 @@ class SideTest(unittest.TestCase):
                 MODULE.check_binaries(side, "0.33.0", MODULE.BINARIES)
 
 
+class EvidenceGrammarTest(unittest.TestCase):
+    OLD_GOVERNANCE = {
+        "version": 1,
+        "authentication": {
+            "kind": "oidc-access-token",
+            "issuer": "http://127.0.0.1:9000",
+            "audiences": ["urn:example:evidence"],
+            "jwksUri": "http://127.0.0.1:9000/oauth2/jwks",
+            "requiredScopes": ["evidence"],
+        },
+        "audit": {"format": "keyed-jsonl", "hashSecretRef": "secret:file/audit",
+                  "hashKeyVersion": 1, "failClosed": True},
+    }
+    OLD_RUNTIME = {
+        "version": 1,
+        "bundleDirectory": "/srv/candidate/bundle",
+        "listener": {"bindHost": "127.0.0.1", "port": 8080, "tlsTermination": "x"},
+        "metricsListener": {"bindHost": "::1", "port": 9090},
+        "secretProviders": {"file": {"root": "/srv/secrets"}},
+    }
+
+    def test_an_earlier_governance_moves_to_the_oidc_block_and_the_audit_key_rename(self) -> None:
+        migrated = MODULE.migrate_evidence_governance(self.OLD_GOVERNANCE)
+        self.assertEqual(migrated["authentication"], {"oidc": {
+            "issuer": "http://127.0.0.1:9000",
+            "audience": "urn:example:evidence",
+            "jwksSource": {"kind": "uri", "uri": "http://127.0.0.1:9000/oauth2/jwks"},
+            "requiredScopes": ["evidence"],
+        }})
+        self.assertEqual(migrated["audit"], {"format": "keyed-jsonl",
+                                             "hashKeyRef": "secret:file/audit",
+                                             "hashKeyVersion": 1, "failClosed": True})
+        self.assertEqual(self.OLD_GOVERNANCE["authentication"]["kind"], "oidc-access-token")
+        self.assertEqual(MODULE.migrate_evidence_governance(migrated), migrated)
+
+    def test_an_earlier_governance_with_several_audiences_is_refused(self) -> None:
+        governance = {"authentication": {**self.OLD_GOVERNANCE["authentication"],
+                                         "audiences": ["a", "b"]}}
+        with self.assertRaisesRegex(Error, "one audience"):
+            MODULE.migrate_evidence_governance(governance)
+
+    def test_an_earlier_runtime_gains_the_envelope_package_and_bind_addresses(self) -> None:
+        migrated = MODULE.migrate_evidence_runtime(self.OLD_RUNTIME)
+        self.assertEqual(migrated, {
+            "apiVersion": "registry.registrystack.org/evidence-runtime/v1alpha1",
+            "kind": "EvidenceRuntimeConfig",
+            "package": {"root": "/srv/candidate/bundle"},
+            "listener": {"bind": "127.0.0.1:8080", "tlsTermination": "x"},
+            "metricsListener": {"bind": "[::1]:9090"},
+            "secretProviders": {"file": {"root": "/srv/secrets"}},
+        })
+        self.assertEqual(MODULE.migrate_evidence_runtime(migrated), migrated)
+
+    def test_the_runtime_file_is_named_the_way_each_side_reads_it(self) -> None:
+        runtime = Path("/srv/runtime.yaml")
+        self.assertEqual(MODULE.evidence_arguments(True, runtime, "check"),
+                         ["check", "--runtime-config", "/srv/runtime.yaml"])
+        self.assertEqual(MODULE.evidence_arguments(False, runtime, "check"),
+                         ["--runtime", "/srv/runtime.yaml", "check"])
+
+
 class StateComparisonTest(unittest.TestCase):
     def test_a_table_that_lost_rows_or_vanished_is_a_loss(self) -> None:
         before = {"public.a": 3, "public.b": 2, "public.c": 0}

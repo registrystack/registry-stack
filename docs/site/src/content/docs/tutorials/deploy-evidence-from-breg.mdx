@@ -164,7 +164,7 @@ signer:
 ```
 
 Use the operator's exact selected version, which may differ from this example.
-Set `runtime.bundleDirectory` to the final deployment location, such as
+Set `runtime.package.root` to the final deployment location, such as
 `/srv/evidence/candidates/operated-001/bundle`. The local build output may live
 elsewhere before transport. Bind production secret and audit paths separately.
 
@@ -189,7 +189,7 @@ ordinary files or choose another directory.
 ```sh
 evidencectl package ./evidence --target ./evidence/targets/production \
   --output ./candidate-operated-001
-evidence --runtime ./candidate-operated-001/runtime.yaml check
+evidence check --runtime-config ./candidate-operated-001/runtime.yaml
 ```
 
 Build uses the matching Evidence runtime to validate the bundle and required
@@ -201,7 +201,7 @@ check passes. The check then validates and compiles the complete
 immutable bundle and validates the mounted secret material exactly as startup
 does, and reports the bundle revision, the runtime revision and the number of
 requirements it compiled. Run it in a context where the runtime file's absolute
-`bundleDirectory` and secret root already resolve: a build host that does not
+`package.root` and secret root already resolve: a build host that does not
 carry those paths fails the check until the candidate is placed. Neither command
 contacts the source, caller issuer or Transit service.
 
@@ -241,8 +241,8 @@ Under the intended service identity, after those dependencies exist:
 
 ```sh
 evidencectl doctor --runtime-config /srv/evidence/candidates/operated-001/runtime.yaml
-evidence --runtime /srv/evidence/candidates/operated-001/runtime.yaml check --require-runtime-dependencies
-evidence --runtime /srv/evidence/candidates/operated-001/runtime.yaml serve
+evidence check --runtime-config /srv/evidence/candidates/operated-001/runtime.yaml --require-runtime-dependencies
+evidence serve --runtime-config /srv/evidence/candidates/operated-001/runtime.yaml
 ```
 
 Use your configured candidate path. `evidencectl doctor` reports every artifact

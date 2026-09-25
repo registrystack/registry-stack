@@ -119,7 +119,7 @@ limits, signing, optional response formats, and authority profiles. Secret refer
 bundle path, private listener, secret root, audit path, and optional private certificate authority
 files. The build copies its bytes unchanged, so the target host remains the authority for path,
 ownership, permission, secret, and trust validation.
-Set `bundleDirectory` to `<new-candidate-directory>/bundle`, and keep the listener on a numeric
+Set `package.root` to `<new-candidate-directory>/bundle`, and keep the listener on a numeric
 loopback or private address. `listener.networkExposure` declares which addresses that means. It
 defaults to `private-address`, which accepts loopback, RFC 1918 private IPv4, or RFC 4193
 unique-local IPv6. A container listener that must bind the wildcard `0.0.0.0` inside an isolated
@@ -194,7 +194,7 @@ evidencectl test "<candidate>"
 Start Evidence Gateway only after both commands pass:
 
 ```sh
-evidence --runtime "<candidate>/runtime.yaml" serve
+evidence serve --runtime-config "<candidate>/runtime.yaml"
 ```
 
 Route traffic through operator-controlled TLS only after `GET /ready` succeeds. The listener stays
@@ -239,7 +239,7 @@ evidence verify \
   --jws "<assertion.jws.json>" \
   --jwks "<trusted-evidence-jwks.json>" \
   --policy "<production-verification-policy.json>"
-evidence --runtime "<candidate>/runtime.yaml" verify-audit
+evidence verify-audit --runtime-config "<candidate>/runtime.yaml"
 ```
 
 The signing policy and secret references are governed bundle content. Rotate a key by publishing a

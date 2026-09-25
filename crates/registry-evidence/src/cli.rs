@@ -1,10 +1,15 @@
 //! Evidence runtime command-line contract.
 
+use std::ffi::OsStr;
 use std::path::PathBuf;
 
 use clap::{ArgGroup, CommandFactory, Parser, Subcommand, ValueEnum};
 
-const DEFAULT_RUNTIME_PATH: &str = "/etc/registry-evidence/runtime.yaml";
+/// The environment variable that used to name the runtime file. Evidence
+/// refuses to start while it is set, so a deployment that still sets it learns
+/// the file is now named on the command line instead of silently reading a
+/// different one.
+pub const REMOVED_RUNTIME_ENVIRONMENT_VARIABLE: &str = "REGISTRY_EVIDENCE_RUNTIME";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -13,17 +18,42 @@ const DEFAULT_RUNTIME_PATH: &str = "/etc/registry-evidence/runtime.yaml";
     about = "Evidence Gateway Version 1"
 )]
 pub struct Cli {
-    /// One closed operator runtime file that binds the governed bundle.
-    #[arg(
-        long,
-        global = true,
-        env = "REGISTRY_EVIDENCE_RUNTIME",
-        default_value = DEFAULT_RUNTIME_PATH
-    )]
-    pub runtime: PathBuf,
-
     #[command(subcommand)]
     pub command: Command,
+}
+
+/// The removed runtime-file input an invocation still uses, as the refusal to
+/// report, or `None`.
+///
+/// `arguments` are the command-line arguments after the program name. They are
+/// read before parsing, so an invocation written for the removed flag is
+/// refused with its replacement named rather than with a missing-argument
+/// error. `runtime_environment_set` is whether
+/// [`REMOVED_RUNTIME_ENVIRONMENT_VARIABLE`] is set in the process environment.
+pub fn removed_runtime_input<I, S>(
+    arguments: I,
+    runtime_environment_set: bool,
+) -> Option<&'static str>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let uses_removed_flag = arguments
+        .into_iter()
+        .map_while(|argument| {
+            let argument = argument.as_ref().as_encoded_bytes().to_vec();
+            (argument != b"--").then_some(argument)
+        })
+        .any(|argument| argument == b"--runtime" || argument.starts_with(b"--runtime="));
+    if uses_removed_flag {
+        return Some("--runtime is no longer accepted; pass --runtime-config FILE");
+    }
+    if runtime_environment_set {
+        return Some(
+            "REGISTRY_EVIDENCE_RUNTIME is no longer read; unset it and pass --runtime-config FILE",
+        );
+    }
+    None
 }
 
 #[derive(Debug, Subcommand)]
@@ -31,6 +61,9 @@ pub enum Command {
     /// Validate and compile the complete immutable bundle, and validate the
     /// mounted secret material exactly as startup does.
     Check {
+        /// The closed operator runtime file that binds the governed bundle.
+        #[arg(long = "runtime-config", value_name = "FILE")]
+        runtime_config: PathBuf,
         /// Also prove audit writability, signer readiness, source credentials,
         /// and access-token JWKS reachability in the target runtime context.
         #[arg(long)]
@@ -62,6 +95,9 @@ pub enum Command {
     },
     /// Evaluate one bundle-owned fixture without source or credential access.
     Evaluate {
+        /// The closed operator runtime file that binds the governed bundle.
+        #[arg(long = "runtime-config", value_name = "FILE")]
+        runtime_config: PathBuf,
         /// Bundle-relative fixture path referenced by exactly one requirement.
         #[arg(long)]
         fixture: PathBuf,
@@ -118,7 +154,11 @@ pub enum Command {
         config: PathBuf,
     },
     /// Start the native Evidence Gateway HTTP service.
-    Serve,
+    Serve {
+        /// The closed operator runtime file that binds the governed bundle.
+        #[arg(long = "runtime-config", value_name = "FILE")]
+        runtime_config: PathBuf,
+    },
     /// Re-verify one stored signed response offline against a pinned key set.
     ///
     /// Exactly one stored response is named, and its format is named with it.
@@ -177,17 +217,28 @@ pub enum Command {
     /// restart time does not grow with retained history; tampering inside an
     /// already sealed segment is not caught there. This is the counterpart
     /// check that catches it, meant to run out of band.
-    VerifyAudit,
+    VerifyAudit {
+        /// The closed operator runtime file that binds the governed bundle.
+        #[arg(long = "runtime-config", value_name = "FILE")]
+        runtime_config: PathBuf,
+    },
     /// Internal local-adopter seam for bearer-free relying-procedure closure.
     #[command(hide = true)]
     PrepareLocalRelyingProcedure {
+        /// The closed operator runtime file that binds the governed bundle.
+        #[arg(long = "runtime-config", value_name = "FILE")]
+        runtime_config: PathBuf,
         /// Owner-only JSON draft containing the request shape and audience.
         #[arg(long)]
         input: PathBuf,
     },
     /// Internal stopped-service audit inspection seam.
     #[command(hide = true)]
-    LocalAuditLastOperation,
+    LocalAuditLastOperation {
+        /// The closed operator runtime file that binds the governed bundle.
+        #[arg(long = "runtime-config", value_name = "FILE")]
+        runtime_config: PathBuf,
+    },
 }
 
 /// Who the `--explain` trace is rendered for.
@@ -216,12 +267,15 @@ mod tests {
         let parsed = Cli::try_parse_from([
             "evidence",
             "check",
+            "--runtime-config",
+            "/etc/registry-evidence/runtime.yaml",
             "--require-runtime-dependencies",
             "--require-audit-under",
             "/var/lib/registry-evidence",
         ])
         .expect("the audit root pairs with the dependency proof");
         let Command::Check {
+            runtime_config: _,
             require_runtime_dependencies,
             require_audit_under,
             without_audit_lock,
@@ -241,6 +295,8 @@ mod tests {
         assert!(Cli::try_parse_from([
             "evidence",
             "check",
+            "--runtime-config",
+            "/etc/registry-evidence/runtime.yaml",
             "--require-audit-under",
             "/var/lib/registry-evidence",
         ])
@@ -264,5 +320,83 @@ mod tests {
                 "{hidden} must remain hidden"
             );
         }
+    }
+
+    const RUNTIME_COMMANDS: [&str; 6] = [
+        "check",
+        "evaluate",
+        "serve",
+        "verify-audit",
+        "prepare-local-relying-procedure",
+        "local-audit-last-operation",
+    ];
+
+    #[test]
+    fn every_runtime_command_names_its_runtime_configuration_explicitly() {
+        let command = command();
+        for subcommand in RUNTIME_COMMANDS {
+            let found = command
+                .find_subcommand(subcommand)
+                .expect("subcommand exists");
+            let runtime = found
+                .get_arguments()
+                .find(|argument| argument.get_id() == "runtime_config")
+                .expect("runtime configuration argument exists");
+            assert_eq!(runtime.get_long(), Some("runtime-config"), "{subcommand}");
+            assert_eq!(runtime.get_env(), None, "{subcommand}");
+            assert!(runtime.get_default_values().is_empty(), "{subcommand}");
+            assert!(runtime.is_required_set(), "{subcommand}");
+        }
+        assert!(Cli::try_parse_from(["evidence", "serve"]).is_err());
+    }
+
+    #[test]
+    fn the_removed_runtime_flag_is_refused_with_its_replacement_named() {
+        const REFUSAL: Option<&str> =
+            Some("--runtime is no longer accepted; pass --runtime-config FILE");
+        for arguments in [
+            &["--runtime", "/etc/registry-evidence/runtime.yaml", "serve"][..],
+            &["serve", "--runtime", "/etc/registry-evidence/runtime.yaml"],
+            &["check", "--runtime=/etc/registry-evidence/runtime.yaml"],
+        ] {
+            assert_eq!(
+                removed_runtime_input(arguments, false),
+                REFUSAL,
+                "{arguments:?}"
+            );
+        }
+        assert_eq!(
+            removed_runtime_input(
+                [
+                    "serve",
+                    "--runtime-config",
+                    "/etc/registry-evidence/runtime.yaml"
+                ],
+                false
+            ),
+            None
+        );
+        // After the terminator an argument is a value, never a flag.
+        assert_eq!(removed_runtime_input(["--", "--runtime"], false), None);
+        assert!(
+            Cli::try_parse_from(["evidence", "--runtime", "/etc/runtime.yaml", "serve"]).is_err(),
+            "the removed flag is not an alias"
+        );
+    }
+
+    #[test]
+    fn the_removed_runtime_environment_variable_is_refused_with_its_replacement_named() {
+        let arguments = [
+            "serve",
+            "--runtime-config",
+            "/etc/registry-evidence/runtime.yaml",
+        ];
+        assert_eq!(removed_runtime_input(arguments, false), None);
+        assert_eq!(
+            removed_runtime_input(arguments, true),
+            Some(
+                "REGISTRY_EVIDENCE_RUNTIME is no longer read; unset it and pass --runtime-config FILE"
+            )
+        );
     }
 }

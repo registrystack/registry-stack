@@ -11,23 +11,24 @@ governance:
   issuer:
     id: urn:example:issuer:record-evidence
   authentication:
-    kind: oidc-access-token
-    issuer: http://127.0.0.1:8082
-    audiences:
-    - urn:example:audience:record-evidence
-    tokenTypes:
-    - at+jwt
-    algorithms:
-    - ES256
-    jwksUri: http://127.0.0.1:8082/.well-known/jwks.json
-    principalClaim: sub
-    requesterTagsClaim: evidence_tags
-    evidenceAudienceClaim: evidence_audience
-    maximumTokenLifetimeSeconds: 300
-    revokedKeyIds: []
+    oidc:
+      issuer: http://127.0.0.1:8082
+      audience: urn:example:audience:record-evidence
+      tokenTypes:
+      - at+jwt
+      algorithms:
+      - ES256
+      jwksSource:
+        kind: uri
+        uri: http://127.0.0.1:8082/.well-known/jwks.json
+      principalClaim: sub
+      requesterTagsClaim: evidence_tags
+      evidenceAudienceClaim: evidence_audience
+      maximumTokenLifetimeSeconds: 300
+      revokedKeyIds: []
   audit:
     format: keyed-jsonl
-    hashSecretRef: secret:file/audit-hmac-key
+    hashKeyRef: secret:file/audit-hmac-key
     hashKeyVersion: 1
     failClosed: true
   subjectBinding:
@@ -75,11 +76,12 @@ governance:
           selectorProfile: breg-8-registry-6-record-7-by-code
           valueOrigin: request
 runtime:
-  version: 1
-  bundleDirectory: /absolute/path/to/candidate/bundle
+  apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+  kind: EvidenceRuntimeConfig
+  package:
+    root: /absolute/path/to/candidate/bundle
   listener:
-    bindHost: 127.0.0.1
-    port: 8080
+    bind: 127.0.0.1:8080
     tlsTermination: operator-controlled-upstream
     trustProxyIdentityHeaders: false
     maximumRequestBytes: 65536

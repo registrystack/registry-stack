@@ -8,14 +8,15 @@
 # writable audit state under /var/lib/registry-evidence. The explicit
 # container-private mode permits the wildcard bind inside the isolated Compose
 # network; it does not authorize public or direct-TLS exposure.
-version: 1
+apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+kind: EvidenceRuntimeConfig
 
-bundleDirectory: /etc/registry-evidence/bundle
+package:
+  root: /etc/registry-evidence/bundle
 
 listener:
-  bindHost: 0.0.0.0
+  bind: 0.0.0.0:8080
   networkExposure: container-private
-  port: 8080
   tlsTermination: operator-controlled-upstream
   trustProxyIdentityHeaders: false
   maximumRequestBytes: 65536

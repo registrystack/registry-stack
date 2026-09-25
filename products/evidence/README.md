@@ -198,7 +198,7 @@ runs one grouped handoff:
 ```sh
 evidencectl doctor --runtime-config '<candidate>/runtime.yaml'
 evidencectl test '<candidate>'
-evidence --runtime '<candidate>/runtime.yaml' serve
+evidence serve --runtime-config '<candidate>/runtime.yaml'
 ```
 
 Doctor delegates the runtime-owned live startup dependency preflight without

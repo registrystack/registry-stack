@@ -19,6 +19,7 @@ use thiserror::Error;
 
 use crate::config::{
     AccessTokenAlgorithm, AccessTokenType, AssuranceProfile, AuthenticationConfig,
+    OidcAuthenticationConfig,
 };
 
 const MAX_PRINCIPAL_BYTES: usize = 512;
@@ -258,13 +259,14 @@ impl Authenticator {
     ///
     /// `issuer_roots` are the private certificate authorities the runtime
     /// file binds to the bundle's `tlsTrustProfile`. They are trusted beside
-    /// the system roots for the `jwksUri` connection alone, and are empty
+    /// the system roots for the `jwksSource.uri` connection alone, and are empty
     /// when the bundle names no profile.
     pub fn from_config(
         config: &AuthenticationConfig,
         assurance_profile: AssuranceProfile,
         issuer_roots: Vec<reqwest::Certificate>,
     ) -> Self {
+        let config = &config.oidc;
         let algorithms = config
             .algorithms
             .iter()
@@ -283,8 +285,8 @@ impl Authenticator {
             })
             .collect();
         let verifier_config = TokenVerifierConfig::access_token_profile(
-            config.issuer.clone(),
-            config.audiences.clone(),
+            config.issuer().to_owned(),
+            vec![config.audience().to_owned()],
             algorithms,
             token_types,
         )
@@ -295,7 +297,7 @@ impl Authenticator {
         .with_allowed_clients(config.allowed_clients.clone().unwrap_or_default())
         .with_assertion_issuers(config.assertion_issuers.clone().unwrap_or_default());
         let fetcher = Arc::new(JwksFetcher::new_trusting_additional_roots(
-            config.jwks_uri.clone(),
+            config.jwks_uri().to_owned(),
             JwksFetcherConfig::defaults(),
             jwks_fetch_policy(config, assurance_profile),
             issuer_roots,
@@ -310,7 +312,7 @@ impl Authenticator {
         };
         Self::new(verifier, claims)
             .with_required_scopes(config.required_scopes.clone().unwrap_or_default())
-            .with_resources(config.audiences.clone())
+            .with_resources(vec![config.audience().to_owned()])
     }
 
     pub fn new(verifier: Arc<TokenVerifier>, claims: AuthenticationClaimsConfig) -> Self {
@@ -419,7 +421,7 @@ impl Authenticator {
     /// Attempt the issuer's key set once at startup, and name it if it cannot
     /// be had.
     ///
-    /// A misspelled or unreachable `jwksUri` is otherwise discovered one
+    /// A misspelled or unreachable `jwksSource.uri` is otherwise discovered one
     /// rejected request at a time, and the rejection an operator sees is the
     /// same closed `401` a bad token gets. Startup is where an operator is
     /// looking, so startup is where it should be said.
@@ -634,7 +636,7 @@ fn exactly_matched_resource<'a>(
 }
 
 fn jwks_fetch_policy(
-    config: &AuthenticationConfig,
+    config: &OidcAuthenticationConfig,
     assurance_profile: AssuranceProfile,
 ) -> FetchUrlPolicy {
     if config.uses_local_issuer_http(assurance_profile) {
@@ -801,19 +803,30 @@ fn valid_claim_path_segment(segment: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn authentication_config() -> AuthenticationConfig {
+    fn authentication_config() -> OidcAuthenticationConfig {
         crate::config::EvidenceConfig::parse_yaml(include_bytes!(
             "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
         ))
         .expect("acceptance configuration parses")
         .authentication
+        .oidc
+    }
+
+    fn set_issuer(config: &mut OidcAuthenticationConfig, issuer: &str, jwks_uri: &str) {
+        config.provider.issuer = issuer.to_owned();
+        config.provider.jwks_source = registry_platform_config::JwksSource::Uri {
+            uri: jwks_uri.to_owned(),
+        };
     }
 
     #[test]
     fn jwks_fetch_policy_opens_http_only_for_the_supervised_local_issuer() {
         let mut exact = authentication_config();
-        exact.issuer = "http://127.0.0.1:8081".to_owned();
-        exact.jwks_uri = "http://127.0.0.1:8081/.well-known/jwks.json".to_owned();
+        set_issuer(
+            &mut exact,
+            "http://127.0.0.1:8081",
+            "http://127.0.0.1:8081/.well-known/jwks.json",
+        );
         let local = jwks_fetch_policy(&exact, AssuranceProfile::Local);
         assert_eq!(local.allowed_schemes, ["http"]);
         assert!(local.allow_localhost);
@@ -822,7 +835,11 @@ mod tests {
         // The JWKS path is the issuer's to choose; what stays fixed is the
         // exact same numeric loopback origin.
         let mut other_path = exact.clone();
-        other_path.jwks_uri = "http://127.0.0.1:8081/oauth2/jwks".to_owned();
+        set_issuer(
+            &mut other_path,
+            "http://127.0.0.1:8081",
+            "http://127.0.0.1:8081/oauth2/jwks",
+        );
         assert_eq!(
             jwks_fetch_policy(&other_path, AssuranceProfile::Local).allowed_schemes,
             ["http"]
@@ -856,8 +873,7 @@ mod tests {
             ),
         ] {
             let mut candidate = authentication_config();
-            candidate.issuer = issuer.to_owned();
-            candidate.jwks_uri = jwks_uri.to_owned();
+            set_issuer(&mut candidate, issuer, jwks_uri);
             let policy = jwks_fetch_policy(&candidate, profile);
             assert_eq!(
                 policy.allowed_schemes,
