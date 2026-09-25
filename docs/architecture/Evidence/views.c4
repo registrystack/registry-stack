@@ -33,7 +33,7 @@ views {
     title 'Evidence / 03. Audit and release boundaries'
     description '''
       Evidence has no integration event bus or webhook delivery surface. Its durable
-      events form the native accountability chain. A successfully authenticated denial
+      events form the native accountability stream. A successfully authenticated denial
       records actor kind, a requester-principal pseudonym and scoped pseudonyms for available
       client, grant and delegated actor context before its generic 403. Source-access and
       terminal events retain plain requirement and purpose identifiers; a refusal before

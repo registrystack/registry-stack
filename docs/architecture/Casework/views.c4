@@ -9,8 +9,8 @@ views {
       Casework signs short-lived task assertions while the external identity provider issues access
       tokens and each resource retains authorization. Human users normally work through a
       separately deployed application host; a Requester service calls the hosted API directly.
-      PostgreSQL owns coordination state and durable intent, while the external keyed journal
-      retains published audit records.
+      PostgreSQL owns coordination state and durable intent. The runtime writes minimized audit
+      entries directly through a per-process file or stdout writer.
     '''
     include casework_staff, casework_app, casework_client, casework_requester, taskAgent, issuer, casework, casework_postgres, casework_audit_journal, breg
     include
@@ -139,11 +139,11 @@ views {
     casework.coordination -> casework.breg_adapter 'Requests caller view and prepares the exact current action'
     casework.breg_adapter -> breg.api 'Rereads under the human bearer and selected BReg profile'
     breg.api -> casework.breg_adapter 'Returns current binding and source-advertised operations'
-    casework.coordination -> casework_postgres 'Atomically reserves pending attempt, history, audit intent and synchronizing state'
+    casework.coordination -> casework_postgres 'Atomically reserves pending attempt, history and synchronizing state'
     casework.coordination -> casework.breg_adapter 'Executes only the durably saved exact-action capsule'
     casework.breg_adapter -> breg.api 'Posts the promoted lifecycle action with its original source idempotency key'
     breg.api -> casework.breg_adapter 'Returns a validated source receipt'
-    casework.coordination -> casework_postgres 'Commits completed attempt, receipt, history, audit intent and readback request'
+    casework.coordination -> casework_postgres 'Commits completed attempt, receipt, history and readback request'
   }
 
   dynamic view casework_attempt_recovery {
@@ -165,7 +165,7 @@ views {
       in the same transaction as the state change.
     '''
     casework.breg_adapter -> casework.coordination 'Returns timeout, transport failure or invalid outcome after execution may have begun'
-    casework.coordination -> casework_postgres 'Commits uncertain attempt, synchronizing item, history and audit intent'
+    casework.coordination -> casework_postgres 'Commits uncertain attempt, synchronizing item, history'
     casework.api -> casework.coordination 'Same actor requests recovery by attempt or original key'
     casework.coordination -> casework_postgres 'Loads the actor-bound capsule and acquires an expired execution lease'
     casework.coordination -> casework.breg_adapter 'Requests recovery of the exact prepared action'
@@ -176,7 +176,7 @@ views {
     casework_operator -> casework_cli 'After source-owner confirmation, previews one expired uncertain attempt settlement'
     casework_cli -> casework_postgres 'Checks exact attempt, lease and item state without writing'
     casework_operator -> casework_cli 'Applies the reviewed applied or not-applied settlement'
-    casework_cli -> casework_postgres 'Atomically fences the old executor and records state, history and audit intent'
+    casework_cli -> casework_postgres 'Atomically fences the old executor and records state, history'
   }
 
   dynamic view casework_hosted_decision {
@@ -198,11 +198,11 @@ views {
     casework_requester -> casework.api 'Creates a declared hosted kind with an idempotency key'
     casework.api -> casework.access 'Selects the Requester profile and issuer-qualified owner'
     casework.api -> casework.hosted 'Validates bounded display data against the declared kind'
-    casework.hosted -> casework_postgres 'Commits item, pinned policy snapshot, history, audit intent and replay response'
+    casework.hosted -> casework_postgres 'Commits item, pinned policy snapshot, history and replay response'
     casework_staff -> casework_app 'Claims the visible hosted item and records a declared outcome'
     casework_app -> casework.api 'Sends revision-fenced claim and decision requests'
     casework.api -> casework.hosted 'Rechecks current team membership and pinned deciding profile'
-    casework.hosted -> casework_postgres 'Atomically commits terminal event, stable opaque actor ref, protected accountability and audit intent'
+    casework.hosted -> casework_postgres 'Atomically commits terminal event, stable opaque actor ref, protected accountability'
     casework_requester -> casework.api 'Pages its own terminal feed'
     casework.api -> casework_requester 'Returns outcome and stable opaque per-person actor ref without raw human identity or reason'
     casework_supervisor -> casework_app 'Requests accountability for one retained terminal event'

@@ -4,7 +4,11 @@ Use these diagrams to understand BReg, Casework and Evidence responsibilities,
 follow requests and events, and inspect the contracts between independently deployed products.
 The model pins source revision `c02e470085f48eae0204ba8400f9f919c5d05500`, reviewed on
 13 September 2026. It includes unreleased contextual authorization changes and does
-not describe the published v0.30.0 release.
+not describe the published v0.30.0 release. The audit models additionally describe the
+unreleased shared-writer change reviewed on 25 September 2026. The product model files link to
+maintained source on `main`; those links are not a claim that the unreleased audit behavior has
+shipped. The other models retain their earlier source links. Audit sequences illustrate the
+default durable file destination; stdout is best-effort.
 
 ## Open the explorer
 
@@ -83,7 +87,7 @@ and `interoperability.c4`. Product `views.c4` files select structures and flows;
 relationship labels for structural views.
 
 Keep existing view IDs stable because they form shared URLs. Update the model and
-its pinned source evidence together. LikeC4 checks model syntax and layout; it does
+its source evidence together. LikeC4 checks model syntax and layout; it does
 not infer architecture or verify prose against Rust.
 
 ```sh

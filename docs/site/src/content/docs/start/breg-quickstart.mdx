@@ -32,14 +32,16 @@ sequenceDiagram
     participant T as Token issuer
     participant B as Base Registry Engine
     participant P as PostgreSQL
+    participant L as Audit writer
 
     A->>T: Request an access token
     T-->>A: Return a signed bearer token
     A->>B: Send a request with the token and an access profile
     B->>B: Verify the token and select the profile
+    B->>L: Accept request entry before protected I/O
     B->>P: Run the compiled query as the runtime role
     P-->>B: Return the rows the row boundary admits
-    B->>P: Append one chained audit record
+    B->>L: Accept response entry before disclosure
     B-->>A: Return the Registry Record envelope
     Note over T: Your OpenID Connect provider
 ```
@@ -48,13 +50,17 @@ The token issuer is your OpenID Connect provider; Base Registry Engine verifies 
 none. You provision PostgreSQL with
 a migration role that owns the schema and a runtime role the serving process uses. The process
 verifies the active package at startup, serves the compiled routes, appends every admitted request
-to a hash-chained [audit journal](../../reference/glossary/#audit-journal), and keeps no state of
-its own outside PostgreSQL.
+to a per-process [audit stream](../../reference/glossary/#audit-journal). Records and history stay
+in PostgreSQL; audit uses a durable file or a best-effort stdout destination.
 
 {/* Evidence: crates/registry-breg/src/auth.rs, RegistryAuthenticator; crates/registry-breg/src/runtime_config.rs, SqlRoles;
     crates/registry-breg/src/audit.rs; release/docker/Dockerfile.breg; products/breg/README.md. */}
 
 ## Make your first request
+
+For this unreleased audit contract, use the [matching source-built tools](../../operate/breg/#obtain-the-runtime)
+in place of the tutorial's released installer. Keep released deployments paired with their release
+documentation archive.
 
 [Create and query your first registry](../../tutorials/first-breg/) starts disposable PostgreSQL
 and the maintained stock identity provider on your machine, initializes a domain-neutral project with `bregctl init`,
@@ -93,7 +99,7 @@ with the migration credential, and metrics.
 
 Start with [Query a registry from Python and Node](../../tutorials/query-breg-client/), which
 reads, lists, and creates records through the client packages with a bearer token and needs a
-registry on Registry Stack v0.26.1 or later, then keep the
+registry and client packages from matching builds, then keep the
 [Registry Stack client API reference](../../reference/client-api/#base-registry-engine) open for
 the full surface. If you call the REST API directly, the
 [Base Registry Engine API reference](../../reference/breg-api/) describes every route, the

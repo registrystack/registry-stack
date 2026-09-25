@@ -84,6 +84,13 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-bregctl/src/lib.rs, doctor_reports_postgres_advisories_after_the_passing_checks_without_failing;
     crates/registry-breg/tests/postgres_startup.rs, prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays_unavailable_until_preloaded. */}
 
+- Breaking audit change: all six runtimes use the shared per-process file or stdout writer.
+  Documented rotation, retention, shipping to append-only storage, and the mutation crash gap.
+  Removed procedures for the retired audit verification, export, and prune commands. See
+  [Base Registry Engine audit retention](../operate/breg-retention/#keep-the-audit-journal),
+  [Evidence audit](../operate/evidence-audit/), and
+  [audit upgrades](../operate/retention-and-persistent-state/#upgrade-casework-and-scheduling-audit).
+
 ## v0.34.0 beta-46
 
 - `bregctl apply` reports a migration database it could not reach, or an
