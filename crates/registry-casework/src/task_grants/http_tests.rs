@@ -1451,9 +1451,9 @@ async fn retiring_and_reintroducing_a_review_template_cannot_revive_its_grant() 
 
     database
         .batch_execute(
-            "ALTER TABLE casework_audit_outbox
-             ADD CONSTRAINT reject_template_retirement_audit
-             CHECK (audit_record->>'reason' IS DISTINCT FROM 'template')",
+            "ALTER TABLE casework_review_history
+             ADD CONSTRAINT reject_template_retirement_history
+             CHECK (detail->>'reason' IS DISTINCT FROM 'template')",
         )
         .await
         .unwrap();
@@ -1500,8 +1500,8 @@ async fn retiring_and_reintroducing_a_review_template_cannot_revive_its_grant() 
     );
     database
         .batch_execute(
-            "ALTER TABLE casework_audit_outbox
-             DROP CONSTRAINT reject_template_retirement_audit",
+            "ALTER TABLE casework_review_history
+             DROP CONSTRAINT reject_template_retirement_history",
         )
         .await
         .unwrap();
@@ -1566,18 +1566,16 @@ async fn retiring_and_reintroducing_a_review_template_cannot_revive_its_grant() 
         .unwrap()
         .get(0);
     assert_eq!(history_events, 1);
-    let audit_events: i64 = database
-        .query_one(
-            "SELECT count(*) FROM casework_audit_outbox
-             WHERE audit_record->>'grantId'=$1
-               AND audit_record->>'event'='casework.task_grant_invalidated'
-               AND audit_record->>'reason'='template'
-               AND audit_record->>'profileId'='system:task-grants'",
-            &[&grant_id.to_string()],
-        )
-        .await
-        .unwrap()
-        .get(0);
+    let grant = f.audit.reference("grantId", &grant_id.to_string());
+    let audit_events = f
+        .audit
+        .responses("task_grant_invalidated")
+        .into_iter()
+        .filter(|record| {
+            record["grantPseudonym"] == grant.as_str()
+                && record["profileId"] == "system:task-grants"
+        })
+        .count();
     assert_eq!(audit_events, 1);
 
     f.admin
