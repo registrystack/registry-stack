@@ -255,7 +255,7 @@ mod tests {
             assertion_issuers: std::collections::BTreeMap::new(),
             issuer: ISSUER.to_owned(),
             audience: AUDIENCE.to_owned(),
-            jwks_source: crate::config::JwksSource::Discovery,
+            jwks_source: crate::config::JwksSource::Discovery {},
             scope_claim: "registry_scopes".to_owned(),
             reads_scope: "scheduling-read".to_owned(),
             explain_scope: "scheduling-explain".to_owned(),

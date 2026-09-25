@@ -90,7 +90,7 @@ async fn authenticate(input: ProbeInput) -> Result<bool, ()> {
         assertion_issuers: assertion_issuers.clone(),
         issuer: input.issuer.clone(),
         audience: input.audience.clone(),
-        jwks_source: JwksSource::Discovery,
+        jwks_source: JwksSource::Discovery {},
         scope_claim: "scope".to_owned(),
         reads_scope: "scheduling-read".to_owned(),
         explain_scope: "scheduling-explain".to_owned(),
