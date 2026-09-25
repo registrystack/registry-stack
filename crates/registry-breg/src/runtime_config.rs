@@ -45,7 +45,11 @@ use crate::{
         ActivatedEventDestinationRegistry, EventDestinationConfigs, RawEventDestinationConfigs,
     },
     model::CompiledRegistry,
-    package::{PackageIntent, PackageLoadContext},
+    package::{
+        load_package_with_verified_envelope, load_predecessor_package_with_verified_envelope,
+        PackageError, PackageIntent, PackageLoadContext, PredecessorPackageContext,
+        VerifiedPackage, VerifiedPredecessorPackage,
+    },
     postgres::{ConnectionConfig, PoolBounds, SqlIdentifier},
 };
 
@@ -886,6 +890,44 @@ impl RuntimeConfig {
             .shared
             .verify_package(&crate::package::shared_package_limits(), "bregctl package")
             .map_err(|error| error.naming_root_as("package.root"))
+    }
+
+    /// Verify the configured package pin and consume that same shared
+    /// envelope through BReg's signature, binding, and derivation checks.
+    pub fn load_active_package(&self) -> std::result::Result<VerifiedPackage, PackageError> {
+        let shared = self
+            .verify_package_envelope()
+            .map_err(|_| PackageError::Envelope)?;
+        load_package_with_verified_envelope(
+            self.package().root(),
+            &self.package_load_context(),
+            &shared,
+        )
+    }
+
+    /// Verify and retain the configured shared package while loading the
+    /// database-active predecessor representation used for successor planning.
+    pub fn load_active_predecessor_package(
+        &self,
+    ) -> std::result::Result<VerifiedPredecessorPackage, PackageError> {
+        let shared = self
+            .verify_package_envelope()
+            .map_err(|_| PackageError::Envelope)?;
+        load_predecessor_package_with_verified_envelope(
+            self.package().root(),
+            &PredecessorPackageContext {
+                environment: self.identity().environment(),
+                instance_id: self.identity().instance_id(),
+                database_id: self.identity().database_id(),
+                database_initialization_environment: self
+                    .identity()
+                    .database_initialization_environment(),
+                trust_anchor: self.package_trust_anchor(),
+                expected_package_revision: self.package().active_revision(),
+                expected_sequence: self.package().active_sequence(),
+            },
+            &shared,
+        )
     }
 
     pub fn authentication(&self) -> &AuthenticationConfig {

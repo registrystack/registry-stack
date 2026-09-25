@@ -709,6 +709,9 @@ impl ImportAuthorityOperatorService {
         }
         let config = crate::runtime_config::load_runtime_config(path)
             .map_err(|_| ImportAuthorityError::Unavailable)?;
+        let package = config
+            .load_active_package()
+            .map_err(|_| ImportAuthorityError::Unavailable)?;
         let audit = crate::audit::RegistryAudit::open_companion(&config)
             .await
             .map_err(|_| ImportAuthorityError::Unavailable)?;
@@ -724,9 +727,8 @@ impl ImportAuthorityOperatorService {
             .get()
             .await
             .map_err(|_| ImportAuthorityError::Unavailable)?;
-        let startup = crate::startup::prepare_startup(
-            config.package().root(),
-            &config.package_load_context(),
+        let startup = crate::startup::prepare_loaded_startup(
+            package,
             &mut client,
             config.database().roles().migration(),
             config.database().roles().runtime(),

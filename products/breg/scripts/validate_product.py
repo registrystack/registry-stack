@@ -50,6 +50,8 @@ RUST_TEST = re.compile(
     re.MULTILINE,
 )
 PACKAGE_LAYOUT_ENTRIES = {
+    ("SHA256SUMS", "shared-checksum-envelope", True),
+    ("REVISION", "operator-revision", False),
     ("package.json", "identity", True),
     ("effective-model.json", "governed-model", True),
     ("inventories/physical-names.json", "physical-name-inventory", True),

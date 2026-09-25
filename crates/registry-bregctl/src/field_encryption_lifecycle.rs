@@ -27,8 +27,7 @@ use registry_breg::field_encryption_backfill::{
 };
 use registry_breg::migration_plan::ReviewedMigrationStepDescriptor;
 use registry_breg::package::{
-    load_package, load_predecessor_package, PackageError, PackageIntent, PackageLoadContext,
-    PredecessorPackageContext, VerifiedPredecessorPackage,
+    load_package, PackageError, PackageIntent, PackageLoadContext, VerifiedPredecessorPackage,
 };
 use registry_breg::postgres::{ExpectedRegistryIdentity, RegistryLockKey};
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfigError};
@@ -80,21 +79,9 @@ pub(crate) fn run_preflight(
     // The counts are only meaningful against the state the apply would start
     // from, so bind the same predecessor an apply binds and let the engine pin
     // the database to it.
-    let predecessor = load_predecessor_package(
-        config.package().root(),
-        &PredecessorPackageContext {
-            environment: config.identity().environment(),
-            instance_id: config.identity().instance_id(),
-            database_id: config.identity().database_id(),
-            database_initialization_environment: config
-                .identity()
-                .database_initialization_environment(),
-            trust_anchor: config.package_trust_anchor(),
-            expected_package_revision: config.package().active_revision(),
-            expected_sequence: config.package().active_sequence(),
-        },
-    )
-    .map_err(FieldEncryptionPreflightLifecycleError::PredecessorPackage)?;
+    let predecessor = config
+        .load_active_predecessor_package()
+        .map_err(FieldEncryptionPreflightLifecycleError::PredecessorPackage)?;
     let expected = predecessor_identity(&predecessor)?;
     let target_intent = PackageIntent::Activation {
         active_revision: &expected.package_revision,
@@ -200,7 +187,8 @@ pub(crate) fn run_erase_history(
     let erase = load_erase_request(request.request_file)?;
     let config = load_runtime_config(request.runtime_config)
         .map_err(FieldEncryptionEraseHistoryLifecycleError::RuntimeConfig)?;
-    let package = load_package(config.package().root(), &config.package_load_context())
+    let package = config
+        .load_active_package()
         .map_err(FieldEncryptionEraseHistoryLifecycleError::ActivePackage)?;
     let manifest = package.manifest();
     let package_sequence = i64::try_from(manifest.sequence).map_err(|_| {

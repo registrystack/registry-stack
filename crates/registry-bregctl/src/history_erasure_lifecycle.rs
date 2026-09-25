@@ -18,7 +18,7 @@ use registry_breg::history_erasure::{
     erase_record_history_with_connection, HistoryErasureError, HistoryErasureOutcome,
     HistoryErasureRequest, HistoryErasureTimeouts, RecordHistoryErasureTarget,
 };
-use registry_breg::package::{load_package, PackageError};
+use registry_breg::package::PackageError;
 use registry_breg::postgres::{ExpectedRegistryIdentity, RegistryLockKey};
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfigError};
 use registry_platform_canonical_json::parse_json_strict;
@@ -79,7 +79,8 @@ pub(crate) fn run(
         Uuid::parse_str(&erasure.record_id).map_err(|_| HistoryErasureLifecycleError::Target)?;
     let config = load_runtime_config(request.runtime_config)
         .map_err(HistoryErasureLifecycleError::RuntimeConfig)?;
-    let package = load_package(config.package().root(), &config.package_load_context())
+    let package = config
+        .load_active_package()
         .map_err(HistoryErasureLifecycleError::Package)?;
     let manifest = package.manifest();
     let package_sequence = i64::try_from(manifest.sequence)
