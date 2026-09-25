@@ -10,7 +10,8 @@ use std::time::Duration;
 use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
 use jsonwebtoken::Algorithm;
 use registry_messaging_core::{
-    ProviderKind, MESSAGING_RUNTIME_API_VERSION, MESSAGING_RUNTIME_KIND, PACKAGE_FILE,
+    valid_package_digest, ProviderKind, MESSAGING_RUNTIME_API_VERSION, MESSAGING_RUNTIME_KIND,
+    PACKAGE_FILE,
 };
 use registry_platform_config::{
     SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,
@@ -502,7 +503,7 @@ impl RuntimeConfig {
             return Err(RuntimeConfigError::RelativeOperatedPath("package.root"));
         }
         if let Some(digest) = &self.package.expected_digest {
-            if !valid_sha256_digest(digest) {
+            if !valid_package_digest(digest) {
                 return Err(RuntimeConfigError::InvalidExpectedDigest);
             }
         }
@@ -795,15 +796,6 @@ fn read_bounded(path: &Path) -> std::io::Result<Vec<u8>> {
         ));
     }
     Ok(bytes)
-}
-
-fn valid_sha256_digest(value: &str) -> bool {
-    value.strip_prefix("sha256:").is_some_and(|hex| {
-        hex.len() == 64
-            && hex
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    })
 }
 
 fn valid_listener(
