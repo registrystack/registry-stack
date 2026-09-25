@@ -2,9 +2,8 @@
 
 use anyhow::{bail, Context, Result};
 use registry_casework::{
-    open_audit, package_limits, secret_resolver, validate_breg_source_description,
-    PostgresStore, RuntimeConfig, SourceReconciliationHealth, PACKAGE_COMMAND,
-    RECONCILIATION_FAILURE_THRESHOLD,
+    open_audit, package_limits, secret_resolver, validate_breg_source_description, PostgresStore,
+    RuntimeConfig, SourceReconciliationHealth, PACKAGE_COMMAND, RECONCILIATION_FAILURE_THRESHOLD,
 };
 use registry_casework_breg::MAXIMUM_REQUEST_ENTITIES;
 use registry_casework_core::{
@@ -1017,6 +1016,12 @@ const DOCTOR_RECONCILIATION_ACTION: &str = "Restore the source named by the refu
 const DOCTOR_PINNED_WORK_ACTION: &str = "Keep the earlier package active until the named work finishes, or, once you accept that it stays hidden or orphaned, set package.acknowledgeStrandedWork to the digest the refusal names, then retry.";
 const DOCTOR_AUDIT_ACTION: &str = "Give audit.path an owner-only directory this user can write, and archive an audit file that ends in an incomplete entry before starting on a fresh path, then retry.";
 
+fn load_doctor_package(config: &RuntimeConfig) -> Result<registry_casework::LoadedCaseworkPackage> {
+    config
+        .load_package()
+        .context("verifying the configured Casework package")
+}
+
 pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
     let config =
         RuntimeConfig::load(runtime_config).context("loading Casework runtime configuration")?;
@@ -1024,16 +1029,9 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
         fs::canonicalize(runtime_config).context("resolving Casework runtime configuration")?;
     let package_root = fs::canonicalize(&config.package.root)
         .context("resolving the configured Casework package root")?;
-    let package_digest = config
-        .package_digest()
-        .context("verifying the configured Casework package")?;
-    check_source_descriptions(&package_root).map_err(|error| {
-        doctor_check_failure(
-            "sourceDescriptions",
-            "Repeat caseworkctl source add for the source description named by the refusal, then retry.",
-            error,
-        )
-    })?;
+    let package = load_doctor_package(&config)?;
+    let package_digest = package.digest();
+    let policy = package.project();
     let resolver = secret_resolver(&config).context("configuring Casework secret providers")?;
     let secret_files = secret_file_checks(&config, &resolver).map_err(|error| {
         doctor_check_failure(
@@ -1076,7 +1074,6 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
             error,
         )
     })?;
-    let policy = load_and_check_policy(&package_root)?;
     if config.sources.len() != policy.sources.len() {
         return Err(anyhow::Error::new(DoctorCheckFailure {
             check: "configuration",
@@ -1095,7 +1092,15 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
             }));
         };
         let adapter = binding
-            .build_adapter(source, &package_root, &resolver)
+            .build_adapter_from_description(
+                source,
+                package
+                    .source_description(&source.description)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("verified package omitted {}", source.description)
+                    })?,
+                &resolver,
+            )
             .map_err(|error| {
                 doctor_dependency_failure(
                     "configuration",
@@ -1139,13 +1144,13 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
     let conflicts = runtime
         .block_on(registry_casework::stranded_pinned_work(
             &store,
-            &policy,
+            policy,
             &dyn_adapters,
         ))
         .map_err(|error| database_failure(error.into()))?;
     let pinned_work = doctor_pinned_work(
         conflicts,
-        &package_digest,
+        package_digest,
         config.package.acknowledge_stranded_work.as_deref(),
     )?;
     runtime
@@ -1433,7 +1438,6 @@ fn load_runtime(project: &Path, requested: Option<&Path>) -> Result<RuntimeSelec
         RuntimeConfig::load(&runtime_config).context("loading Casework runtime configuration")?;
     let package_root = fs::canonicalize(&config.package.root)
         .context("resolving the configured Casework package root")?;
-    load_and_check_policy(&package_root)?;
     config.package.root = package_root;
     Ok(RuntimeSelection {
         workspace,
@@ -2655,6 +2659,47 @@ mod tests {
         let config = RuntimeConfig::load(runtime).unwrap();
         assert_eq!(config.listener.bind, "127.0.0.1:8100".parse().unwrap());
         assert!(config.sources.contains_key("professional-licences"));
+    }
+
+    #[test]
+    fn doctor_package_helper_returns_one_validated_replacement_package() {
+        let directory = crate::canonical_tempdir();
+        fs::write(directory.path().join("casework.yaml"), CASEWORK_YAML).unwrap();
+        fs::create_dir(directory.path().join("sources")).unwrap();
+        fs::write(
+            directory.path().join("sources/professional-licences.json"),
+            BREG_SOURCE_DESCRIPTION,
+        )
+        .unwrap();
+        let runtime = directory.path().join("runtime.yaml");
+        fs::write(&runtime, runtime_example(directory.path(), true).unwrap()).unwrap();
+        package_locally(directory.path());
+        let config = RuntimeConfig::load(&runtime).expect("package A is valid");
+        let first_digest = config.load_package().unwrap().digest().to_owned();
+
+        fs::rename(
+            directory.path().join(LOCAL_PACKAGE_DIRECTORY),
+            directory.path().join(".casework/package-a"),
+        )
+        .unwrap();
+        fs::write(
+            directory.path().join("casework.yaml"),
+            CASEWORK_YAML.replace(
+                "label: Licence corrections",
+                "label: Replacement corrections",
+            ),
+        )
+        .unwrap();
+        package_locally(directory.path());
+
+        let package = load_doctor_package(&config).expect("doctor validates package B");
+        assert_ne!(package.digest(), first_digest);
+        assert_eq!(package.project().queues[0].label, "Replacement corrections");
+        let source = &package.project().sources[0];
+        assert_eq!(
+            package.source_description(&source.description).unwrap(),
+            BREG_SOURCE_DESCRIPTION.as_bytes()
+        );
     }
 
     // registrystack/registry-stack#1256: a pinned BReg source description
