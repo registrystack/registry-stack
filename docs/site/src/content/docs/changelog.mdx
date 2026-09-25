@@ -22,8 +22,10 @@ relevant product pages on this site rather than duplicating release notes.
   index unless a declared index or a unique constraint without `when` already
   leads with it, and `bregctl check` reports `entity.list.unindexed_filter`
   and `entity.list.unindexed_sort` for a filterable or sortable list field no
-  index leads with. The findings never fail a check. An upgraded engine
-  refuses an active package whose project has a reference field no index
+  index leads with. The findings fail a check only under `--deny-findings`,
+  so a pipeline that runs `bregctl check --deny-findings` fails until those
+  fields are indexed. An upgraded engine refuses an active package whose
+  project has a reference field no index
   leads with, because its compiler now derives a different schema: `doctor`
   reports `startup.package.refused` with `the package compiler derivation
   failed`. Build and apply a successor with the upgraded `bregctl` before

@@ -219,8 +219,8 @@ another entity and changes when the constraint changes.
 `{id: asset-class, fields: [asset-class]}`. The compiler indexes every `reference` field
 unless a declared index or a unique constraint without `when` already leads with it.
 `bregctl check` reports `entity.list.unindexed_filter` or `entity.list.unindexed_sort` for a
-filterable or sortable list field that no index leads with. The finding never fails a check;
-declare an index for an entity that will hold more than a few thousand rows.
+filterable or sortable list field that no index leads with. The finding fails a check only under
+`--deny-findings`; declare an index for an entity that will hold more than a few thousand rows.
 
 {/* Evidence: crates/registry-breg/src/compiler.rs, derived_constraint_id(), compile_entities(), and unindexed_list_findings(); crates/registry-breg/src/generated_ddl.rs; products/breg/generated/authoring/registry-module.schema.json. */}
 
