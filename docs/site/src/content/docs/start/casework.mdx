@@ -79,7 +79,7 @@ caseworkctl dev tutorial-work/casework
 The installer verifies the release `SHA256SUMS` before it installs `casework` and `caseworkctl`
 into `~/.local/bin`. The `standalone-decision` template writes a project that declares one
 review kind and admitted producer and needs no registry behind it. `caseworkctl dev` starts PostgreSQL in a container,
-starts the maintained stock identity provider and `casework`, seeds the directory, and prints a
+packages the project, starts the maintained stock identity provider and `casework`, seeds the directory, and prints a
 report carrying a ready status, the service URL, the token endpoint, and one credential directory
 per local client.
 

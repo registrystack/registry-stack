@@ -622,6 +622,22 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
     assert_eq!(doctor["checks"]["pinnedWork"], "ready", "{doctor:#}");
     assert_eq!(doctor["pinnedWork"]["conflicts"], json!([]), "{doctor:#}");
 
+    // The runtime serves the package the start built from the authored
+    // project, verified at startup exactly as a deployed package is.
+    let package = fs::canonicalize(session.project.join(".casework/dev/package"))
+        .expect("the start built a session package");
+    assert_eq!(doctor["packageRoot"], json!(package), "{doctor:#}");
+    let sums = fs::read(package.join("SHA256SUMS")).expect("the session package has SHA256SUMS");
+    assert_eq!(
+        doctor["packageDigest"],
+        registry_platform_config::sha256_uri(&sums),
+        "{doctor:#}"
+    );
+    assert_eq!(
+        fs::read(package.join("casework.yaml")).expect("the packaged policy"),
+        fs::read(&policy_path).expect("the authored policy"),
+    );
+
     let accepted = create_review_request(&session, &first, "synthetic-batch-0042");
     let request = accepted["requestId"]
         .as_str()

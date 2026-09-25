@@ -41,10 +41,8 @@
           "type": "string"
         },
         "packageDigest": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
         },
         "checks": {
           "$ref": "#/$defs/doctorChecks"
@@ -72,8 +70,7 @@
             "verdict": {
               "enum": [
                 "clear",
-                "acknowledged",
-                "development"
+                "acknowledged"
               ]
             },
             "conflicts": {

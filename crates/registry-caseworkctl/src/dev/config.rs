@@ -605,9 +605,10 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
 
 /// The operator configuration the supervised `casework` children read.
 ///
-/// It binds the authored `casework.yaml` the reader edits, not a copy, so
-/// `caseworkctl doctor --runtime-config <this file>` reports on the same
-/// policy the reader's `caseworkctl check` reads.
+/// It binds the package each start builds from the authored project, so the
+/// runtime verifies its package exactly as a deployed one does, and
+/// `caseworkctl doctor --runtime-config <this file>` reports on the package
+/// the session serves.
 pub(super) fn operator(state: &State) -> Value {
     let root = state.root();
     let sources = state
@@ -632,7 +633,7 @@ pub(super) fn operator(state: &State) -> Value {
     json!({
         "apiVersion": registry_casework::RUNTIME_CONFIG_API_VERSION,
         "kind": registry_casework::RUNTIME_CONFIG_KIND,
-        "package": {"root": state.project},
+        "package": {"root": root.join(super::SESSION_PACKAGE)},
         "listener": {
             "bind": format!("127.0.0.1:{}", state.casework_port),
             "tlsTermination": "development-loopback",

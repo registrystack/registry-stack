@@ -79,7 +79,7 @@ REPORTS = {
         "properties": {
             "runtimeConfig": STRING,
             "packageRoot": STRING,
-            "packageDigest": {"type": ["string", "null"]},
+            "packageDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
             "checks": {"$ref": "#/$defs/doctorChecks"},
             "secretFileChecks": OBJECT_ARRAY,
             "sourceChecks": OBJECT_ARRAY,
@@ -88,7 +88,7 @@ REPORTS = {
                 "additionalProperties": False,
                 "required": ["verdict", "conflicts"],
                 "properties": {
-                    "verdict": {"enum": ["clear", "acknowledged", "development"]},
+                    "verdict": {"enum": ["clear", "acknowledged"]},
                     "conflicts": OBJECT_ARRAY,
                 },
             },
@@ -253,7 +253,8 @@ REPORTS = {
         "required": [
             "project",
             "dryRun",
-            "policyDigest",
+            "packageDigest",
+            "revision",
             "files",
             "runtimeConfigurationIncluded",
             "secretsIncluded",
@@ -264,7 +265,8 @@ REPORTS = {
             "project": STRING,
             "output": STRING,
             "dryRun": BOOLEAN,
-            "policyDigest": {"type": "string", "pattern": "^sha256:"},
+            "packageDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "revision": {"type": ["string", "null"]},
             "files": OBJECT_ARRAY,
             "runtimeConfigurationIncluded": {"const": False},
             "secretsIncluded": {"const": False},

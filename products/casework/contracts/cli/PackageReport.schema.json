@@ -14,7 +14,8 @@
         "command",
         "project",
         "dryRun",
-        "policyDigest",
+        "packageDigest",
+        "revision",
         "files",
         "runtimeConfigurationIncluded",
         "secretsIncluded",
@@ -43,9 +44,15 @@
         "dryRun": {
           "type": "boolean"
         },
-        "policyDigest": {
+        "packageDigest": {
           "type": "string",
-          "pattern": "^sha256:"
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "revision": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "files": {
           "type": "array",

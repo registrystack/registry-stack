@@ -14,7 +14,7 @@ standards_referenced:
 
 You have decided an item in [Decide your first Casework item](../../tutorials/first-casework/), and now you want to author the policy a real team will work under.
 This page covers the project file: the access profiles that separate people from producer services, the queues work waits in, the unified review policies, the routing rules and clocks that move work over time, and the source declaration that binds a Base Registry Engine (BReg) register.
-At the end, `caseworkctl package` writes a directory whose manifest an operator verifies before a runtime serves it.
+At the end, `caseworkctl package` writes a directory whose `SHA256SUMS` an operator verifies before a runtime serves it.
 
 If `caseworkctl` is not installed yet, the release installer places `casework` and `caseworkctl` together in `~/.local/bin` after checking the release `SHA256SUMS`:
 
@@ -43,7 +43,7 @@ caseworkctl init ./decisions --template standalone-decision
 
 `init` refuses a destination that already exists; it never overwrites a project.
 Point it at a new directory, or edit the project you already have.
-`casework.yaml` is the policy a deployment serves: `runtime.example.yaml` is a starting point for the deployment's own file, `dev-clients.yaml` describes local callers, `fixtures/` holds the synthetic cases `caseworkctl test` runs, and `sources/` waits for the imported description of any source you connect. The project also includes an editor schema and VS Code settings for the runtime file.
+`casework.yaml` is the policy a deployment serves: `runtime.example.yaml` is a starting point for the deployment's own file and serves the package `caseworkctl package . --output .casework/package` writes, `dev-clients.yaml` describes local callers, `fixtures/` holds the synthetic cases `caseworkctl test` runs, and `sources/` waits for the imported description of any source you connect. The project also includes an editor schema and VS Code settings for the runtime file.
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, init() and CASEWORK_YAML;
     products/casework/examples/standalone-decision/casework.yaml. */}
@@ -499,20 +499,22 @@ caseworkctl test ./decisions
 caseworkctl package ./decisions --output ./decisions-package
 ```
 
-The output is a directory, not an archive: `casework.yaml`, every source description the policy names, and `casework.package.json`, a manifest carrying a `policyDigest` over the sorted list of path, sha256, and byte count for each file.
-The report repeats the digest and states `secretsIncluded: false` and `runtimeConfigurationIncluded: false`, because the runtime file and its secrets stay outside the package and outside review.
+The output is a directory, not an archive: `casework.yaml`, every source description the policy names, and `SHA256SUMS`, one `sha256sum` line per file sorted by path.
+The package digest is the SHA-256 digest of `SHA256SUMS` itself, so it covers every file, and `sha256sum -c SHA256SUMS` checks the directory by hand.
+`--revision TEXT` adds a `REVISION` file with one free-text line, such as a ticket or a date, which the digest covers too.
+The report states the `packageDigest` and states `secretsIncluded: false` and `runtimeConfigurationIncluded: false`, because the runtime file and its secrets stay outside the package and outside review.
 Packaging refuses an existing output directory, so each candidate lands in its own new directory.
 
 :::caution[A packaged policy is verified by byte, not by intent]
-The runtime rebuilds the manifest from the directory at startup and refuses any difference: a changed byte, a missing file, or an extra file left beside the policy. Adding one blank line to a packaged `casework.yaml` is enough to make `casework` exit with `casework: the Casework policy package is invalid`, and so is dropping an unrelated note into the package root. A running process keeps the policy it verified at startup, so editing in place changes nothing it is serving and breaks the next restart.
+The runtime rechecks every line of `SHA256SUMS` at startup and refuses any difference, naming each file: a changed byte, a missing file, or an extra file left beside the policy. Adding one blank line to a packaged `casework.yaml` is enough to make `casework` exit with `the package at … does not match its SHA256SUMS; changed: casework.yaml`, and so is dropping an unrelated note into the package root. A running process keeps the policy it verified at startup, so editing in place changes nothing it is serving and breaks the next restart.
 :::
 
 Edit the authoring project instead, run the loop again, and package into a new directory.
-`caseworkctl check` on a package directory validates the policy file and says nothing about the manifest, so treat a package as read-only once it exists.
+`caseworkctl check` on a package directory validates the policy file and says nothing about `SHA256SUMS`, so treat a package as read-only once it exists.
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, check(), explain(), simulate(),
-    test(), and package(); crates/registry-casework/src/config.rs, PolicyPackageManifest and
-    verify_policy_package(). */}
+    test(), and package(); crates/registry-casework/src/config.rs, verify_casework_package();
+    crates/registry-platform-config/src/package.rs, write_package() and verify_package(). */}
 
 ## Connect a Base Registry Engine source
 
@@ -647,15 +649,15 @@ An operator receives three things from you and nothing else.
 | Artifact | Purpose |
 | ------------------------ | ------------------------------------------------------------ |
 | The package directory | The policy the runtime verifies and serves |
-| The manifest digest | The one value that says which policy this is |
+| The package digest | The one value that says which policy this is |
 | `runtime.example.yaml` | The starting point for the deployment's own file |
 
-Send the `policyDigest` out of band and have the operator confirm it against `casework.package.json` in the directory they received, because that digest is what distinguishes the reviewed policy from a copy of it.
+Send the `packageDigest` out of band and have the operator set it as `package.expectedDigest`, because that digest is what distinguishes the reviewed policy from a copy of it.
 The runtime file, the database credentials, the identity provider, the audit key, and the source bindings are theirs, and none of them belongs in your project or your package.
 Tell them which queues need teams, since the inbox stays closed until every declared queue has one.
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, package();
-    crates/registry-casework/src/config.rs, PolicyPackageManifest and RuntimeConfig::check;
+    crates/registry-casework/src/config.rs, verify_casework_package() and RuntimeConfig::check;
     products/casework/examples/professional-review/runtime.example.yaml. */}
 
 ## Next

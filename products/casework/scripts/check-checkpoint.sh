@@ -79,10 +79,10 @@ if "output" in dry_run:
     sys.exit("dry-run report must omit output")
 if packaged["dryRun"] is not False:
     sys.exit("written package report must set dryRun: false")
-if dry_run["policyDigest"] != packaged["policyDigest"]:
+if dry_run["packageDigest"] != packaged["packageDigest"]:
     sys.exit(
-        "dry-run policyDigest %r does not match the written package's %r"
-        % (dry_run["policyDigest"], packaged["policyDigest"])
+        "dry-run packageDigest %r does not match the written package's %r"
+        % (dry_run["packageDigest"], packaged["packageDigest"])
     )
 if dry_run["files"] != packaged["files"]:
     sys.exit("dry-run files do not match the written package's files")
