@@ -281,6 +281,12 @@ mod tests {
     }
 
     #[test]
+    fn an_ipv6_resource_allows_its_bracketed_host() {
+        let resource = Url::parse("https://[::1]:8443/mcp").expect("url");
+        assert_eq!(allowed_hosts(&resource), ["[::1]", "[::1]:8443"]);
+    }
+
+    #[test]
     fn an_http2_authority_stands_in_for_a_missing_host() {
         let authority =
             ResourceAuthority::of(&Url::parse("https://gateway.example.test/mcp").expect("url"))

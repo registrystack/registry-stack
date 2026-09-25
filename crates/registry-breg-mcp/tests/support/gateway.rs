@@ -93,11 +93,19 @@ pub struct Harness {
 
 impl Harness {
     pub async fn start(limits: Limits) -> Self {
+        Self::start_for_host(limits, "127.0.0.1").await
+    }
+
+    /// A gateway listening on IPv4 loopback whose resource names `host`, so
+    /// a test can reach it under a `Host` the network need not route, such
+    /// as the IPv6 loopback on a runner without IPv6.
+    pub async fn start_for_host(limits: Limits, host: &str) -> Self {
         capture_logs();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("gateway listens");
-        let origin = format!("http://{}", listener.local_addr().expect("gateway address"));
+        let address = listener.local_addr().expect("gateway address");
+        let origin = format!("http://{host}:{}", address.port());
         let resource = format!("{origin}/mcp");
         let gateway_key = generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("key");
         let authorization = TestAuthorizationServer::builder()
@@ -125,7 +133,7 @@ impl Harness {
         let directory = tempfile::tempdir().expect("temporary directory");
         let secrets = write_secrets(directory.path(), &gateway_key);
         let document = document(&Document {
-            listen: &origin["http://".len()..],
+            listen: &address.to_string(),
             resource: &resource,
             issuer: &authorization.issuer(),
             jwks: &authorization.jwks_uri(),

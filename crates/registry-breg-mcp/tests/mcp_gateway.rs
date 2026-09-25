@@ -508,6 +508,43 @@ async fn a_foreign_host_or_any_origin_is_refused() {
     assert!(harness.registry.seen().is_empty());
 }
 
+/// An IPv6 resource is served under its bracketed `Host`: both the outer
+/// host guard and rmcp's own allow-list admit it. The gateway listens on
+/// IPv4 loopback, so the request names the IPv6 authority only in its `Host`.
+#[tokio::test]
+async fn an_ipv6_resource_is_served_under_its_bracketed_host() {
+    let harness = Harness::start_for_host(Limits::default(), "[::1]").await;
+    let socket = harness.resource.replace("[::1]", "127.0.0.1");
+    let host = harness.origin["http://".len()..].to_owned();
+    let token = harness.token(CITIZEN_A);
+    let client = reqwest::Client::new();
+    let list = |host: &str| {
+        client
+            .post(&socket)
+            .bearer_auth(&token)
+            .header(header::HOST, host)
+            .header(header::ACCEPT, "application/json, text/event-stream")
+            .json(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+            .send()
+    };
+
+    let response = list(&host).await.expect("the gateway answers");
+    assert_eq!(response.status(), StatusCode::OK, "{host}");
+    let body = response.json::<Value>().await.expect("a JSON-RPC answer");
+    assert!(
+        body["result"]["tools"]
+            .as_array()
+            .is_some_and(|tools| !tools.is_empty()),
+        "{body}"
+    );
+    // The listener's own address is not the resource's authority.
+    let ipv4 = socket["http://".len()..socket.len() - "/mcp".len()].to_owned();
+    for other in [ipv4.as_str(), "[::1]", "[::2]:443"] {
+        let response = list(other).await.expect("the gateway answers");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{other}");
+    }
+}
+
 #[tokio::test]
 async fn a_wrong_host_or_any_origin_is_refused_before_authentication() {
     // One call per citizen and per client: a refusal that reached the
