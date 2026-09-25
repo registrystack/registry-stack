@@ -199,6 +199,17 @@ enum AuditCommand {
     /// whole chain has verified. While Casework runs, the export carries the
     /// sealed history only; stop Casework first for a complete export.
     Export(AuditExportArgs),
+    /// Continue audit publication after a restore left the audit file and the
+    /// database at different points.
+    ///
+    /// Casework refuses to publish when the database's last published record
+    /// is not where the audit file says it is, as after restoring only one of
+    /// the two from backup. Stop every Casework runtime on the database, then
+    /// run this: records the audit file already holds are marked published so
+    /// none is written twice, the journal records the acknowledgement, and
+    /// publication continues from it. A consistent pair is reported and left
+    /// untouched.
+    AcknowledgeRestore(AuditAcknowledgeRestoreArgs),
 }
 
 #[derive(Debug, Args)]
@@ -210,6 +221,14 @@ struct AuditVerifyArgs {
     /// hold it or continue from it.
     #[arg(long, value_name = "HEX")]
     from_head: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct AuditAcknowledgeRestoreArgs {
+    /// Absolute runtime configuration naming the database, audit.path, and
+    /// audit.hashKeyRef.
+    #[arg(long, value_name = "FILE")]
+    runtime_config: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -505,6 +524,7 @@ fn cli_report_kind(command: &Command) -> &'static str {
         Command::Audit(args) => match args.command {
             AuditCommand::Verify(_) => "AuditVerifyReport",
             AuditCommand::Export(_) => "AuditExportReport",
+            AuditCommand::AcknowledgeRestore(_) => "AuditRestoreAcknowledgementReport",
         },
         Command::Check(_) => "CheckReport",
         Command::Db(_) => "DatabaseMigrationReport",
@@ -1030,6 +1050,9 @@ fn run(cli: Cli) -> Result<Value> {
                 audit::verify(&args.runtime_config, args.from_head.as_deref())
             }
             AuditCommand::Export(args) => audit::export(&args.runtime_config, &args.output),
+            AuditCommand::AcknowledgeRestore(args) => {
+                audit::acknowledge_restore(&args.runtime_config)
+            }
         },
         Command::Db(args) => match args.command {
             DbCommand::Migrate(args) => {

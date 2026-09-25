@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Offline audit journal verification and export.
+//! Offline audit journal verification, export, and restore acknowledgement.
 //!
-//! Both commands read the chain the runtime configuration names under the key
-//! `audit.hashKeyRef` resolves, and neither writes to the journal nor takes the
-//! writer's place. Chain traversal and verification stay in the runtime crate;
-//! this module owns argument handling, the owner-only export file, and the
-//! refusal an operator reads.
+//! Verification and export read the chain the runtime configuration names
+//! under the key `audit.hashKeyRef` resolves, and neither writes to the journal
+//! nor takes the writer's place. Acknowledging a restore takes the writer's
+//! place while every runtime is stopped, and appends one acknowledgement
+//! record. Chain traversal, verification, and the acknowledgement stay in the
+//! runtime crate; this module owns argument handling, the owner-only export
+//! file, and the refusal an operator reads.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::BufWriter;
@@ -16,8 +18,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use registry_casework::{
-    export_audit_journal, secret_resolver, verify_audit_journal, AuditHead, RuntimeConfig,
-    RuntimeError,
+    acknowledge_audit_restore, export_audit_journal, secret_resolver, verify_audit_journal,
+    AuditHead, RuntimeConfig, RuntimeError,
 };
 use serde_json::{json, Value};
 
@@ -49,6 +51,8 @@ const AUDIT_OUTPUT_ACTION: &str = "Choose an absolute --output path in an existi
 const AUDIT_HEAD_ACTION: &str = "Pass the headHash an earlier audit verify or export reported \
      for this journal, or restore audit.path and the segments beside it from the backup that \
      holds that head, then retry.";
+const AUDIT_RUNNING_ACTION: &str = "Stop every Casework runtime that uses this database and \
+     audit.path, then retry.";
 const AUDIT_CHAIN_PATH: &str = "runtime.yaml:/audit/path";
 const AUDIT_HEAD_PATH: &str = "audit verify --from-head";
 const AUDIT_OUTPUT_PATH: &str = "audit export --output";
@@ -123,6 +127,22 @@ pub(crate) fn export(runtime_config: &Path, output: &Path) -> Result<Value> {
     }))
 }
 
+pub(crate) fn acknowledge_restore(runtime_config: &Path) -> Result<Value> {
+    let (config, runtime_config) = load(runtime_config)?;
+    let acknowledgement = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("starting the Casework operator runtime")?
+        .block_on(acknowledge_audit_restore(&config))
+        .map_err(acknowledgement_failure)?;
+    Ok(json!({
+        "ok": true,
+        "command": "audit acknowledge-restore",
+        "runtimeConfig": runtime_config,
+        "acknowledgement": acknowledgement,
+    }))
+}
+
 fn load(runtime_config: &Path) -> Result<(RuntimeConfig, PathBuf)> {
     let config =
         RuntimeConfig::load(runtime_config).context("loading Casework runtime configuration")?;
@@ -157,6 +177,29 @@ fn chain_failure(error: RuntimeError) -> anyhow::Error {
             refusal(error.to_string(), AUDIT_HEAD_PATH, AUDIT_HEAD_ACTION)
         }
         error => refusal(error.to_string(), AUDIT_CHAIN_PATH, AUDIT_CHAIN_ACTION),
+    }
+}
+
+/// A running Casework runtime holds the lease or the journal, which the
+/// operator resolves by stopping it, and a journal that does not open under
+/// the configured key is refused as verification refuses it. Every other
+/// failure keeps its own error so it is classified as the configuration or
+/// runtime dependency it is.
+fn acknowledgement_failure(error: RuntimeError) -> anyhow::Error {
+    match error {
+        RuntimeError::AuditPublicationLeaseHeld | RuntimeError::AuditJournalLocked => {
+            refusal(error.to_string(), AUDIT_CHAIN_PATH, AUDIT_RUNNING_ACTION)
+        }
+        RuntimeError::Store(error) => {
+            anyhow::Error::new(error).context("acknowledging the Casework audit restore")
+        }
+        RuntimeError::Config(error) => {
+            anyhow::Error::new(error).context("acknowledging the Casework audit restore")
+        }
+        RuntimeError::Audit | RuntimeError::AuditSecret(_) | RuntimeError::AuditJournal(_) => {
+            chain_failure(error)
+        }
+        error => anyhow::Error::new(error).context("acknowledging the Casework audit restore"),
     }
 }
 

@@ -203,6 +203,16 @@ fn every_public_json_report_matches_its_schema() {
             ],
         ),
         (
+            "audit acknowledge-restore",
+            "AuditRestoreAcknowledgementReport",
+            vec![
+                "audit",
+                "acknowledge-restore",
+                "--runtime-config",
+                missing.to_str().unwrap(),
+            ],
+        ),
+        (
             "retention erase",
             "RetentionEraseReport",
             vec![
@@ -270,7 +280,7 @@ fn every_public_json_report_matches_its_schema() {
     assert_eq!(exit, ExitCode::from(2));
     reports.push(("usage", "UsageReport", usage));
 
-    assert_eq!(reports.len(), 21);
+    assert_eq!(reports.len(), 22);
     for (label, kind, report) in reports {
         assert_matches_contract(label, kind, &report);
     }
@@ -350,10 +360,10 @@ fn db_migrate_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
     assert_eq!(migrated["status"], "migrated");
     execute_in_test_database(
         &scoped,
-        "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(18,now())",
+        "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(19,now())",
     );
 
-    let refusal = "the Casework database schema version 18 is newer than this binary supports (17); run a casework release that supports it";
+    let refusal = "the Casework database schema version 19 is newer than this binary supports (18); run a casework release that supports it";
     let (exit, report) = invoke(migrate.clone());
     assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report:#?}");
     assert_eq!(report["ok"], false);
@@ -453,6 +463,134 @@ fn audit_fixture(records: usize) -> (tempfile::TempDir, PathBuf, PathBuf) {
             }
         });
     (root, runtime_config, journal)
+}
+
+#[cfg(feature = "postgres-test")]
+#[test]
+fn audit_acknowledge_restore_continues_an_audit_file_behind_its_database() {
+    let base = std::env::var("CASEWORK_TEST_DATABASE_URL")
+        .expect("CASEWORK_TEST_DATABASE_URL is required for the real PostgreSQL test");
+    // A schema of its own, so this test never races a suite that resets the
+    // public schema of the same database.
+    let schema = format!("caseworkctl_restore_{}", Uuid::new_v4().simple());
+    let separator = if base.contains('?') { '&' } else { '?' };
+    let scoped = format!("{base}{separator}options=-csearch_path%3D{schema}");
+    execute_in_test_database(&base, &format!("CREATE SCHEMA {schema}"));
+    let secret = format!("CASEWORKCTL_TEST_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
+    std::env::set_var(&secret, &scoped);
+
+    let (root, runtime_config, journal) = audit_fixture(2);
+    let mut runtime: Value =
+        serde_norway::from_slice(&std::fs::read(&runtime_config).expect("runtime config reads"))
+            .expect("runtime config parses");
+    runtime["secretProviders"]["environment"] = json!({});
+    runtime["database"] = json!({
+        "runtimeUrlRef": format!("secret:env/{secret}"),
+        "migrationUrlRef": format!("secret:env/{secret}"),
+        "testOnlyPlaintext": true,
+    });
+    std::fs::write(
+        &runtime_config,
+        serde_norway::to_string(&runtime).expect("runtime config renders"),
+    )
+    .expect("runtime config writes");
+    let (exit, migrated) = invoke(vec![
+        OsString::from("db"),
+        OsString::from("migrate"),
+        root.path().join("standalone").into_os_string(),
+        OsString::from("--runtime-config"),
+        runtime_config.clone().into_os_string(),
+    ]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{migrated:#?}");
+    // The database last published a record this audit file does not hold, as
+    // it does after the audit file is restored from an earlier backup.
+    let database_head = "ab".repeat(32);
+    execute_in_test_database(
+        &scoped,
+        &format!(
+            "INSERT INTO casework_audit_publication_head(singleton,record_hash,recorded_at) \
+             VALUES(true,'{database_head}',now())"
+        ),
+    );
+    let acknowledge = arguments(&[
+        "audit",
+        "acknowledge-restore",
+        "--runtime-config",
+        runtime_config.to_str().unwrap(),
+    ]);
+
+    // A process holding the audit file's writer lock is a running runtime.
+    {
+        let _writer =
+            registry_platform_audit::DurableSegmentedJsonlSink::open(&journal, 1024 * 1024)
+                .expect("writer lock");
+        let (exit, report) = invoke(acknowledge.clone());
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report:#?}");
+        assert_matches_contract(
+            "audit acknowledge-restore refusal",
+            "AuditRestoreAcknowledgementReport",
+            &report,
+        );
+        assert_eq!(report["diagnostics"][0]["code"], "casework.audit.refused");
+        assert_eq!(
+            report["diagnostics"][0]["suggestedAction"],
+            "Stop every Casework runtime that uses this database and audit.path, then retry."
+        );
+    }
+    let before = record_hashes(&journal);
+    assert_eq!(before.len(), 2, "a refusal appends nothing");
+
+    let (exit, report) = invoke(acknowledge.clone());
+    assert_eq!(exit, ExitCode::SUCCESS, "{report:#?}");
+    assert_matches_contract(
+        "audit acknowledge-restore",
+        "AuditRestoreAcknowledgementReport",
+        &report,
+    );
+    let after = record_hashes(&journal);
+    assert_eq!(
+        after.len(),
+        3,
+        "the acknowledgement is recorded in the journal"
+    );
+    assert_eq!(
+        report["acknowledgement"],
+        json!({
+            "relation": "journal-behind",
+            "acknowledged": true,
+            "recordsAhead": 0,
+            "markedPublished": 0,
+            "databaseHead": database_head,
+            "journalHead": before[1],
+            "acknowledgementHash": after[2],
+        })
+    );
+    let appended: Value = serde_json::from_str(
+        std::fs::read_to_string(&journal)
+            .expect("journal reads")
+            .lines()
+            .last()
+            .expect("acknowledgement line"),
+    )
+    .expect("acknowledgement envelope");
+    assert_eq!(
+        appended["record"]["event"],
+        "casework.audit.restore-acknowledged"
+    );
+    assert_eq!(appended["prev_hash"], before[1]);
+
+    let (exit, report) = invoke(acknowledge);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report:#?}");
+    assert_eq!(report["acknowledgement"]["relation"], "consistent");
+    assert_eq!(report["acknowledgement"]["acknowledged"], false);
+    assert_eq!(
+        record_hashes(&journal).len(),
+        3,
+        "a consistent pair is left untouched"
+    );
+
+    std::env::remove_var(&secret);
+    execute_in_test_database(&base, &format!("DROP SCHEMA {schema} CASCADE"));
 }
 
 fn record_hashes(journal: &Path) -> Vec<String> {

@@ -1113,6 +1113,273 @@ fn newest_segmented_audit_envelope(path: &Path) -> Result<Option<AuditEnvelope>,
     Ok(None)
 }
 
+/// Where the audit journal stands against the publication head the database
+/// recorded.
+#[derive(Debug, PartialEq, Eq)]
+enum AuditJournalRelation {
+    /// The journal ends at the head, or one record past it: the record a
+    /// publisher appended and had not yet confirmed when it stopped.
+    Consistent,
+    /// The journal holds more than one record after the head, as it does when
+    /// the database is restored from a backup older than the journal.
+    DatabaseBehind { records_ahead: u64 },
+    /// The journal does not hold the head, as it does when the journal is
+    /// restored from an earlier backup, replaced, or started afresh, or
+    /// belongs to another replica or database.
+    JournalBehind,
+}
+
+impl AuditJournalRelation {
+    const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Consistent => "consistent",
+            Self::DatabaseBehind { .. } => "database-behind",
+            Self::JournalBehind => "journal-behind",
+        }
+    }
+}
+
+/// Place the publication `head` in the retained journal at `path`.
+///
+/// The tail is checked first, so a journal in step with its database is
+/// never read in full. Otherwise every retained record is read in chain
+/// order; the first retained record also matches when it continues `head`
+/// from segments archived away. Like [`newest_segmented_audit_envelope`],
+/// this does not verify the chain: the keyed bootstrap that opened the
+/// journal already authenticated it.
+fn audit_journal_relation(
+    path: &Path,
+    head: &[u8; 32],
+) -> Result<AuditJournalRelation, RuntimeError> {
+    if let Some(tail) = newest_segmented_audit_envelope(path)? {
+        if tail.record_hash == *head || tail.prev_hash.as_ref() == Some(head) {
+            return Ok(AuditJournalRelation::Consistent);
+        }
+    }
+    let mut first = true;
+    let mut found = false;
+    let mut records_ahead = 0_u64;
+    for_each_retained_audit_envelope(path, |envelope| {
+        if first {
+            first = false;
+            found = envelope.prev_hash.as_ref() == Some(head);
+        }
+        if envelope.record_hash == *head {
+            found = true;
+            records_ahead = 0;
+        } else if found {
+            records_ahead += 1;
+        }
+    })?;
+    Ok(match (found, records_ahead) {
+        (true, 0 | 1) => AuditJournalRelation::Consistent,
+        (true, _) => AuditJournalRelation::DatabaseBehind { records_ahead },
+        (false, _) => AuditJournalRelation::JournalBehind,
+    })
+}
+
+/// Every event identifier the retained journal at `path` carries.
+fn retained_audit_event_ids(path: &Path) -> Result<Vec<Uuid>, RuntimeError> {
+    let mut event_ids = Vec::new();
+    for_each_retained_audit_envelope(path, |envelope| {
+        event_ids.extend(audit_envelope_event_id(&envelope));
+    })?;
+    Ok(event_ids)
+}
+
+/// Visit every retained journal record in chain order, without verifying the
+/// chain.
+fn for_each_retained_audit_envelope(
+    path: &Path,
+    mut visit: impl FnMut(AuditEnvelope),
+) -> Result<(), RuntimeError> {
+    use std::io::BufRead as _;
+
+    let candidates =
+        registry_platform_audit::segmented_audit_paths(path).map_err(|_| RuntimeError::Audit)?;
+    for candidate in candidates {
+        let file = match std::fs::File::open(&candidate) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Err(RuntimeError::Audit),
+        };
+        for line in std::io::BufReader::new(file).lines() {
+            let line = line.map_err(|_| RuntimeError::Audit)?;
+            visit(serde_json::from_str::<AuditEnvelope>(&line).map_err(|_| RuntimeError::Audit)?);
+        }
+    }
+    Ok(())
+}
+
+fn audit_envelope_event_id(envelope: &AuditEnvelope) -> Option<Uuid> {
+    envelope
+        .record
+        .as_object()
+        .and_then(|record| record.get("eventId"))
+        .and_then(Value::as_str)
+        .and_then(|event_id| Uuid::parse_str(event_id).ok())
+}
+
+/// Event identifiers marked published per statement while a restore is
+/// acknowledged, so a long retained journal never becomes one oversized
+/// parameter.
+const AUDIT_ACKNOWLEDGEMENT_MARK_BATCH: usize = 10_000;
+
+/// The operator step every journal and database disagreement names.
+const AUDIT_RESTORE_STEP: &str = "or stop every Casework runtime and run `caseworkctl audit \
+     acknowledge-restore` to continue from here";
+
+/// Compare the journal this runtime opened with the publication head its
+/// database recorded, and refuse to publish when a restore has left them at
+/// different points. A database that has recorded no head yet, as after the
+/// upgrade that introduces it, adopts the journal's tail.
+async fn reconcile_publication_head(
+    lease: &crate::store::AuditPublicationLease,
+    path: &Path,
+) -> Result<(), RuntimeError> {
+    let Some(head) = lease.head().await? else {
+        if let Some(tail) = newest_segmented_audit_envelope(path)? {
+            lease.set_head(&hash_hex(&tail.record_hash)).await?;
+        }
+        return Ok(());
+    };
+    let head = AuditHead::parse(&head).ok_or(RuntimeError::Audit)?;
+    match audit_journal_relation(path, &head.0)? {
+        AuditJournalRelation::Consistent => Ok(()),
+        AuditJournalRelation::DatabaseBehind { records_ahead, .. } => {
+            Err(RuntimeError::AuditJournalDiverged(format!(
+                "the audit file holds {records_ahead} records after the last one this database \
+                 recorded as published, as it does when the database is restored from a backup \
+                 older than the audit file; restore the database backup that matches the audit \
+                 file, {AUDIT_RESTORE_STEP}"
+            )))
+        }
+        AuditJournalRelation::JournalBehind => Err(RuntimeError::AuditJournalDiverged(format!(
+            "the audit file does not hold the last record this database recorded as published, \
+             as it does when the audit file is restored from an earlier backup, replaced, or \
+             started afresh, or belongs to another replica or database; restore the audit file \
+             that holds that record, {AUDIT_RESTORE_STEP}"
+        ))),
+    }
+}
+
+/// What an acknowledged restore found and recorded.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditRestoreAcknowledgement {
+    /// `consistent`, `database-behind`, or `journal-behind`.
+    pub relation: &'static str,
+    /// Whether an acknowledgement record was appended to the journal. A
+    /// consistent journal and database are left as they are.
+    pub acknowledged: bool,
+    /// Records the journal holds after the database's publication head.
+    pub records_ahead: u64,
+    /// Records the retained journal already holds that the database still
+    /// listed as pending, now marked published so they are not appended twice.
+    pub marked_published: u64,
+    /// The publication head the database recorded, as lowercase hex.
+    pub database_head: Option<String>,
+    /// The hash of the journal's last record before the acknowledgement.
+    pub journal_head: Option<String>,
+    /// The hash of the appended acknowledgement record, now the head of both.
+    pub acknowledgement_hash: Option<String>,
+}
+
+/// Acknowledge a restore that left the audit journal and the database at
+/// different points, so publication continues from here.
+///
+/// Every Casework runtime on the database must be stopped: this takes the
+/// audit publication lease and the journal's single-writer lock and refuses
+/// while either is held. Records the retained journal already holds and the
+/// database still lists as pending are marked published, so none is
+/// appended twice.
+/// The journal then records the acknowledgement itself, and its hash becomes
+/// the database's publication head. A journal and database already in step
+/// are reported and left untouched.
+pub async fn acknowledge_audit_restore(
+    config: &RuntimeConfig,
+) -> Result<AuditRestoreAcknowledgement, RuntimeError> {
+    let secrets = secret_resolver(config)?;
+    let store = PostgresStore::connect_runtime(&config.database, &secrets)?;
+    store.ready().await?;
+    let audit_secret = resolve_audit_secret(&secrets, &config.audit.hash_key_ref)?;
+    let profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+        audit_secret.expose_secret().to_vec(),
+    ))
+    .map_err(|_| RuntimeError::Audit)?;
+    acknowledge_audit_restore_in(&store, &config.audit.path, &profile).await
+}
+
+async fn acknowledge_audit_restore_in(
+    store: &PostgresStore,
+    path: &Path,
+    profile: &AuditProfile,
+) -> Result<AuditRestoreAcknowledgement, RuntimeError> {
+    let lease = store
+        .try_audit_publication_lease()
+        .await?
+        .ok_or(RuntimeError::AuditPublicationLeaseHeld)?;
+    let (sink, chain, _) = open_audit_journal(path, profile).await?;
+    let journal_head =
+        newest_segmented_audit_envelope(path)?.map(|tail| hash_hex(&tail.record_hash));
+    let database_head = lease.head().await?;
+    let relation = match database_head.as_deref() {
+        None => AuditJournalRelation::Consistent,
+        Some(head) => {
+            let head = AuditHead::parse(head).ok_or(RuntimeError::Audit)?;
+            audit_journal_relation(path, &head.0)?
+        }
+    };
+    let name = relation.as_str();
+    let records_ahead = match relation {
+        AuditJournalRelation::Consistent => {
+            return Ok(AuditRestoreAcknowledgement {
+                relation: name,
+                acknowledged: false,
+                records_ahead: 0,
+                marked_published: 0,
+                database_head,
+                journal_head,
+                acknowledgement_hash: None,
+            })
+        }
+        AuditJournalRelation::DatabaseBehind { records_ahead } => records_ahead,
+        AuditJournalRelation::JournalBehind => 0,
+    };
+    // A record the retained journal already carries is never appended again,
+    // whichever of the two a restore left behind.
+    let mut marked_published = 0;
+    for event_ids in retained_audit_event_ids(path)?.chunks(AUDIT_ACKNOWLEDGEMENT_MARK_BATCH) {
+        marked_published += lease.mark_journal_records_published(event_ids).await?;
+    }
+    let envelope = chain
+        .append(
+            sink.as_ref(),
+            serde_json::json!({
+                "event": "casework.audit.restore-acknowledged",
+                "eventId": Uuid::new_v4().to_string(),
+                "relation": name,
+                "recordsAhead": records_ahead,
+                "markedPublished": marked_published,
+                "databaseHead": database_head,
+                "journalHead": journal_head,
+            }),
+        )
+        .await
+        .map_err(|error| RuntimeError::AuditJournal(describe_audit_journal_failure(&error)))?;
+    let acknowledgement_hash = hash_hex(&envelope.record_hash);
+    lease.set_head(&acknowledgement_hash).await?;
+    Ok(AuditRestoreAcknowledgement {
+        relation: name,
+        acknowledged: true,
+        records_ahead,
+        marked_published,
+        database_head,
+        journal_head,
+        acknowledgement_hash: Some(acknowledgement_hash),
+    })
+}
+
 pub fn secret_resolver(config: &RuntimeConfig) -> Result<SecretResolver, RuntimeError> {
     let mut providers = Vec::new();
     if config.secret_providers.file.is_some() {
@@ -1191,8 +1458,14 @@ impl AuditPublication {
         else {
             return Ok(false);
         };
-        match open_audit_journal(&self.path, &self.profile).await {
-            Ok((sink, chain, state)) => {
+        let opened = match open_audit_journal(&self.path, &self.profile).await {
+            Ok(opened) => opened,
+            Err(RuntimeError::AuditJournalLocked) => return Ok(false),
+            Err(error) => return Err(AuditTakeoverError::Journal(error)),
+        };
+        match reconcile_publication_head(&lease, &self.path).await {
+            Ok(()) => {
+                let (sink, chain, state) = opened;
                 self.leader = Some(AuditPublicationLeader {
                     publisher: RuntimeAuditPublisher {
                         lease,
@@ -1204,7 +1477,6 @@ impl AuditPublication {
                 });
                 Ok(true)
             }
-            Err(RuntimeError::AuditJournalLocked) => Ok(false),
             Err(error) => Err(AuditTakeoverError::Journal(error)),
         }
     }
@@ -1272,6 +1544,25 @@ impl AuditPublicationForTest {
         self.0.is_leader()
     }
 
+    /// Take the lease as a starting runtime does, reporting a refusal as the
+    /// message startup would fail with.
+    pub async fn start(&mut self) -> Result<bool, String> {
+        self.0
+            .take_at_startup()
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn acknowledge_restore(
+        store: &PostgresStore,
+        path: &Path,
+        profile: &AuditProfile,
+    ) -> Result<AuditRestoreAcknowledgement, String> {
+        acknowledge_audit_restore_in(store, path, profile)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
     /// Drop the lease and close the journal, as a stopping runtime does.
     pub fn stop(&mut self) {
         self.0.leader = None;
@@ -1311,22 +1602,25 @@ impl AuditPublicationFailure {
 #[async_trait]
 trait AuditPublicationBackend: Send + Sync {
     async fn pending(&self, maximum: i64) -> Result<Vec<(Uuid, Value)>, ()>;
-    async fn append(&self, record: Value) -> Result<(), ()>;
-    async fn mark_published(&self, event_id: Uuid) -> Result<(), ()>;
+    /// Append `record` to the journal, returning the keyed hash of the
+    /// journal record that carries it.
+    async fn append(&self, record: Value) -> Result<[u8; 32], ()>;
+    /// Mark `event_id` published, with `record_hash` as the publication head.
+    async fn mark_published(&self, event_id: Uuid, record_hash: [u8; 32]) -> Result<(), ()>;
 }
 
 #[derive(Default)]
 struct AuditPublicationState {
-    unconfirmed: Option<Uuid>,
+    /// The event the journal's tail carries and the keyed hash of that tail
+    /// record, until the database confirms it published.
+    unconfirmed: Option<(Uuid, [u8; 32])>,
 }
 
 impl AuditPublicationState {
     fn from_verified_tail(tail: Option<&AuditEnvelope>) -> Self {
-        let unconfirmed = tail
-            .and_then(|envelope| envelope.record.as_object())
-            .and_then(|record| record.get("eventId"))
-            .and_then(Value::as_str)
-            .and_then(|event_id| Uuid::parse_str(event_id).ok());
+        let unconfirmed = tail.and_then(|envelope| {
+            audit_envelope_event_id(envelope).map(|event_id| (event_id, envelope.record_hash))
+        });
         Self { unconfirmed }
     }
 }
@@ -1337,17 +1631,20 @@ impl AuditPublicationBackend for RuntimeAuditPublisher {
         self.lease.pending(maximum).await.map_err(|_| ())
     }
 
-    async fn append(&self, record: Value) -> Result<(), ()> {
+    async fn append(&self, record: Value) -> Result<[u8; 32], ()> {
         let record = published_audit_record(record, &self.identifiers)?;
         self.chain
             .append(self.sink.as_ref(), record)
             .await
-            .map(|_| ())
+            .map(|envelope| envelope.record_hash)
             .map_err(|_| ())
     }
 
-    async fn mark_published(&self, event_id: Uuid) -> Result<(), ()> {
-        self.lease.mark_published(event_id).await.map_err(|_| ())
+    async fn mark_published(&self, event_id: Uuid, record_hash: [u8; 32]) -> Result<(), ()> {
+        self.lease
+            .mark_published(event_id, &hash_hex(&record_hash))
+            .await
+            .map_err(|_| ())
     }
 }
 
@@ -1355,9 +1652,9 @@ async fn publish_audit_pass(
     publisher: &impl AuditPublicationBackend,
     state: &mut AuditPublicationState,
 ) -> Result<(), AuditPublicationFailure> {
-    if let Some(event_id) = state.unconfirmed {
+    if let Some((event_id, record_hash)) = state.unconfirmed {
         publisher
-            .mark_published(event_id)
+            .mark_published(event_id, record_hash)
             .await
             .map_err(|()| AuditPublicationFailure::PublishedMark)?;
         state.unconfirmed = None;
@@ -1369,13 +1666,13 @@ async fn publish_audit_pass(
     for (event_id, record) in records {
         let record = audit_record_with_event_id(event_id, record)
             .map_err(|()| AuditPublicationFailure::RecordIdentity)?;
-        publisher
+        let record_hash = publisher
             .append(record)
             .await
             .map_err(|()| AuditPublicationFailure::SinkAppend)?;
-        state.unconfirmed = Some(event_id);
+        state.unconfirmed = Some((event_id, record_hash));
         publisher
-            .mark_published(event_id)
+            .mark_published(event_id, record_hash)
             .await
             .map_err(|()| AuditPublicationFailure::PublishedMark)?;
         state.unconfirmed = None;
@@ -1825,15 +2122,15 @@ mod tests {
             Ok(state.pending.clone())
         }
 
-        async fn append(&self, record: Value) -> Result<(), ()> {
+        async fn append(&self, record: Value) -> Result<[u8; 32], ()> {
             self.chain
                 .append(self.sink.as_ref(), record)
                 .await
-                .map(|_| ())
+                .map(|envelope| envelope.record_hash)
                 .map_err(|_| ())
         }
 
-        async fn mark_published(&self, event_id: Uuid) -> Result<(), ()> {
+        async fn mark_published(&self, event_id: Uuid, _record_hash: [u8; 32]) -> Result<(), ()> {
             let mut state = self.database.lock().await;
             if state.fail_marks {
                 return Err(());
@@ -1860,16 +2157,16 @@ mod tests {
             Ok(state.pending.clone().into_iter().collect())
         }
 
-        async fn append(&self, _record: Value) -> Result<(), ()> {
+        async fn append(&self, _record: Value) -> Result<[u8; 32], ()> {
             let mut state = self.state.lock().await;
             if state.failure == Some(AuditPublicationFailure::SinkAppend) {
                 return Err(());
             }
             state.append_count += 1;
-            Ok(())
+            Ok([0; 32])
         }
 
-        async fn mark_published(&self, event_id: Uuid) -> Result<(), ()> {
+        async fn mark_published(&self, event_id: Uuid, _record_hash: [u8; 32]) -> Result<(), ()> {
             let mut state = self.state.lock().await;
             if state.failure == Some(AuditPublicationFailure::PublishedMark) {
                 return Err(());
@@ -2011,6 +2308,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_publication_head_is_placed_in_the_retained_journal() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().expect("audit directory");
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("restrict audit directory");
+        let path = directory.path().join("casework.jsonl");
+        let profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+            b"casework-audit-head-secret-32-bytes".to_vec(),
+        ))
+        .expect("audit profile");
+        let sink = DurableSegmentedJsonlSink::open(&path, MAXIMUM_AUDIT_SEGMENT_BYTES)
+            .expect("writer lock");
+        let chain = profile
+            .bootstrap_or_start_empty(&sink)
+            .await
+            .expect("keyed bootstrap");
+        let mut hashes = Vec::new();
+        let mut event_ids = Vec::new();
+        for _ in 0..4 {
+            let event_id = Uuid::new_v4();
+            let envelope = chain
+                .append(
+                    &sink,
+                    serde_json::json!({"event": "casework.synthetic", "eventId": event_id}),
+                )
+                .await
+                .expect("append");
+            hashes.push(envelope.record_hash);
+            event_ids.push(event_id);
+        }
+
+        let relation = |head: &[u8; 32]| audit_journal_relation(&path, head).expect("relation");
+        assert_eq!(relation(&hashes[3]), AuditJournalRelation::Consistent);
+        assert_eq!(
+            relation(&hashes[2]),
+            AuditJournalRelation::Consistent,
+            "the one record a publisher appended but never confirmed is not a divergence"
+        );
+        assert_eq!(
+            relation(&hashes[1]),
+            AuditJournalRelation::DatabaseBehind { records_ahead: 2 }
+        );
+        assert_eq!(
+            relation(&hashes[0]),
+            AuditJournalRelation::DatabaseBehind { records_ahead: 3 }
+        );
+        assert_eq!(
+            retained_audit_event_ids(&path).expect("event ids"),
+            event_ids
+        );
+        assert_eq!(relation(&[7; 32]), AuditJournalRelation::JournalBehind);
+
+        let empty = tempfile::tempdir().expect("empty audit directory");
+        std::fs::set_permissions(empty.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("restrict empty audit directory");
+        let empty_path = empty.path().join("casework.jsonl");
+        let _empty_sink = DurableSegmentedJsonlSink::open(&empty_path, MAXIMUM_AUDIT_SEGMENT_BYTES)
+            .expect("empty writer lock");
+        assert_eq!(
+            audit_journal_relation(&empty_path, &hashes[3]).expect("relation"),
+            AuditJournalRelation::JournalBehind,
+            "an empty journal does not hold a head the database recorded"
+        );
+    }
+
+    #[tokio::test]
     async fn audit_publication_reconciles_a_real_file_tail_after_restart() {
         use std::os::unix::fs::PermissionsExt as _;
 
@@ -2052,7 +2416,12 @@ mod tests {
             publish_audit_pass(&publisher, &mut publication_state).await,
             Err(AuditPublicationFailure::PublishedMark)
         );
-        assert_eq!(publication_state.unconfirmed, Some(event_id));
+        assert_eq!(
+            publication_state
+                .unconfirmed
+                .map(|(unconfirmed, _)| unconfirmed),
+            Some(event_id)
+        );
         assert!(matches!(
             DurableSegmentedJsonlSink::open(&path, MAXIMUM_AUDIT_SEGMENT_BYTES),
             Err(registry_platform_audit::AuditError::SinkLocked { .. })
@@ -2542,7 +2911,7 @@ mod tests {
             .await
             .expect("the upgraded runtime opens an audit file the rotating sink never rotated");
         assert_eq!(
-            state.unconfirmed.map(|event_id| event_id.to_string()),
+            state.unconfirmed.map(|(event_id, _)| event_id.to_string()),
             earlier.last().cloned(),
             "restart reconciliation reads the earlier writer's tail"
         );
@@ -2924,6 +3293,13 @@ pub enum RuntimeError {
          the journal was replaced or truncated after that head was recorded"
     )]
     AuditHeadMissing,
+    #[error("the Casework audit journal and database disagree: {0}")]
+    AuditJournalDiverged(String),
+    #[error(
+        "a Casework runtime holds the audit publication lease; stop every Casework runtime \
+         that uses this database before acknowledging a restore"
+    )]
+    AuditPublicationLeaseHeld,
     #[error("the Casework audit export could not be written ({0})")]
     AuditExport(String),
     #[error("the Casework review completion destination configuration is invalid")]

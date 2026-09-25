@@ -647,21 +647,80 @@ closes the audit file on its next pass and logs `Casework lost the audit publica
 Give every replica the same `audit.path` on a filesystem that honours advisory file locks, so each
 publisher continues the one chain the last one left. A replica that takes the lease while the
 previous publisher still holds the lock beside the audit file stays a standby and tries again on the
-next pass. Replicas with separate audit files publish no record twice, but after the lease moves the
-chain continues in another file, so a chain verified in one file no longer holds every record. If you
-cannot share the audit directory, run one replica.
+next pass. Replicas with separate audit files do not work: the database records the last record it
+published, and a replica whose audit file does not hold that record refuses to take over, as
+[a restored audit file](#restore-from-a-backup) is refused. If you cannot share the audit directory,
+run one replica.
 
-A replica that takes the lease but cannot open or verify the audit file fails its pass at
-`journal-open`, logs the same cause startup would, and fails readiness until a pass succeeds. The
-runtime that holds the lease at startup refuses to start on that cause instead.
+A replica that takes the lease but cannot open or verify the audit file, or whose audit file
+disagrees with the database, fails its pass at `journal-open`, logs the same cause startup would,
+and fails readiness until a pass succeeds. The runtime that holds the lease at startup refuses to
+start on that cause instead.
 
 {/* Evidence: crates/registry-casework/src/runtime.rs, AuditPublication::take_at_startup(),
-    take_lease(), pass(), and release_lost_lease();
+    take_lease(), pass(), release_lost_lease(), and reconcile_publication_head();
     crates/registry-casework/src/store.rs, try_audit_publication_lease() and
     AuditPublicationLease;
     crates/registry-casework/tests/postgres_transactions.rs,
     one_runtime_publishes_the_audit_outbox_while_another_stands_by() and
     a_runtime_whose_lease_session_ends_releases_the_shared_journal(). */}
+
+### Restore from a backup
+
+The database and the audit file are backed up separately, and a restore can leave them at different
+points. Casework detects that before it publishes again. Each time it marks an audit record
+published, the database records that record's hash as its publication head, in the same
+transaction. The runtime that takes the audit publication lease looks for the head in the audit
+file and refuses to continue from a file that disagrees:
+
+- **The database is behind the audit file**, as after restoring only the database from an older
+  backup. The refusal says `the audit file holds <n> records after the last one this database
+  recorded as published`. Publishing from here would append the restored outbox's records a second
+  time.
+- **The audit file is behind the database**, as after restoring only the audit file, replacing it,
+  starting it afresh, or pointing a replica at a file of its own. The refusal says
+  `the audit file does not hold the last record this database recorded as published`. Publishing
+  from here would leave the records the database already published out of this file's chain.
+
+Both start with `the Casework audit journal and database disagree`. The runtime that holds the lease
+at startup refuses to start, and a standby that takes the lease over fails its pass at
+`journal-open` and stays not ready. The one record a publisher appended just before it stopped,
+without marking it published, is not a disagreement.
+
+Restore the matching pair when you have it: the database backup and the audit file taken together.
+When you do not, stop every Casework runtime on the database and acknowledge the restore:
+
+```sh
+caseworkctl audit acknowledge-restore --runtime-config /etc/registry-casework/runtime.yaml
+```
+
+It uses the runtime database credential, takes the audit publication lease and the audit file's
+writer lock, and refuses with code `casework.audit.refused` while a runtime holds either. It marks
+every record the audit file already holds that the database lists as pending as published, so none
+is appended twice. It then appends one `casework.audit.restore-acknowledged` record naming the
+relation it found, the number of records the audit file held after the database's head, and both
+heads, and makes that record the new head. Its report carries the same fields. A database and
+audit file that already agree are reported as `consistent` and left untouched, so running it
+twice is harmless. Start Casework again afterwards.
+
+An acknowledged restore resumes publication; it does not recover what the restore lost. Work done
+after the database backup is gone from the database while the audit file still records it, and
+the source was not told. Idempotency keys used after the backup are gone too, so a client that
+retries one of those requests has it run again as a new request. When the database was behind,
+read the records the report counts after `databaseHead` in the audit file to see which operations
+to check with their callers and the source.
+
+{/* Evidence: crates/registry-casework/migrations/0018_audit_publication_head.sql;
+    crates/registry-casework/src/store.rs, AuditPublicationLease::mark_published(), head(),
+    set_head(), and mark_journal_records_published();
+    crates/registry-casework/src/runtime.rs, audit_journal_relation(),
+    reconcile_publication_head(), retained_audit_event_ids(), and acknowledge_audit_restore();
+    crates/registry-caseworkctl/src/audit.rs, acknowledge_restore();
+    crates/registry-casework/tests/postgres_transactions.rs,
+    a_database_restored_behind_its_audit_file_is_refused_until_acknowledged(),
+    an_audit_file_restored_behind_its_database_is_refused_until_acknowledged(),
+    acknowledging_a_restore_never_appends_a_record_the_audit_file_holds(), and
+    a_database_without_a_publication_head_adopts_the_audit_file_tail(). */}
 
 ## Establish directory authority
 
@@ -835,6 +894,8 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 | `the Casework database schema version N is newer than this binary supports (M)` | A newer release already migrated this database. Run that release or a later one; Casework does not migrate a schema down. |
 | `the Casework database holds hosted work that schema migration 15 would drop` | The database still holds hosted work from Casework 0.32.0 or earlier. Keep it with that release until its work is exported, then migrate a fresh database as [Migrate and serve](#migrate-and-serve) describes. |
 | `the Casework audit journal could not be initialized` naming a numbered file `rotated by an earlier Casework release`, or saying the file `does not begin at the first record of its chain` | The audit directory still holds the layout of Casework 0.33.0 or earlier. Archive it as [the upgrade steps](#upgrade-from-a-release-that-rotated-the-audit-file) describe. |
+| `the Casework audit journal and database disagree` | The database and the audit file were restored from different points, or a replica has an audit file of its own. Restore the matching pair, or stop every runtime and run `caseworkctl audit acknowledge-restore` as [the restore steps](#restore-from-a-backup) describe. |
+| `caseworkctl audit acknowledge-restore` refuses with `holds the audit publication lease`, or says another process holds the single-writer lock beside `audit.path` | A Casework runtime is still running on the database or the audit file. Stop every one, then retry. |
 | `the Casework audit journal could not be initialized: audit directory must be owner-only` | Set the audit directory to mode `0700`, owned by the runtime user. |
 | `GET /ready` returns `503` while `GET /health` returns `200` | Audit publication, PostgreSQL, or a source's reconciliation is failing. Run `caseworkctl doctor`, which names the check, then read the runtime log for the failed audit stage or the reconciliation entry. |
 | `doctor` refuses at `doctor:/checks/reconciliation` | The named source's last passes failed. `source-unavailable` means the source did not answer; `source-refused` means it answered with a refusal or a response Casework cannot use; `store` and `configuration` point at the database and the binding. Repair the cause; the next pass that succeeds restores readiness. |

@@ -61,6 +61,37 @@ REPORTS = {
             "auditChain": AUDIT_CHAIN,
         },
     },
+    "AuditRestoreAcknowledgementReport": {
+        "command": "audit acknowledge-restore",
+        "required": ["runtimeConfig", "acknowledgement"],
+        "properties": {
+            "runtimeConfig": STRING,
+            "acknowledgement": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "relation",
+                    "acknowledged",
+                    "recordsAhead",
+                    "markedPublished",
+                    "databaseHead",
+                    "journalHead",
+                    "acknowledgementHash",
+                ],
+                "properties": {
+                    "relation": {
+                        "enum": ["consistent", "database-behind", "journal-behind"]
+                    },
+                    "acknowledged": BOOLEAN,
+                    "recordsAhead": {"type": "integer", "minimum": 0},
+                    "markedPublished": {"type": "integer", "minimum": 0},
+                    "databaseHead": AUDIT_HASH,
+                    "journalHead": AUDIT_HASH,
+                    "acknowledgementHash": AUDIT_HASH,
+                },
+            },
+        },
+    },
     "AttemptSettlementReport": {
         "command": "attempt settle",
         "required": ["project", "runtimeConfig", "report"],

@@ -973,7 +973,7 @@ async fn repeated_migration_is_a_ledger_no_op_and_never_drops_the_occurrence_ind
     let (store, client, schema) = isolated_schema("migrate").await;
     store.migrate().await.expect("first migration");
     let applied = applied_versions(&client).await;
-    assert_eq!(applied, (1..=17).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=18).collect::<Vec<i64>>());
     let index = occurrence_index(&client, &schema).await;
     assert!(index.1, "the occurrence identity index is unique");
 
@@ -1208,7 +1208,7 @@ async fn migration_16_releases_superseded_identities_in_a_database_that_holds_th
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=17).collect::<Vec<_>>()
+        (1..=18).collect::<Vec<_>>()
     );
     let second_a = observe_open_in_generation(&store, "binding-a").await;
     let states: Vec<(uuid::Uuid, String)> = items_by_state(&client)
@@ -1360,7 +1360,7 @@ async fn migration_replaces_empty_hosted_tables_through_the_ledger_head() {
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=17).collect::<Vec<_>>()
+        (1..=18).collect::<Vec<_>>()
     );
     let hosted_tables_remaining: bool = client
         .query_one(
@@ -1391,7 +1391,7 @@ async fn migration_13_adds_sync_claim_indexes_to_an_existing_schema() {
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=17).collect::<Vec<_>>()
+        (1..=18).collect::<Vec<_>>()
     );
     let indexes: Vec<String> = client
         .query(
@@ -1435,14 +1435,14 @@ async fn readiness_rejects_an_unmigrated_schema() {
             store.ready().await,
             Err(StoreError::SchemaNotCurrent {
                 applied: None,
-                required: 17
+                required: 18
             })
         ),
         "a schema without the migration ledger must fail readiness"
     );
     assert_eq!(
         store.ready().await.unwrap_err().to_string(),
-        "the Casework database schema is not current: no migration has been applied, and this binary requires version 17; apply the migrations with `casework migrate` or `caseworkctl db migrate`"
+        "the Casework database schema is not current: no migration has been applied, and this binary requires version 18; apply the migrations with `casework migrate` or `caseworkctl db migrate`"
     );
 }
 
@@ -1465,8 +1465,8 @@ async fn readiness_rejects_a_partial_schema_missing_review_tables() {
         matches!(
             store.ready().await,
             Err(StoreError::SchemaNotCurrent {
-                applied: Some(17),
-                required: 17
+                applied: Some(18),
+                required: 18
             })
         ),
         "a partial migration ledger must fail readiness"
@@ -1497,15 +1497,15 @@ async fn readiness_rejects_an_unsupported_migration_version() {
         matches!(
             refusal,
             StoreError::SchemaNewer {
-                found: 18,
-                supported: 17
+                found: 19,
+                supported: 18
             }
         ),
         "a newer schema is not reported as corrupt data: {refusal:?}"
     );
     assert_eq!(
         refusal.to_string(),
-        "the Casework database schema version 18 is newer than this binary supports (17); run a casework release that supports it"
+        "the Casework database schema version 19 is newer than this binary supports (18); run a casework release that supports it"
     );
 }
 
@@ -1518,7 +1518,7 @@ async fn migration_refuses_a_schema_newer_than_this_binary_and_writes_nothing() 
         .expect("migrate to the current schema");
     client
         .execute(
-            "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(18,now())",
+            "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(19,now())",
             &[],
         )
         .await
@@ -1533,8 +1533,8 @@ async fn migration_refuses_a_schema_newer_than_this_binary_and_writes_nothing() 
         matches!(
             refusal,
             StoreError::SchemaNewer {
-                found: 18,
-                supported: 17
+                found: 19,
+                supported: 18
             }
         ),
         "{refusal:?}"
@@ -2778,9 +2778,356 @@ fn assert_each_event_once(journals: &[&std::path::Path], expected: usize) {
     assert_eq!(event_ids.len(), expected, "no record is published twice");
 }
 
+/// The session holding this schema's audit publication lease, if any.
+const AUDIT_LEASE_HOLDER: &str = "SELECT pid FROM pg_locks WHERE locktype='advisory' AND objsubid=1 AND granted \
+     AND ((classid::bigint << 32) | objid::bigint) = hashtextextended('casework.audit-publication:' || $1::text, 0)";
+
+/// Wait until the session of a dropped lease has ended on the server.
+async fn wait_for_free_audit_lease(client: &tokio_postgres::Client, schema: &str) {
+    for _ in 0..250 {
+        if client
+            .query(AUDIT_LEASE_HOLDER, &[&schema])
+            .await
+            .expect("read the lease holder")
+            .is_empty()
+        {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("the audit publication lease was not released");
+}
+
+async fn audit_publication_head(client: &tokio_postgres::Client) -> Option<String> {
+    client
+        .query_opt(
+            "SELECT record_hash FROM casework_audit_publication_head",
+            &[],
+        )
+        .await
+        .expect("read the publication head")
+        .map(|row| row.get(0))
+}
+
+async fn published_audit_event_ids(client: &tokio_postgres::Client) -> Vec<uuid::Uuid> {
+    client
+        .query(
+            "SELECT event_id FROM casework_audit_outbox WHERE published_at IS NOT NULL",
+            &[],
+        )
+        .await
+        .expect("read published audit records")
+        .iter()
+        .map(|row| row.get(0))
+        .collect()
+}
+
+/// The hash of the last record the journal at `path` holds.
+fn journal_tail_hash(path: &std::path::Path) -> String {
+    let segments = registry_platform_audit::segmented_audit_paths(path).expect("journal segments");
+    let last = segments.last().expect("a journal segment");
+    let text = std::fs::read_to_string(last).expect("journal segment");
+    let line = text.lines().last().expect("a journal record");
+    serde_json::from_str::<serde_json::Value>(line).expect("audit envelope")["record_hash"]
+        .as_str()
+        .expect("record hash")
+        .to_owned()
+}
+
+#[tokio::test]
+async fn a_database_restored_behind_its_audit_file_is_refused_until_acknowledged() {
+    let (store, client, schema) = isolated_schema("audit_restore_database_behind").await;
+    store.migrate().await.expect("migrate");
+    let root = tempfile::tempdir().expect("deployment root");
+    let journal = owner_only_audit_directory(root.path(), "journal");
+    let mut first = registry_casework::AuditPublicationForTest::new(
+        store.clone(),
+        journal.clone(),
+        audit_publication_profile(),
+    );
+    insert_pending_audit(&client, 1).await;
+    first.pass().await.expect("publish the first record");
+    let backup_head = audit_publication_head(&client)
+        .await
+        .expect("publication records the head");
+    assert_eq!(backup_head, journal_tail_hash(&journal));
+    let published_at_backup = published_audit_event_ids(&client).await;
+
+    insert_pending_audit(&client, 2).await;
+    first.pass().await.expect("publish two more records");
+    first.stop();
+    wait_for_free_audit_lease(&client, &schema).await;
+
+    // Restore the database to the moment of the backup: the audit file keeps
+    // the two records published after it.
+    client
+        .execute(
+            "UPDATE casework_audit_publication_head SET record_hash = $1",
+            &[&backup_head],
+        )
+        .await
+        .expect("restore the publication head");
+    client
+        .execute(
+            "UPDATE casework_audit_outbox SET published_at = NULL WHERE NOT (event_id = ANY($1))",
+            &[&published_at_backup],
+        )
+        .await
+        .expect("restore the pending records");
+
+    let mut restarted = registry_casework::AuditPublicationForTest::new(
+        store.clone(),
+        journal.clone(),
+        audit_publication_profile(),
+    );
+    assert_eq!(restarted.pass().await, Err("journal-open"));
+    assert!(!restarted.is_leader());
+    let refusal = restarted
+        .start()
+        .await
+        .expect_err("startup refuses a database behind its audit file");
+    assert!(
+        refusal.contains("the audit file holds 2 records after the last one")
+            && refusal.contains("caseworkctl audit acknowledge-restore"),
+        "{refusal}"
+    );
+    assert_eq!(store.audit_outbox_pending().await.expect("backlog"), 2);
+    wait_for_free_audit_lease(&client, &schema).await;
+
+    let acknowledgement = registry_casework::AuditPublicationForTest::acknowledge_restore(
+        &store,
+        &journal,
+        &audit_publication_profile(),
+    )
+    .await
+    .expect("acknowledge the restore");
+    assert_eq!(acknowledgement.relation, "database-behind");
+    assert!(acknowledgement.acknowledged);
+    assert_eq!(acknowledgement.records_ahead, 2);
+    assert_eq!(acknowledgement.marked_published, 2);
+    assert_eq!(
+        acknowledgement.database_head.as_deref(),
+        Some(backup_head.as_str())
+    );
+    assert_eq!(
+        acknowledgement.acknowledgement_hash,
+        audit_publication_head(&client).await
+    );
+    assert_eq!(
+        acknowledgement.acknowledgement_hash.as_deref(),
+        Some(journal_tail_hash(&journal).as_str())
+    );
+    assert_eq!(store.audit_outbox_pending().await.expect("backlog"), 0);
+
+    restarted.pass().await.expect("publication continues");
+    assert!(restarted.is_leader());
+    insert_pending_audit(&client, 1).await;
+    restarted.pass().await.expect("publish after the restore");
+    assert_eq!(store.audit_outbox_pending().await.expect("backlog"), 0);
+    assert_each_event_once(&[&journal], 5);
+}
+
+#[tokio::test]
+async fn an_audit_file_restored_behind_its_database_is_refused_until_acknowledged() {
+    let (store, client, schema) = isolated_schema("audit_restore_journal_behind").await;
+    store.migrate().await.expect("migrate");
+    let root = tempfile::tempdir().expect("deployment root");
+    let journal = owner_only_audit_directory(root.path(), "journal");
+    let mut first = registry_casework::AuditPublicationForTest::new(
+        store.clone(),
+        journal.clone(),
+        audit_publication_profile(),
+    );
+    insert_pending_audit(&client, 2).await;
+    first.pass().await.expect("publish two records");
+    first.stop();
+    wait_for_free_audit_lease(&client, &schema).await;
+
+    // An audit file that does not hold the published records, as a restore
+    // from an earlier backup or a fresh directory leaves it.
+    let replaced = owner_only_audit_directory(root.path(), "replaced");
+    insert_pending_audit(&client, 1).await;
+    let mut restarted = registry_casework::AuditPublicationForTest::new(
+        store.clone(),
+        replaced.clone(),
+        audit_publication_profile(),
+    );
+    let refusal = restarted
+        .start()
+        .await
+        .expect_err("startup refuses an audit file behind its database");
+    assert!(
+        refusal.contains("does not hold the last record this database recorded as published")
+            && refusal.contains("caseworkctl audit acknowledge-restore"),
+        "{refusal}"
+    );
+    assert!(!restarted.is_leader());
+    assert!(
+        journal_event_ids(&replaced).is_empty(),
+        "nothing is published"
+    );
+    wait_for_free_audit_lease(&client, &schema).await;
+
+    let acknowledgement = registry_casework::AuditPublicationForTest::acknowledge_restore(
+        &store,
+        &replaced,
+        &audit_publication_profile(),
+    )
+    .await
+    .expect("acknowledge the restore");
+    assert_eq!(acknowledgement.relation, "journal-behind");
+    assert!(acknowledgement.acknowledged);
+    assert_eq!(acknowledgement.records_ahead, 0);
+    assert_eq!(acknowledgement.marked_published, 0);
+    assert_eq!(acknowledgement.journal_head, None);
+    assert_eq!(
+        acknowledgement.acknowledgement_hash,
+        audit_publication_head(&client).await
+    );
+
+    restarted.pass().await.expect("publication continues");
+    assert!(restarted.is_leader());
+    assert_eq!(store.audit_outbox_pending().await.expect("backlog"), 0);
+    assert_each_event_once(&[&replaced], 2);
+}
+
+#[tokio::test]
+async fn acknowledging_a_restore_never_appends_a_record_the_audit_file_holds() {
+    let (store, client, schema) = isolated_schema("audit_restore_retained_record").await;
+    store.migrate().await.expect("migrate");
+    let root = tempfile::tempdir().expect("deployment root");
+    let journal = owner_only_audit_directory(root.path(), "journal");
+    let mut first = registry_casework::AuditPublicationForTest::new(
+        store.clone(),
+        journal.clone(),
+        audit_publication_profile(),
+    );
+    insert_pending_audit(&client, 2).await;
+    first.pass().await.expect("publish two records");
+    first.stop();
+    wait_for_free_audit_lease(&client, &schema).await;
+
+    // A database restored from a backup whose head the retained audit file no
+    // longer holds, as when older segments were archived away, while a record
+    // the audit file holds is pending again.
+    client
+        .execute(
+            "UPDATE casework_audit_publication_head SET record_hash = $1",
+            &[&"cd".repeat(32)],
+        )
+        .await
+        .expect("move the publication head");
+    client
+        .execute(
+            "UPDATE casework_audit_outbox SET published_at = NULL \
+             WHERE event_id = (SELECT event_id FROM casework_audit_outbox LIMIT 1)",
+            &[],
+        )
+        .await
+        .expect("restore one pending record");
+
+    let acknowledgement = registry_casework::AuditPublicationForTest::acknowledge_restore(
+        &store,
+        &journal,
+        &audit_publication_profile(),
+    )
+    .await
+    .expect("acknowledge the restore");
+    assert_eq!(acknowledgement.relation, "journal-behind");
+    assert_eq!(acknowledgement.marked_published, 1);
+    assert_eq!(store.audit_outbox_pending().await.expect("backlog"), 0);
+    wait_for_free_audit_lease(&client, &schema).await;
+
+    let mut restarted = registry_casework::AuditPublicationForTest::new(
+        store.clone(),
+        journal.clone(),
+        audit_publication_profile(),
+    );
+    restarted.pass().await.expect("publication continues");
+    assert!(restarted.is_leader());
+    assert_each_event_once(&[&journal], 3);
+}
+
+#[tokio::test]
+async fn a_database_without_a_publication_head_adopts_the_audit_file_tail() {
+    let (store, client, schema) = isolated_schema("audit_restore_first_head").await;
+    store.migrate().await.expect("migrate");
+    let root = tempfile::tempdir().expect("deployment root");
+    let journal = owner_only_audit_directory(root.path(), "journal");
+    let mut first = registry_casework::AuditPublicationForTest::new(
+        store.clone(),
+        journal.clone(),
+        audit_publication_profile(),
+    );
+    insert_pending_audit(&client, 2).await;
+    first.pass().await.expect("publish two records");
+    first.stop();
+    wait_for_free_audit_lease(&client, &schema).await;
+
+    // A database upgraded from a release that kept no publication head.
+    client
+        .execute("DELETE FROM casework_audit_publication_head", &[])
+        .await
+        .expect("remove the publication head");
+    let acknowledgement = registry_casework::AuditPublicationForTest::acknowledge_restore(
+        &store,
+        &journal,
+        &audit_publication_profile(),
+    )
+    .await
+    .expect("inspect the restore state");
+    assert_eq!(acknowledgement.relation, "consistent");
+    assert!(!acknowledgement.acknowledged, "nothing is appended");
+    assert_eq!(acknowledgement.acknowledgement_hash, None);
+    assert_eq!(journal_event_ids(&journal).len(), 2);
+    wait_for_free_audit_lease(&client, &schema).await;
+
+    let mut restarted = registry_casework::AuditPublicationForTest::new(
+        store.clone(),
+        journal.clone(),
+        audit_publication_profile(),
+    );
+    restarted.pass().await.expect("the tail is adopted");
+    assert!(restarted.is_leader());
+    assert_eq!(
+        audit_publication_head(&client).await,
+        Some(journal_tail_hash(&journal))
+    );
+    assert_each_event_once(&[&journal], 2);
+}
+
+#[tokio::test]
+async fn acknowledging_a_restore_refuses_while_a_runtime_holds_the_lease() {
+    let (store, client, _schema) = isolated_schema("audit_restore_lease_held").await;
+    store.migrate().await.expect("migrate");
+    let root = tempfile::tempdir().expect("deployment root");
+    let journal = owner_only_audit_directory(root.path(), "journal");
+    let mut leader = registry_casework::AuditPublicationForTest::new(
+        store.clone(),
+        journal.clone(),
+        audit_publication_profile(),
+    );
+    insert_pending_audit(&client, 1).await;
+    leader.pass().await.expect("publish");
+    assert!(leader.is_leader());
+
+    let refusal = registry_casework::AuditPublicationForTest::acknowledge_restore(
+        &store,
+        &journal,
+        &audit_publication_profile(),
+    )
+    .await
+    .expect_err("a running runtime blocks the acknowledgement");
+    assert!(
+        refusal.contains("holds the audit publication lease"),
+        "{refusal}"
+    );
+    assert_each_event_once(&[&journal], 1);
+}
+
 #[tokio::test]
 async fn one_runtime_publishes_the_audit_outbox_while_another_stands_by() {
-    let (store, client, _schema) = isolated_schema("audit_publication_lease").await;
+    let (store, client, schema) = isolated_schema("audit_publication_lease").await;
     store.migrate().await.expect("migrate");
     let root = tempfile::tempdir().expect("deployment root");
     let first_journal = owner_only_audit_directory(root.path(), "first");
@@ -2822,13 +3169,20 @@ async fn one_runtime_publishes_the_audit_outbox_while_another_stands_by() {
 
     first.stop();
     insert_pending_audit(&client, 1).await;
-    second
-        .pass()
+    wait_for_free_audit_lease(&client, &schema).await;
+    assert_eq!(
+        second.pass().await,
+        Err("journal-open"),
+        "a standby with its own audit file does not continue another file's chain"
+    );
+    assert!(!second.is_leader());
+    assert!(second
+        .start()
         .await
-        .expect("the standby takes the released lease and publishes");
-    assert!(second.is_leader());
-    assert_eq!(journal_event_ids(&second_journal).len(), 1);
-    assert_each_event_once(&[&first_journal, &second_journal], 6);
+        .expect_err("a separate audit file is refused at takeover")
+        .contains("does not hold the last record this database recorded as published"),);
+    assert_eq!(store.audit_outbox_pending().await.expect("backlog"), 1);
+    assert_each_event_once(&[&first_journal, &second_journal], 5);
 }
 
 #[tokio::test]

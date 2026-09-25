@@ -13,6 +13,25 @@
   file locks, or run one replica. While a runtime of an earlier release still
   runs against the same database, it publishes without the lease; stop every
   earlier runtime before the first replica of this release starts.
+- BREAKING: Casework refuses to publish audit records after a restore that
+  left the database and the audit file at different points. Migration 0018
+  adds `casework_audit_publication_head`, which records the hash of the last
+  audit record the database marked published, in the same statement as the
+  mark. The runtime that takes the audit publication lease refuses with
+  `the Casework audit journal and database disagree` when the audit file
+  holds more than one record after that head (the database was restored from
+  an older backup, and publishing would append its records again) or does not
+  hold the head at all (the audit file was restored, replaced, or started
+  afresh). It refuses to start, or as a standby fails its takeover pass at
+  `journal-open`. Replicas with separate audit files are refused the same way;
+  give every replica the same `audit.path`. The first runtime of this release
+  adopts the audit file's last record as the head. The new
+  `caseworkctl audit acknowledge-restore --runtime-config` resumes
+  publication once every runtime is stopped: it marks the records the audit
+  file already holds as published, appends a
+  `casework.audit.restore-acknowledged` record, and makes it the head. It
+  does not restore lost work or the idempotency keys used after the backup;
+  the operator guide's restore section says what to check.
 - `caseworkctl audit verify` checks the retained audit chain against
   `audit.hashKeyRef` and reports the last record's `headHash`; with
   `--from-head` it refuses a chain that no longer holds a head recorded

@@ -46,9 +46,11 @@ const OCCURRENCE_IDENTITY_MIGRATION: &str =
     include_str!("../migrations/0016_occurrence_identity_excludes_superseded.sql");
 const SOURCE_RECONCILIATION_HEALTH_MIGRATION: &str =
     include_str!("../migrations/0017_source_reconciliation_health.sql");
+const AUDIT_PUBLICATION_HEAD_MIGRATION: &str =
+    include_str!("../migrations/0018_audit_publication_head.sql");
 
 /// Every schema version in ledger order.
-const MIGRATIONS: [(i64, &str); 17] = [
+const MIGRATIONS: [(i64, &str); 18] = [
     (1, MIGRATION),
     (2, HOSTED_MIGRATION),
     (3, ASSIGNMENT_MIGRATION),
@@ -66,6 +68,7 @@ const MIGRATIONS: [(i64, &str); 17] = [
     (15, UNIFIED_REVIEWS_MIGRATION),
     (16, OCCURRENCE_IDENTITY_MIGRATION),
     (17, SOURCE_RECONCILIATION_HEALTH_MIGRATION),
+    (18, AUDIT_PUBLICATION_HEAD_MIGRATION),
 ];
 
 /// The newest schema version this binary knows how to run against.
@@ -3269,14 +3272,60 @@ impl AuditPublicationLease {
             .collect())
     }
 
-    pub(crate) async fn mark_published(&self, event_id: Uuid) -> Result<(), StoreError> {
+    /// Mark `event_id` published and record `record_hash`, the keyed hash of
+    /// the journal record that carries it, as the publication head, in one
+    /// statement.
+    pub(crate) async fn mark_published(
+        &self,
+        event_id: Uuid,
+        record_hash: &str,
+    ) -> Result<(), StoreError> {
         self.client
             .execute(
-                "UPDATE casework_audit_outbox SET published_at=now() WHERE event_id=$1 AND published_at IS NULL",
-                &[&event_id],
+                "WITH marked AS (UPDATE casework_audit_outbox SET published_at=now() WHERE event_id=$1 AND published_at IS NULL) INSERT INTO casework_audit_publication_head(singleton,record_hash,recorded_at) VALUES(true,$2,now()) ON CONFLICT(singleton) DO UPDATE SET record_hash=EXCLUDED.record_hash,recorded_at=EXCLUDED.recorded_at",
+                &[&event_id, &record_hash],
             )
             .await?;
         Ok(())
+    }
+
+    /// The keyed hash of the last journal record this database recorded as
+    /// published, or `None` before the first publication under this schema.
+    pub(crate) async fn head(&self) -> Result<Option<String>, StoreError> {
+        Ok(self
+            .client
+            .query_opt(
+                "SELECT record_hash FROM casework_audit_publication_head",
+                &[],
+            )
+            .await?
+            .map(|row| row.get(0)))
+    }
+
+    /// Record `record_hash` as the publication head without marking a record.
+    pub(crate) async fn set_head(&self, record_hash: &str) -> Result<(), StoreError> {
+        self.client
+            .execute(
+                "INSERT INTO casework_audit_publication_head(singleton,record_hash,recorded_at) VALUES(true,$1,now()) ON CONFLICT(singleton) DO UPDATE SET record_hash=EXCLUDED.record_hash,recorded_at=EXCLUDED.recorded_at",
+                &[&record_hash],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Mark every still-pending record among `event_ids` published, returning
+    /// how many were pending.
+    pub(crate) async fn mark_journal_records_published(
+        &self,
+        event_ids: &[Uuid],
+    ) -> Result<u64, StoreError> {
+        Ok(self
+            .client
+            .execute(
+                "UPDATE casework_audit_outbox SET published_at=now() WHERE published_at IS NULL AND event_id=ANY($1)",
+                &[&event_ids],
+            )
+            .await?)
     }
 }
 
