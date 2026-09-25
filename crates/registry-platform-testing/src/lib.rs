@@ -18,7 +18,6 @@ use axum::{extract::State, response::IntoResponse, routing::get, Json, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use jsonwebtoken::Algorithm;
-use registry_platform_audit::{verify_chain, AuditChainHasher, AuditEnvelope};
 use registry_platform_crypto::{sign, LocalJwkSigner, PrivateJwk, PublicJwk, SigningProvider};
 use serde_json::{json, Map, Value};
 use thiserror::Error;
@@ -406,12 +405,6 @@ pub mod fixtures {
     }
 }
 
-pub type ChainAssertionError = registry_platform_audit::ChainVerificationError;
-
-pub fn assert_chain_integrity(envelopes: &[AuditEnvelope]) -> Result<(), ChainAssertionError> {
-    verify_chain(envelopes, &AuditChainHasher::unkeyed_dev_only()).map(|_| ())
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("audit JSON contains forbidden raw value: {needle}")]
 pub struct AuditJsonLeakError {
@@ -485,12 +478,8 @@ pub fn oidc_verifier_config(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-
     use super::*;
-    use async_trait::async_trait;
     use jsonwebtoken::decode_header;
-    use registry_platform_audit::{AuditError, AuditSink, ChainState};
     use registry_platform_crypto::verify;
     use registry_platform_httputil::FetchUrlPolicy;
     use registry_platform_oidc::{
@@ -623,24 +612,6 @@ mod tests {
         upstream.assert_max_request_bytes(3);
     }
 
-    #[tokio::test]
-    async fn chain_integrity_assertion_delegates_to_audit_verifier() {
-        let sink = MemorySink::default();
-        let chain = ChainState::unkeyed_dev_only();
-        let first = chain
-            .append(&sink, json!({ "event": "first" }))
-            .await
-            .expect("first append");
-        let mut second = chain
-            .append(&sink, json!({ "event": "second" }))
-            .await
-            .expect("second append");
-
-        assert_chain_integrity(&[first.clone(), second.clone()]).expect("chain is valid");
-        second.record["event"] = json!("changed");
-        assert!(assert_chain_integrity(&[first, second]).is_err());
-    }
-
     #[test]
     fn audit_json_leak_assertion_reports_raw_values() {
         let record = json!({
@@ -671,67 +642,5 @@ mod tests {
         let err =
             assert_json_absent_strings(&boolean, ["true"]).expect_err("boolean leak is reported");
         assert_eq!(err.needle(), "true");
-    }
-
-    #[tokio::test]
-    async fn chain_integrity_assertion_accepts_retained_suffix() {
-        let sink = MemorySink::default();
-        let chain = ChainState::unkeyed_dev_only();
-        let first = chain
-            .append(&sink, json!({ "event": "first" }))
-            .await
-            .expect("first append");
-        let second = chain
-            .append(&sink, json!({ "event": "second" }))
-            .await
-            .expect("second append");
-
-        assert_chain_integrity(std::slice::from_ref(&second))
-            .expect("retained suffix is internally consistent");
-        let verification = verify_chain(
-            std::slice::from_ref(&second),
-            &AuditChainHasher::unkeyed_dev_only(),
-        )
-        .expect("retained suffix verifies");
-        assert_eq!(verification.start_prev_hash, Some(first.record_hash));
-        assert_eq!(verification.last_hash, Some(second.record_hash));
-    }
-
-    #[derive(Default)]
-    struct MemorySink {
-        envelopes: Mutex<Vec<AuditEnvelope>>,
-    }
-
-    #[async_trait]
-    impl AuditSink for MemorySink {
-        async fn write(&self, envelope: &AuditEnvelope) -> Result<(), AuditError> {
-            self.envelopes
-                .lock()
-                .expect("memory sink lock is healthy")
-                .push(envelope.clone());
-            Ok(())
-        }
-
-        async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
-            Ok(self
-                .envelopes
-                .lock()
-                .expect("memory sink lock is healthy")
-                .last()
-                .map(|envelope| envelope.record_hash))
-        }
-
-        async fn tail_hash_with_hasher(
-            &self,
-            hasher: &AuditChainHasher,
-        ) -> Result<Option<[u8; 32]>, AuditError> {
-            let _ = hasher;
-            Ok(self
-                .envelopes
-                .lock()
-                .expect("memory sink lock is healthy")
-                .last()
-                .map(|envelope| envelope.record_hash))
-        }
     }
 }

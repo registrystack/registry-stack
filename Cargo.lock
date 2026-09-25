@@ -5633,22 +5633,17 @@ dependencies = [
 name = "registry-platform-audit"
 version = "0.34.0"
 dependencies = [
- "async-trait",
  "hmac 0.13.0",
- "registry-platform-canonical-json",
  "rustix 1.1.5",
  "schemars",
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "subtle",
  "tempfile",
  "thiserror 2.0.20",
  "time",
  "tokio",
  "tracing",
- "tracing-subscriber",
- "ulid",
  "uuid",
  "zeroize",
 ]
@@ -5867,7 +5862,6 @@ dependencies = [
 name = "registry-platform-testing"
 version = "0.34.0"
 dependencies = [
- "async-trait",
  "axum",
  "base64 0.22.1",
  "bytes",
