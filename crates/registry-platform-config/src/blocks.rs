@@ -568,8 +568,9 @@ impl OidcClientsConfig {
 }
 
 /// The package a runtime serves: `root` is the absolute package directory,
-/// and `expectedDigest`, when set, pins the package identity the runtime must
-/// find there.
+/// and `expectedDigest`, when set, pins the package digest the runtime must
+/// find there. The package digest is the digest of the package's
+/// `SHA256SUMS` file; see [`crate::package`].
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -577,8 +578,9 @@ pub struct PackageConfig {
     /// Absolute path of the package directory.
     #[cfg_attr(feature = "schema", schemars(extend("pattern" = "^/")))]
     pub root: PathBuf,
-    /// `sha256:` label of the package identity. When set, the runtime refuses
-    /// to start on any other package.
+    /// `sha256:` label of the package digest, the digest of the package's
+    /// `SHA256SUMS` file. When set, the runtime refuses to start on any other
+    /// package.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(extend("pattern" = "^sha256:[0-9a-f]{64}$")))]
     pub expected_digest: Option<String>,
@@ -601,16 +603,14 @@ impl PackageConfig {
         Ok(())
     }
 
-    /// Compare the identity of the package found at `root` with the pin.
-    /// `found` is `None` when the package carries no identity.
-    pub fn verify_digest(&self, found: Option<&str>) -> Result<(), PackageDigestMismatch> {
-        match (&self.expected_digest, found) {
-            (None, _) => Ok(()),
-            (Some(expected), Some(found)) if expected == found => Ok(()),
-            (Some(expected), found) => Err(PackageDigestMismatch {
+    /// Compare the digest of the package found at `root` with the pin.
+    pub fn verify_digest(&self, found: &str) -> Result<(), PackageDigestMismatch> {
+        match &self.expected_digest {
+            Some(expected) if expected != found => Err(PackageDigestMismatch {
                 expected: expected.clone(),
-                found: found.map(ToOwned::to_owned),
+                found: found.to_owned(),
             }),
+            _ => Ok(()),
         }
     }
 }
@@ -619,13 +619,12 @@ impl PackageConfig {
 /// Both values are package identities, not secrets.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[error(
-    "package.expectedDigest is {expected} but the package at package.root {}; \
-     deploy the pinned package or update package.expectedDigest",
-    match found { Some(found) => format!("is {found}"), None => "carries no identity".to_owned() }
+    "package.expectedDigest is {expected} but the package at package.root is {found}; \
+     deploy the pinned package or update package.expectedDigest"
 )]
 pub struct PackageDigestMismatch {
     pub expected: String,
-    pub found: Option<String>,
+    pub found: String,
 }
 
 /// Whether `value` is `sha256:` followed by 64 lowercase hex digits.

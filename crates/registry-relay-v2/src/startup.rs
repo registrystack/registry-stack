@@ -137,7 +137,7 @@ async fn prepare_loaded(loaded: LoadedRuntime) -> Result<PreparedRelay, StartupE
     let package = load_package(&paths.package).map_err(|_| StartupError::PackageInvalid)?;
     runtime
         .package
-        .verify_digest(Some(&package.manifest.package_revision))
+        .verify_digest(&package.manifest.package_revision)
         .map_err(|error| StartupError::RuntimeRefused(error.to_string()))?;
     validate_runtime_contract(&runtime, &package.contract)?;
 

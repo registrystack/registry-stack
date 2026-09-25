@@ -189,10 +189,10 @@
     },
     "PackageConfig": {
       "additionalProperties": false,
-      "description": "The package a runtime serves: `root` is the absolute package directory,\nand `expectedDigest`, when set, pins the package identity the runtime must\nfind there.",
+      "description": "The package a runtime serves: `root` is the absolute package directory,\nand `expectedDigest`, when set, pins the package digest the runtime must\nfind there. The package digest is the digest of the package's\n`SHA256SUMS` file; see [`crate::package`].",
       "properties": {
         "expectedDigest": {
-          "description": "`sha256:` label of the package identity. When set, the runtime refuses\nto start on any other package.",
+          "description": "`sha256:` label of the package digest, the digest of the package's\n`SHA256SUMS` file. When set, the runtime refuses to start on any other\npackage.",
           "pattern": "^sha256:[0-9a-f]{64}$",
           "type": [
             "string",

@@ -4,11 +4,13 @@
 //! file, parsing and environment-substitution rules; the [`blocks`] types are
 //! the configuration sections every runtime spells the same way; and
 //! [`SecretResolver`] resolves the `secret:env/NAME` and `secret:file/name`
-//! references those sections carry. Each product still owns and validates the
-//! rest of its configuration contract.
+//! references those sections carry. [`package`] writes and verifies the
+//! package directory `package.root` names. Each product still owns and
+//! validates the rest of its configuration contract.
 
 pub mod blocks;
 mod loader;
+pub mod package;
 #[cfg(feature = "schema")]
 pub mod schema;
 mod secrets;
@@ -29,6 +31,10 @@ pub use loader::{
     LoadedRuntimeConfig, RemovedKey, RuntimeConfigError, RuntimeConfigErrorKind,
     RuntimeConfigLoader, RuntimeEnvelope, DEFAULT_MAX_RUNTIME_CONFIG_BYTES,
     MAX_RUNTIME_CONFIG_PATH_BYTES, REMOVED_OIDC_JWKS_URI,
+};
+pub use package::{
+    plan_package, verify_package, write_package, write_sum_file, PackageError, PackageErrorKind,
+    PackageLimits, VerifiedPackage, REVISION_FILE, SUM_FILE,
 };
 pub use secrets::{
     ProtectedSecret, SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,

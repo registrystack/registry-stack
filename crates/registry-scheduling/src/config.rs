@@ -451,12 +451,15 @@ impl RuntimeConfig {
             return Err(RuntimeConfigError::HookDestinationInventoryMismatch);
         }
         let package_digest = self.policy_package_digest()?;
-        if self.listener.tls_termination == TlsTermination::OperatorControlledUpstream
-            && package_digest.is_none()
-        {
-            return Err(RuntimeConfigError::ProductionPolicyPackageRequired);
+        match package_digest.as_deref() {
+            Some(found) => self.package.verify_digest(found)?,
+            None if self.listener.tls_termination == TlsTermination::OperatorControlledUpstream
+                || self.package.expected_digest.is_some() =>
+            {
+                return Err(RuntimeConfigError::ProductionPolicyPackageRequired);
+            }
+            None => {}
         }
-        self.package.verify_digest(package_digest.as_deref())?;
         #[cfg(not(feature = "postgres-test"))]
         if self.database.test_only_plaintext {
             return Err(RuntimeConfigError::PlaintextDatabase);
