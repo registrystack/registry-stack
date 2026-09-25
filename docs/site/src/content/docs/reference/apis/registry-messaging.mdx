@@ -39,10 +39,14 @@ callback verifier authenticates them instead.
 scoped to the calling principal. The same key with the same request answers the stored receipt
 again, and the same key with a different request is refused with `idempotency.key-reused`. A key
 whose stored receipt is older than the deployment's `retention.submissionReceiptDays` is refused
-with `idempotency.expired`, because the first answer is no longer held.
+with `idempotency.expired`, because the first answer is no longer held. A key whose message has
+since been deleted by `retention.recordDays` answers the same `idempotency.expired`: the row stays
+under the caller's keyed pseudonym with its message, request hash, and receipt nulled, so a repeat
+is refused rather than accepted as a new message to the same recipient.
 
 {/* Evidence: crates/registry-messaging-core/src/wire.rs, idempotency key bounds;
-    crates/registry-messaging/src/messages.rs, SUBMIT_OPERATION;
+    crates/registry-messaging/src/messages.rs, SUBMIT_OPERATION, lookup_key(), and replay();
+    crates/registry-messaging/src/retention.rs, delete_records();
     products/messaging/RUNTIME-CONFIG.md, Keys. */}
 
 A refusal answers `application/problem+json` with `type`, `title`, `status`, `detail`, `code`, and
@@ -100,7 +104,7 @@ replicas. A runtime that cannot decide a limit refuses with `503 service.unavail
 content-type: application/problem+json
 retry-after: 1
 
-{"type":"https://id.registrystack.org/problems/registry-messaging/rate-limit/exceeded","title":"Request rate exceeded","status":429,"detail":"Your Messaging access profile's request rate is exceeded. Try again after the time in Retry-After.","code":"rate-limit.exceeded","traceId":"…"}
+{"type":"https://id.registrystack.org/problems/registry-messaging/rate-limit/exceeded","title":"Request rate exceeded","status":429,"detail":"The request rate accepted from this caller is exceeded. Try again after the time in Retry-After.","code":"rate-limit.exceeded","traceId":"…"}
 ```
 
 {/* Evidence: products/messaging/RUNTIME-CONFIG.md, The package; crates/registry-messaging/src/limits.rs,
@@ -171,6 +175,15 @@ configuration gives it an `hmac-sha1-url-form` or `hmac-sha256-body` callback ve
 routes take no bearer token: the verifier authenticates each callback, and the provider package's
 receipt script reads it.
 
+Before a callback is verified, it is charged to a token bucket, so an anonymous flood cannot spend
+verification, receipt-script, and store work without bound. Each provider with a verifier has its
+own bucket, keyed by its configured id, fixed at 6000 a minute with a burst of 600; every path
+naming no such provider shares one more bucket of the same size. A callback past its bucket answers
+`429 rate-limit.exceeded` with `Retry-After` and is counted in
+`messaging_limit_refusals_total{limit="callback"}` rather than by outcome, so the refusal, like an
+unverified callback, does not reveal which providers receive callbacks. A limiter that cannot decide
+answers `503 service.unavailable`.
+
 A verified callback answers `204` whether or not its reference names a message, and a receipt never
 moves a report backwards. An unknown provider, a provider that receives no callbacks, a signature or
 token that does not verify, and a callback on the route its verifier does not use all answer `403
@@ -179,7 +192,10 @@ receipt script cannot read answers `422 callback.unreadable`, and one the runtim
 answers `503 service.unavailable` so the provider retries.
 
 {/* Evidence: crates/registry-messaging/src/http.rs, receiveProviderCallback and CALLBACK_PROBLEMS;
-    crates/registry-messaging/src/http.rs, a_callback_for_a_provider_that_receives_none_is_unverified;
+    crates/registry-messaging/src/http.rs, a_callback_for_a_provider_that_receives_none_is_unverified
+    and callbacks_past_the_rate_are_refused_before_they_are_verified;
+    crates/registry-messaging/src/limits.rs, CallbackLimits and
+    each_callback_provider_and_the_unrouted_paths_have_separate_budgets;
     crates/registry-messaging/src/receipts.rs;
     products/messaging/RUNTIME-CONFIG.md, Provider callbacks. */}
 

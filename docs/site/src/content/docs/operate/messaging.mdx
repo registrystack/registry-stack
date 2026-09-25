@@ -177,12 +177,18 @@ providers:
 | `tlsTrustProfiles` | Named PEM bundles an HTTP provider's `tlsTrustProfile` selects |
 
 Every mapping is closed, so a misspelled key is refused with its path instead of falling back to a
-default. A string value may carry `${VAR}`, `${VAR:-default}`, or `${VAR:?message}`, except a
-member whose name ends in `Ref`, which names a secret and refuses an environment expression. The
-full key reference is `products/messaging/RUNTIME-CONFIG.md` in the Registry Stack repository.
+default. `${VAR}`, `${VAR:-default}`, and `${VAR:?message}` expand over the document's raw text
+before it is parsed as YAML, so an expression in a comment or a key is expanded too and must
+resolve; a value that fills a whole member is quoted as one string, and one embedded in longer text
+is refused if it could change the document's shape. A member whose name ends in `Ref` names a
+secret and refuses `${` anywhere at or below it, before expansion runs. The expanded document is
+capped at one mebibyte. The full key reference is `products/messaging/RUNTIME-CONFIG.md` in the
+Registry Stack repository.
 
 {/* Evidence: products/messaging/RUNTIME-CONFIG.md; products/messaging/examples/starter/runtime.example.yaml;
-    products/messaging/generated/runtime/runtime.schema.json. */}
+    products/messaging/generated/runtime/runtime.schema.json; crates/registry-messaging/src/config.rs,
+    parse_with_environment(); crates/registry-platform-config/src/lib.rs,
+    expand_config_env_vars_with() and reject_config_env_expressions_in(). */}
 
 ### Listener and token rules
 
@@ -259,7 +265,7 @@ keeps its payload:
 | Period ends | What is erased |
 | --- | --- |
 | `payloadDays` after the terminal state | The rendered parts and the recipient contact. The message record stays |
-| `recordDays` after the terminal state | The message record, with its attempts, receipts, and idempotency key. The key can be used again |
+| `recordDays` after the terminal state | The message record, with its attempts and receipts. The idempotency key stays spent, held only under the caller's keyed pseudonym, and a repeat of it is refused with `idempotency.expired` |
 | `submissionReceiptDays` after acceptance | The stored submission receipt. A repeat of its key is refused with `idempotency.expired` |
 
 A message that is queued, sending, or held in an unknown outcome is never erased, whatever its age.
@@ -627,7 +633,7 @@ listener answers the same path `404 request.not-found`.
 | `messaging_authentication_refusals_total` | `reason`: `refused`, `claims`, `profile`, `unavailable` | Bearer credentials refused before a caller was resolved |
 | `messaging_provider_attempts_total` | `outcome`: `accepted`, `transient`, `permanent`, `maybe-sent` | Provider attempts, by the class the attempt history records |
 | `messaging_provider_callbacks_total` | `outcome`: `unverified`, `unreadable`, `ignored`, `applied`, `unchanged`, `unmatched`, `ambiguous`, `unavailable` | Provider callbacks, by what became of them |
-| `messaging_limit_refusals_total` | `limit`: `rate`, `daily`, `pacing` | Submissions an access profile's rate or daily limit refused, and attempts whose provider send slot did not open in time |
+| `messaging_limit_refusals_total` | `limit`: `rate`, `daily`, `pacing`, `callback` | Submissions an access profile's rate or daily limit refused, attempts whose provider send slot did not open in time, and provider callbacks the callback rate refused before verification |
 | `messaging_retention_runs_total` | `outcome`: `erased`, `idle`, `failed` | Retention sweeps this process ran |
 | `messaging_dispatch_jobs` | `state`: `pending`, `leased`, `unknown` | Gauge read from the database at each scrape: messages waiting to send, being sent, or held for an operator |
 
