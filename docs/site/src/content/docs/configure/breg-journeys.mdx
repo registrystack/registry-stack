@@ -118,13 +118,15 @@ These are all the findings the compiler can report, each attached to the documen
 | `access.profile.unrestricted_collection` | The profile can list every row; caller filters are not authorization. | Add a claim-bound row boundary, or accept a registry-wide role knowingly. |
 | `access.profile.unrestricted_rows` | The profile's granted operations reach every row and no claim-bound boundary narrows them. | Add a claim-bound row boundary, or accept a registry-wide role knowingly. |
 | `access.profile.writable_row_boundary` | The profile can write a field a row boundary depends on. | With `create`, keep it writable: the row policy pins it to the caller's claim on insert. With `patch` alone, remove it from the writable fields unless moving records is intended. |
+| `entity.list.unindexed_filter` | No index leads with a filterable list field, so a filtered list scans every row the caller may read. | For an entity that will hold more than a few thousand rows, declare an index that leads with the field under `entities[].indexes`. |
+| `entity.list.unindexed_sort` | No index leads with a sortable list field, so a sorted list orders every row the caller may read. | For an entity that will hold more than a few thousand rows, declare an index that leads with the field under `entities[].indexes`. |
 | `manifest_projection.missing` | No Registry Manifest projection is declared. | Declare one to clear the finding. `check --production` passes without it, and `package` builds a package without one. |
 | `module.lock.digest_missing` | A module lock entry has no production digest. | Run `project lock` before a production package. |
 | `module.lock.missing` | A module source has no lock entry. | Run `project lock`. |
 | `module.source.missing` | A lock entry names a module whose source is not loaded. | Restore the module file or remove the lock entry. |
 | `package.identity.missing` | No package identity is declared. | Declare one before a production package. |
 
-Under `--production`, the `module.*` and `package.*` findings become errors; `manifest_projection.missing` is reported only in authoring mode, so resolve it before you leave this page.
+Under `--production`, the `module.*` and `package.*` findings become errors; `manifest_projection.missing` and the `entity.list.*` findings are reported only in authoring mode, so resolve them before you leave this page.
 
 {/* Evidence: crates/registry-breg/src/access.rs; crates/registry-breg/src/compiler.rs. */}
 

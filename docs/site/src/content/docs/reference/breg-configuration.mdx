@@ -54,6 +54,18 @@ declared field type and that the condition is valid for the event trigger.
     crates/registry-breg/src/compiler.rs;
     docs/site/scripts/configuration-reference.mjs, collectFields(). */}
 
+## Indexes
+
+`entities[].indexes` declares btree indexes by `id` and ordered `fields`. Every `reference`
+field is indexed automatically unless a declared index or a unique constraint without `when`
+already leads with it. `bregctl check` reports the authoring findings
+`entity.list.unindexed_filter` and `entity.list.unindexed_sort` for a filterable or sortable
+list field that no index leads with. They never fail a check and are not raised when a package
+is built.
+
+{/* Evidence: crates/registry-breg/src/compiler.rs, compile_entities() and
+    unindexed_list_findings(); crates/registry-breg/src/model.rs, leading_field_indexed(). */}
+
 ## Attachment storage
 
 Portable request entities declare `attachments[]`; deployment storage is selected
