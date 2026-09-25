@@ -3189,6 +3189,89 @@ async fn a_database_without_a_publication_head_never_republishes_journaled_recor
 }
 
 #[tokio::test]
+async fn acknowledging_a_restore_never_trusts_an_altered_sealed_record() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let (store, client, _schema) = isolated_schema("audit_restore_altered_sealed").await;
+    store.migrate().await.expect("migrate");
+    let root = tempfile::tempdir().expect("deployment root");
+    let journal = owner_only_audit_directory(root.path(), "journal");
+    // A journal of several small sealed segments the key authenticates.
+    let profile = audit_publication_profile();
+    {
+        let sink = registry_platform_audit::DurableSegmentedJsonlSink::open(&journal, 600)
+            .expect("writer lock");
+        let chain = profile
+            .bootstrap_or_start_empty(&sink)
+            .await
+            .expect("keyed bootstrap");
+        for _ in 0..8 {
+            chain
+                .append(
+                    &sink,
+                    serde_json::json!({
+                        "event": "casework.test",
+                        "eventId": uuid::Uuid::new_v4().to_string(),
+                    }),
+                )
+                .await
+                .expect("append");
+        }
+    }
+    let segments = registry_platform_audit::segmented_audit_paths(&journal).expect("segments");
+    assert!(
+        segments.len() >= 3,
+        "the fixture seals more than one segment"
+    );
+
+    // A record the database still lists as pending and the journal never held.
+    let pending = uuid::Uuid::new_v4();
+    client
+        .execute(
+            "INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)",
+            &[&pending, &serde_json::json!({"event": "casework.test"})],
+        )
+        .await
+        .expect("insert a pending audit record");
+
+    // A writer without the key rewrites a record in the oldest sealed segment
+    // to carry that pending event id. The bootstrap reads only the newest
+    // sealed record and the active file, so it never sees this line.
+    let oldest = &segments[0];
+    let mode = std::fs::metadata(oldest)
+        .expect("segment mode")
+        .permissions();
+    std::fs::set_permissions(oldest, std::fs::Permissions::from_mode(0o600))
+        .expect("make the segment writable");
+    let text = std::fs::read_to_string(oldest).expect("read the oldest segment");
+    let mut lines = text.lines().map(str::to_owned).collect::<Vec<_>>();
+    let mut forged = serde_json::from_str::<serde_json::Value>(lines.last().expect("a record"))
+        .expect("audit envelope");
+    forged["record"]["eventId"] = serde_json::json!(pending.to_string());
+    *lines.last_mut().expect("a record") = forged.to_string();
+    std::fs::write(oldest, format!("{}\n", lines.join("\n"))).expect("alter the segment");
+    std::fs::set_permissions(oldest, mode).expect("restore the segment mode");
+
+    let refusal = registry_casework::AuditPublicationForTest::acknowledge_restore(
+        &store,
+        &journal,
+        &audit_publication_profile(),
+    )
+    .await
+    .expect_err("an altered sealed record refuses the acknowledgement");
+    assert!(
+        refusal.contains("the retained audit chain does not verify under audit.hashKeyRef"),
+        "{refusal}"
+    );
+    assert!(
+        published_audit_event_ids(&client).await.is_empty(),
+        "no record is marked published on an unverified line"
+    );
+    assert_eq!(audit_publication_head(&client).await, None);
+    assert_eq!(store.audit_outbox_pending().await.expect("backlog"), 1);
+}
+
+#[tokio::test]
 async fn acknowledging_a_restore_refuses_while_a_runtime_holds_the_lease() {
     let (store, client, _schema) = isolated_schema("audit_restore_lease_held").await;
     store.migrate().await.expect("migrate");

@@ -38,8 +38,9 @@
   records this database lists as not yet published` when the database still
   lists as pending a record the audit file holds before its last one. The new
   `caseworkctl audit acknowledge-restore --runtime-config` resumes
-  publication once every runtime is stopped: it marks the records the audit
-  file already holds as published, appends a
+  publication once every runtime is stopped: it verifies every retained
+  audit record under `audit.hashKeyRef`, refusing a chain that does not
+  verify, marks the records the audit file already holds as published, appends a
   `casework.audit.restore-acknowledged` record, and makes it the head. It
   does not restore lost work or the idempotency keys used after the backup;
   the operator guide's restore section says what to check.

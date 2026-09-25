@@ -722,7 +722,9 @@ caseworkctl audit acknowledge-restore --runtime-config /etc/registry-casework/ru
 ```
 
 It uses the runtime database credential, takes the audit publication lease and the audit file's
-writer lock, and refuses with code `casework.audit.refused` while a runtime holds either. It marks
+writer lock, and refuses with code `casework.audit.refused` while a runtime holds either. Because it
+trusts the audit file to say what was published, it first verifies every retained record under
+`audit.hashKeyRef` and refuses a chain that does not verify or that changes while it runs. It marks
 every record the audit file already holds that the database lists as pending as published, so none
 is appended twice. It then appends one `casework.audit.restore-acknowledged` record naming the
 relation it found, the number of records the audit file held after the database's head (or, for a

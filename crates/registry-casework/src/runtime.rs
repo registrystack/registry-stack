@@ -950,6 +950,17 @@ fn walk_audit_journal(
         audit_secret.expose_secret().to_vec(),
     ))
     .map_err(|_| RuntimeError::Audit)?;
+    walk_audit_journal_with(path, &audit_profile, start, visit)
+}
+
+/// Walk the retained audit chain under `audit_profile`'s key, as
+/// [`walk_audit_journal`] does.
+fn walk_audit_journal_with(
+    path: &Path,
+    audit_profile: &AuditProfile,
+    start: AuditChainStart,
+    visit: impl FnMut(&AuditEnvelope, &str) -> Result<(), registry_platform_audit::AuditError>,
+) -> Result<AuditJournalVerification, RuntimeError> {
     refuse_rotated_audit_layout(path)?;
     let directory_exists = path.parent().is_some_and(Path::is_dir);
     if !directory_exists
@@ -1189,10 +1200,13 @@ impl AuditJournalRelation {
 ///
 /// The tail is checked first, so a journal in step with its database is
 /// never read in full. Otherwise every retained record is read in chain
-/// order; the first retained record also matches when it continues `head`
-/// from segments archived away. Like [`newest_segmented_audit_envelope`],
-/// this does not verify the chain: the keyed bootstrap that opened the
-/// journal already authenticated it.
+/// order. Like [`newest_segmented_audit_envelope`], this does not verify the
+/// chain beyond what the keyed bootstrap that opened the journal
+/// authenticated: the active file and the newest sealed record. An altered
+/// older record can therefore make startup refuse, or let publication
+/// continue onto this journal, but never marks a record published; only
+/// `caseworkctl audit acknowledge-restore` does that, and it verifies every
+/// retained record under the key first.
 fn audit_journal_relation(
     path: &Path,
     head: &[u8; 32],
@@ -1202,26 +1216,51 @@ fn audit_journal_relation(
             return Ok(AuditJournalRelation::Consistent);
         }
     }
-    let mut first = true;
-    let mut found = false;
-    let mut records_ahead = 0_u64;
-    for_each_retained_audit_envelope(path, |envelope| {
-        if first {
-            first = false;
-            found = envelope.prev_hash.as_ref() == Some(head);
+    let mut placement = AuditHeadPlacement::new(*head);
+    for_each_retained_audit_envelope(path, |envelope| placement.observe(&envelope))?;
+    Ok(placement.relation())
+}
+
+/// Where a publication head falls among the retained records, observed in
+/// chain order. The first retained record also matches when it continues
+/// the head from segments archived away.
+struct AuditHeadPlacement {
+    head: [u8; 32],
+    first: bool,
+    found: bool,
+    records_ahead: u64,
+}
+
+impl AuditHeadPlacement {
+    const fn new(head: [u8; 32]) -> Self {
+        Self {
+            head,
+            first: true,
+            found: false,
+            records_ahead: 0,
         }
-        if envelope.record_hash == *head {
-            found = true;
-            records_ahead = 0;
-        } else if found {
-            records_ahead += 1;
+    }
+
+    fn observe(&mut self, envelope: &AuditEnvelope) {
+        if self.first {
+            self.first = false;
+            self.found = envelope.prev_hash.as_ref() == Some(&self.head);
         }
-    })?;
-    Ok(match (found, records_ahead) {
-        (true, 0 | 1) => AuditJournalRelation::Consistent,
-        (true, _) => AuditJournalRelation::DatabaseBehind { records_ahead },
-        (false, _) => AuditJournalRelation::JournalBehind,
-    })
+        if envelope.record_hash == self.head {
+            self.found = true;
+            self.records_ahead = 0;
+        } else if self.found {
+            self.records_ahead += 1;
+        }
+    }
+
+    const fn relation(&self) -> AuditJournalRelation {
+        match (self.found, self.records_ahead) {
+            (true, 0 | 1) => AuditJournalRelation::Consistent,
+            (true, records_ahead) => AuditJournalRelation::DatabaseBehind { records_ahead },
+            (false, _) => AuditJournalRelation::JournalBehind,
+        }
+    }
 }
 
 /// Place a journal against a database that has recorded no publication head.
@@ -1241,10 +1280,23 @@ async fn headless_audit_journal_relation(
     let tail_event = newest_segmented_audit_envelope(path)?
         .as_ref()
         .and_then(audit_envelope_event_id);
-    let mut event_ids = retained_audit_event_ids(path)?;
-    event_ids.retain(|event_id| Some(*event_id) != tail_event);
+    headless_relation_among(lease, &retained_audit_event_ids(path)?, tail_event).await
+}
+
+/// Count the retained `event_ids`, other than the tail's, that a database
+/// without a publication head still lists as pending.
+async fn headless_relation_among(
+    lease: &crate::store::AuditPublicationLease,
+    event_ids: &[Uuid],
+    tail_event: Option<Uuid>,
+) -> Result<AuditJournalRelation, RuntimeError> {
+    let before_tail = event_ids
+        .iter()
+        .copied()
+        .filter(|event_id| Some(*event_id) != tail_event)
+        .collect::<Vec<_>>();
     let mut records_ahead = 0;
-    for event_ids in event_ids.chunks(AUDIT_ACKNOWLEDGEMENT_MARK_BATCH) {
+    for event_ids in before_tail.chunks(AUDIT_ACKNOWLEDGEMENT_MARK_BATCH) {
         records_ahead += lease.pending_among(event_ids).await?;
     }
     Ok(if records_ahead == 0 {
@@ -1386,9 +1438,10 @@ pub struct AuditRestoreAcknowledgement {
 ///
 /// Every Casework runtime on the database must be stopped: this takes the
 /// audit publication lease and the journal's single-writer lock and refuses
-/// while either is held. Records the retained journal already holds and the
-/// database still lists as pending are marked published, so none is
-/// appended twice.
+/// while either is held. Every retained record is verified under the audit
+/// key first, and a journal that does not verify is refused. Records the
+/// retained journal already holds and the database still lists as pending
+/// are marked published, so none is appended twice.
 /// The journal then records the acknowledgement itself, and its hash becomes
 /// the database's publication head. A journal and database already in step
 /// are reported and left untouched.
@@ -1415,16 +1468,49 @@ async fn acknowledge_audit_restore_in(
         .try_audit_publication_lease()
         .await?
         .ok_or(RuntimeError::AuditPublicationLeaseHeld)?;
+    let database_head = lease.head().await?;
+    let head = database_head
+        .as_deref()
+        .map(|head| AuditHead::parse(head).ok_or(RuntimeError::Audit))
+        .transpose()?;
+    // Every retained record is verified under the key before any of them is
+    // trusted, because this marks the records the journal holds as published.
+    // The keyed bootstrap alone reads only the active file and the newest
+    // sealed record. The walk runs before this process takes the journal's
+    // writer lock, since it reads the active file only while that lock is
+    // free, and the journal opened afterwards must end where the walk ended.
+    let mut placement = head.map(|head| AuditHeadPlacement::new(head.0));
+    let mut event_ids = Vec::new();
+    let mut tail_event = None;
+    let verification = walk_audit_journal_with(
+        path,
+        profile,
+        AuditChainStart::ArchivedHeadAllowed,
+        |envelope, _| {
+            if let Some(placement) = placement.as_mut() {
+                placement.observe(envelope);
+            }
+            tail_event = audit_envelope_event_id(envelope);
+            event_ids.extend(tail_event);
+            Ok(())
+        },
+    )?;
+    if path.exists() && !verification.active_segment_verified {
+        return Err(RuntimeError::AuditJournalLocked);
+    }
     let (sink, chain, _) = open_audit_journal(path, profile).await?;
     let journal_head =
         newest_segmented_audit_envelope(path)?.map(|tail| hash_hex(&tail.record_hash));
-    let database_head = lease.head().await?;
-    let relation = match database_head.as_deref() {
-        None => headless_audit_journal_relation(&lease, path).await?,
-        Some(head) => {
-            let head = AuditHead::parse(head).ok_or(RuntimeError::Audit)?;
-            audit_journal_relation(path, &head.0)?
-        }
+    if journal_head != verification.head_hash {
+        return Err(RuntimeError::AuditJournal(
+            "the audit file changed while it was verified; stop every Casework runtime and \
+             process that writes to audit.path, then acknowledge the restore again"
+                .to_owned(),
+        ));
+    }
+    let relation = match placement {
+        None => headless_relation_among(&lease, &event_ids, tail_event).await?,
+        Some(placement) => placement.relation(),
     };
     let name = relation.as_str();
     let records_ahead = match relation {
@@ -1446,7 +1532,7 @@ async fn acknowledge_audit_restore_in(
     // A record the retained journal already carries is never appended again,
     // whichever of the two a restore left behind.
     let mut marked_published = 0;
-    for event_ids in retained_audit_event_ids(path)?.chunks(AUDIT_ACKNOWLEDGEMENT_MARK_BATCH) {
+    for event_ids in event_ids.chunks(AUDIT_ACKNOWLEDGEMENT_MARK_BATCH) {
         marked_published += lease.mark_journal_records_published(event_ids).await?;
     }
     let envelope = chain
