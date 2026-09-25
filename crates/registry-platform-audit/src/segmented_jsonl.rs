@@ -612,15 +612,32 @@ pub fn segmented_audit_paths(path: &Path) -> Result<Vec<PathBuf>, AuditError> {
 
 /// Verify all sealed history and, when no writer is running, the active segment.
 ///
-/// A missing sequence inside the retained sealed range is reported distinctly.
-/// An archived prefix is allowed and identified by `first_sequence`: the first
-/// retained record then chains onto the archived head, which is reported as
-/// `start_prev_hash` for the caller to compare with the head it holds.
+/// The retained chain must begin at its first record. A missing sequence
+/// inside the retained sealed range, and a retained range whose first record
+/// continues a sealed segment that is no longer present, are both reported
+/// as [`AuditError::SegmentMissing`]. Use
+/// [`visit_segmented_audit_chain_from_archived_head`] to accept an archived
+/// prefix against a head the caller holds.
 pub fn verify_segmented_audit_chain(
     path: &Path,
     hasher: &AuditChainHasher,
 ) -> Result<SegmentedAuditSummary, AuditError> {
     visit_segmented_audit_chain(path, hasher, |_, _| Ok(()))
+}
+
+/// Verify as [`visit_segmented_audit_chain`] does, but accept a chain whose
+/// earliest sealed segments were archived away.
+///
+/// The first retained record then chains onto the archived head, which is
+/// reported as `start_prev_hash` beside `first_sequence`. Deletion and
+/// archival look the same on disk, so the caller must compare that head with
+/// one it retained before treating the chain as complete.
+pub fn visit_segmented_audit_chain_from_archived_head(
+    path: &Path,
+    hasher: &AuditChainHasher,
+    visit: impl FnMut(&AuditEnvelope, &str) -> Result<(), AuditError>,
+) -> Result<SegmentedAuditSummary, AuditError> {
+    visit_segmented(path, hasher, true, visit)
 }
 
 /// Verify what [`verify_segmented_audit_chain`] verifies and pass each record,
@@ -634,6 +651,15 @@ pub fn verify_segmented_audit_chain(
 pub fn visit_segmented_audit_chain(
     path: &Path,
     hasher: &AuditChainHasher,
+    visit: impl FnMut(&AuditEnvelope, &str) -> Result<(), AuditError>,
+) -> Result<SegmentedAuditSummary, AuditError> {
+    visit_segmented(path, hasher, false, visit)
+}
+
+fn visit_segmented(
+    path: &Path,
+    hasher: &AuditChainHasher,
+    archived_head_allowed: bool,
     mut visit: impl FnMut(&AuditEnvelope, &str) -> Result<(), AuditError>,
 ) -> Result<SegmentedAuditSummary, AuditError> {
     let mut visit = |envelope: AuditEnvelope, line: &str| visit(&envelope, line);
@@ -658,12 +684,20 @@ pub fn visit_segmented_audit_chain(
         }
     }
 
-    // Sequence one opens the chain. A later first sequence follows an
-    // archived prefix, so its first record's own link is the starting head.
+    // Sequence one opens the chain. A later first sequence whose first
+    // record links to an earlier one follows a prefix that is gone: only a
+    // caller that opted in starts from that record's own link.
     let start_prev_hash = match sealed.first() {
         Some((sequence, first)) if *sequence > 1 => first_prev_hash(first, hasher)?,
         _ => None,
     };
+    if let (Some(first), Some(_)) = (first_sequence, start_prev_hash) {
+        if !archived_head_allowed {
+            return Err(AuditError::SegmentMissing {
+                sequence: first - 1,
+            });
+        }
+    }
     let mut head = start_prev_hash;
     let mut records = 0usize;
     let mut segments = 0usize;
@@ -1546,7 +1580,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_archived_prefix_verifies_from_the_archived_head() {
+    async fn an_archived_prefix_verifies_only_when_the_caller_opts_in() {
         let (_directory, path, hasher) = fixture();
         {
             let sink = DurableSegmentedJsonlSink::open(&path, 450).expect("sink opens");
@@ -1571,8 +1605,20 @@ mod tests {
             .last_hash;
         fs::remove_file(&segments[0].1).expect("archive the first segment");
 
-        let summary =
-            verify_segmented_audit_chain(&path, &hasher).expect("retained chain verifies");
+        assert!(
+            matches!(
+                verify_segmented_audit_chain(&path, &hasher),
+                Err(AuditError::SegmentMissing { sequence: 1 })
+            ),
+            "the default verification refuses a chain whose oldest segment is gone"
+        );
+        assert!(matches!(
+            visit_segmented_audit_chain(&path, &hasher, |_, _| Ok(())),
+            Err(AuditError::SegmentMissing { sequence: 1 })
+        ));
+
+        let summary = visit_segmented_audit_chain_from_archived_head(&path, &hasher, |_, _| Ok(()))
+            .expect("retained chain verifies from its archived head");
         assert_eq!(summary.first_sequence, Some(2));
         assert_eq!(summary.start_prev_hash, archived_head);
         assert_eq!(summary.last_hash, complete.last_hash);

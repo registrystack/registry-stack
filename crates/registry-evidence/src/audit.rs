@@ -4146,6 +4146,42 @@ mod tests {
         );
     }
 
+    /// Deleting the oldest sealed segments must not leave a chain that
+    /// verifies from whatever record now comes first.
+    #[tokio::test]
+    async fn deleted_oldest_segments_are_reported_as_missing_history() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        {
+            let log = EvidenceAuditLog::initialize(
+                &path,
+                2048,
+                b"0123456789abcdef0123456789abcdef".to_vec(),
+                1,
+            )
+            .await
+            .expect("audit initializes");
+            for _ in 0..48 {
+                log.append(event(&log)).await.expect("event appends");
+            }
+        }
+        let segments = audit_segment_paths(&path).expect("segments enumerate");
+        assert!(
+            segments.len() >= 4,
+            "the fixture needs several sealed segments"
+        );
+        std::fs::remove_file(&segments[0]).expect("the first sealed segment is deleted");
+        std::fs::remove_file(&segments[1]).expect("the second sealed segment is deleted");
+
+        assert!(
+            matches!(
+                verify_audit_chain(&path, &audit_secret()),
+                Err(EvidenceAuditError::SegmentMissing { sequence: 2 })
+            ),
+            "a truncated front must fail as missing sealed history"
+        );
+    }
+
     /// A restart after rotation must resume the sealed chain rather than
     /// starting a second one.
     #[tokio::test]

@@ -622,6 +622,7 @@ fn audit_verify_reports_the_head_and_refuses_a_head_the_chain_never_held() {
     assert_matches_contract("audit verify", "AuditVerifyReport", &report);
     assert_eq!(report["auditChain"]["records"], 3);
     assert_eq!(report["auditChain"]["activeSegmentVerified"], true);
+    assert_eq!(report["auditChain"]["startsAtArchivedHead"], false);
     assert_eq!(report["auditChain"]["startPrevHash"], Value::Null);
     assert_eq!(report["auditChain"]["headHash"], hashes[2].as_str());
     assert_eq!(report["fromHead"], Value::Null);

@@ -38,9 +38,12 @@
   earlier. `caseworkctl audit export --output` writes the verified retained
   records to a new owner-only JSONL file and never replaces an existing one.
   Both refuse with `casework.audit.refused`. The `auditChain` object in their
-  reports and in `doctor` gains `headHash` and `startPrevHash`, and a chain
-  whose oldest files were archived away now verifies from the first retained
-  record instead of being refused as a fork.
+  reports and in `doctor` gains `headHash`, `firstSequence`,
+  `startsAtArchivedHead`, and `startPrevHash`. A chain whose oldest files are
+  gone is refused as missing history by `audit verify`, `audit export`, and
+  `doctor`; only `audit verify --from-head` accepts it, when the chain
+  continues from that head, and then reports `startsAtArchivedHead: true`
+  with the first retained sequence.
 - The optional `metricsListener.bind` runtime setting serves `/metrics`
   (Prometheus text: build and package digest, audit publisher health, audit
   outbox backlog, and per-source reconciliation failures and last-success

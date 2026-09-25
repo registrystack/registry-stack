@@ -46,6 +46,8 @@
             "records",
             "segments",
             "activeSegmentVerified",
+            "firstSequence",
+            "startsAtArchivedHead",
             "startPrevHash",
             "headHash"
           ],
@@ -59,6 +61,16 @@
               "minimum": 0
             },
             "activeSegmentVerified": {
+              "type": "boolean"
+            },
+            "firstSequence": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "startsAtArchivedHead": {
               "type": "boolean"
             },
             "startPrevHash": {

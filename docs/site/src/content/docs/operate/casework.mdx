@@ -823,12 +823,17 @@ opening the database or a source, reading the same runtime file `doctor` reads:
 caseworkctl audit verify --runtime-config /etc/registry-casework/runtime.yaml
 ```
 
-Its report gives the records and files it verified, whether it covered the active file, the
-`headHash` of the last record, and the `startPrevHash` the first retained record continues when
-older files were archived away (`null` for a chain that starts at its beginning). Record `headHash`
-somewhere the audit host cannot rewrite. A later run with `--from-head <headHash>` proves the
-retained chain still holds that record or continues from it, and refuses a journal that was
-replaced or truncated after the head was recorded. A chain the key does not verify, a missing or
+Its report gives the records and files it verified, whether it covered the active file, and the
+`headHash` of the last record. Record `headHash` somewhere the audit host cannot rewrite. A later
+run with `--from-head <headHash>` proves the retained chain still holds that record or continues
+from it, and refuses a journal that was replaced or truncated after the head was recorded.
+
+Without `--from-head`, a chain whose oldest numbered files are gone is refused as missing history,
+because deletion and archival look the same on disk; `audit export` and `doctor` refuse it the same
+way. With `--from-head`, such a chain verifies when its first retained record continues that head,
+and the report says so: `startsAtArchivedHead` is `true`, `firstSequence` names the oldest retained
+file, and `startPrevHash` is the head it continues. A chain retained from its beginning reports
+`startsAtArchivedHead: false` and a `null` `startPrevHash`. A chain the key does not verify, a missing or
 altered record, or a head the chain never held is refused with code `casework.audit.refused` and
 exit status 1, naming the path at fault.
 
@@ -842,7 +847,8 @@ under `activeSegmentVerified`; stop Casework for a complete export.
 {/* Evidence: crates/registry-caseworkctl/src/audit.rs, verify() and export();
     crates/registry-casework/src/runtime.rs, verify_audit_journal(), export_audit_journal(),
     and AuditHead;
-    crates/registry-platform-audit/src/segmented_jsonl.rs, visit_segmented_audit_chain();
+    crates/registry-platform-audit/src/segmented_jsonl.rs, visit_segmented_audit_chain() and
+    visit_segmented_audit_chain_from_archived_head();
     crates/registry-caseworkctl/src/cli_contract_tests.rs. */}
 
 ## Change the active package

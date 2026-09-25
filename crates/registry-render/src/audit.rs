@@ -154,12 +154,7 @@ pub fn verify_chain(directory: &Path, key: Vec<u8>) -> Result<i32, RenderProblem
         })?
         .hasher();
     let ledger = directory.join("ledger.jsonl");
-    let summary = verify_segmented_audit_chain(&ledger, &hasher).map_err(|err| {
-        RenderProblem::new(
-            ProblemKind::AuditFailed,
-            format!("chain verification: {err}"),
-        )
-    })?;
+    let summary = verify_ledger(&ledger, &hasher)?;
     println!(
         "audit chain verified: {} record(s) across {} segment(s)",
         summary.records, summary.segments
@@ -174,4 +169,80 @@ pub fn verify_chain(directory: &Path, key: Vec<u8>) -> Result<i32, RenderProblem
         }
     }
     Ok(0)
+}
+
+/// Verify the ledger from its first record. A ledger whose oldest sealed
+/// segments are gone is refused as missing history.
+fn verify_ledger(
+    ledger: &Path,
+    hasher: &registry_platform_audit::AuditChainHasher,
+) -> Result<registry_platform_audit::SegmentedAuditSummary, RenderProblem> {
+    verify_segmented_audit_chain(ledger, hasher).map_err(|err| {
+        RenderProblem::new(
+            ProblemKind::AuditFailed,
+            format!("chain verification: {err}"),
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const KEY: &[u8] = b"0123456789abcdef0123456789abcdef";
+
+    fn event() -> RenderAuditEvent {
+        let mut event = RenderAuditEvent::refused(
+            "receipt",
+            &RenderProblem::new(ProblemKind::AuditFailed, "fixture".to_owned()),
+            "caller-fingerprint",
+            None,
+            None,
+        );
+        event.bundle_hash = "x".repeat(160);
+        event
+    }
+
+    fn sealed_segments(ledger: &Path) -> Vec<std::path::PathBuf> {
+        let mut paths =
+            registry_platform_audit::segmented_audit_paths(ledger).expect("segments enumerate");
+        paths.retain(|path| path != ledger);
+        paths
+    }
+
+    #[tokio::test]
+    async fn verify_refuses_a_ledger_whose_oldest_segments_were_deleted() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let audit_directory = directory.path().join("audit");
+        {
+            let audit = RenderAudit::open(&audit_directory, KEY.to_vec(), 1200)
+                .await
+                .expect("ledger opens");
+            for _ in 0..16 {
+                audit.append(event()).await.expect("event appends");
+            }
+        }
+        let hasher = AuditChainProfile::production_from_secret_bytes(Zeroizing::new(KEY.to_vec()))
+            .expect("key accepted")
+            .hasher();
+        let ledger = audit_directory.join("ledger.jsonl");
+        let complete = verify_ledger(&ledger, &hasher).expect("complete ledger verifies");
+        assert!(complete.records >= 16);
+        let sealed = sealed_segments(&ledger);
+        assert!(
+            sealed.len() >= 3,
+            "the fixture needs several sealed segments"
+        );
+        std::fs::remove_file(&sealed[0]).expect("the first sealed segment is deleted");
+
+        let refusal = verify_ledger(&ledger, &hasher).expect_err("a truncated ledger is refused");
+        assert_eq!(refusal.kind, ProblemKind::AuditFailed);
+        assert!(
+            refusal
+                .detail
+                .contains("sealed segment 1 is archived or missing"),
+            "{}",
+            refusal.detail
+        );
+    }
 }

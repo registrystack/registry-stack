@@ -24,6 +24,16 @@
   retained record's link is reported as `start_prev_hash` so a caller can
   compare it with the head it retained at archive time.
 
+- Segmented audit verification (`verify_segmented_audit_chain`,
+  `visit_segmented_audit_chain`) refuses a chain whose oldest sealed segments
+  are gone as `SegmentMissing`, naming the sequence just before the first
+  retained one, instead of as a fork. Evidence `verify-audit` and Render
+  `audit-verify` keep refusing such a chain. The opt-in
+  `visit_segmented_audit_chain_from_archived_head` accepts it for a caller
+  that holds the head the chain continues, and reports that head as
+  `start_prev_hash` beside `first_sequence` so the caller can compare it with
+  the head it retained.
+
 - Add the shared runtime configuration loader: a bounded, strict YAML reader
   for `runtime.yaml` that refuses symbolic links, removed keys, and a wrong
   envelope, then substitutes `${VAR}`, `${VAR:-default}`, and

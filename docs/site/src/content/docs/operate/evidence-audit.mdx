@@ -48,9 +48,11 @@ active-segment: not verified: a running writer holds it, so only sealed history 
 ```
 
 Run this check before and after backup, restore, or audit transfer. A missing sealed segment and a
-broken keyed chain both fail, but only retained and discoverable history can be checked. This is
-not proof that an operator never deleted history before the check or that an off-host receiver
-accepted it.
+broken keyed chain both fail. That includes the oldest sealed segments: when the first retained
+record continues a segment that is no longer present, the check fails and names that segment, so
+deleting the start of the chain does not leave a shorter chain that verifies. Only retained and
+discoverable history can be checked, so this is not proof that an operator never deleted the newest
+records or the whole chain before the check, or that an off-host receiver accepted it.
 
 ## Interpret one operation
 

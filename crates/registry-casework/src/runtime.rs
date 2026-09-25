@@ -800,6 +800,13 @@ pub struct AuditJournalVerification {
     /// Whether the active segment was verified. A running writer holds it,
     /// so only the sealed history is verified while the runtime serves.
     pub active_segment_verified: bool,
+    /// The sequence of the oldest retained sealed segment, or `None` when
+    /// only the active segment exists.
+    pub first_sequence: Option<u64>,
+    /// Whether the retained chain starts at an archived head rather than at
+    /// its first record. Only a verification that names the head it expects
+    /// accepts such a chain.
+    pub starts_at_archived_head: bool,
     /// The head the first retained record continues, as lowercase hex:
     /// `None` when the retained chain begins at its first record, and the
     /// archived head when earlier sealed segments were moved away.
@@ -848,7 +855,14 @@ pub fn verify_audit_journal(
     from_head: Option<AuditHead>,
 ) -> Result<AuditJournalVerification, RuntimeError> {
     let mut found = false;
-    let verification = walk_audit_journal(path, secrets, hash_key_ref, |envelope, _| {
+    // Only a caller that names the head it retained may accept a chain whose
+    // oldest sealed segments are gone; without one, deletion is not archival.
+    let start = if from_head.is_some() {
+        AuditChainStart::ArchivedHeadAllowed
+    } else {
+        AuditChainStart::FirstRecord
+    };
+    let verification = walk_audit_journal(path, secrets, hash_key_ref, start, |envelope, _| {
         found |= from_head.is_some_and(|head| head.0 == envelope.record_hash);
         Ok(())
     })?;
@@ -877,15 +891,21 @@ pub fn export_audit_journal(
     out: &mut dyn std::io::Write,
 ) -> Result<AuditJournalVerification, RuntimeError> {
     let mut write_failure = None;
-    let walked = walk_audit_journal(path, secrets, hash_key_ref, |_, line| {
-        out.write_all(line.as_bytes())
-            .and_then(|()| out.write_all(b"\n"))
-            .map_err(|error| {
-                let kind = error.kind();
-                write_failure = Some(kind);
-                registry_platform_audit::AuditError::Io(std::io::Error::from(kind))
-            })
-    });
+    let walked = walk_audit_journal(
+        path,
+        secrets,
+        hash_key_ref,
+        AuditChainStart::FirstRecord,
+        |_, line| {
+            out.write_all(line.as_bytes())
+                .and_then(|()| out.write_all(b"\n"))
+                .map_err(|error| {
+                    let kind = error.kind();
+                    write_failure = Some(kind);
+                    registry_platform_audit::AuditError::Io(std::io::Error::from(kind))
+                })
+        },
+    );
     if let Some(kind) = write_failure {
         return Err(RuntimeError::AuditExport(kind.to_string()));
     }
@@ -906,12 +926,23 @@ fn hash_hex(hash: &[u8; 32]) -> String {
         })
 }
 
+/// Where a walk of the retained audit chain accepts it to begin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuditChainStart {
+    /// The chain must be retained from its first record.
+    FirstRecord,
+    /// The earliest sealed segments may have been archived away; the caller
+    /// checks the reported start against a head it holds.
+    ArchivedHeadAllowed,
+}
+
 /// Walk the retained audit chain under the key `hash_key_ref` names, passing
 /// each record to `visit` once its own link verifies.
 fn walk_audit_journal(
     path: &Path,
     secrets: &SecretResolver,
     hash_key_ref: &str,
+    start: AuditChainStart,
     visit: impl FnMut(&AuditEnvelope, &str) -> Result<(), registry_platform_audit::AuditError>,
 ) -> Result<AuditJournalVerification, RuntimeError> {
     let audit_secret = resolve_audit_secret(secrets, hash_key_ref)?;
@@ -930,20 +961,30 @@ fn walk_audit_journal(
             records: 0,
             segments: 0,
             active_segment_verified: false,
+            first_sequence: None,
+            starts_at_archived_head: false,
             start_prev_hash: None,
             head_hash: None,
         });
     }
-    let summary = registry_platform_audit::visit_segmented_audit_chain(
-        path,
-        &audit_profile.chain_hasher(),
-        visit,
-    )
+    let hasher = audit_profile.chain_hasher();
+    let summary = match start {
+        AuditChainStart::FirstRecord => {
+            registry_platform_audit::visit_segmented_audit_chain(path, &hasher, visit)
+        }
+        AuditChainStart::ArchivedHeadAllowed => {
+            registry_platform_audit::visit_segmented_audit_chain_from_archived_head(
+                path, &hasher, visit,
+            )
+        }
+    }
     .map_err(|error| RuntimeError::AuditJournal(describe_audit_journal_failure(&error)))?;
     Ok(AuditJournalVerification {
         records: summary.records,
         segments: summary.segments,
         active_segment_verified: summary.active_verified,
+        first_sequence: summary.first_sequence,
+        starts_at_archived_head: summary.start_prev_hash.is_some(),
         start_prev_hash: summary.start_prev_hash.as_ref().map(hash_hex),
         head_hash: summary.last_hash.as_ref().map(hash_hex),
     })
@@ -2600,6 +2641,8 @@ mod tests {
                 records: 0,
                 segments: 0,
                 active_segment_verified: false,
+                first_sequence: None,
+                starts_at_archived_head: false,
                 start_prev_hash: None,
                 head_hash: None,
             }
@@ -2776,6 +2819,27 @@ mod tests {
             .to_owned();
         std::fs::remove_file(&segments[0]).expect("archive the first segment");
 
+        for refusal in [
+            verify_audit_journal(&path, &secrets, "secret:file/casework-audit-key", None)
+                .expect_err("without a head the truncated chain is refused"),
+            export_audit_journal(
+                &path,
+                &secrets,
+                "secret:file/casework-audit-key",
+                &mut Vec::new(),
+            )
+            .expect_err("an export never starts from an archived head"),
+        ] {
+            assert!(
+                matches!(
+                    &refusal,
+                    RuntimeError::AuditJournal(message)
+                        if message.contains("sealed segment 1 is archived or missing")
+                ),
+                "{refusal}"
+            );
+        }
+
         let verified = verify_audit_journal(
             &path,
             &secrets,
@@ -2788,6 +2852,8 @@ mod tests {
             Some(archived_head.as_str())
         );
         assert_eq!(verified.records, 8 - first.lines().count());
+        assert!(verified.starts_at_archived_head);
+        assert_eq!(verified.first_sequence, Some(2));
     }
 
     fn upgrade_audit_profile() -> AuditProfile {
