@@ -4824,7 +4824,7 @@ version = "0.34.0"
 dependencies = [
  "async-trait",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chacha20poly1305",
  "chrono",
  "clap",
@@ -4888,7 +4888,7 @@ version = "0.34.0"
 dependencies = [
  "async-trait",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "jsonschema",
  "registry-platform-canonical-json",
  "registry-platform-crypto",
@@ -4948,7 +4948,7 @@ dependencies = [
  "anstyle",
  "anyhow",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "clap",
  "getrandom 0.4.3",
  "hmac 0.13.0",
@@ -4995,7 +4995,7 @@ version = "0.34.0"
 dependencies = [
  "async-trait",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "clap",
  "deadpool-postgres",
@@ -5046,7 +5046,7 @@ name = "registry-casework-breg"
 version = "0.34.0"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "registry-breg-client",
  "registry-casework-core",
  "registry-platform-config",
@@ -5072,7 +5072,7 @@ version = "0.34.0"
 dependencies = [
  "async-trait",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "ed25519-dalek",
  "getrandom 0.4.3",
@@ -5146,7 +5146,7 @@ name = "registry-caseworkctl"
 version = "0.34.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "clap",
  "getrandom 0.4.3",
@@ -5239,7 +5239,7 @@ name = "registry-discovery-client"
 version = "0.34.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "registry-discovery",
  "registry-discovery-profile",
@@ -5337,7 +5337,7 @@ dependencies = [
  "async-trait",
  "axum",
  "axum-test",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "chrono",
  "chrono-tz",
@@ -5406,7 +5406,7 @@ dependencies = [
 name = "registry-evidence-client"
 version = "0.34.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "ed25519-dalek",
  "getrandom 0.4.3",
@@ -5433,7 +5433,7 @@ dependencies = [
 name = "registry-evidence-client-node"
 version = "0.34.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "ed25519-dalek",
  "getrandom 0.4.3",
@@ -5457,7 +5457,7 @@ dependencies = [
 name = "registry-evidence-client-py"
 version = "0.34.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "ed25519-dalek",
  "getrandom 0.4.3",
@@ -5484,7 +5484,7 @@ dependencies = [
  "async-trait",
  "axum",
  "axum-test",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "clap",
  "ed25519-dalek",
@@ -5518,7 +5518,7 @@ dependencies = [
 name = "registry-evidence-verifier"
 version = "0.34.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "jsonschema",
  "p256",
@@ -5540,7 +5540,7 @@ version = "0.34.0"
 dependencies = [
  "anyhow",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "clap",
  "fake",
@@ -5655,7 +5655,7 @@ dependencies = [
 name = "registry-platform-authcommon"
 version = "0.34.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "proptest",
  "registry-platform-crypto",
  "serde",
@@ -5695,7 +5695,7 @@ dependencies = [
 name = "registry-platform-config"
 version = "0.34.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "registry-platform-crypto",
  "rustix 1.1.5",
  "serde",
@@ -5713,7 +5713,7 @@ version = "0.34.0"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
- "base64 0.22.1",
+ "base64 0.23.1",
  "ed25519-dalek",
  "hmac 0.13.0",
  "p256",
@@ -5776,7 +5776,7 @@ version = "0.34.0"
 dependencies = [
  "async-trait",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "chrono",
  "ed25519-dalek",
@@ -5809,7 +5809,7 @@ name = "registry-platform-oidc"
 version = "0.34.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "jsonwebtoken",
  "registry-platform-crypto",
  "registry-platform-httputil",
@@ -5835,7 +5835,7 @@ name = "registry-platform-sdjwt"
 version = "0.34.0"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "getrandom 0.4.3",
  "jsonwebtoken",
  "registry-platform-crypto",
@@ -5867,7 +5867,7 @@ version = "0.34.0"
 dependencies = [
  "async-trait",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "jsonwebtoken",
  "registry-platform-audit",
@@ -5957,7 +5957,7 @@ version = "0.34.0"
 dependencies = [
  "async-trait",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "chacha20poly1305",
  "chrono",
@@ -6029,7 +6029,7 @@ name = "registry-render"
 version = "0.34.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "clap",
  "comemo",
@@ -6100,7 +6100,7 @@ version = "0.34.0"
 dependencies = [
  "async-trait",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "clap",
  "deadpool-postgres",
@@ -6211,7 +6211,7 @@ dependencies = [
 name = "registry-thunderid-tooling"
 version = "0.34.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "getrandom 0.4.3",
  "p256",
  "registry-platform-authcommon",
