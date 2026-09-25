@@ -5,7 +5,7 @@ import { basename, join, relative, resolve } from 'node:path';
 const rootDir = resolve(import.meta.dirname, '..');
 const fixturesDir = join(rootDir, 'fixtures', 'vale');
 const valePackageDir = join(rootDir, 'node_modules', '@vvago', 'vale');
-const valeBin = join(valePackageDir, 'bin', process.platform === 'win32' ? 'vale.exe' : 'vale');
+const valeBin = join(valePackageDir, 'native', process.platform === 'win32' ? 'vale.exe' : 'vale');
 const fixturePattern = /\.mdx?$/;
 const directivePattern = /<!--\s*ValeFixture\s+expect:\s*([\s\S]*?)-->/i;
 
@@ -14,7 +14,7 @@ async function ensureVale() {
     await access(valeBin);
   } catch {
     await new Promise((resolveRun, rejectRun) => {
-      const child = spawn(process.execPath, [join(valePackageDir, 'index.js')], {
+      const child = spawn(process.execPath, [join(valePackageDir, 'dist', 'index.cjs')], {
         cwd: rootDir,
         stdio: 'inherit',
       });
