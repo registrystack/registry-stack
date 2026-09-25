@@ -126,6 +126,47 @@ class EvidenceTests(unittest.TestCase):
             self.assertIsNone(result["database"])
             self.assertEqual(result["product"], "evidence")
 
+    def test_summary_fails_a_run_that_evaluated_no_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = root / "manifest.json"
+            manifest.write_text(
+                json.dumps({"product": "evidence", "profile": "steady", "configuration": {"parameters": {}}}),
+                encoding="utf-8",
+            )
+            samples = root / "samples.json"
+            samples.write_text("", encoding="utf-8")
+            safety = root / "safety.json"
+            safety.write_text(json.dumps({"safe": True}), encoding="utf-8")
+            for name, failed_requests, passed in (
+                ("evaluated", {"values": {"rate": 0}, "thresholds": {"rate==0": {"ok": True}}}, True),
+                ("--no-thresholds", {"values": {"rate": 0}}, False),
+                ("empty threshold set", {"values": {"rate": 0}, "thresholds": {}}, False),
+            ):
+                with self.subTest(name):
+                    k6_summary = root / "summary.json"
+                    k6_summary.write_text(
+                        json.dumps(
+                            {"state": {"testRunDurationMs": 1000}, "metrics": {"http_req_failed": failed_requests}}
+                        ),
+                        encoding="utf-8",
+                    )
+                    out = root / "result.json"
+                    evidence.summarize(
+                        argparse.Namespace(
+                            manifest=manifest,
+                            k6_summary=k6_summary,
+                            samples=samples,
+                            db_after=None,
+                            db_waits=None,
+                            db_sampler_exit_code=0,
+                            safety=safety,
+                            k6_exit_code=0,
+                            out=out,
+                        )
+                    )
+                    self.assertIs(json.loads(out.read_text(encoding="utf-8"))["pass"], passed)
+
     def test_summary_fails_when_the_wait_sampler_stopped_early_or_recorded_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

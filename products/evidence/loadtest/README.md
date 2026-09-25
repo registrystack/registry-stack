@@ -118,6 +118,8 @@ minutes.
 `run.sh` accepts `--profile`, `--ops`, and `--duration`; other non-sensitive
 arguments pass through to k6. HTTP debug and system-tag overrides are refused
 because they can expose credentials, nonces, or subject identifiers.
+`--no-thresholds` and `K6_NO_THRESHOLDS` are refused too, because a run
+without thresholds has no verdict.
 Profile-specific environment variables are:
 
 - `steady`: `OPS=20`, `DURATION=2m`

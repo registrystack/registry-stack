@@ -39,6 +39,10 @@ while [[ $# -gt 0 ]]; do
       printf '%s\n' "$1 is disabled because it can expose credentials, cursors, or record identifiers." >&2
       exit 2
       ;;
+    --no-thresholds|--no-thresholds=*)
+      printf '%s\n' "$1 is disabled because a run without thresholds has no verdict." >&2
+      exit 2
+      ;;
     *)
       pass_through+=("$1")
       shift
@@ -48,6 +52,10 @@ done
 [[ -n "$profile" ]] || usage
 if [[ -n "${K6_HTTP_DEBUG:-}" || -n "${K6_SYSTEM_TAGS:-}" ]]; then
   printf '%s\n' 'K6_HTTP_DEBUG and K6_SYSTEM_TAGS overrides are disabled for evidence safety.' >&2
+  exit 2
+fi
+if [[ -n "${K6_NO_THRESHOLDS:-}" ]]; then
+  printf '%s\n' 'K6_NO_THRESHOLDS is disabled because a run without thresholds has no verdict.' >&2
   exit 2
 fi
 script="$loadtest_dir/profiles/$profile.js"

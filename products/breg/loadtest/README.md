@@ -93,6 +93,8 @@ token for its warmup and for every independent hold.
 `run.sh` accepts `--profile`, `--ops`, and `--duration`; other non-sensitive
 arguments pass through to k6. HTTP debug and system-tag overrides are refused
 because they can expose credentials, cursors, URLs, or record identifiers.
+`--no-thresholds` and `K6_NO_THRESHOLDS` are refused too, because a run
+without thresholds has no verdict.
 Profile-specific environment variables are:
 
 - `steady`: `OPS=50`, `DURATION=3m`, `FOLLOW_CURSOR=1`
