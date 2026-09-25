@@ -371,16 +371,16 @@ fn runtime_document_identity_is_required_and_exact() {
             &base.replace(&format!("apiVersion: {RUNTIME_CONFIG_API_VERSION}\n"), ""),
             env_lookup
         )
-        .expect_err("missing apiVersion refused by strict document shape"),
-        RuntimeConfigError::Document
+        .expect_err("missing apiVersion refused by the envelope"),
+        RuntimeConfigError::InvalidApiVersion
     );
     assert_eq!(
         parse_runtime_config_with_env(
             &base.replace(&format!("kind: {RUNTIME_CONFIG_KIND}\n"), ""),
             env_lookup
         )
-        .expect_err("missing kind refused by strict document shape"),
-        RuntimeConfigError::Document
+        .expect_err("missing kind refused by the envelope"),
+        RuntimeConfigError::InvalidKind
     );
 }
 
@@ -526,7 +526,8 @@ fn operational_defaults_materialize_without_defaulting_authority() {
         assert_eq!(
             parse_runtime_config_with_env(&raw.replace(line, ""), env_lookup)
                 .expect_err("authority-bearing runtime member is never defaulted"),
-            expected
+            expected,
+            "removing {line:?}"
         );
     }
 }
@@ -744,7 +745,7 @@ fn wasm_execution_backend_refuses_unknown_values() {
         &fixture.package_root,
         &fixture.trust_anchor,
     );
-    for backend in ["warp", "Pulley", ""] {
+    for backend in ["warp", "Pulley", "\"\""] {
         let configured = format!("{base}wasmExecution:\n  backend: {backend}\n");
         let metadata = parse_runtime_config(&configured)
             .expect_err("an unknown WASM execution backend is refused")
@@ -1832,7 +1833,7 @@ fn debug_and_errors_do_not_render_secret_or_expanded_canaries() {
 }
 
 #[test]
-fn unsafe_embedded_env_expansion_is_refused_without_echoing_value() {
+fn a_substituted_value_cannot_inject_document_structure() {
     let fixture = RuntimeFixture::new();
     let raw = valid_runtime(
         &fixture.secret_root,
@@ -1844,25 +1845,169 @@ fn unsafe_embedded_env_expansion_is_refused_without_echoing_value() {
         "OIDC_HOST" => Some("issuer.example\nentities: []".to_owned()),
         _ => env_lookup(name),
     })
-    .expect_err("unsafe embedded expansion refused");
-    assert_eq!(error, RuntimeConfigError::EnvExpansion);
+    .expect_err("a substituted newline stays inside the issuer string");
+    assert_eq!(error, RuntimeConfigError::InvalidOidc);
     let rendered = format!("{error:?} {error}");
     assert!(!rendered.contains("issuer.example"));
     assert!(!rendered.contains("entities"));
 }
 
 #[test]
-fn expanded_runtime_document_is_bounded_before_yaml_parsing() {
-    let raw = "listener: ${OVERSIZED_RUNTIME_VALUE}\n: malformed\n";
-    let error = parse_runtime_config_with_env(raw, |name| match name {
+fn substituted_runtime_document_stays_within_the_size_bound() {
+    let fixture = RuntimeFixture::new();
+    let raw = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    )
+    .replace(
+        "instanceId: registry-primary",
+        "instanceId: ${OVERSIZED_RUNTIME_VALUE}",
+    );
+    let error = parse_runtime_config_with_env(&raw, |name| match name {
         "OVERSIZED_RUNTIME_VALUE" => Some("runtime-bound-canary".repeat(4096)),
         _ => env_lookup(name),
     })
-    .expect_err("oversized expansion refused before parsing");
+    .expect_err("oversized substitution refused");
 
     assert_eq!(error, RuntimeConfigError::Bounds);
     let rendered = format!("{error:?} {error}");
     assert!(!rendered.contains("runtime-bound-canary"));
+}
+
+#[test]
+fn a_substitution_inside_a_secret_reference_is_refused() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let lookup = |name: &str| match name {
+        "AUDIT_KEY_REF" => Some("secret:file/audit-key".to_owned()),
+        "SECRET_ROOT" => Some(fixture.secret_root.display().to_string()),
+        _ => env_lookup(name),
+    };
+    for raw in [
+        base.replace(
+            "hashKeyRef: secret:file/audit-key",
+            "hashKeyRef: ${AUDIT_KEY_REF}",
+        ),
+        base.replace(
+            "hashKeyRef: secret:file/audit-key",
+            "hashKeyRef: secret:file/${AUDIT_KEY_REF}",
+        ),
+        base.replace(
+            &format!("root: {}", fixture.secret_root.display()),
+            "root: ${SECRET_ROOT}",
+        ),
+    ] {
+        let error = parse_runtime_config_with_env(&raw, lookup)
+            .expect_err("a secret reference or provider takes no substitution");
+        assert_eq!(error, RuntimeConfigError::SubstitutionInReference);
+        assert_eq!(error.code(), "runtime_config.substitution_in_reference");
+        assert_eq!(error.path(), "/");
+    }
+}
+
+#[test]
+fn substituted_values_stay_strings() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let lookup = |name: &str| match name {
+        "INSTANCE_ID" => Some("12345".to_owned()),
+        "POOL_SIZE" => Some("4".to_owned()),
+        _ => env_lookup(name),
+    };
+    let config = parse_runtime_config_with_env(
+        &base.replace("instanceId: registry-primary", "instanceId: ${INSTANCE_ID}"),
+        lookup,
+    )
+    .expect("a numeric-looking substitution is the string it was written as");
+    assert_eq!(config.package_load_context().instance_id, "12345");
+
+    assert_eq!(
+        parse_runtime_config_with_env(&base.replace("maxSize: 4", "maxSize: ${POOL_SIZE}"), lookup)
+            .expect_err("a substitution never becomes a number"),
+        RuntimeConfigError::Document
+    );
+}
+
+#[test]
+fn oidc_issuer_and_audience_follow_the_shared_issuer_block() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    parse_runtime_config_with_env(
+        &base.replace("https://issuer.example", "http://127.0.0.1:8095"),
+        env_lookup,
+    )
+    .expect("a loopback http issuer serves local development");
+    for issuer in [
+        "urn:breg:issuer",
+        "http://issuer.example",
+        "https://user:secret@issuer.example",
+        "https://issuer.example#fragment",
+    ] {
+        assert_eq!(
+            parse_runtime_config_with_env(
+                &base.replace("https://issuer.example", issuer),
+                env_lookup
+            )
+            .expect_err("issuer outside the shared block refused"),
+            RuntimeConfigError::InvalidOidc,
+            "{issuer}"
+        );
+    }
+    let long_audience = "a".repeat(513);
+    assert_eq!(
+        parse_runtime_config_with_env(&base.replace("urn:breg:test", &long_audience), env_lookup)
+            .expect_err("audience above 512 characters refused"),
+        RuntimeConfigError::InvalidOidc
+    );
+}
+
+#[test]
+fn jwks_source_uri_kind_skips_discovery_under_the_shared_rules() {
+    let fixture = RuntimeFixture::new();
+    let with_uri = |uri: &str| {
+        valid_runtime(
+            &fixture.secret_root,
+            &fixture.package_root,
+            &fixture.trust_anchor,
+        )
+        .replace(
+            "    jwksCache:\n",
+            &format!("    jwksSource:\n      kind: uri\n      uri: {uri}\n    jwksCache:\n"),
+        )
+    };
+    let config =
+        parse_runtime_config_with_env(&with_uri("https://issuer.example/jwks"), env_lookup)
+            .expect("uri source parses");
+    let debug = format!("{config:?}");
+    assert!(debug.contains("Uri"));
+    assert!(!debug.contains("https://issuer.example/jwks"));
+    parse_runtime_config_with_env(&with_uri("http://127.0.0.1:8095/jwks"), env_lookup)
+        .expect("loopback http uri source parses");
+    for uri in [
+        "http://issuer.example/jwks",
+        "https://user:secret@issuer.example/jwks",
+        "file:///etc/jwks.json",
+    ] {
+        assert_eq!(
+            parse_runtime_config_with_env(&with_uri(uri), env_lookup)
+                .expect_err("uri outside the shared rules refused"),
+            RuntimeConfigError::InvalidOidc,
+            "{uri}"
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -3178,6 +3323,27 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
         parse_runtime_config(&unknown_kind).unwrap_err(),
         RuntimeConfigError::Document
     );
+}
+
+#[test]
+fn an_audit_key_that_is_not_a_secret_reference_is_an_invalid_audit_binding() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    for reference in ["audit-key", "secret:vault/audit-key", "\"\""] {
+        let configured = base.replace(
+            "  hashKeyRef: secret:file/audit-key\n",
+            &format!("  hashKeyRef: {reference}\n"),
+        );
+        assert_eq!(
+            parse_runtime_config(&configured).err(),
+            Some(RuntimeConfigError::InvalidAudit),
+            "{reference} is refused as the audit key"
+        );
+    }
 }
 
 #[test]

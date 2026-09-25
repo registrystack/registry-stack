@@ -42,4 +42,4 @@ EXPOSE 8080
 # Base Registry Engine serves GET /health and GET /healthz. Distroless has no shell
 # or HTTP client, and the runtime deliberately has no healthcheck subcommand.
 ENTRYPOINT ["/usr/local/bin/breg"]
-CMD ["--config", "/etc/breg/runtime.yaml"]
+CMD ["--runtime-config", "/etc/breg/runtime.yaml"]

@@ -952,7 +952,7 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
     fs::write(&config_path, canary_runtime_document()).expect("canary runtime config writes");
     let output = Command::new(env!("CARGO_BIN_EXE_breg"))
         .args([
-            "--config",
+            "--runtime-config",
             config_path.to_str().expect("config path is UTF-8"),
         ])
         .env("BREG_LOG", "info")
@@ -993,9 +993,23 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
         }
     }
 
-    let invalid_level = Command::new(env!("CARGO_BIN_EXE_breg"))
+    let removed_flag = Command::new(env!("CARGO_BIN_EXE_breg"))
         .args([
             "--config",
+            config_path.to_str().expect("config path is UTF-8"),
+        ])
+        .output()
+        .expect("breg process runs");
+    assert_eq!(removed_flag.status.code(), Some(2));
+    assert!(removed_flag.stdout.is_empty());
+    assert_eq!(
+        std::str::from_utf8(&removed_flag.stderr).expect("refusal is UTF-8"),
+        "breg: --config is no longer accepted; pass --runtime-config FILE\n"
+    );
+
+    let invalid_level = Command::new(env!("CARGO_BIN_EXE_breg"))
+        .args([
+            "--runtime-config",
             config_path.to_str().expect("config path is UTF-8"),
         ])
         .env("BREG_LOG", "debug")

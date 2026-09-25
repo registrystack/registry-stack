@@ -476,7 +476,9 @@ fn diff_help_and_selector_usage_preserve_the_closed_command_inventory_and_exit_c
     let malformed_runtime = directory.path.join(format!("{VALUE_CANARY}.yaml"));
     fs::write(
         &malformed_runtime,
-        format!("unexpectedSetting: {VALUE_CANARY}\n"),
+        format!(
+            "apiVersion: registry.registrystack.org/breg-runtime/v1alpha1\nkind: BRegRuntimeConfig\nunexpectedSetting: {VALUE_CANARY}\n"
+        ),
     )
     .expect("malformed runtime configuration is written");
     let refused_runtime = run(&[

@@ -146,7 +146,7 @@ configured domain or a compatible additive schema change.
    `bregctl apply --runtime-config <file> --package <directory>` and
    then `bregctl verify --runtime-config <file>`. Initial activation
    also requires `--initial`.
-5. `breg --config <file>` serves the active package. Authorized
+5. `breg --runtime-config <file>` serves the active package. Authorized
    bulk operations use `bregctl data validate`, `data import`, and
    `data export`, which reuse the packaged plans and normal authenticated API
    paths.
@@ -171,7 +171,10 @@ refused before initial production control-plane state or DDL is created.
 
 OIDC key resolution is deployment configuration, not governed package content.
 If `authentication.oidc.jwksSource` is omitted, discovery is used. An operator
-can instead pin a static document through a protected secret reference:
+can name the key set location directly with `kind: uri` and an `https` `uri`
+(plain `http` only on an IPv4 loopback host), which the verifier fetches and
+refreshes the same way it does a discovered key set, or pin a static document
+through a protected secret reference:
 
 ```yaml
 authentication:

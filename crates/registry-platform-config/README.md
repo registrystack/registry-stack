@@ -53,9 +53,6 @@ The effective digest of a loaded file is the `sha256:` label of the canonical
 JSON of the substituted document, so a comment or formatting change does not
 change it.
 
-`expand_config_env_vars` is the earlier text-level expansion, kept for the
-runtimes that do not read their configuration through the loader yet.
-
 ## Shared blocks
 
 `blocks` holds the sections each runtime embeds unchanged:
@@ -83,8 +80,8 @@ cargo run -p registry-platform-config --features schema \
 
 `products/platform/scripts/check-config-conformance.py` holds each runtime that
 reads `runtime.yaml` through `RuntimeConfigLoader` to this surface: its
-generated runtime schema embeds the shared blocks it uses unchanged, it no
-longer calls `expand_config_env_vars`, and named tests prove a `*Ref` field and
+generated runtime schema embeds the shared blocks it uses unchanged, it does
+not call a text-level `expand_config_env_vars` expansion, and named tests prove a `*Ref` field and
 an authored project file both refuse `${VAR}`. `--check-generated` also
 regenerates the canonical schema and fails when the committed copy differs. A
 product that adopts the loader adds a row to the gate.

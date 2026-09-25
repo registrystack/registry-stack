@@ -112,6 +112,7 @@ STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
 CONFIG_CONFORMANCE_PACKAGES = frozenset(
     {
         "registry-platform-config",
+        "registry-breg",
         "registry-discovery",
         "registry-evidence",
         "registry-relay-v2",
@@ -123,6 +124,7 @@ CONFIG_CONFORMANCE_PACKAGES = frozenset(
 CONFIG_CONFORMANCE_INPUTS = (
     "products/platform/generated/*",
     "products/platform/scripts/*config-conformance*",
+    "products/breg/generated/runtime/*",
     "products/scheduling/generated/runtime/*",
 )
 

@@ -102,7 +102,7 @@ also publishes `breg-install.sh` as a movable alias of the pinned installer.
 The container image is `ghcr.io/registrystack/breg:v0.26.1`, built on distroless nonroot for
 `linux/amd64` only; see [platform support](../../explanation/known-limitations/#platform-support)
 for the rest of the artifact matrix. Its
-entrypoint is `/usr/local/bin/breg`, its default arguments are `--config /etc/breg/runtime.yaml`,
+entrypoint is `/usr/local/bin/breg`, its default arguments are `--runtime-config /etc/breg/runtime.yaml`,
 and it exposes port 8080. The image carries no shell, no writable directory, no healthcheck
 subcommand, and no `bregctl`: the audit journal lives in PostgreSQL, the runtime configuration and
 the files it names are mounted read-only under `/etc/breg`, and the orchestrator probes
@@ -397,6 +397,12 @@ runtime file's `identity.databaseInitializationEnvironment` is `local`, and `bre
     RuntimeFieldEncryptionUnavailable; crates/registry-breg/src/api/mod.rs,
     field_encryption_refusal(); crates/registry-breg/src/startup.rs, FieldEncryptionCustody;
     crates/registry-bregctl/src/doctor.rs, startup_diagnostic(). */}
+
+`issuer` must be an `https` URL without credentials or fragment; plain `http` is accepted only on
+an IPv4 loopback host, for local development. `audience` is at most 512 characters. `jwksSource`
+takes one of three kinds: `discovery` (the default) reads the key set location from the issuer's
+discovery document, `uri` names it directly with a `uri` member under the same URL rule, and
+`static` pins a document through `documentRef`.
 
 `leewayMilliseconds` must be a whole number of seconds and at most 300000. Static keys load at
 startup; rotate them through a configuration change and restart:
@@ -713,7 +719,7 @@ fingerprint. Confirm the configuration before starting the process:
 ```sh
 bregctl verify --runtime-config /etc/breg/runtime.yaml
 bregctl doctor --runtime-config /etc/breg/runtime.yaml
-breg --config /etc/breg/runtime.yaml
+breg --runtime-config /etc/breg/runtime.yaml
 ```
 
 `verify` opens no runtime dependency. It proves that the configured package verifies against the

@@ -529,6 +529,7 @@ class CiChangesTest(unittest.TestCase):
     def test_config_conformance_inputs_select_the_conformance_gate(self) -> None:
         for path in (
             "crates/registry-platform-config/src/blocks.rs",
+            "crates/registry-breg/src/runtime_config.rs",
             "crates/registry-relay-v2/src/contract.rs",
             "crates/registry-relayctl/schemas/authoring/runtime.schema.json",
             "crates/registry-render/src/manifest.rs",
@@ -537,6 +538,7 @@ class CiChangesTest(unittest.TestCase):
             "crates/registry-scheduling/src/config.rs",
             "products/platform/generated/runtime-config-blocks.schema.json",
             "products/platform/scripts/check-config-conformance.py",
+            "products/breg/generated/runtime/runtime.schema.json",
             "products/scheduling/generated/runtime/runtime.schema.json",
         ):
             with self.subTest(path=path):

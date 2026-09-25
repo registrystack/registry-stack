@@ -121,7 +121,7 @@ mod tests {
         let catalog = catalog();
         let breg = find_command(&catalog.binaries, "breg");
         assert!(breg.options.iter().any(|option| {
-            option.display == "--config <ABSOLUTE_FILE>" && option.always_required
+            option.display == "--runtime-config <ABSOLUTE_FILE>" && option.always_required
         }));
         let generate = find_command(&catalog.binaries, "bregctl generate");
         assert!(generate.arguments.iter().any(|argument| {

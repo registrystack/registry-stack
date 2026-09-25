@@ -86,7 +86,7 @@ def main() -> None:
         return len(args.requests.read_text().splitlines()) if args.requests.exists() else 0
 
     with (output / "server.log").open("wb") as log:
-        server = subprocess.Popen([str(args.breg), "--config", str(active_runtime)], stdout=log, stderr=log)
+        server = subprocess.Popen([str(args.breg), "--runtime-config", str(active_runtime)], stdout=log, stderr=log)
         try:
             deadline = time.monotonic() + 20
             while True:

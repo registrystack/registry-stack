@@ -481,6 +481,11 @@ mod tests {
                 "/",
             ),
             (
+                RuntimeConfigError::SubstitutionInReference,
+                "startup.runtime_config.substitution_in_reference",
+                "/",
+            ),
+            (
                 RuntimeConfigError::Document,
                 "startup.runtime_config.document",
                 "/",
