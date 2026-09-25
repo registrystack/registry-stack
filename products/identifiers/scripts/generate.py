@@ -25,7 +25,7 @@ GENERATED_AUDIT_SCHEMA = (
     / "artifacts"
     / "registry-relay"
     / "audit-event"
-    / "v2alpha1.json"
+    / "v2alpha2.json"
 )
 REFERENCE_URI_RE = re.compile(
     r"https://id\.registrystack\.org/[^\s<>{}\"'`\\]+"
@@ -708,7 +708,7 @@ def main() -> None:
         print("Registry Stack identifier reference closure is complete.")
         return
     with tempfile.TemporaryDirectory(prefix="registry-identifiers-") as temp:
-        generated_audit_schema = Path(temp) / "audit-event.v2alpha1.json"
+        generated_audit_schema = Path(temp) / "audit-event.v2alpha2.json"
         generate_audit_schema(REPO_ROOT, generated_audit_schema)
         if args.write:
             GENERATED_AUDIT_SCHEMA.parent.mkdir(parents=True, exist_ok=True)
