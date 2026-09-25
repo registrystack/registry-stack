@@ -125,23 +125,23 @@ fn package_root_is_absolute_and_the_pin_is_a_sha256_label() {
         expected_digest: Some(digest.clone()),
     };
     package.check().expect("valid package");
-    package.verify_digest(Some(&digest)).expect("matches");
+    package.verify_digest(&digest).expect("matches");
 
-    let mismatch = package
-        .verify_digest(Some("sha256:other"))
-        .expect_err("mismatch");
-    assert!(mismatch.to_string().contains("package.expectedDigest"));
-    assert!(mismatch
-        .to_string()
-        .contains("deploy the pinned package or update package.expectedDigest"));
-    let missing = package.verify_digest(None).expect_err("no identity");
-    assert!(missing.to_string().contains("carries no identity"));
+    let other = format!("sha256:{}", "b".repeat(64));
+    let mismatch = package.verify_digest(&other).expect_err("mismatch");
+    assert_eq!(
+        mismatch.to_string(),
+        format!(
+            "package.expectedDigest is {digest} but the package at package.root is {other}; \
+             deploy the pinned package or update package.expectedDigest"
+        )
+    );
 
     PackageConfig {
         root: PathBuf::from("/srv/package"),
         expected_digest: None,
     }
-    .verify_digest(None)
+    .verify_digest(&other)
     .expect("no pin, no check");
 
     let error = PackageConfig {

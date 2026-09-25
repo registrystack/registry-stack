@@ -69,6 +69,41 @@ change it.
   IP address host, and for private listeners the declared TLS termination and
   network exposure.
 
+## Package
+
+`package` is the one package format every runtime serves from
+`package.root`. A product's `package` command either writes its files from
+memory with `write_package`, or populates a new directory itself and calls
+`write_sum_file`; `plan_package` reports the digest a package would have
+without writing it. The package carries `SHA256SUMS` at the root: one line per
+file in the `sha256sum` text format, sorted by path, LF line endings, listing
+every file but itself. An optional `REVISION` file holds one free-text line
+(at most 256 bytes) and is listed and hashed like every other file. The
+package digest is the `sha256:` label of the `SHA256SUMS` bytes, and is what
+`package.expectedDigest` pins. The same files and revision always give the
+same digest, and `sha256sum -c SHA256SUMS` checks a package by hand.
+
+At startup `PackageConfig::verify_package` recomputes every digest and
+refuses, in one message naming each file and the command that rebuilds the
+package:
+
+- a changed, missing, or extra file, including a hidden file and an empty
+  directory;
+- a missing or malformed `SHA256SUMS`, by line;
+- a symbolic link or special file anywhere in the package, or a `package.root`
+  that is a link;
+- a path with a backslash or control character, or two paths that differ only
+  in letter case;
+- a package over its file count, per-file, total, depth, or path-length bound;
+- a package whose digest is not `package.expectedDigest`, showing both
+  digests in the `PackageDigestMismatch` shape every runtime shares.
+
+Only file bytes are hashed. Modes, owners, and timestamps are not, because
+copies, source control, and image layers do not preserve them the same way on
+every platform, and hashing them would give one package several digests.
+Line endings are not normalized. `is_envelope_file` names `SHA256SUMS` and
+`REVISION` so a product loader that enumerates its package can skip them.
+
 With the `schema` feature, the `shared-blocks-schema` example writes the
 canonical JSON Schema of these blocks to
 `products/platform/generated/runtime-config-blocks.schema.json`:

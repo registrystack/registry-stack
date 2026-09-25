@@ -505,7 +505,7 @@ impl DeploymentInputs {
         if runtime
             .config
             .package
-            .verify_digest(Some(bundle.revision()))
+            .verify_digest(bundle.revision())
             .is_err()
         {
             return Err(invalid_artifact(

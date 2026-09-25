@@ -260,7 +260,7 @@ pub fn verify_package(runtime: &RenderRuntime, bundle_hash: &str) -> Result<(), 
     let found = format!("sha256:{bundle_hash}");
     runtime
         .package
-        .verify_digest(Some(&found))
+        .verify_digest(&found)
         .map_err(|error| invalid(error.to_string()))
 }
 
