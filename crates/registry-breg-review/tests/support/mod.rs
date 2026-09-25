@@ -99,6 +99,10 @@ pub struct MockRegistry {
     /// Whether the registry refuses every bearer token, as it does once a
     /// person's access token is revoked.
     refusing_tokens: Mutex<bool>,
+    /// An address whose reader the next submit conflict this registry
+    /// answers also withdraws, taking effect strictly after that submit's
+    /// own read of the draft.
+    withdraw_reader_on_next_conflict: Mutex<Option<&'static str>>,
 }
 
 impl MockRegistry {
@@ -144,6 +148,7 @@ impl MockRegistry {
             replays: Mutex::new(HashMap::new()),
             bearers: Mutex::new(Vec::new()),
             refusing_tokens: Mutex::new(false),
+            withdraw_reader_on_next_conflict: Mutex::new(None),
         }
     }
 
@@ -169,6 +174,26 @@ impl MockRegistry {
             .get_mut(address)
             .unwrap()
             .reader = None;
+    }
+
+    /// The steward withdraws the self-service link behind `address`, but not
+    /// until the next submit this registry answers with a conflict: that
+    /// submit's own read of the draft still sees the reader in place, so a
+    /// caller can prove a conflict re-render reads again rather than reusing
+    /// what that read returned.
+    pub fn withdraw_reader_on_next_conflict(&self, address: &'static str) {
+        *self.withdraw_reader_on_next_conflict.lock().unwrap() = Some(address);
+    }
+
+    fn apply_deferred_withdrawal(&self) {
+        if let Some(address) = self.withdraw_reader_on_next_conflict.lock().unwrap().take() {
+            self.addresses
+                .lock()
+                .unwrap()
+                .get_mut(address)
+                .unwrap()
+                .reader = None;
+        }
     }
 
     pub fn submitted(&self, request: &str) -> bool {
@@ -640,9 +665,11 @@ async fn submit_draft(
         return problem(BRegProblemCode::IdempotencyConflict);
     }
     if if_match != action_etag(draft.action_generation) {
+        registry.apply_deferred_withdrawal();
         return problem(BRegProblemCode::PreconditionFailed);
     }
     if draft.submitted {
+        registry.apply_deferred_withdrawal();
         return problem(BRegProblemCode::MutationConflict);
     }
     draft.submitted = true;

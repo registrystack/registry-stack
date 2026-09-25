@@ -199,6 +199,36 @@ async fn t5_stale_if_match_after_agent_patch_rerenders_and_asks_again() {
 }
 
 #[tokio::test]
+async fn a_conflicted_submit_rerenders_from_a_fresh_read_not_the_stale_one() {
+    let harness = Harness::start().await;
+    let (cookie, page) = harness.review().await;
+    let csrf = page.input("csrf").unwrap();
+    let view = page.input("view").unwrap();
+
+    // Between the page's load and this submit, the draft changed (so the
+    // submit conflicts), and the moment it conflicts the target address
+    // stops being readable too. The submit's own read at the top of the
+    // POST still sees the address; only a fresh read after the conflict
+    // would see it gone.
+    harness.environment.registry.agent_patch();
+    harness
+        .environment
+        .registry
+        .withdraw_reader_on_next_conflict(ADDRESS_A);
+
+    let stale = harness
+        .post(
+            &submit_path(),
+            Some(&cookie),
+            &[("csrf", &csrf), ("view", &view)],
+        )
+        .await;
+
+    assert_eq!(stale.status, StatusCode::NOT_FOUND, "{}", stale.body);
+    assert_eq!(stale.error_code(), Some("not-found"));
+}
+
+#[tokio::test]
 async fn t4_cross_citizen_read_and_submit_give_not_found() {
     let harness = Harness::start().await;
     let (owner_cookie, owner_page) = harness.review().await;

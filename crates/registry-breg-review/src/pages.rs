@@ -336,12 +336,27 @@ pub(crate) async fn submit(
                 {
                     return response;
                 }
+                // The draft changed between the read at the top of this POST
+                // and the registry's refusal, so the review loaded then is
+                // stale. Reloading now renders the confirmation the person
+                // would actually be agreeing to, instead of one that has
+                // already changed and would only conflict again.
+                let fresh =
+                    match registry::load(&caller.session.registry, &profile(&app), &request_id)
+                        .await
+                    {
+                        Ok(fresh) => fresh,
+                        Err(refusal) => {
+                            return refused(&app, &caller, Action::Submit, &request_id, refusal)
+                                .await
+                        }
+                    };
                 render(
                     &app,
                     Action::Submit,
                     &caller,
                     &request_id,
-                    review,
+                    fresh,
                     StatusCode::CONFLICT,
                 )
             }
