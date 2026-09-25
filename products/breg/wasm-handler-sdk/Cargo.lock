@@ -2763,6 +2763,7 @@ dependencies = [
  "registry-evidence-verifier",
  "registry-manifest-core",
  "registry-platform-canonical-json",
+ "registry-platform-config",
  "registry-platform-hooks",
  "registry-platform-script",
  "rhai",
@@ -2859,6 +2860,22 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "registry-platform-config"
+version = "0.34.0"
+dependencies = [
+ "registry-platform-canonical-json",
+ "rustix 1.1.5",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "serde_path_to_error",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "url",
+ "zeroize",
 ]
 
 [[package]]

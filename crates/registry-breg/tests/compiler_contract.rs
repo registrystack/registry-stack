@@ -3411,6 +3411,46 @@ registry:
 }
 
 #[test]
+fn an_authored_project_carrying_an_environment_expression_is_refused() {
+    let failure = parse_project_yaml(
+        br#"
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: neutral
+  version: "1"
+  defaultLanguage: en
+  canonicalBaseIri: ${AUTHORED_BASE_IRI}
+entities:
+  - id: case
+    title: "Case ${AUTHORED_TITLE:-default}"
+"#,
+    )
+    .expect_err("an environment expression in an authored project is refused");
+    let diagnostic = &failure.diagnostics()[0];
+    assert_eq!(diagnostic.code, "source.environment_expression");
+    assert_eq!(diagnostic.path, "project.registry.canonicalBaseIri");
+    assert!(diagnostic.message.contains("runtime.yaml"));
+    assert!(!diagnostic.message.contains("AUTHORED_BASE_IRI"));
+
+    let module = parse_module_yaml(
+        br#"
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryModule
+entities:
+  - id: case
+    fields:
+      - id: label
+        description: ${AUTHORED_DESCRIPTION}
+"#,
+    )
+    .expect_err("an environment expression in an authored module is refused");
+    let diagnostic = &module.diagnostics()[0];
+    assert_eq!(diagnostic.code, "source.environment_expression");
+    assert_eq!(diagnostic.path, "module.entities[0].fields[0].description");
+}
+
+#[test]
 fn source_parse_diagnostics_name_the_member_the_alternatives_and_the_location() {
     let unknown_yaml_member = parse_project_yaml(
         br#"

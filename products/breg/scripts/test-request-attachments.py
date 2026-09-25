@@ -200,7 +200,7 @@ def test_request_attachment_journey() -> None:
             runtime = str(temporary / "verified-runtime.json")
             Path(runtime).write_text(json.dumps(configured), encoding="utf-8")
             configured_log = (temporary / "verified-runtime.log").open("wb")
-            configured_process = subprocess.Popen([str(binaries / "breg"), "--config", runtime],
+            configured_process = subprocess.Popen([str(binaries / "breg"), "--runtime-config", runtime],
                                                   env=environment, stdout=configured_log, stderr=subprocess.STDOUT)
             base = f"http://127.0.0.1:{configured_port}"
             deadline = time.monotonic() + 30

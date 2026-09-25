@@ -169,7 +169,7 @@ class GeneratedGateTests(unittest.TestCase):
             "apply.database_configuration.refused",
             "author refusal changed the production database state",
             "apply --runtime-config",
-            '"$breg" --config',
+            '"$breg" --runtime-config',
             "data validate",
             "data import",
             '"assetCode":"ASSET-PUBLIC-001"',

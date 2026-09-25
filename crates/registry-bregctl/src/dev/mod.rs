@@ -1489,7 +1489,7 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
         command(&mut verify, &root, "verify", None)?;
         children.breg = Some(service(
             &args.breg_bin,
-            &["--config"],
+            &["--runtime-config"],
             &root.join("runtime.yaml"),
             &root,
             "breg",

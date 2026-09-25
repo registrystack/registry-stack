@@ -96,6 +96,9 @@
   a `documentRef` written beside `kind: discovery` is refused.
 - BREAKING: `expand_config_env_vars` no longer repeats a `${VAR:?message}`
   message or an invalid variable name in its refusal.
+- BREAKING: remove `expand_config_env_vars`, `expand_config_env_vars_with`, and
+  `ConfigEnvExpansionError`. Every runtime reads `runtime.yaml` through
+  `RuntimeConfigLoader`, which substitutes `${VAR}` inside parsed string values.
 
 ## v0.34.0 - 2026-09-25
 

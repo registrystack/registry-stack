@@ -720,7 +720,7 @@ render_runtime_config "$temporary_root/runtime-server-v1.yaml" "$temporary_root/
   "$package_revision_v1" 1 60000 "secret:file/production-runtime-url" \
   "secret:file/production-migration-url" "$listener" \
   "asset-site-placement-acceptance-0.1.0"
-BREG_LOG=error "$breg" --config "$temporary_root/runtime-server-v1.yaml" >"$temporary_root/server-v1.log" 2>&1 &
+BREG_LOG=error "$breg" --runtime-config "$temporary_root/runtime-server-v1.yaml" >"$temporary_root/server-v1.log" 2>&1 &
 breg_pid=$!
 wait_ready_status "${server_url}ready" 200
 
@@ -939,7 +939,7 @@ render_runtime_config "$temporary_root/runtime-server-v2.yaml" "$temporary_root/
   "$package_revision_v2" 2 60000 "secret:file/production-runtime-url" \
   "secret:file/production-migration-url" "$listener" \
   "asset-site-placement-acceptance-0.1.0"
-BREG_LOG=error "$breg" --config "$temporary_root/runtime-server-v2.yaml" >"$temporary_root/server-v2.log" 2>&1 &
+BREG_LOG=error "$breg" --runtime-config "$temporary_root/runtime-server-v2.yaml" >"$temporary_root/server-v2.log" 2>&1 &
 breg_pid=$!
 wait_ready_status "${server_url}ready" 200
 
@@ -1114,7 +1114,7 @@ breg_pid=""
 render_runtime_config "$temporary_root/runtime-server-v3.yaml" "$temporary_root/build-v3/package" \
   "$package_revision_v3" 3 60000 "secret:file/production-runtime-url" \
   "secret:file/production-migration-url" "$listener" "asset-site-placement-acceptance-0.1.0"
-BREG_LOG=error "$breg" --config "$temporary_root/runtime-server-v3.yaml" >"$temporary_root/server-v3.log" 2>&1 &
+BREG_LOG=error "$breg" --runtime-config "$temporary_root/runtime-server-v3.yaml" >"$temporary_root/server-v3.log" 2>&1 &
 breg_pid=$!
 wait_ready_status "${server_url}ready" 200
 printf '%s\n' '{"operation":"create","data":{"assetCode":"ASSET-PUBLIC-002","label":"Reviewed field asset","assetClass":"equipment","maintenanceNote":"Synthetic maintenance note"}}' >"$temporary_root/assets-create-v3.jsonl"
