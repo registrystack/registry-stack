@@ -373,18 +373,6 @@ async fn a_stale_revision_or_a_closed_application_is_not_written() {
         )
         .await;
     assert_eq!(error_code(&stale), "stale-application");
-    // The one patch a stale update sends carries a precondition no revision
-    // meets, so it can only find out whether the registry holds its key.
-    let writes = fixture.writes();
-    assert_eq!(writes.len(), 1, "{writes:?}");
-    assert_ne!(
-        writes[0].if_match.as_deref(),
-        Some(crate::mock_registry::etag(1).as_str())
-    );
-    assert_eq!(
-        fixture.registry.applications()[&draft].data["newLocality"],
-        "Port Selene"
-    );
     let submitted = fixture.registry.add_application(
         json!({"address": ADDRESS_A, "newAddressLine": "5 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
         json!({"bregState": "submitted", "editable": false, "proposalVersion": 1,
@@ -399,37 +387,7 @@ async fn a_stale_revision_or_a_closed_application_is_not_written() {
         )
         .await;
     assert_eq!(error_code(&closed), "application-not-editable");
-    assert_eq!(fixture.writes().len(), 1);
-}
-
-/// A retry of an update the registry already applied finds the revision
-/// moved on. Its key is derived from the caller's own arguments, so the
-/// registry recognises it, and the retry is answered as applied.
-#[tokio::test]
-async fn a_retried_update_the_registry_already_applied_is_answered_as_applied() {
-    let fixture = Fixture::start().await;
-    let caller = fixture.caller(CITIZEN_A);
-    let draft = fixture.registry.add_application(
-        json!({"address": ADDRESS_A, "newAddressLine": "5 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
-        draft_request(),
-    );
-    let arguments = json!({"applicationId": draft.to_string(), "expectedRevision": "1",
-        "patch": [{"op": "replace", "path": "/newLocality", "value": "Old Town"}]});
-    let first = fixture
-        .call(&caller, UPDATE_APPLICATION, arguments.clone())
-        .await;
-    assert_eq!(first["application"]["revision"], "2", "{first}");
-    fixture
-        .registry
-        .fail_next(http::Method::PATCH, BRegProblemCode::IdempotencyConflict);
-    let retried = fixture.call(&caller, UPDATE_APPLICATION, arguments).await;
-    assert_eq!(retried["isError"], false, "{retried}");
-    assert_eq!(retried["application"]["revision"], "2");
-    assert_eq!(fixture.registry.applications()[&draft].revision, 2);
-    let writes = fixture.writes();
-    assert_eq!(writes.len(), 2, "{writes:?}");
-    assert_eq!(writes[0].idempotency_key, writes[1].idempotency_key);
-    assert_eq!(writes[0].body, writes[1].body);
+    assert!(fixture.writes().is_empty());
 }
 
 #[tokio::test]

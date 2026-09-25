@@ -254,12 +254,11 @@ async fn a_citizen_starts_again_after_cancelling_and_a_retry_reuses_the_draft() 
     fixture.finish().await;
 }
 
-/// An update whose answer was lost, retried with the same arguments, is
-/// answered as applied rather than stale, and applies nothing twice. A
-/// different edit from the same stale revision is still refused and never
-/// lands over the change that moved the application on.
+/// An update whose answer was lost, retried with the same arguments, applies
+/// nothing twice: the retry is refused as stale, and reading the status shows
+/// the change it asked for already in place.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_retried_update_is_applied_once_and_a_concurrent_edit_stays_stale() {
+async fn a_retried_update_is_refused_as_stale_and_applies_once() {
     let (listener, resource) = gateway_listener().await;
     let fixture = RealRegistry::start(&resource, None).await;
     fixture.seed_citizen("B-1", CITIZEN_B).await;
@@ -274,44 +273,25 @@ async fn a_retried_update_is_applied_once_and_a_concurrent_edit_stays_stale() {
     .await;
     assert_eq!(started.is_error, Some(false), "{started:?}");
     let application = gateway::structured(&started)["application"].clone();
-    let update = |locality: &str| {
+    let update = || {
         gateway::call(
             &client,
             "update_application",
             json!({"applicationId": application["applicationId"],
                 "expectedRevision": application["revision"],
-                "patch": [{"op": "replace", "path": "/newLocality", "value": locality}]}),
+                "patch": [{"op": "replace", "path": "/newLocality", "value": "Old Town"}]}),
         )
     };
-    let locality = |result: &rmcp::model::CallToolResult| {
-        gateway::structured(result)["registryData"]["fields"]
-            .as_array()
-            .and_then(|fields| {
-                fields
-                    .iter()
-                    .find(|field| field["name"] == "newLocality")
-                    .map(|field| field["value"].clone())
-            })
-            .expect("the locality is reported")
-    };
 
-    let first = update("Old Town").await;
+    let first = update().await;
     assert_eq!(first.is_error, Some(false), "{first:?}");
     let applied = gateway::structured(&first)["application"]["revision"].clone();
     assert_ne!(applied, application["revision"]);
 
     // The chat host never saw the first answer and sends the same call.
-    let retried = update("Old Town").await;
-    assert_eq!(retried.is_error, Some(false), "{retried:?}");
-    assert_eq!(
-        gateway::structured(&retried)["application"]["revision"],
-        applied
-    );
-    assert_eq!(locality(&retried), "Old Town");
+    let retried = update().await;
+    assert_eq!(gateway::error_code(&retried), "stale-application");
 
-    // Another edit from the revision the first update moved past is stale.
-    let concurrent = update("New Town").await;
-    assert_eq!(gateway::error_code(&concurrent), "stale-application");
     let status = gateway::call(
         &client,
         "get_application_status",
@@ -322,7 +302,16 @@ async fn a_retried_update_is_applied_once_and_a_concurrent_edit_stays_stale() {
         gateway::structured(&status)["application"]["revision"],
         applied
     );
-    assert_eq!(locality(&status), "Old Town");
+    let locality = gateway::structured(&status)["registryData"]["fields"]
+        .as_array()
+        .and_then(|fields| {
+            fields
+                .iter()
+                .find(|field| field["name"] == "newLocality")
+                .map(|field| field["value"].clone())
+        })
+        .expect("the locality is reported");
+    assert_eq!(locality, "Old Town");
     client.cancel().await.expect("client closes");
     fixture.finish().await;
 }

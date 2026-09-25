@@ -449,14 +449,11 @@ so its status stays `submitted` until the change is applied or the request close
 Writes carry an idempotency key derived from the citizen, the tool, and the arguments, so a
 retried call replays its first answer instead of creating a second draft. A `start_application`
 identical to one whose draft is still open returns that draft; after 32 closed identical
-applications it answers `not-permitted`. An `update_application` identical to one that already
-applied returns the draft as it now stands, even though its revision has moved on; any other update
-from an earlier revision answers `stale-application` and changes nothing.
+applications it answers `not-permitted`.
 
 {/* Evidence: crates/registry-breg-mcp/src/tools.rs, start_input_schema(), update_input_schema();
     crates/registry-breg-mcp/src/gateway.rs, application_summary(), REGISTRY_DATA_NOTICE;
     crates/registry-breg-mcp/src/server.rs, NeverSessionManager;
-    crates/registry-breg-mcp/src/gateway.rs, Gateway::update(), UNMATCHED_ETAG;
     crates/registry-breg-mcp/src/idempotency.rs; crates/registry-breg-mcp/README.md. */}
 
 ### Tool errors
@@ -470,7 +467,8 @@ the registry supplied one. Each code carries fixed text:
 - `not-found`: no application with that identifier is available to the citizen. An application that
   no longer names the citizen's own record answers the same way.
 - `application-not-editable`: the application can no longer be changed.
-- `stale-application`: the application changed since it was read.
+- `stale-application`: the application changed since it was read, possibly by an earlier call whose
+  answer was lost. Read its status before trying again.
 - `idempotency-conflict`: an earlier identical request is still being processed or differed. After
   request retention erases a closed application, an identical start answers this code; a start with
   any different value succeeds.

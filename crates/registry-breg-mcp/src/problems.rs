@@ -58,7 +58,8 @@ impl ToolErrorCode {
             Self::NotFound => "No application with that identifier is available to you.",
             Self::ApplicationNotEditable => "The application can no longer be changed here.",
             Self::StaleApplication => {
-                "The application changed since it was read. Read its status and try again."
+                "The application changed since it was read, possibly by an earlier call that \
+                 already applied. Read its status before trying again."
             }
             Self::IdempotencyConflict => {
                 "An earlier identical request is still being processed or differed. Try again."
