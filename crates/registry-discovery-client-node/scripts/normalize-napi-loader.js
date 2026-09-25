@@ -4,19 +4,21 @@ const { readFileSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 
 const loader = join(__dirname, '..', 'index.js');
-const generated = '  if (!wasiBindingLoaded && (!__napiWasiFlavorRequested || __napiWasiFlavor === "wasm32-wasi")) {';
-const normalized = '  if (!__napiWasiFlavorRequested || __napiWasiFlavor === "wasm32-wasi") {';
 const source = readFileSync(loader, 'utf8');
-const generatedCount = source.split(generated).length - 1;
-const normalizedCount = source.split(normalized).length - 1;
-const first = source.indexOf(generated);
+const generatedPattern = /^  if \(!wasiBindingLoaded && \(!__napiWasiFlavorRequested \|\| __napiWasiFlavor === (['"])wasm32-wasi\1\)\) \{$/gm;
+const normalizedPattern = /^  if \(!__napiWasiFlavorRequested \|\| __napiWasiFlavor === (['"])wasm32-wasi\1\) \{$/gm;
+const generatedGuards = [...source.matchAll(generatedPattern)];
+const normalizedGuards = [...source.matchAll(normalizedPattern)];
 
-if (generatedCount === 1 && normalizedCount === 1) {
+if (generatedGuards.length === 1 && normalizedGuards.length === 1) {
   process.exit(0);
 }
-if (generatedCount !== 2 || normalizedCount !== 0 || first < 0) {
+if (generatedGuards.length !== 2 || normalizedGuards.length !== 0) {
   throw new Error('the generated NAPI loader no longer contains the expected WASI guards');
 }
 
-const output = source.slice(0, first) + normalized + source.slice(first + generated.length);
+const [first] = generatedGuards;
+const quote = first[1];
+const normalized = `  if (!__napiWasiFlavorRequested || __napiWasiFlavor === ${quote}wasm32-wasi${quote}) {`;
+const output = source.slice(0, first.index) + normalized + source.slice(first.index + first[0].length);
 writeFileSync(loader, output, 'utf8');
