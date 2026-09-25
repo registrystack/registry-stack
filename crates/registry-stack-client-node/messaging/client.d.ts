@@ -100,6 +100,8 @@ export type MessagingProblemCode =
   | 'message.terminal'
   | 'operation.not-authorized'
   | 'profile.not-authorized'
+  | 'quota.exceeded'
+  | 'rate-limit.exceeded'
   | 'request.body-too-large'
   | 'request.invalid'
   | 'request.method-not-allowed'
@@ -120,6 +122,12 @@ export class MessagingClientError extends Error {
   readonly detail?: string
   readonly status?: SafeInteger
   readonly traceId?: string
+  /**
+   * Whole seconds a 429 limit refusal asked the caller to wait, from
+   * `Retry-After`, at most one day. Absent on every other failure; the
+   * client never waits or retries itself.
+   */
+  readonly retryAfterSeconds?: SafeInteger
   readonly transportKind?: string
   readonly protocolFailure?: MessagingProtocolFailure
 }

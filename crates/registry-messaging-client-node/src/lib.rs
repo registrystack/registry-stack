@@ -207,11 +207,13 @@ fn error_envelope(error: MessagingClientError) -> Value {
             status,
             code,
             trace_id,
+            retry_after_seconds,
         } => json!({
             "kind": "problem",
             "status": status,
             "code": code.code(),
             "traceId": trace_id,
+            "retryAfterSeconds": retry_after_seconds,
             "title": code.title(),
             "detail": code.detail(),
             "message": code.detail(),

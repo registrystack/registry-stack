@@ -54,7 +54,9 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   generates one or retries a submission or a cancellation. Message, template,
   and version names are checked by the Rust client before any request.
   Bindings add no Messaging semantics: the closed problem catalogue, message
-  view, receipt, and template preview come from the Rust client unchanged.
+  view, receipt, and template preview come from the Rust client unchanged. A
+  429 limit refusal carries the bounded `Retry-After` wait the Rust client
+  read; waiting and retrying stay the caller's decision.
 - Preserve strict duplicate-member rejection, bounded responses, product media
   types, trace/Problem validation, and value-free errors. Bindings must not
   expose URLs, headers, payloads, selectors, credentials, or transport chains

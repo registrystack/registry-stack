@@ -9,4 +9,8 @@ Every message operation accepts a bearer token for that call; `health` and
 sent. `cancel` takes a message identifier and `preview` a template identifier,
 version, and `{ locale, data }` request; each refuses a malformed name before a
 request is sent. The binding does not retain credentials, never invents an
-idempotency key, and never retries a submission or a cancellation.
+idempotency key, and never retries a submission or a cancellation. A
+submission over its access profile's request rate or daily limit fails with
+`rate-limit.exceeded` or `quota.exceeded` and status 429, and
+`retryAfterSeconds` carries the wait the runtime asked for, at most one day;
+it is absent on every other failure.

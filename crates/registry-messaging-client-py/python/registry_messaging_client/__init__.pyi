@@ -147,6 +147,8 @@ MessagingProblemCode: TypeAlias = Literal[
     "message.terminal",
     "operation.not-authorized",
     "profile.not-authorized",
+    "quota.exceeded",
+    "rate-limit.exceeded",
     "request.body-too-large",
     "request.invalid",
     "request.method-not-allowed",
@@ -170,6 +172,10 @@ class MessagingClientError(Exception):
     detail: str | None
     status: int | None
     trace_id: str | None
+    # Whole seconds a 429 limit refusal asked the caller to wait, from
+    # Retry-After, at most one day; None on every other failure. The client
+    # never waits or retries itself.
+    retry_after_seconds: int | None
     transport_kind: str | None
     protocol_failure: MessagingProtocolFailure | None
 

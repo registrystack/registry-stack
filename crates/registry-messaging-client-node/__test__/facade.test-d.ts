@@ -65,6 +65,15 @@ void recover
 const known: MessagingProblemCode = 'idempotency.key-reused'
 void known
 
+const limits: ReadonlyArray<MessagingProblemCode> = ['rate-limit.exceeded', 'quota.exceeded']
+void limits
+
+function waitFor(error: MessagingClientError): number | undefined {
+  if (error.kind === 'problem' && error.status === 429) return error.retryAfterSeconds
+  return undefined
+}
+void waitFor
+
 // @ts-expect-error the recipient is one email address or one phone number
 const neither: SubmitMessageRequest = { senderProfile: 'reminders-sms', to: {}, content: { text: 'x' } }
 void neither

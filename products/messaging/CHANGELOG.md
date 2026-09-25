@@ -137,4 +137,5 @@
   through the `messaging` namespace of `@registrystack/client` and
   `registry-stack-client` from Registry Stack v0.35.0, and hold its Node.js
   and Python bindings to the dependency-direction and vendor-neutrality
-  gates.
+  gates. A `rate-limit.exceeded` or `quota.exceeded` refusal carries the
+  bounded `Retry-After` wait, at most one day, in all three languages.

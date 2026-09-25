@@ -41,6 +41,10 @@ client's camel-case wire DTOs inside a
 `MessagingClientError` preserves the problem code, its pinned title and
 detail, the status, and trace context, so a caller handles a reused or
 expired idempotency key, a cancellation that lost the race to dispatch, and a
-template refusal explicitly.
+template refusal explicitly. A submission over its access profile's request
+rate or daily limit answers `rate-limit.exceeded` or `quota.exceeded` with
+status 429, and `retry_after_seconds` carries the wait the runtime asked for,
+at most one day; it is `None` on every other failure. The client never waits
+or retries.
 
 This crate is private and does not publish a standalone Python distribution.

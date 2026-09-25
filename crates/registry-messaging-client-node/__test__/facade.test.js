@@ -57,9 +57,10 @@ async function serve(context, answer) {
     request.on('data', (chunk) => { body += chunk; });
     request.on('end', () => {
       requests.push({ method: request.method, path: request.url, headers: request.headers, body });
-      const { status, contentType, document } = answer(request);
+      const { status, contentType, document, retryAfter } = answer(request);
       const headers = { traceparent: TRACEPARENT };
       if (contentType) headers['content-type'] = contentType;
+      if (retryAfter !== undefined) headers['retry-after'] = retryAfter;
       response.writeHead(status, headers);
       response.end(document === undefined ? '' : JSON.stringify(document));
     });
@@ -330,12 +331,15 @@ test('a template refusal is the mapped problem', async (context) => {
 });
 
 test('a reused idempotency key is the mapped problem with its pinned detail', async (context) => {
-  const { baseUrl } = await serve(context, () => problem(
-    'idempotency.key-reused',
-    409,
-    'Idempotency key reused',
-    'This idempotency key was used for a different request.',
-  ));
+  const { baseUrl } = await serve(context, () => ({
+    ...problem(
+      'idempotency.key-reused',
+      409,
+      'Idempotency key reused',
+      'This idempotency key was used for a different request.',
+    ),
+    retryAfter: '5',
+  }));
   const { MessagingClient, MessagingClientError } = require('../client');
   const client = new MessagingClient({ baseUrl });
 
@@ -348,9 +352,35 @@ test('a reused idempotency key is the mapped problem with its pinned detail', as
     assert.equal(error.detail, 'This idempotency key was used for a different request.');
     assert.equal(error.message, error.detail);
     assert.equal(error.traceId, TRACE_ID);
+    assert.equal(error.retryAfterSeconds, undefined);
     return true;
   });
 });
+
+for (const [code, title, retryAfter, seconds] of [
+  ['rate-limit.exceeded', 'Request rate exceeded', '2', 2],
+  ['quota.exceeded', 'Daily limit reached', '3600', 3600],
+]) {
+  test(`a submission refused with ${code} is the mapped limit with its wait`, async (context) => {
+    const { baseUrl } = await serve(context, () => ({
+      ...problem(code, 429, title, 'Try again after the time in Retry-After.'),
+      retryAfter,
+    }));
+    const { MessagingClient, MessagingClientError } = require('../client');
+    const client = new MessagingClient({ baseUrl });
+
+    await assert.rejects(client.submit('one-call-secret', 'key-1', SUBMISSION), (error) => {
+      assert.ok(error instanceof MessagingClientError);
+      assert.equal(error.kind, 'problem');
+      assert.equal(error.status, 429);
+      assert.equal(error.code, code);
+      assert.equal(error.retryAfterSeconds, seconds);
+      assert.equal(error.traceId, TRACE_ID);
+      assert.ok(!JSON.stringify({ ...error, message: error.message }).includes('one-call-secret'));
+      return true;
+    });
+  });
+}
 
 test('a message the caller may not see is the mapped not-visible problem', async (context) => {
   const { baseUrl } = await serve(context, () => problem(

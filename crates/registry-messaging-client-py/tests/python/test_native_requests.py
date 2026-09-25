@@ -17,6 +17,8 @@ MESSAGE_ID = "0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d"
 HIDDEN_ID = "00000000-0000-4000-8000-000000000404"
 RACED_ID = "00000000-0000-4000-8000-000000000409"
 REUSED_KEY = "reused-key"
+RATE_LIMITED_KEY = "rate-limited-key"
+QUOTA_KEY = "over-quota-key"
 PROBLEM_BASE = "https://id.registrystack.org/problems/registry-messaging/"
 LINKS = {
     "self": f"/v1/messages/{MESSAGE_ID}",
@@ -149,6 +151,25 @@ class _Handler(BaseHTTPRequestHandler):
                 409,
                 "Idempotency key reused",
                 "This idempotency key was used for a different request.",
+                retry_after="5",
+            )
+            return
+        if self.headers.get("idempotency-key") == RATE_LIMITED_KEY:
+            self.respond_problem(
+                "rate-limit.exceeded",
+                429,
+                "Request rate exceeded",
+                "Try again after the time in Retry-After.",
+                retry_after="2",
+            )
+            return
+        if self.headers.get("idempotency-key") == QUOTA_KEY:
+            self.respond_problem(
+                "quota.exceeded",
+                429,
+                "Daily limit reached",
+                "Try again after the time in Retry-After.",
+                retry_after="3600",
             )
             return
         self.respond(202, {"id": MESSAGE_ID, "status": "queued", "links": LINKS})
@@ -162,7 +183,9 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def respond_problem(self, code: str, status: int, title: str, detail: str) -> None:
+    def respond_problem(
+        self, code: str, status: int, title: str, detail: str, retry_after: str | None = None
+    ) -> None:
         payload = json.dumps({
             "type": PROBLEM_BASE + code.replace(".", "/"),
             "title": title,
@@ -174,6 +197,8 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("content-type", "application/problem+json")
         self.send_header("traceparent", TRACEPARENT)
+        if retry_after is not None:
+            self.send_header("retry-after", retry_after)
         self.send_header("content-length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
@@ -265,10 +290,35 @@ class NativeRequestTests(unittest.TestCase):
         self.assertEqual(error.detail, "This idempotency key was used for a different request.")
         self.assertEqual(str(error), error.detail)
         self.assertEqual(error.trace_id, TRACE_ID)
+        self.assertIsNone(error.retry_after_seconds)
         self.assertIsNone(error.protocol_failure)
         self.assertIsNone(error.transport_kind)
         rendered = "\n".join((str(error), repr(error), repr(vars(error))))
         self.assertNotIn("canary", rendered)
+
+    def test_a_submission_over_the_request_rate_is_the_mapped_limit_with_its_wait(self) -> None:
+        with self.assertRaises(MessagingClientError) as raised:
+            self.client.submit("answered-token-canary", RATE_LIMITED_KEY, SUBMISSION)
+
+        error = raised.exception
+        self.assertEqual(error.kind, "problem")
+        self.assertEqual(error.status, 429)
+        self.assertEqual(error.code, "rate-limit.exceeded")
+        self.assertEqual(error.retry_after_seconds, 2)
+        self.assertEqual(error.trace_id, TRACE_ID)
+        rendered = "\n".join((str(error), repr(error), repr(vars(error))))
+        self.assertNotIn("canary", rendered)
+
+    def test_a_submission_over_the_daily_limit_is_the_mapped_quota_with_its_wait(self) -> None:
+        with self.assertRaises(MessagingClientError) as raised:
+            self.client.submit("one-call-token", QUOTA_KEY, SUBMISSION)
+
+        error = raised.exception
+        self.assertEqual(error.kind, "problem")
+        self.assertEqual(error.status, 429)
+        self.assertEqual(error.code, "quota.exceeded")
+        self.assertEqual(error.retry_after_seconds, 3600)
+        self.assertEqual(error.trace_id, TRACE_ID)
 
     def test_invisible_message_is_the_mapped_not_visible_problem(self) -> None:
         with self.assertRaises(MessagingClientError) as raised:

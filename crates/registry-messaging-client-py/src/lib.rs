@@ -38,6 +38,7 @@ struct MappedError {
     detail: Option<&'static str>,
     status: Option<u16>,
     trace_id: Option<String>,
+    retry_after_seconds: Option<u64>,
     transport_kind: Option<String>,
     protocol_failure: Option<&'static str>,
 }
@@ -62,6 +63,9 @@ fn to_py_err(py: Python<'_>, mapped: MappedError) -> PyErr {
         .expect("fresh exception accepts attributes");
     instance
         .setattr("trace_id", mapped.trace_id)
+        .expect("fresh exception accepts attributes");
+    instance
+        .setattr("retry_after_seconds", mapped.retry_after_seconds)
         .expect("fresh exception accepts attributes");
     instance
         .setattr("transport_kind", mapped.transport_kind)
@@ -105,6 +109,7 @@ fn client_error(py: Python<'_>, error: RustClientError) -> PyErr {
             status,
             code,
             trace_id,
+            retry_after_seconds,
         } => MappedError {
             kind: "problem",
             message: code.detail().to_owned(),
@@ -113,6 +118,7 @@ fn client_error(py: Python<'_>, error: RustClientError) -> PyErr {
             detail: Some(code.detail()),
             status: Some(status),
             trace_id,
+            retry_after_seconds,
             ..MappedError::default()
         },
         RustClientError::Protocol {

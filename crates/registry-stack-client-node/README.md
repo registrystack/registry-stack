@@ -131,7 +131,10 @@ withdraws a message that has not been dispatched and answers its view; a
 cancellation that lost the race to dispatch or to a final state answers
 `message.dispatch-started` or `message.terminal` and is never retried.
 `preview` renders one template version for a locale and data and sends
-nothing.
+nothing. A submission over its access profile's request rate or daily limit
+fails with `rate-limit.exceeded` or `quota.exceeded` and status 429;
+`retryAfterSeconds` carries the wait the runtime asked for, at most one day,
+and the client never waits or retries on its own.
 
 ## Documentation
 
