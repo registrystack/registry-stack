@@ -95,7 +95,6 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_registry_extensibility \
     --test postgres_action_handlers \
     --test postgres_request_activation \
-    --test postgres_audit_tooling \
     --test postgres_field_encryption \
     --test postgres_package \
     --test postgres_migration \

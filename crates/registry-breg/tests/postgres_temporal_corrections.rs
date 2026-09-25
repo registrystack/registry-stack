@@ -17,6 +17,7 @@ use registry_breg::api::{
     router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
     VerifiedRequestClaims,
 };
+use registry_breg::audit::RegistryAudit;
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
@@ -79,8 +80,10 @@ async fn real_postgres_temporal_correction_batches_validate_only_completed_inter
         .build_pool()
         .expect("bounded runtime pool builds");
     let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("registry lock key is valid");
-    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x58; 32].into())
-        .expect("test audit profile is keyed");
+    let audit_profile = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x58; 32].into())
+            .expect("test audit profile is keyed"),
+    );
     let app = mutation_router(
         pool.clone(),
         registry.clone(),
@@ -314,7 +317,7 @@ fn mutation_router(
     registry: Arc<registry_breg::CompiledRegistry>,
     identity: registry_breg::postgres::ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
-    profile: AuditProfile,
+    profile: RegistryAudit,
     fault: Option<MutationFaultPoint>,
 ) -> axum::Router {
     let cursors = Arc::new(
@@ -757,7 +760,6 @@ async fn effect_counts(database: &TestDatabase, table: &str) -> EffectCounts {
                    (SELECT count(*) FROM registry_data.{table}),
                    (SELECT count(*) FROM registry_internal.registry_revisions),
                    (SELECT count(*) FROM registry_internal.registry_outbox),
-                   (SELECT count(*) FROM registry_internal.registry_audit),
                    (SELECT count(*) FROM registry_internal.registry_idempotency),
                    (SELECT count(*) FROM registry_internal.registry_revision_commits),
                    (SELECT count(*) FROM registry_internal.registry_revision_commit_members)"
@@ -770,10 +772,10 @@ async fn effect_counts(database: &TestDatabase, table: &str) -> EffectCounts {
         current: row.get(0),
         revisions: row.get(1),
         outbox: row.get(2),
-        audit: row.get(3),
-        idempotency: row.get(4),
-        commits: row.get(5),
-        commit_members: row.get(6),
+        audit: i64::try_from(database.audit_entries().len()).expect("audit count fits i64"),
+        idempotency: row.get(3),
+        commits: row.get(4),
+        commit_members: row.get(5),
     }
 }
 

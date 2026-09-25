@@ -145,8 +145,11 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
         .runtime_config
         .build_pool()
         .expect("bounded runtime pool builds");
-    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into())
-        .expect("test owns a strongly keyed audit profile");
+    let audit_profile = registry_breg::audit::test_support::capturing(
+        AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into())
+            .expect("test owns a strongly keyed audit profile"),
+    )
+    .0;
     let plan = MutationPlan::from_compiled(&compiled, "records.case.create")
         .expect("create plan retains the exact compiler delivery");
     let patch_plan = MutationPlan::from_compiled(&compiled, "records.case.patch")
@@ -1414,6 +1417,12 @@ impl DestinationFixture {
         &self,
         compiled: &registry_breg::CompiledRegistry,
     ) -> ActivatedEventDestinationRegistry {
+        let audit_path = self
+            .secret_root
+            .with_file_name("audit")
+            .join("audit.jsonl")
+            .display()
+            .to_string();
         let raw = format!(
             r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
 kind: BRegRuntimeConfig
@@ -1468,6 +1477,7 @@ authentication:
     purpose: registry_purpose
 audit:
   hashKeyRef: secret:file/audit-key
+  path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
   maxAgeSeconds: 300

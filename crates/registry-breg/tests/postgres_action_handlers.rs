@@ -267,7 +267,8 @@ fn configured_app(
     timeout: Option<Duration>,
 ) -> axum::Router {
     let pool = database.runtime_config.build_pool().unwrap();
-    let audit = AuditProfile::production_from_secret_bytes(vec![0x42; 32].into()).unwrap();
+    let audit =
+        database.audit(AuditProfile::production_from_secret_bytes(vec![0x42; 32].into()).unwrap());
     let lock = RegistryLockKey::derive(PACKAGE).unwrap();
     let cursors = Arc::new(
         CursorCodec::new(Zeroizing::new(vec![0x63; 32]), Duration::from_secs(300)).unwrap(),
@@ -477,11 +478,9 @@ async fn action_handlers_compute_refuse_retry_recover_and_preserve_compiled_auth
     assert!(refused.1["traceId"].is_string());
     assert!(problem_validator.is_valid(&refused.1), "{}", refused.1);
     assert_eq!(before, counts(&database, &registry).await);
-    let audit_phases = database.admin.query_one(
-        "SELECT count(*) FILTER (WHERE convert_from(envelope, 'UTF8') LIKE '%\"phase\":\"attempt\"%'), count(*) FILTER (WHERE convert_from(envelope, 'UTF8') LIKE '%\"phase\":\"refusal\"%'), count(*) FILTER (WHERE convert_from(envelope, 'UTF8') LIKE '%\"phase\":\"terminal\"%') FROM registry_internal.registry_audit", &[]).await.unwrap();
-    assert!(audit_phases.get::<_, i64>(0) >= 1);
-    assert!(audit_phases.get::<_, i64>(1) >= 1);
-    assert_eq!(audit_phases.get::<_, i64>(2), 0);
+    assert!(record_phase_count(&database, "attempt") >= 1);
+    assert!(record_phase_count(&database, "refusal") >= 1);
+    assert_eq!(record_phase_count(&database, "terminal"), 0);
     // A refused invocation did not durably consume the key.
     let accepted = call(simple, "refused-retry", input("0123456789012")).await;
     assert_eq!(accepted.0, StatusCode::OK, "{}", accepted.1);
@@ -1131,11 +1130,18 @@ async fn wasm_handler_declaration_fails_typed_and_statelessly_without_the_execut
     );
     assert!(!failed.1.to_string().contains("private-input-canary"));
     assert_eq!(before, counts(&database, &registry).await);
-    let audit_phases = database.admin.query_one(
-        "SELECT count(*) FILTER (WHERE convert_from(envelope, 'UTF8') LIKE '%\"phase\":\"attempt\"%'), count(*) FILTER (WHERE convert_from(envelope, 'UTF8') LIKE '%\"phase\":\"terminal\"%') FROM registry_internal.registry_audit", &[]).await.unwrap();
-    assert!(audit_phases.get::<_, i64>(0) >= 1);
-    assert_eq!(audit_phases.get::<_, i64>(1), 0);
+    assert!(record_phase_count(&database, "attempt") >= 1);
+    assert_eq!(record_phase_count(&database, "terminal"), 0);
     database.cleanup().await;
+}
+
+/// How many captured audit records carry one BReg record phase.
+fn record_phase_count(database: &TestDatabase, phase: &str) -> usize {
+    database
+        .audit_records()
+        .iter()
+        .filter(|record| record["phase"] == phase)
+        .count()
 }
 
 fn app_with_fault(
@@ -1185,7 +1191,7 @@ fn event_destinations(
             },
             "authorityClaims":{"principal":"registry_principal", "purpose":"purpose"}
         },
-        "audit":{"hashKeyRef":"secret:file/audit-key"},
+        "audit":{"hashKeyRef":"secret:file/audit-key","path":root.join("audit").join("audit.jsonl")},
         "cursor":{"secretRef":"secret:file/cursor-key", "maxAgeSeconds":300},
         "eventDestinations":{"person-events":{
             "origin":"https://consumer.example/", "path":"/events", "networkProfile":"productionHttps", "dnsFamily":"dualStackStrict",

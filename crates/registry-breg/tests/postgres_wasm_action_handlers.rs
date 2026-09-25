@@ -202,7 +202,8 @@ fn configured_app(
     // an install is refused.
     registry_breg::wasm_runtime::install_default().expect("the wasm runtime installs");
     let pool = database.runtime_config.build_pool().unwrap();
-    let audit = AuditProfile::production_from_secret_bytes(vec![0x42; 32].into()).unwrap();
+    let audit =
+        database.audit(AuditProfile::production_from_secret_bytes(vec![0x42; 32].into()).unwrap());
     let lock = RegistryLockKey::derive(PACKAGE).unwrap();
     let cursors = Arc::new(
         CursorCodec::new(Zeroizing::new(vec![0x63; 32]), Duration::from_secs(300)).unwrap(),
@@ -292,9 +293,17 @@ async fn counts(database: &TestDatabase, registry: &registry_breg::CompiledRegis
 }
 
 async fn audit_phases(database: &TestDatabase) -> (i64, i64, i64) {
-    let row = database.admin.query_one(
-        "SELECT count(*) FILTER (WHERE convert_from(envelope, 'UTF8') LIKE '%\"phase\":\"attempt\"%'), count(*) FILTER (WHERE convert_from(envelope, 'UTF8') LIKE '%\"phase\":\"refusal\"%'), count(*) FILTER (WHERE convert_from(envelope, 'UTF8') LIKE '%\"phase\":\"terminal\"%') FROM registry_internal.registry_audit", &[]).await.unwrap();
-    (row.get(0), row.get(1), row.get(2))
+    let records = database.audit_records();
+    let count = |phase: &str| {
+        i64::try_from(
+            records
+                .iter()
+                .filter(|record| record["phase"] == phase)
+                .count(),
+        )
+        .expect("audit count fits i64")
+    };
+    (count("attempt"), count("refusal"), count("terminal"))
 }
 
 fn q(value: &str) -> String {
@@ -611,7 +620,7 @@ fn event_destinations(
             },
             "authorityClaims":{"principal":"registry_principal", "purpose":"purpose"}
         },
-        "audit":{"hashKeyRef":"secret:file/audit-key"},
+        "audit":{"hashKeyRef":"secret:file/audit-key","path":root.join("audit").join("audit.jsonl")},
         "cursor":{"secretRef":"secret:file/cursor-key", "maxAgeSeconds":300},
         "eventDestinations":{"person-events":{
             "origin":"https://consumer.example/", "path":"/events", "networkProfile":"productionHttps", "dnsFamily":"dualStackStrict",

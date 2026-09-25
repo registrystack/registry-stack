@@ -198,10 +198,13 @@ Delivery is asynchronous, after commit, and at least once:
 - No global or per-record delivery order is promised. The record revision lets
   consumers detect stale or missing transitions.
 
-A durable, value-free attempt audit commits before network egress. A terminal
-audit and delivery-state transition commit together after the outcome. Audit
-failure prevents the send or terminal transition rather than creating an
-unaccounted delivery.
+A value-free attempt audit entry is accepted by the audit writer before
+network egress. The terminal audit entry is written inside the delivery-state
+transition's transaction, before that transaction commits. Audit failure
+prevents the send or rolls the terminal transition back rather than creating
+an unaccounted delivery. A commit that fails after an accepted entry leaves an
+entry for a transition that did not happen, and the delivery keeps its earlier
+state.
 
 The payload and the raw handler answer bytes are erased immediately after
 successful delivery. The delivered row retains the answer's digest, its
@@ -210,8 +213,8 @@ itself. Pending and dead-letter payloads have a deployment-selectable
 retention period capped at 30 days. After expiry, replay is impossible.
 Digests and value-free operational metadata follow the normal audit
 retention policy. Audit and operational logs contain no projected values,
-raw record ids, destination URLs, or secrets. Payload erasure and its
-terminal audit record commit atomically.
+raw record ids, destination URLs, or secrets. Payload erasure commits only
+after its terminal audit entry is accepted.
 
 The public record API exposes no outbox, payload, delivery, or replay route.
 

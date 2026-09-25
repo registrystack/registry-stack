@@ -276,6 +276,11 @@ fn runtime_source(
     database: &TestDatabase,
     idp: &MockIdp,
 ) -> String {
+    let audit_path = root
+        .with_file_name("audit")
+        .join("audit.jsonl")
+        .display()
+        .to_string();
     format!(
         r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
 kind: BRegRuntimeConfig
@@ -325,7 +330,7 @@ authentication:
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose
-audit: {{hashKeyRef: secret:file/audit-key}}
+audit: {{hashKeyRef: secret:file/audit-key, path: {audit_path}}}
 cursor: {{secretRef: secret:file/cursor-key, maxAgeSeconds: 300}}
 wasmExecution:
   backend: pulley

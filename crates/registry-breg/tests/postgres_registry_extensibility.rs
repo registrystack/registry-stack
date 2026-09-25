@@ -464,8 +464,11 @@ fn build_app(
         .build_pool()
         .expect("bounded runtime pool");
     let lock_key = RegistryLockKey::derive(REGISTRY_ID).expect("registry lock key");
-    let audit = AuditProfile::production_from_secret_bytes(vec![0x61; 32].into())
-        .expect("keyed test audit");
+    let audit = registry_breg::audit::test_support::capturing(
+        AuditProfile::production_from_secret_bytes(vec![0x61; 32].into())
+            .expect("keyed test audit"),
+    )
+    .0;
     let cursors = Arc::new(
         CursorCodec::new(Zeroizing::new(vec![0x43; 32]), Duration::from_secs(300))
             .expect("test cursor codec"),
@@ -570,7 +573,7 @@ fn event_destinations(
             },
             "authorityClaims":{"principal":"registry_principal", "purpose":"purpose"}
         },
-        "audit":{"hashKeyRef":"secret:file/audit-key"},
+        "audit":{"hashKeyRef":"secret:file/audit-key","path":root.join("audit").join("audit.jsonl")},
         "cursor":{"secretRef":"secret:file/cursor-key", "maxAgeSeconds":300},
         "eventDestinations":{"facility-events":{
             "origin":"https://consumer.example/", "path":"/events", "networkProfile":"productionHttps", "dnsFamily":"dualStackStrict",

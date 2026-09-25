@@ -529,6 +529,7 @@ authentication:
     purpose: registry_purpose
 audit:
   hashKeyRef: secret:file/audit-key
+  path: $temporary_root/audit/audit.jsonl
 cursor:
   secretRef: secret:file/cursor-key
   maxAgeSeconds: 300

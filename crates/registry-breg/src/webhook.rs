@@ -22,7 +22,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use registry_platform_audit::AuditProfile;
 use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields};
 use registry_platform_hooks::delivery::{
     DeliveryAuditDisposition, DeliveryAuditOutcome, DeliveryAuditPhase, DeliveryAuditRecord,
@@ -43,7 +42,7 @@ use tokio_postgres::Transaction;
 use uuid::Uuid;
 
 use crate::audit::{
-    append_webhook_audit, WebhookAudit, WebhookAuditDisposition, WebhookAuditOutcome,
+    webhook_entry, RegistryAudit, WebhookAudit, WebhookAuditDisposition, WebhookAuditOutcome,
     WebhookAuditPhase,
 };
 use crate::event_destination::{ActivatedEventDestination, ActivatedEventDestinationRegistry};
@@ -126,8 +125,8 @@ impl WebhookOperatorService {
                 .activate_event_destinations(startup.package().registry())
                 .map_err(|_| WebhookOperatorError::Unavailable)?,
         );
-        let audit_profile = config
-            .audit_profile()
+        let audit = RegistryAudit::open_companion(&config)
+            .await
             .map_err(|_| WebhookOperatorError::Unavailable)?;
         let handlers = Arc::new(HookHandlerRegistry::new(
             startup.package().registry(),
@@ -141,7 +140,7 @@ impl WebhookOperatorService {
             startup.expected_identity().clone(),
             startup.lock_key(),
             config.operational_timeouts().record_lock,
-            audit_profile,
+            audit,
         );
         delivery
             .verify_retained_bindings()
@@ -185,7 +184,7 @@ struct BregDeliverySeams {
     expected: ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
     lock_timeout: Duration,
-    audit_profile: AuditProfile,
+    audit: RegistryAudit,
     field_encryption: Option<Arc<FieldEncryptionService>>,
 }
 
@@ -195,7 +194,7 @@ impl BregDeliverySeams {
             self.lock_key,
             self.lock_timeout,
             self.expected.clone(),
-            self.audit_profile.clone(),
+            self.audit.clone(),
             Some(Arc::clone(&self.destinations)),
         );
         match &self.field_encryption {
@@ -404,14 +403,17 @@ impl DeliverySeams for BregDeliverySeams {
         self.handlers.handler(binding)
     }
 
+    /// The platform worker calls this seam inside the transaction it is about
+    /// to commit, so the entry is appended before that commit: a refused
+    /// append rolls the transition back, and a failed commit after an
+    /// accepted append leaves an entry for a transition that did not happen.
     async fn record_audit(
         &self,
-        transaction: &Transaction<'_>,
+        _transaction: &Transaction<'_>,
         record: DeliveryAuditRecord<'_>,
     ) -> Result<(), DeliveryError> {
-        append_webhook_audit(
-            transaction,
-            &self.audit_profile,
+        let entry = webhook_entry(
+            self.audit.profile(),
             WebhookAudit {
                 event_id: record.event_id,
                 compiled_delivery_id: record.compiled_delivery_id,
@@ -423,8 +425,11 @@ impl DeliverySeams for BregDeliverySeams {
                 disposition: audit_disposition(record.disposition),
             },
         )
-        .await
-        .map_err(|_| DeliveryError::Unavailable)
+        .map_err(|_| DeliveryError::Unavailable)?;
+        self.audit
+            .append(entry)
+            .await
+            .map_err(|_| DeliveryError::Unavailable)
     }
 
     fn operational_event(&self, event: DeliveryOperationalEvent) {
@@ -745,7 +750,7 @@ impl WebhookDeliveryService {
         expected: ExpectedRegistryIdentity,
         lock_key: RegistryLockKey,
         lock_timeout: Duration,
-        audit_profile: AuditProfile,
+        audit: RegistryAudit,
     ) -> Self {
         Self::new_with_field_encryption(
             pool,
@@ -755,7 +760,7 @@ impl WebhookDeliveryService {
             expected,
             lock_key,
             lock_timeout,
-            audit_profile,
+            audit,
             None,
         )
     }
@@ -772,7 +777,7 @@ impl WebhookDeliveryService {
         expected: ExpectedRegistryIdentity,
         lock_key: RegistryLockKey,
         lock_timeout: Duration,
-        audit_profile: AuditProfile,
+        audit: RegistryAudit,
         field_encryption: Option<Arc<FieldEncryptionService>>,
     ) -> Self {
         let config = DeliveryConfig {
@@ -788,7 +793,7 @@ impl WebhookDeliveryService {
             expected,
             lock_key,
             lock_timeout,
-            audit_profile,
+            audit,
             field_encryption,
         };
         Self {

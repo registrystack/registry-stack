@@ -633,7 +633,7 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::FieldPatternSyntax { .. } => {
             "a persisted field pattern has invalid PostgreSQL syntax"
         }
-        StartupError::Audit => "the Registry audit profile was refused",
+        StartupError::Audit => "the Registry audit profile or destination was refused",
         StartupError::Cursor => "the Registry cursor profile was refused",
         StartupError::Oidc => "the Registry OIDC key source was refused",
         StartupError::Authentication => "the Registry authentication profile was refused",
@@ -1123,7 +1123,7 @@ async fn configured_metrics_record_served_requests_with_closed_value_free_labels
 
 /// A request that presents no credential and is refused before admission is
 /// counted on the metrics listener under a closed reason, so the operational
-/// signal survives the refusal no longer reaching the hash-chained journal.
+/// signal survives the refusal no longer reaching the audit journal.
 #[tokio::test]
 async fn anonymous_pre_admission_refusals_are_counted_under_closed_reasons() {
     let _request_logs = captured_request_logs();
@@ -1289,6 +1289,7 @@ telemetry:
 }
 
 fn runtime_without_telemetry(root: &Path) -> String {
+    let audit_path = root.join("audit").join("audit.jsonl").display().to_string();
     format!(
         r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
 kind: BRegRuntimeConfig
@@ -1344,6 +1345,7 @@ authentication:
     purpose: registry_purpose
 audit:
   hashKeyRef: secret:file/audit-key
+  path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
   maxAgeSeconds: 300

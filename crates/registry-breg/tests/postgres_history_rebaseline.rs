@@ -45,11 +45,12 @@ use postgres_harness::TestDatabase;
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::history_erasure::{
-    erase_record_history, HistoryErasureRequest, HistoryErasureTimeouts, RecordHistoryErasureTarget,
+    erase_record_history, HistoryErasureRequest, HistoryErasureTimeouts,
+    RecordHistoryErasureTarget, HISTORY_ERASURE_AUDIT_SCHEMA,
 };
 use registry_breg::history_rebaseline::{
     rebaseline_history_coverage, HistoryRebaselineError, HistoryRebaselineRequest,
-    HistoryRebaselineTimeouts,
+    HistoryRebaselineTimeouts, HISTORY_REBASELINE_AUDIT_SCHEMA,
 };
 use registry_breg::mutation::install_mutation_schema;
 use registry_breg::postgres::{
@@ -93,7 +94,7 @@ async fn rebaseline_restores_snapshot_coverage_from_current_state_after_an_erasu
             lock_key,
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
                 .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: "operator-run-1",
             reason: "approved retention request",
             target: RecordHistoryErasureTarget::new(ENTITY, erased, 1),
@@ -121,7 +122,7 @@ async fn rebaseline_restores_snapshot_coverage_from_current_state_after_an_erasu
                 Duration::from_secs(5),
             )
             .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: OPERATOR_CANARY,
             registry: &registry,
         },
@@ -167,7 +168,7 @@ async fn rebaseline_restores_snapshot_coverage_from_current_state_after_an_erasu
                     Duration::from_secs(5),
                 )
                 .unwrap(),
-                audit_profile: &audit_profile,
+                audit: &database.audit(audit_profile.clone()),
                 operator_reference: OPERATOR_CANARY,
                 registry: &registry,
             },
@@ -178,7 +179,7 @@ async fn rebaseline_restores_snapshot_coverage_from_current_state_after_an_erasu
         "a second rebaseline has nothing to do"
     );
 
-    assert_rebaseline_audit_chains_and_is_minimized(&database, &audit_profile).await;
+    assert_rebaseline_audit_is_minimized(&database);
 
     migration_task.abort();
     database.cleanup().await;
@@ -204,7 +205,7 @@ async fn rebaseline_refuses_while_maintenance_is_not_ready() {
             lock_key,
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
                 .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: "operator-run-1",
             reason: "approved retention request",
             target: RecordHistoryErasureTarget::new(ENTITY, erased, 1),
@@ -235,7 +236,7 @@ async fn rebaseline_refuses_while_maintenance_is_not_ready() {
                     Duration::from_secs(5),
                 )
                 .unwrap(),
-                audit_profile: &audit_profile,
+                audit: &database.audit(audit_profile.clone()),
                 operator_reference: OPERATOR_CANARY,
                 registry: &registry,
             },
@@ -246,17 +247,9 @@ async fn rebaseline_refuses_while_maintenance_is_not_ready() {
         "the shared maintenance interlock refuses a registry that is not ready"
     );
 
-    let audit_count: i64 = database
-        .admin
-        .query_one(
-            "SELECT count(*)::bigint FROM registry_internal.registry_audit",
-            &[],
-        )
-        .await
-        .expect("administrator can count audit records")
-        .get(0);
     assert_eq!(
-        audit_count, 1,
+        database.audit_entries().len(),
+        1,
         "a refused rebaseline writes no audit record"
     );
 
@@ -284,7 +277,7 @@ async fn rebaseline_refuses_while_a_retained_journal_head_is_unindexed() {
             lock_key,
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
                 .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: "operator-run-1",
             reason: "approved retention request",
             target: RecordHistoryErasureTarget::new(ENTITY, erased, 1),
@@ -316,7 +309,7 @@ async fn rebaseline_refuses_while_a_retained_journal_head_is_unindexed() {
                     Duration::from_secs(5),
                 )
                 .unwrap(),
-                audit_profile: &audit_profile,
+                audit: &database.audit(audit_profile.clone()),
                 operator_reference: OPERATOR_CANARY,
                 registry: &registry,
             },
@@ -351,7 +344,7 @@ async fn rebaseline_refuses_when_a_live_row_has_no_matching_journal_head() {
             lock_key,
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
                 .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: "operator-run-1",
             reason: "approved retention request",
             target: RecordHistoryErasureTarget::new(ENTITY, erased, 2),
@@ -372,7 +365,7 @@ async fn rebaseline_refuses_when_a_live_row_has_no_matching_journal_head() {
                     Duration::from_secs(5),
                 )
                 .unwrap(),
-                audit_profile: &audit_profile,
+                audit: &database.audit(audit_profile.clone()),
                 operator_reference: OPERATOR_CANARY,
                 registry: &registry,
             },
@@ -409,7 +402,7 @@ async fn rebaseline_restores_coverage_when_a_migration_baseline_indexed_only_jou
             lock_key,
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
                 .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: "operator-run-1",
             reason: "approved retention request",
             target: RecordHistoryErasureTarget::new(ENTITY, erased, 1),
@@ -429,7 +422,7 @@ async fn rebaseline_restores_coverage_when_a_migration_baseline_indexed_only_jou
                 Duration::from_secs(5),
             )
             .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: OPERATOR_CANARY,
             registry: &registry,
         },
@@ -760,34 +753,17 @@ async fn insert_revision(
         .expect("test revision inserts");
 }
 
-async fn assert_rebaseline_audit_chains_and_is_minimized(
-    database: &TestDatabase,
-    profile: &AuditProfile,
-) {
-    let rows = database
-        .admin
-        .query(
-            "SELECT record_hash, envelope FROM registry_internal.registry_audit
-              ORDER BY created_at, envelope_id",
-            &[],
-        )
-        .await
-        .expect("administrator can inspect audit");
-    assert_eq!(rows.len(), 2, "the erasure and the rebaseline are audited");
-    let envelopes = rows
-        .iter()
-        .map(|row| {
-            let value =
-                registry_platform_canonical_json::parse_json_strict(&row.get::<_, Vec<u8>>(1))
-                    .expect("audit envelope is canonical JSON");
-            serde_json::from_value::<registry_platform_audit::AuditEnvelope>(value)
-                .expect("audit envelope shape is valid")
-        })
-        .collect::<Vec<_>>();
-    registry_platform_audit::verify_chain(&envelopes, &profile.chain_hasher())
-        .expect("the rebaseline record extends the erasure chain");
-    let audit_text = String::from_utf8(rows[1].get::<_, Vec<u8>>(1)).expect("audit is utf8");
-    assert!(audit_text.contains("breg-history-rebaseline-audit/v1"));
+fn assert_rebaseline_audit_is_minimized(database: &TestDatabase) {
+    let entries = database.audit_entries();
+    assert_eq!(
+        entries.len(),
+        2,
+        "the erasure and the rebaseline are audited"
+    );
+    assert_eq!(entries[0]["schema"], HISTORY_ERASURE_AUDIT_SCHEMA);
+    assert_eq!(entries[1]["schema"], HISTORY_REBASELINE_AUDIT_SCHEMA);
+    assert!(entries.iter().all(|entry| entry["phase"] == "response"));
+    let audit_text = entries[1].to_string();
     assert!(audit_text.contains("history-rebaseline-maintenance"));
     assert!(!audit_text.contains(OPERATOR_CANARY));
     assert!(!audit_text.contains(KEPT_RECORD));

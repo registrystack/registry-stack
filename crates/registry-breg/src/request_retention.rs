@@ -6,12 +6,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Duration;
 
-use registry_platform_audit::AuditProfile;
+use registry_platform_audit::{AuditEntry, AuditProfile};
 use serde::Serialize;
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
-use crate::audit::{append_terminal_audit, TerminalAudit, TerminalAuditOutcome};
+use crate::audit::{terminal_entry, RegistryAudit, TerminalAudit, TerminalAuditOutcome};
 use crate::correlation::RequestCorrelation;
 use crate::history_commit::{
     allocate_revision_commit, CommitAllocation, HistoryCommitError, RevisionCommitMember,
@@ -27,6 +27,8 @@ use crate::postgres::{
 use crate::runtime_config::load_runtime_config;
 
 const MAX_RETAINED_HISTORY_PAGE_SIZE: u16 = 50;
+/// The audit schema of the attachment-cleanup attempt and outcome entries.
+pub const ATTACHMENT_CLEANUP_AUDIT_SCHEMA: &str = "breg-attachment-cleanup-audit/v1";
 // Reserve the other half of the client's 2 MiB request-extension budget for
 // current actions and the remaining request metadata.
 const MAX_RETAINED_HISTORY_BYTES: usize = 1_048_576;
@@ -188,7 +190,7 @@ pub struct RequestRetentionOperatorService {
     runtime_role: SqlIdentifier,
     lock_timeout: Duration,
     statement_timeout: Duration,
-    audit_profile: AuditProfile,
+    audit: RegistryAudit,
     attachment_storage: crate::attachment_storage::AttachmentStorage,
     verification_policy: String,
 }
@@ -224,8 +226,8 @@ impl RequestRetentionOperatorService {
         let migration_connection = config
             .migration_database_connection_config()
             .map_err(|_| RequestRetentionError::Unavailable)?;
-        let audit_profile = config
-            .audit_profile()
+        let audit = RegistryAudit::open_companion(&config)
+            .await
             .map_err(|_| RequestRetentionError::Unavailable)?;
         let attachment_storage = config
             .activate_attachment_storage(startup.package().registry().registry_id())
@@ -247,7 +249,7 @@ impl RequestRetentionOperatorService {
             runtime_role: config.database().roles().runtime().clone(),
             lock_timeout: config.operational_timeouts().migration_lock,
             statement_timeout: config.operational_timeouts().migration_statement,
-            audit_profile,
+            audit,
         })
     }
 
@@ -262,7 +264,7 @@ impl RequestRetentionOperatorService {
         migration_connection: ConnectionConfig,
         migration_role: SqlIdentifier,
         runtime_role: SqlIdentifier,
-        audit_profile: AuditProfile,
+        audit: RegistryAudit,
     ) -> Self {
         Self {
             attachment_storage: crate::attachment_storage::AttachmentStorage::Database,
@@ -276,7 +278,7 @@ impl RequestRetentionOperatorService {
             runtime_role,
             lock_timeout: Duration::from_secs(5),
             statement_timeout: Duration::from_secs(30),
-            audit_profile,
+            audit,
         }
     }
 
@@ -474,16 +476,14 @@ impl RequestRetentionOperatorService {
             .await
             .map_err(map_history_commit_error)?;
         }
-        append_retention_audit(
-            &transaction,
-            &self.audit_profile,
-            &self.expected,
-            scope.clone(),
-            erasure,
-        )
-        .await?;
+        let entry =
+            retention_terminal_entry(self.audit.profile(), &self.expected, scope.clone(), erasure)?;
         transaction
             .commit()
+            .await
+            .map_err(|_| RequestRetentionError::Unavailable)?;
+        self.audit
+            .append(entry)
             .await
             .map_err(|_| RequestRetentionError::Unavailable)?;
         let (pending_external_deletions, external_deletion_tombstones) =
@@ -512,40 +512,43 @@ impl RequestRetentionOperatorService {
             .await
             .map_err(|_| RequestRetentionError::Unavailable)?;
         let correlation = Uuid::new_v4().to_string();
+        // The verified transaction proves this process may act on the
+        // managed catalog before the request entry is written; it holds no
+        // audit state.
         let transaction = self.begin_verified_transaction(&mut client).await?;
-        crate::audit::append_envelope(
-            &transaction,
-            &self.audit_profile,
-            serde_json::json!({
-                "kind":"attachmentCleanup", "phase":"attempt", "outcome":"started",
-                "packageRevision":self.expected.package_revision,
-                "actor":"breg:request-retention-operator", "correlation":correlation,
-            }),
-        )
-        .await
-        .map_err(|_| RequestRetentionError::Unavailable)?;
         transaction.commit().await.map_err(map_retention_error)?;
+        self.audit
+            .append(AuditEntry::request(
+                ATTACHMENT_CLEANUP_AUDIT_SCHEMA,
+                correlation.clone(),
+                serde_json::json!({
+                    "kind":"attachmentCleanup", "phase":"attempt", "outcome":"started",
+                    "packageRevision":self.expected.package_revision,
+                    "actor":"breg:request-retention-operator", "correlation":correlation,
+                }),
+            ))
+            .await
+            .map_err(|_| RequestRetentionError::Unavailable)?;
         let (pending_external_deletions, external_deletion_tombstones) =
             self.retry_external_deletions(&mut client).await?;
         let result = AttachmentCleanup {
             pending_external_deletions,
             external_deletion_tombstones,
         };
-        let transaction = self.begin_verified_transaction(&mut client).await?;
-        crate::audit::append_envelope(
-            &transaction,
-            &self.audit_profile,
-            serde_json::json!({
-                "kind":"attachmentCleanup", "phase":"terminal", "outcome":"completed",
-                "packageRevision":self.expected.package_revision,
-                "actor":"breg:request-retention-operator", "correlation":correlation,
-                "pendingExternalDeletions":result.pending_external_deletions,
-                "externalDeletionTombstones":result.external_deletion_tombstones,
-            }),
-        )
-        .await
-        .map_err(|_| RequestRetentionError::Unavailable)?;
-        transaction.commit().await.map_err(map_retention_error)?;
+        self.audit
+            .append(AuditEntry::response(
+                ATTACHMENT_CLEANUP_AUDIT_SCHEMA,
+                correlation.clone(),
+                serde_json::json!({
+                    "kind":"attachmentCleanup", "phase":"terminal", "outcome":"completed",
+                    "packageRevision":self.expected.package_revision,
+                    "actor":"breg:request-retention-operator", "correlation":correlation,
+                    "pendingExternalDeletions":result.pending_external_deletions,
+                    "externalDeletionTombstones":result.external_deletion_tombstones,
+                }),
+            ))
+            .await
+            .map_err(|_| RequestRetentionError::Unavailable)?;
         Ok(result)
     }
 
@@ -1396,13 +1399,14 @@ async fn set_request_table_force_row_security(
     Ok(())
 }
 
-async fn append_retention_audit(
-    transaction: &tokio_postgres::Transaction<'_>,
+/// Build the `response` entry for one request-detail erasure. The caller
+/// appends it after the erasure transaction commits.
+fn retention_terminal_entry(
     profile: &AuditProfile,
     expected: &ExpectedRegistryIdentity,
     scope: RequestDetailErasureScope<'_>,
     erasure: RequestDetailErasure,
-) -> Result<()> {
+) -> Result<AuditEntry> {
     let record_reference = profile
         .key_hasher()
         .audit_reference_hash(
@@ -1424,8 +1428,7 @@ async fn append_retention_audit(
         .and_then(|count| count.checked_add(erasure.current_intake_rows))
         .and_then(|count| count.checked_add(erasure.attachment_references))
         .ok_or(RequestRetentionError::Unavailable)?;
-    append_terminal_audit(
-        transaction,
+    terminal_entry(
         profile,
         TerminalAudit {
             grant: None,
@@ -1447,7 +1450,6 @@ async fn append_retention_audit(
             correlation: RequestCorrelation::breg_created(),
         },
     )
-    .await
     .map_err(|_| RequestRetentionError::Unavailable)
 }
 

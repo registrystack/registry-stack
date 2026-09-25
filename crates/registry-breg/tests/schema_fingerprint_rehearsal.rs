@@ -318,6 +318,7 @@ authentication:
     purpose: registry_purpose
 audit:
   hashKeyRef: secret:env/BREG_REHEARSAL_AUDIT_KEY
+  path: /tmp/breg-rehearsal-audit/audit.jsonl
 cursor:
   secretRef: secret:env/BREG_REHEARSAL_CURSOR_KEY
   maxAgeSeconds: 300

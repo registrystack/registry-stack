@@ -14,7 +14,7 @@ use std::{
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use jsonwebtoken::jwk::JwkSet;
-use registry_platform_audit::AuditProfile;
+use registry_platform_audit::{AuditDestination, AuditDestinationKind, AuditProfile};
 use registry_platform_config::{
     expand_config_env_vars_with, SecretError, SecretProvider, SecretReference, SecretResolver,
 };
@@ -2008,13 +2008,33 @@ impl fmt::Debug for AuthorityClaimsConfig {
 #[derive(Clone)]
 pub struct AuditConfig {
     hash_key_ref: SecretReference,
+    destination: AuditDestination,
 }
 
 impl AuditConfig {
     fn from_raw(raw: RawAuditConfig) -> Result<Self> {
         let hash_key_ref =
             parse_secret_reference(raw.hash_key_ref, RuntimeConfigError::InvalidAudit)?;
-        Ok(Self { hash_key_ref })
+        let destination = AuditDestination::from_settings(
+            raw.destination,
+            raw.path.map(PathBuf::from),
+            raw.rotate_bytes,
+            raw.retain_days,
+        )
+        .map_err(|_| RuntimeConfigError::InvalidAudit)?;
+        Ok(Self {
+            hash_key_ref,
+            destination,
+        })
+    }
+
+    /// Where the service writes its audit entries. Operator tooling that runs
+    /// beside the service writes to the sibling destination
+    /// `destination().for_process("bregctl")`, so the two never share a
+    /// writer lock.
+    #[must_use]
+    pub fn destination(&self) -> &AuditDestination {
+        &self.destination
     }
 }
 
@@ -2023,6 +2043,7 @@ impl fmt::Debug for AuditConfig {
         formatter
             .debug_struct("AuditConfig")
             .field("hash_key_ref", &"<redacted>")
+            .field("destination", &self.destination)
             .finish()
     }
 }
@@ -2691,6 +2712,20 @@ impl From<RawContextualClaimNames> for ClaimNames {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawAuditConfig {
     hash_key_ref: String,
+    /// `file` (the default) writes a durable, rotated JSON Lines file at
+    /// `path`; `stdout` writes one JSON line per entry to standard output.
+    #[serde(default)]
+    destination: AuditDestinationKind,
+    /// Absolute path of the active audit file. Required for, and accepted
+    /// only with, the `file` destination.
+    #[serde(default)]
+    path: Option<String>,
+    /// Size in bytes at which the active file rotates. Defaults to 100 MiB.
+    #[serde(default)]
+    rotate_bytes: Option<u64>,
+    /// Days a rotated file is retained. Defaults to 90.
+    #[serde(default)]
+    retain_days: Option<u32>,
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
@@ -2943,6 +2978,18 @@ pub fn runtime_config_schema() -> std::result::Result<Value, serde_json::Error> 
 
 #[cfg(feature = "schema")]
 fn install_schema_constraints(schema: &mut Value) {
+    install_schema_integer_bounds(
+        schema,
+        "/$defs/RawAuditConfig/properties/rotateBytes",
+        registry_platform_audit::MIN_AUDIT_ROTATE_BYTES,
+        u64::from(u32::MAX),
+    );
+    install_schema_integer_bounds(
+        schema,
+        "/$defs/RawAuditConfig/properties/retainDays",
+        1,
+        u64::from(registry_platform_audit::MAX_AUDIT_RETAIN_DAYS),
+    );
     for (pointer, minimum, maximum) in [
         (
             "/$defs/RawPoolBounds/properties/maxSize",

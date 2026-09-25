@@ -17,6 +17,7 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::time::Duration;
 
+use registry_breg::audit::RegistryAudit;
 use registry_breg::field_encryption_backfill::{
     erase_field_encryption_history_with_connection,
     preflight_field_encryption_backfill_with_connection, FieldEncryptionBackfillPreflightError,
@@ -164,6 +165,8 @@ pub(crate) fn run_preflight(
 #[derive(Debug)]
 pub(crate) enum FieldEncryptionEraseHistoryLifecycleError {
     RuntimeConfigPath,
+    /// The companion audit destination could not be opened.
+    Audit,
     RequestFile,
     RequestDocument,
     RuntimeConfig(RuntimeConfigError),
@@ -215,7 +218,7 @@ pub(crate) fn run_erase_history(
     let migration_connection = config
         .migration_database_connection_config()
         .map_err(|_| FieldEncryptionEraseHistoryLifecycleError::DatabaseConfiguration)?;
-    let audit_profile = config
+    config
         .audit_profile()
         .map_err(FieldEncryptionEraseHistoryLifecycleError::RuntimeConfig)?;
     let lock_key = RegistryLockKey::derive(&expected.package_id)
@@ -229,6 +232,9 @@ pub(crate) fn run_erase_history(
         .enable_all()
         .build()
         .map_err(|_| FieldEncryptionEraseHistoryLifecycleError::Runtime)?;
+    let audit = runtime
+        .block_on(RegistryAudit::open_companion(&config))
+        .map_err(|_| FieldEncryptionEraseHistoryLifecycleError::Audit)?;
     let outcome = runtime
         .block_on(erase_field_encryption_history_with_connection(
             &migration_connection,
@@ -237,7 +243,7 @@ pub(crate) fn run_erase_history(
                 migration_role: config.database().roles().migration(),
                 lock_key,
                 timeouts,
-                audit_profile: &audit_profile,
+                audit: &audit,
                 operator_reference: &erase.operator_reference,
                 reason: &erase.reason,
                 registry: package.registry(),

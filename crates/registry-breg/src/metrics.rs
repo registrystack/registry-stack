@@ -19,10 +19,10 @@
 //!
 //! The anonymous refusal counter is the operational signal for requests that
 //! carry no principal and are refused before admission. Those refusals are
-//! counted here rather than appended to the hash-chained audit journal: they
-//! name no principal to hold accountable, and journaling them would let an
-//! unauthenticated caller grow the journal and serialize every audited write
-//! behind its head lock. Its reason label is the same kind of closed
+//! counted here rather than appended to the audit journal: they name no
+//! principal to hold accountable, and journaling them would let an
+//! unauthenticated caller grow the journal without bound. Its reason label is
+//! the same kind of closed
 //! vocabulary as the labels above.
 
 use std::{

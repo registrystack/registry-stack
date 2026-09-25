@@ -58,10 +58,10 @@ and that file is compared. `--mint-bin` and `--mint-port` are refused by this
 candidate; they belong to the earlier Mint-based dev interface.
 
 `dev stop` keeps everything it created: the owned container, its named data
-volume, records, audit history, keys, credentials and the built package. Add
-`--remove` to reclaim the storage as well; it removes the owned container and
-its `breg-dev-<owner>` data volume, discarding records, audit history, event receipts and seed
-checkpoints. For an initial package at sequence 1, the next start builds an empty
+volume, records, the audit files under `.breg/dev/audit`, keys, credentials and
+the built package. Add `--remove` to reclaim the storage as well; it removes the
+owned container and its `breg-dev-<owner>` data volume, discarding records,
+event receipts and seed checkpoints. The audit files are kept. For an initial package at sequence 1, the next start builds an empty
 database from the same authored project, ports, credentials and package. It also
 lets the next start take edited
 inputs: once no records are retained, a changed package, clients file or port
@@ -502,10 +502,10 @@ identifiable and reclaimable once the container is gone.
 | --- | --- |
 | First start | Capture the authored closure, prepare private identities, create the owned database, run normal schema-test/package/apply/verify commands, then seed through authenticated HTTP. |
 | Already running | Return the existing ready session and credential references. |
-| Stop, including repeated stop | Gracefully stop owned BReg and ThunderID, then stop the owned PostgreSQL container. Keep records, keys, package, seed checkpoints and audit history. |
+| Stop, including repeated stop | Gracefully stop owned BReg and ThunderID, then stop the owned PostgreSQL container. Keep records, keys, package, seed checkpoints and the audit files. |
 | Stop where no start ever ran | Refuse and name the absent session. Nothing is created, changed or removed, so a mistyped project path cannot read as a stopped session. |
 | Start after stop | Reuse the same container, database, and existing credentials. Preserve record edits; activate the explicitly prepared source successor when present. Obtain fresh short-lived tokens. |
-| Stop with `--remove`, including a repeated one | Stop as above, then remove the owned container and its named data volume, tolerating whatever an earlier reclamation already took. Discard records, audit history, event receipts and seed checkpoints. Keep keys, credentials, ports, clients and the built package. |
+| Stop with `--remove`, including a repeated one | Stop as above, then remove the owned container and its named data volume, tolerating whatever an earlier reclamation already took. Discard records, event receipts and seed checkpoints. Keep the audit files, keys, credentials, ports, clients and the built package. |
 | Start after `--remove` | At sequence 1, create an empty container and volume, activate the initial package, and replay authored seeds. A retained successor refuses before Docker because its predecessor records were removed; use a fresh project at sequence 1 for an empty experiment. |
 | Seed request committed before checkpoint | Replay the same permanent BReg idempotency reservation. The original create result is returned without creating or overwriting a record. |
 | `breg` from another release | Refuse before the owned container is inspected and before the supervisor launches, naming the file that answered, the version it reported and the version `bregctl` reports. Nothing is created, changed or removed. |

@@ -213,11 +213,6 @@ path = "tests/postgres_fixture_journeys.rs"
 required-features = ["postgres-test", "tooling"]
 
 [[test]]
-name = "postgres_audit_tooling"
-path = "tests/postgres_audit_tooling.rs"
-required-features = ["postgres-test", "tooling"]
-
-[[test]]
 name = "schema_fingerprint_rehearsal"
 path = "tests/schema_fingerprint_rehearsal.rs"
 required-features = ["postgres-test", "tooling"]
@@ -263,7 +258,7 @@ runtime = [
 ]
 postgres-test = ["runtime", "dep:tower", "registry-platform-httputil/test-support"]
 postgres-tls-test = ["runtime"]
-schema = ["dep:schemars", "registry-platform-hooks/schema"]
+schema = ["dep:schemars", "registry-platform-audit?/schema", "registry-platform-hooks/schema"]
 tooling = ["dep:tempfile", "dep:tower"]
 wasm = ["registry-platform-script/wasm"]
 

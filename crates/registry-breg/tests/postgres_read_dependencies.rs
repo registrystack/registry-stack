@@ -147,7 +147,10 @@ async fn exercise_read_dependencies(case: &str, invalid_population: bool, active
         identity.clone(),
         lock_key,
         Duration::from_secs(2),
-        AuditProfile::production_from_secret_bytes(vec![0x42; 32].into()).expect("keyed audit"),
+        registry_breg::audit::test_support::capturing(
+            AuditProfile::production_from_secret_bytes(vec![0x42; 32].into()).expect("keyed audit"),
+        )
+        .0,
         cursors.clone(),
     )
     .with_query_plan_for_test(plans.clone());

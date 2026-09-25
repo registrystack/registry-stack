@@ -732,8 +732,9 @@ The host admits the action and existing targets before external work, then
 releases the PostgreSQL connection and evaluates Rhai once. A failed helper
 poisons the invocation even if Rhai catches its error. Successful effects and
 acquisitions are frozen before finalization. Finalization rechecks authority,
-conditions, constraints and evidence acceptance, then commits writes, audit,
-receipt and protected evidence-use material atomically. SQL retries reuse the
+conditions, constraints and evidence acceptance, then commits writes, receipt
+and protected evidence-use material atomically, and releases the receipt only
+after its post-commit audit response entry is accepted. SQL retries reuse the
 frozen result; successful receipt replay calls no helper. Concurrent admitted
 attempts can each call the provider but only one application commits.
 

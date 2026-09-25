@@ -339,16 +339,11 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
     assert_eq!(widened_checkpoint.output_length(), 0);
     assert!(!format!("{widened:?} {widened}").contains(SECRET_CANARY));
 
-    let audit: String = database
-        .admin
-        .query_one(
-            "SELECT coalesce(string_agg(convert_from(envelope, 'UTF8'), ''), '')
-               FROM registry_internal.registry_audit",
-            &[],
-        )
-        .await
-        .expect("administrator inspects minimized audit")
-        .get(0);
+    let audit = database
+        .audit_entries()
+        .iter()
+        .map(Value::to_string)
+        .collect::<String>();
     assert!(!audit.contains(PRINCIPAL_CANARY));
     assert!(!audit.contains(SECRET_CANARY));
     assert!(!audit.contains("ROW-000"));
@@ -404,8 +399,10 @@ fn authenticated_app(
         .build_pool()
         .expect("runtime pool builds");
     let lock_key = RegistryLockKey::derive("data-export-registry").expect("lock key derives");
-    let audit = AuditProfile::production_from_secret_bytes(vec![0x61; 32].into())
-        .expect("test audit profile is keyed");
+    let audit = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x61; 32].into())
+            .expect("test audit profile is keyed"),
+    );
     let cursors = Arc::new(
         CursorCodec::new(Zeroizing::new(vec![0x43; 32]), Duration::from_secs(300))
             .expect("cursor codec builds"),
@@ -489,7 +486,6 @@ async fn durable_counts(
                    (SELECT count(*) FROM registry_data.\"{table}\"),
                    (SELECT count(*) FROM registry_internal.registry_revisions),
                    (SELECT count(*) FROM registry_internal.registry_outbox),
-                   (SELECT count(*) FROM registry_internal.registry_audit),
                    (SELECT count(*) FROM registry_internal.registry_idempotency),
                    (SELECT count(*) FROM registry_internal.registry_revision_commits),
                    (SELECT count(*) FROM registry_internal.registry_revision_commit_members)"
@@ -502,10 +498,10 @@ async fn durable_counts(
         current: row.get(0),
         revisions: row.get(1),
         outbox: row.get(2),
-        audit: row.get(3),
-        idempotency: row.get(4),
-        commits: row.get(5),
-        commit_members: row.get(6),
+        audit: i64::try_from(database.audit_entries().len()).expect("audit count fits i64"),
+        idempotency: row.get(3),
+        commits: row.get(4),
+        commit_members: row.get(5),
     }
 }
 

@@ -6188,6 +6188,11 @@ fn write_runtime_config(
     let secret_root = parent.join("secrets");
     fs::create_dir_all(&secret_root).expect("secret root creates");
     let path = parent.join("runtime.yaml");
+    let audit_path = secret_root
+        .with_file_name("audit")
+        .join("audit.jsonl")
+        .display()
+        .to_string();
     fs::write(
         &path,
         format!(
@@ -6245,6 +6250,7 @@ authentication:
     purpose: registry_purpose
 audit:
   hashKeyRef: secret:file/{PACKAGE_VALUE_CANARY}
+  path: {audit_path}
 cursor:
   secretRef: secret:file/{PACKAGE_VALUE_CANARY}
   maxAgeSeconds: 300

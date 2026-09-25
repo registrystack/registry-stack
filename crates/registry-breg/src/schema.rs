@@ -191,7 +191,8 @@ mod tests {
                 }
             },
             "audit": {
-                "hashKeyRef": "secret:file/audit-key"
+                "hashKeyRef": "secret:file/audit-key",
+                "path": "/var/lib/breg/audit/audit.jsonl"
             },
             "cursor": {
                 "secretRef": "secret:file/cursor-key"

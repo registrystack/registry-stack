@@ -333,8 +333,11 @@ async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_t
         database.migration_config.clone(),
         database.migration_role.clone(),
         database.runtime_role.clone(),
-        AuditProfile::production_from_secret_bytes(vec![0x8b; 32].into())
-            .expect("test audit profile is keyed"),
+        registry_breg::audit::test_support::capturing(
+            AuditProfile::production_from_secret_bytes(vec![0x8b; 32].into())
+                .expect("test audit profile is keyed"),
+        )
+        .0,
     );
     retention
         .erase(RequestDetailErasureScope {
@@ -621,8 +624,11 @@ async fn snapshot_reads_exclude_soft_erased_request_revisions() {
         database.migration_config.clone(),
         database.migration_role.clone(),
         database.runtime_role.clone(),
-        AuditProfile::production_from_secret_bytes(vec![0x8b; 32].into())
-            .expect("test audit profile is keyed"),
+        registry_breg::audit::test_support::capturing(
+            AuditProfile::production_from_secret_bytes(vec![0x8b; 32].into())
+                .expect("test audit profile is keyed"),
+        )
+        .0,
     );
     retention
         .erase(RequestDetailErasureScope {
@@ -728,8 +734,11 @@ fn request_router(
 ) -> axum::Router {
     let pool = database.runtime_config.build_pool().expect("pool builds");
     let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
-    let audit = AuditProfile::production_from_secret_bytes(vec![0x8b; 32].into())
-        .expect("test audit profile is keyed");
+    let audit = registry_breg::audit::test_support::capturing(
+        AuditProfile::production_from_secret_bytes(vec![0x8b; 32].into())
+            .expect("test audit profile is keyed"),
+    )
+    .0;
     let cursors = Arc::new(
         CursorCodec::new(Zeroizing::new(vec![0x37; 32]), Duration::from_secs(300))
             .expect("cursor codec builds"),
