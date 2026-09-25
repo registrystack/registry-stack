@@ -11,9 +11,9 @@ ADD --checksum=sha256:8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8a
 # The runtime configuration, compiled package, deployment trust anchor, runtime
 # secrets, migration credential, and signing keys are deployment inputs. The
 # release image carries only the runtime binary and its licenses, and gives
-# operators fixed read-only mount points under /etc/breg. BReg keeps no local
-# state: its audit journal lives in PostgreSQL, and the image carries no
-# writable directory of its own.
+# operators fixed read-only mount points under /etc/breg. File audit needs an
+# operator-mounted writable directory at the configured audit.path; the image
+# carries no writable directory of its own.
 RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
     --mount=type=bind,source=LICENSE,target=/workspace/LICENSE \
     --mount=type=bind,source=THIRD_PARTY_NOTICES,target=/workspace/THIRD_PARTY_NOTICES,readonly \

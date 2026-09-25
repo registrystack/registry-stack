@@ -163,7 +163,11 @@ Every pull request should make the review path clear:
 - Schema and migration code refuses when it would drop rows; it never drops
   them silently. A change that would lose persisted state fails with an error
   that names what would be lost, and the operator decides the next step. Cover
-  the refusal with a test.
+  the refusal with a test. The documented audit-writer transition retires
+  only BReg's audit journal/head and Casework's and Scheduling's audit outboxes.
+  Preserve the retired audit state separately before removal, drain old outbox
+  publishers, and verify archived row counts in the release rehearsal. Every
+  retained domain and operational state table still requires row preservation.
 
 ## Dependency Changes
 

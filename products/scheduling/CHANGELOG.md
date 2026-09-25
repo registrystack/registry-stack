@@ -27,6 +27,11 @@
     `migrate` refuses while the outbox still holds unpublished records, so
     run the previous release until its publisher has drained the outbox,
     then migrate.
+  - Before starting the upgraded runtime, archive the old active audit file
+    and every numbered sibling separately, then use a fresh `audit.path`.
+    Retention now deletes aged sealed files under that path. Update log
+    consumers to the new envelope and ship entries to append-only storage
+    when tamper evidence is required.
   - `/readyz` reports ready only while the audit writer is ready.
   - `schedulingctl records apply` writes its request entry before it
     replaces the records and its response entry after, to a sibling file

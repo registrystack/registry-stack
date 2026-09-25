@@ -6,10 +6,11 @@ The rehearsal downloads the previous release's published Base Registry
 Engine, Casework, and Evidence binaries, authenticates them the way
 release/VERIFY.md describes, and uses them to write real state: a signed,
 activated registry package with records and revisions, a Casework review
-queue with answered and in-flight work, and an Evidence audit chain with a
+queue with answered and in-flight work, and an Evidence audit stream with a
 signed response. It then points the binaries built from this source at that
 exact state, runs the documented upgrade steps, and fails unless the state is
-still served unchanged and no table lost a row.
+still served unchanged and no retained table lost a row. Retired audit tables
+are archived and counted before the documented migration removes them.
 
 Only the release download reaches the network. PostgreSQL runs in one
 disposable, loopback-bound container, and every credential is synthetic,
@@ -245,16 +246,119 @@ def install_asset(asset: Path, binary: str, destination: Path) -> None:
             output.chmod(0o755)
 
 
-def row_count_losses(before: dict[str, int], after: dict[str, int]) -> list[str]:
-    """Name every table that disappeared or now holds fewer rows."""
+def row_count_losses(before: dict[str, int], after: dict[str, int],
+                     archived: dict[str, int] | None = None) -> list[str]:
+    """Name every row loss, allowing only checked archives of retired audit tables."""
 
     losses = []
     for table, count in sorted(before.items()):
+        if (table not in after and (archived or {}).get(table) == count
+                and any(table in tables for tables in RETIRED_AUDIT_TABLES.values())):
+            continue
         if table not in after:
             losses.append(f"{table} disappeared (held {count} rows)")
         elif after[table] < count:
             losses.append(f"{table} dropped from {count} to {after[table]} rows")
     return losses
+
+
+# Only these audit tables retire in this transition. Business tables always
+# remain subject to the ordinary row-preservation comparison.
+RETIRED_AUDIT_TABLES = {
+    "registry": ("registry_internal.registry_audit", "registry_internal.registry_audit_head"),
+    "casework": ("public.casework_audit_outbox",),
+}
+
+
+def audit_paths(directory: Path, name: str) -> list[Path]:
+    return sorted(path for path in directory.iterdir() if path.is_file()
+                  and (path.name == name or re.fullmatch(re.escape(name) + r"\.[0-9]+", path.name)))
+
+
+def archive_audit_files(directory: Path, name: str, archive: Path) -> int:
+    private_directory(archive)
+    paths = audit_paths(directory, name)
+    for path in paths:
+        destination = archive / path.name
+        if destination.exists():
+            raise RehearsalError("audit archive destination already exists")
+        path.rename(destination)
+    return len(paths)
+
+
+def audit_record_count(directory: Path, name: str, *, schema: str | None = None) -> int:
+    count = 0
+    for path in audit_paths(directory, name):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise RehearsalError("audit stream contains an invalid JSON line") from error
+            if not isinstance(entry, dict):
+                raise RehearsalError("audit stream contains a non-object entry")
+            if schema is not None and (
+                entry.get("schema") != schema
+                or entry.get("phase") not in ("request", "response")
+                or not all(isinstance(entry.get(key), str) and entry[key]
+                           for key in ("eventId", "time", "correlation"))
+                or not isinstance(entry.get("record"), dict)
+            ):
+                raise RehearsalError("audit stream contains an invalid current envelope")
+            count += 1
+    return count
+
+
+def archive_audit_tables(postgres: Postgres, database: str, counts: dict[str, int],
+                         directory: Path) -> dict[str, int]:
+    private_directory(directory)
+    archived = {}
+    for table in RETIRED_AUDIT_TABLES[database]:
+        if table not in counts:
+            continue
+        # Table names come only from the closed list above, never input.
+        rows = postgres.sql(database, f"SELECT row_to_json(t)::text FROM {table} AS t;")
+        path = directory / f"{table}.jsonl"
+        with path.open("x", encoding="utf-8") as handle:
+            path.chmod(0o600)
+            handle.write(rows)
+        count = audit_record_count(directory, path.name)
+        if count != counts[table]:
+            raise RehearsalError(f"audit archive row count differs for {table}")
+        archived[table] = count
+    return archived
+
+
+def wait_for_casework_audit(postgres: Postgres) -> None:
+    if postgres.sql("casework", "SELECT to_regclass('casework_audit_outbox') IS NOT NULL;").strip() != "t":
+        return
+    deadline = time.monotonic() + READY_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if postgres.sql("casework", "SELECT count(*) FROM casework_audit_outbox WHERE published_at IS NULL;").strip() == "0":
+            return
+        time.sleep(0.1)
+    raise RehearsalError("the previous Casework release did not drain its audit outbox")
+
+
+def upgrade_evidence_audit_configuration(bundle: dict[str, Any], runtime: dict[str, Any]) -> None:
+    audit = bundle["audit"]
+    if "hashSecretRef" in audit:
+        bundle["audit"] = {"hashKeyRef": audit["hashSecretRef"],
+                           "hashKeyVersion": audit["hashKeyVersion"]}
+    if "auditStorage" in runtime:
+        storage = runtime.pop("auditStorage")
+        runtime["audit"] = {"path": storage["path"]}
+        if "maximumFileBytes" in storage:
+            runtime["audit"]["rotateBytes"] = storage["maximumFileBytes"]
+
+
+def breg_view_differences(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
+    # An ETag binds the active package revision, which changes on rebuild.
+    # Record identifiers, domain data, and stored revisions must still match.
+    def state(views: dict[str, Any]) -> dict[str, Any]:
+        return {key: {field: value for field, value in view.items() if field != "etag"}
+                for key, view in views.items()}
+
+    return view_differences(state(before), state(after))
 
 
 def view_differences(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
@@ -461,6 +565,9 @@ class Side:
 
     def run(self, binary: str, *args: str, **kwargs: Any) -> subprocess.CompletedProcess[str]:
         return run([self.path(binary), *args], env=self.env(), **kwargs)
+
+    def has_legacy_breg_audit(self) -> bool:
+        return self.run("bregctl", "audit", "--help", check=False).returncode == 0
 
     def run_json(self, binary: str, *args: str, **kwargs: Any) -> Any:
         return run_json([self.path(binary), *args], env=self.env(), **kwargs)
@@ -732,7 +839,7 @@ class Breg:
         return token
 
     def write_runtime(self, path: Path, database: str, package_root: Path,
-                      revision: str, sequence: int, port: int) -> None:
+                      revision: str, sequence: int, port: int, *, file_audit: bool = True) -> None:
         dump_yaml(path, {
             "apiVersion": "registry.registrystack.org/breg-runtime/v1alpha1",
             "kind": "BRegRuntimeConfig",
@@ -762,7 +869,9 @@ class Breg:
                                         "documentRef": "secret:file/jwks.json"}},
                 "authorityClaims": {"principal": "registry_principal",
                                     "purpose": "registry_purpose"}},
-            "audit": {"hashKeyRef": "secret:file/audit-key"},
+            "audit": {"hashKeyRef": "secret:file/audit-key",
+                      **({"path": str(private_directory(path.parent / "audit") / "breg.jsonl")}
+                         if file_audit else {})},
             "cursor": {"secretRef": "secret:file/cursor-key"},
         })
 
@@ -793,7 +902,7 @@ class Breg:
         empty = private_directory(build / "empty-package-root")
         test_runtime = build / "runtime-test.yaml"
         self.write_runtime(test_runtime, "schematest", empty, "sha256:" + "0" * 64, 1,
-                           free_port())
+                           free_port(), file_audit=not side.has_legacy_breg_audit())
         credentials = build / "credentials.json"
         self.credentials(credentials)
         baseline_args = ["--baseline-runtime-config", str(baseline)] if baseline else []
@@ -881,7 +990,8 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
     breg.provision()
     breg.author(old)
     package, revision = breg.package(old, work / "build-1")
-    breg.write_runtime(breg.runtime, "registry", package, revision, 1, breg.port)
+    breg.write_runtime(breg.runtime, "registry", package, revision, 1, breg.port,
+                       file_audit=not old.has_legacy_breg_audit())
     old.run_json("bregctl", "--format", "json", "apply", "--runtime-config",
                  str(breg.runtime), "--package", str(package), "--initial")
     ready = f"http://127.0.0.1:{breg.port}/ready"
@@ -893,24 +1003,11 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
         service.stop()
     before_counts = postgres.row_counts("registry")
 
-    for command in ("verify", "doctor"):
-        new.run_json("bregctl", "--format", "json", command, "--runtime-config",
-                     str(breg.runtime))
-    new.run("bregctl", "audit", "verify", "--runtime-config", str(breg.runtime))
-    service = Service(new, "breg", ["--config", str(breg.runtime)], work / "breg-new.log", ready)
-    try:
-        after_views = breg.views(seeded)
-        differences = view_differences(before_views, after_views)
-        written = breg.seed("after")
-    finally:
-        service.stop()
-    losses = row_count_losses(before_counts, postgres.row_counts("registry"))
-
-    # A successor built and activated by this source over the previous
-    # release's state exercises the upgraded compiler and migration planner.
-    # An unchanged model is refused as an empty plan, so the successor adds
-    # one optional field no profile reads: additive, and invisible to the
-    # views compared below.
+    archived = archive_audit_tables(postgres, "registry", before_counts, work / "audit-table-archive")
+    # The new catalog removes audit tables, so rebuild and apply a successor
+    # before verifying or serving with the new runtime. The optional field
+    # gives future releases an additive successor even after this transition.
+    breg.write_runtime(breg.runtime, "registry", package, revision, 1, breg.port)
     registry = load_yaml(breg.project / "registry.yaml")
     registry["package"]["sequence"] = int(registry["package"]["sequence"]) + 1
     group = next(entity for entity in registry["entities"] if entity["id"] == "record-group")
@@ -928,21 +1025,19 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
                       work / "breg-successor.log", ready)
     try:
         successor_views = breg.views(seeded)
+        written = breg.seed("after")
         breg.views(written)
     finally:
         service.stop()
-    new.run("bregctl", "audit", "verify", "--runtime-config", str(breg.runtime))
-    losses += row_count_losses(counts_before_successor, postgres.row_counts("registry"))
-    # A successor records new revision identifiers only for changed rows; the
-    # stored domain data must still match exactly.
-    for key, view in before_views.items():
-        if successor_views.get(key, {}).get("domainData") != view["domainData"]:
-            differences.append(f"{key} domain data changed across the successor activation")
+    new.run_json("bregctl", "--format", "json", "doctor", "--runtime-config", str(breg.runtime))
+    losses = row_count_losses(counts_before_successor, postgres.row_counts("registry"), archived)
+    differences = breg_view_differences(before_views, successor_views)
 
     report["breg"] = {
         "records": sum(len(value) for value in seeded.values()),
         "tables": len(before_counts),
         "successorSequence": registry["package"]["sequence"],
+        "archivedAuditTables": archived,
         "viewDifferences": differences,
         "rowLosses": losses,
     }
@@ -1146,22 +1241,16 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
                 or len(before_views["tasks"]) < 2):
             raise RehearsalError("the previous release did not record the answered "
                                  "and in-flight review work the rehearsal compares")
+        wait_for_casework_audit(postgres)
     finally:
         service.stop()
     before_counts = postgres.row_counts("casework")
 
-    # The documented upgrade: every earlier process is stopped, and a rotated
-    # audit layout moves to an archive before the first serve.
-    rotated = sorted(path.name for path in casework.audit.iterdir()
-                     if re.fullmatch(r"casework\.ndjson\.[0-9]+", path.name))
-    if rotated:
-        archive = private_directory(work / "audit-archive")
-        for path in casework.audit.iterdir():
-            if path.name == "casework.ndjson" or path.name in rotated:
-                path.rename(archive / path.name)
+    archived = archive_audit_tables(postgres, "casework", before_counts, work / "audit-table-archive")
+    archived_files = archive_audit_files(casework.audit, "casework.ndjson", work / "audit-archive")
     new.run("casework", *runtime, "migrate")
     casework.grant_existing()
-    losses = row_count_losses(before_counts, postgres.row_counts("casework"))
+    losses = row_count_losses(before_counts, postgres.row_counts("casework"), archived)
     service = Service(new, "casework", [*runtime, "serve"], work / "casework-new.log", ready)
     try:
         after_views = casework.views(requests)
@@ -1170,13 +1259,14 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
         casework.request_review("after-0")
     finally:
         service.stop()
-    losses += row_count_losses(before_counts, postgres.row_counts("casework"))
+    losses += row_count_losses(before_counts, postgres.row_counts("casework"), archived)
     new.run_json("caseworkctl", "--format", "json", "check", str(casework.project))
 
     report["casework"] = {
         "reviewRequests": len(requests),
         "tables": len(before_counts),
-        "rotatedAuditFilesArchived": len(rotated),
+        "auditFilesArchived": archived_files,
+        "archivedAuditTables": archived,
         "viewDifferences": differences,
         "rowLosses": losses,
     }
@@ -1186,7 +1276,7 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
 
 
 # ---------------------------------------------------------------------------
-# Evidence: build a bundle, sign a response, upgrade, verify the audit chain.
+# Evidence: sign a response, archive the old stream, upgrade, inspect new entries.
 
 
 EVIDENCE_KID = "upgrade-rehearsal-evidence-issuer"
@@ -1223,7 +1313,7 @@ class Evidence:
                  str(self.target), "--output", str(self.candidate))
         runtime = load_yaml(self.candidate / "runtime.yaml")
         runtime["bundleDirectory"] = str(self.candidate / "bundle")
-        runtime["auditStorage"]["path"] = str(self.audit / "evidence.jsonl")
+        runtime["auditStorage" if "auditStorage" in runtime else "audit"]["path"] = str(self.audit / "evidence.jsonl")
         runtime["listener"]["port"] = self.port
         runtime["sourceExtracts"] = {"record-status-extract": {"path": str(self.extract())}}
         dump_yaml(self.runtime, runtime)
@@ -1269,10 +1359,15 @@ class Evidence:
                       "values": {"record_reference": "REC-0001"}}}]})
         return status, body
 
-    def audit_records(self) -> int:
-        return sum(len(path.read_text().splitlines())
-                   for path in sorted(self.audit.iterdir()) if path.is_file()
-                   and path.name.startswith("evidence.jsonl"))
+    def upgrade_audit_configuration(self) -> None:
+        bundle_path = self.candidate / "bundle" / "evidence.yaml"
+        bundle = load_yaml(bundle_path)
+        runtime = load_yaml(self.runtime)
+        upgrade_evidence_audit_configuration(bundle, runtime)
+        for path, document in ((bundle_path, bundle), (self.runtime, runtime)):
+            path.chmod(0o600)
+            dump_yaml(path, document)
+            path.chmod(0o444)
 
 
 def rehearse_evidence(work: Path, keys: Keys, old: Side, new: Side,
@@ -1291,11 +1386,12 @@ def rehearse_evidence(work: Path, keys: Keys, old: Side, new: Side,
                 "GET", f"http://127.0.0.1:{evidence.port}/.well-known/evidence/jwks.json")
         finally:
             service.stop()
-        old.run("evidence", *runtime, "verify-audit")
-        records_before = evidence.audit_records()
+        records_before = audit_record_count(evidence.audit, "evidence.jsonl")
+        archive = work / "audit-archive"
+        archive_audit_files(evidence.audit, "evidence.jsonl", archive)
+        evidence.upgrade_audit_configuration()
 
         new.run("evidence", *runtime, "check")
-        new.run("evidence", *runtime, "verify-audit")
         service = Service(new, "evidence", [*runtime, "serve"], work / "evidence-new.log", ready)
         try:
             status, after = evidence.request()
@@ -1304,19 +1400,21 @@ def rehearse_evidence(work: Path, keys: Keys, old: Side, new: Side,
                 "GET", f"http://127.0.0.1:{evidence.port}/.well-known/evidence/jwks.json")
         finally:
             service.stop()
-        new.run("evidence", *runtime, "verify-audit")
-        records_after = evidence.audit_records()
+        fresh_records = audit_record_count(evidence.audit, "evidence.jsonl", schema="registry.evidence.audit/v2")
+        archived_records = audit_record_count(archive, "evidence.jsonl")
+        records_after = archived_records + fresh_records
     finally:
         evidence.jwks.stop()
 
     losses = []
-    if records_after <= records_before:
-        losses.append(f"the audit chain holds {records_after} records after the upgrade, "
-                      f"{records_before} before it")
+    if records_before == 0 or archived_records != records_before or fresh_records < 2:
+        losses.append("the archived audit stream was not preserved or the upgraded request wrote fewer than two entries")
     differences = view_differences({"jwks": jwks}, {"jwks": jwks_after})
     report["evidence"] = {
         "auditRecordsBefore": records_before,
         "auditRecordsAfter": records_after,
+        "freshAuditRecords": fresh_records,
+        "archivedAuditRecords": archived_records,
         "viewDifferences": differences,
         "rowLosses": losses,
     }
