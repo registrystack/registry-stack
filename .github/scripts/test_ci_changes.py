@@ -2433,7 +2433,7 @@ class LockfileSelectionTest(unittest.TestCase):
         self,
     ) -> None:
         # tree-sitter-yaml compiles C, so it is proven by the full sweep; its
-        # pure-Rust companion rhai reaches five members through normal edges.
+        # pure-Rust companion rhai reaches six members through normal edges.
         change = self.change(bump_lock_package(self.lock, "rhai", "1.26.2"))
         self.assertEqual(
             change.members,
@@ -2443,6 +2443,7 @@ class LockfileSelectionTest(unittest.TestCase):
                     "registry-evidence",
                     "registry-evidence-authoring",
                     "registry-evidencectl",
+                    "registry-messaging",
                     "registry-platform-script",
                 }
             ),
@@ -2451,6 +2452,7 @@ class LockfileSelectionTest(unittest.TestCase):
         self.assertTrue(outputs["platform"])
         self.assertTrue(outputs["breg_contracts"])
         self.assertTrue(outputs["evidence_contracts"])
+        self.assertTrue(outputs["messaging_contracts"])
 
     def test_sys_bump_forces_full(self) -> None:
         change = self.change(bump_lock_package(self.lock, "libsqlite3-sys", "0.38.3"))

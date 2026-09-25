@@ -918,42 +918,42 @@ jobs:
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build the Messaging operator tool
-        run: cargo build --locked --profile ci -p registry-messagingctl
+        run: cargo build --locked -p registry-messagingctl
       - name: Verify Messaging product contracts and offline configuration checks
         env:
-          MESSAGINGCTL_BIN: ${{ github.workspace }}/target/ci/messagingctl
+          MESSAGINGCTL_BIN: ${{ github.workspace }}/target/debug/messagingctl
         run: products/messaging/scripts/check-checkpoint.sh
       - name: Verify migrations, readiness, and the served runtime
         env:
           MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
-        run: cargo test --locked --profile ci -p registry-messaging --features postgres-test --test postgres_migrate
+        run: cargo test --locked -p registry-messaging --features postgres-test --test postgres_migrate
       - name: Verify the package ledger and template stability
         env:
           MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
-        run: cargo test --locked --profile ci -p registry-messaging --features postgres-test --test postgres_package
+        run: cargo test --locked -p registry-messaging --features postgres-test --test postgres_package
       - name: Verify message submission, visibility, and cancellation routes
         env:
           MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
-        run: cargo test --locked --profile ci -p registry-messaging --features postgres-test --test postgres_messages
+        run: cargo test --locked -p registry-messaging --features postgres-test --test postgres_messages
       - name: Verify dispatch worker outcomes and settlement
         env:
           MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
-        run: cargo test --locked --profile ci -p registry-messaging --features postgres-test --test postgres_dispatch
+        run: cargo test --locked -p registry-messaging --features postgres-test --test postgres_dispatch
       - name: Verify provider callbacks and delivery reports
         env:
           MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
-        run: cargo test --locked --profile ci -p registry-messaging --features postgres-test --test postgres_callbacks
+        run: cargo test --locked -p registry-messaging --features postgres-test --test postgres_callbacks
       - name: Verify retention erasure
         env:
           MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
-        run: cargo test --locked --profile ci -p registry-messaging --features postgres-test --test postgres_retention
+        run: cargo test --locked -p registry-messaging --features postgres-test --test postgres_retention
       - name: Verify messagingctl messages commands
         env:
           MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
-        run: cargo test --locked --profile ci -p registry-messagingctl --features postgres-test --tests
+        run: cargo test --locked -p registry-messagingctl --features postgres-test --tests
       - name: Send one email and one SMS through messagingctl dev
         env:
-          MESSAGINGCTL_BIN: ${{ github.workspace }}/target/ci/messagingctl
+          MESSAGINGCTL_BIN: ${{ github.workspace }}/target/debug/messagingctl
         run: products/messaging/scripts/test-dev.sh
 
   messaging-smtp:
@@ -989,7 +989,7 @@ jobs:
         env:
           MESSAGING_SMTP_TEST_MAILPIT_SMTP: 127.0.0.1:${{ job.services.mailpit.ports['1025'] }}
           MESSAGING_SMTP_TEST_MAILPIT_API: http://127.0.0.1:${{ job.services.mailpit.ports['8025'] }}
-        run: cargo test --locked --profile ci -p registry-messaging --features smtp-test --test smtp_mailpit
+        run: cargo test --locked -p registry-messaging --features smtp-test --test smtp_mailpit
 
   breg-contracts:
     name: Base Registry Engine product contracts (${{ matrix.lane }})
@@ -1791,13 +1791,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          CARGO_TARGET_DIR="target/messaging-tutorial-source" \
-            cargo build --locked --profile ci -p registry-messagingctl
+          cargo build --locked -p registry-messagingctl
 
       - name: Execute the Registry Messaging tutorial from a reader directory
         shell: bash
         env:
-          MESSAGINGCTL_BIN: ${{ github.workspace }}/target/messaging-tutorial-source/ci/messagingctl
+          MESSAGINGCTL_BIN: ${{ github.workspace }}/target/debug/messagingctl
         run: |
           set -euo pipefail
           # The tutorial passes no port flags, and this runner listens on
