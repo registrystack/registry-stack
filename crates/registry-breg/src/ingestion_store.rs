@@ -1207,6 +1207,59 @@ pub(crate) async fn append_run_audit(
         .map_err(|_| IngestionStoreError::Unavailable)
 }
 
+/// The request a run transition is about to serve: what its `request` entry
+/// names before the transition's first protected read or write.
+pub(crate) struct RunRequest<'a> {
+    /// `create`, `cancel`, or `submitChunk`.
+    pub(crate) transition: &'a str,
+    pub(crate) run_id: Option<Uuid>,
+    pub(crate) chunk_index: Option<i64>,
+    pub(crate) package_revision: &'a str,
+    pub(crate) entity_id: &'a str,
+    pub(crate) profile_id: &'a str,
+    pub(crate) principal_reference: &'a str,
+    pub(crate) correlation: &'a str,
+}
+
+/// Append the value-free `request` entry of one run transition, correlated by
+/// the request that drives it. Callers append it before the transition's
+/// first protected read or write and perform neither unless the append is
+/// accepted; the transition's `response` entry, appended after commit, shares
+/// the correlation. The entry names only what that response entry already
+/// records.
+pub(crate) async fn append_run_request(
+    audit: &crate::audit::RegistryAudit,
+    request: RunRequest<'_>,
+) -> Result<(), IngestionStoreError> {
+    if !crate::audit::profile_is_keyed(audit.profile()) {
+        return Err(IngestionStoreError::Unavailable);
+    }
+    let mut record = json!({
+        "kind": "ingestionRun",
+        "phase": "attempt",
+        "transition": request.transition,
+        "packageRevision": request.package_revision,
+        "entityId": request.entity_id,
+        "selectedAccessProfile": request.profile_id,
+        "principalReference": request.principal_reference,
+        "correlation": request.correlation,
+    });
+    if let Some(run_id) = request.run_id {
+        record["runId"] = json!(run_id.to_string());
+    }
+    if let Some(chunk_index) = request.chunk_index {
+        record["chunkIndex"] = json!(chunk_index);
+    }
+    audit
+        .append(AuditEntry::request(
+            INGESTION_AUDIT_SCHEMA,
+            request.correlation.to_owned(),
+            record,
+        ))
+        .await
+        .map_err(|_| IngestionStoreError::Unavailable)
+}
+
 /// The canonical lifecycle record for one run transition.
 pub(crate) fn run_audit_record(
     outcome: &str,
