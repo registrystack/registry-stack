@@ -290,12 +290,14 @@ impl DatabaseConfig {
 
 /// Where a runtime obtains the OIDC issuer's signing keys.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum JwksSource {
     /// Read `jwks_uri` from the issuer's OpenID Connect discovery document.
-    #[default]
-    Discovery,
+    // A struct variant, so `deny_unknown_fields` refuses a `uri` or a
+    // `documentRef` written beside `kind: discovery`; serde ignores extra
+    // members on a unit variant of an internally tagged enum.
+    Discovery {},
     /// Fetch the key set from this absolute `https` URI, skipping discovery.
     Uri {
         #[cfg_attr(feature = "schema", schemars(extend("pattern" = "^https?://")))]
@@ -310,13 +312,19 @@ pub enum JwksSource {
     },
 }
 
+impl Default for JwksSource {
+    fn default() -> Self {
+        Self::Discovery {}
+    }
+}
+
 impl JwksSource {
     /// A `uri` source names an absolute `https` URL without credentials. A
     /// loopback `http` URL is accepted only when `allow_loopback_http` is set,
     /// for supervised local development.
     pub fn check(&self, field: &str, allow_loopback_http: bool) -> Result<(), ConfigBlockError> {
         match self {
-            Self::Discovery => Ok(()),
+            Self::Discovery {} => Ok(()),
             Self::Uri { uri } => {
                 let field = format!("{field}.uri");
                 if valid_jwks_uri(uri, allow_loopback_http) {

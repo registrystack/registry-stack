@@ -1589,7 +1589,7 @@ impl OidcRuntime {
             )
         })?;
         let key_transport = match &self.jwks_source {
-            JwksSource::Discovery => {
+            JwksSource::Discovery {} => {
                 let discovery_url = format!(
                     "{}{OIDC_DISCOVERY_SUFFIX}",
                     issuer_identifier.trim_end_matches('/')
