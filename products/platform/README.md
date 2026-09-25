@@ -9,7 +9,7 @@ and related registry services.
 
 The workspace is consumed by applications through a pinned git tag. It centralizes
 the pieces that should behave identically across services: outbound HTTP policy,
-authentication helpers, OIDC verification, audit chaining, browser-facing HTTP
+authentication helpers, OIDC verification, audit writing, browser-facing HTTP
 security, SD-JWT VC support, crypto primitives, bounded SQLite reads, and
 integration-test fixtures.
 
@@ -17,7 +17,7 @@ integration-test fixtures.
 
 | Crate | Purpose |
 | --- | --- |
-| [`registry-platform-audit`](crates/registry-platform-audit/README.md) | Tamper-evident audit envelopes, async sinks, JSONL verification, and redaction helpers. |
+| [`registry-platform-audit`](crates/registry-platform-audit/README.md) | Shared JSON Lines audit writer, durable file acceptance, rotation, and keyed reference helpers. |
 | [`registry-platform-authcommon`](crates/registry-platform-authcommon/README.md) | Provider-independent authentication helpers for Bearer tokens and API-key fingerprints. |
 | [`registry-platform-buildinfo`](crates/registry-platform-buildinfo/README.md) | Shared build and version metadata. |
 | [`registry-platform-canonical-json`](crates/registry-platform-canonical-json/README.md) | Canonical JSON serialization for digests and signatures. |

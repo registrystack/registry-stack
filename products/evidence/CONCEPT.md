@@ -110,7 +110,7 @@ Evidence should:
 - use startup-only YAML configuration and trusted Rhai extraction and derivation scripts;
 - execute fixed, least-privilege source requests through Rust;
 - reuse platform audit and operational logging primitives where they fit;
-- provide privacy-safe, tamper-evident audit records;
+- provide privacy-safe audit records, with tamper evidence supplied by the deployment log pipeline;
 - minimize acquisition when the source supports it and always minimize disclosure;
 - validate all definitions, scripts, and schemas before serving, and require
   complete fixtures before production or evidence-grade serving;
@@ -1532,7 +1532,10 @@ They must not contain request bodies, selector profiles or values, source
 responses, Supported Values, credentials, tokens, authority grants, or Rhai
 inputs.
 
-Audit records establish accountable access. Reusable platform primitives may provide tamper-evident envelopes, keyed pseudonymization, redaction helpers, sinks, and chain verification.
+Audit records establish accountable access. The shared platform writer provides
+plain JSON Lines envelopes, with keyed pseudonymization and redaction helpers.
+Entries are not chained or signed. Tamper evidence and completeness depend on
+shipping the stream to append-only storage outside the service's write authority.
 
 Authorized-material audit events contain only reviewed fields:
 
@@ -2440,8 +2443,7 @@ It does not include:
 - application-level or ambient-environment HTTP proxy routing;
 - federation;
 - runtime configuration mutation;
-- an application database unless the selected audit sink requires an external
-  durable service; a mounted extract is a read-only source input, never a store
+- an application database; a mounted extract is a read-only source input, never a store
   the service owns, writes, or keeps state in.
 
 ## 18. Delivery sequence
