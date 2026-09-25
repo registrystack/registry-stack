@@ -104,6 +104,9 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             &format!("the runtime package was refused: {cause}"),
         );
     }
+    if let StartupError::PackageEnvelopeRefused(cause) = error {
+        return diagnostic("startup.package.refused", "package", &cause);
+    }
     // The writer's own refusal names the rule and the recovery step, and
     // never a path or a secret.
     if let StartupError::AuditDestination(reason) = error {
@@ -116,6 +119,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
     let (code, path, message) = match error {
         StartupError::RuntimeConfig(_)
         | StartupError::PackageRefused(_)
+        | StartupError::PackageEnvelopeRefused(_)
         | StartupError::AuditDestination(_) => {
             unreachable!("handled above")
         }

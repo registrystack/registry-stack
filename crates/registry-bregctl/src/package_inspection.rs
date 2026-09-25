@@ -12,11 +12,12 @@ use registry_breg::package::{
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 use registry_breg::CompiledRegistry;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RuntimePackageInspectionError {
     RuntimeConfigPath,
     RuntimeConfig(RuntimeConfigError),
     Package(PackageError),
+    SharedPackage(String),
 }
 
 /// Inspect exactly the package selected and bound by one strict runtime
@@ -29,6 +30,9 @@ pub(crate) fn inspect_runtime_package(
     }
     let config = load_runtime_config(runtime_config)
         .map_err(RuntimePackageInspectionError::RuntimeConfig)?;
+    config
+        .verify_package_envelope()
+        .map_err(|error| RuntimePackageInspectionError::SharedPackage(error.to_string()))?;
     let context = PackageInspectionContext {
         environment: config.identity().environment(),
         instance_id: config.identity().instance_id(),
@@ -74,7 +78,12 @@ fn load_predecessor_runtime_config(
     if !runtime_config.is_absolute() {
         return Err(RuntimePackageInspectionError::RuntimeConfigPath);
     }
-    load_runtime_config(runtime_config).map_err(RuntimePackageInspectionError::RuntimeConfig)
+    let config = load_runtime_config(runtime_config)
+        .map_err(RuntimePackageInspectionError::RuntimeConfig)?;
+    config
+        .verify_package_envelope()
+        .map_err(|error| RuntimePackageInspectionError::SharedPackage(error.to_string()))?;
+    Ok(config)
 }
 
 fn predecessor_context(config: &RuntimeConfig) -> PredecessorPackageContext<'_> {
