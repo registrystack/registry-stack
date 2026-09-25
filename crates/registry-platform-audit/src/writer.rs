@@ -445,7 +445,7 @@ pub struct AuditWriter {
 }
 
 enum WriterInner {
-    File(Box<GroupCommitFile>),
+    File(Arc<GroupCommitFile>),
     Stream(LineStream),
 }
 
@@ -471,7 +471,7 @@ impl AuditWriter {
                 let opened = tokio::task::spawn_blocking(move || SegmentedFile::open(file))
                     .await
                     .map_err(|error| AuditError::Io(io::Error::other(error)))??;
-                WriterInner::File(Box::new(GroupCommitFile::new(opened)))
+                WriterInner::File(Arc::new(GroupCommitFile::new(opened)))
             }
             AuditDestination::Stdout => {
                 WriterInner::Stream(LineStream::new(Box::new(io::stdout())))
@@ -492,11 +492,17 @@ impl AuditWriter {
     }
 
     /// Append one entry. For the file destination this returns only after the
-    /// entry's bytes are durable.
+    /// entry's bytes are durable. Canceling the caller does not cancel an
+    /// enqueued file write or the other entries in its group commit.
     pub async fn append(&self, entry: AuditEntry) -> Result<(), AuditUnavailable> {
         let line = entry.to_line()?;
         match self.inner.as_ref() {
-            WriterInner::File(file) => file.append(line).await,
+            WriterInner::File(file) => {
+                let file = Arc::clone(file);
+                tokio::spawn(async move { file.append(line).await })
+                    .await
+                    .map_err(|_| AuditUnavailable::new(AuditUnavailableReason::Stopped))?
+            }
             WriterInner::Stream(stream) => stream.append(&line),
         }
     }
@@ -541,6 +547,8 @@ impl AuditWriter {
 struct LineStream {
     out: StdMutex<Box<dyn Write + Send>>,
     healthy: AtomicBool,
+    #[cfg(test)]
+    before_lock_hook: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl LineStream {
@@ -548,6 +556,8 @@ impl LineStream {
         Self {
             out: StdMutex::new(out),
             healthy: AtomicBool::new(true),
+            #[cfg(test)]
+            before_lock_hook: None,
         }
     }
 
@@ -559,10 +569,18 @@ impl LineStream {
         if !self.healthy() {
             return Err(AuditUnavailable::new(AuditUnavailableReason::Stopped));
         }
+        #[cfg(test)]
+        if let Some(hook) = &self.before_lock_hook {
+            hook();
+        }
         let mut out = self
             .out
             .lock()
             .map_err(|_| AuditUnavailable::new(AuditUnavailableReason::Stopped))?;
+        // A prior holder can stop the stream while this append waits.
+        if !self.healthy() {
+            return Err(AuditUnavailable::new(AuditUnavailableReason::Stopped));
+        }
         match out.write_all(line.as_bytes()).and_then(|()| out.flush()) {
             Ok(()) => Ok(()),
             Err(error) => {
@@ -1186,7 +1204,7 @@ mod tests {
             .expect("open");
         file.sync_hook = Some(hook);
         AuditWriter {
-            inner: Arc::new(WriterInner::File(Box::new(GroupCommitFile::new(file)))),
+            inner: Arc::new(WriterInner::File(Arc::new(GroupCommitFile::new(file)))),
         }
     }
 
@@ -1350,6 +1368,107 @@ mod tests {
             durable_writes < appends as u64 / 2,
             "{durable_writes} durable writes for {appends} appends"
         );
+    }
+
+    async fn wait_for_pending(file: &GroupCommitFile, expected: usize) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while file.state.lock().await.pending.len() != expected {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("pending batch reached expected size");
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_flush_owner_keeps_every_waiting_entry_durable() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        let writer = AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect("open");
+        let WriterInner::File(file) = writer.inner.as_ref() else {
+            panic!("file writer");
+        };
+        // Enqueue both callers in one batch, then hold its file-state lock so
+        // cancellation lands after the batch was removed from pending.
+        let file_guard = file.file.state.lock().await;
+        let flush_guard = file.flush.lock().await;
+        let owner = tokio::spawn({
+            let writer = writer.clone();
+            async move { writer.append(request("owner")).await }
+        });
+        wait_for_pending(file, 1).await;
+        let waiter = tokio::spawn({
+            let writer = writer.clone();
+            async move { writer.append(request("waiter")).await }
+        });
+        wait_for_pending(file, 2).await;
+        drop(flush_guard);
+        wait_for_pending(file, 0).await;
+        owner.abort();
+        assert!(owner.await.expect_err("owner cancelled").is_cancelled());
+        drop(file_guard);
+        tokio::time::timeout(Duration::from_secs(5), writer.append(request("later")))
+            .await
+            .expect("later completes")
+            .expect("later accepted");
+        tokio::time::timeout(Duration::from_secs(5), waiter)
+            .await
+            .expect("waiter completes")
+            .expect("waiter joined")
+            .expect("waiter accepted");
+        let correlations: Vec<Value> = lines(&path)
+            .into_iter()
+            .map(|entry| entry["correlation"].clone())
+            .collect();
+        assert_eq!(
+            correlations,
+            vec![json!("owner"), json!("waiter"), json!("later")]
+        );
+        assert!(writer.ready().await);
+    }
+
+    #[tokio::test]
+    async fn cancelling_during_file_sync_keeps_the_pinned_state_current() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        let (release, gate) = mpsc::channel::<()>();
+        let gate = Arc::new(Mutex::new(gate));
+        let syncing = Arc::new(AtomicUsize::new(0));
+        let hook_syncing = Arc::clone(&syncing);
+        let hook: SyncHook = Arc::new(move || {
+            if hook_syncing.fetch_add(1, Ordering::SeqCst) == 0 {
+                gate.lock()
+                    .expect("gate")
+                    .recv_timeout(Duration::from_secs(5))
+                    .map_err(io::Error::other)?;
+            }
+            Ok(())
+        });
+        let writer = open_with_hook(destination, hook).await;
+        let owner = tokio::spawn({
+            let writer = writer.clone();
+            async move { writer.append(request("owner")).await }
+        });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while syncing.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("file sync started");
+        owner.abort();
+        assert!(owner.await.expect_err("owner cancelled").is_cancelled());
+        release.send(()).expect("finish sync");
+        writer
+            .append(request("later"))
+            .await
+            .expect("later accepted");
+        assert_eq!(lines(&path).len(), 2);
+        assert!(writer.ready().await);
     }
 
     #[tokio::test]
@@ -1584,6 +1703,76 @@ mod tests {
         let second = writer.append(request("req-2")).await.expect_err("refused");
         assert_eq!(second.reason(), AuditUnavailableReason::Stopped);
         assert!(!writer.ready().await);
+    }
+
+    #[test]
+    fn queued_stream_append_stays_stopped_after_an_earlier_write_fails() {
+        struct FailOnce {
+            entered: std::sync::mpsc::Sender<()>,
+            release: std::sync::mpsc::Receiver<()>,
+            writes: Arc<AtomicU64>,
+        }
+
+        impl Write for FailOnce {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                if self.writes.fetch_add(1, Ordering::Relaxed) == 0 {
+                    self.entered.send(()).expect("first write entered");
+                    self.release
+                        .recv_timeout(Duration::from_secs(5))
+                        .map_err(io::Error::other)?;
+                    return Err(io::Error::other("first write failed"));
+                }
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let (entered, first_write) = std::sync::mpsc::channel();
+        let (queued, second_append) = std::sync::mpsc::channel();
+        let (release, failure_gate) = std::sync::mpsc::channel();
+        let writes = Arc::new(AtomicU64::new(0));
+        let mut stream = LineStream::new(Box::new(FailOnce {
+            entered,
+            release: failure_gate,
+            writes: writes.clone(),
+        }));
+        let calls = AtomicU64::new(0);
+        stream.before_lock_hook = Some(Arc::new(move || {
+            if calls.fetch_add(1, Ordering::Relaxed) == 1 {
+                queued.send(()).expect("second append passed readiness");
+            }
+        }));
+        std::thread::scope(|scope| {
+            let first = scope.spawn(|| stream.append("first\n"));
+            first_write
+                .recv_timeout(Duration::from_secs(5))
+                .expect("first write started");
+            let second = scope.spawn(|| stream.append("second\n"));
+            second_append
+                .recv_timeout(Duration::from_secs(5))
+                .expect("second append queued");
+            release.send(()).expect("release failed write");
+            assert_eq!(
+                first
+                    .join()
+                    .expect("first joined")
+                    .expect_err("first refused")
+                    .reason(),
+                AuditUnavailableReason::WriteFailed
+            );
+            assert_eq!(
+                second
+                    .join()
+                    .expect("second joined")
+                    .expect_err("queued append refused")
+                    .reason(),
+                AuditUnavailableReason::Stopped
+            );
+        });
+        assert_eq!(writes.load(Ordering::Relaxed), 1);
     }
 
     #[test]

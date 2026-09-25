@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Keep queued stream appends stopped after an earlier write fails, and finish
+  accepted file writes when their request task is canceled. Group commits retain
+  every waiting entry and update the pinned file state before accepting later
+  writes.
+
 - Add `AuditWriter`, the one audit writer every product uses. It appends a
   plain JSON envelope (`schema`, `eventId`, `time`, `phase`, `correlation`,
   `record`) to an owner-only file with fsync and group commit, size rotation,
