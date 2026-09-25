@@ -140,6 +140,7 @@
         "secretFiles",
         "sourceDescriptions",
         "sourceConnections",
+        "audit",
         "database",
         "oidcIssuer",
         "directory"
@@ -155,6 +156,9 @@
           "const": "ready"
         },
         "sourceConnections": {
+          "const": "ready"
+        },
+        "audit": {
           "const": "ready"
         },
         "database": {

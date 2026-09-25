@@ -80,6 +80,14 @@ impl PostgresStore {
         let value = serde_json::to_value(document)?;
         let digest = digest_json(&value)?;
         let revision = i64::try_from(document.revision).map_err(|_| StoreError::Invalid)?;
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                "holiday_revision_created",
+                Some(actor),
+                &actor.profile_id,
+                json!({}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let resource = format!("{}:{}", document.holiday_set, document.revision);
@@ -95,7 +103,7 @@ impl PostgresStore {
             &[&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&resource,&idempotency_key],
         ).await? {
             if row.get::<_,String>(0)!=digest{return Err(StoreError::IdempotencyConflict)}
-            transaction.commit().await?;
+            audit.commit(transaction).await?;
             return Ok(())
         }
         let existing = transaction
@@ -118,7 +126,7 @@ impl PostgresStore {
                 &Value::Null,
             )
             .await?;
-            transaction.commit().await?;
+            audit.commit(transaction).await?;
             return Ok(());
         }
         transaction.execute(
@@ -126,7 +134,7 @@ impl PostgresStore {
             &[&document.holiday_set,&revision,&value,&digest,&Utc::now(),&actor.principal.issuer,&actor.principal.subject,&actor.profile_id],
         ).await?;
         append_clock_audit(
-            &transaction,
+            &mut audit,
             actor,
             "holiday_revision_created",
             json!({"holidaySet":document.holiday_set,"revision":document.revision,"digest":digest}),
@@ -142,7 +150,7 @@ impl PostgresStore {
             &Value::Null,
         )
         .await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(())
     }
 
@@ -304,6 +312,14 @@ impl PostgresStore {
         if idempotency_key.is_empty() || idempotency_key.len() > 256 {
             return Err(StoreError::Invalid);
         }
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                "clock_recomputed",
+                Some(actor),
+                &actor.profile_id,
+                json!({}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let lock_binding = format!(
@@ -403,7 +419,7 @@ impl PostgresStore {
             if !item.state.is_active() {
                 return Err(StoreError::Conflict);
             }
-            crate::store::append_item_event(&transaction,&item,HistoryKind::ClockRecomputed,Some(actor),&actor.profile_id,json!({"clockOccurrenceId":id,"calculationGeneration":next,"recomputeGeneration":recompute,"oldCalculationGeneration":current,"dueAt":value.due_at})).await?;
+            crate::store::append_item_event(&transaction,&mut audit,&item,HistoryKind::ClockRecomputed,Some(actor),&actor.profile_id,json!({"clockOccurrenceId":id,"calculationGeneration":next,"recomputeGeneration":recompute,"oldCalculationGeneration":current,"dueAt":value.due_at})).await?;
             transaction.execute("UPDATE casework_clock_recompute_previews SET applied_at=$3 WHERE preview_id=$1 AND clock_occurrence_id=$2",&[&preview_id,&id,&now]).await?;
             applied.push(id);
         }
@@ -412,7 +428,7 @@ impl PostgresStore {
             applied_occurrences: applied,
         };
         transaction.execute("INSERT INTO casework_idempotency(issuer,subject,profile_id,operation,resource,idempotency_key,request_hash,response,created_at) VALUES($1,$2,$3,'clock.recompute.apply',$4,$5,$6,$7,$8)",&[&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&preview_id.to_string(),&idempotency_key,&request_hash,&serde_json::to_value(&result)?,&now]).await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(result)
     }
 
@@ -477,6 +493,7 @@ impl PostgresStore {
         claim: &ClockTimerClaim,
         observation: &registry_casework_core::AuthoritativeObservation,
     ) -> Result<usize, StoreError> {
+        let mut audit = self.begin_background_audit().await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         // Reconciliation uses subject -> item -> clock. Preserve that order so
@@ -490,7 +507,7 @@ impl PostgresStore {
                 "UPDATE casework_clock_occurrences SET state='cancelled',next_action_at=NULL,lease_token=NULL,lease_until=NULL,updated_at=now() WHERE clock_occurrence_id=$1 AND lease_token=$2",
                 &[&claim.clock_occurrence_id, &claim.lease_token],
             ).await?;
-            transaction.commit().await?;
+            audit.commit(transaction).await?;
             return Ok(0);
         }
         let preview_item = transaction
@@ -517,14 +534,14 @@ impl PostgresStore {
                 .as_deref()
                 .is_some_and(|value| matches!(value, "completed" | "cancelled"))
             {
-                transaction.commit().await?;
+                audit.commit(transaction).await?;
                 return Ok(0);
             }
             return Err(StoreError::Conflict);
         };
         let state: String = occurrence.get(0);
         if !matches!(state.as_str(), "running" | "verification_pending") {
-            transaction.commit().await?;
+            audit.commit(transaction).await?;
             return Ok(0);
         }
         let scope: String = occurrence.get(1);
@@ -549,7 +566,7 @@ impl PostgresStore {
                 "UPDATE casework_clock_occurrences SET state=CASE WHEN $3 THEN 'cancelled' ELSE 'verification_pending' END,next_action_at=CASE WHEN $3 THEN NULL ELSE now()+make_interval(secs=>$4::int) END,lease_token=NULL,lease_until=NULL,updated_at=now() WHERE clock_occurrence_id=$1 AND lease_token=$2",
                 &[&claim.clock_occurrence_id,&claim.lease_token,&(!occurrence_current),&i32::try_from(VERIFICATION_RETRY_SECONDS).map_err(|_|StoreError::Invalid)?],
             ).await?;
-            transaction.commit().await?;
+            audit.commit(transaction).await?;
             return Ok(0);
         }
         let item_id = item_id.ok_or(StoreError::Corrupt)?;
@@ -565,7 +582,7 @@ impl PostgresStore {
                 "UPDATE casework_clock_occurrences SET next_action_at=now()+make_interval(secs=>$3::int),lease_token=NULL,lease_until=NULL,updated_at=now() WHERE clock_occurrence_id=$1 AND lease_token=$2",
                 &[&claim.clock_occurrence_id,&claim.lease_token,&i32::try_from(VERIFICATION_RETRY_SECONDS).map_err(|_|StoreError::Invalid)?],
             ).await?;
-            transaction.commit().await?;
+            audit.commit(transaction).await?;
             return Ok(0);
         }
         let calculation =
@@ -584,7 +601,7 @@ impl PostgresStore {
             .await?
             {
                 let event_id = crate::store::append_item_event(
-                    &transaction,&item,HistoryKind::ClockReminder,None,"system:clock",
+                    &transaction,&mut audit,&item,HistoryKind::ClockReminder,None,"system:clock",
                     json!({"clockOccurrenceId":claim.clock_occurrence_id,"clockId":calculation.policy.id(),"effectId":reminder.id,"calculationGeneration":generation,"at":reminder.at}),
                 ).await?;
                 attach_effect_event(
@@ -611,7 +628,7 @@ impl PostgresStore {
                     "UPDATE casework_clock_occurrences SET state='verification_pending',next_action_at=now()+make_interval(secs=>$3::int),lease_token=NULL,lease_until=NULL,updated_at=now() WHERE clock_occurrence_id=$1 AND lease_token=$2",
                     &[&claim.clock_occurrence_id,&claim.lease_token,&i32::try_from(VERIFICATION_RETRY_SECONDS).map_err(|_|StoreError::Invalid)?],
                 ).await?;
-                transaction.commit().await?;
+                audit.commit(transaction).await?;
                 return Ok(applied);
             }
             if reserve_effect(
@@ -640,7 +657,7 @@ impl PostgresStore {
                     &[&item.item_id,&item.queue_id,&state_name(item.state),&item.revision,&now],
                 ).await?;
                 let event_id = crate::store::append_item_event(
-                    &transaction,&item,HistoryKind::ClockStepApplied,None,"system:clock",
+                    &transaction,&mut audit,&item,HistoryKind::ClockStepApplied,None,"system:clock",
                     json!({"clockOccurrenceId":claim.clock_occurrence_id,"clockId":calculation.policy.id(),"effectId":step.id,"because":step.because,"calculationGeneration":generation,"previousQueue":prior_queue,"queue":step.reassign_queue,"previousHolder":prior_holder}),
                 ).await?;
                 attach_effect_event(
@@ -661,7 +678,7 @@ impl PostgresStore {
             "UPDATE casework_clock_occurrences SET state='running',next_action_at=$3,lease_token=NULL,lease_until=NULL,updated_at=$4 WHERE clock_occurrence_id=$1 AND lease_token=$2",
             &[&claim.clock_occurrence_id,&claim.lease_token,&next,&now],
         ).await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(applied)
     }
 }
@@ -1252,14 +1269,16 @@ fn valid_date(value: &str) -> bool {
 }
 
 async fn append_clock_audit(
-    transaction: &Transaction<'_>,
+    audit: &mut crate::audit::AuditOperation,
     actor: &ActorContext,
     kind: &str,
     detail: Value,
 ) -> Result<(), StoreError> {
     let event_id = Uuid::new_v4();
-    transaction.execute("INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)",&[&event_id,&json!({"event":format!("casework.{kind}"),"eventId":event_id,"actor":{"issuer":actor.principal.issuer,"subject":actor.principal.subject},"profileId":actor.profile_id,"detail":detail})]).await?;
-    Ok(())
+    audit.record(
+        event_id,
+        json!({"event":format!("casework.{kind}"),"eventId":event_id,"actor":{"issuer":actor.principal.issuer,"subject":actor.principal.subject},"profileId":actor.profile_id,"detail":detail}),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1457,7 +1476,9 @@ mod tests {
             trusted_root_certificate_ref: None,
             test_only_plaintext: true,
         };
-        let store = PostgresStore::connect_migration(&config, &secrets).expect("store");
+        let store = PostgresStore::connect_migration(&config, &secrets)
+            .expect("store")
+            .with_audit(crate::CaseworkAudit::capture().0);
         store.migrate().await.expect("migrate clocks");
         let admin = actor("admin", CaseworkRole::Administrator, "administrator");
         store

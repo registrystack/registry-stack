@@ -44,9 +44,10 @@ const SYNC_CLAIM_INDEXES_MIGRATION: &str =
 const UNIFIED_REVIEWS_MIGRATION: &str = include_str!("../migrations/0015_unified_reviews.sql");
 const OCCURRENCE_IDENTITY_MIGRATION: &str =
     include_str!("../migrations/0016_occurrence_identity_excludes_superseded.sql");
+const AUDIT_WRITER_MIGRATION: &str = include_str!("../migrations/0017_audit_writer.sql");
 
 /// Every schema version in ledger order.
-const MIGRATIONS: [(i64, &str); 16] = [
+const MIGRATIONS: [(i64, &str); 17] = [
     (1, MIGRATION),
     (2, HOSTED_MIGRATION),
     (3, ASSIGNMENT_MIGRATION),
@@ -63,6 +64,7 @@ const MIGRATIONS: [(i64, &str); 16] = [
     (14, include_str!("../migrations/0014_task_grants.sql")),
     (15, UNIFIED_REVIEWS_MIGRATION),
     (16, OCCURRENCE_IDENTITY_MIGRATION),
+    (17, AUDIT_WRITER_MIGRATION),
 ];
 
 /// The newest schema version this binary knows how to run against.
@@ -139,6 +141,52 @@ async fn refuse_to_drop_hosted_work(
     }
 }
 
+/// The schema version that drops the audit outbox.
+const AUDIT_OUTBOX_DROP_VERSION: i64 = 17;
+
+/// Refuse a migration that would drop audit records the previous release has
+/// not yet published to its audit journal. They have no successor in the
+/// database, so the operator drains them with that release first.
+async fn refuse_to_drop_unpublished_audit(
+    transaction: &tokio_postgres::Transaction<'_>,
+) -> Result<(), StoreError> {
+    let dropped: bool = transaction
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM casework_schema_migrations WHERE version=$1)",
+            &[&AUDIT_OUTBOX_DROP_VERSION],
+        )
+        .await?
+        .get(0);
+    if dropped {
+        return Ok(());
+    }
+    let exists: bool = transaction
+        .query_one(
+            "SELECT to_regclass('casework_audit_outbox') IS NOT NULL",
+            &[],
+        )
+        .await?
+        .get(0);
+    if !exists {
+        return Ok(());
+    }
+    let rows: i64 = transaction
+        .query_one(
+            "SELECT count(*) FROM casework_audit_outbox WHERE published_at IS NULL",
+            &[],
+        )
+        .await?
+        .get(0);
+    if rows == 0 {
+        Ok(())
+    } else {
+        Err(StoreError::UnpublishedAuditWouldBeDropped {
+            version: AUDIT_OUTBOX_DROP_VERSION,
+            rows,
+        })
+    }
+}
+
 /// Serializes operator-run migrations on one session lock. A second migrator
 /// waits here instead of racing the ledger primary key. The key spells the
 /// ASCII bytes of "casework".
@@ -168,6 +216,7 @@ pub(crate) struct RemoteDiscoveryClaim {
 #[derive(Clone)]
 pub struct PostgresStore {
     pool: Pool,
+    audit: Option<crate::CaseworkAudit>,
 }
 
 impl std::fmt::Debug for PostgresStore {
@@ -247,7 +296,70 @@ impl PostgresStore {
             .runtime(Runtime::Tokio1)
             .build()
             .map_err(|_| StoreError::Configuration)?;
-        Ok(Self { pool })
+        Ok(Self { pool, audit: None })
+    }
+
+    /// Write this store's audited operations to `audit`. A store without an
+    /// audit destination refuses every audited operation before it opens a
+    /// transaction.
+    #[must_use]
+    pub fn with_audit(mut self, audit: crate::CaseworkAudit) -> Self {
+        self.audit = Some(audit);
+        self
+    }
+
+    /// Whether the audit destination can still accept entries.
+    pub async fn audit_ready(&self) -> bool {
+        match &self.audit {
+            Some(audit) => audit.ready().await,
+            None => false,
+        }
+    }
+
+    /// Start an audited unit of background work that no caller requested.
+    pub(crate) async fn begin_background_audit(
+        &self,
+    ) -> Result<crate::audit::AuditOperation, StoreError> {
+        self.audit
+            .as_ref()
+            .ok_or(StoreError::AuditUnavailable)?
+            .begin_background()
+            .await
+    }
+
+    /// Append the `request` entry of one audited operation. Call it before
+    /// the operation's transaction opens.
+    pub(crate) async fn begin_audit(
+        &self,
+        request: Value,
+    ) -> Result<crate::audit::AuditOperation, StoreError> {
+        self.audit
+            .as_ref()
+            .ok_or(StoreError::AuditUnavailable)?
+            .begin(request)
+            .await
+    }
+
+    /// Start an audited operation that a caller requested when `actor` names
+    /// one, and an audited unit of background work otherwise.
+    pub(crate) async fn begin_audit_for(
+        &self,
+        actor: Option<&ActorContext>,
+        event: &str,
+        identifiers: Value,
+    ) -> Result<crate::audit::AuditOperation, StoreError> {
+        match actor {
+            Some(actor) => {
+                self.begin_audit(crate::audit::request_record(
+                    event,
+                    Some(actor),
+                    &actor.profile_id,
+                    identifiers,
+                ))
+                .await
+            }
+            None => self.begin_background_audit().await,
+        }
     }
 
     pub async fn migrate(&self) -> Result<(), StoreError> {
@@ -285,6 +397,7 @@ impl PostgresStore {
             .get(0);
         refuse_newer_schema(newest_applied)?;
         refuse_to_drop_hosted_work(&transaction).await?;
+        refuse_to_drop_unpublished_audit(&transaction).await?;
         transaction.commit().await?;
 
         for (version, migration) in MIGRATIONS {
@@ -365,6 +478,14 @@ impl PostgresStore {
             return Err(StoreError::Forbidden);
         }
         let request_hash = request_hash(request)?;
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                "directory_bootstrapped",
+                Some(actor),
+                &actor.profile_id,
+                json!({"teamId": request.team_id, "queueId": request.queue_id}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         if let Some(response) = idempotent_response(
@@ -427,16 +548,14 @@ impl PostgresStore {
             "INSERT INTO casework_directory_events(event_id,directory_revision,event_kind,occurred_at,actor_issuer,actor_subject,profile_id,detail) VALUES($1,$2,'directory_bootstrapped',$3,$4,$5,$6,$7)",
             &[&event_id,&next,&now,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&detail],
         ).await?;
-        insert_audit_outbox(
-            &transaction,
+        audit.record(
             event_id,
             json!({
                 "event":"casework.directory_bootstrapped","directoryRevision":next,
                 "actor":{"issuer":actor.principal.issuer,"subject":actor.principal.subject},
                 "profileId":actor.profile_id,"teamId":request.team_id,"queueId":request.queue_id
             }),
-        )
-        .await?;
+        )?;
         let response = json!({"revision":next});
         insert_idempotency(
             &transaction,
@@ -448,7 +567,7 @@ impl PostgresStore {
             &response,
         )
         .await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(next)
     }
 
@@ -569,6 +688,7 @@ impl PostgresStore {
         {
             return Err(StoreError::Invalid);
         }
+        let mut audit = self.begin_background_audit().await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         transaction.execute(
@@ -597,14 +717,14 @@ impl PostgresStore {
             return Err(StoreError::Corrupt);
         };
         if erased {
-            transaction.commit().await?;
+            audit.commit(transaction).await?;
             return Ok(None);
         }
         if generation != observation.binding.generation {
             return Err(StoreError::StaleGeneration);
         }
         if observation.ordered_revision < applied {
-            transaction.commit().await?;
+            audit.commit(transaction).await?;
             return Ok(None);
         }
         // A source observation must never advance the local reducer past an
@@ -622,7 +742,7 @@ impl PostgresStore {
                 "UPDATE casework_subjects SET sync_pending=true,sync_lease_until=NULL WHERE source_id=$1 AND subject_kind=$2 AND subject_id=$3",
                 &[&observation.subject.source_id, &observation.subject.kind, &observation.subject.id],
             ).await?;
-            transaction.commit().await?;
+            audit.commit(transaction).await?;
             return Ok(None);
         }
         if observation.ordered_revision == applied
@@ -645,7 +765,7 @@ impl PostgresStore {
                 "UPDATE casework_subjects SET sync_pending=(wanted_revision>$4),sync_lease_until=NULL WHERE source_id=$1 AND subject_kind=$2 AND subject_id=$3",
                 &[&observation.subject.source_id,&observation.subject.kind,&observation.subject.id,&observation.ordered_revision]
             ).await?;
-            transaction.commit().await?;
+            audit.commit(transaction).await?;
             return Ok(None);
         }
 
@@ -663,8 +783,10 @@ impl PostgresStore {
             for row in active_rows {
                 let item = row_to_item(&row)?;
                 let event = observation_event(observation.state)?;
-                result =
-                    Some(update_observed_item(&transaction, &item, event, observation, now).await?);
+                result = Some(
+                    update_observed_item(&transaction, &mut audit, &item, event, observation, now)
+                        .await?,
+                );
             }
         } else {
             let matching = active_rows.iter().find_map(|row| {
@@ -681,6 +803,7 @@ impl PostgresStore {
                 if item.binding.generation != observation.binding.generation {
                     update_observed_item(
                         &transaction,
+                        &mut audit,
                         &item,
                         OccurrenceEvent::Supersede,
                         observation,
@@ -692,6 +815,7 @@ impl PostgresStore {
                 {
                     update_observed_item(
                         &transaction,
+                        &mut audit,
                         &item,
                         OccurrenceEvent::Complete,
                         observation,
@@ -707,6 +831,7 @@ impl PostgresStore {
                     // the earlier proposal's application occurrence.
                     update_observed_item(
                         &transaction,
+                        &mut audit,
                         &item,
                         OccurrenceEvent::Supersede,
                         observation,
@@ -719,6 +844,7 @@ impl PostgresStore {
                 result = Some(
                     update_observed_item(
                         &transaction,
+                        &mut audit,
                         &item,
                         observation_event(observation.state)?,
                         observation,
@@ -779,6 +905,7 @@ impl PostgresStore {
                 }
                 append_item_event(
                     &transaction,
+                    &mut audit,
                     &item,
                     HistoryKind::Observed,
                     None,
@@ -794,7 +921,7 @@ impl PostgresStore {
             "UPDATE casework_subjects SET applied_revision=$4,wanted_revision=GREATEST(wanted_revision,$4),sync_pending=(wanted_revision>$4),sync_lease_until=NULL,active=$5,representation_etag=$6 WHERE source_id=$1 AND subject_kind=$2 AND subject_id=$3",
             &[&observation.subject.source_id,&observation.subject.kind,&observation.subject.id,&observation.ordered_revision,&(!terminal),&observation.representation_etag]
         ).await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(result)
     }
 
@@ -831,6 +958,14 @@ impl PostgresStore {
         let operation = if claim { "item.claim" } else { "item.release" };
         let resource = item_id.to_string();
         let request_hash = hash_bytes(format!("{item_id}:{expected_revision}:{claim}").as_bytes());
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                if claim { "claimed" } else { "released" },
+                Some(actor),
+                &actor.profile_id,
+                json!({"itemId": item_id}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let row = transaction
@@ -907,6 +1042,7 @@ impl PostgresStore {
         updated.updated_at = now;
         let event_id = append_item_event(
             &transaction,
+            &mut audit,
             &updated,
             if claim {
                 HistoryKind::Claimed
@@ -944,7 +1080,7 @@ impl PostgresStore {
             &response,
         )
         .await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(updated)
     }
 
@@ -962,6 +1098,14 @@ impl PostgresStore {
         if reason.len() > 16_384 || flagged_fields.len() > 128 {
             return Err(StoreError::Invalid);
         }
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                "draft_saved",
+                Some(actor),
+                &actor.profile_id,
+                json!({"itemId": item_id}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let row = transaction
@@ -1024,6 +1168,7 @@ impl PostgresStore {
         item.updated_at = now;
         append_item_event(
             &transaction,
+            &mut audit,
             &item,
             HistoryKind::DraftSaved,
             Some(actor),
@@ -1051,7 +1196,7 @@ impl PostgresStore {
             &response,
         )
         .await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(draft)
     }
 
@@ -1083,6 +1228,14 @@ impl PostgresStore {
         expected_revision: i64,
         idempotency_key: &str,
     ) -> Result<bool, StoreError> {
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                "draft_saved",
+                Some(actor),
+                &actor.profile_id,
+                json!({"itemId": item_id}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let row = transaction
@@ -1133,6 +1286,7 @@ impl PostgresStore {
             .await?;
         append_item_event(
             &transaction,
+            &mut audit,
             &item,
             HistoryKind::DraftSaved,
             Some(actor),
@@ -1150,7 +1304,7 @@ impl PostgresStore {
             &json!({"deleted":true}),
         )
         .await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(true)
     }
 
@@ -1198,6 +1352,14 @@ impl PostgresStore {
         request_hash: &str,
         prepared: &PreparedSourceAttempt,
     ) -> Result<(AttemptStatus, Uuid), StoreError> {
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                "attempt_reserved",
+                Some(actor),
+                &actor.profile_id,
+                json!({"itemId": item_id}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let row = transaction
@@ -1273,6 +1435,7 @@ impl PostgresStore {
         }
         append_item_event(
             &transaction,
+            &mut audit,
             &item,
             HistoryKind::AttemptReserved,
             Some(actor),
@@ -1280,7 +1443,7 @@ impl PostgresStore {
             Value::Object(history_detail),
         )
         .await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok((
             AttemptStatus {
                 attempt_id,
@@ -1312,6 +1475,14 @@ impl PostgresStore {
         attempt_id: Uuid,
         execution_token: Uuid,
     ) -> Result<AttemptStatus, StoreError> {
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                "attempt_uncertain",
+                Some(actor),
+                &actor.profile_id,
+                json!({}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let row=transaction.query_opt("SELECT attempt_id,item_id,actor_issuer,actor_subject,casework_profile_id,item_revision,operation,state,created_at,receipt,displayed_binding,decision_reason FROM casework_attempts WHERE attempt_id=$1 AND execution_token=$2 AND execution_lease_until>now() FOR UPDATE", &[&attempt_id,&execution_token]).await?.ok_or(StoreError::AttemptPending)?;
@@ -1375,6 +1546,7 @@ impl PostgresStore {
         }
         append_item_event(
             &transaction,
+            &mut audit,
             &item,
             HistoryKind::AttemptUncertain,
             Some(actor),
@@ -1382,7 +1554,7 @@ impl PostgresStore {
             Value::Object(history_detail),
         )
         .await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(AttemptStatus {
             attempt_id,
             item_id,
@@ -1440,6 +1612,18 @@ impl PostgresStore {
         receipt: Option<&SourceReceipt>,
         state: AttemptState,
     ) -> Result<AttemptStatus, StoreError> {
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                if state == AttemptState::Completed {
+                    "action_completed"
+                } else {
+                    "attempt_uncertain"
+                },
+                Some(actor),
+                &actor.profile_id,
+                json!({}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let row=transaction.query_opt("SELECT attempt_id,item_id,actor_issuer,actor_subject,casework_profile_id,item_revision,operation,state,created_at,receipt,execution_token,decision_reason,flagged_fields,displayed_binding FROM casework_attempts WHERE attempt_id=$1 FOR UPDATE", &[&attempt_id]).await?.ok_or(StoreError::NotFound)?;
@@ -1460,7 +1644,7 @@ impl PostgresStore {
         if old == AttemptState::Uncertain && state == AttemptState::Uncertain {
             transaction.execute("UPDATE casework_attempts SET execution_lease_until=now(),updated_at=now() WHERE attempt_id=$1", &[&attempt_id]).await?;
             let attempt = attempt_from_row(&row)?;
-            transaction.commit().await?;
+            audit.commit(transaction).await?;
             return Ok(attempt);
         }
         if state == AttemptState::Completed && receipt.is_none() {
@@ -1530,6 +1714,7 @@ impl PostgresStore {
         }
         append_item_event(
             &transaction,
+            &mut audit,
             &item,
             history_kind,
             Some(actor),
@@ -1549,7 +1734,7 @@ impl PostgresStore {
                 transaction.execute("UPDATE casework_subjects SET wanted_revision=GREATEST(wanted_revision,$4),sync_pending=true WHERE source_id=$1 AND subject_kind=$2 AND subject_id=$3", &[&item.subject.source_id,&item.subject.kind,&item.subject.id,&revision]).await?;
             }
         }
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(AttemptStatus {
             attempt_id,
             item_id,
@@ -1596,6 +1781,20 @@ impl PostgresStore {
             MAXIMUM_SETTLEMENT_DECIDED_BY_BYTES,
         )?;
         let attempt_id = settlement.attempt_id;
+        // A preview writes nothing and is not audited.
+        let audit = if apply {
+            Some(
+                self.begin_audit(crate::audit::request_record(
+                    "attempt_settled",
+                    None,
+                    "system:operator",
+                    json!({}),
+                ))
+                .await?,
+            )
+        } else {
+            None
+        };
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         // The lease is read on the database clock, the clock recovery acquisition reads.
@@ -1641,10 +1840,10 @@ impl PostgresStore {
             item_state,
             applied: false,
         };
-        if !apply {
+        let Some(mut audit) = audit else {
             transaction.rollback().await?;
             return Ok(report);
-        }
+        };
         let now = Utc::now();
         // A fresh execution token fences any executor still holding the old one.
         transaction.execute("UPDATE casework_attempts SET state=$2,receipt=NULL,execution_token=$3,execution_lease_until=now(),updated_at=$4 WHERE attempt_id=$1", &[&attempt_id,&attempt_state_name(attempt_state),&Uuid::new_v4(),&now]).await?;
@@ -1666,6 +1865,7 @@ impl PostgresStore {
             .await?;
         append_item_event(
             &transaction,
+            &mut audit,
             &item,
             HistoryKind::AttemptSettled,
             None,
@@ -1688,7 +1888,7 @@ impl PostgresStore {
             }
             transaction.execute("UPDATE casework_subjects SET sync_pending=true WHERE source_id=$1 AND subject_kind=$2 AND subject_id=$3", &[&item.subject.source_id,&item.subject.kind,&item.subject.id]).await?;
         }
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         report.applied = true;
         Ok(report)
     }
@@ -1726,6 +1926,20 @@ impl PostgresStore {
             MAXIMUM_SETTLEMENT_DECIDED_BY_BYTES,
         )?;
         let attempt_id = marking.attempt_id;
+        // A preview writes nothing and is not audited.
+        let audit = if apply {
+            Some(
+                self.begin_audit(crate::audit::request_record(
+                    "attempt_uncertain",
+                    None,
+                    "system:operator",
+                    json!({}),
+                ))
+                .await?,
+            )
+        } else {
+            None
+        };
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         // The lease is read on the database clock, the clock recovery acquisition reads.
@@ -1767,10 +1981,10 @@ impl PostgresStore {
             item_state,
             applied: false,
         };
-        if !apply {
+        let Some(mut audit) = audit else {
             transaction.rollback().await?;
             return Ok(report);
-        }
+        };
         let now = Utc::now();
         // A fresh execution token fences any executor still holding the old one.
         transaction.execute("UPDATE casework_attempts SET state='uncertain',execution_token=$2,execution_lease_until=now(),updated_at=$3 WHERE attempt_id=$1", &[&attempt_id,&Uuid::new_v4(),&now]).await?;
@@ -1810,6 +2024,7 @@ impl PostgresStore {
         }
         append_item_event(
             &transaction,
+            &mut audit,
             &item,
             HistoryKind::AttemptUncertain,
             None,
@@ -1817,7 +2032,7 @@ impl PostgresStore {
             Value::Object(history_detail),
         )
         .await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         report.applied = true;
         Ok(report)
     }
@@ -1829,6 +2044,14 @@ impl PostgresStore {
         actor: &ActorContext,
         item_id: Uuid,
     ) -> Result<(), StoreError> {
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                "opened",
+                Some(actor),
+                &actor.profile_id,
+                json!({"itemId": item_id}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let row = transaction
@@ -1846,6 +2069,7 @@ impl PostgresStore {
         }
         append_item_event(
             &transaction,
+            &mut audit,
             &item,
             HistoryKind::Opened,
             Some(actor),
@@ -1853,7 +2077,7 @@ impl PostgresStore {
             json!({}),
         )
         .await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(())
     }
 
@@ -3050,21 +3274,6 @@ impl PostgresStore {
         Ok(client.query_one("SELECT EXISTS(SELECT 1 FROM casework_subjects WHERE source_id=$1 AND binding_generation=$2 AND erased_at IS NULL AND sync_pending=true)", &[&source_id,&generation]).await?.get(0))
     }
 
-    pub async fn pending_audit(&self, limit: i64) -> Result<Vec<(Uuid, Value)>, StoreError> {
-        let client = self.client().await?;
-        Ok(client.query("SELECT event_id,audit_record FROM casework_audit_outbox WHERE published_at IS NULL ORDER BY event_id LIMIT $1", &[&limit]).await?.into_iter().map(|row|(row.get(0),row.get(1))).collect())
-    }
-    pub async fn mark_audit_published(&self, event_id: Uuid) -> Result<(), StoreError> {
-        let client = self.client().await?;
-        client
-            .execute(
-                "UPDATE casework_audit_outbox SET published_at=now() WHERE event_id=$1 AND published_at IS NULL",
-                &[&event_id],
-            )
-            .await?;
-        Ok(())
-    }
-
     pub async fn events(
         &self,
         after: Option<Uuid>,
@@ -3293,6 +3502,7 @@ fn set_holder(item: &mut WorkItem, holder: Option<IssuerPrincipal>) {
 
 async fn update_observed_item(
     transaction: &tokio_postgres::Transaction<'_>,
+    audit: &mut crate::audit::AuditOperation,
     item: &WorkItem,
     event: OccurrenceEvent,
     observation: &AuthoritativeObservation,
@@ -3344,6 +3554,7 @@ async fn update_observed_item(
     };
     append_item_event(
         transaction,
+        audit,
         &updated,
         kind,
         None,
@@ -3354,6 +3565,7 @@ async fn update_observed_item(
     if let Some(previous_holder) = displaced_holder {
         append_item_event(
             transaction,
+            audit,
             &updated,
             HistoryKind::Released,
             None,
@@ -3379,6 +3591,7 @@ fn observation_event(state: OccurrenceState) -> Result<OccurrenceEvent, StoreErr
 
 pub(crate) async fn append_item_event(
     transaction: &tokio_postgres::Transaction<'_>,
+    audit: &mut crate::audit::AuditOperation,
     item: &WorkItem,
     kind: HistoryKind,
     actor: Option<&ActorContext>,
@@ -3394,21 +3607,8 @@ pub(crate) async fn append_item_event(
     transaction.execute("INSERT INTO casework_history(event_id,item_id,item_revision,kind,occurred_at,actor_issuer,actor_subject,profile_id,detail) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)", &[&event_id,&item.item_id,&item.revision,&kind_name,&now,&issuer,&subject,&profile_id,&detail]).await?;
     let actor_reference: Option<String> = None;
     transaction.execute("INSERT INTO casework_events(event_id,item_id,item_revision,event_kind,occurred_at,actor_reference,detail) VALUES($1,$2,$3,$4,$5,$6,$7)", &[&event_id,&item.item_id,&item.revision,&kind_name,&now,&actor_reference,&detail]).await?;
-    insert_audit_outbox(transaction,event_id,json!({"event":format!("casework.{kind_name}"),"eventId":event_id,"itemId":item.item_id,"itemRevision":item.revision,"actor":actor.map(|a|json!({"issuer":a.principal.issuer,"subject":a.principal.subject})),"profileId":profile_id})).await?;
+    audit.record(event_id,json!({"event":format!("casework.{kind_name}"),"eventId":event_id,"itemId":item.item_id,"itemRevision":item.revision,"actor":actor.map(|a|json!({"issuer":a.principal.issuer,"subject":a.principal.subject})),"profileId":profile_id}))?;
     Ok(event_id)
-}
-async fn insert_audit_outbox(
-    transaction: &tokio_postgres::Transaction<'_>,
-    event_id: Uuid,
-    record: Value,
-) -> Result<(), StoreError> {
-    transaction
-        .execute(
-            "INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)",
-            &[&event_id, &record],
-        )
-        .await?;
-    Ok(())
 }
 
 async fn idempotent_response(
@@ -3845,6 +4045,8 @@ pub enum StoreError {
     SecretConfiguration(String),
     #[error("the Casework database is unavailable")]
     Unavailable,
+    #[error("the Casework audit destination is unavailable")]
+    AuditUnavailable,
     #[error("the requested resource was not found")]
     NotFound,
     #[error("the caller is not authorized for this operation")]
@@ -3887,6 +4089,10 @@ pub enum StoreError {
         version: i64,
         tables: Vec<(&'static str, i64)>,
     },
+    #[error(
+        "the Casework database holds {rows} audit record(s) that schema migration {version} would drop before they reach the audit journal; nothing was changed. Run the release that wrote them until its audit publisher has published every record, then migrate again"
+    )]
+    UnpublishedAuditWouldBeDropped { version: i64, rows: i64 },
     #[error("the Casework database operation failed{}", violated_constraint(.0))]
     Postgres(#[from] tokio_postgres::Error),
     #[error("Casework serialization failed")]

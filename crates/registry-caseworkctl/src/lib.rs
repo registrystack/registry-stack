@@ -693,6 +693,10 @@ fn operator_refusal(kind: CommandKind, error: &anyhow::Error) -> Option<Value> {
                     "Keep this database with the release that wrote it until its hosted work \
                      is exported, then migrate a fresh Casework database."
                 }
+                StoreError::UnpublishedAuditWouldBeDropped { .. } => {
+                    "Run the casework release that wrote these audit records until its audit \
+                     publisher has published every one, then migrate again."
+                }
                 _ => return None,
             };
             (
@@ -1613,6 +1617,27 @@ mod tests {
         assert_eq!(
             diagnostic["suggestedAction"],
             "Keep this database with the release that wrote it until its hosted work is exported, then migrate a fresh Casework database."
+        );
+
+        let audit = anyhow::Error::new(StoreError::UnpublishedAuditWouldBeDropped {
+            version: 17,
+            rows: 2,
+        })
+        .context("applying Casework database migrations");
+        let (exit, diagnostic) = classify_failure(kind, &audit);
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(diagnostic["code"], "casework.migration.refused");
+        assert_eq!(
+            diagnostic["message"],
+            StoreError::UnpublishedAuditWouldBeDropped {
+                version: 17,
+                rows: 2
+            }
+            .to_string()
+        );
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            "Run the casework release that wrote these audit records until its audit publisher has published every one, then migrate again."
         );
 
         for failure in [StoreError::Unavailable, StoreError::Corrupt] {

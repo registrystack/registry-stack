@@ -1747,12 +1747,15 @@ impl From<StoreError> for HttpError {
             StoreError::AttemptPending => Self::RecoveryPending(None),
             StoreError::Invalid => Self::Invalid,
             StoreError::ReviewValidation(validation) => Self::Validation(validation),
-            StoreError::Unavailable | StoreError::Postgres(_) => Self::ServiceUnavailable,
+            StoreError::Unavailable | StoreError::AuditUnavailable | StoreError::Postgres(_) => {
+                Self::ServiceUnavailable
+            }
             StoreError::Configuration
             | StoreError::SecretConfiguration(_)
             | StoreError::Corrupt
             | StoreError::SchemaNewer { .. }
             | StoreError::HostedWorkWouldBeDropped { .. }
+            | StoreError::UnpublishedAuditWouldBeDropped { .. }
             | StoreError::Json(_) => Self::Internal,
         }
     }

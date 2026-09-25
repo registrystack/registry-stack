@@ -2,7 +2,7 @@
 
 use anyhow::{bail, Context, Result};
 use registry_casework::{
-    secret_resolver, validate_breg_source_description, verify_policy_package,
+    open_audit, secret_resolver, validate_breg_source_description, verify_policy_package,
     PolicyPackageManifest, PostgresStore, RuntimeConfig, POLICY_PACKAGE_MANIFEST_FILE,
 };
 use registry_casework_breg::MAXIMUM_REQUEST_ENTITIES;
@@ -921,6 +921,12 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
     resolver
         .resolve(&config.audit.hash_key_ref)
         .context("the audit secret is unavailable")?;
+    config
+        .audit
+        .destination()
+        .context("the Casework audit destination is invalid")?
+        .check_writable()
+        .context("the Casework audit destination is not writable by this user")?;
     let runtime = async_runtime()?;
     let policy = load_and_check_policy(&package_root)?;
     if config.sources.len() != policy.sources.len() {
@@ -970,6 +976,7 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
             "secretFiles": "ready",
             "sourceDescriptions": "ready",
             "sourceConnections": "ready",
+            "audit": "ready",
             "database": "ready",
             "oidcIssuer": "ready",
             "directory": "ready"
@@ -1028,6 +1035,7 @@ pub(super) fn retention_erase(
     };
     let runtime = async_runtime()?;
     let report = if apply {
+        let store = with_operator_audit(store, config, &resolver, &runtime)?;
         runtime.block_on(store.erase_source_retention(&selector))
     } else {
         runtime.block_on(store.preview_source_retention(&selector))
@@ -1067,6 +1075,7 @@ pub(super) fn attempt_settle(
         .context("the Casework migration database configuration is invalid")?;
     let runtime = async_runtime()?;
     let report = if apply {
+        let store = with_operator_audit(store, config, &resolver, &runtime)?;
         runtime.block_on(store.settle_attempt(&settlement))
     } else {
         runtime.block_on(store.preview_attempt_settlement(&settlement))
@@ -1106,6 +1115,7 @@ pub(super) fn attempt_mark_uncertain(
         .context("the Casework migration database configuration is invalid")?;
     let runtime = async_runtime()?;
     let report = if apply {
+        let store = with_operator_audit(store, config, &resolver, &runtime)?;
         runtime.block_on(store.mark_expired_attempt_uncertain(&marking))
     } else {
         runtime.block_on(store.preview_attempt_uncertain_marking(&marking))
@@ -1283,6 +1293,21 @@ fn check_request_review_binding(
     Ok(())
 }
 
+/// Attach the audit destination an applying operator command writes to. It
+/// is the configured destination's `caseworkctl` companion, so the command
+/// runs while the service holds its own destination.
+fn with_operator_audit(
+    store: PostgresStore,
+    config: &RuntimeConfig,
+    resolver: &SecretResolver,
+    runtime: &tokio::runtime::Runtime,
+) -> Result<PostgresStore> {
+    let audit = runtime
+        .block_on(open_audit(config, resolver, Some("caseworkctl")))
+        .context("opening the Casework operator audit destination")?;
+    Ok(store.with_audit(audit))
+}
+
 fn async_runtime() -> Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1447,7 +1472,6 @@ mod tests {
                 history_details: 7,
                 event_details: 8,
                 idempotency_responses: 9,
-                audit_records: 10,
                 clock_occurrences: 11,
                 clock_previews: 12,
             },
@@ -1458,7 +1482,7 @@ mod tests {
         assert_eq!(output["report"]["blockedLiveAttempts"], 1);
         assert_eq!(output["report"]["clockOccurrences"], 11);
         assert_eq!(output["report"]["clockPreviews"], 12);
-        assert_eq!(output["report"].as_object().unwrap().len(), 14);
+        assert_eq!(output["report"].as_object().unwrap().len(), 13);
     }
 
     /// The operator permission is the migration database credential: the
