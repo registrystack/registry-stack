@@ -580,7 +580,7 @@ impl RuntimeConfig {
         };
         let fetcher = match &self.authentication.oidc.jwks_source {
             JwksSource::Uri { uri } => JwksFetcher::new(uri.clone(), JwksFetcherConfig::defaults()),
-            JwksSource::Discovery => {
+            JwksSource::Discovery {} => {
                 let discovery = fetch_discovery(&discovery_config)
                     .await
                     .map_err(|_| RuntimeConfigError::Oidc)?;

@@ -420,7 +420,7 @@ fn authenticator() -> SchedulingAuthenticator {
         assertion_issuers: std::collections::BTreeMap::new(),
         issuer: ISSUER.to_owned(),
         audience: AUDIENCE.to_owned(),
-        jwks_source: JwksSource::Discovery,
+        jwks_source: JwksSource::Discovery {},
         scope_claim: "registry_scopes".to_owned(),
         reads_scope: "scheduling-read".to_owned(),
         explain_scope: "scheduling-explain".to_owned(),

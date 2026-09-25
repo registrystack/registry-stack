@@ -973,7 +973,7 @@ async fn stock_issuer_registered_authority_drives_a_protected_relay_lookup() {
         .clone()
         .expect("social-assistance declares an issuer");
     issuer.issuer = stock.issuer.clone();
-    issuer.jwks_source = registry_platform_config::JwksSource::Discovery;
+    issuer.jwks_source = registry_platform_config::JwksSource::Discovery {};
     issuer.audience = audience;
     issuer.algorithms = vec!["RS256".into()];
     let authenticator = build_authenticator_for_supervised_local_development(&issuer)

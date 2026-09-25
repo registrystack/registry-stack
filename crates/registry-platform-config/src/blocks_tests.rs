@@ -70,8 +70,22 @@ fn database_debug_redacts_every_reference() {
 }
 
 #[test]
+fn a_discovery_jwks_source_refuses_the_members_of_the_other_kinds() {
+    for text in [
+        "kind: discovery\nuri: https://keys.example.test/jwks",
+        "kind: discovery\ndocumentRef: secret:file/jwks",
+    ] {
+        let error = serde_norway::from_str::<JwksSource>(text)
+            .expect_err("a discovery source carries no other member");
+        assert!(error.to_string().contains("unknown field"), "{error}");
+    }
+    let discovery: JwksSource = serde_norway::from_str("kind: discovery").unwrap();
+    assert_eq!(discovery, JwksSource::Discovery {});
+}
+
+#[test]
 fn jwks_source_has_three_kinds_and_defaults_to_discovery() {
-    assert_eq!(JwksSource::default(), JwksSource::Discovery);
+    assert_eq!(JwksSource::default(), JwksSource::Discovery {});
     let uri: JwksSource =
         serde_norway::from_str("kind: uri\nuri: https://issuer.example.test/jwks").unwrap();
     assert_eq!(uri.uri(), Some("https://issuer.example.test/jwks"));
@@ -260,7 +274,7 @@ fn blocks_serialize_back_to_the_form_they_were_read_from() {
         serde_json::json!({"kind": "uri", "uri": "https://issuer.example.test/jwks"})
     );
     assert_eq!(
-        serde_json::to_value(JwksSource::Discovery).unwrap(),
+        serde_json::to_value(JwksSource::Discovery {}).unwrap(),
         serde_json::json!({"kind": "discovery"})
     );
     for (value, text) in [
