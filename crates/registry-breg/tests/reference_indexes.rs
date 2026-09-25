@@ -3,6 +3,9 @@
 //! Reference columns carry a compiler-owned btree index, and list filters or
 //! sorts without a leading index produce an authoring-only finding.
 
+#[path = "support/consent_fixture.rs"]
+mod consent_fixture;
+
 use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
 use serde_json::{json, Value};
 
@@ -282,6 +285,34 @@ fn production_compiles_carry_no_index_findings() {
     assert!(!index_findings(&compile(&value, CompileProfile::Authoring)).is_empty());
     value["package"] = json!({"environment":"local","instanceId":"reference-index-instance","sequence":1,"sourceRevision":"reference-index-source"});
     assert!(index_findings(&compile(&value, CompileProfile::Production)).is_empty());
+}
+
+#[test]
+fn a_consent_records_scope_column_leads_the_consent_key_index() {
+    let mut value = consent_fixture::source();
+    let permission = &mut value["accessProfiles"][1]["permissions"][0];
+    assert_eq!(permission["entity"], json!("consent-decision"));
+    permission["filterableFields"] = json!(["scope", "purpose"]);
+    permission["sortableFields"] = json!(["scope"]);
+
+    let registry = consent_fixture::compile(&value).expect("source compiles");
+    // The fixture's unrelated `person` permission already has its own
+    // pre-existing unindexed findings; narrow to consent-decision so this
+    // test only asserts on the scope/purpose behavior it sets up.
+    let consent_findings = index_findings(&registry)
+        .into_iter()
+        .filter(|(_, path)| path.starts_with("entities[id=consent-decision]"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        consent_findings,
+        vec![(
+            UNINDEXED_FILTER.to_owned(),
+            "entities[id=consent-decision].accessProfiles[id=recipient-feed].filterableFields[field=purpose]"
+                .to_owned()
+        )],
+        "the compiler's consent key index leads with scope, so only the \
+         non-leading purpose column is still unindexed"
+    );
 }
 
 #[cfg(feature = "runtime")]

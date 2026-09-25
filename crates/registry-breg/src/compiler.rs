@@ -6128,6 +6128,18 @@ fn unindexed_field_findings<'a>(
     sortable_fields: impl IntoIterator<Item = &'a String>,
     findings: &mut Vec<Diagnostic>,
 ) {
+    // A consent record's compiler-generated key index (see
+    // `consent::index_statements`) always leads with its scope column, so a
+    // filter or sort on the scope field already has an index to lean on even
+    // without an authored one.
+    let consent_scope_indexed = |field: &str| {
+        entity.consent_record.as_ref().is_some_and(|record| {
+            entity
+                .fields
+                .get(field)
+                .is_some_and(|compiled| compiled.physical_name == record.scope_column)
+        })
+    };
     // Only plaintext stored columns can carry an authored index; the
     // canonical id is the primary key, and derived fields are views.
     let unindexed = |field: &str| {
@@ -6136,6 +6148,7 @@ fn unindexed_field_findings<'a>(
             .get(field)
             .is_some_and(|compiled| compiled.encryption.is_none())
             && !leading_field_indexed(field, &entity.indexes, &entity.constraints)
+            && !consent_scope_indexed(field)
     };
     // A temporal exclusion constraint is backed by a GiST index that answers
     // equality on its first scope field but cannot return rows in order.
