@@ -28,7 +28,7 @@ pub use loader::{
     contains_environment_expression, reject_environment_expressions_in_authored_yaml,
     LoadedRuntimeConfig, RemovedKey, RuntimeConfigError, RuntimeConfigErrorKind,
     RuntimeConfigLoader, RuntimeEnvelope, DEFAULT_MAX_RUNTIME_CONFIG_BYTES,
-    MAX_RUNTIME_CONFIG_PATH_BYTES,
+    MAX_RUNTIME_CONFIG_PATH_BYTES, REMOVED_OIDC_JWKS_URI,
 };
 pub use secrets::{
     ProtectedSecret, SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,

@@ -44,3 +44,104 @@ pub fn shared_blocks_document() -> Result<String, serde_json::Error> {
     rendered.push('\n');
     Ok(rendered)
 }
+
+/// Root `allOf` members stating that a static JWKS document at
+/// `authentication.oidc.jwksSource.documentRef` names a secret provider by
+/// its prefix, so a configuration carrying one must enable that provider.
+pub fn jwks_document_provider_requirements() -> Value {
+    serde_json::json!([
+        secret_provider_requirement(
+            "^secret:env/",
+            "environment",
+            "EnvironmentSecretProviderConfig"
+        ),
+        secret_provider_requirement("^secret:file/", "file", "FileSecretProviderConfig"),
+    ])
+}
+
+fn secret_provider_requirement(reference_pattern: &str, provider: &str, definition: &str) -> Value {
+    serde_json::json!({
+        "if": {
+            "properties": {
+                "authentication": {
+                    "properties": {
+                        "oidc": {
+                            "properties": {
+                                "jwksSource": {
+                                    "properties": {
+                                        "documentRef": {"pattern": reference_pattern}
+                                    },
+                                    "required": ["documentRef"]
+                                }
+                            },
+                            "required": ["jwksSource"]
+                        }
+                    },
+                    "required": ["oidc"]
+                }
+            },
+            "required": ["authentication"]
+        },
+        "then": {
+            "properties": {
+                "secretProviders": {
+                    "properties": {
+                        provider: {"$ref": format!("#/$defs/{definition}")}
+                    },
+                    "required": [provider]
+                }
+            }
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_static_jwks_document_requires_the_provider_its_reference_names() {
+        let requirement = |pattern: &str, provider: &str, definition: &str| {
+            serde_json::json!({
+                "if": {
+                    "properties": {
+                        "authentication": {
+                            "properties": {
+                                "oidc": {
+                                    "properties": {
+                                        "jwksSource": {
+                                            "properties": {"documentRef": {"pattern": pattern}},
+                                            "required": ["documentRef"]
+                                        }
+                                    },
+                                    "required": ["jwksSource"]
+                                }
+                            },
+                            "required": ["oidc"]
+                        }
+                    },
+                    "required": ["authentication"]
+                },
+                "then": {
+                    "properties": {
+                        "secretProviders": {
+                            "properties": {provider: {"$ref": format!("#/$defs/{definition}")}},
+                            "required": [provider]
+                        }
+                    }
+                }
+            })
+        };
+        assert_eq!(
+            jwks_document_provider_requirements(),
+            serde_json::json!([
+                requirement(
+                    "^secret:env/",
+                    "environment",
+                    "EnvironmentSecretProviderConfig"
+                ),
+                requirement("^secret:file/", "file", "FileSecretProviderConfig"),
+            ])
+        );
+    }
+}
