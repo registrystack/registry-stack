@@ -3225,14 +3225,14 @@ impl PostgresStore {
         &self,
     ) -> Result<Option<AuditPublicationLease>, StoreError> {
         let client = self.client().await?;
-        let acquired: bool = client
+        let acquired: Option<bool> = client
             .query_one(
-                "SELECT pg_try_advisory_lock(hashtextextended($1::text || current_schema()::text, 0))",
-                &[&AUDIT_PUBLICATION_LEASE_PREFIX],
+                "SELECT pg_try_advisory_lock($1, current_schema()::regnamespace::oid::int4)",
+                &[&AUDIT_PUBLICATION_LEASE_CLASS],
             )
             .await?
-            .get(0);
-        if acquired {
+            .try_get(0)?;
+        if acquired.ok_or(StoreError::Invalid)? {
             Ok(Some(AuditPublicationLease {
                 client: deadpool_postgres::Object::take(client),
             }))
@@ -3242,9 +3242,17 @@ impl PostgresStore {
     }
 }
 
-/// The lock name is scoped by schema, so separate Casework deployments that
-/// share one database each elect their own publisher.
-const AUDIT_PUBLICATION_LEASE_PREFIX: &str = "casework.audit-publication:";
+/// The audit publication lease is a lock in PostgreSQL's two-integer advisory
+/// key space: this class, which spells the ASCII bytes of "CASE", and the
+/// identifier of the Casework schema, so separate Casework deployments that
+/// share one database each elect their own publisher. PostgreSQL keeps the
+/// single-bigint and two-integer key spaces apart ("these two key spaces do
+/// not overlap", Advisory Lock Functions; `pg_locks` shows them with
+/// `objsubid` 1 and 2), and every other Casework advisory lock, including the
+/// ones keyed by caller-chosen values, uses the single-bigint space, so no
+/// caller-chosen key can hold or wait on the lease. Nothing else in Casework
+/// takes a lock in this class.
+const AUDIT_PUBLICATION_LEASE_CLASS: i32 = 0x4341_5345;
 
 /// The held audit publication lease. Pending reads and publication marks go
 /// through the leased session, so a runtime whose lease has ended cannot mark

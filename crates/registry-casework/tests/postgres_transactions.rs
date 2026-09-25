@@ -2778,9 +2778,13 @@ fn assert_each_event_once(journals: &[&std::path::Path], expected: usize) {
     assert_eq!(event_ids.len(), expected, "no record is published twice");
 }
 
-/// The session holding this schema's audit publication lease, if any.
-const AUDIT_LEASE_HOLDER: &str = "SELECT pid FROM pg_locks WHERE locktype='advisory' AND objsubid=1 AND granted \
-     AND ((classid::bigint << 32) | objid::bigint) = hashtextextended('casework.audit-publication:' || $1::text, 0)";
+/// The session holding this schema's audit publication lease, if any: a lock
+/// in the two-integer advisory key space (`objsubid` 2) under the class that
+/// spells "CASE", keyed by the schema's identifier.
+const AUDIT_LEASE_HOLDER: &str =
+    "SELECT pid FROM pg_locks WHERE locktype='advisory' AND objsubid=2 AND granted \
+     AND classid=1128354629 AND objid=$1::text::regnamespace::oid \
+     AND database=(SELECT oid FROM pg_database WHERE datname=current_database())";
 
 /// Wait until the session of a dropped lease has ended on the server.
 async fn wait_for_free_audit_lease(client: &tokio_postgres::Client, schema: &str) {
@@ -3274,6 +3278,48 @@ async fn one_runtime_publishes_the_audit_outbox_while_another_stands_by() {
 }
 
 #[tokio::test]
+async fn a_single_key_advisory_lock_never_blocks_the_audit_publication_lease() {
+    let (store, client, schema) = isolated_schema("audit_publication_lock_space").await;
+    store.migrate().await.expect("migrate");
+    let root = tempfile::tempdir().expect("deployment root");
+    let journal = owner_only_audit_directory(root.path(), "journal");
+
+    // Caller-chosen keys hash into the single-bigint advisory key space. A
+    // session lock there on the value the lease name hashes to, as a key a
+    // caller chose to collide with it would take, must not stop publication.
+    client
+        .query_one(
+            "SELECT pg_advisory_lock(hashtextextended('casework.audit-publication:' || $1::text, 0))",
+            &[&schema],
+        )
+        .await
+        .expect("hold a single-key advisory lock");
+
+    let mut publication = registry_casework::AuditPublicationForTest::new(
+        store.clone(),
+        journal.clone(),
+        audit_publication_profile(),
+    );
+    insert_pending_audit(&client, 1).await;
+    publication.pass().await.expect("publish");
+    assert!(publication.is_leader(), "the lease is taken");
+    assert_eq!(
+        client
+            .query(AUDIT_LEASE_HOLDER, &[&schema])
+            .await
+            .expect("read the lease holder")
+            .len(),
+        1,
+        "the lease is held in the two-integer key space"
+    );
+    assert_each_event_once(&[&journal], 1);
+    client
+        .execute("SELECT pg_advisory_unlock_all()", &[])
+        .await
+        .expect("release the single-key lock");
+}
+
+#[tokio::test]
 async fn a_runtime_whose_lease_session_ends_releases_the_shared_journal() {
     let (store, client, schema) = isolated_schema("audit_publication_handover").await;
     store.migrate().await.expect("migrate");
@@ -3294,8 +3340,7 @@ async fn a_runtime_whose_lease_session_ends_releases_the_shared_journal() {
     assert!(first.is_leader());
 
     // End the leader's database session the way a lost connection does.
-    let lease_holder = "SELECT pid FROM pg_locks WHERE locktype='advisory' AND objsubid=1 AND granted \
-         AND ((classid::bigint << 32) | objid::bigint) = hashtextextended('casework.audit-publication:' || $1::text, 0)";
+    let lease_holder = AUDIT_LEASE_HOLDER;
     let terminated = client
         .query(
             &format!("SELECT pg_terminate_backend(pid) FROM ({lease_holder}) holder"),

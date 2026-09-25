@@ -3,8 +3,10 @@
 ## Unreleased
 
 - Replicas no longer publish the same audit record twice. One runtime at a
-  time holds the audit publication lease, a PostgreSQL session lock scoped to
-  the Casework schema, and only that runtime opens the audit file and appends
+  time holds the audit publication lease, a PostgreSQL session advisory lock
+  in the two-integer key space (class `1128354629`, the ASCII bytes of
+  `CASE`, and the Casework schema's OID), apart from the single-key locks
+  that caller-chosen values hash into, and only that runtime opens the audit file and appends
   to it; every other runtime serves requests, stays ready, and takes the
   lease once the publisher stops or its database session ends. A new
   `casework_audit_publisher_leader` metric reports which runtime publishes,
