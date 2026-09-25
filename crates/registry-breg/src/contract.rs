@@ -3403,7 +3403,6 @@ fn deserialize_value<T: DeserializeOwned>(
     })
 }
 
-/// Join the document root with the member path `serde_path_to_error` recorded.
 /// `${...}` substitution belongs to `runtime.yaml`; an authored project or
 /// module is reviewed as written, so an environment expression in one is
 /// refused with the member that holds it. A document the shared reader cannot
@@ -3446,6 +3445,7 @@ fn authored_member_path(root: &str, field: &str) -> String {
     path
 }
 
+/// Join the document root with the member path `serde_path_to_error` recorded.
 pub(crate) fn document_path<E: std::fmt::Display>(
     root: &str,
     error: &serde_path_to_error::Error<E>,

@@ -533,21 +533,15 @@ impl RuntimeConfig {
         &self,
         secrets: &SecretResolver,
     ) -> Result<(TokenVerifierConfig, std::sync::Arc<JwksFetcher>), RuntimeConfigError> {
-        let discovery_config = OidcDiscoveryConfig {
-            issuer: self.authentication.oidc.provider.issuer.clone(),
-            jwks_uri_override: self
-                .authentication
-                .oidc
-                .provider
-                .jwks_source
-                .uri()
-                .map(str::to_owned),
-            discovery_timeout: Duration::from_secs(5),
-            max_doc_bytes: 1024 * 1024,
-        };
         let fetcher = match &self.authentication.oidc.provider.jwks_source {
             JwksSource::Uri { uri } => JwksFetcher::new(uri.clone(), JwksFetcherConfig::defaults()),
             JwksSource::Discovery {} => {
+                let discovery_config = OidcDiscoveryConfig {
+                    issuer: self.authentication.oidc.provider.issuer.clone(),
+                    jwks_uri_override: None,
+                    discovery_timeout: Duration::from_secs(5),
+                    max_doc_bytes: 1024 * 1024,
+                };
                 let discovery = fetch_discovery(&discovery_config)
                     .await
                     .map_err(|_| RuntimeConfigError::Oidc)?;
