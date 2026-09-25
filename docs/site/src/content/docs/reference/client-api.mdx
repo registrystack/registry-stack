@@ -1278,10 +1278,11 @@ value outside the schema itself, and both reasons carry the instance path of the
 
 ## Registry Messaging
 
-The Messaging client covers four routes: liveness, readiness, the submission of one message, and
-the read of one message's status. It carries no route for cancelling a message or previewing a
-template, and no operator route. The client never reaches the Messaging runtime or its operator
-tooling; it speaks the public HTTP contract any caller uses.
+The Messaging client covers six routes: liveness, readiness, the submission of one message, the
+read of one message's status, the cancellation of one message before dispatch, and the preview of
+one template version. It carries no operator route and no provider callback route. The client never
+reaches the Messaging runtime or its operator tooling; it speaks the public HTTP contract any caller
+uses.
 
 ### Construct a Messaging client
 
@@ -1330,6 +1331,8 @@ Method names are given in the Rust and Python form. Node uses the camel case for
 | `ready` | Nothing | An empty value when the runtime can serve, and a `service.unavailable` problem otherwise |
 | `submit` | The bearer token, an idempotency key, and the submission | The `MessageReceipt`: the message `id`, its `status`, and `links` |
 | `message` | The bearer token and a message identifier | The `MessageView`: `status`, `dispatch`, `report`, the attempt summaries, and `links` |
+| `cancel` | The bearer token and a message identifier | The `MessageView` as the cancellation left it |
+| `preview` | The bearer token, a template identifier, a version, and a `TemplatePreviewRequest` of `locale` and `data` | The `TemplatePreview`: the template reference, `locale`, `channel`, `packageDigest`, the rendered `parts`, and `sms` segment counts for an SMS template |
 
 Every call that reaches a caller route takes the request's bearer token as its first argument and
 retains none. In Rust it is a `BearerToken`, built with `BearerToken::new(token)`. The module is for
@@ -1341,6 +1344,16 @@ submission. After a lost response, send the same key with the same submission, a
 answers the stored receipt instead of accepting a second message. A message identifier must be the
 lowercase hyphenated UUID the runtime answered; any other value is refused before any exchange. The
 view carries the recipient's channel with the value `redacted`, and no rendered content.
+
+`cancel` withdraws a message whose dispatch has not started. A cancellation that lost the race
+answers `message.dispatch-started` when dispatch began first, and `message.terminal` when the
+message was already final; the client never retries either. `preview` renders one template version
+for a locale and data and sends nothing. The template identifier must be a lowercase kebab
+identifier of at most 64 bytes and the version a package version label of at most 32 bytes, and
+both are refused before any exchange otherwise. A version the active package does not ship answers
+`template.not-found`; data its schema refuses, a locale it does not carry, and a render the runtime
+stopped answer `template.data-invalid`, `template.locale-unavailable`, and
+`template.render-refused`.
 
 ```python
 receipt = client.submit(
@@ -1355,10 +1368,20 @@ receipt = client.submit(
     },
 )
 view = client.message(token, receipt["value"]["id"])
+cancelled = client.cancel(token, receipt["value"]["id"])
+preview = client.preview(
+    token,
+    "appointment-reminder-sms",
+    "1",
+    {"locale": "en", "data": {"name": "Ada", "day": "2026-10-01", "office": "North"}},
+)
 ```
 
 {/* Evidence: crates/registry-messaging-client/src/client.rs, MessagingClient, submit(),
-    message(), is_idempotency_key(), and is_message_id();
+    message(), cancel(), preview(), is_idempotency_key(), and is_message_id();
+    crates/registry-messaging-core/src/access.rs, valid_identifier(),
+    MAXIMUM_PROFILE_IDENTIFIER_BYTES; crates/registry-messaging-core/src/package.rs,
+    valid_template_version(), MAXIMUM_TEMPLATE_VERSION_BYTES;
     crates/registry-messaging-client-node/client.d.ts, MessagingClient;
     crates/registry-messaging-client-py/README.md, crates/registry-stack-client-node/README.md,
     Messaging notes; crates/CLIENTS.md */}
@@ -1386,27 +1409,38 @@ catalogue, its status is the one the code pins, its type URI is the pinned one, 
 identifier matches the response's trace header. Anything else, including a code the client does
 not know, is a `Protocol` failure with `Problem`. The title and detail are not compared: the caller
 reads the pinned copies through `code.title()` and `code.detail()`, so a deployment that rewords
-them still answers a refusal the caller can match. The error carries no `Retry-After` value, so a
-`rate-limit.exceeded` or `quota.exceeded` refusal names the limit but not the wait.
+them still answers a refusal the caller can match.
+
+A submission over its access profile's request rate or daily limit is refused with
+`rate-limit.exceeded` or `quota.exceeded` and status 429. That `Problem` also carries
+`retry_after_seconds`, the whole seconds the response's `Retry-After` asked the caller to wait. The
+client accepts only a single delta-seconds value from 1 through `MAXIMUM_RETRY_AFTER_SECONDS`
+(86,400, one day); an absent, repeated, or out-of-range header leaves the wait unset and the refusal
+still typed. The wait is unset on every other status. The client never waits or retries on its own.
 
 Python raises `messaging.MessagingClientError`, an `Exception` whose attributes are `kind`, `code`,
-`title`, `detail`, `status`, `trace_id`, `transport_kind`, and `protocol_failure`; an absent member
-is `None`. Node rejects with `messaging.MessagingClientError`, an `Error` with `kind` and the
-optional `code`, `title`, `detail`, `status`, `traceId`, `transportKind`, and `protocolFailure`; an
-absent member is undefined.
+`title`, `detail`, `status`, `trace_id`, `retry_after_seconds`, `transport_kind`, and
+`protocol_failure`; an absent member is `None`. Node rejects with `messaging.MessagingClientError`,
+an `Error` with `kind` and the optional `code`, `title`, `detail`, `status`, `traceId`,
+`retryAfterSeconds`, `transportKind`, and `protocolFailure`; an absent member is undefined. The
+`MessagingProblemCode` type in both bindings names every code of the catalogue, including
+`rate-limit.exceeded` and `quota.exceeded`.
 
 | Kind | Meaning | Members set |
 | --- | --- | --- |
 | `configuration` | The construction inputs were refused | none |
 | `invalid_request` | An input was refused before any exchange | none |
 | `transport` | The exchange failed below HTTP | `transport_kind` |
-| `problem` | Messaging answered with an accepted problem | `status`, `code`, `title`, `detail`, and `trace_id` |
+| `problem` | Messaging answered with an accepted problem | `status`, `code`, `title`, `detail`, and `trace_id`, plus `retry_after_seconds` on a 429 that named a wait |
 | `protocol` | The response violated the contract | `status`, `protocol_failure`, and `trace_id` when one was validated |
 
 {/* Evidence: crates/registry-messaging-client/src/error.rs, MessagingClientError and
-    MessagingProtocolFailure; crates/registry-messaging-client/src/client.rs, domain_problem();
+    MessagingProtocolFailure; crates/registry-messaging-client/src/client.rs, domain_problem(),
+    MAXIMUM_RETRY_AFTER_SECONDS; crates/registry-platform-httputil/src/lib.rs,
+    retry_after_seconds();
     crates/registry-messaging-client-py/python/registry_messaging_client/__init__.pyi,
-    MessagingErrorKind; crates/registry-messaging-client-node/client.d.ts, MessagingClientError */}
+    MessagingErrorKind and MessagingProblemCode; crates/registry-messaging-client-node/client.d.ts,
+    MessagingClientError and MessagingProblemCode */}
 
 ## Shared implementation boundary
 
