@@ -118,6 +118,22 @@ fn a_missing_file_is_refused_by_name() {
 }
 
 #[test]
+fn a_package_whose_every_listed_file_is_gone_names_each_missing_file() {
+    let (directory, _) = packaged(None);
+    fs::remove_dir_all(directory.path().join("rules")).expect("remove rules");
+    fs::remove_file(directory.path().join("policy.yaml")).expect("remove policy");
+    let error = verify(directory.path()).expect_err("only SHA256SUMS is left");
+    assert!(
+        matches!(error.kind(), PackageErrorKind::Mismatch { missing, .. } if missing.len() == 3),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("missing: policy.yaml"),
+        "{error}"
+    );
+}
+
+#[test]
 fn an_extra_file_or_empty_directory_is_refused_by_name() {
     let (directory, _) = packaged(None);
     write(directory.path(), "rules/.DS_Store", b"x");

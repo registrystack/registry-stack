@@ -170,6 +170,9 @@ pub fn write_sum_file(
             reason: "is an empty directory",
         }));
     }
+    if walked.files.is_empty() {
+        return Err(refuse(PackageErrorKind::Empty));
+    }
     if let Some(revision) = revision {
         write_new(root, REVISION_FILE, format!("{revision}\n").as_bytes()).map_err(refuse)?;
         walked.files.insert(REVISION_FILE.to_owned());
@@ -572,9 +575,6 @@ fn walk(root: &Path, limits: &PackageLimits) -> Result<Walked, PackageErrorKind>
     let mut entries = 0_usize;
     let entry_bound = limits.max_files.saturating_mul(2).saturating_add(1);
     visit(root, "", limits, &mut walked, &mut entries, entry_bound)?;
-    if walked.files.is_empty() && walked.empty_directories.is_empty() {
-        return Err(PackageErrorKind::Empty);
-    }
     check_file_count(walked.files.len(), limits)?;
     Ok(walked)
 }
