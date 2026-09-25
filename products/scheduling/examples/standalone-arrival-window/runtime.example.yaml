@@ -15,15 +15,14 @@
 apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1
 kind: SchedulingRuntimeConfig
 package:
-  # The selected package always contains the policy at scheduling.yaml; no
-  # second selector can override it. Under
-  # listener.tlsTermination: operator-controlled-upstream the directory must
-  # also contain the scheduling.package.json manifest `schedulingctl package`
-  # writes; development loopback may select an unpackaged project directory.
+  # The package `schedulingctl package --output` writes: scheduling.yaml and
+  # the SHA256SUMS file that lists it. The runtime verifies it at every start,
+  # in every listener mode, and refuses a changed, missing, or extra file; no
+  # second selector can override the policy it holds.
   root: /srv/registry-scheduling/package
-  # Pin the package the runtime must serve: the sha256 label
-  # `schedulingctl package` prints as the policy digest. A mismatch, or a pin
-  # over a directory without a package manifest, is a startup refusal.
+  # Pin the package the runtime must serve: the packageDigest
+  # `schedulingctl package` prints, the SHA-256 digest of SHA256SUMS. Any
+  # other package is a startup refusal.
   # expectedDigest: sha256:<64 lowercase hex digits>
 listener:
   # Required: the IP address and port the runtime listens on.
