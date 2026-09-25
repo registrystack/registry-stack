@@ -443,9 +443,9 @@ async fn check_pinned_work(
 pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
     let config = RuntimeConfig::load(path)?;
     let package = config.load_package()?;
-    let package_digest = package.digest;
+    let package_digest = package.digest().to_owned();
     tracing::info!(package_digest = %package_digest, "verified Casework package");
-    let project = package.project;
+    let project = package.project();
     let secrets = secret_resolver(&config)?;
     let store = PostgresStore::connect_runtime(&config.database, &secrets)?;
     store.ready().await?;
@@ -462,8 +462,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             .build_adapter_from_description(
                 source,
                 package
-                    .source_descriptions
-                    .get(&source.description)
+                    .source_description(&source.description)
                     .ok_or_else(|| RuntimeError::SourceConfiguration(source.id.clone()))?,
                 &secrets,
             )
@@ -482,7 +481,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     // Refuse before any activation step writes to the database.
     check_pinned_work(
         &store,
-        &project,
+        project,
         &adapters,
         &package_digest,
         config.package.acknowledge_stranded_work.as_deref(),
@@ -496,7 +495,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
 
     let (verifier, keys) = config.oidc_verifier(&secrets).await?;
     let authenticator = Arc::new(CaseworkAuthenticator::new(
-        &project,
+        project,
         verifier,
         keys,
         config.authentication.oidc.human_identity.clone(),
@@ -645,7 +644,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     let app = router(HttpState {
         service,
         authenticator,
-        project: Arc::new(project),
+        project: Arc::new(project.clone()),
     });
     // Both sockets bind before either serves, so a metrics address already in
     // use refuses startup instead of leaving an API without its telemetry.

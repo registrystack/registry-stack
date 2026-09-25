@@ -138,10 +138,27 @@ fn verify_casework_contents(
 }
 
 #[derive(Debug)]
-pub(crate) struct LoadedCaseworkPackage {
-    pub(crate) digest: String,
-    pub(crate) project: CaseworkProject,
-    pub(crate) source_descriptions: BTreeMap<String, Vec<u8>>,
+pub struct LoadedCaseworkPackage {
+    digest: String,
+    project: CaseworkProject,
+    source_descriptions: BTreeMap<String, Vec<u8>>,
+}
+
+impl LoadedCaseworkPackage {
+    #[must_use]
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
+
+    #[must_use]
+    pub const fn project(&self) -> &CaseworkProject {
+        &self.project
+    }
+
+    #[must_use]
+    pub fn source_description(&self, path: &str) -> Option<&[u8]> {
+        self.source_descriptions.get(path).map(Vec::as_slice)
+    }
 }
 
 fn normalized_relative_path(value: &str) -> Option<PathBuf> {
@@ -584,18 +601,6 @@ impl RuntimeConfig {
             return Err(RuntimeConfigError::RelativeOperatedPath("audit.path"));
         }
         self.validate_secret_references()?;
-        let policy_path = self.policy_path();
-        // The bounded expression refusal comes before the typed project read,
-        // which would otherwise report a typed field holding `${...}` as a
-        // type error quoting it. A document the shared reader cannot parse is
-        // left to the project read, which reports its own diagnostic first.
-        if let Err(error) = reject_authored_environment_expressions(&policy_path) {
-            if matches!(error, RuntimeConfigError::Load(_)) {
-                CaseworkProject::load(&policy_path).map_err(RuntimeConfigError::Project)?;
-            }
-            return Err(error);
-        }
-        let project = CaseworkProject::load(&policy_path).map_err(RuntimeConfigError::Project)?;
         if self
             .package
             .acknowledge_stranded_work
@@ -604,18 +609,8 @@ impl RuntimeConfig {
         {
             return Err(RuntimeConfigError::InvalidStrandedWorkAcknowledgement);
         }
-        verify_casework_package(&self.package, &project)?;
-        validate_project_source_inputs(&policy_path, &project)?;
-        let declared_sources = project
-            .sources
-            .iter()
-            .map(|source| source.id.as_str())
-            .collect::<BTreeSet<_>>();
-        let configured_sources = self
-            .sources
-            .keys()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>();
+        let package = self.capture_package_after_verification(|| {})?;
+        let project = package.project();
         if !self.listener.is_valid() {
             return Err(RuntimeConfigError::InvalidListener);
         }
@@ -644,9 +639,103 @@ impl RuntimeConfig {
             || self.authentication.oidc.human_identity.claim.is_empty()
             || self.authentication.oidc.human_identity.value.is_empty()
             || self.authentication.oidc.human_identity.claim == self.authentication.oidc.scope_claim
-            || project.access_profiles.iter().any(|profile| {
-                profile.principal_claim == self.authentication.oidc.human_identity.claim
+        {
+            return Err(RuntimeConfigError::InvalidOidc);
+        }
+        self.validate_project_bindings(project)?;
+        if self.database.runtime_url_ref.is_empty() || self.database.migration_url_ref.is_empty() {
+            return Err(RuntimeConfigError::InvalidDatabaseReference);
+        }
+        if self
+            .review_completion_destinations
+            .iter()
+            .any(|(id, destination)| {
+                id.is_empty()
+                    || !valid_review_completion_url(&destination.url)
+                    || !(MINIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS
+                        ..=MAXIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS)
+                        .contains(&destination.timeout_milliseconds)
+                    || !(MINIMUM_REVIEW_COMPLETION_ATTEMPTS..=MAXIMUM_REVIEW_COMPLETION_ATTEMPTS)
+                        .contains(&destination.maximum_attempts)
+                    || !(MINIMUM_REVIEW_COMPLETION_RETRY_SECONDS
+                        ..=MAXIMUM_REVIEW_COMPLETION_RETRY_SECONDS)
+                        .contains(&destination.retry_seconds)
             })
+        {
+            return Err(RuntimeConfigError::InvalidSourceBindings);
+        }
+        self.validate_source_bindings()?;
+        #[cfg(not(feature = "postgres-test"))]
+        if self.database.test_only_plaintext {
+            return Err(RuntimeConfigError::PlaintextDatabase);
+        }
+        Ok(())
+    }
+
+    /// Verify the package at `package.root` again and return its digest.
+    pub fn package_digest(&self) -> Result<String, RuntimeConfigError> {
+        Ok(self.load_package()?.digest)
+    }
+
+    /// Verify, validate, and capture the exact package bytes a consumer will use.
+    pub fn load_package(&self) -> Result<LoadedCaseworkPackage, RuntimeConfigError> {
+        self.load_package_after_verification(|| {})
+    }
+
+    fn load_package_after_verification(
+        &self,
+        after_verification: impl FnOnce(),
+    ) -> Result<LoadedCaseworkPackage, RuntimeConfigError> {
+        let package = self.capture_package_after_verification(after_verification)?;
+        self.validate_project_bindings(package.project())?;
+        Ok(package)
+    }
+
+    fn capture_package_after_verification(
+        &self,
+        after_verification: impl FnOnce(),
+    ) -> Result<LoadedCaseworkPackage, RuntimeConfigError> {
+        let verified = verify_casework_envelope(&self.package)?;
+        after_verification();
+
+        let policy_bytes = capture_verified_file(&self.package.root, &verified, POLICY_FILE)?;
+        // Preserve the typed project diagnostic when malformed YAML also
+        // resembles an environment expression. Both checks use the same
+        // bytes captured from the verified package.
+        if let Err(error) = reject_authored_environment_expressions_bytes(&policy_bytes) {
+            if matches!(error, RuntimeConfigError::Load(_)) {
+                CaseworkProject::from_slice(&policy_bytes)
+                    .map_err(RuntimeConfigError::Project)?;
+            }
+            return Err(error);
+        }
+        let project =
+            CaseworkProject::from_slice(&policy_bytes).map_err(RuntimeConfigError::Project)?;
+        verify_casework_contents(&project, &verified)?;
+
+        let mut source_descriptions = BTreeMap::new();
+        for source in &project.sources {
+            let bytes =
+                capture_verified_file(&self.package.root, &verified, source.description.as_str())?;
+            source_descriptions.insert(source.description.clone(), bytes);
+        }
+        validate_project_source_description_bytes(&project, &source_descriptions)?;
+
+        Ok(LoadedCaseworkPackage {
+            digest: verified.digest().to_owned(),
+            project,
+            source_descriptions,
+        })
+    }
+
+    fn validate_project_bindings(
+        &self,
+        project: &CaseworkProject,
+    ) -> Result<(), RuntimeConfigError> {
+        if project
+            .access_profiles
+            .iter()
+            .any(|profile| profile.principal_claim == self.authentication.oidc.human_identity.claim)
         {
             return Err(RuntimeConfigError::InvalidOidc);
         }
@@ -680,9 +769,17 @@ impl RuntimeConfig {
         } else if !project.task_templates.is_empty() {
             return Err(RuntimeConfigError::InvalidOidc);
         }
-        if self.database.runtime_url_ref.is_empty() || self.database.migration_url_ref.is_empty() {
-            return Err(RuntimeConfigError::InvalidDatabaseReference);
-        }
+
+        let declared_sources = project
+            .sources
+            .iter()
+            .map(|source| source.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let configured_sources = self
+            .sources
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
         if self.sources.keys().any(String::is_empty) || configured_sources != declared_sources {
             return Err(RuntimeConfigError::InvalidSourceBindings);
         }
@@ -706,6 +803,7 @@ impl RuntimeConfig {
         }) {
             return Err(RuntimeConfigError::InactiveReviewSourceNamespace);
         }
+
         let declared_destinations = project
             .review_producers
             .iter()
@@ -717,74 +815,10 @@ impl RuntimeConfig {
             .keys()
             .map(String::as_str)
             .collect::<BTreeSet<_>>();
-        if !declared_destinations.is_subset(&configured_destinations)
-            || self
-                .review_completion_destinations
-                .iter()
-                .any(|(id, destination)| {
-                    id.is_empty()
-                        || !valid_review_completion_url(&destination.url)
-                        || !(MINIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS
-                            ..=MAXIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS)
-                            .contains(&destination.timeout_milliseconds)
-                        || !(MINIMUM_REVIEW_COMPLETION_ATTEMPTS
-                            ..=MAXIMUM_REVIEW_COMPLETION_ATTEMPTS)
-                            .contains(&destination.maximum_attempts)
-                        || !(MINIMUM_REVIEW_COMPLETION_RETRY_SECONDS
-                            ..=MAXIMUM_REVIEW_COMPLETION_RETRY_SECONDS)
-                            .contains(&destination.retry_seconds)
-                })
-        {
+        if !declared_destinations.is_subset(&configured_destinations) {
             return Err(RuntimeConfigError::InvalidSourceBindings);
         }
-        self.validate_source_bindings()?;
-        #[cfg(not(feature = "postgres-test"))]
-        if self.database.test_only_plaintext {
-            return Err(RuntimeConfigError::PlaintextDatabase);
-        }
         Ok(())
-    }
-
-    /// Verify the package at `package.root` again and return its digest.
-    pub fn package_digest(&self) -> Result<String, RuntimeConfigError> {
-        let project =
-            CaseworkProject::load(self.policy_path()).map_err(RuntimeConfigError::Project)?;
-        Ok(verify_casework_package(&self.package, &project)?
-            .digest()
-            .to_owned())
-    }
-
-    /// Verify and capture the exact package bytes the runtime will serve.
-    pub(crate) fn load_package(&self) -> Result<LoadedCaseworkPackage, RuntimeConfigError> {
-        self.load_package_after_verification(|| {})
-    }
-
-    fn load_package_after_verification(
-        &self,
-        after_verification: impl FnOnce(),
-    ) -> Result<LoadedCaseworkPackage, RuntimeConfigError> {
-        let verified = verify_casework_envelope(&self.package)?;
-        after_verification();
-
-        let policy_bytes = capture_verified_file(&self.package.root, &verified, POLICY_FILE)?;
-        reject_authored_environment_expressions_bytes(&policy_bytes)?;
-        let project =
-            CaseworkProject::from_slice(&policy_bytes).map_err(RuntimeConfigError::Project)?;
-        verify_casework_contents(&project, &verified)?;
-
-        let mut source_descriptions = BTreeMap::new();
-        for source in &project.sources {
-            let bytes =
-                capture_verified_file(&self.package.root, &verified, source.description.as_str())?;
-            source_descriptions.insert(source.description.clone(), bytes);
-        }
-        validate_project_source_description_bytes(&project, &source_descriptions)?;
-
-        Ok(LoadedCaseworkPackage {
-            digest: verified.digest().to_owned(),
-            project,
-            source_descriptions,
-        })
     }
 
     fn validate_secret_references(&self) -> Result<(), RuntimeConfigError> {
@@ -953,22 +987,6 @@ fn valid_review_completion_url(raw: &str) -> bool {
     }
 }
 
-fn validate_project_source_inputs(
-    project_path: &Path,
-    project: &CaseworkProject,
-) -> Result<(), RuntimeConfigError> {
-    let root = project_path.parent().ok_or(RuntimeConfigError::Invalid)?;
-    let mut descriptions = BTreeMap::new();
-    for source in &project.sources {
-        let relative = normalized_relative_path(&source.description)
-            .ok_or(RuntimeConfigError::SourceDescription)?;
-        let bytes = read_bounded_file(&root.join(relative), MAXIMUM_PACKAGE_FILE_BYTES)
-            .ok_or(RuntimeConfigError::SourceDescription)?;
-        descriptions.insert(source.description.clone(), bytes);
-    }
-    validate_project_source_description_bytes(project, &descriptions)
-}
-
 fn validate_project_source_description_bytes(
     project: &CaseworkProject,
     descriptions: &BTreeMap<String, Vec<u8>>,
@@ -1006,15 +1024,6 @@ fn validate_project_source_description_bytes(
         }
     }
     Ok(())
-}
-
-/// Refuse an authored project that carries an environment expression.
-/// Substitution applies to `runtime.yaml` only; `casework.yaml` is reviewed
-/// and packaged as written.
-fn reject_authored_environment_expressions(policy_path: &Path) -> Result<(), RuntimeConfigError> {
-    let bytes = read_bounded_file(policy_path, MAXIMUM_PACKAGE_FILE_BYTES)
-        .ok_or(RuntimeConfigError::PolicyUnreadable)?;
-    reject_authored_environment_expressions_bytes(&bytes)
 }
 
 fn reject_authored_environment_expressions_bytes(bytes: &[u8]) -> Result<(), RuntimeConfigError> {
@@ -1816,6 +1825,30 @@ reviewProducers:
                 "{changed_path}: {error:?}"
             );
         }
+    }
+
+    #[test]
+    fn final_unpinned_package_load_revalidates_project_bindings_after_replacement() {
+        let root = canonical_tempdir();
+        let (package, operator, _) = packaged_operator(root.path(), "operator-controlled-upstream");
+        let config = RuntimeConfig::load(&operator).expect("package A is valid");
+
+        std::fs::remove_file(package.join(SUM_FILE)).unwrap();
+        let replacement =
+            SOURCE_PROJECT.replace("principalClaim: sub", "principalClaim: registry_actor_kind");
+        std::fs::write(package.join(POLICY_FILE), replacement).unwrap();
+        registry_platform_config::write_sum_file(
+            &package,
+            None,
+            &package_limits(),
+            PACKAGE_COMMAND,
+        )
+        .unwrap();
+
+        let error = config
+            .load_package()
+            .expect_err("package B conflicts with the configured human identity claim");
+        assert!(matches!(error, RuntimeConfigError::InvalidOidc));
     }
 
     #[test]
