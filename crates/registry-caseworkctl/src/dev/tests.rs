@@ -80,7 +80,7 @@ fn announced_pid(path: &Path) -> Option<rustix::process::Pid> {
 
 #[test]
 fn init_clients_bind_the_standalone_template() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     let policy = crate::project::load_and_check_policy(&project).unwrap();
     let clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
@@ -287,7 +287,7 @@ fn clients_file_refuses_two_teams_assigned_to_one_queue() {
 
 #[test]
 fn binding_refuses_a_requester_with_a_human_claim() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     let policy = crate::project::load_and_check_policy(&project).unwrap();
     let text = STANDALONE_DEV_CLIENTS.replace(
@@ -303,7 +303,7 @@ fn binding_refuses_a_requester_with_a_human_claim() {
 
 #[test]
 fn binding_accepts_a_client_with_every_required_profile_scope() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     fs::write(
         project.join("casework.yaml"),
@@ -325,7 +325,7 @@ fn binding_accepts_a_client_with_every_required_profile_scope() {
 
 #[test]
 fn binding_refuses_a_client_missing_one_required_profile_scope() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     fs::write(
         project.join("casework.yaml"),
@@ -348,7 +348,7 @@ fn binding_refuses_a_client_missing_one_required_profile_scope() {
 
 #[test]
 fn binding_accepts_directory_members_with_matching_roles() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     let policy = crate::project::load_and_check_policy(&project).unwrap();
     let clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
@@ -370,7 +370,7 @@ fn binding_accepts_directory_members_with_matching_roles() {
 
 #[test]
 fn binding_refuses_repeated_resolved_principals_within_each_membership_kind() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = standalone(root.path());
 
     for (role, existing_id, second_id, membership_kind) in [
@@ -422,7 +422,7 @@ fn binding_refuses_repeated_resolved_principals_within_each_membership_kind() {
 
 #[test]
 fn binding_accepts_one_resolved_principal_in_each_membership_kind() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     let mut policy = crate::project::load_and_check_policy(&project).unwrap();
     for profile in &mut policy.access_profiles {
@@ -444,7 +444,7 @@ fn binding_accepts_one_resolved_principal_in_each_membership_kind() {
 
 #[test]
 fn binding_refuses_directory_members_with_mismatched_roles() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     let policy = crate::project::load_and_check_policy(&project).unwrap();
 
@@ -467,7 +467,7 @@ fn binding_refuses_directory_members_with_mismatched_roles() {
 
 #[test]
 fn binding_refuses_an_unserved_queue_and_a_missing_administrator() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     let policy = crate::project::load_and_check_policy(&project).unwrap();
 
@@ -507,7 +507,7 @@ fn generated_secrets_are_nul_free_lowercase_hexadecimal() {
 
 #[test]
 fn generated_operator_config_loads_through_the_runtime_contract() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     let state = session(&project);
     let session_root = state.root();
@@ -528,8 +528,8 @@ fn generated_operator_config_loads_through_the_runtime_contract() {
     // The local issuer emits one space-delimited `scope` claim.
     assert_eq!(config.authentication.oidc.scope_claim, "scope");
     assert!(matches!(
-        config.authentication.oidc.jwks_source,
-        registry_casework::OidcJwksSource::Static { ref document_ref }
+        config.authentication.oidc.provider.jwks_source,
+        registry_casework::JwksSource::Static { ref document_ref }
             if document_ref == "secret:file/issuer-jwks"
     ));
     assert_eq!(
@@ -549,7 +549,10 @@ fn generated_operator_config_loads_through_the_runtime_contract() {
         Some(session_root.join("secrets").as_path())
     );
     assert!(config.secret_providers.environment.is_none());
-    assert_eq!(config.audit.hash_key_ref, "secret:file/casework-audit-key");
+    assert_eq!(
+        config.audit.key.hash_key_ref.as_str(),
+        "secret:file/casework-audit-key"
+    );
     assert_eq!(
         config.database.runtime_url_ref,
         "secret:file/runtime-database-url"
@@ -563,13 +566,19 @@ fn generated_operator_config_loads_through_the_runtime_contract() {
         Some("secret:file/database-root.pem")
     );
     assert!(config.sources.is_empty());
-    assert_eq!(config.authentication.oidc.issuer, state.issuer_origin());
-    assert_eq!(config.authentication.oidc.audience, state.audience());
+    assert_eq!(
+        config.authentication.oidc.provider.issuer,
+        state.issuer_origin()
+    );
+    assert_eq!(
+        config.authentication.oidc.provider.audience,
+        state.audience()
+    );
 }
 
 #[test]
 fn a_project_declaring_sources_is_refused_before_anything_starts() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = root.path().join("project");
     crate::project::init(&project, "professional-review").unwrap();
     let clients = fs::read(project.join("dev-clients.yaml")).unwrap();
@@ -579,7 +588,7 @@ fn a_project_declaring_sources_is_refused_before_anything_starts() {
 
 #[test]
 fn borrowed_source_mode_is_explicit_pinned_and_refuses_session_qualified_subjects() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = root.path().join("project");
     crate::project::init(&project, "professional-review").unwrap();
     let policy = crate::project::load_and_check_policy(&project).unwrap();
@@ -625,7 +634,7 @@ fn task_templates_cannot_use_the_borrowed_source_issuer() {
 
 #[test]
 fn the_source_digest_pins_the_project_and_its_clients() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     let clients = fs::read(project.join("dev-clients.yaml")).unwrap();
     let first = capture(&project, &clients).unwrap().digest;
@@ -773,7 +782,7 @@ fn bare_dev_alias_ports_also_fall_back_to_the_environment() {
 
 #[test]
 fn events_reports_only_the_bounded_journal_tail() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     let logs = project.join(".casework/dev/logs");
     fs::create_dir_all(&logs).unwrap();
@@ -825,7 +834,7 @@ fn events_reports_only_the_bounded_journal_tail() {
 
 #[test]
 fn stopping_a_project_that_never_started_is_refused() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     let refusal = format!("{:#}", stop(&project, false, None).unwrap_err());
     assert!(refusal.contains("nothing was stopped"), "{refusal}");
@@ -835,7 +844,7 @@ fn stopping_a_project_that_never_started_is_refused() {
 
 #[test]
 fn a_first_start_without_a_clients_file_names_the_flag() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = root.path().join("project");
     fs::create_dir(&project).unwrap();
     let refusal = format!("{:#}", clients_file(None, None, &project).unwrap_err());
@@ -845,7 +854,7 @@ fn a_first_start_without_a_clients_file_names_the_flag() {
 
 #[test]
 fn a_stopped_session_retains_an_explicit_equivalent_clients_file() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = fs::canonicalize(standalone(root.path())).unwrap();
     let original_clients = fs::read(project.join("dev-clients.yaml")).unwrap();
     let replacement = project.join("replacement-clients.yaml");
@@ -899,7 +908,7 @@ fn a_stopped_session_retains_an_explicit_equivalent_clients_file() {
 
 #[test]
 fn an_active_session_refuses_an_equivalent_clients_file_at_a_new_path() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = fs::canonicalize(standalone(root.path())).unwrap();
     let original_clients = fs::read(project.join("dev-clients.yaml")).unwrap();
     let replacement = project.join("replacement-clients.yaml");
@@ -957,7 +966,7 @@ fn an_active_session_refuses_an_equivalent_clients_file_at_a_new_path() {
 
 #[test]
 fn the_report_names_every_local_credential_without_a_secret() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     let mut state = session(&project);
     state.status = Status::Ready;
@@ -1018,7 +1027,7 @@ struct DockerInventory {
 
 impl DockerInventory {
     fn new(state: &State) -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let executable = root.path().join("docker");
         let container = root.path().join("container-active");
         let volume = root.path().join("volume-active");
@@ -1113,7 +1122,7 @@ fn persisted_session(project: &Path) -> State {
 
 #[test]
 fn config_change_keeps_the_owner_after_container_creation_fails() {
-    let workspace = tempfile::tempdir().unwrap();
+    let workspace = crate::canonical_tempdir();
     let project = standalone(workspace.path());
     let mut state = persisted_session(&project);
     let docker = DockerInventory::new(&state);
@@ -1147,7 +1156,7 @@ fn config_change_keeps_the_owner_after_container_creation_fails() {
 
 #[test]
 fn config_change_keeps_the_owner_after_created_container_cannot_be_saved() {
-    let workspace = tempfile::tempdir().unwrap();
+    let workspace = crate::canonical_tempdir();
     let project = standalone(workspace.path());
     let mut state = persisted_session(&project);
     let docker = DockerInventory::new(&state);
@@ -1180,7 +1189,7 @@ fn config_change_keeps_the_owner_after_created_container_cannot_be_saved() {
 
 #[test]
 fn volume_removal_requires_the_retained_owner_label() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     let state = session(&project);
     let mut wrong_labels = serde_json::Map::new();
@@ -1238,7 +1247,7 @@ fn legacy_database_container(state: &State, volume_name: &str, destination: &str
 
 #[test]
 fn legacy_unlabeled_volume_requires_the_exact_retained_container_and_mount() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     let mut state = session(&project);
     state.container_id = Some("retained-container-id".to_owned());
@@ -1307,7 +1316,7 @@ fn legacy_unlabeled_volume_requires_the_exact_retained_container_and_mount() {
 
 #[test]
 fn foreground_interruption_terminates_and_reaps_its_owned_supervisor() {
-    let workspace = tempfile::tempdir().unwrap();
+    let workspace = crate::canonical_tempdir();
     let project = standalone(workspace.path());
     let mut state = session(&project);
     state.status = Status::Starting;
@@ -1340,7 +1349,7 @@ fn foreground_interruption_terminates_and_reaps_its_owned_supervisor() {
 
 #[test]
 fn failed_start_waits_for_the_supervisor_lock_to_be_released() {
-    let workspace = tempfile::tempdir().unwrap();
+    let workspace = crate::canonical_tempdir();
     let project = standalone(workspace.path());
     let mut state = session(&project);
     state.status = Status::Failed;
@@ -1377,7 +1386,7 @@ fn failed_start_waits_for_the_supervisor_lock_to_be_released() {
 
 #[test]
 fn migration_failures_use_the_bounded_native_diagnostic_stream() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     private::directory(&root.path().join("logs")).unwrap();
     let refusal = format!(
         "{:#}",
@@ -1401,7 +1410,7 @@ fn migration_failures_use_the_bounded_native_diagnostic_stream() {
 
 #[test]
 fn database_readiness_commands_stop_at_the_aggregate_deadline() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     private::directory(&root.path().join("logs")).unwrap();
     let started = Instant::now();
     let deadline = started + Duration::from_millis(75);
@@ -1428,7 +1437,7 @@ fn database_readiness_commands_stop_at_the_aggregate_deadline() {
 
 #[test]
 fn interrupted_native_prerequisite_is_killed_and_reaped() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     private::directory(&root.path().join("logs")).unwrap();
     let marker = root.path().join("prerequisite.pid");
     let terminate = Arc::new(AtomicBool::new(false));
@@ -1472,7 +1481,7 @@ fn interrupted_native_prerequisite_is_killed_and_reaped() {
 
 #[test]
 fn native_pump_setup_failures_reap_the_child_and_join_started_pumps() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     private::directory(&root.path().join("logs")).unwrap();
     for fail_on in [1, 2] {
         // The child outlasts every wait below, so only cleanup can end it.
@@ -1527,7 +1536,7 @@ fn native_pump_setup_failures_reap_the_child_and_join_started_pumps() {
 
 #[test]
 fn failed_native_stdin_write_reaps_the_child_and_joins_pumps() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     private::directory(&root.path().join("logs")).unwrap();
     let child = Command::new("/bin/sh")
         .args(["-c", "exec 0<&-; while :; do :; done"])
@@ -1674,7 +1683,7 @@ fn service_http_readiness_keeps_the_normal_request_timeout() {
 
 #[test]
 fn prerequisite_logs_are_bounded_and_keep_the_latest_diagnostics() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let logs = root.path().join("logs");
     private::directory(&logs).unwrap();
     let latest = format!("diagnostic-{}", MAX_PREREQUISITE_LOGS + 7);
@@ -1697,7 +1706,7 @@ fn prerequisite_logs_are_bounded_and_keep_the_latest_diagnostics() {
         assert_eq!(metadata.nlink(), 1);
     }
 
-    let unsafe_root = tempfile::tempdir().unwrap();
+    let unsafe_root = crate::canonical_tempdir();
     let unsafe_logs = unsafe_root.path().join("logs");
     private::directory(&unsafe_logs).unwrap();
     let unsafe_path = unsafe_logs.join(format!("probe-{}.log", uuid::Uuid::new_v4()));
@@ -1710,14 +1719,14 @@ fn prerequisite_logs_are_bounded_and_keep_the_latest_diagnostics() {
 
 #[test]
 fn prerequisite_log_rotation_stays_in_the_opened_directory_after_a_path_swap() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let logs = root.path().join("logs");
     private::directory(&logs).unwrap();
     for index in 0..MAX_PREREQUISITE_LOGS {
         let mut log = log_file(root.path(), "probe").unwrap();
         writeln!(log, "diagnostic-{index}").unwrap();
     }
-    let redirected = tempfile::tempdir().unwrap();
+    let redirected = crate::canonical_tempdir();
     let names = fs::read_dir(&logs)
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
@@ -1747,7 +1756,7 @@ fn prerequisite_log_rotation_stays_in_the_opened_directory_after_a_path_swap() {
 
 #[test]
 fn retained_service_journal_stays_bounded_and_keeps_latest_diagnostics() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let logs = root.path().join("logs");
     private::directory(&logs).unwrap();
     let path = logs.join("casework.log");
@@ -1793,7 +1802,7 @@ fn retained_service_journal_stays_bounded_and_keeps_latest_diagnostics() {
 
 #[test]
 fn supervisor_log_stays_bounded_and_resists_path_swaps_and_links() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let logs = root.path().join("logs");
     private::directory(&logs).unwrap();
     let path = logs.join("supervisor.log");
@@ -1827,7 +1836,7 @@ fn supervisor_log_stays_bounded_and_resists_path_swaps_and_links() {
     assert_eq!(metadata.permissions().mode() & 0o077, 0);
     assert_eq!(metadata.nlink(), 1);
 
-    let swap_root = tempfile::tempdir().unwrap();
+    let swap_root = crate::canonical_tempdir();
     let swap_logs = swap_root.path().join("logs");
     let moved_logs = swap_root.path().join("original-logs");
     let replacement_logs = swap_root.path().join("replacement-logs");
@@ -1859,7 +1868,7 @@ fn supervisor_log_stays_bounded_and_resists_path_swaps_and_links() {
         b"original recent failure\ncurrent failure\n"
     );
 
-    let hardlink_root = tempfile::tempdir().unwrap();
+    let hardlink_root = crate::canonical_tempdir();
     let hardlink_logs = hardlink_root.path().join("logs");
     private::directory(&hardlink_logs).unwrap();
     let target = hardlink_logs.join("target.log");
@@ -1870,7 +1879,7 @@ fn supervisor_log_stays_bounded_and_resists_path_swaps_and_links() {
     assert!(refusal.contains("single-link"), "{refusal}");
     assert_eq!(fs::read(&target).unwrap(), b"preserve me");
 
-    let symlink_root = tempfile::tempdir().unwrap();
+    let symlink_root = crate::canonical_tempdir();
     let symlink_logs = symlink_root.path().join("logs");
     private::directory(&symlink_logs).unwrap();
     let target = symlink_logs.join("target.log");
@@ -1884,7 +1893,7 @@ fn supervisor_log_stays_bounded_and_resists_path_swaps_and_links() {
 
 #[test]
 fn invalid_service_journal_is_refused_before_the_child_starts() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let logs = root.path().join("logs");
     private::directory(&logs).unwrap();
     let journal = logs.join("casework.log");
@@ -1978,7 +1987,7 @@ fn nonzero_outer_guard_helper() {
 
 #[test]
 fn guarded_service_stops_after_its_supervisor_is_killed() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let binary = root.path().join("service.sh");
     fs::write(
         &binary,
@@ -2021,7 +2030,7 @@ fn guarded_service_stops_after_its_supervisor_is_killed() {
 
 #[test]
 fn service_guard_owns_a_stubborn_child_during_startup_interruption() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let binary = root.path().join("stubborn.sh");
     fs::write(
         &binary,
@@ -2087,7 +2096,7 @@ fn service_guard_does_not_force_kill_after_a_fast_term_exit() {
 
 #[test]
 fn established_service_keeps_its_graceful_shutdown_window() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     private::directory(&root.path().join("logs")).unwrap();
     let binary = root.path().join("service.sh");
     let graceful = root.path().join("graceful");
@@ -2124,7 +2133,7 @@ fn established_service_keeps_its_graceful_shutdown_window() {
 
 #[test]
 fn established_stubborn_service_reports_forced_shutdown() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     private::directory(&root.path().join("logs")).unwrap();
     let binary = root.path().join("stubborn.sh");
     fs::write(
@@ -2149,7 +2158,7 @@ fn established_stubborn_service_reports_forced_shutdown() {
 
 #[test]
 fn killed_guard_leaves_the_supervisor_to_clean_its_exact_service_group() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     private::directory(&root.path().join("logs")).unwrap();
     let binary = root.path().join("stubborn.sh");
     fs::write(
@@ -2191,7 +2200,7 @@ fn killed_guard_leaves_the_supervisor_to_clean_its_exact_service_group() {
 
 #[test]
 fn nonzero_guard_exit_is_detected_without_waiting_for_pump_eof() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     private::directory(&root.path().join("logs")).unwrap();
     let service_pid_file = root.path().join("service.pid");
     let service_binary = root.path().join("service.sh");
@@ -2240,7 +2249,7 @@ fn nonzero_guard_exit_is_detected_without_waiting_for_pump_eof() {
 
 #[test]
 fn live_guard_timeout_kills_the_pinned_group_before_reaping() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     private::directory(&root.path().join("logs")).unwrap();
     let guard_binary = root.path().join("guard.sh");
     let service_pid_file = root.path().join("service.pid");
@@ -2341,7 +2350,7 @@ fn failed_group_kill_never_enters_a_blocking_guard_wait() {
 
 #[test]
 fn service_pump_setup_failures_reap_the_child_and_join_started_pumps() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let logs = root.path().join("logs");
     private::directory(&logs).unwrap();
     for fail_on in [1, 2] {
@@ -2388,7 +2397,7 @@ fn service_pump_setup_failures_reap_the_child_and_join_started_pumps() {
 
 #[test]
 fn guardian_pump_setup_failure_reaps_a_stubborn_owned_service() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let logs = root.path().join("logs");
     private::directory(&logs).unwrap();
     let binary = root.path().join("stubborn.sh");
@@ -2430,7 +2439,7 @@ fn guardian_pump_setup_failure_reaps_a_stubborn_owned_service() {
 
 #[test]
 fn seeding_administrator_token_is_issued_after_every_other_client() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     let mut state = session(&project);
     let clients = Clients {
@@ -2488,7 +2497,7 @@ fn seeding_administrator_token_is_issued_after_every_other_client() {
 
 #[test]
 fn token_issuance_stops_between_clients_when_interrupted() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     let mut state = session(&project);
     let clients = Clients {
@@ -2568,7 +2577,7 @@ fn service_cleanup_joins_every_log_pump() {
 
 #[test]
 fn legacy_issuer_state_and_unsafe_token_clients_are_refused_without_effects() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     let state = session(&project);
     private::directory(&project.join(".casework")).unwrap();
@@ -2626,7 +2635,7 @@ fn a_borrowed_session_admits_only_the_clients_its_project_declares() {
     // and an omitted list admits all of them, so it is stated whenever the
     // project declares integrations rather than only when it adds clients of
     // its own beyond the ones it borrows.
-    let workspace = tempfile::tempdir().unwrap();
+    let workspace = crate::canonical_tempdir();
     let project = standalone(workspace.path());
     let mut policy = crate::project::load_and_check_policy(&project).unwrap();
     policy.sources.push(serde_json::from_value(json!({"id":"source","adapter":"breg","description":"source.json","requests":[{"entity":"correction","queue":"decisions"}]})).unwrap());
@@ -2663,7 +2672,7 @@ fn a_borrowed_session_admits_only_the_clients_its_project_declares() {
 
 #[test]
 fn explicit_local_integrations_render_only_governed_authority_and_bind_the_source() {
-    let workspace = tempfile::tempdir().unwrap();
+    let workspace = crate::canonical_tempdir();
     let project = standalone(workspace.path());
     let mut policy = crate::project::load_and_check_policy(&project).unwrap();
     policy.sources.push(serde_json::from_value(json!({"id":"source","adapter":"breg","description":"source.json","requests":[{"entity":"correction","queue":"decisions"}]})).unwrap());
@@ -2828,10 +2837,10 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_sourc
 
 #[test]
 fn borrowed_casework_client_requires_exact_owner_claims_scopes_and_resource() {
-    let project_temp = tempfile::tempdir().unwrap();
+    let project_temp = crate::canonical_tempdir();
     let project = fs::canonicalize(project_temp.path()).unwrap();
     fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();
-    let owner_temp = tempfile::tempdir().unwrap();
+    let owner_temp = crate::canonical_tempdir();
     let owner_project = fs::canonicalize(owner_temp.path()).unwrap();
     fs::set_permissions(&owner_project, fs::Permissions::from_mode(0o700)).unwrap();
     let owner_root = owner_project.join(".breg/dev");
@@ -2894,10 +2903,10 @@ fn a_borrowed_client_the_owner_registered_for_exchange_must_declare_it() {
     // registered for exchange without this project declaring it would be
     // admitted with no pairing to refuse the other authorities with, so the
     // two declarations must agree exactly.
-    let project_temp = tempfile::tempdir().unwrap();
+    let project_temp = crate::canonical_tempdir();
     let project = fs::canonicalize(project_temp.path()).unwrap();
     fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();
-    let owner_temp = tempfile::tempdir().unwrap();
+    let owner_temp = crate::canonical_tempdir();
     let owner_project = fs::canonicalize(owner_temp.path()).unwrap();
     fs::set_permissions(&owner_project, fs::Permissions::from_mode(0o700)).unwrap();
     let owner_root = owner_project.join(".breg/dev");
@@ -2963,7 +2972,7 @@ fn a_borrowed_client_the_owner_registered_for_exchange_must_declare_it() {
 
 #[test]
 fn task_template_subject_follows_the_actual_local_issuer_owner() {
-    let workspace = tempfile::tempdir().unwrap();
+    let workspace = crate::canonical_tempdir();
     let project = standalone(workspace.path());
     let mut policy = crate::project::load_and_check_policy(&project).unwrap();
     let client = "task-agent";
@@ -2997,7 +3006,7 @@ fn task_template_subject_follows_the_actual_local_issuer_owner() {
     no_exchange.service_clients[0].task_exchange = false;
     assert!(no_exchange.validate(&clients, &policy).is_err());
 
-    let owner_temp = tempfile::tempdir().unwrap();
+    let owner_temp = crate::canonical_tempdir();
     let owner_project = fs::canonicalize(owner_temp.path()).unwrap();
     fs::set_permissions(&owner_project, fs::Permissions::from_mode(0o700)).unwrap();
     let owner_root = owner_project.join(".breg/dev");
@@ -3065,13 +3074,13 @@ fn task_template_subject_follows_the_actual_local_issuer_owner() {
 
 #[test]
 fn borrowed_browser_admission_requires_exact_owner_resource() {
-    let workspace = tempfile::tempdir().unwrap();
+    let workspace = crate::canonical_tempdir();
     let project = standalone(workspace.path());
     let mut policy = crate::project::load_and_check_policy(&project).unwrap();
     for profile in &mut policy.access_profiles {
         profile.principal_claim = "registry_principal".to_owned();
     }
-    let owner_temp = tempfile::tempdir().unwrap();
+    let owner_temp = crate::canonical_tempdir();
     let owner_project = fs::canonicalize(owner_temp.path()).unwrap();
     fs::set_permissions(&owner_project, fs::Permissions::from_mode(0o700)).unwrap();
     let owner_root = owner_project.join(".breg/dev");
@@ -3133,13 +3142,13 @@ fn a_borrowed_task_authority_connection_pairs_the_task_exchange_clients() {
     // with one of its other connections would reach the owner's resource
     // servers as that authority's, so the pairing is read here and not only
     // the connection itself.
-    let workspace = tempfile::tempdir().unwrap();
+    let workspace = crate::canonical_tempdir();
     let project = standalone(workspace.path());
     let mut policy = crate::project::load_and_check_policy(&project).unwrap();
     for profile in &mut policy.access_profiles {
         profile.principal_claim = "registry_principal".to_owned();
     }
-    let owner_temp = tempfile::tempdir().unwrap();
+    let owner_temp = crate::canonical_tempdir();
     let owner_project = fs::canonicalize(owner_temp.path()).unwrap();
     fs::set_permissions(&owner_project, fs::Permissions::from_mode(0o700)).unwrap();
     let owner_root = owner_project.join(".breg/dev");
@@ -3236,7 +3245,7 @@ impl RegistrySession {
     }
 
     fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let project = Self::create_project(root.path(), "registry");
         let executable = root.path().join("bregctl");
         fs::write(
@@ -3356,7 +3365,7 @@ fn retained_credential_canaries(state: &State, clients: &Clients) -> BTreeMap<Pa
 
 #[test]
 fn binding_a_source_exports_the_reader_and_every_person_from_the_registry_session() {
-    let workspace = tempfile::tempdir().unwrap();
+    let workspace = crate::canonical_tempdir();
     let project = workspace.path().join("project");
     crate::project::init(&project, "professional-review").unwrap();
     let registry = RegistrySession::new();
@@ -3444,7 +3453,7 @@ fn binding_a_source_exports_the_reader_and_every_person_from_the_registry_sessio
 
 #[test]
 fn incompatible_source_issuers_leave_retained_credentials_unchanged() {
-    let workspace = tempfile::tempdir().unwrap();
+    let workspace = crate::canonical_tempdir();
     let project = workspace.path().join("project");
     crate::project::init(&project, "professional-review").unwrap();
     let registry = RegistrySession::new();
@@ -3492,7 +3501,7 @@ fn incompatible_source_issuers_leave_retained_credentials_unchanged() {
 
 #[test]
 fn sources_need_the_same_shared_casework_client_credentials() {
-    let workspace = tempfile::tempdir().unwrap();
+    let workspace = crate::canonical_tempdir();
     let project = workspace.path().join("project");
     crate::project::init(&project, "professional-review").unwrap();
     let registry = RegistrySession::new();
@@ -3544,7 +3553,7 @@ fn sources_need_the_same_shared_casework_client_credentials() {
 
 #[test]
 fn two_sources_can_share_one_registry_client_registration() {
-    let workspace = tempfile::tempdir().unwrap();
+    let workspace = crate::canonical_tempdir();
     let project = workspace.path().join("project");
     crate::project::init(&project, "professional-review").unwrap();
     let registry = RegistrySession::new();
@@ -3597,7 +3606,7 @@ fn two_sources_can_share_one_registry_client_registration() {
 
 #[test]
 fn active_source_revalidation_refuses_rotated_credentials_without_replacement() {
-    let workspace = tempfile::tempdir().unwrap();
+    let workspace = crate::canonical_tempdir();
     let project = workspace.path().join("project");
     crate::project::init(&project, "professional-review").unwrap();
     let registry = RegistrySession::new();

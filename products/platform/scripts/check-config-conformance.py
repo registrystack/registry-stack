@@ -298,6 +298,51 @@ ROWS: tuple[Row, ...] = (
         ),
     ),
     Row(
+        product="casework",
+        loader_sources=("crates/registry-casework/src",),
+        runtime_schema="products/casework/generated/runtime/runtime.schema.json",
+        shared_blocks=(
+            "DatabaseConfig",
+            "EnvironmentSecretProviderConfig",
+            "FileSecretProviderConfig",
+            "JwksSource",
+            "ListenerBind",
+            "ListenerNetworkExposure",
+            "PrivateListenerConfig",
+            "SecretProvidersConfig",
+            "SecretReference",
+            "TlsTermination",
+        ),
+        reference_refusal=TestRef(
+            "crates/registry-casework/src/config.rs",
+            "environment_expressions_substitute_values_but_never_secret_references",
+        ),
+        authored_refusal=TestRef(
+            "crates/registry-casework/src/config.rs",
+            "an_authored_project_carrying_an_environment_expression_is_refused",
+        ),
+        rust_blocks=(
+            RustBlock(
+                "crates/registry-casework/src/config.rs",
+                "OidcConfig",
+                "provider",
+                "OidcIssuerConfig",
+            ),
+            RustBlock(
+                "crates/registry-casework/src/config.rs",
+                "OidcConfig",
+                "clients",
+                "OidcClientsConfig",
+            ),
+            RustBlock(
+                "crates/registry-casework/src/config.rs",
+                "AuditConfig",
+                "key",
+                "AuditKeyConfig",
+            ),
+        ),
+    ),
+    Row(
         product="scheduling",
         loader_sources=("crates/registry-scheduling/src",),
         runtime_schema="products/scheduling/generated/runtime/runtime.schema.json",

@@ -14,6 +14,7 @@ use registry_casework_core::{
     AttemptSettlement, AttemptSettlementOutcome, AttemptUncertainMarking, ConfigError,
     ConfigLoadError,
 };
+use registry_platform_config::RuntimeConfigErrorKind;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::ffi::{OsStr, OsString};
@@ -517,22 +518,32 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
             }),
         );
     }
-    let io_failure = error.chain().any(|cause| cause.is::<std::io::Error>());
     let runtime_error = error
         .chain()
         .find_map(|cause| cause.downcast_ref::<RuntimeConfigError>());
+    let io_failure = error.chain().any(|cause| cause.is::<std::io::Error>())
+        || matches!(
+            runtime_error,
+            Some(RuntimeConfigError::Load(load))
+                if load.kind() == RuntimeConfigErrorKind::Unavailable
+        );
     let project_error = error
         .chain()
         .find_map(|cause| cause.downcast_ref::<ConfigLoadError>());
     let semantic_error = error
         .chain()
         .find_map(|cause| cause.downcast_ref::<ConfigError>());
+    let authored_expression = error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<registry_platform_config::RuntimeConfigError>())
+        .find(|authored| authored.kind() == RuntimeConfigErrorKind::AuthoredExpression);
     let runtime_project_error =
         matches!(runtime_error, Some(RuntimeConfigError::Project(_))) && project_error.is_some();
     let runtime_dependency_unavailable = matches!(runtime_error, Some(RuntimeConfigError::Oidc));
     let domain = !io_failure
         && !runtime_dependency_unavailable
         && (runtime_error.is_some()
+            || authored_expression.is_some()
             || project_error.is_some()
             || semantic_error.is_some()
             || matches!(kind, CommandKind::Authoring));
@@ -547,6 +558,12 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
             "runtime_dependency",
             "runtime.yaml:/authentication/oidc".to_owned(),
             "Restore access to the configured OIDC issuer or mounted JWKS, then retry.",
+        )
+    } else if let Some(authored) = authored_expression {
+        (
+            "casework_project",
+            format!("casework.yaml:/{}", authored.field().replace('.', "/")),
+            "Write the value in casework.yaml directly; environment substitution applies to runtime.yaml only.",
         )
     } else if runtime_project_error {
         project_diagnostic_location(project_error.expect("runtime project error has source"))
@@ -573,7 +590,11 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
         "caseworkctl.io-failure"
     } else if runtime_dependency_unavailable {
         "casework.runtime-dependency.unavailable"
-    } else if runtime_project_error || project_error.is_some() || semantic_error.is_some() {
+    } else if runtime_project_error
+        || authored_expression.is_some()
+        || project_error.is_some()
+        || semantic_error.is_some()
+    {
         "casework.project.invalid"
     } else if runtime_error.is_some() {
         "casework.runtime-configuration.invalid"
@@ -586,6 +607,8 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
         "A required filesystem operation failed.".to_owned()
     } else if runtime_dependency_unavailable {
         "The configured OIDC runtime dependency is unavailable.".to_owned()
+    } else if let Some(authored) = authored_expression {
+        authored.to_string()
     } else if runtime_project_error {
         project_error
             .expect("runtime project error has source")
@@ -732,17 +755,27 @@ fn operator_refusal(kind: CommandKind, error: &anyhow::Error) -> Option<Value> {
 }
 
 fn runtime_diagnostic_location(error: &RuntimeConfigError) -> (&'static str, String, &'static str) {
-    let path = if matches!(error, RuntimeConfigError::RemovedPrincipalClaim) {
-        "runtime.yaml:/authentication/oidc/principalClaim".to_owned()
+    let removed_key = match error {
+        RuntimeConfigError::Load(load) if load.kind() == RuntimeConfigErrorKind::RemovedKey => {
+            Some(load.field())
+        }
+        _ => None,
+    };
+    let path = if let Some(field) = removed_key {
+        format!("runtime.yaml:/{}", field.replace('.', "/"))
     } else if error.path() == "/" {
         "runtime.yaml".to_owned()
     } else {
         format!("runtime.yaml:/{}", error.path().trim_start_matches('/'))
     };
-    let action = if matches!(error, RuntimeConfigError::RemovedPrincipalClaim) {
-        "Remove authentication.oidc.principalClaim and configure accessProfiles[].principalClaim in casework.yaml."
-    } else {
-        "Correct the named runtime configuration field, then retry."
+    let action = match removed_key {
+        Some("authentication.oidc.principalClaim") => {
+            "Remove authentication.oidc.principalClaim and configure accessProfiles[].principalClaim in casework.yaml."
+        }
+        Some("authentication.oidc.jwksUri") => {
+            "Replace authentication.oidc.jwksUri with authentication.oidc.jwksSource, kind: uri, and the same https URL as uri."
+        }
+        _ => "Correct the named runtime configuration field, then retry.",
     };
     ("runtime_configuration", path, action)
 }
@@ -1009,6 +1042,8 @@ fn run(cli: Cli) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_casework::RuntimeConfig;
+    use std::fs;
 
     #[test]
     fn internal_service_guard_preserves_hyphenated_service_arguments() {
@@ -1208,7 +1243,7 @@ mod tests {
 
     #[test]
     fn authoring_refusal_preserves_its_message_and_names_authored_input() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let project = root.path().join("casework");
         project::init(&project, "standalone-decision").unwrap();
         for entry in std::fs::read_dir(project.join("fixtures")).unwrap() {
@@ -1260,7 +1295,7 @@ mod tests {
 
     #[test]
     fn check_reports_the_exact_broken_review_policy_binding() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let project = root.path().join("casework");
         let example = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../products/casework/examples/multi-stage-routing-clocks");
@@ -1308,7 +1343,7 @@ mod tests {
 
     #[test]
     fn denied_authoring_findings_use_exit_one_and_the_same_diagnostics() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let project = root.path().join("casework");
         project::init(&project, "professional-review").unwrap();
         let mut stdout = Vec::new();
@@ -1359,8 +1394,46 @@ mod tests {
     }
 
     #[test]
+    fn check_refuses_an_environment_expression_in_the_authored_project() {
+        let root = crate::canonical_tempdir();
+        let project = root.path().join("standalone");
+        project::init(&project, "standalone-decision").unwrap();
+        let policy_path = project.join("casework.yaml");
+        let mut policy: Value =
+            serde_norway::from_slice(&std::fs::read(&policy_path).unwrap()).unwrap();
+        assert!(policy["queues"][0]["label"].is_string());
+        policy["queues"][0]["label"] = json!("${QUEUE_LABEL}");
+        std::fs::write(&policy_path, serde_norway::to_string(&policy).unwrap()).unwrap();
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = main_entry_from(
+            [
+                OsString::from("caseworkctl"),
+                OsString::from("--format=json"),
+                OsString::from("check"),
+                project.into_os_string(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(exit, ExitCode::from(1));
+        assert!(stderr.is_empty());
+        let report: Value = serde_json::from_slice(&stdout).unwrap();
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(diagnostic["code"], "casework.project.invalid");
+        assert_eq!(diagnostic["path"], "casework.yaml:/queues/0/label");
+        assert!(diagnostic["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("runtime.yaml only")));
+        assert!(diagnostic["suggestedAction"]
+            .as_str()
+            .is_some_and(|action| action.contains("casework.yaml")));
+    }
+
+    #[test]
     fn review_connection_retention_diagnostic_names_the_incompatible_pair() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let project = root.path().join("standalone");
         project::init(&project, "standalone-decision").unwrap();
         let policy_path = project.join("casework.yaml");
@@ -1401,7 +1474,7 @@ mod tests {
 
     #[test]
     fn operational_failures_follow_the_selected_output_channel() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let missing = root.path().join("missing-runtime.yaml");
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -1450,7 +1523,7 @@ mod tests {
     #[test]
     fn runtime_and_project_parse_diagnostics_never_echo_rejected_values() {
         const REJECTED_VALUE: &str = "value-that-must-not-be-echoed";
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let runtime = root.path().join("runtime.yaml");
         std::fs::write(
             &runtime,
@@ -1502,18 +1575,43 @@ mod tests {
     }
 
     #[test]
-    fn removed_principal_claim_diagnostic_names_the_replacement_path_and_action() {
-        let error = anyhow::Error::new(RuntimeConfigError::RemovedPrincipalClaim);
-        let (exit, diagnostic) = classify_failure(CommandKind::Operational, &error);
-        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
-        assert_eq!(
-            diagnostic["path"],
-            "runtime.yaml:/authentication/oidc/principalClaim"
-        );
-        assert!(diagnostic["suggestedAction"]
-            .as_str()
-            .unwrap()
-            .contains("accessProfiles[].principalClaim"));
+    fn removed_runtime_keys_name_the_replacement_path_and_action() {
+        let root = crate::canonical_tempdir();
+        let runtime_config = root.path().join("runtime.yaml");
+        for (removed, path, replacement) in [
+            (
+                "principalClaim: sub",
+                "runtime.yaml:/authentication/oidc/principalClaim",
+                "accessProfiles[].principalClaim",
+            ),
+            (
+                "jwksUri: https://issuer.example/jwks",
+                "runtime.yaml:/authentication/oidc/jwksUri",
+                "authentication.oidc.jwksSource",
+            ),
+        ] {
+            fs::write(
+                &runtime_config,
+                format!(
+                    "apiVersion: {}\nkind: {}\nauthentication:\n  oidc:\n    {removed}\n",
+                    registry_casework::RUNTIME_CONFIG_API_VERSION,
+                    registry_casework::RUNTIME_CONFIG_KIND,
+                ),
+            )
+            .unwrap();
+            let error = anyhow::Error::new(RuntimeConfig::load(&runtime_config).unwrap_err());
+            let (exit, diagnostic) = classify_failure(CommandKind::Operational, &error);
+            assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+            assert_eq!(diagnostic["code"], "casework.runtime-configuration.invalid");
+            assert_eq!(diagnostic["path"], path);
+            assert!(
+                diagnostic["suggestedAction"]
+                    .as_str()
+                    .unwrap()
+                    .contains(replacement),
+                "{diagnostic}"
+            );
+        }
     }
 
     #[test]
@@ -2085,3 +2183,12 @@ mod tests {
 
 #[cfg(test)]
 mod cli_contract_tests;
+
+/// A temporary directory under the canonical system temporary root. The
+/// runtime configuration loader refuses a path through a symbolic link, and
+/// the system temporary root is one on some hosts.
+#[cfg(test)]
+pub(crate) fn canonical_tempdir() -> tempfile::TempDir {
+    let root = std::fs::canonicalize(std::env::temp_dir()).expect("canonical temporary root");
+    tempfile::tempdir_in(root).expect("temporary directory")
+}
