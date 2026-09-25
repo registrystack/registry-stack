@@ -160,7 +160,9 @@ impl ReviewRecoveryOperatorService {
     }
 
     /// Fails an accepted review that will never be answered, keeping its
-    /// binding for late correlation. BReg sends nothing to the authority.
+    /// binding so an operator can find the review at the authority. A result
+    /// the authority delivers for it afterwards is refused, not recorded.
+    /// BReg sends nothing to the authority.
     pub async fn close(&self, scope: ReviewRecoveryScope<'_>) -> Result<ReviewRecovery> {
         self.recover(scope, Operation::Close).await
     }
