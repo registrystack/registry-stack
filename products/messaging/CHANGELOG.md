@@ -7,7 +7,8 @@
   schema, package access profiles, OIDC bearer authentication, the keyed
   audit journal, `/health` and `/ready`, the authenticated message status
   route, and `/metrics` on a separate private listener. The contract is
-  pre-1.0 and may change in a later minor release.
+  pre-1.0 and may change in a later minor release. The database schema is
+  one migration, version 1.
 - Refuse unknown configuration keys with their path, and refuse an
   environment expression in any member that names a secret.
 - Add `messagingctl check`, which loads a runtime configuration and its
@@ -92,8 +93,7 @@
   (`429 rate-limit.exceeded`) and its `dailyLimit` over the profile's
   accepted messages of the last 24 hours (`429 quota.exceeded`), both with
   `Retry-After`. Pace each `http` provider's sends to its
-  `capabilities.ratePerSecond`. Migration 0004 indexes a profile's
-  acceptances.
+  `capabilities.ratePerSecond`.
 - Add the problems `rate-limit.exceeded` (429) and `quota.exceeded` (429).
 - Enforce retention: a payload is erased `retention.payloadDays` and a
   record deleted `retention.recordDays` after the message reached a terminal
@@ -102,8 +102,7 @@
   is never erased. The runtime sweeps at start and hourly and journals
   `messaging.retention.erased`; `messagingctl retention erase-expired
   --before` runs the same sweep on demand, previewing unless `--apply` is
-  given. A deleted record frees its idempotency key. Migration 0005 drops
-  the per-payload erase deadline, which counted from acceptance.
+  given. A deleted record frees its idempotency key.
 - Answer `/ready` with `503` once the package ledger names a package other
   than the one the runtime serves, until the runtime is restarted onto it.
 - Add `registry-messaging-client` with health, readiness, and

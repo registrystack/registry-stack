@@ -24,20 +24,10 @@ use tokio_postgres::Config as PgConfig;
 use crate::config::{describe_secret_failure, DatabaseConfig};
 
 const MESSAGING_MIGRATION: &str = include_str!("../migrations/0001_messaging.sql");
-pub(crate) const MESSAGES_MIGRATION: &str = include_str!("../migrations/0002_messages.sql");
-const RECEIPTS_MIGRATION: &str = include_str!("../migrations/0003_receipts.sql");
-const DAILY_LIMIT_MIGRATION: &str = include_str!("../migrations/0004_daily_limit.sql");
-const RETENTION_MIGRATION: &str = include_str!("../migrations/0005_retention.sql");
 
 /// Every schema version, in the order it is applied. Readiness requires the
 /// applied set to be exactly this list.
-const MIGRATIONS: [(i64, &str); 5] = [
-    (1, MESSAGING_MIGRATION),
-    (2, MESSAGES_MIGRATION),
-    (3, RECEIPTS_MIGRATION),
-    (4, DAILY_LIMIT_MIGRATION),
-    (5, RETENTION_MIGRATION),
-];
+const MIGRATIONS: [(i64, &str); 1] = [(1, MESSAGING_MIGRATION)];
 
 /// Serializes operator-run migrations on one session lock. A second migrator
 /// waits here instead of racing the migrations table's primary key. The key
@@ -383,12 +373,12 @@ mod tests {
         let table =
             JobTable::new("public", crate::dispatch::JOB_TABLE, "message_id", "part").unwrap();
         let declared = normalized(&table.create_statements().join("\n").replace("public.", ""));
-        let start = MESSAGES_MIGRATION
+        let start = MESSAGING_MIGRATION
             .find("CREATE TABLE IF NOT EXISTS messaging_dispatch_jobs")
             .expect("the job table");
-        let end = MESSAGES_MIGRATION
+        let end = MESSAGING_MIGRATION
             .find("ALTER TABLE messaging_dispatch_jobs")
             .expect("the job table's own constraints");
-        assert_eq!(normalized(&MESSAGES_MIGRATION[start..end]), declared);
+        assert_eq!(normalized(&MESSAGING_MIGRATION[start..end]), declared);
     }
 }

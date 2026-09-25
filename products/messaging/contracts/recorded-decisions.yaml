@@ -376,8 +376,8 @@ decisions:
       messaging_dispatch_jobs reports the pending, leased, and unknown
       dispatch jobs by reading the store on each scrape of the metrics
       listener, in one read-only transaction with a two-second statement
-      timeout, over partial indexes (migration 0005 adds the one for
-      unknown). Terminal states are not counted. A scrape the store cannot
+      timeout, over the partial indexes the schema keeps for each of the
+      three states. Terminal states are not counted. A scrape the store cannot
       answer has no samples for the gauge and logs a warning. Attempt,
       limit, and retention counters are in-process and start at zero.
     reasoning: >-
