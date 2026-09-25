@@ -515,37 +515,67 @@ fn openapi_document_has_no_drift() {
     );
 }
 
+fn check_audit_under(runtime: &Path, bundle: &Path, root: &Path) -> Output {
+    run(&[
+        "check",
+        "--bundle",
+        bundle.to_str().unwrap(),
+        "--runtime",
+        runtime.to_str().unwrap(),
+        "--require-audit-under",
+        root.to_str().unwrap(),
+    ])
+}
+
 #[test]
-fn tampered_ledger_fails_audit_verify() {
+fn check_proves_the_audit_file_resolves_under_the_root() {
     let (home, runtime, _) = serve_deployment();
-    let server = start_server(&runtime);
-    // One honest render to have a chain worth tampering with.
-    let data = std::fs::read_to_string(fixtures_receipt()).unwrap();
-    let body = format!(r#"{{"issuedAt":"2026-09-16T10:32:00Z","data":{data}}}"#);
-    let reply = request(
-        server.port,
-        "POST",
-        "/v1/render/receipt",
-        &[
-            ("Authorization", &format!("Bearer {}", API_KEY)),
-            ("Content-Type", "application/json"),
-        ],
-        Some(&body),
+    let out = check_audit_under(&runtime, &home.join("bundle"), &home);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(reply.status, 200);
-    drop(server);
-    // Flip one byte inside a sealed ledger line.
-    let ledger = home.join("audit").join("ledger.jsonl");
-    let mut bytes = std::fs::read(&ledger).unwrap();
-    if let Some(position) = bytes.iter().position(|b| *b == b'"') {
-        bytes[position] = b'X';
-    }
-    std::fs::write(&ledger, bytes).unwrap();
-    let out = run(&["audit-verify", "--runtime", runtime.to_str().unwrap()]);
+    assert!(
+        stdout.contains(&format!(
+            "audit file {} resolves under {}",
+            home.join("audit/render.jsonl").display(),
+            home.display()
+        )),
+        "{stdout}"
+    );
+    let elsewhere = tempdir();
+    let out = check_audit_under(&runtime, &home.join("bundle"), &elsewhere);
     assert_ne!(
         out.status.code(),
         Some(0),
-        "a tampered chain must not verify"
+        "an audit file outside the root fails the proof"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("audit file fails the containment proof"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn check_refuses_to_prove_a_stdout_audit_destination() {
+    let (home, runtime, _) = serve_deployment();
+    let text = std::fs::read_to_string(&runtime).unwrap();
+    let text = text.replace(
+        &format!("  path: {}\n", home.join("audit/render.jsonl").display()),
+        "  destination: stdout\n",
+    );
+    assert!(text.contains("destination: stdout"), "{text}");
+    std::fs::write(&runtime, text).unwrap();
+    let out = check_audit_under(&runtime, &home.join("bundle"), &home);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(out.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("audit.destination is stdout, which has no path to prove"),
+        "{stderr}"
     );
 }
 
@@ -557,7 +587,6 @@ use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
 const API_KEY: &str = "test-key-0123456789abcdef0123456789abcdef";
-const AUDIT_KEY: &str = "audit-key-0123456789abcdef0123456789abcd";
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -565,10 +594,6 @@ fn repo_root() -> PathBuf {
         .nth(2)
         .expect("crate path")
         .to_path_buf()
-}
-
-fn fixtures_receipt() -> PathBuf {
-    repo_root().join("products/render/bundles/receipt/fixtures/data.json")
 }
 
 fn write_secret(path: &Path, contents: &str) {
@@ -592,7 +617,6 @@ fn serve_deployment() -> (PathBuf, PathBuf, u16) {
         &bundle,
     );
     write_secret(&home.join("api.key"), API_KEY);
-    write_secret(&home.join("audit.key"), AUDIT_KEY);
     std::fs::create_dir(home.join("audit")).unwrap();
     let port = TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -600,9 +624,9 @@ fn serve_deployment() -> (PathBuf, PathBuf, u16) {
         .unwrap()
         .port();
     let runtime = format!(
-        "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nserver:\n  bind: 127.0.0.1:{port}\nbundle:\n  path: {}\nauth:\n  apiKeyRef: secret:file/api.key\nlimits:\n  renderTimeoutSeconds: 20\naudit:\n  directory: {}\n  integrityKeyRef: secret:file/audit.key\n",
+        "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nserver:\n  bind: 127.0.0.1:{port}\nbundle:\n  path: {}\nauth:\n  apiKeyRef: secret:file/api.key\nlimits:\n  renderTimeoutSeconds: 20\naudit:\n  path: {}\n",
         bundle.display(),
-        home.join("audit").display()
+        home.join("audit/render.jsonl").display()
     );
     let runtime_path = home.join("runtime.yaml");
     std::fs::write(&runtime_path, runtime).unwrap();

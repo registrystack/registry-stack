@@ -17,7 +17,7 @@ pub const OPENAPI_JSON: &str = r#"{
     },
     "/ready": {
       "get": {
-        "summary": "Readiness (audit ledger included)",
+        "summary": "Readiness (audit destination included)",
         "responses": {
           "200": { "description": "ready" },
           "503": { "description": "not ready" }
