@@ -19,7 +19,9 @@ use tokio_postgres::{Client, Row};
 /// two cases apart without the superuser-only `shared_preload_libraries`
 /// setting itself. `current_setting` cannot: a configured value for a module
 /// that never loaded is kept as a placeholder it still returns, while
-/// `pg_settings` lists only defined settings.
+/// `pg_settings` lists only defined settings. A loaded module still records
+/// nothing when `pg_stat_statements.track` is `none` or `compute_query_id` is
+/// `off`, so tracking is read as a third value.
 const BASELINE_QUERY: &str = "SELECT
     pg_catalog.current_setting('max_connections', true),
     pg_catalog.current_setting('superuser_reserved_connections', true),
@@ -31,7 +33,12 @@ const BASELINE_QUERY: &str = "SELECT
     ),
     EXISTS (
         SELECT FROM pg_catalog.pg_settings WHERE name = 'pg_stat_statements.max'
-    )";
+    ),
+    (
+        SELECT setting <> 'none'
+        FROM pg_catalog.pg_settings
+        WHERE name = 'pg_stat_statements.track'
+    ) AND pg_catalog.current_setting('compute_query_id', true) IS DISTINCT FROM 'off'";
 
 /// Whether an advisory names something an operator should change or only
 /// something worth knowing.
@@ -109,6 +116,7 @@ pub struct BaselineSettings {
     pub track_counts: Option<String>,
     pub pg_stat_statements_installed: Option<bool>,
     pub pg_stat_statements_loaded: Option<bool>,
+    pub pg_stat_statements_tracking: Option<bool>,
 }
 
 /// Inspect the server behind `client` and advise on it for a runtime pool of
@@ -135,6 +143,7 @@ fn settings_from_row(row: &Row) -> BaselineSettings {
         track_counts: text(4),
         pg_stat_statements_installed: row.try_get::<_, Option<bool>>(5).ok().flatten(),
         pg_stat_statements_loaded: row.try_get::<_, Option<bool>>(6).ok().flatten(),
+        pg_stat_statements_tracking: row.try_get::<_, Option<bool>>(7).ok().flatten(),
     }
 }
 
@@ -171,23 +180,29 @@ pub fn advise(settings: &BaselineSettings, pool_max_size: usize) -> Vec<Baseline
     ));
     // `CREATE EXTENSION pg_stat_statements` succeeds without
     // `shared_preload_libraries`, but its view then refuses every query, so
-    // installed and loaded are inspected and advised on separately.
+    // installed, loaded, and tracking are inspected and advised on separately.
     match (
         settings.pg_stat_statements_installed,
         settings.pg_stat_statements_loaded,
+        settings.pg_stat_statements_tracking,
     ) {
-        (Some(true), Some(true)) => {}
-        (Some(false), Some(_)) => advisories.push(BaselineAdvisory::new(
+        (Some(true), Some(true), Some(true)) => {}
+        (Some(false), Some(_), _) => advisories.push(BaselineAdvisory::new(
             "postgres.pg_stat_statements.unavailable",
             AdvisorySeverity::Information,
             "pg_stat_statements is not installed in this database, so per-statement timings are unavailable when diagnosing load",
         )),
-        (Some(true), Some(false)) => advisories.push(BaselineAdvisory::new(
+        (Some(true), Some(false), _) => advisories.push(BaselineAdvisory::new(
             "postgres.pg_stat_statements.unavailable",
             AdvisorySeverity::Information,
             "pg_stat_statements is installed but not loaded through shared_preload_libraries, so per-statement timings are unavailable when diagnosing load",
         )),
-        (_, _) => advisories.push(BaselineAdvisory::new(
+        (Some(true), Some(true), Some(false)) => advisories.push(BaselineAdvisory::new(
+            "postgres.pg_stat_statements.unavailable",
+            AdvisorySeverity::Information,
+            "pg_stat_statements is loaded but records nothing while pg_stat_statements.track is none or compute_query_id is off, so per-statement timings are unavailable when diagnosing load",
+        )),
+        (_, _, _) => advisories.push(BaselineAdvisory::new(
             "postgres.pg_stat_statements.not_inspected",
             AdvisorySeverity::Information,
             "could not inspect whether pg_stat_statements is installed in this database",
@@ -269,6 +284,7 @@ mod tests {
             track_counts: Some("on".to_owned()),
             pg_stat_statements_installed: Some(true),
             pg_stat_statements_loaded: Some(true),
+            pg_stat_statements_tracking: Some(true),
         }
     }
 
@@ -359,6 +375,20 @@ mod tests {
     }
 
     #[test]
+    fn a_loaded_pg_stat_statements_that_tracks_nothing_is_information_only() {
+        let mut settings = healthy();
+        settings.pg_stat_statements_tracking = Some(false);
+        let advisories = advise(&settings, 4);
+        assert_eq!(
+            advisories[1].code(),
+            "postgres.pg_stat_statements.unavailable"
+        );
+        assert_eq!(advisories[1].severity(), AdvisorySeverity::Information);
+        assert!(advisories[1].message().contains("pg_stat_statements.track"));
+        assert!(advisories[1].message().contains("compute_query_id"));
+    }
+
+    #[test]
     fn settings_that_could_not_be_read_are_reported_not_guessed() {
         let advisories = advise(&BaselineSettings::default(), 4);
         assert_eq!(
@@ -392,6 +422,13 @@ mod tests {
         loaded_unknown.pg_stat_statements_loaded = None;
         assert_eq!(
             advise(&loaded_unknown, 4)[1].code(),
+            "postgres.pg_stat_statements.not_inspected"
+        );
+
+        let mut tracking_unknown = healthy();
+        tracking_unknown.pg_stat_statements_tracking = None;
+        assert_eq!(
+            advise(&tracking_unknown, 4)[1].code(),
             "postgres.pg_stat_statements.not_inspected"
         );
     }

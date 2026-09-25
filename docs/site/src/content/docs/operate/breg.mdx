@@ -244,8 +244,10 @@ Base Registry Engine's catalog checks accept the extension either way, but the
 `postgres.pg_stat_statements.unavailable` advisory only stops once the preload above actually took
 effect. PostgreSQL lets `CREATE EXTENSION` succeed without `shared_preload_libraries`, then refuses
 every query against the view, so skipping the restart leaves `doctor` advising, with a message
-naming the module as installed but not loaded. Only superusers and roles with the privileges of
-`pg_read_all_stats` see the statement text of other roles.
+naming the module as installed but not loaded. It also keeps advising while
+`pg_stat_statements.track` is `none` or `compute_query_id` is `off`, because the module then
+records nothing. Only superusers and roles with the privileges of `pg_read_all_stats` see the
+statement text of other roles.
 
 **Keep maintenance running.** Leave `autovacuum` and `track_counts` on; with either off, `breg`
 and `doctor` warn, because dead rows accumulate and planner statistics go stale. After a large

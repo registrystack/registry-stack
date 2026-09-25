@@ -13248,6 +13248,7 @@ mod tests {
             track_counts: Some("off".to_owned()),
             pg_stat_statements_installed: Some(false),
             pg_stat_statements_loaded: Some(false),
+            pg_stat_statements_tracking: None,
         };
         let advisories = registry_breg::postgres::advise(&settings, 9);
 
