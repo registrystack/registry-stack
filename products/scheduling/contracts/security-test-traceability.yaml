@@ -141,7 +141,7 @@ entries:
       - {path: crates/registry-schedulingctl/tests/records_apply_postgres.rs, name: records_apply_replaces_facts_wholesale_and_audits_each_write}
   - id: SCHEDULING-SEC-15
     tests:
-      - {path: crates/registry-scheduling/src/config.rs, name: production_requires_a_verified_package_while_loopback_accepts_authoring}
+      - {path: crates/registry-scheduling/src/config.rs, name: every_listener_mode_verifies_the_package_without_a_pin}
       - {path: crates/registry-scheduling/src/config.rs, name: a_refused_authored_policy_names_the_member_and_the_cause}
       - {path: crates/registry-scheduling-core/src/policy.rs, name: the_policy_digest_is_stable_and_moves_with_content}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: adoption_binds_one_identity_and_refuses_a_second}

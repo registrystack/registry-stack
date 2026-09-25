@@ -132,13 +132,8 @@ pub async fn migrate_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeErro
 
 pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
     let config = RuntimeConfig::load(path)?;
-    match config.policy_package_digest()? {
-        Some(digest) => tracing::info!(
-            policy_package_digest = %digest,
-            "verified Scheduling policy package"
-        ),
-        None => tracing::info!("loading authored Scheduling policy for loopback development"),
-    }
+    let package_digest = config.package_digest()?;
+    tracing::info!(package_digest = %package_digest, "verified Scheduling package");
     let policy = config.load_policy()?;
     let scheduling_id = policy.scheduling.id.clone();
     let policy_digest = policy.policy_digest();

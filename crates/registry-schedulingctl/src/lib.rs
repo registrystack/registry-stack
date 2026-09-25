@@ -50,8 +50,8 @@ enum Command {
     Test(ProjectArgs),
     /// Explain the checked policy offline: what the runtime would publish.
     Explain(ProjectArgs),
-    /// Write the verified policy package manifest beside the authored policy.
-    Package(ProjectArgs),
+    /// Write the checked policy into a new package directory the runtime verifies.
+    Package(PackageArgs),
     /// Apply the live environment records of a deployment.
     Records(RecordsArgs),
     /// List delivery intents a deployment's sweep has stopped carrying.
@@ -83,6 +83,22 @@ struct ProjectArgs {
     /// Authored scheduling project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct PackageArgs {
+    /// Authored scheduling project directory.
+    #[arg(value_name = "PROJECT")]
+    project: PathBuf,
+    /// New directory for the verified package. Required unless --dry-run.
+    #[arg(long, value_name = "DIRECTORY", required_unless_present = "dry_run")]
+    output: Option<PathBuf>,
+    /// Report the same packageDigest and files a package would produce, without writing one.
+    #[arg(long, conflicts_with = "output", required_unless_present = "output")]
+    dry_run: bool,
+    /// Free-text revision recorded in the package's REVISION file and covered by its digest.
+    #[arg(long, value_name = "TEXT")]
+    revision: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -214,7 +230,10 @@ fn run(cli: Cli) -> Result<Value> {
         Command::Check(args) => project::check(&args.project),
         Command::Test(args) => project::test(&args.project),
         Command::Explain(args) => project::explain(&args.project),
-        Command::Package(args) => project::package(&args.project),
+        Command::Package(args) => match args.output {
+            Some(output) => project::package(&args.project, &output, args.revision.as_deref()),
+            None => project::package_dry_run(&args.project, args.revision.as_deref()),
+        },
         Command::Records(args) => match args.command {
             RecordsCommand::Apply(apply) => records::apply(&apply.config, &apply.records),
         },
@@ -396,9 +415,10 @@ fn human_lead(report: &Value) -> String {
             "Offline synthetic fixtures passed with incomplete authored inputs.".to_owned()
         }
         ("test", _, _) => "Offline synthetic fixtures passed.".to_owned(),
-        ("package", _, _) => {
-            "Policy package manifest written beside the authored policy.".to_owned()
+        ("package", _, _) if report["dryRun"] == true => {
+            "Package planned; nothing was written.".to_owned()
         }
+        ("package", _, _) => "Package written.".to_owned(),
         ("records-apply", _, _) => "Environment records applied.".to_owned(),
         ("intents", _, _) => "Undelivered delivery intents listed.".to_owned(),
         _ => format!("{command} succeeded."),
@@ -526,14 +546,49 @@ mod tests {
         };
         assert_eq!(args.template, "standalone-exact-time");
 
-        for command in ["test", "explain", "package"] {
+        for command in ["test", "explain"] {
             let cli = Cli::try_parse_from(["schedulingctl", command, "/tmp/project"]).unwrap();
             match command {
                 "test" => assert!(matches!(cli.command, Command::Test(_))),
-                "explain" => assert!(matches!(cli.command, Command::Explain(_))),
-                _ => assert!(matches!(cli.command, Command::Package(_))),
+                _ => assert!(matches!(cli.command, Command::Explain(_))),
             }
         }
+        // `package` writes a new directory or plans one, never both and
+        // never beside the project.
+        assert!(Cli::try_parse_from(["schedulingctl", "package", "/tmp/project"]).is_err());
+        assert!(Cli::try_parse_from([
+            "schedulingctl",
+            "package",
+            "/tmp/project",
+            "--output",
+            "/tmp/package",
+            "--dry-run",
+        ])
+        .is_err());
+        let Command::Package(args) = Cli::try_parse_from([
+            "schedulingctl",
+            "package",
+            "/tmp/project",
+            "--output",
+            "/tmp/package",
+            "--revision",
+            "change 42",
+        ])
+        .unwrap()
+        .command
+        else {
+            panic!("expected package")
+        };
+        assert_eq!(args.output, Some(PathBuf::from("/tmp/package")));
+        assert_eq!(args.revision.as_deref(), Some("change 42"));
+        let Command::Package(args) =
+            Cli::try_parse_from(["schedulingctl", "package", "/tmp/project", "--dry-run"])
+                .unwrap()
+                .command
+        else {
+            panic!("expected package")
+        };
+        assert!(args.dry_run && args.output.is_none());
 
         let cli = Cli::try_parse_from([
             "schedulingctl",
@@ -914,53 +969,85 @@ mod tests {
     }
 
     #[test]
-    fn package_writes_a_verifiable_manifest_and_refuses_replacement() {
-        let (_root, project) = initialized("standalone-exact-time");
-        let (exit, report, stderr) = run_json(&["package", project.to_str().unwrap()]);
-        assert_eq!(exit, ExitCode::SUCCESS);
+    fn package_writes_a_package_the_runtime_verifies_and_refuses_replacement() {
+        let (root, project) = initialized("standalone-exact-time");
+        let output = root.path().join("package");
+        let (exit, report, stderr) = run_json(&[
+            "package",
+            project.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+        ]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
         assert!(stderr.is_empty());
         assert_eq!(report["command"], "package");
-        assert!(report["packageDigest"]
-            .as_str()
-            .unwrap()
-            .starts_with("sha256:"));
-        assert!(report["policyDigest"]
-            .as_str()
-            .unwrap()
-            .starts_with("sha256:"));
-        // The package identity and the policy's own digest are different
-        // documents and must never be conflated.
-        assert_ne!(report["packageDigest"], report["policyDigest"]);
+        assert_eq!(report["dryRun"], false);
+        assert_eq!(report["revision"], Value::Null);
         assert_eq!(report["files"][0]["path"], "scheduling.yaml");
+        assert_eq!(report["files"].as_array().unwrap().len(), 1);
         assert_eq!(report["runtimeConfigurationIncluded"], false);
         assert_eq!(report["secretsIncluded"], false);
+        assert!(report.get("policyDigest").is_none(), "{report}");
+        // The package digest is the digest of SHA256SUMS, the file the
+        // runtime verifies the package against.
+        let sums = std::fs::read(output.join("SHA256SUMS")).unwrap();
+        assert_eq!(
+            report["packageDigest"],
+            registry_platform_config::sha256_uri(&sums)
+        );
+        let verified = registry_scheduling::config::verify_scheduling_package(
+            &registry_platform_config::PackageConfig {
+                root: output.clone(),
+                expected_digest: None,
+            },
+        )
+        .expect("the runtime verifies the written package");
+        assert_eq!(verified.digest(), report["packageDigest"]);
+        assert_eq!(
+            std::fs::read(output.join("scheduling.yaml")).unwrap(),
+            std::fs::read(project.join("scheduling.yaml")).unwrap()
+        );
+        assert!(!project.join("SHA256SUMS").exists());
 
-        let manifest_path = project.join("scheduling.package.json");
-        assert!(manifest_path.is_file());
-        // The written manifest is exactly the one the runtime's own verifier
-        // accepts against the same policy text.
-        let policy_path = project.join("scheduling.yaml");
-        let policy_text = std::fs::read_to_string(&policy_path).unwrap();
-        let verified =
-            registry_scheduling::config::verify_policy_package(&policy_path, &policy_text)
-                .unwrap()
-                .expect("the written manifest verifies");
-        // `verify_policy_package` returns the manifest's own byte-exact
-        // digest, which the on-disk manifest calls `policyDigest`; the
-        // report must mirror that naming, not the policy's semantic digest.
-        assert_eq!(verified, report["policyDigest"].as_str().unwrap());
-        // Pretty-printed, newline-terminated: a text document an operator
-        // diffs.
-        let bytes = std::fs::read(&manifest_path).unwrap();
-        assert_eq!(bytes.last(), Some(&b'\n'));
+        // A dry run reports the digest the written package carries.
+        let (exit, planned, _) = run_json(&["package", project.to_str().unwrap(), "--dry-run"]);
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert_eq!(planned["dryRun"], true);
+        assert_eq!(planned["packageDigest"], report["packageDigest"]);
 
-        // Repackaging is a deliberate act: the existing manifest is refused,
-        // never silently replaced.
-        let (exit, report, stderr) = run_json(&["package", project.to_str().unwrap()]);
+        // Packaging the same project twice gives the same digest; a revision
+        // is covered by it.
+        let again = root.path().join("again");
+        let (_, repeated, _) = run_json(&[
+            "package",
+            project.to_str().unwrap(),
+            "--output",
+            again.to_str().unwrap(),
+        ]);
+        assert_eq!(repeated["packageDigest"], report["packageDigest"]);
+        let revised = root.path().join("revised");
+        let (_, revised_report, _) = run_json(&[
+            "package",
+            project.to_str().unwrap(),
+            "--output",
+            revised.to_str().unwrap(),
+            "--revision",
+            "change 42",
+        ]);
+        assert_eq!(revised_report["revision"], "change 42");
+        assert_ne!(revised_report["packageDigest"], report["packageDigest"]);
+
+        // A package is written once: an existing output is refused.
+        let (exit, report, stderr) = run_json(&[
+            "package",
+            project.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+        ]);
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert!(stderr.is_empty());
         let message = report["diagnostics"][0]["message"].as_str().unwrap();
-        assert!(message.contains("already exists"), "{message}");
+        assert!(message.contains("schedulingctl package"), "{message}");
     }
 
     #[test]
@@ -973,14 +1060,20 @@ mod tests {
             1,
         );
         std::fs::write(&policy_path, broken).unwrap();
-        let (exit, report, stderr) = run_json(&["package", project.to_str().unwrap()]);
+        let output = project.with_file_name("package");
+        let (exit, report, stderr) = run_json(&[
+            "package",
+            project.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+        ]);
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert!(stderr.is_empty());
         assert!(report["diagnostics"][0]["message"]
             .as_str()
             .unwrap()
             .contains("finding"));
-        assert!(!project.join("scheduling.package.json").exists());
+        assert!(!output.exists());
     }
 
     #[test]
@@ -1042,6 +1135,8 @@ mod tests {
     #[test]
     fn records_apply_refuses_an_invalid_document_before_touching_a_database() {
         let (root, project) = initialized("standalone-exact-time");
+        let package = root.path().join("package");
+        project::package(&project, &package, None).unwrap();
         let config_path = root.path().join("runtime.yaml");
         std::fs::write(
             &config_path,
@@ -1058,7 +1153,7 @@ mod tests {
                  audit:\n  path: {}/audit.jsonl\n\
                  \x20 hashKeyRef: secret:env/SCHEDULINGCTL_TEST_AUDIT\n\
                  retention:\n  attemptReceiptDays: 2\n",
-                project.display(),
+                package.display(),
                 root.path().display()
             ),
         )

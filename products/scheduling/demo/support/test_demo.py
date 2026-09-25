@@ -138,12 +138,12 @@ class DemoRecordsTest(unittest.TestCase):
 class RuntimeConfigTest(unittest.TestCase):
     def test_the_runtime_config_pins_every_required_block(self):
         config = demo.runtime_config(
-            Path("/run/project"), Path("/run/secrets"), Path("/run/audit"), 8105, None
+            Path("/run/package"), Path("/run/secrets"), Path("/run/audit"), 8105, None
         )
         for required in (
             "apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1",
             "kind: SchedulingRuntimeConfig",
-            "root: /run/project",
+            "root: /run/package",
             "bind: 127.0.0.1:8105",
             "tlsTermination: development-loopback",
             "root: /run/secrets",
@@ -161,7 +161,7 @@ class RuntimeConfigTest(unittest.TestCase):
 
     def test_the_database_trust_root_is_named_when_present(self):
         config = demo.runtime_config(
-            Path("/run/project"), Path("/run/secrets"), Path("/run/audit"), 8105,
+            Path("/run/package"), Path("/run/secrets"), Path("/run/audit"), 8105,
             Path("/run/secrets/db-root-ca"),
         )
         self.assertIn(
@@ -171,7 +171,7 @@ class RuntimeConfigTest(unittest.TestCase):
 
     def test_the_audit_path_names_the_audit_file(self):
         config = demo.runtime_config(
-            Path("/run/project"), Path("/run/secrets"), Path("/run/audit/audit.jsonl"), 8105, None
+            Path("/run/package"), Path("/run/secrets"), Path("/run/audit/audit.jsonl"), 8105, None
         )
         self.assertIn("path: /run/audit/audit.jsonl", config)
 

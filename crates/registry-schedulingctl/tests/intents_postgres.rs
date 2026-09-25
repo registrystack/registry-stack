@@ -154,6 +154,13 @@ async fn intents_lists_local_and_failed_oldest_due_first_and_respects_limit() {
     let project = root.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
     std::fs::write(project.join("scheduling.yaml"), POLICY).unwrap();
+    registry_platform_config::package::write_sum_file(
+        &project,
+        None,
+        &registry_scheduling::config::package_limits(),
+        registry_scheduling::config::PACKAGE_COMMAND,
+    )
+    .expect("the package is sealed");
     std::fs::write(
         root.path().join("runtime.yaml"),
         format!(

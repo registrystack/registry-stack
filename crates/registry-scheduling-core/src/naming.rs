@@ -9,9 +9,6 @@ pub const SCHEDULING_POLICY_API_VERSION: &str =
 /// Kind of an authored scheduling policy package.
 pub const SCHEDULING_POLICY_KIND: &str = "SchedulingPolicyPackage";
 
-/// File name of the package manifest written beside the authored policy.
-pub const SCHEDULING_PACKAGE_MANIFEST_FILE: &str = "scheduling.package.json";
-
 /// File name of the authored policy inside a scheduling project.
 pub const AUTHORED_POLICY_FILE: &str = "scheduling.yaml";
 
@@ -96,7 +93,6 @@ mod tests {
             "registry.registrystack.org/scheduling-policy-package/v1alpha1"
         );
         assert_eq!(SCHEDULING_POLICY_KIND, "SchedulingPolicyPackage");
-        assert_eq!(SCHEDULING_PACKAGE_MANIFEST_FILE, "scheduling.package.json");
         assert_eq!(AUTHORED_POLICY_FILE, "scheduling.yaml");
         assert_eq!(
             SCHEDULING_RUNTIME_API_VERSION,
