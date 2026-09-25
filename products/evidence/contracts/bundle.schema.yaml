@@ -121,8 +121,8 @@ properties:
     $ref: '#/$defs/authentication'
   audit:
     description: >-
-      Governs audit pseudonymization and the fail-closed policy for the whole deployment;
-      `runtime.yaml` contributes only the storage location.
+      Governs audit pseudonymization for the whole deployment; `runtime.yaml` contributes only
+      the audit destination.
     $ref: '#/$defs/audit'
   subjectBinding:
     description: >-
@@ -655,34 +655,24 @@ $defs:
     type: object
     additionalProperties: false
     required:
-      - format
-      - hashSecretRef
+      - hashKeyRef
       - hashKeyVersion
-      - failClosed
     properties:
-      format:
+      hashKeyRef:
         description: >-
-          Fixes the audit record form to the keyed JSONL chain, whose sealed segments an operator
-          replays out of band to prove retained history.
-        const: keyed-jsonl
-      hashSecretRef:
-        description: >-
-          Points at the file secret Rust separates into the audit chain and identifier subkeys;
-          the same reference cannot also serve `subjectBinding.secretRef`.
+          Points at the file secret Rust derives the audit pseudonym key from; the same
+          reference cannot also serve `subjectBinding.secretRef`. Every audit gate is fail
+          closed whatever this section says, so an authorization refusal, access attempt, or
+          disclosure release whose entry cannot be written stops the response instead of being
+          served unaudited.
         $ref: '#/$defs/secret-ref'
       hashKeyVersion:
         description: >-
           Stamped into every audit pseudonym as its version prefix, so pseudonyms produced
-          under different audit key material stay distinguishable within one chain.
+          under different audit key material stay distinguishable within one audit log.
         type: integer
         minimum: 1
         maximum: 2147483647
-      failClosed:
-        description: >-
-          Holds every audit gate closed, so an authorization refusal, access attempt, or disclosure
-          release whose record cannot be durably written stops the response instead of being
-          served unaudited.
-        const: true
   subject-binding:
     type: object
     additionalProperties: false
@@ -3258,8 +3248,8 @@ deployment_rules:
     token type, algorithm, and JWKS; upstream identity headers are ignored and rejected if
     mapped
   audit: >-
-    failClosed and keyed pseudonymization remain governed; storage path and rotation bound
-    come only from runtime.yaml
+    keyed pseudonymization remains governed and every audit gate is fail closed; the audit
+    destination, path, rotation size, and retention come only from runtime.yaml
   rate_limit_labels: >-
     principal and authority use scoped pseudonyms; raw selector values are never labels or
     keys

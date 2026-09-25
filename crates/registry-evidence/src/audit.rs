@@ -1,23 +1,17 @@
-//! Fail-closed native Evidence audit with a durable keyed JSONL chain.
+//! Fail-closed native Evidence audit through the platform audit writer.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io::{Error as IoError, ErrorKind},
+    fs::{File, OpenOptions, TryLockError},
+    io::{BufRead, BufReader, Error as IoError, ErrorKind, Read},
+    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
-#[cfg(test)]
-use std::io::{Seek, SeekFrom, Write};
-#[cfg(test)]
-use std::sync::atomic::Ordering;
-
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-pub use registry_platform_audit::segmented_audit_paths as audit_segment_paths;
 use registry_platform_audit::{
-    verify_segmented_audit_chain, visit_stopped_segmented_audit_chain, AuditChainHasher,
-    AuditEnvelope, AuditError, AuditHashSecret, AuditKeyHasher, AuditProfile,
-    AuthorizationAuditEvent, AuthorizationOutcome, DurableSegmentedAuditLog,
+    AuditDestination, AuditEntry, AuditError, AuditKeyHasher, AuditPhase as EntryPhase,
+    AuditProfile, AuditUnavailable, AuditWriter, AuthorizationAuditEvent, AuthorizationOutcome,
 };
 use registry_platform_crypto::canonicalize_json;
 use registry_platform_oidc::ActorKind;
@@ -28,9 +22,13 @@ use zeroize::Zeroizing;
 use crate::config::{AssuranceProfile, MAXIMUM_HOLDER_BOUND_BATCH_SIZE};
 use crate::model::EVIDENCE_REQUEST_BATCH_MAX_ITEMS;
 
-const AUDIT_SCHEMA: &str = "registry.evidence.audit/v1";
-const REQUEST_BATCH_AUDIT_SCHEMA: &str = "registry.evidence.audit.request-batch/v1";
-const AUTHORIZATION_REFUSAL_AUDIT_SCHEMA: &str = "registry.evidence.audit.authorization-refusal/v1";
+/// Envelope schema of an authorized-material event.
+pub const AUDIT_SCHEMA: &str = "registry.evidence.audit/v2";
+/// Envelope schema of a request-batch event.
+pub const REQUEST_BATCH_AUDIT_SCHEMA: &str = "registry.evidence.audit.request-batch/v2";
+/// Envelope schema of an authenticated authorization refusal.
+pub const AUTHORIZATION_REFUSAL_AUDIT_SCHEMA: &str =
+    "registry.evidence.audit.authorization-refusal/v2";
 const AUTHORIZATION_REFUSAL_ERROR_CATEGORY: &str = "not-authorized";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -70,7 +68,6 @@ pub enum AuthorizationRefusalAuditDecision {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceAuthorizationRefusalAuditEvent {
-    pub schema: String,
     pub assurance_profile: AssuranceProfile,
     pub event_id: String,
     pub occurred_at: String,
@@ -100,7 +97,6 @@ impl EvidenceAuthorizationRefusalAuditEvent {
         duration_milliseconds: u64,
     ) -> Self {
         Self {
-            schema: AUTHORIZATION_REFUSAL_AUDIT_SCHEMA.to_owned(),
             assurance_profile,
             event_id: format!("urn:ulid:{}", ulid::Ulid::new()),
             occurred_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -120,8 +116,7 @@ impl EvidenceAuthorizationRefusalAuditEvent {
     }
 
     pub fn validate_phase_fields(&self) -> Result<(), EvidenceAuditError> {
-        if self.schema != AUTHORIZATION_REFUSAL_AUDIT_SCHEMA
-            || self.phase != AuditPhase::Denial
+        if self.phase != AuditPhase::Denial
             || self.decision != AuthorizationRefusalAuditDecision::NotAuthorized
             || !valid_uri(&self.event_id)
             || chrono::DateTime::parse_from_rfc3339(&self.occurred_at).is_err()
@@ -263,7 +258,6 @@ pub struct EvidenceRequestBatchAuditOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceRequestBatchAuditEvent {
-    pub schema: String,
     pub assurance_profile: AssuranceProfile,
     pub event_id: String,
     pub occurred_at: String,
@@ -314,7 +308,6 @@ impl EvidenceRequestBatchAuditEvent {
         duration_milliseconds: u64,
     ) -> Self {
         Self {
-            schema: REQUEST_BATCH_AUDIT_SCHEMA.to_owned(),
             assurance_profile,
             event_id: format!("urn:ulid:{}", ulid::Ulid::new()),
             occurred_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -343,8 +336,7 @@ impl EvidenceRequestBatchAuditEvent {
     }
 
     pub fn validate_phase_fields(&self) -> Result<(), EvidenceAuditError> {
-        let common_valid = self.schema == REQUEST_BATCH_AUDIT_SCHEMA
-            && valid_uri(&self.event_id)
+        let common_valid = valid_uri(&self.event_id)
             && chrono::DateTime::parse_from_rfc3339(&self.occurred_at).is_ok()
             && (16..=128).contains(&self.operation.len())
             && valid_uri(&self.requirement)
@@ -535,7 +527,6 @@ fn valid_batch_outcomes(outcomes: &[EvidenceRequestBatchAuditOutcome]) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceAuditEvent {
-    pub schema: String,
     pub assurance_profile: AssuranceProfile,
     pub event_id: String,
     pub occurred_at: String,
@@ -581,9 +572,10 @@ pub struct EvidenceAuditEvent {
     /// stays byte-identical.
     ///
     /// A batch is named here rather than in one event per member because the
-    /// release gate accepts one terminal event per operation: N events would
+    /// release gate writes one terminal event per operation: N events would
     /// either be N operations, losing the fact that one request released them,
-    /// or N terminal events for one operation, which the chain does not accept.
+    /// or N terminal events for one operation, which no reader could tell apart
+    /// from a duplicated release.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evidence_ids: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -610,7 +602,6 @@ impl EvidenceAuditEvent {
         duration_milliseconds: u64,
     ) -> Self {
         Self {
-            schema: AUDIT_SCHEMA.to_owned(),
             assurance_profile,
             event_id: format!("urn:ulid:{}", ulid::Ulid::new()),
             occurred_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -714,8 +705,7 @@ impl EvidenceAuditEvent {
                 && concepts.iter().all(|concept| valid_uri(concept))
                 && concepts.iter().collect::<BTreeSet<_>>().len() == concepts.len()
         });
-        if self.schema != AUDIT_SCHEMA
-            || !phase_decision_is_native
+        if !phase_decision_is_native
             || !valid_uri(&self.event_id)
             || chrono::DateTime::parse_from_rfc3339(&self.occurred_at).is_err()
             || !valid_uri(&self.requirement)
@@ -851,34 +841,26 @@ pub enum EvidenceAuditError {
     Configuration,
     #[error("audit event is invalid")]
     InvalidEvent,
-    #[error("audit initialization or write failed")]
+    #[error("audit initialization or read failed")]
     Audit(#[from] AuditError),
-    /// A span of sealed history is absent. Reported separately from a hash
-    /// break so an operator can tell deliberate archival from tampering.
-    #[error("audit chain is missing sealed segment {sequence}")]
-    SegmentMissing { sequence: u64 },
-    /// The whole stopped local chain verified and holds no operation, as
-    /// before a local service has answered its first request. Reported apart
-    /// from a verification failure because it is a verified answer.
-    #[error("verified local audit chain retains no operation")]
+    /// The writer did not accept an entry. Every caller refuses the request
+    /// that needed it with the existing service-unavailable problem.
+    #[error("audit destination did not accept the entry")]
+    Unavailable(#[from] AuditUnavailable),
+    /// The stopped local audit files read and hold no operation, as before a
+    /// local service has answered its first request. Reported apart from a
+    /// read failure because it is a complete answer.
+    #[error("stopped local audit retains no operation")]
     NoOperation,
 }
 
-/// The chain's on-disk footprint, sealed segments and the active segment
-/// together.
+/// Evidence's audit boundary: the closed native record families, their keyed
+/// pseudonyms, and the one platform writer every entry goes through.
 ///
-/// Rotation never deletes a sealed segment, so this only falls when an
-/// operator archives one. That is why it is measured by walking the segment
-/// directory rather than accumulated in a counter: a counter would keep
-/// reporting bytes an operator had already reclaimed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AuditStorageUsage {
-    pub segments: usize,
-    pub bytes: u64,
-}
-
+/// Every entry's correlation is the record's server-minted `operation`, so an
+/// access attempt and the terminal event it led to share one correlation.
 pub struct EvidenceAuditLog {
-    sink: Arc<DurableSegmentedAuditLog>,
+    writer: AuditWriter,
     key_hasher: AuditKeyHasher,
     key_version: u32,
 }
@@ -887,45 +869,40 @@ impl std::fmt::Debug for EvidenceAuditLog {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("EvidenceAuditLog")
-            .field("path", &self.sink.path())
+            .field("writer", &self.writer)
             .field("key_version", &self.key_version)
             .finish_non_exhaustive()
     }
 }
 
 impl EvidenceAuditLog {
+    /// Derive the identifier key, then open the configured destination. The
+    /// key is derived first, so an unusable secret never creates an audit
+    /// file.
     pub async fn initialize(
-        path: impl Into<PathBuf>,
-        maximum_file_bytes: u64,
+        destination: AuditDestination,
         master_secret: Vec<u8>,
         key_version: u32,
     ) -> Result<Self, EvidenceAuditError> {
-        if maximum_file_bytes == 0 || key_version == 0 {
-            return Err(EvidenceAuditError::Configuration);
-        }
-        let path = path.into();
-        if !path.is_absolute() {
-            return Err(AuditError::Io(IoError::new(
-                ErrorKind::InvalidInput,
-                "audit path must be absolute",
-            ))
-            .into());
-        }
-        if !path.parent().is_some_and(Path::is_dir) {
-            return Err(AuditError::Io(IoError::new(
-                ErrorKind::NotFound,
-                "audit parent directory is unavailable",
-            ))
-            .into());
-        }
-        let profile = AuditProfile::production_from_secret_bytes(Zeroizing::new(master_secret))?;
-        let chain_hasher = profile.chain_hasher();
-        let key_hasher = profile.key_hasher();
-        let sink = Arc::new(
-            DurableSegmentedAuditLog::initialize(path, maximum_file_bytes, chain_hasher).await?,
-        );
+        let key_hasher = identifier_key_hasher(master_secret, key_version)?;
+        let writer = AuditWriter::open(destination).await?;
         Ok(Self {
-            sink,
+            writer,
+            key_hasher,
+            key_version,
+        })
+    }
+
+    /// Wrap a writer that is already open, such as one built with
+    /// [`AuditWriter::from_line_sink`] to observe or refuse writes.
+    pub fn with_writer(
+        writer: AuditWriter,
+        master_secret: Vec<u8>,
+        key_version: u32,
+    ) -> Result<Self, EvidenceAuditError> {
+        let key_hasher = identifier_key_hasher(master_secret, key_version)?;
+        Ok(Self {
+            writer,
             key_hasher,
             key_version,
         })
@@ -951,106 +928,89 @@ impl EvidenceAuditLog {
         Ok(format!("hmac-sha256:v{}:{digest}", self.key_version))
     }
 
-    /// Measure the chain's footprint for the capacity gauge.
-    ///
-    /// This walks the audit directory, so it runs on the blocking pool: the
-    /// number of sealed segments grows without bound and the caller is a
-    /// scrape handler on the async runtime. A segment that disappears midway
-    /// through the walk is skipped rather than failing the read, because an
-    /// operator archiving history concurrently is expected, not an error.
-    pub async fn storage_usage(&self) -> Result<AuditStorageUsage, EvidenceAuditError> {
-        let path = self.sink.path().to_path_buf();
-        tokio::task::spawn_blocking(move || {
-            let segments = audit_segment_paths(&path)?;
-            let mut bytes = 0u64;
-            let mut counted = 0usize;
-            for segment in &segments {
-                match std::fs::symlink_metadata(segment) {
-                    Ok(metadata) => {
-                        counted += 1;
-                        bytes = bytes.saturating_add(metadata.len());
-                    }
-                    Err(error) if error.kind() == ErrorKind::NotFound => {}
-                    Err(error) => return Err(AuditError::Io(error)),
-                }
-            }
-            Ok(AuditStorageUsage {
-                segments: counted,
-                bytes,
-            })
-        })
-        .await
-        .map_err(|error| AuditError::Io(IoError::other(error)))?
-        .map_err(EvidenceAuditError::from)
-    }
-
-    pub async fn append(
-        &self,
-        event: EvidenceAuditEvent,
-    ) -> Result<AuditEnvelope, EvidenceAuditError> {
+    /// Append an authorized-material event. An access attempt is a `request`
+    /// entry; every terminal phase is a `response` entry.
+    pub async fn append(&self, event: EvidenceAuditEvent) -> Result<(), EvidenceAuditError> {
         event.validate_phase_fields()?;
-        let record = serde_json::to_value(event).map_err(AuditError::Json)?;
-        self.sink
-            .append_record(record)
+        let phase = if event.phase == AuditPhase::AccessAttempt {
+            EntryPhase::Request
+        } else {
+            EntryPhase::Response
+        };
+        self.write(AUDIT_SCHEMA, phase, &event.operation, &event)
             .await
-            .map_err(EvidenceAuditError::Audit)
     }
 
+    /// Append an authorization refusal. It is decided before any protected
+    /// I/O, so it is one `response` entry with no `request` entry before it.
     pub async fn append_authorization_refusal(
         &self,
         event: EvidenceAuthorizationRefusalAuditEvent,
-    ) -> Result<AuditEnvelope, EvidenceAuditError> {
+    ) -> Result<(), EvidenceAuditError> {
         event.validate_phase_fields()?;
-        let record = serde_json::to_value(event).map_err(AuditError::Json)?;
-        self.sink
-            .append_record(record)
-            .await
-            .map_err(EvidenceAuditError::Audit)
+        self.write(
+            AUTHORIZATION_REFUSAL_AUDIT_SCHEMA,
+            EntryPhase::Response,
+            &event.operation,
+            &event,
+        )
+        .await
     }
 
+    /// Append a request-batch event. A physical source access is a `request`
+    /// entry; the terminal release or failure is a `response` entry.
     pub async fn append_request_batch(
         &self,
         event: EvidenceRequestBatchAuditEvent,
-    ) -> Result<AuditEnvelope, EvidenceAuditError> {
+    ) -> Result<(), EvidenceAuditError> {
         event.validate_phase_fields()?;
-        let record = serde_json::to_value(event).map_err(AuditError::Json)?;
-        self.sink
-            .append_record(record)
+        let phase = if event.phase == EvidenceRequestBatchAuditPhase::AccessAttempt {
+            EntryPhase::Request
+        } else {
+            EntryPhase::Response
+        };
+        self.write(REQUEST_BATCH_AUDIT_SCHEMA, phase, &event.operation, &event)
             .await
-            .map_err(EvidenceAuditError::Audit)
+    }
+
+    async fn write<T: Serialize>(
+        &self,
+        schema: &str,
+        phase: EntryPhase,
+        correlation: &str,
+        event: &T,
+    ) -> Result<(), EvidenceAuditError> {
+        let record = serde_json::to_value(event).map_err(AuditError::Json)?;
+        self.writer
+            .append(AuditEntry::new(schema, phase, correlation, record))
+            .await?;
+        Ok(())
     }
 
     pub async fn ready(&self) -> bool {
-        self.sink.ready().await
+        self.writer.ready().await
     }
 
     /// Durable writes performed so far, for proving that concurrent appends
     /// share them rather than each paying an `fsync`.
     #[cfg(test)]
     pub(crate) fn durable_writes(&self) -> usize {
-        usize::try_from(self.sink.durable_writes()).unwrap_or(usize::MAX)
-    }
-
-    #[cfg(test)]
-    fn startup_verifications(&self) -> u64 {
-        self.sink.startup_verifications()
+        usize::try_from(self.writer.durable_writes()).unwrap_or(usize::MAX)
     }
 }
 
-/// Result of an out-of-band verification pass over a whole audit chain.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AuditChainSummary {
-    /// Segments actually replayed.
-    pub segments: usize,
-    pub records: usize,
-    pub head: Option<[u8; 32]>,
-    /// Sequence of the oldest and newest sealed segments, absent when the chain
-    /// has never rotated.
-    pub first_sequence: Option<u64>,
-    pub last_sequence: Option<u64>,
-    /// Whether the active segment was replayed. False when a running writer
-    /// holds the chain, in which case only sealed history was proven.
-    pub active_verified: bool,
+/// The identifier hasher behind every pseudonym. Derivation is the platform
+/// profile's, so pseudonyms stay byte-identical for one secret and key
+/// version.
+fn identifier_key_hasher(
+    master_secret: Vec<u8>,
+    key_version: u32,
+) -> Result<AuditKeyHasher, EvidenceAuditError> {
+    if key_version == 0 {
+        return Err(EvidenceAuditError::Configuration);
+    }
+    let profile = AuditProfile::production_from_secret_bytes(Zeroizing::new(master_secret))?;
+    Ok(profile.key_hasher())
 }
 
 pub const LOCAL_AUDIT_OPERATION_VIEW_SCHEMA_V1: &str = "registry.evidence.local-audit-operation/v1";
@@ -1104,6 +1064,22 @@ struct LocalAuthorizationRefusalOperationEvent {
     safe_error_category: String,
 }
 
+/// One stored line as the platform writer lays it out.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredAuditEntry {
+    schema: String,
+    event_id: String,
+    time: String,
+    phase: EntryPhase,
+    correlation: String,
+    record: serde_json::Value,
+}
+
+/// Largest stored line the local reader accepts, matching the writer's entry
+/// bound.
+const MAXIMUM_LOCAL_AUDIT_LINE_BYTES: u64 = 1024 * 1024;
+
 #[derive(Clone, Copy)]
 struct LocalAuditInspectionBounds {
     maximum_segments: usize,
@@ -1142,25 +1118,35 @@ impl LocalAuditCollector {
         }
     }
 
-    fn collect(&mut self, envelope: AuditEnvelope) -> Result<(), AuditError> {
+    fn collect(&mut self, entry: StoredAuditEntry) -> Result<(), AuditError> {
         let bounds = self.bounds.ok_or_else(invalid_audit_data)?;
         self.records = self.records.checked_add(1).ok_or_else(file_size_error)?;
         if self.records > bounds.maximum_records {
             return Err(file_size_error());
         }
-        match envelope
-            .record
-            .get("schema")
-            .and_then(serde_json::Value::as_str)
-        {
-            Some(AUDIT_SCHEMA) => {
-                let event =
-                    serde_json::from_value(envelope.record).map_err(|_| invalid_audit_data())?;
+        if entry.event_id.is_empty() || entry.time.is_empty() {
+            return Err(invalid_audit_data());
+        }
+        match entry.schema.as_str() {
+            AUDIT_SCHEMA => {
+                let event: EvidenceAuditEvent =
+                    serde_json::from_value(entry.record).map_err(|_| invalid_audit_data())?;
+                let expected_phase = if event.phase == AuditPhase::AccessAttempt {
+                    EntryPhase::Request
+                } else {
+                    EntryPhase::Response
+                };
+                if entry.phase != expected_phase || entry.correlation != event.operation {
+                    return Err(invalid_audit_data());
+                }
                 self.collect_authorized(event)
             }
-            Some(AUTHORIZATION_REFUSAL_AUDIT_SCHEMA) => {
-                let event =
-                    serde_json::from_value(envelope.record).map_err(|_| invalid_audit_data())?;
+            AUTHORIZATION_REFUSAL_AUDIT_SCHEMA => {
+                let event: EvidenceAuthorizationRefusalAuditEvent =
+                    serde_json::from_value(entry.record).map_err(|_| invalid_audit_data())?;
+                if entry.phase != EntryPhase::Response || entry.correlation != event.operation {
+                    return Err(invalid_audit_data());
+                }
                 self.collect_authorization_refusal(event)
             }
             _ => Err(invalid_audit_data()),
@@ -1323,22 +1309,19 @@ fn coherent_operation_pair(access: &EvidenceAuditEvent, terminal: &EvidenceAudit
         && access.adapter_id == terminal.adapter_id
 }
 
-/// Verify the whole stopped local chain and derive the last operation from the
-/// exact verified envelopes in that one replay.
-pub fn verified_last_local_audit_operation(
+/// Read the stopped local audit file and its retained sealed files in order,
+/// and derive the last operation from the entries read.
+///
+/// The reader takes the writer's lock for the whole read, so it refuses while
+/// an Evidence process still writes the file.
+pub fn last_local_audit_operation(
     path: &Path,
-    chain_secret: &AuditHashSecret,
 ) -> Result<LocalAuditOperationView, EvidenceAuditError> {
-    verified_last_local_audit_operation_with_bounds(
-        path,
-        chain_secret,
-        LocalAuditInspectionBounds::DEFAULT,
-    )
+    last_local_audit_operation_with_bounds(path, LocalAuditInspectionBounds::DEFAULT)
 }
 
-fn verified_last_local_audit_operation_with_bounds(
+fn last_local_audit_operation_with_bounds(
     path: &Path,
-    chain_secret: &AuditHashSecret,
     bounds: LocalAuditInspectionBounds,
 ) -> Result<LocalAuditOperationView, EvidenceAuditError> {
     if bounds.maximum_segments == 0
@@ -1347,43 +1330,105 @@ fn verified_last_local_audit_operation_with_bounds(
     {
         return Err(EvidenceAuditError::Configuration);
     }
+    if !path.is_absolute() {
+        return Err(EvidenceAuditError::Configuration);
+    }
 
-    let hasher = AuditChainHasher::keyed(chain_secret.clone());
+    let _writer_lock = lock_stopped_audit_file(path)?;
+    let files = local_audit_files(path, bounds.maximum_segments)?;
     let mut collector = LocalAuditCollector::new(bounds);
-    visit_stopped_segmented_audit_chain(
-        path,
-        &hasher,
-        bounds.maximum_segments,
-        bounds.maximum_records,
-        |envelope| collector.collect(envelope),
-    )
-    .map_err(map_platform_audit_error)?;
+    for file in &files {
+        read_local_audit_file(file, &mut collector)?;
+    }
     collector.finish()
 }
 
-/// Verify every retained segment, including the active segment when no writer is running.
-pub fn verify_audit_chain(
-    path: &Path,
-    chain_secret: &AuditHashSecret,
-) -> Result<AuditChainSummary, EvidenceAuditError> {
-    let summary =
-        verify_segmented_audit_chain(path, &AuditChainHasher::keyed(chain_secret.clone()))
-            .map_err(map_platform_audit_error)?;
-    Ok(AuditChainSummary {
-        segments: summary.segments,
-        records: summary.records,
-        head: summary.last_hash,
-        first_sequence: summary.first_sequence,
-        last_sequence: summary.last_sequence,
-        active_verified: summary.active_verified,
-    })
+/// Take the writer's lock, refusing while a writer holds it. The lock is
+/// released when the returned file is dropped.
+fn lock_stopped_audit_file(path: &Path) -> Result<File, AuditError> {
+    let mut lock_path = path.as_os_str().to_os_string();
+    lock_path.push(".lock");
+    let lock_path = PathBuf::from(lock_path);
+    let lock = open_local_audit_file(&lock_path)?;
+    match lock.try_lock() {
+        Ok(()) => Ok(lock),
+        Err(TryLockError::WouldBlock) => Err(AuditError::SinkLocked {
+            path: lock_path.display().to_string(),
+        }),
+        Err(TryLockError::Error(error)) => Err(AuditError::Io(error)),
+    }
 }
 
-fn map_platform_audit_error(error: AuditError) -> EvidenceAuditError {
-    match error {
-        AuditError::SegmentMissing { sequence } => EvidenceAuditError::SegmentMissing { sequence },
-        error => EvidenceAuditError::Audit(error),
+/// The retained sealed files in sequence order, then the active file.
+fn local_audit_files(path: &Path, maximum_files: usize) -> Result<Vec<PathBuf>, AuditError> {
+    let parent = path.parent().ok_or_else(invalid_audit_data)?;
+    let active = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(invalid_audit_data)?;
+    let mut sealed = Vec::new();
+    for entry in std::fs::read_dir(parent).map_err(AuditError::Io)? {
+        let candidate = entry.map_err(AuditError::Io)?.path();
+        let sequence = candidate
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_prefix(active))
+            .and_then(|suffix| suffix.strip_prefix('.'))
+            .filter(|digits| digits.len() == 8 && digits.bytes().all(|byte| byte.is_ascii_digit()))
+            .and_then(|digits| digits.parse::<u64>().ok());
+        if let Some(sequence) = sequence {
+            sealed.push((sequence, candidate));
+            if sealed.len() >= maximum_files {
+                return Err(file_size_error());
+            }
+        }
     }
+    sealed.sort_unstable_by_key(|(sequence, _)| *sequence);
+    let mut files: Vec<PathBuf> = sealed.into_iter().map(|(_, file)| file).collect();
+    files.push(path.to_path_buf());
+    Ok(files)
+}
+
+fn read_local_audit_file(
+    path: &Path,
+    collector: &mut LocalAuditCollector,
+) -> Result<(), AuditError> {
+    let file = open_local_audit_file(path)?;
+    let mut reader = BufReader::new(file);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let read = (&mut reader)
+            .take(MAXIMUM_LOCAL_AUDIT_LINE_BYTES + 1)
+            .read_until(b'\n', &mut line)
+            .map_err(AuditError::Io)?;
+        if read == 0 {
+            return Ok(());
+        }
+        // A line without its newline is either longer than any entry the
+        // writer produces or a torn final write; neither is a whole entry.
+        if line.pop() != Some(b'\n') {
+            return Err(invalid_audit_data());
+        }
+        let entry: StoredAuditEntry =
+            serde_json::from_slice(&line).map_err(|_| invalid_audit_data())?;
+        collector.collect(entry)?;
+    }
+}
+
+/// Open an audit file for reading without following a symbolic link, and
+/// require a regular file.
+fn open_local_audit_file(path: &Path) -> Result<File, AuditError> {
+    let flags = rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC;
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(flags.bits() as i32)
+        .open(path)
+        .map_err(AuditError::Io)?;
+    if !file.metadata().map_err(AuditError::Io)?.is_file() {
+        return Err(invalid_audit_data());
+    }
+    Ok(file)
 }
 
 fn invalid_audit_data() -> AuditError {
@@ -1400,6 +1445,12 @@ fn file_size_error() -> AuditError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        io::{Seek, SeekFrom, Write},
+        sync::Arc,
+    };
+
+    use registry_platform_audit::FileDestination;
 
     fn request_batch_item_group(
         indices: Vec<u8>,
@@ -1740,12 +1791,11 @@ mod tests {
         .expect("frozen audit fixture parses");
         assert_eq!(
             fixture["fixture"],
-            serde_json::json!("registry.evidence.audit-events/v1")
+            serde_json::json!("registry.evidence.audit-events/v2")
         );
         assert_eq!(fixture["synthetic_only"], serde_json::json!(true));
 
         let access = EvidenceAuditEvent {
-            schema: AUDIT_SCHEMA.to_owned(),
             assurance_profile: AssuranceProfile::EvidenceGrade,
             event_id: "urn:example:fixture:audit:access-001".to_owned(),
             occurred_at: "2026-08-02T00:00:00Z".to_owned(),
@@ -1853,15 +1903,7 @@ mod tests {
             );
         }
 
-        let mut authorized_with_refusal_schema = access.clone();
-        authorized_with_refusal_schema.schema = AUTHORIZATION_REFUSAL_AUDIT_SCHEMA.to_owned();
-        assert!(matches!(
-            authorized_with_refusal_schema.validate_phase_fields(),
-            Err(EvidenceAuditError::InvalidEvent)
-        ));
-
         let refusal = EvidenceAuthorizationRefusalAuditEvent {
-            schema: AUTHORIZATION_REFUSAL_AUDIT_SCHEMA.to_owned(),
             assurance_profile: AssuranceProfile::EvidenceGrade,
             event_id: "urn:example:fixture:audit:authorization-refusal-001".to_owned(),
             occurred_at: "2026-08-02T00:00:03Z".to_owned(),
@@ -1943,8 +1985,8 @@ mod tests {
                 "unmatched-authority-on-authorization-refusal",
                 "response-protection-on-authorization-refusal",
                 "missing-authorization-refusal-category",
-                "full-schema-on-authorization-refusal",
-                "refusal-schema-on-authorized-event",
+                "authorization-refusal-under-authorized-envelope-schema",
+                "authorized-event-under-refusal-envelope-schema",
                 "request-nonce-in-any-event",
                 "stage-arrays-on-non-release-event",
                 "mismatched-stage-arrays-on-release-event"
@@ -1989,12 +2031,13 @@ mod tests {
             "schema rejects the neutral declared-unresolved denial"
         );
 
-        let mut refusal_with_full_schema = fixture["authorization_refusal"].clone();
-        refusal_with_full_schema["schema"] = serde_json::json!(AUDIT_SCHEMA);
-
-        let mut authorized_with_refusal_schema = fixture["access_attempt"].clone();
-        authorized_with_refusal_schema["schema"] =
+        // The schema id is the envelope's, never a record field.
+        let mut refusal_with_record_schema = fixture["authorization_refusal"].clone();
+        refusal_with_record_schema["schema"] =
             serde_json::json!(AUTHORIZATION_REFUSAL_AUDIT_SCHEMA);
+
+        let mut authorized_with_record_schema = fixture["access_attempt"].clone();
+        authorized_with_record_schema["schema"] = serde_json::json!(AUDIT_SCHEMA);
 
         let mut polluted_refusal = fixture["authorization_refusal"].clone();
         let polluted = polluted_refusal
@@ -2074,10 +2117,10 @@ mod tests {
             );
 
         for (name, candidate) in [
-            ("refusal-with-full-schema", refusal_with_full_schema),
+            ("refusal-with-record-schema", refusal_with_record_schema),
             (
-                "authorized-with-refusal-schema",
-                authorized_with_refusal_schema,
+                "authorized-with-record-schema",
+                authorized_with_record_schema,
             ),
             ("polluted-refusal", polluted_refusal),
             ("stage-arrays-on-access", stage_arrays_on_access),
@@ -2360,9 +2403,11 @@ mod tests {
         let refusal_object = set_on_refusal
             .as_object_mut()
             .expect("batch release is an object");
+        refusal_object.insert("phase".to_owned(), serde_json::json!("denial"));
+        refusal_object.insert("decision".to_owned(), serde_json::json!("not-authorized"));
         refusal_object.insert(
-            "schema".to_owned(),
-            serde_json::json!(AUTHORIZATION_REFUSAL_AUDIT_SCHEMA),
+            "safeErrorCategory".to_owned(),
+            serde_json::json!("not-authorized"),
         );
 
         for (name, candidate) in [
@@ -2380,27 +2425,95 @@ mod tests {
         }
     }
 
+    const MASTER: &[u8] = b"0123456789abcdef0123456789abcdef";
+
+    fn file_destination(path: &Path) -> AuditDestination {
+        AuditDestination::File(FileDestination::new(path).expect("audit path is absolute"))
+    }
+
+    async fn file_log(path: &Path) -> EvidenceAuditLog {
+        EvidenceAuditLog::initialize(file_destination(path), MASTER.to_vec(), 1)
+            .await
+            .expect("audit initializes")
+    }
+
+    /// Lines a stream writer emitted, shared with the test that reads them.
+    #[derive(Clone, Default)]
+    struct CapturedLines(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Write for CapturedLines {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("capture lock")
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl CapturedLines {
+        fn entries(&self) -> Vec<serde_json::Value> {
+            let bytes = self.0.lock().expect("capture lock").clone();
+            String::from_utf8(bytes)
+                .expect("entries are UTF-8")
+                .lines()
+                .map(|line| serde_json::from_str(line).expect("entry is JSON"))
+                .collect()
+        }
+    }
+
+    fn captured_log() -> (EvidenceAuditLog, CapturedLines) {
+        let captured = CapturedLines::default();
+        let writer = AuditWriter::from_line_sink(Box::new(captured.clone()));
+        let log =
+            EvidenceAuditLog::with_writer(writer, MASTER.to_vec(), 1).expect("audit key derives");
+        (log, captured)
+    }
+
+    struct RefusingSink;
+
+    impl Write for RefusingSink {
+        fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("destination refused the write"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Write entries exactly as given, bypassing the native record checks, so
+    /// the local reader's own checks are what a test exercises.
+    async fn append_raw_entries(path: &Path, entries: Vec<AuditEntry>) {
+        let writer = AuditWriter::open(file_destination(path))
+            .await
+            .expect("raw writer opens");
+        for entry in entries {
+            writer.append(entry).await.expect("raw entry appends");
+        }
+    }
+
+    /// Seal the active file under the next sequence, as rotation does, so a
+    /// test can build history across files without writing a whole rotation's
+    /// worth of entries.
+    fn seal_active_file(path: &Path, sequence: u64) {
+        let mut sealed = path.as_os_str().to_os_string();
+        sealed.push(format!(".{sequence:08}"));
+        std::fs::rename(path, PathBuf::from(sealed)).expect("active file is sealed");
+    }
+
     #[tokio::test]
     async fn audit_is_durable_keyed_and_redacted() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("audit.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            64 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
-        assert_eq!(log.startup_verifications(), 1);
-        assert!(log.ready().await, "an empty verified chain is ready");
+        let log = file_log(&path).await;
+        assert!(log.ready().await, "an opened destination is ready");
         log.append(event(&log)).await.expect("event appends");
         assert!(log.ready().await);
-        assert_eq!(
-            log.startup_verifications(),
-            1,
-            "steady-state appends and readiness must not rescan the audit file"
-        );
 
         let contents = std::fs::read_to_string(&path).expect("audit reads");
         assert!(!contents.contains("principal-canary"));
@@ -2414,37 +2527,172 @@ mod tests {
             .open(&path)
             .and_then(|mut file| file.write_all(b"{}\n"))
             .expect("tamper audit file");
-        assert!(!log.ready().await, "readiness detects chain tampering");
+        assert!(!log.ready().await, "readiness detects an external write");
+    }
+
+    #[test]
+    fn pseudonyms_are_byte_identical_for_one_secret_and_key_version() {
+        let (log, _) = captured_log();
+        assert_eq!(
+            log.pseudonym("requester-v1", "urn:example:trust", b"principal-canary")
+                .expect("pseudonym builds"),
+            "hmac-sha256:v1:4e879be5e2b07e5d7cdd40680e24f165c40712e3d375306d4c7d6ae50c66b68c",
+        );
+    }
+
+    /// Entries are not chained, so nothing at startup can compare a master
+    /// against earlier entries. What keeps two key epochs apart in one log is
+    /// the pseudonym itself: the version is stamped into its prefix, and a
+    /// different master yields a different digest for the same input.
+    #[test]
+    fn pseudonyms_keep_key_epochs_distinguishable() {
+        let pseudonym = |master: &[u8], version: u32| {
+            let writer = AuditWriter::from_line_sink(Box::new(CapturedLines::default()));
+            EvidenceAuditLog::with_writer(writer, master.to_vec(), version)
+                .expect("audit key derives")
+                .pseudonym("requester-v1", "urn:example:trust", b"principal-canary")
+                .expect("pseudonym builds")
+        };
+        let original = pseudonym(MASTER, 1);
+        let next_version = pseudonym(MASTER, 2);
+        let replaced_master = pseudonym(b"fedcba9876543210fedcba9876543210", 2);
+
+        assert!(original.starts_with("hmac-sha256:v1:"));
+        assert!(next_version.starts_with("hmac-sha256:v2:"));
+        assert_ne!(original, next_version);
+        assert_ne!(
+            next_version, replaced_master,
+            "a different master yields a different pseudonym for the same input"
+        );
+    }
+
+    #[tokio::test]
+    async fn entries_carry_the_envelope_schema_phase_and_correlation() {
+        let (log, captured) = captured_log();
+        let access = local_access(&log, "local-operation-0000000000000001");
+        let release = local_release(&access);
+        let refusal = local_authorization_refusal(&log, "local-refusal-000000000000000002");
+        let mut batch_access = request_batch_event(
+            EvidenceRequestBatchAuditPhase::AccessAttempt,
+            EvidenceRequestBatchAuditDecision::Authorized,
+        );
+        batch_access.source_id = Some("source-a".to_owned());
+        batch_access.adapter_id = Some("adapter-a".to_owned());
+        batch_access.item_indices = Some(vec![0]);
+        batch_access.item_groups = Some(vec![request_batch_item_group(vec![0], '2')]);
+        let mut batch_abort = request_batch_event(
+            EvidenceRequestBatchAuditPhase::TerminalFailure,
+            EvidenceRequestBatchAuditDecision::Aborted,
+        );
+        batch_abort.safe_error_category = Some("source-status".to_owned());
+
+        let expected = [
+            (
+                AUDIT_SCHEMA,
+                "request",
+                access.operation.clone(),
+                serde_json::to_value(&access).expect("access serializes"),
+            ),
+            (
+                AUDIT_SCHEMA,
+                "response",
+                release.operation.clone(),
+                serde_json::to_value(&release).expect("release serializes"),
+            ),
+            (
+                AUTHORIZATION_REFUSAL_AUDIT_SCHEMA,
+                "response",
+                refusal.operation.clone(),
+                serde_json::to_value(&refusal).expect("refusal serializes"),
+            ),
+            (
+                REQUEST_BATCH_AUDIT_SCHEMA,
+                "request",
+                batch_access.operation.clone(),
+                serde_json::to_value(&batch_access).expect("batch access serializes"),
+            ),
+            (
+                REQUEST_BATCH_AUDIT_SCHEMA,
+                "response",
+                batch_abort.operation.clone(),
+                serde_json::to_value(&batch_abort).expect("batch abort serializes"),
+            ),
+        ];
+
+        log.append(access).await.expect("access appends");
+        log.append(release).await.expect("release appends");
+        log.append_authorization_refusal(refusal)
+            .await
+            .expect("refusal appends");
+        log.append_request_batch(batch_access)
+            .await
+            .expect("batch access appends");
+        log.append_request_batch(batch_abort)
+            .await
+            .expect("batch abort appends");
+
+        let entries = captured.entries();
+        assert_eq!(entries.len(), expected.len());
+        for (entry, (schema, phase, correlation, record)) in entries.iter().zip(expected) {
+            assert_eq!(
+                entry
+                    .as_object()
+                    .expect("entry is an object")
+                    .keys()
+                    .collect::<Vec<_>>(),
+                [
+                    "correlation",
+                    "eventId",
+                    "phase",
+                    "record",
+                    "schema",
+                    "time"
+                ]
+            );
+            assert_eq!(entry["schema"], serde_json::json!(schema));
+            assert_eq!(entry["phase"], serde_json::json!(phase));
+            assert_eq!(entry["correlation"], serde_json::json!(correlation));
+            assert_eq!(entry["record"], record, "the record is the native event");
+            assert!(
+                entry["record"].get("schema").is_none(),
+                "the schema id is the envelope's, never a record field"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refused_write_stops_every_later_append() {
+        let writer = AuditWriter::from_line_sink(Box::new(RefusingSink));
+        let log =
+            EvidenceAuditLog::with_writer(writer, MASTER.to_vec(), 1).expect("audit key derives");
+        assert!(matches!(
+            log.append(event(&log)).await,
+            Err(EvidenceAuditError::Unavailable(_))
+        ));
+        assert!(!log.ready().await, "a refused write stops the writer");
+        assert!(matches!(
+            log.append_authorization_refusal(local_authorization_refusal(
+                &log,
+                "local-refusal-000000000000000001"
+            ))
+            .await,
+            Err(EvidenceAuditError::Unavailable(_))
+        ));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn concurrent_appends_extend_one_keyed_chain_without_forking() {
-        // Every evaluation shares one `EvidenceAuditLog` through an `Arc`, so many
-        // requests can append at once. The keyed chain must serialize each event's
-        // prev-hash read with its durable write: if two appends observed the same
-        // tail hash in parallel they would fork the chain and surface as a
-        // `ChainForkDetected` error (a spurious 503) or a broken linkage. Drive a
-        // burst of concurrent appends across worker threads and prove each one
-        // succeeds and the resulting chain still verifies end to end.
+    async fn concurrent_appends_record_each_entry_exactly_once() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("audit.jsonl");
-        let log = Arc::new(
-            EvidenceAuditLog::initialize(
-                &path,
-                256 * 1024,
-                b"0123456789abcdef0123456789abcdef".to_vec(),
-                1,
-            )
-            .await
-            .expect("audit initializes"),
-        );
+        let log = Arc::new(file_log(&path).await);
 
         const CONCURRENCY: usize = 16;
         let mut handles = Vec::with_capacity(CONCURRENCY);
-        for _ in 0..CONCURRENCY {
+        for index in 0..CONCURRENCY {
             let log = Arc::clone(&log);
             handles.push(tokio::spawn(async move {
-                let event = event(log.as_ref());
+                let mut event = event(log.as_ref());
+                event.operation = format!("concurrent-operation-{index:04}");
                 log.append(event).await
             }));
         }
@@ -2452,264 +2700,59 @@ mod tests {
             handle
                 .await
                 .expect("append task joins")
-                .expect("a concurrent append never forks the keyed chain");
+                .expect("a concurrent append is accepted");
         }
+        assert!(log.ready().await);
 
-        assert!(
-            log.ready().await,
-            "the chain verifies after concurrent appends"
-        );
-        assert_eq!(
-            log.startup_verifications(),
-            1,
-            "concurrent appends extend the chain incrementally without rescanning it"
-        );
-        let lines = std::fs::read_to_string(&path)
+        let mut correlations: Vec<String> = std::fs::read_to_string(&path)
             .expect("audit reads")
             .lines()
-            .count();
+            .map(|line| {
+                let entry: StoredAuditEntry = serde_json::from_str(line).expect("entry parses");
+                assert_eq!(entry.schema, AUDIT_SCHEMA);
+                assert_eq!(entry.phase, EntryPhase::Request);
+                entry.correlation
+            })
+            .collect();
+        correlations.sort_unstable();
+        let expected: Vec<String> = (0..CONCURRENCY)
+            .map(|index| format!("concurrent-operation-{index:04}"))
+            .collect();
         assert_eq!(
-            lines, CONCURRENCY,
+            correlations, expected,
             "every concurrent append is durably recorded exactly once"
-        );
-
-        // Release the single-writer sink lock before reopening: the sink holds an
-        // exclusive lock for one writer per file, so a fresh reader can only
-        // re-verify the chain once this handle is dropped.
-        drop(log);
-
-        // A fresh reader re-verifies the whole keyed chain from disk, proving the
-        // prev-hash linkage stayed consistent under concurrent appends.
-        let reopened = EvidenceAuditLog::initialize(
-            &path,
-            256 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("a chain grown under concurrency verifies on restart");
-        assert!(
-            reopened.ready().await,
-            "the reopened chain verifies end to end"
         );
     }
 
     #[tokio::test]
-    async fn restart_verifies_a_nonempty_keyed_chain_before_accepting_appends() {
+    async fn restart_appends_to_the_same_destination() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("audit.jsonl");
         {
-            let log = EvidenceAuditLog::initialize(
-                &path,
-                64 * 1024,
-                b"0123456789abcdef0123456789abcdef".to_vec(),
-                1,
-            )
-            .await
-            .expect("audit initializes");
+            let log = file_log(&path).await;
             log.append(event(&log)).await.expect("event appends");
         }
 
-        let restarted = EvidenceAuditLog::initialize(
-            &path,
-            64 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("a valid nonempty chain verifies on restart");
+        let restarted = file_log(&path).await;
         assert!(restarted.ready().await);
-        assert_eq!(restarted.startup_verifications(), 1);
         restarted
             .append(event(&restarted))
             .await
-            .expect("verified restarted chain accepts an append");
-    }
-
-    #[tokio::test]
-    async fn restart_rejects_same_length_chain_corruption() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("audit.jsonl");
-        {
-            let log = EvidenceAuditLog::initialize(
-                &path,
-                64 * 1024,
-                b"0123456789abcdef0123456789abcdef".to_vec(),
-                1,
-            )
-            .await
-            .expect("audit initializes");
-            log.append(event(&log)).await.expect("event appends");
-        }
-
-        let mut external = std::fs::OpenOptions::new()
-            .write(true)
-            .open(&path)
-            .expect("audit file opens for corruption");
-        external
-            .seek(SeekFrom::Start(0))
-            .and_then(|_| external.write_all(b"["))
-            .and_then(|_| external.sync_all())
-            .expect("same-length corruption persists");
-
-        assert!(
-            EvidenceAuditLog::initialize(
-                &path,
-                64 * 1024,
-                b"0123456789abcdef0123456789abcdef".to_vec(),
-                1,
-            )
-            .await
-            .is_err(),
-            "restart must reject a corrupted keyed chain"
+            .expect("restarted writer accepts an append");
+        assert_eq!(
+            std::fs::read_to_string(&path)
+                .expect("audit reads")
+                .lines()
+                .count(),
+            2
         );
-    }
-
-    #[tokio::test]
-    async fn restart_rejects_a_truncated_final_record() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("audit.jsonl");
-        {
-            let log = EvidenceAuditLog::initialize(
-                &path,
-                64 * 1024,
-                b"0123456789abcdef0123456789abcdef".to_vec(),
-                1,
-            )
-            .await
-            .expect("audit initializes");
-            log.append(event(&log)).await.expect("event appends");
-        }
-
-        let original_length = std::fs::metadata(&path)
-            .expect("audit metadata reads")
-            .len();
-        assert!(original_length > 8, "fixture record has truncation room");
-        let external = std::fs::OpenOptions::new()
-            .write(true)
-            .open(&path)
-            .expect("audit file opens for truncation");
-        external
-            .set_len(original_length - 8)
-            .and_then(|_| external.sync_all())
-            .expect("truncation persists");
-
-        assert!(
-            EvidenceAuditLog::initialize(
-                &path,
-                64 * 1024,
-                b"0123456789abcdef0123456789abcdef".to_vec(),
-                1,
-            )
-            .await
-            .is_err(),
-            "restart must reject a truncated keyed chain"
-        );
-    }
-
-    #[tokio::test]
-    async fn restart_rejects_the_wrong_audit_key() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("audit.jsonl");
-        {
-            let log = EvidenceAuditLog::initialize(
-                &path,
-                64 * 1024,
-                b"0123456789abcdef0123456789abcdef".to_vec(),
-                1,
-            )
-            .await
-            .expect("audit initializes");
-            log.append(event(&log)).await.expect("event appends");
-        }
-
-        assert!(
-            EvidenceAuditLog::initialize(
-                &path,
-                64 * 1024,
-                b"fedcba9876543210fedcba9876543210".to_vec(),
-                1,
-            )
-            .await
-            .is_err(),
-            "restart must reject a keyed chain under a different audit secret"
-        );
-    }
-
-    #[tokio::test]
-    async fn replacement_master_cannot_append_to_an_existing_evidence_epoch() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("audit.jsonl");
-        let original = b"original-evidence-audit-master-32-bytes";
-        let replacement = b"replacement-audit-master-is-also-32-bytes";
-        {
-            let log = EvidenceAuditLog::initialize(&path, 64 * 1024, original.to_vec(), 1)
-                .await
-                .expect("original audit epoch initializes");
-            log.append(event(&log)).await.expect("event appends");
-        }
-
-        assert!(verify_audit_chain(&path, &chain_secret(replacement)).is_err());
-        assert!(
-            EvidenceAuditLog::initialize(&path, 64 * 1024, replacement.to_vec(), 1)
-                .await
-                .is_err(),
-            "replacement master bytes cannot append under the existing epoch configuration"
-        );
-        assert!(verify_audit_chain(&path, &chain_secret(original)).is_ok());
-    }
-
-    #[tokio::test]
-    async fn archived_and_fresh_evidence_audit_epochs_verify_independently() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let archived_path = directory.path().join("audit-epoch-1.jsonl");
-        let fresh_path = directory.path().join("audit-epoch-2.jsonl");
-        let archived_master = b"archived-evidence-audit-master-32-bytes";
-        let fresh_master = b"fresh-evidence-audit-master-value-32-bytes";
-
-        {
-            let archived = EvidenceAuditLog::initialize(
-                &archived_path,
-                64 * 1024,
-                archived_master.to_vec(),
-                1,
-            )
-            .await
-            .expect("archived epoch initializes");
-            archived
-                .append(event(&archived))
-                .await
-                .expect("archived event appends");
-        }
-        {
-            let fresh =
-                EvidenceAuditLog::initialize(&fresh_path, 64 * 1024, fresh_master.to_vec(), 2)
-                    .await
-                    .expect("fresh epoch initializes");
-            fresh
-                .append(event(&fresh))
-                .await
-                .expect("fresh event appends");
-        }
-
-        assert!(verify_audit_chain(&archived_path, &chain_secret(archived_master)).is_ok());
-        assert!(verify_audit_chain(&fresh_path, &chain_secret(fresh_master)).is_ok());
-        assert!(verify_audit_chain(&archived_path, &chain_secret(fresh_master)).is_err());
-        assert!(verify_audit_chain(&fresh_path, &chain_secret(archived_master)).is_err());
     }
 
     #[tokio::test]
     async fn same_length_external_mutation_fails_readiness_and_future_appends() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("audit.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            64 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
+        let log = file_log(&path).await;
         log.append(event(&log)).await.expect("event appends");
 
         std::thread::sleep(std::time::Duration::from_millis(2));
@@ -2725,64 +2768,57 @@ mod tests {
 
         assert!(!log.ready().await);
         assert!(log.append(event(&log)).await.is_err());
-        assert_eq!(log.startup_verifications(), 1);
     }
 
     #[tokio::test]
-    async fn invalid_release_shape_and_size_limit_fail_closed() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("audit.jsonl");
-        let log =
-            EvidenceAuditLog::initialize(&path, 1, b"0123456789abcdef0123456789abcdef".to_vec(), 1)
-                .await
-                .expect("audit initializes");
-        assert!(log.append(event(&log)).await.is_err());
-
+    async fn invalid_release_shape_fails_closed_before_any_write() {
+        let (log, captured) = captured_log();
         let mut invalid = event(&log);
         invalid.phase = AuditPhase::DisclosureRelease;
         assert!(matches!(
             log.append(invalid).await,
             Err(EvidenceAuditError::InvalidEvent)
         ));
+        assert!(
+            captured.entries().is_empty(),
+            "an invalid event is never written"
+        );
     }
 
     #[tokio::test]
     async fn second_writer_is_rejected() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("audit.jsonl");
-        let first = EvidenceAuditLog::initialize(
-            &path,
-            64 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("first initializes");
-        let second = EvidenceAuditLog::initialize(
-            &path,
-            64 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await;
-        assert!(second.is_err());
+        let first = file_log(&path).await;
+        let second =
+            EvidenceAuditLog::initialize(file_destination(&path), MASTER.to_vec(), 1).await;
+        assert!(matches!(
+            second,
+            Err(EvidenceAuditError::Audit(AuditError::SinkLocked { .. }))
+        ));
         drop(first);
     }
 
-    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_unusable_key_version_opens_no_destination() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        assert!(matches!(
+            EvidenceAuditLog::initialize(file_destination(&path), MASTER.to_vec(), 0).await,
+            Err(EvidenceAuditError::Configuration)
+        ));
+        assert!(
+            !path.exists(),
+            "key derivation runs before the file is created"
+        );
+    }
+
     #[tokio::test]
     async fn pathname_replacement_never_redirects_the_pinned_audit_writer() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("audit.jsonl");
         let displaced = directory.path().join("displaced.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            64 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
+        let log = file_log(&path).await;
 
         std::fs::rename(&path, &displaced).expect("initialized file is displaced");
         std::fs::write(&path, b"replacement-canary\n").expect("replacement is created");
@@ -2790,29 +2826,11 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
             .expect("replacement mode is owner-only");
 
-        assert!(log.append(event(&log)).await.is_err());
         assert!(!log.ready().await);
         assert_eq!(
             std::fs::read_to_string(&path).expect("replacement reads"),
             "replacement-canary\n"
         );
-        assert_eq!(
-            std::fs::read_to_string(&displaced).expect("pinned file reads"),
-            ""
-        );
-    }
-
-    fn chain_secret(master: &[u8]) -> AuditHashSecret {
-        let profile = AuditProfile::production_from_secret_bytes(Zeroizing::new(master.to_vec()))
-            .expect("audit profile builds");
-        match profile.chain_hasher() {
-            AuditChainHasher::Keyed(secret) => secret,
-            AuditChainHasher::UnkeyedDevOnly => panic!("production profile must be keyed"),
-        }
-    }
-
-    fn audit_secret() -> AuditHashSecret {
-        chain_secret(b"0123456789abcdef0123456789abcdef")
     }
 
     fn local_access(log: &EvidenceAuditLog, operation: &str) -> EvidenceAuditEvent {
@@ -2921,16 +2939,7 @@ mod tests {
 
     #[tokio::test]
     async fn authorization_refusal_is_a_distinct_minimal_native_event() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("audit.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            64 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
+        let (log, captured) = captured_log();
         let operation = "local-refusal-000000000000000001";
         let event = local_authorization_refusal(&log, operation);
         event
@@ -2958,7 +2967,6 @@ mod tests {
                 "reason",
                 "requesterPseudonym",
                 "safeErrorCategory",
-                "schema",
             ]
         );
         assert_eq!(value["phase"], serde_json::json!("denial"));
@@ -2987,27 +2995,25 @@ mod tests {
         log.append_authorization_refusal(event)
             .await
             .expect("refusal appends");
-        drop(log);
-        let summary = verify_audit_chain(&path, &audit_secret()).expect("chain verifies");
-        assert_eq!(summary.records, 1);
+        let entries = captured.entries();
+        assert_eq!(entries.len(), 1, "a refusal is one entry");
+        assert_eq!(
+            entries[0]["schema"],
+            serde_json::json!(AUTHORIZATION_REFUSAL_AUDIT_SCHEMA)
+        );
+        assert_eq!(entries[0]["phase"], serde_json::json!("response"));
+        assert_eq!(entries[0]["correlation"], serde_json::json!(operation));
     }
 
     #[tokio::test]
-    async fn local_inspection_reports_a_verified_chain_that_retains_no_operation() {
+    async fn local_inspection_reports_stopped_audit_that_retains_no_operation() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("audit.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            64 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
+        let log = file_log(&path).await;
         drop(log);
 
         assert!(matches!(
-            verified_last_local_audit_operation(&path, &audit_secret()),
+            last_local_audit_operation(&path),
             Err(EvidenceAuditError::NoOperation)
         ));
     }
@@ -3016,14 +3022,7 @@ mod tests {
     async fn local_inspection_returns_a_standalone_refusal_as_the_last_operation() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("audit.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            64 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
+        let log = file_log(&path).await;
         append_local_operation(&log, "local-operation-0000000000000001").await;
         let refusal_operation = "local-refusal-000000000000000002";
         log.append_authorization_refusal(local_authorization_refusal(&log, refusal_operation))
@@ -3032,8 +3031,7 @@ mod tests {
         drop(log);
 
         let value = serde_json::to_value(
-            verified_last_local_audit_operation(&path, &audit_secret())
-                .expect("stopped local chain verifies"),
+            last_local_audit_operation(&path).expect("stopped local audit reads"),
         )
         .expect("view serializes");
         assert_eq!(value["operation"], serde_json::json!(refusal_operation));
@@ -3079,16 +3077,7 @@ mod tests {
 
     #[tokio::test]
     async fn authorization_refusal_rejects_non_native_fields_and_values() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("audit.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            64 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
+        let (log, captured) = captured_log();
 
         for mutate in [
             |event: &mut EvidenceAuthorizationRefusalAuditEvent| {
@@ -3096,9 +3085,6 @@ mod tests {
             },
             |event: &mut EvidenceAuthorizationRefusalAuditEvent| {
                 event.safe_error_category = "grant-mismatch".to_owned();
-            },
-            |event: &mut EvidenceAuthorizationRefusalAuditEvent| {
-                event.schema = AUDIT_SCHEMA.to_owned();
             },
         ] {
             let mut invalid =
@@ -3113,104 +3099,173 @@ mod tests {
                 Err(EvidenceAuditError::InvalidEvent)
             ));
         }
+        assert!(captured.entries().is_empty());
     }
 
     #[tokio::test]
-    async fn local_inspection_rejects_malformed_mixed_refusal_shapes() {
+    async fn local_inspection_rejects_malformed_and_misfiled_entries() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let pseudonym_path = directory.path().join("pseudonyms.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &pseudonym_path,
-            64 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("pseudonym helper initializes");
+        let (log, _) = captured_log();
         let refusal = local_authorization_refusal(&log, "local-refusal-malformed-00000000001");
-        let mut refusal_with_full_schema = refusal.clone();
-        refusal_with_full_schema.schema = AUDIT_SCHEMA.to_owned();
-        let mut authorized_with_refusal_schema =
-            local_access(&log, "local-refusal-malformed-00000000003");
-        authorized_with_refusal_schema.schema = AUTHORIZATION_REFUSAL_AUDIT_SCHEMA.to_owned();
+        let refusal_record = serde_json::to_value(&refusal).expect("refusal serializes");
+        let access = local_access(&log, "local-refusal-malformed-00000000003");
+        let access_record = serde_json::to_value(&access).expect("access serializes");
         let mut legacy_denial =
             serde_json::to_value(local_access(&log, "local-refusal-malformed-00000000002"))
                 .expect("legacy event serializes");
-        let legacy_denial = legacy_denial
+        let legacy_object = legacy_denial
             .as_object_mut()
             .expect("legacy event is an object");
-        legacy_denial.insert("phase".to_owned(), serde_json::json!("denial"));
-        legacy_denial.insert("decision".to_owned(), serde_json::json!("not-authorized"));
-        legacy_denial.insert(
+        legacy_object.insert("phase".to_owned(), serde_json::json!("denial"));
+        legacy_object.insert("decision".to_owned(), serde_json::json!("not-authorized"));
+        legacy_object.insert(
             "safeErrorCategory".to_owned(),
             serde_json::json!("not-authorized"),
         );
-        let legacy_denial = serde_json::Value::Object(legacy_denial.clone());
-        drop(log);
 
-        let mut refusal_with_requirement =
-            serde_json::to_value(&refusal).expect("refusal serializes");
-        refusal_with_requirement
-            .as_object_mut()
-            .expect("refusal is an object")
-            .insert(
-                "requirement".to_owned(),
-                serde_json::json!("urn:example:requirement:probe:v1"),
-            );
-        let mut refusal_with_protection =
-            serde_json::to_value(&refusal).expect("refusal serializes");
-        refusal_with_protection
-            .as_object_mut()
-            .expect("refusal is an object")
-            .insert("responseProtection".to_owned(), serde_json::json!("signed"));
-        let mut refusal_without_category =
-            serde_json::to_value(&refusal).expect("refusal serializes");
+        let with_field = |record: &serde_json::Value, key: &str, value: serde_json::Value| {
+            let mut record = record.clone();
+            record
+                .as_object_mut()
+                .expect("record is an object")
+                .insert(key.to_owned(), value);
+            record
+        };
+        let mut refusal_without_category = refusal_record.clone();
         refusal_without_category
             .as_object_mut()
             .expect("refusal is an object")
             .remove("safeErrorCategory");
-        let mut refusal_with_wrong_decision =
-            serde_json::to_value(&refusal).expect("refusal serializes");
-        refusal_with_wrong_decision
-            .as_object_mut()
-            .expect("refusal is an object")
-            .insert("decision".to_owned(), serde_json::json!("no-match"));
+        let mut invalid_access = access.clone();
+        invalid_access.decision = AuditDecision::Released;
+
+        let refusal_operation = refusal.operation.clone();
+        let access_operation = access.operation.clone();
         let malformed = [
             (
-                "full-schema-on-refusal",
-                serde_json::to_value(refusal_with_full_schema).expect("refusal serializes"),
+                "refusal-under-authorized-envelope-schema",
+                AuditEntry::response(AUDIT_SCHEMA, &refusal_operation, refusal_record.clone()),
             ),
             (
-                "refusal-schema-on-authorized",
-                serde_json::to_value(authorized_with_refusal_schema)
-                    .expect("authorized event serializes"),
+                "authorized-under-refusal-envelope-schema",
+                AuditEntry::request(
+                    AUTHORIZATION_REFUSAL_AUDIT_SCHEMA,
+                    &access_operation,
+                    access_record.clone(),
+                ),
             ),
-            ("requirement", refusal_with_requirement),
-            ("response-protection", refusal_with_protection),
-            ("missing-category", refusal_without_category),
-            ("wrong-decision", refusal_with_wrong_decision),
-            ("legacy-full-shape", legacy_denial),
+            (
+                "access-under-response-phase",
+                AuditEntry::response(AUDIT_SCHEMA, &access_operation, access_record.clone()),
+            ),
+            (
+                "refusal-under-request-phase",
+                AuditEntry::request(
+                    AUTHORIZATION_REFUSAL_AUDIT_SCHEMA,
+                    &refusal_operation,
+                    refusal_record.clone(),
+                ),
+            ),
+            (
+                "access-under-another-correlation",
+                AuditEntry::request(AUDIT_SCHEMA, "another-operation", access_record.clone()),
+            ),
+            (
+                "record-schema-field",
+                AuditEntry::response(
+                    AUTHORIZATION_REFUSAL_AUDIT_SCHEMA,
+                    &refusal_operation,
+                    with_field(
+                        &refusal_record,
+                        "schema",
+                        serde_json::json!(AUTHORIZATION_REFUSAL_AUDIT_SCHEMA),
+                    ),
+                ),
+            ),
+            (
+                "requirement",
+                AuditEntry::response(
+                    AUTHORIZATION_REFUSAL_AUDIT_SCHEMA,
+                    &refusal_operation,
+                    with_field(
+                        &refusal_record,
+                        "requirement",
+                        serde_json::json!("urn:example:requirement:probe:v1"),
+                    ),
+                ),
+            ),
+            (
+                "response-protection",
+                AuditEntry::response(
+                    AUTHORIZATION_REFUSAL_AUDIT_SCHEMA,
+                    &refusal_operation,
+                    with_field(
+                        &refusal_record,
+                        "responseProtection",
+                        serde_json::json!("signed"),
+                    ),
+                ),
+            ),
+            (
+                "missing-category",
+                AuditEntry::response(
+                    AUTHORIZATION_REFUSAL_AUDIT_SCHEMA,
+                    &refusal_operation,
+                    refusal_without_category,
+                ),
+            ),
+            (
+                "wrong-decision",
+                AuditEntry::response(
+                    AUTHORIZATION_REFUSAL_AUDIT_SCHEMA,
+                    &refusal_operation,
+                    with_field(&refusal_record, "decision", serde_json::json!("no-match")),
+                ),
+            ),
+            (
+                "legacy-full-shape",
+                AuditEntry::response(
+                    AUTHORIZATION_REFUSAL_AUDIT_SCHEMA,
+                    "local-refusal-malformed-00000000002",
+                    legacy_denial,
+                ),
+            ),
+            (
+                "invalid-native-event",
+                AuditEntry::request(
+                    AUDIT_SCHEMA,
+                    &access_operation,
+                    serde_json::to_value(invalid_access).expect("invalid event serializes"),
+                ),
+            ),
+            (
+                "request-batch-family",
+                AuditEntry::request(
+                    REQUEST_BATCH_AUDIT_SCHEMA,
+                    "operation-request-batch-audit",
+                    serde_json::to_value(request_batch_event(
+                        EvidenceRequestBatchAuditPhase::TerminalFailure,
+                        EvidenceRequestBatchAuditDecision::Aborted,
+                    ))
+                    .expect("batch event serializes"),
+                ),
+            ),
+            (
+                "unknown-schema",
+                AuditEntry::request(
+                    "registry.evidence.audit/v1",
+                    &access_operation,
+                    access_record.clone(),
+                ),
+            ),
         ];
 
-        for (name, record) in malformed {
+        for (name, entry) in malformed {
             let path = directory.path().join(format!("{name}.jsonl"));
-            let envelope = AuditEnvelope::new_with_hasher(
-                record,
-                None,
-                &AuditChainHasher::keyed(audit_secret()),
-            )
-            .expect("malformed record is still keyed");
-            std::fs::write(&path, envelope.to_jsonl().expect("envelope renders"))
-                .expect("audit writes");
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt as _;
-                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-                    .expect("audit mode is owner-only");
-            }
+            append_raw_entries(&path, vec![entry]).await;
             assert!(
-                verified_last_local_audit_operation(&path, &audit_secret()).is_err(),
-                "mixed refusal shape {name} must fail closed"
+                last_local_audit_operation(&path).is_err(),
+                "misfiled entry {name} must fail closed"
             );
         }
     }
@@ -3219,14 +3274,7 @@ mod tests {
     async fn local_inspection_never_pairs_an_access_event_with_a_refusal() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("access-then-refusal.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            64 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
+        let log = file_log(&path).await;
         let operation = "local-refusal-mixed-operation-0000001";
         log.append(local_access(&log, operation))
             .await
@@ -3237,19 +3285,12 @@ mod tests {
         drop(log);
 
         assert!(
-            verified_last_local_audit_operation(&path, &audit_secret()).is_err(),
+            last_local_audit_operation(&path).is_err(),
             "a refusal is standalone and cannot close an authorized access event"
         );
 
         let path = directory.path().join("refusal-then-access.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            64 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
+        let log = file_log(&path).await;
         log.append_authorization_refusal(local_authorization_refusal(&log, operation))
             .await
             .expect("refusal appends");
@@ -3258,19 +3299,12 @@ mod tests {
             .expect("access appends");
         drop(log);
         assert!(
-            verified_last_local_audit_operation(&path, &audit_secret()).is_err(),
+            last_local_audit_operation(&path).is_err(),
             "an authorized operation cannot reuse a completed refusal operation id"
         );
 
         let path = directory.path().join("duplicate-refusal.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            64 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
+        let log = file_log(&path).await;
         log.append_authorization_refusal(local_authorization_refusal(&log, operation))
             .await
             .expect("first refusal appends");
@@ -3279,7 +3313,7 @@ mod tests {
             .expect("second refusal appends");
         drop(log);
         assert!(
-            verified_last_local_audit_operation(&path, &audit_secret()).is_err(),
+            last_local_audit_operation(&path).is_err(),
             "a completed refusal operation id cannot be reused"
         );
     }
@@ -3288,14 +3322,7 @@ mod tests {
     async fn local_inspection_uses_physical_last_record_across_heterogeneous_operations() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("authorized-terminal-last.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            64 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
+        let log = file_log(&path).await;
         let authorized_operation = "local-interleaved-authorized-000000001";
         let access = local_access(&log, authorized_operation);
         let release = local_release(&access);
@@ -3310,8 +3337,7 @@ mod tests {
         drop(log);
 
         let value = serde_json::to_value(
-            verified_last_local_audit_operation(&path, &audit_secret())
-                .expect("heterogeneous stopped chain verifies"),
+            last_local_audit_operation(&path).expect("heterogeneous stopped audit reads"),
         )
         .expect("view serializes");
         assert_eq!(
@@ -3322,14 +3348,7 @@ mod tests {
         assert_eq!(value["events"].as_array().map(Vec::len), Some(2));
 
         let path = directory.path().join("refusal-last.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            64 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
+        let log = file_log(&path).await;
         append_local_operation(&log, "local-heterogeneous-authorized-000001").await;
         let refusal_operation = "local-heterogeneous-refusal-000000001";
         log.append_authorization_refusal(local_authorization_refusal(&log, refusal_operation))
@@ -3338,8 +3357,7 @@ mod tests {
         drop(log);
 
         let value = serde_json::to_value(
-            verified_last_local_audit_operation(&path, &audit_secret())
-                .expect("heterogeneous stopped chain verifies"),
+            last_local_audit_operation(&path).expect("heterogeneous stopped audit reads"),
         )
         .expect("view serializes");
         assert_eq!(
@@ -3354,20 +3372,12 @@ mod tests {
     async fn local_inspection_returns_one_closed_two_phase_view() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("audit.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            64 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
+        let log = file_log(&path).await;
         let operation = "local-operation-0000000000000001";
         append_local_operation(&log, operation).await;
         drop(log);
 
-        let view = verified_last_local_audit_operation(&path, &audit_secret())
-            .expect("stopped local chain verifies");
+        let view = last_local_audit_operation(&path).expect("stopped local audit reads");
         let value = serde_json::to_value(view).expect("view serializes");
         assert_eq!(
             value
@@ -3449,24 +3459,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_inspection_selects_the_last_verified_native_operation() {
+    async fn local_inspection_selects_the_last_native_operation() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("audit.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            64 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
+        let log = file_log(&path).await;
         append_local_operation(&log, "local-operation-0000000000000001").await;
         append_local_operation(&log, "local-operation-0000000000000002").await;
         drop(log);
 
         let value = serde_json::to_value(
-            verified_last_local_audit_operation(&path, &audit_secret())
-                .expect("stopped local chain verifies"),
+            last_local_audit_operation(&path).expect("stopped local audit reads"),
         )
         .expect("view serializes");
         assert_eq!(
@@ -3477,149 +3479,105 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_inspection_verifies_the_full_rotated_keyed_chain() {
+    async fn local_inspection_reads_sealed_files_in_sequence_then_the_active_file() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("audit.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            4096,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
-        for index in 0..12 {
+        for index in 0..3u64 {
+            let log = file_log(&path).await;
             append_local_operation(&log, &format!("local-operation-{index:016}")).await;
+            drop(log);
+            seal_active_file(&path, index + 1);
         }
+        let log = file_log(&path).await;
+        let operation = "local-operation-0000000000000003";
+        let access = local_access(&log, operation);
+        let release = local_release(&access);
+        log.append(access).await.expect("access appends");
         drop(log);
-        assert!(
-            audit_segment_paths(&path)
-                .expect("segments enumerate")
-                .len()
-                > 2,
-            "fixture rotates through sealed history"
-        );
+        // The access attempt is sealed and its release lands in the active
+        // file, so the view only closes if the files are read in order.
+        seal_active_file(&path, 4);
+        let log = file_log(&path).await;
+        log.append(release).await.expect("release appends");
+        drop(log);
 
         let value = serde_json::to_value(
-            verified_last_local_audit_operation(&path, &audit_secret())
-                .expect("the full keyed chain verifies"),
+            last_local_audit_operation(&path).expect("sealed and active files read"),
         )
         .expect("view serializes");
-        assert_eq!(
-            value["operation"],
-            serde_json::json!("local-operation-0000000000000011")
-        );
+        assert_eq!(value["operation"], serde_json::json!(operation));
+        assert_eq!(value["events"].as_array().map(Vec::len), Some(2));
     }
 
     #[tokio::test]
-    async fn local_inspection_rejects_tampering_wrong_secret_and_live_writer() {
+    async fn local_inspection_rejects_tampering_and_a_live_writer() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let live_path = directory.path().join("live.jsonl");
-        let live = EvidenceAuditLog::initialize(
-            &live_path,
-            64 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
+        let path = directory.path().join("live.jsonl");
+        let live = file_log(&path).await;
         append_local_operation(&live, "local-operation-0000000000000001").await;
         assert!(
-            verified_last_local_audit_operation(&live_path, &audit_secret()).is_err(),
+            matches!(
+                last_local_audit_operation(&path),
+                Err(EvidenceAuditError::Audit(AuditError::SinkLocked { .. }))
+            ),
             "a live writer fails rather than yielding a partial view"
         );
         drop(live);
+        last_local_audit_operation(&path).expect("the stopped file reads");
 
-        let wrong = AuditHashSecret::new(b"abcdef0123456789abcdef0123456789".to_vec())
-            .expect("wrong secret builds");
+        rewrite_line(&path, 0, |line| line.replacen('{', "[", 1));
         assert!(
-            verified_last_local_audit_operation(&live_path, &wrong).is_err(),
-            "a wrong secret yields no view"
-        );
-
-        rewrite_segment_line(&live_path, 0, corrupt_line);
-        assert!(
-            verified_last_local_audit_operation(&live_path, &audit_secret()).is_err(),
-            "tampered keyed history yields no view"
+            last_local_audit_operation(&path).is_err(),
+            "a line that is not an entry yields no view"
         );
     }
 
     #[tokio::test]
-    async fn local_inspection_rejects_missing_history_and_active_segment() {
+    async fn local_inspection_rejects_a_torn_final_line_and_a_missing_active_file() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("audit.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            4096,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
-        for index in 0..12 {
-            append_local_operation(&log, &format!("local-operation-{index:016}")).await;
-        }
+        let log = file_log(&path).await;
+        append_local_operation(&log, "local-operation-0000000000000001").await;
         drop(log);
-        let segments = audit_segment_paths(&path).expect("segments enumerate");
-        assert!(segments.len() > 3, "fixture has a middle sealed segment");
-        std::fs::remove_file(&segments[1]).expect("middle segment is removed");
-        assert!(matches!(
-            verified_last_local_audit_operation(&path, &audit_secret()),
-            Err(EvidenceAuditError::SegmentMissing { sequence: 2 })
-        ));
+        let length = std::fs::metadata(&path).expect("audit metadata").len();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .and_then(|file| file.set_len(length - 8))
+            .expect("final line is torn");
+        assert!(
+            last_local_audit_operation(&path).is_err(),
+            "a torn final line yields no view"
+        );
 
         let active_path = directory.path().join("missing-active.jsonl");
-        let active = EvidenceAuditLog::initialize(
-            &active_path,
-            64 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
+        let active = file_log(&active_path).await;
         append_local_operation(&active, "local-operation-0000000000000001").await;
         drop(active);
-        std::fs::remove_file(&active_path).expect("active segment is removed");
+        std::fs::remove_file(&active_path).expect("active file is removed");
         assert!(
-            verified_last_local_audit_operation(&active_path, &audit_secret()).is_err(),
-            "an absent active segment yields no view"
+            last_local_audit_operation(&active_path).is_err(),
+            "an absent active file yields no view"
         );
     }
 
     #[tokio::test]
-    async fn local_inspection_rejects_a_keyed_but_invalid_native_event() {
+    async fn local_inspection_refuses_a_symbolic_link() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("audit.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &directory.path().join("pseudonyms.jsonl"),
-            64 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("pseudonym helper initializes");
-        let mut invalid = local_access(&log, "local-operation-0000000000000001");
-        invalid.decision = AuditDecision::Released;
+        let target = directory.path().join("target.jsonl");
+        let log = file_log(&target).await;
+        append_local_operation(&log, "local-operation-0000000000000001").await;
         drop(log);
-        let hasher = AuditChainHasher::keyed(audit_secret());
-        let envelope = AuditEnvelope::new_with_hasher(
-            serde_json::to_value(invalid).expect("invalid event serializes"),
-            None,
-            &hasher,
+        let link = directory.path().join("audit.jsonl");
+        std::os::unix::fs::symlink(&target, &link).expect("active link is created");
+        std::fs::copy(
+            directory.path().join("target.jsonl.lock"),
+            directory.path().join("audit.jsonl.lock"),
         )
-        .expect("invalid native event is still keyed");
-        std::fs::write(&path, envelope.to_jsonl().expect("envelope renders"))
-            .expect("audit writes");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-                .expect("audit mode is owner-only");
-        }
-
+        .expect("lock is copied");
         assert!(
-            verified_last_local_audit_operation(&path, &audit_secret()).is_err(),
-            "a valid chain hash cannot bless a non-native event"
+            last_local_audit_operation(&link).is_err(),
+            "the reader never follows a symbolic link"
         );
     }
 
@@ -3627,18 +3585,19 @@ mod tests {
     async fn local_inspection_fails_instead_of_truncating_at_any_bound() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("audit.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            4096,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
-        for index in 0..4 {
+        let log = file_log(&path).await;
+        for index in 0..2 {
             append_local_operation(&log, &format!("local-operation-{index:016}")).await;
         }
         drop(log);
+        seal_active_file(&path, 1);
+        let log = file_log(&path).await;
+        for index in 2..4 {
+            append_local_operation(&log, &format!("local-operation-{index:016}")).await;
+        }
+        drop(log);
+        last_local_audit_operation(&path).expect("the default bounds hold");
+
         let defaults = LocalAuditInspectionBounds::DEFAULT;
         for bounds in [
             LocalAuditInspectionBounds {
@@ -3655,53 +3614,30 @@ mod tests {
             },
         ] {
             assert!(
-                verified_last_local_audit_operation_with_bounds(&path, &audit_secret(), bounds)
-                    .is_err(),
+                last_local_audit_operation_with_bounds(&path, bounds).is_err(),
                 "a bound failure yields no truncated view"
             );
         }
     }
 
-    /// Change one byte of a record without changing its length, so the record
-    /// no longer matches the hash the chain recorded for it.
-    fn corrupt_line(line: &str) -> String {
-        let mut bytes = line.as_bytes().to_vec();
-        for byte in bytes.iter_mut() {
-            if byte.is_ascii_lowercase() {
-                *byte = if *byte == b'z' { b'y' } else { *byte + 1 };
-                break;
-            }
-        }
-        String::from_utf8(bytes).expect("a corrupted record stays UTF-8")
-    }
-
-    fn rewrite_segment_line(path: &Path, index: usize, rewrite: impl Fn(&str) -> String) {
-        let contents = std::fs::read_to_string(path).expect("segment reads");
+    fn rewrite_line(path: &Path, index: usize, rewrite: impl Fn(&str) -> String) {
+        let contents = std::fs::read_to_string(path).expect("audit file reads");
         let mut lines: Vec<String> = contents.lines().map(str::to_owned).collect();
         lines[index] = rewrite(&lines[index]);
         let mut rewritten = lines.join("\n");
         rewritten.push('\n');
-        std::fs::write(path, rewritten).expect("segment rewrites");
+        std::fs::write(path, rewritten).expect("audit file rewrites");
     }
 
-    /// Readiness reports on the chain, not on how busy the writer is. The
-    /// fingerprint it compares is the one the writer advances on every append,
-    /// so a probe that read it outside the writer's lock would see the
+    /// Readiness reports on the destination, not on how busy the writer is.
+    /// The fingerprint it compares is the one the writer advances on every
+    /// append, so a probe that read it outside the writer's lock would see the
     /// service's own traffic as external mutation and flap under load.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn readiness_holds_while_appends_are_in_flight() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("audit.jsonl");
-        let log = Arc::new(
-            EvidenceAuditLog::initialize(
-                &path,
-                1024 * 1024,
-                b"0123456789abcdef0123456789abcdef".to_vec(),
-                1,
-            )
-            .await
-            .expect("audit initializes"),
-        );
+        let log = Arc::new(file_log(&path).await);
 
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let mut writers = tokio::task::JoinSet::new();
@@ -3709,7 +3645,7 @@ mod tests {
             let log = Arc::clone(&log);
             let stop = Arc::clone(&stop);
             writers.spawn(async move {
-                while !stop.load(Ordering::Relaxed) {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                     log.append(event(&log)).await.expect("event appends");
                 }
             });
@@ -3727,7 +3663,7 @@ mod tests {
             }
             tokio::task::yield_now().await;
         }
-        stop.store(true, Ordering::Relaxed);
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
         while let Some(result) = writers.join_next().await {
             result.expect("writer task joins");
         }
@@ -3744,16 +3680,7 @@ mod tests {
     async fn concurrent_appends_share_durable_writes() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("audit.jsonl");
-        let log = Arc::new(
-            EvidenceAuditLog::initialize(
-                &path,
-                1024 * 1024,
-                b"0123456789abcdef0123456789abcdef".to_vec(),
-                1,
-            )
-            .await
-            .expect("audit initializes"),
-        );
+        let log = Arc::new(file_log(&path).await);
 
         const APPENDS: usize = 64;
         let mut appends = tokio::task::JoinSet::new();
@@ -3761,48 +3688,32 @@ mod tests {
             let log = Arc::clone(&log);
             appends.spawn(async move { log.append(event(&log)).await.expect("event appends") });
         }
-        let mut hashes = Vec::new();
         while let Some(result) = appends.join_next().await {
-            hashes.push(result.expect("append task joins").record_hash);
+            result.expect("append task joins");
         }
-        hashes.sort_unstable();
-        hashes.dedup();
-        assert_eq!(
-            hashes.len(),
-            APPENDS,
-            "every concurrent append gets its own chain position"
-        );
 
         let writes = log.durable_writes();
         assert!(
             writes < APPENDS,
             "concurrent appends must share durable writes, saw {writes} for {APPENDS} records"
         );
-        drop(log);
-
-        let summary = verify_audit_chain(&path, &audit_secret()).expect("chain verifies");
         assert_eq!(
-            summary.records, APPENDS,
+            std::fs::read_to_string(&path)
+                .expect("audit reads")
+                .lines()
+                .count(),
+            APPENDS,
             "batching must not drop or duplicate a record"
         );
-        assert!(summary.active_verified);
     }
 
-    /// A durable write that fails leaves the in-memory head ahead of the disk,
-    /// so the sink must refuse everything afterwards rather than chain onto a
-    /// record that was never written.
+    /// A durable write that fails leaves the writer unable to say what reached
+    /// the disk, so it must refuse everything afterwards.
     #[tokio::test]
-    async fn a_failed_durable_write_poisons_the_sink_instead_of_forking_the_chain() {
+    async fn a_failed_durable_write_stops_the_writer() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("audit.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            1024 * 1024,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
+        let log = file_log(&path).await;
         log.append(event(&log)).await.expect("event appends");
         assert!(log.ready().await);
 
@@ -3814,20 +3725,17 @@ mod tests {
             .open(&path)
             .expect("external truncation opens");
 
-        let failed = log.append(event(&log)).await;
         assert!(
-            failed.is_err(),
+            log.append(event(&log)).await.is_err(),
             "an externally modified file fails the write"
         );
-
-        let after = log.append(event(&log)).await;
         assert!(
-            after.is_err(),
-            "the sink stays failed rather than continuing on a head the disk never received"
+            log.append(event(&log)).await.is_err(),
+            "the writer stays stopped"
         );
         assert!(
             !log.ready().await,
-            "a poisoned sink never reports itself ready again"
+            "a stopped writer never reports itself ready again"
         );
     }
 
@@ -3836,19 +3744,10 @@ mod tests {
     /// will never arrive would hang the request that asked for the audit
     /// record, which is a worse outcome than refusing it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn a_poisoned_sink_fails_concurrent_waiters_instead_of_hanging_them() {
+    async fn a_stopped_writer_fails_concurrent_waiters_instead_of_hanging_them() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("audit.jsonl");
-        let log = Arc::new(
-            EvidenceAuditLog::initialize(
-                &path,
-                1024 * 1024,
-                b"0123456789abcdef0123456789abcdef".to_vec(),
-                1,
-            )
-            .await
-            .expect("audit initializes"),
-        );
+        let log = Arc::new(file_log(&path).await);
         log.append(event(&log)).await.expect("event appends");
         std::fs::OpenOptions::new()
             .write(true)
@@ -3873,412 +3772,12 @@ mod tests {
             outcomes
         })
         .await
-        .expect("a poisoned sink answers every waiter rather than hanging one");
+        .expect("a stopped writer answers every waiter rather than hanging one");
 
         assert_eq!(outcomes.len(), 32);
         assert!(
             outcomes.iter().all(Result::is_err),
-            "every waiter is told the chain stopped, none is handed a position that was never written"
-        );
-    }
-
-    #[tokio::test]
-    async fn storage_usage_counts_every_segment_and_grows_across_rotation() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("audit.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            4096,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
-
-        let empty = log.storage_usage().await.expect("usage reads");
-        assert_eq!(
-            empty.segments, 1,
-            "the active segment counts before any append"
-        );
-        assert_eq!(empty.bytes, 0);
-
-        log.append(event(&log)).await.expect("event appends");
-        let single = log.storage_usage().await.expect("usage reads");
-        assert_eq!(single.segments, 1);
-        assert!(single.bytes > 0, "an appended record occupies bytes");
-
-        const RECORDS: usize = 24;
-        for _ in 0..RECORDS {
-            log.append(event(&log)).await.expect("event appends");
-        }
-
-        let rolled = log.storage_usage().await.expect("usage reads");
-        assert!(
-            rolled.segments > 1,
-            "a bound smaller than the appended volume must roll at least once"
-        );
-        assert_eq!(
-            rolled.segments,
-            audit_segment_paths(&path)
-                .expect("segments enumerate")
-                .len(),
-            "usage counts sealed segments as well as the active one"
-        );
-        assert!(
-            rolled.bytes > single.bytes,
-            "sealed history keeps counting toward the footprint after rotation"
-        );
-
-        // Retention is the operator's, so archiving a sealed segment must show
-        // up as a smaller footprint rather than being masked by a counter that
-        // only ever accumulates.
-        let segments = audit_segment_paths(&path).expect("segments enumerate");
-        let oldest = segments.first().expect("rotation sealed a segment");
-        let archived = std::fs::metadata(oldest).expect("sealed metadata").len();
-        std::fs::remove_file(oldest).expect("sealed segment archives away");
-
-        let pruned = log.storage_usage().await.expect("usage reads");
-        assert_eq!(pruned.segments, rolled.segments - 1);
-        assert_eq!(pruned.bytes, rolled.bytes - archived);
-    }
-
-    /// Append past the per-segment bound and prove the sealed segment and the
-    /// active segment are one chain, not two independent ones.
-    #[tokio::test]
-    async fn appends_rotate_into_sealed_segments_and_the_chain_spans_the_seam() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("audit.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            4096,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
-
-        const RECORDS: usize = 24;
-        for _ in 0..RECORDS {
-            log.append(event(&log)).await.expect("event appends");
-        }
-
-        let segments = audit_segment_paths(&path).expect("segments enumerate");
-        assert!(
-            segments.len() > 1,
-            "a bound smaller than the appended volume must roll at least once"
-        );
-        assert_eq!(
-            segments.last().expect("an active segment exists"),
-            &path,
-            "the configured path stays the active segment"
-        );
-        assert!(
-            log.ready().await,
-            "the chain stays ready across its own rotation"
-        );
-
-        // Against a live writer the verifier proves sealed history only, rather
-        // than racing an in-flight append and calling a partial line corruption.
-        let live = verify_audit_chain(&path, &audit_secret())
-            .expect("sealed history verifies while the writer runs");
-        assert!(!live.active_verified);
-        assert_eq!(live.segments, segments.len() - 1);
-        drop(log);
-
-        let summary = verify_audit_chain(&path, &audit_secret())
-            .expect("the chain verifies across every seam");
-        assert!(summary.active_verified);
-        assert_eq!(summary.records, RECORDS, "no record is lost to rotation");
-        assert_eq!(summary.segments, segments.len());
-        assert_eq!(summary.first_sequence, Some(1));
-        assert_eq!(summary.last_sequence, Some(segments.len() as u64 - 1));
-    }
-
-    /// Rotation must never be reachable ahead of the pinned-path check, or an
-    /// external rename would be laundered into a legitimate-looking seal.
-    #[tokio::test]
-    async fn pathname_replacement_is_rejected_even_when_the_append_would_rotate() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("audit.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            4096,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
-        // Fill the active segment so the next append is one that would rotate.
-        while std::fs::metadata(&path)
-            .expect("active segment reads")
-            .len()
-            == 0
-            || audit_segment_paths(&path)
-                .expect("segments enumerate")
-                .len()
-                < 2
-        {
-            log.append(event(&log)).await.expect("event appends");
-        }
-        let sealed_before = audit_segment_paths(&path)
-            .expect("segments enumerate")
-            .len();
-
-        let displaced = directory.path().join("displaced.jsonl");
-        std::fs::rename(&path, &displaced).expect("the active segment is renamed away");
-        std::fs::write(&path, "").expect("a replacement is planted");
-
-        assert!(
-            log.append(event(&log)).await.is_err(),
-            "an append must not continue onto a replaced pathname, rotation or not"
-        );
-        assert!(!log.ready().await);
-        assert_eq!(
-            audit_segment_paths(&path)
-                .expect("segments enumerate")
-                .len(),
-            sealed_before,
-            "a rejected append must not seal anything"
-        );
-    }
-
-    /// A gap in sealed history is reported as a missing segment, not as a hash
-    /// break, so an operator can tell archival from tampering.
-    #[tokio::test]
-    async fn an_archived_middle_segment_is_reported_as_missing_not_as_corruption() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("audit.jsonl");
-        {
-            let log = EvidenceAuditLog::initialize(
-                &path,
-                2048,
-                b"0123456789abcdef0123456789abcdef".to_vec(),
-                1,
-            )
-            .await
-            .expect("audit initializes");
-            for _ in 0..48 {
-                log.append(event(&log)).await.expect("event appends");
-            }
-        }
-        let segments = audit_segment_paths(&path).expect("segments enumerate");
-        assert!(
-            segments.len() >= 4,
-            "the fixture needs a sealed segment that is neither first nor last"
-        );
-        std::fs::remove_file(&segments[1]).expect("a middle segment is archived away");
-
-        assert!(
-            matches!(
-                verify_audit_chain(&path, &audit_secret()),
-                Err(EvidenceAuditError::SegmentMissing { sequence: 2 })
-            ),
-            "a gap must name the absent sequence rather than look like tampering"
-        );
-    }
-
-    /// A restart after rotation must resume the sealed chain rather than
-    /// starting a second one.
-    #[tokio::test]
-    async fn a_restart_after_rotation_continues_from_the_sealed_tail() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("audit.jsonl");
-        const BEFORE: usize = 24;
-        {
-            let log = EvidenceAuditLog::initialize(
-                &path,
-                4096,
-                b"0123456789abcdef0123456789abcdef".to_vec(),
-                1,
-            )
-            .await
-            .expect("audit initializes");
-            for _ in 0..BEFORE {
-                log.append(event(&log)).await.expect("event appends");
-            }
-            assert!(
-                audit_segment_paths(&path)
-                    .expect("segments enumerate")
-                    .len()
-                    > 1
-            );
-        }
-
-        let restarted = EvidenceAuditLog::initialize(
-            &path,
-            4096,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("a rotated chain verifies on restart");
-        restarted
-            .append(event(&restarted))
-            .await
-            .expect("a restarted rotated chain accepts an append");
-        drop(restarted);
-
-        let summary = verify_audit_chain(&path, &audit_secret())
-            .expect("the chain verifies after a restart across a seam");
-        assert_eq!(summary.records, BEFORE + 1);
-    }
-
-    /// Crashing between the rename and the creation of the replacement leaves
-    /// no active segment. Restart must recover the chain head from the sealed
-    /// tail instead of silently beginning a new chain at genesis.
-    #[tokio::test]
-    async fn a_missing_active_segment_recovers_from_the_sealed_tail() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("audit.jsonl");
-        const BEFORE: usize = 24;
-        {
-            let log = EvidenceAuditLog::initialize(
-                &path,
-                4096,
-                b"0123456789abcdef0123456789abcdef".to_vec(),
-                1,
-            )
-            .await
-            .expect("audit initializes");
-            for _ in 0..BEFORE {
-                log.append(event(&log)).await.expect("event appends");
-            }
-        }
-        let segments = audit_segment_paths(&path).expect("segments enumerate");
-        assert!(segments.len() > 1, "the fixture must have rolled");
-        let sealed_records: usize = segments[..segments.len() - 1]
-            .iter()
-            .map(|segment| {
-                std::fs::read_to_string(segment)
-                    .expect("sealed segment reads")
-                    .lines()
-                    .count()
-            })
-            .sum();
-        std::fs::remove_file(&path).expect("the active segment is lost to a crash");
-
-        let restarted = EvidenceAuditLog::initialize(
-            &path,
-            4096,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("a missing active segment is recreated");
-        restarted
-            .append(event(&restarted))
-            .await
-            .expect("appends resume after the active segment is lost");
-        drop(restarted);
-
-        let summary = verify_audit_chain(&path, &audit_secret())
-            .expect("the recovered chain still spans its seams");
-        assert_eq!(
-            summary.records,
-            sealed_records + 1,
-            "the record written after recovery continues sealed history, and the \
-             records lost with the active segment are not silently replaced"
-        );
-        assert!(
-            summary.records < BEFORE + 1,
-            "the fixture must actually have lost the active segment's records"
-        );
-        assert!(
-            summary.head.is_some(),
-            "the recovered chain continues rather than restarting at genesis"
-        );
-    }
-
-    /// The chain head is recovered from the last record of the newest sealed
-    /// segment, so corrupting that record is caught at startup.
-    #[tokio::test]
-    async fn a_corrupt_sealed_tail_is_rejected_at_startup() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("audit.jsonl");
-        {
-            let log = EvidenceAuditLog::initialize(
-                &path,
-                4096,
-                b"0123456789abcdef0123456789abcdef".to_vec(),
-                1,
-            )
-            .await
-            .expect("audit initializes");
-            for _ in 0..24 {
-                log.append(event(&log)).await.expect("event appends");
-            }
-        }
-
-        let segments = audit_segment_paths(&path).expect("segments enumerate");
-        let newest_sealed = segments[segments.len() - 2].clone();
-        let sealed_lines = std::fs::read_to_string(&newest_sealed)
-            .expect("sealed segment reads")
-            .lines()
-            .count();
-        rewrite_segment_line(&newest_sealed, sealed_lines - 1, corrupt_line);
-
-        assert!(
-            EvidenceAuditLog::initialize(
-                &path,
-                4096,
-                b"0123456789abcdef0123456789abcdef".to_vec(),
-                1,
-            )
-            .await
-            .is_err(),
-            "a corrupt sealed tail must not be accepted as the chain head"
-        );
-    }
-
-    /// Boot-time verification deliberately covers only the active segment and
-    /// the sealed tail it chains to, so history is bounded rather than replayed
-    /// from genesis. This pins the accepted cost: corruption inside an already
-    /// sealed segment starts the service and is caught by the out-of-band
-    /// verifier instead.
-    #[tokio::test]
-    async fn sealed_segment_corruption_passes_startup_and_fails_the_verifier() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("audit.jsonl");
-        {
-            let log = EvidenceAuditLog::initialize(
-                &path,
-                4096,
-                b"0123456789abcdef0123456789abcdef".to_vec(),
-                1,
-            )
-            .await
-            .expect("audit initializes");
-            for _ in 0..24 {
-                log.append(event(&log)).await.expect("event appends");
-            }
-        }
-
-        let segments = audit_segment_paths(&path).expect("segments enumerate");
-        let oldest_sealed = segments[0].clone();
-        assert!(
-            std::fs::read_to_string(&oldest_sealed)
-                .expect("sealed segment reads")
-                .lines()
-                .count()
-                > 1,
-            "the corrupted record must not be the sealed tail"
-        );
-        rewrite_segment_line(&oldest_sealed, 0, corrupt_line);
-
-        let restarted = EvidenceAuditLog::initialize(
-            &path,
-            4096,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("startup does not replay sealed history");
-        assert!(restarted.ready().await);
-        drop(restarted);
-
-        assert!(
-            verify_audit_chain(&path, &audit_secret()).is_err(),
-            "the out-of-band verifier is what catches sealed-segment corruption"
+            "every waiter is told the writer stopped"
         );
     }
 }

@@ -14,5 +14,5 @@ secretProviders:
 signer:
   kind: local-jwk
   privateKeyRef: secret:file/evidence-signing
-auditStorage: {path: /tmp/registry-evidence-local/audit/evidence.jsonl, maximumFileBytes: 1048576}
+audit: {path: /tmp/registry-evidence-local/audit/evidence.jsonl}
 outboundTls: {systemRoots: true, trustProfiles: {}}

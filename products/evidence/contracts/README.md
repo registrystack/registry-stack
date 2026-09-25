@@ -40,8 +40,9 @@ The normative source set is:
   authority, one-decision authorization inputs, exact selector profiles, and
   value-origin rules;
 - `audit-event.schema.yaml` and `request-batch-audit-event.schema.yaml`: the
-  protected native audit-record shapes, with
-  distinct discriminators for mutually exclusive complete authorized-material
+  protected native audit-record shapes, carried in the `record` member of the
+  shared platform audit envelope, with
+  distinct entry schemas for mutually exclusive complete authorized-material
   and minimal authenticated authorization-refusal shapes. Complete events carry
   the closed `responseProtection` mode and require `signingKeyId` exactly for
   cryptographically protected release; the refusal shape omits both; the
@@ -137,7 +138,7 @@ Evidence vocabulary.
    definitions may still be rejected when their combination reconstructs a
    protected value.
 7. The governed bundle and `runtime.yaml` are separate closed startup inputs.
-   Runtime binds only process-local paths, listener bounds, audit storage,
+   Runtime binds only process-local paths, listener bounds, the audit destination,
    file secrets, signer transport and pinned version, and logical private CAs.
    It cannot override governed semantics, source authority, or the governed
    active public key.

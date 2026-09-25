@@ -4,7 +4,7 @@ service: {providerId: urn:example:fixture:provider:evidence, publicOrigin: https
 issuer: {id: urn:example:fixture:issuer:authority}
 publication: {serviceId: urn:example:fixture:service:evidence, title: Synthetic Evidence service, description: Synthetic minimum-disclosure assertions for acceptance testing, endpointUrl: https://evidence.example.invalid, jurisdictions: [urn:example:jurisdiction:acceptance]}
 authentication: {kind: oidc-access-token, issuer: https://identity.invalid, audiences: [evidence-fixture], tokenTypes: [at+jwt], algorithms: [ES256], jwksUri: https://identity.invalid/.well-known/jwks.json, principalClaim: sub, requesterTagsClaim: evidence_tags, evidenceAudienceClaim: evidence_audience, maximumTokenLifetimeSeconds: 300, revokedKeyIds: []}
-audit: {format: keyed-jsonl, hashSecretRef: secret:file/audit-hash-key, hashKeyVersion: 1, failClosed: true}
+audit: {hashKeyRef: secret:file/audit-hash-key, hashKeyVersion: 1}
 subjectBinding: {secretRef: secret:file/subject-binding-key, keyVersion: 1}
 rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
 signing: {format: flattened-jws-json, algorithm: ES256, activePublicJwkFile: public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json, publishedPublicJwkFiles: [], revokedKeyIds: [], jwksPath: /.well-known/evidence/jwks.json, maximumAssertionValiditySeconds: 300, verifierClockSkewSeconds: 30}

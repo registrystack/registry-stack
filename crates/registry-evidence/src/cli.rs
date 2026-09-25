@@ -161,13 +161,6 @@ pub enum Command {
         #[arg(long)]
         at: Option<String>,
     },
-    /// Run a full out-of-band verification pass over the audit chain.
-    ///
-    /// Startup verification is deliberately bounded to the active segment, so
-    /// restart time does not grow with retained history; tampering inside an
-    /// already sealed segment is not caught there. This is the counterpart
-    /// check that catches it, meant to run out of band.
-    VerifyAudit,
     /// Internal local-adopter seam for bearer-free relying-procedure closure.
     #[command(hide = true)]
     PrepareLocalRelyingProcedure {

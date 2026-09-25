@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Microbenchmarks for the durable Evidence audit chain.
+//! Microbenchmarks for the durable Evidence audit file.
 //!
-//! These measure the real filesystem path through the shared
-//! `DurableSegmentedAuditLog`, including the durable `fsync` that covers each
-//! append and can be shared by a concurrent group of records.
+//! These measure the real filesystem path through the shared platform
+//! `AuditWriter` file destination, including the durable `fsync` that covers
+//! each append and can be shared by a concurrent group of entries.
 //!
 //! Covers:
-//! - one sequential append, the latency floor a request pays per audit record;
-//! - concurrent appends, which measure the sink's durable group commit;
+//! - one sequential append, the latency floor a request pays per audit entry;
+//! - concurrent appends, which measure the writer's durable group commit;
 //! - event construction and serialization alone, for scale against the I/O.
 //!
 //! The `record_bytes` line printed on startup reports the on-disk size of one
-//! representative record, which is what sizes the audit file against its
-//! configured ceiling.
+//! representative entry, which is what sizes the audit file against its
+//! configured rotation size.
 
 use std::{hint::black_box, sync::Arc};
 
@@ -22,11 +22,12 @@ use registry_evidence::audit::{
     EvidenceAuditLog, ResponseProtection,
 };
 use registry_evidence::config::AssuranceProfile;
+use registry_platform_audit::{AuditDestination, FileDestination};
 use tokio::{runtime::Runtime, task::JoinSet};
 
-/// Far above anything an individual benchmark run appends, so the file-size
-/// ceiling never interferes with the measurement.
-const BENCH_MAXIMUM_FILE_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+/// Far above anything an individual benchmark run appends, so rotation never
+/// interferes with the measurement.
+const BENCH_ROTATE_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 const BENCH_SECRET: [u8; 64] = [0x5a; 64];
 const BENCH_BUNDLE_REVISION: &str =
     "sha256:0000000000000000000000000000000000000000000000000000000000000000";
@@ -73,29 +74,38 @@ fn runtime() -> Runtime {
         .expect("tokio runtime")
 }
 
+/// A file destination at `path` that never rotates during a benchmark run.
+fn bench_destination(path: &std::path::Path) -> AuditDestination {
+    AuditDestination::File(
+        FileDestination::new(path)
+            .and_then(|file| file.with_rotate_bytes(BENCH_ROTATE_BYTES))
+            .expect("benchmark audit destination"),
+    )
+}
+
 /// Initialize a durable log over a fresh temporary file. The `TempDir` is
-/// returned because dropping it would delete the file out from under the sink.
+/// returned because dropping it would delete the file out from under the
+/// writer.
 fn durable_log(runtime: &Runtime) -> (tempfile::TempDir, Arc<EvidenceAuditLog>) {
     let directory = tempfile::tempdir().expect("temp dir");
     let path = directory.path().join("audit.jsonl");
     let log = runtime.block_on(async {
-        EvidenceAuditLog::initialize(path, BENCH_MAXIMUM_FILE_BYTES, BENCH_SECRET.to_vec(), 1)
+        EvidenceAuditLog::initialize(bench_destination(&path), BENCH_SECRET.to_vec(), 1)
             .await
             .expect("initialize audit log")
     });
     (directory, Arc::new(log))
 }
 
-/// Report the on-disk size of a single record. This is the number that decides
-/// how quickly a deployment reaches its configured audit file ceiling.
+/// Report the on-disk size of a single entry. This is the number that decides
+/// how quickly a deployment reaches its configured audit rotation size.
 fn report_record_bytes(runtime: &Runtime) {
     let directory = tempfile::tempdir().expect("temp dir");
     let path = directory.path().join("audit.jsonl");
     runtime.block_on(async {
-        let log =
-            EvidenceAuditLog::initialize(&path, BENCH_MAXIMUM_FILE_BYTES, BENCH_SECRET.to_vec(), 1)
-                .await
-                .expect("initialize audit log");
+        let log = EvidenceAuditLog::initialize(bench_destination(&path), BENCH_SECRET.to_vec(), 1)
+            .await
+            .expect("initialize audit log");
         let event = sample_event();
         event
             .validate_phase_fields()
@@ -106,8 +116,8 @@ fn report_record_bytes(runtime: &Runtime) {
     eprintln!("audit/record_bytes: {bytes}");
 }
 
-/// One append at a time: the per-record cost a request pays, dominated by the
-/// `fsync` in the sink write path.
+/// One append at a time: the per-entry cost a request pays, dominated by the
+/// `fsync` in the writer's write path.
 fn benchmark_sequential_append(c: &mut Criterion) {
     let runtime = runtime();
     report_record_bytes(&runtime);
@@ -122,9 +132,9 @@ fn benchmark_sequential_append(c: &mut Criterion) {
     group.finish();
 }
 
-/// Many appends in flight at once. The sink assigns chain positions in order
-/// and groups pending records into durable writes. Each completed append waits
-/// for the `fsync` covering its group, so concurrency can amortize that cost.
+/// Many appends in flight at once. The writer groups pending entries into
+/// durable writes. Each completed append waits for the `fsync` covering its
+/// group, so concurrency can amortize that cost.
 fn benchmark_concurrent_append(c: &mut Criterion) {
     let runtime = runtime();
     let (_directory, log) = durable_log(&runtime);
@@ -147,7 +157,7 @@ fn benchmark_concurrent_append(c: &mut Criterion) {
                             });
                         }
                         while let Some(result) = appends.join_next().await {
-                            black_box(result.expect("join"));
+                            result.expect("join");
                         }
                     }
                 });

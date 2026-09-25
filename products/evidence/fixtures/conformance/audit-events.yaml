@@ -1,7 +1,6 @@
-fixture: registry.evidence.audit-events/v1
+fixture: registry.evidence.audit-events/v2
 synthetic_only: true
 access_attempt:
-  schema: registry.evidence.audit/v1
   assuranceProfile: evidence-grade
   eventId: urn:example:fixture:audit:access-001
   occurredAt: '2026-08-02T00:00:00Z'
@@ -24,7 +23,6 @@ access_attempt:
   reason: authorization.allowed
   durationMilliseconds: 2
 disclosure_release:
-  schema: registry.evidence.audit/v1
   assuranceProfile: evidence-grade
   eventId: urn:example:fixture:audit:release-001
   occurredAt: '2026-08-02T00:00:01Z'
@@ -50,7 +48,6 @@ disclosure_release:
   signingKeyId: _QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo
   durationMilliseconds: 12
 unsigned_disclosure_release:
-  schema: registry.evidence.audit/v1
   assuranceProfile: evidence-grade
   eventId: urn:example:fixture:audit:release-002
   occurredAt: '2026-08-02T00:00:02Z'
@@ -75,7 +72,6 @@ unsigned_disclosure_release:
   evidenceId: urn:example:fixture:evidence:001
   durationMilliseconds: 12
 disclosure_release_fetch_set:
-  schema: registry.evidence.audit/v1
   assuranceProfile: evidence-grade
   eventId: urn:example:fixture:audit:release-003
   occurredAt: '2026-08-02T00:00:04Z'
@@ -103,7 +99,6 @@ disclosure_release_fetch_set:
   signingKeyId: _QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo
   durationMilliseconds: 21
 authorization_refusal:
-  schema: registry.evidence.audit.authorization-refusal/v1
   assuranceProfile: evidence-grade
   eventId: urn:example:fixture:audit:authorization-refusal-001
   occurredAt: '2026-08-02T00:00:03Z'
@@ -136,8 +131,8 @@ negative:
   - unmatched-authority-on-authorization-refusal
   - response-protection-on-authorization-refusal
   - missing-authorization-refusal-category
-  - full-schema-on-authorization-refusal
-  - refusal-schema-on-authorized-event
+  - authorization-refusal-under-authorized-envelope-schema
+  - authorized-event-under-refusal-envelope-schema
   - request-nonce-in-any-event
   - stage-arrays-on-non-release-event
   - mismatched-stage-arrays-on-release-event

@@ -1187,7 +1187,7 @@ fn verify_never_classifies_a_bundle_rejection_as_unprovisioned_secrets() {
 #[test]
 fn verify_classifies_a_secret_stage_message_carrying_a_reason() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let script = "#!/bin/sh\nprintf 'evidence: runtime audit initialization failed: the audit chain head does not verify\\n' >&2\nexit 1\n";
+    let script = "#!/bin/sh\nprintf 'evidence: runtime audit initialization failed: the audit hash key is unusable\\n' >&2\nexit 1\n";
     let stub = write_stub_evidence(temp.path(), script);
     let project = temp.path().join("project");
     std::fs::create_dir_all(&project).expect("mkdir project");
