@@ -863,9 +863,15 @@ idempotency key. An authority that still holds the request answers with the same
 lost it creates the review again. A result the old binding delivers later is recorded as
 unmatched.
 
+Resubmitting relies on the authority still honouring that idempotency key. Before you resubmit a
+review coded `result-poll-attempts-exhausted` or `operator-closed`, confirm at the authority that
+it no longer holds the review: an authority whose idempotency retention has lapsed opens a second
+review while a reviewer may still be working the first.
+
 `close` accepts an accepted review without a result. It marks the submission failed with
-`operator-closed` and keeps the binding for reconciliation. It does not contact the authority, so
-cancel the review there as well if it still exists.
+`operator-closed` and keeps the binding for reconciliation, and a result the authority delivers
+for it afterwards is refused. It does not contact the authority, so cancel the review there as
+well if it still exists.
 
 Both refuse a withdrawn proposal, a review whose result is already recorded, and any other state
 with `review_recovery.submission.ineligible`, whose message names the reason, state, and code.
