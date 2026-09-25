@@ -135,11 +135,27 @@ first. Check the version-selected candidate destinations before dispatch:
 
 ```sh
 version="${VERSION:?set VERSION to the candidate version without a v prefix}"
+private_probe=""
+for package in $(python3 release/scripts/release_candidate.py image-names \
+    --version "${version}"); do
+  candidate="${package}-candidate"
+  if response="$(gh api "/orgs/registrystack/packages/container/${candidate}" 2>&1)" &&
+      [[ "$(printf '%s' "${response}" | jq -r '.visibility')" == "private" ]]; then
+    private_probe="${candidate}"
+    break
+  fi
+done
+if [[ -z "${private_probe}" ]]; then
+  echo "cannot prove this token can read private registrystack packages;" \
+    "authenticate with read:packages and org access" >&2
+  exit 1
+fi
+
 for package in $(python3 release/scripts/release_candidate.py image-names \
     --version "${version}"); do
   candidate="${package}-candidate"
   if response="$(gh api "/orgs/registrystack/packages/container/${candidate}" 2>&1)"; then
-    echo "${response}" | jq -c '[.name,.package_type,.visibility]'
+    printf '%s' "${response}" | jq -c '[.name,.package_type,.visibility]'
   elif [[ "${response}" == *"(HTTP 404)"* ]]; then
     echo "[\"${candidate}\",\"absent\"]"
   elif [[ "${response}" == *"(HTTP 401)"* || "${response}" == *"(HTTP 403)"* ]]; then
@@ -152,11 +168,13 @@ for package in $(python3 release/scripts/release_candidate.py image-names \
 done
 ```
 
-Each result must name the requested package and report `container` and
-`private`. A `401` or `403` means the token cannot prove the package's state,
-not that the package is absent; re-authenticate with a token that has
+The probe must first read at least one private candidate package; otherwise a
+404 could be GitHub concealing a private package from an under-authorized
+token. Each result must then name the requested package and report `container`
+and `private`. A `401` or `403` means the token cannot prove the package's
+state, not that the package is absent; re-authenticate with a token that has
 `read:packages` and org access before continuing. If a candidate package is
-genuinely absent, stop and provision it with the
+genuinely absent after the probe succeeds, stop and provision it with the
 classic-PAT bootstrap before dispatch. If it reports `public`, change it to
 private in the organization package settings. The package REST API does not
 provide a visibility change. Remove the candidate bootstrap version only after
