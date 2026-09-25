@@ -144,7 +144,9 @@ One entity holds at most one open authority. It stops admitting work when the op
 when its expiry passes, when its committed items reach the volume (`exhausted`), or when another
 package revision is activated (`superseded`). Run `bregctl import-authority close-expired` on a
 schedule, or after an activation, to record the expiries and supersessions no load has observed
-yet; `list` records them too before it answers. The operator reference and reason are
+yet. `list` is a read: it takes no Registry lock, so it never holds back a write and still answers
+during an interrupted apply, and it records nothing, but it shows an authority whose expiry or
+package has passed with the status it has reached. The operator reference and reason are
 stored and audited only as keyed hashes, so do not rely on reading them back; every opening,
 close, expiry, exhaustion, and supersession appends one record to the audit journal, and every
 committed chunk's run record names the authority it consumed. Hooks and events fire for imported
