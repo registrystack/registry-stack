@@ -10,9 +10,11 @@
 //!
 //! Every value is read at scrape time: the build and the verified policy
 //! package this process serves and, from the Casework database, each
-//! configured source's reconciliation health. The only label values are the
-//! configured source identifiers, the build version, and the package digest,
-//! so no caller, record, or request value can become a series.
+//! configured source's reconciliation health. The database readings are
+//! shared by every scrape inside a five-second window and bounded by a read
+//! timeout, so the scrape rate never sets the database load. The only label
+//! values are the configured source identifiers, the build version, and the
+//! package digest, so no caller, record, or request value can become a series.
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -30,6 +32,18 @@ use serde_json::json;
 use crate::store::{PostgresStore, SourceReconciliationHealth, StoreError};
 
 const METRICS_MEDIA_TYPE: &str = "text/plain; version=0.0.4";
+/// How long one scrape waits for the database readings before it reports
+/// the database down.
+const READINGS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long one set of database readings answers later scrapes. Scrapes are
+/// unauthenticated on the operator-private listener, so this bounds the
+/// database work any scrape rate can cause to one reading per window, on one
+/// pool connection at a time.
+const READINGS_REUSE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The database readings one scrape reports, or `None` when they could not
+/// be read.
+type Readings = Option<Vec<SourceReconciliationHealth>>;
 
 /// What the telemetry listener reports about this process.
 #[derive(Clone)]
@@ -60,6 +74,10 @@ struct MetricsInner {
     store: Arc<dyn MetricsReadings>,
     source_ids: Vec<String>,
     package_digest: Option<String>,
+    read_timeout: std::time::Duration,
+    /// The last readings and when they were taken. Held across a reading, so
+    /// concurrent scrapes wait for the one reading in flight.
+    last_readings: tokio::sync::Mutex<Option<(tokio::time::Instant, Readings)>>,
 }
 
 impl MetricsState {
@@ -68,12 +86,59 @@ impl MetricsState {
         source_ids: Vec<String>,
         package_digest: Option<String>,
     ) -> Self {
+        Self::with_read_timeout(store, source_ids, package_digest, READINGS_TIMEOUT)
+    }
+
+    fn with_read_timeout(
+        store: Arc<dyn MetricsReadings>,
+        source_ids: Vec<String>,
+        package_digest: Option<String>,
+        read_timeout: std::time::Duration,
+    ) -> Self {
         Self {
             inner: Arc::new(MetricsInner {
                 store,
                 source_ids,
                 package_digest,
+                read_timeout,
+                last_readings: tokio::sync::Mutex::new(None),
             }),
+        }
+    }
+}
+
+impl MetricsInner {
+    /// The database readings for one scrape: the last readings while they
+    /// are inside the reuse window, otherwise one fresh reading bounded by
+    /// the read timeout.
+    async fn readings(&self) -> Readings {
+        let mut last = self.last_readings.lock().await;
+        if let Some((taken, readings)) = last.as_ref() {
+            if taken.elapsed() < READINGS_REUSE {
+                return readings.clone();
+            }
+        }
+        let readings = match tokio::time::timeout(self.read_timeout, self.read_database()).await {
+            Ok(readings) => readings,
+            Err(_) => {
+                tracing::warn!(
+                    timeout_seconds = self.read_timeout.as_secs_f64(),
+                    "Casework metrics timed out reading the database"
+                );
+                None
+            }
+        };
+        *last = Some((tokio::time::Instant::now(), readings.clone()));
+        readings
+    }
+
+    async fn read_database(&self) -> Readings {
+        match self.store.reconciliation_health(&self.source_ids).await {
+            Ok(health) => Some(health),
+            Err(error) => {
+                tracing::warn!(error = %error, "Casework metrics could not read reconciliation health");
+                None
+            }
         }
     }
 }
@@ -97,13 +162,7 @@ async fn version(State(state): State<MetricsState>) -> Response {
 
 async fn metrics(State(state): State<MetricsState>) -> Response {
     let inner = &state.inner;
-    let database = match inner.store.reconciliation_health(&inner.source_ids).await {
-        Ok(health) => Some(health),
-        Err(error) => {
-            tracing::warn!(error = %error, "Casework metrics could not read reconciliation health");
-            None
-        }
-    };
+    let database = inner.readings().await;
     let body = render(
         registry_platform_buildinfo::DISPLAY_VERSION,
         inner.package_digest.as_deref(),
@@ -250,8 +309,11 @@ mod tests {
         assert!(!rendered.contains("casework_source_reconciliation"));
     }
 
+    #[derive(Default)]
     struct FakeReadings {
         available: bool,
+        stall: bool,
+        reads: std::sync::atomic::AtomicUsize,
     }
 
     #[async_trait]
@@ -260,21 +322,41 @@ mod tests {
             &self,
             source_ids: &[String],
         ) -> Result<Vec<SourceReconciliationHealth>, StoreError> {
+            self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.stall {
+                std::future::pending::<()>().await;
+            }
             if !self.available {
                 return Err(StoreError::Configuration);
             }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             Ok(source_ids.iter().map(|id| source(id, 2, None)).collect())
         }
     }
 
-    async fn get(available: bool, path: &str) -> (axum::http::StatusCode, Option<String>, String) {
-        use tower::ServiceExt as _;
-        let state = MetricsState::new(
-            Arc::new(FakeReadings { available }),
+    fn fake_state(readings: Arc<FakeReadings>, read_timeout: std::time::Duration) -> MetricsState {
+        MetricsState::with_read_timeout(
+            readings,
             vec!["permits".to_owned()],
             Some("sha256:abc".to_owned()),
-        );
-        let response = metrics_router(state)
+            read_timeout,
+        )
+    }
+
+    async fn get(available: bool, path: &str) -> (axum::http::StatusCode, Option<String>, String) {
+        let readings = Arc::new(FakeReadings {
+            available,
+            ..FakeReadings::default()
+        });
+        get_from(metrics_router(fake_state(readings, READINGS_TIMEOUT)), path).await
+    }
+
+    async fn get_from(
+        router: Router,
+        path: &str,
+    ) -> (axum::http::StatusCode, Option<String>, String) {
+        use tower::ServiceExt as _;
+        let response = router
             .oneshot(
                 axum::http::Request::get(path)
                     .body(axum::body::Body::empty())
@@ -325,6 +407,54 @@ mod tests {
                 "{path}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_scrape_burst_reads_the_database_once() {
+        let readings = Arc::new(FakeReadings {
+            available: true,
+            ..FakeReadings::default()
+        });
+        let router = metrics_router(fake_state(readings.clone(), READINGS_TIMEOUT));
+        let mut scrapes = tokio::task::JoinSet::new();
+        for _ in 0..16 {
+            scrapes.spawn(get_from(router.clone(), "/metrics"));
+        }
+        while let Some(scrape) = scrapes.join_next().await {
+            let (status, _, body) = scrape.expect("scrape task");
+            assert_eq!(status, axum::http::StatusCode::OK);
+            assert!(
+                body.contains(
+                    "casework_source_reconciliation_consecutive_failures{source_id=\"permits\"} 2\n"
+                ),
+                "{body}"
+            );
+        }
+        let (_, _, body) = get_from(router, "/metrics").await;
+        assert!(body.contains("casework_database_up 1\n"), "{body}");
+        assert_eq!(
+            readings.reads.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "scrapes inside the reuse window share one database reading"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stalled_database_reading_reports_the_database_down() {
+        let readings = Arc::new(FakeReadings {
+            available: true,
+            stall: true,
+            ..FakeReadings::default()
+        });
+        let router = metrics_router(fake_state(readings, std::time::Duration::from_millis(50)));
+        let (status, _, body) = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            get_from(router, "/metrics"),
+        )
+        .await
+        .expect("a stalled reading ends the scrape at the read timeout");
+        assert_eq!(status, axum::http::StatusCode::OK);
+        assert!(body.contains("casework_database_up 0\n"), "{body}");
     }
 
     #[test]
