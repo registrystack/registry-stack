@@ -265,6 +265,20 @@ CASEWORK_TUTORIAL_INPUTS = (
     "docs/site/src/content/docs/tutorials/review-breg-changes-in-casework.mdx",
 )
 
+# Every input the Registry Messaging tutorial gate replays or is built from.
+# The gate starts the local session the page tells a reader to run; that
+# session and the starter project the page initializes are both written by
+# registry-messagingctl, so package routing already carries them.
+MESSAGING_TUTORIAL_INPUTS = (
+    "Cargo.lock",
+    "Cargo.toml",
+    "docs/site/package-lock.json",
+    "docs/site/package.json",
+    "docs/site/scripts/check-messaging-tutorial.sh",
+    "docs/site/scripts/check-messaging-tutorial.test.mjs",
+    "docs/site/src/content/docs/tutorials/first-messaging.mdx",
+)
+
 # This guide explains the authoring form across three intentionally separate
 # enforcement layers: the shared form model, the evidencectl compiler, and the
 # frozen bundle validator. Keep the routing list at module ownership rather
@@ -487,6 +501,12 @@ BREG_TUTORIAL_PACKAGES = frozenset(
 CASEWORK_TUTORIAL_PACKAGES = frozenset(
     {"registry-casework", "registry-caseworkctl", "registry-breg", "registry-bregctl", "registry-thunderid-tooling"}
 )
+
+# The gate builds and runs exactly messagingctl, which links the Messaging
+# runtime in process for its local session and issues every token the reader's
+# calls carry. The client crates in the Messaging shard are not on the
+# replayed path.
+MESSAGING_TUTORIAL_PACKAGES = frozenset({"registry-messaging", "registry-messagingctl"})
 
 # The offline proof of the native BReg to Evidence composition drives bregctl,
 # evidencectl and the Evidence runtime over the reviewed teaching inputs. It
@@ -1254,6 +1274,12 @@ def classify(
         or bool(affected & CASEWORK_TUTORIAL_PACKAGES)
     )
 
+    messaging_tutorial = (
+        complete
+        or any(matches(path, *MESSAGING_TUTORIAL_INPUTS) for path in paths)
+        or bool(affected & MESSAGING_TUTORIAL_PACKAGES)
+    )
+
     breg_evidence_composition = (
         complete
         or any(matches(path, *BREG_EVIDENCE_COMPOSITION_INPUTS) for path in paths)
@@ -1330,6 +1356,7 @@ def classify(
         "evidence_tutorial": evidence_tutorial,
         "breg_tutorial": breg_tutorial,
         "casework_tutorial": casework_tutorial,
+        "messaging_tutorial": messaging_tutorial,
         "breg_evidence_composition": breg_evidence_composition,
         "identifiers": identifiers,
     }

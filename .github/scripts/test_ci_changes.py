@@ -28,6 +28,7 @@ from ci_changes import (
     BREG_PACKAGES,
     CASEWORK_PACKAGES,
     MESSAGING_PACKAGES,
+    MESSAGING_TUTORIAL_INPUTS,
     RELAY_CLIENT_PACKAGES,
     RELAY_TUTORIAL_INPUTS,
     STACK_CLIENT_PACKAGES,
@@ -310,6 +311,9 @@ class CiChangesTest(unittest.TestCase):
             "casework-tutorial": (
                 "needs.changes.outputs.casework_tutorial == 'true'"
             ),
+            "messaging-tutorial": (
+                "needs.changes.outputs.messaging_tutorial == 'true'"
+            ),
             "breg-evidence-composition": (
                 "needs.changes.outputs.breg_evidence_composition == 'true'"
             ),
@@ -371,6 +375,7 @@ class CiChangesTest(unittest.TestCase):
             "evidence-tutorials",
             "breg-tutorial",
             "casework-tutorial",
+            "messaging-tutorial",
             "breg-evidence-composition",
             "evidence-anchors",
             "docs",
@@ -435,6 +440,7 @@ class CiChangesTest(unittest.TestCase):
                 "evidence-tutorials",
                 "breg-tutorial",
                 "casework-tutorial",
+                "messaging-tutorial",
                 "breg-evidence-composition",
                 "evidence-anchors",
                 "docs",
@@ -474,6 +480,7 @@ class CiChangesTest(unittest.TestCase):
             "evidence-tutorials",
             "breg-tutorial",
             "casework-tutorial",
+            "messaging-tutorial",
             "breg-evidence-composition",
             "evidence-anchors",
             "docs",
@@ -485,7 +492,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(34, len(final_needs))
+        self.assertEqual(35, len(final_needs))
 
         def embedded_python(job: dict[str, Any]) -> str:
             run = job["steps"][0]["run"]
@@ -1144,6 +1151,68 @@ class CiChangesTest(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertFalse(classify(self.workspace, (path,))["casework_tutorial"])
+
+    def test_messaging_tutorial_inputs_cover_every_registered_tutorial(self) -> None:
+        # The gate's registry is the source of truth for which tutorials it
+        # replays. A tutorial missing here would not trigger the job that
+        # replays it, so it could break without any pull request noticing.
+        gate = (
+            Path(__file__).resolve().parents[2]
+            / "docs/site/scripts/check-messaging-tutorial.sh"
+        )
+        registry = re.search(
+            r"^MESSAGING_TUTORIALS=\((.*?)^\)",
+            gate.read_text(),
+            re.DOTALL | re.MULTILINE,
+        )
+        if registry is None:
+            self.fail("the gate must declare MESSAGING_TUTORIALS")
+        slugs = registry.group(1).split()
+        self.assertTrue(slugs, "the gate must register at least one tutorial")
+        for slug in slugs:
+            with self.subTest(slug=slug):
+                page = f"docs/site/src/content/docs/{slug}.mdx"
+                self.assertTrue(
+                    any(
+                        fnmatch.fnmatchcase(page, pattern)
+                        for pattern in MESSAGING_TUTORIAL_INPUTS
+                    )
+                )
+
+    def test_messaging_tutorial_routing(self) -> None:
+        infrastructure = (
+            "docs/site/scripts/check-messaging-tutorial.sh",
+            "docs/site/scripts/check-messaging-tutorial.test.mjs",
+            "docs/site/src/content/docs/tutorials/first-messaging.mdx",
+            "docs/site/package.json",
+        )
+        for path in infrastructure:
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["messaging_tutorial"])
+        # The replay builds and runs messagingctl, which links the runtime in
+        # process for its local session.
+        for path in (
+            "crates/registry-messaging/src/runtime.rs",
+            "crates/registry-messagingctl/src/dev/mod.rs",
+            "crates/registry-messagingctl/src/starter.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["messaging_tutorial"])
+        # The source-neutral core is linked by the runtime, so a change to it
+        # reaches the replay through reverse dependencies.
+        self.assertTrue(
+            classify(self.workspace, ("crates/registry-messaging-core/src/lib.rs",))[
+                "messaging_tutorial"
+            ]
+        )
+        # Pages that share the tutorials directory and reach none of the
+        # Registry Messaging replay.
+        for path in (
+            "docs/site/src/content/docs/tutorials/first-casework.mdx",
+            "docs/site/scripts/check-casework-tutorial.sh",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(classify(self.workspace, (path,))["messaging_tutorial"])
 
     def test_breg_evidence_composition_routing(self) -> None:
         # The proof drives bregctl, evidencectl and the Evidence runtime over

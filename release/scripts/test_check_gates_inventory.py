@@ -1576,6 +1576,33 @@ class GateInventoryTest(unittest.TestCase):
             self.module.missing_gates(self.workflow, classifier),
         )
 
+    def test_missing_messaging_tutorial_gates_are_reported(self) -> None:
+        for snippet, replacement, gate in (
+            (
+                "bash docs/site/scripts/check-messaging-tutorial.sh",
+                "true # Registry Messaging tutorial replay disabled",
+                "Registry Messaging tutorial replay",
+            ),
+            (
+                "run: npm run check:tutorial:messaging:dry-run",
+                "run: true # Registry Messaging tutorial dry run disabled",
+                "Registry Messaging tutorial command drift",
+            ),
+        ):
+            with self.subTest(gate=gate):
+                text = self.workflow.replace(snippet, replacement, 1)
+                self.assertIn(gate, self.module.missing_gates(text))
+
+    def test_missing_messaging_tutorial_path_filter_is_reported(self) -> None:
+        classifier = self.classifier.replace(
+            '"docs/site/scripts/check-messaging-tutorial.sh",',
+            '"docs/site/scripts/unrouted-messaging-tutorial.sh",',
+        )
+        self.assertIn(
+            "Registry Messaging tutorial path filter",
+            self.module.missing_gates(self.workflow, classifier),
+        )
+
     def test_missing_released_docset_selector_gate_is_reported(self) -> None:
         policy_texts = self.module.policy_file_texts(
             ROOT,

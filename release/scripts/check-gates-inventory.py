@@ -600,6 +600,18 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Registry Casework tutorial path filter",
         '"docs/site/scripts/check-casework-tutorial.sh",',
     ),
+    (
+        "Registry Messaging tutorial replay",
+        "bash docs/site/scripts/check-messaging-tutorial.sh",
+    ),
+    (
+        "Registry Messaging tutorial command drift",
+        "run: npm run check:tutorial:messaging:dry-run",
+    ),
+    (
+        "Registry Messaging tutorial path filter",
+        '"docs/site/scripts/check-messaging-tutorial.sh",',
+    ),
 )
 
 RELEASE_SECURITY_POLICY_PATHS = (
