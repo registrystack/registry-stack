@@ -598,6 +598,7 @@ fn baseline_advisories() -> Vec<BaselineAdvisory> {
         autovacuum: Some("off".to_owned()),
         track_counts: Some("off".to_owned()),
         pg_stat_statements_installed: Some(false),
+        pg_stat_statements_loaded: Some(false),
     };
     let within_budget = BaselineSettings {
         max_connections: Some("100".to_owned()),

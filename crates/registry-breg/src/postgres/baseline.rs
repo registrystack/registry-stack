@@ -12,7 +12,12 @@ use tokio_postgres::{Client, Row};
 
 /// One read of every input the advisories are decided from. The settings are
 /// read with `missing_ok`, so a server without one reports it as absent
-/// instead of failing the whole read.
+/// instead of failing the whole read. `pg_stat_statements.max` is read for
+/// the same reason: `CREATE EXTENSION pg_stat_statements` succeeds whether or
+/// not the module is in `shared_preload_libraries`, but its `_PG_init`
+/// defines the extension's custom settings only when it runs from there, so
+/// reading one back tells the two cases apart without the superuser-only
+/// `shared_preload_libraries` setting itself.
 const BASELINE_QUERY: &str = "SELECT
     pg_catalog.current_setting('max_connections', true),
     pg_catalog.current_setting('superuser_reserved_connections', true),
@@ -21,7 +26,8 @@ const BASELINE_QUERY: &str = "SELECT
     pg_catalog.current_setting('track_counts', true),
     EXISTS (
         SELECT FROM pg_catalog.pg_extension WHERE extname = 'pg_stat_statements'
-    )";
+    ),
+    pg_catalog.current_setting('pg_stat_statements.max', true)";
 
 /// Whether an advisory names something an operator should change or only
 /// something worth knowing.
@@ -98,6 +104,7 @@ pub struct BaselineSettings {
     pub autovacuum: Option<String>,
     pub track_counts: Option<String>,
     pub pg_stat_statements_installed: Option<bool>,
+    pub pg_stat_statements_loaded: Option<bool>,
 }
 
 /// Inspect the server behind `client` and advise on it for a runtime pool of
@@ -123,6 +130,13 @@ fn settings_from_row(row: &Row) -> BaselineSettings {
         autovacuum: text(3),
         track_counts: text(4),
         pg_stat_statements_installed: row.try_get::<_, Option<bool>>(5).ok().flatten(),
+        // `Ok(Some(_))` means the setting exists (loaded), `Ok(None)` means the
+        // query ran but found no such setting (not loaded), and `Err` means the
+        // column itself could not be read.
+        pg_stat_statements_loaded: row
+            .try_get::<_, Option<String>>(6)
+            .ok()
+            .map(|value| value.is_some()),
     }
 }
 
@@ -157,14 +171,25 @@ pub fn advise(settings: &BaselineSettings, pool_max_size: usize) -> Vec<Baseline
             "could not inspect whether track_counts is on",
         ),
     ));
-    match settings.pg_stat_statements_installed {
-        Some(true) => {}
-        Some(false) => advisories.push(BaselineAdvisory::new(
+    // `CREATE EXTENSION pg_stat_statements` succeeds without
+    // `shared_preload_libraries`, but its view then refuses every query, so
+    // installed and loaded are inspected and advised on separately.
+    match (
+        settings.pg_stat_statements_installed,
+        settings.pg_stat_statements_loaded,
+    ) {
+        (Some(true), Some(true)) => {}
+        (Some(false), Some(_)) => advisories.push(BaselineAdvisory::new(
             "postgres.pg_stat_statements.unavailable",
             AdvisorySeverity::Information,
             "pg_stat_statements is not installed in this database, so per-statement timings are unavailable when diagnosing load",
         )),
-        None => advisories.push(BaselineAdvisory::new(
+        (Some(true), Some(false)) => advisories.push(BaselineAdvisory::new(
+            "postgres.pg_stat_statements.unavailable",
+            AdvisorySeverity::Information,
+            "pg_stat_statements is installed but not loaded through shared_preload_libraries, so per-statement timings are unavailable when diagnosing load",
+        )),
+        (_, _) => advisories.push(BaselineAdvisory::new(
             "postgres.pg_stat_statements.not_inspected",
             AdvisorySeverity::Information,
             "could not inspect whether pg_stat_statements is installed in this database",
@@ -245,6 +270,7 @@ mod tests {
             autovacuum: Some("on".to_owned()),
             track_counts: Some("on".to_owned()),
             pg_stat_statements_installed: Some(true),
+            pg_stat_statements_loaded: Some(true),
         }
     }
 
@@ -302,15 +328,36 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_pg_stat_statements_is_information_only() {
+    fn an_installed_and_loaded_pg_stat_statements_reports_no_advisory() {
+        let advisories = advise(&healthy(), 4);
+        assert_eq!(codes(&advisories), ["postgres.connections.budget"]);
+    }
+
+    #[test]
+    fn a_not_installed_pg_stat_statements_is_information_only() {
         let mut settings = healthy();
         settings.pg_stat_statements_installed = Some(false);
+        settings.pg_stat_statements_loaded = Some(false);
         let advisories = advise(&settings, 4);
         assert_eq!(
             advisories[1].code(),
             "postgres.pg_stat_statements.unavailable"
         );
         assert_eq!(advisories[1].severity(), AdvisorySeverity::Information);
+        assert!(advisories[1].message().contains("not installed"));
+    }
+
+    #[test]
+    fn an_installed_but_not_loaded_pg_stat_statements_is_information_only() {
+        let mut settings = healthy();
+        settings.pg_stat_statements_loaded = Some(false);
+        let advisories = advise(&settings, 4);
+        assert_eq!(
+            advisories[1].code(),
+            "postgres.pg_stat_statements.unavailable"
+        );
+        assert_eq!(advisories[1].severity(), AdvisorySeverity::Information);
+        assert!(advisories[1].message().contains("shared_preload_libraries"));
     }
 
     #[test]
@@ -331,6 +378,23 @@ mod tests {
         assert_eq!(
             advise(&unparsable, 4)[0].code(),
             "postgres.connections.not_inspected"
+        );
+    }
+
+    #[test]
+    fn pg_stat_statements_is_not_inspected_when_either_value_is_unreadable() {
+        let mut installed_unknown = healthy();
+        installed_unknown.pg_stat_statements_installed = None;
+        assert_eq!(
+            advise(&installed_unknown, 4)[1].code(),
+            "postgres.pg_stat_statements.not_inspected"
+        );
+
+        let mut loaded_unknown = healthy();
+        loaded_unknown.pg_stat_statements_loaded = None;
+        assert_eq!(
+            advise(&loaded_unknown, 4)[1].code(),
+            "postgres.pg_stat_statements.not_inspected"
         );
     }
 }
