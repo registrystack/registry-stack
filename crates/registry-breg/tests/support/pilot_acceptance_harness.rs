@@ -318,6 +318,15 @@ impl PilotHarness {
         .await
     }
 
+    /// Count the entries the runtime has written to its audit file.
+    #[allow(dead_code)]
+    pub fn audit_entry_count(&self) -> usize {
+        fs::read_to_string(self.scratch.path().join("audit").join("audit.jsonl"))
+            .expect("the pilot runtime audit file reads")
+            .lines()
+            .count()
+    }
+
     /// Serve the verified startup Router on an ephemeral loopback listener.
     #[allow(dead_code)]
     pub async fn serve_http(&self) -> PilotHttpServer {
@@ -698,6 +707,7 @@ fn write_runtime_config(
         format!("reviewAuthorities:\n{bindings}")
     };
     let path = root.join("runtime.yaml");
+    let audit_path = root.join("audit").join("audit.jsonl").display().to_string();
     fs::write(
         &path,
         format!(
@@ -752,6 +762,7 @@ authentication:
     purpose: purpose
 audit:
   hashKeyRef: secret:file/audit-key
+  path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
   maxAgeSeconds: 300

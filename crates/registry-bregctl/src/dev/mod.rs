@@ -187,8 +187,8 @@ struct StopArgs {
     #[arg(value_name = "PROJECT", default_value = ".")]
     project: PathBuf,
     /// Also remove the owned container and its data volume, discarding records,
-    /// audit history, event receipts and seed checkpoints; the next start can
-    /// then take edited inputs.
+    /// event receipts and seed checkpoints; the next start can then take edited
+    /// inputs. The audit files under .breg/dev/audit are kept.
     #[arg(long)]
     remove: bool,
     #[arg(long, hide = true)]

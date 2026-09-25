@@ -40,7 +40,6 @@ use serde_json::{json, Value};
 
 mod action_handler_test;
 mod apply_lifecycle;
-mod audit_lifecycle;
 mod consent_module;
 mod data_lifecycle;
 mod dev;
@@ -63,7 +62,6 @@ mod test_lifecycle;
 mod webhook_lifecycle;
 
 use apply_lifecycle::{ApplyLifecycleActivation, ApplyLifecycleError, ApplyLifecycleRequest};
-use audit_lifecycle::{AuditCliError, AuditExportOutcome, AuditPruneOutcome, AuditVerifyOutcome};
 use data_lifecycle::{
     DataExportRequest, DataImportRequest, DataLifecycleError, DataValidateRequest, ExportPairState,
 };
@@ -172,8 +170,6 @@ enum Command {
     RequestRetention(RequestRetentionArgs),
     /// Erase expired protected action Evidence using configured migration authority.
     EvidenceRetention(EvidenceRetentionArgs),
-    /// Verify, export, and prune the chained audit journal.
-    Audit(AuditArgs),
     /// Maintain field-encryption key material.
     FieldEncryption(FieldEncryptionArgs),
 }
@@ -669,59 +665,6 @@ struct RequestRetentionExactArgs {
     /// Exact proposal version to inspect or erase.
     #[arg(long, value_name = "VERSION")]
     proposal_version: i64,
-}
-
-#[derive(Debug, Args)]
-struct AuditArgs {
-    #[command(subcommand)]
-    command: AuditCommand,
-}
-
-#[derive(Debug, Subcommand)]
-enum AuditCommand {
-    /// Verify the chained audit journal against its recorded head.
-    Verify(AuditVerifyArgs),
-    /// Export the verified audit journal as JSON Lines in chain order.
-    Export(AuditExportArgs),
-    /// Remove the verified journal prefix older than one retention boundary.
-    Prune(AuditPruneArgs),
-}
-
-#[derive(Debug, Args)]
-struct AuditVerifyArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
-    #[arg(long, value_name = "ABSOLUTE_FILE")]
-    runtime_config: PathBuf,
-}
-
-#[derive(Debug, Args)]
-struct AuditExportArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
-    #[arg(long, value_name = "ABSOLUTE_FILE")]
-    runtime_config: PathBuf,
-
-    /// Absolute JSON Lines file the export creates.
-    ///
-    /// The export creates this file and never truncates, replaces, or appends
-    /// to an existing one, so a destination that already exists is refused.
-    /// A path holding a `..` component is refused.
-    #[arg(long, value_name = "ABSOLUTE_FILE")]
-    output: PathBuf,
-}
-
-#[derive(Debug, Args)]
-struct AuditPruneArgs {
-    /// Absolute Base Registry Engine runtime configuration file.
-    #[arg(long, value_name = "ABSOLUTE_FILE")]
-    runtime_config: PathBuf,
-
-    /// RFC 3339 instant every removed record must precede.
-    #[arg(long, value_name = "RFC3339")]
-    before: String,
-
-    /// Report what the boundary would remove without removing it.
-    #[arg(long)]
-    dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1234,7 +1177,6 @@ enum DiagnosticArtifact {
     WebhookOperations,
     RequestRetentionOperation,
     EvidenceRetentionOperation,
-    AuditJournal,
     HistoryErasure,
     HistoryRebaseline,
     FieldEncryption,
@@ -1283,7 +1225,6 @@ enum SuggestedAction {
     VerifyWebhookOperation,
     VerifyRequestRetentionOperation,
     VerifyEvidenceRetentionOperation,
-    VerifyAuditJournal,
     PrepareHistoryErasureRequest,
     PrepareHistoryRebaselineRequest,
     ReviewRetainedHistory,
@@ -1551,33 +1492,6 @@ struct AttachmentCleanupSuccessReport {
     command: &'static str,
     #[serde(flatten)]
     outcome: registry_breg::request_retention::AttachmentCleanup,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AuditVerifySuccessReport {
-    ok: bool,
-    command: &'static str,
-    #[serde(flatten)]
-    outcome: AuditVerifyOutcome,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AuditExportSuccessReport {
-    ok: bool,
-    command: &'static str,
-    #[serde(flatten)]
-    outcome: AuditExportOutcome,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AuditPruneSuccessReport {
-    ok: bool,
-    command: &'static str,
-    #[serde(flatten)]
-    outcome: AuditPruneOutcome,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -2129,22 +2043,6 @@ where
                 }
             };
         }
-        Command::Audit(args) => {
-            return match args.command {
-                AuditCommand::Verify(args) => match audit_verify(&args) {
-                    Ok(report) => write_audit_verify_success(&report, format, stdout, stderr),
-                    Err(failure) => write_failure(&failure, format, stdout, stderr),
-                },
-                AuditCommand::Export(args) => match audit_export(&args) {
-                    Ok(report) => write_audit_export_success(&report, format, stdout, stderr),
-                    Err(failure) => write_failure(&failure, format, stdout, stderr),
-                },
-                AuditCommand::Prune(args) => match audit_prune(&args) {
-                    Ok(report) => write_audit_prune_success(&report, format, stdout, stderr),
-                    Err(failure) => write_failure(&failure, format, stdout, stderr),
-                },
-            };
-        }
         Command::FieldEncryption(args) => {
             return match args.command {
                 FieldEncryptionCommand::Keygen(args) => {
@@ -2270,97 +2168,6 @@ fn request_retention_failure(
     }
 }
 
-fn audit_verify(args: &AuditVerifyArgs) -> Result<AuditVerifySuccessReport, FailureReport> {
-    let outcome = audit_lifecycle::verify(&args.runtime_config)
-        .map_err(|error| audit_failure("audit verify", error))?;
-    Ok(AuditVerifySuccessReport {
-        ok: true,
-        command: "audit verify",
-        outcome,
-    })
-}
-
-fn audit_export(args: &AuditExportArgs) -> Result<AuditExportSuccessReport, FailureReport> {
-    let outcome = audit_lifecycle::export(&args.runtime_config, &args.output)
-        .map_err(|error| audit_failure("audit export", error))?;
-    Ok(AuditExportSuccessReport {
-        ok: true,
-        command: "audit export",
-        outcome,
-    })
-}
-
-fn audit_prune(args: &AuditPruneArgs) -> Result<AuditPruneSuccessReport, FailureReport> {
-    let outcome = audit_lifecycle::prune(&args.runtime_config, &args.before, args.dry_run)
-        .map_err(|error| audit_failure("audit prune", error))?;
-    Ok(AuditPruneSuccessReport {
-        ok: true,
-        command: "audit prune",
-        outcome,
-    })
-}
-
-fn audit_failure(command: &'static str, error: AuditCliError) -> FailureReport {
-    let failure_diagnostic = match error {
-        AuditCliError::Operator => diagnostic(
-            "audit.operation.refused",
-            "audit",
-            "the audit journal operation was refused",
-        ),
-        AuditCliError::OutputPath(error) => path_diagnostic(
-            error,
-            "audit.output.invalid",
-            "output",
-            "the export output parent directory is not available; create it, or give a destination inside a directory that exists",
-            "the export output parent must be a directory and must not be a symbolic link",
-        ),
-        AuditCliError::OutputExists => diagnostic(
-            "audit.output.exists",
-            "output",
-            "the export output must be a new path; choose a destination that does not already exist",
-        ),
-        AuditCliError::OutputNotDurable => diagnostic(
-            "audit.output.not_durable",
-            "output",
-            "the export was written to its destination and the directory holding it could not be made durable, so a crash may lose it; verify the destination, or remove it and export again",
-        ),
-        AuditCliError::ChainBroken => diagnostic(
-            "audit.chain.broken",
-            "audit",
-            "the audit chain does not link every reachable record",
-        ),
-        AuditCliError::InvalidEnvelope => diagnostic(
-            "audit.envelope.invalid",
-            "audit",
-            "the audit journal holds an unreadable envelope",
-        ),
-        AuditCliError::HeadMismatch => diagnostic(
-            "audit.head.mismatch",
-            "audit",
-            "the audit head does not name the newest reachable record",
-        ),
-        AuditCliError::Unreachable => diagnostic(
-            "audit.records.unreachable",
-            "audit",
-            "the audit journal holds records the head cannot reach",
-        ),
-        AuditCliError::BoundaryInFuture => diagnostic(
-            "audit.boundary.future",
-            "audit",
-            "the audit retention boundary is later than the database transaction time",
-        ),
-    };
-    FailureReport {
-        ok: false,
-        command,
-        diagnostics: vec![tool_diagnostic(
-            failure_diagnostic,
-            DiagnosticArtifact::AuditJournal,
-            SuggestedAction::VerifyAuditJournal,
-        )],
-    }
-}
-
 fn history_erase(args: &HistoryEraseArgs) -> Result<HistoryEraseSuccessReport, FailureReport> {
     if !args.acknowledge_irreversible {
         return Err(FailureReport {
@@ -2444,6 +2251,13 @@ fn history_erasure_lifecycle_failure(error: HistoryErasureLifecycleError) -> Fai
             "the migration database configuration was refused",
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::VerifyMigrationAuthority,
+        ),
+        HistoryErasureLifecycleError::Audit => (
+            "history.erase.audit.unavailable",
+            "audit",
+            "the history erasure audit destination could not be opened; check the audit path and its directory permissions",
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
         ),
         HistoryErasureLifecycleError::Runtime => (
             "history.erase.runtime.unavailable",
@@ -2566,6 +2380,13 @@ fn history_rebaseline_lifecycle_failure(error: HistoryRebaselineLifecycleError) 
             "the migration database configuration was refused",
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::VerifyMigrationAuthority,
+        ),
+        HistoryRebaselineLifecycleError::Audit => (
+            "history.rebaseline.audit.unavailable",
+            "audit",
+            "the history rebaseline audit destination could not be opened; check the audit path and its directory permissions",
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
         ),
         HistoryRebaselineLifecycleError::Runtime => (
             "history.rebaseline.runtime.unavailable",
@@ -2909,6 +2730,13 @@ fn field_encryption_erase_history_failure(
             "the migration database configuration was refused",
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::VerifyMigrationAuthority,
+        ),
+        FieldEncryptionEraseHistoryLifecycleError::Audit => (
+            "field_encryption.erase_history.audit.unavailable",
+            "audit",
+            "the field-encryption erase-history audit destination could not be opened; check the audit path and its directory permissions",
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
         ),
         FieldEncryptionEraseHistoryLifecycleError::Runtime => (
             "field_encryption.erase_history.runtime.unavailable",
@@ -4574,6 +4402,13 @@ fn reconcile_lifecycle_failure(error: ReconcileLifecycleError) -> FailureReport 
             "the migration database configuration was refused",
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::VerifyMigrationAuthority,
+        ),
+        ReconcileLifecycleError::Audit => (
+            "migration.reconcile.audit.unavailable",
+            "audit",
+            "the migration reconciliation audit destination could not be opened; check the audit path and its directory permissions",
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
         ),
         ReconcileLifecycleError::Runtime => (
             "migration.reconcile.runtime.unavailable",
@@ -7190,11 +7025,16 @@ authentication:
     principal: registry_principal
     purpose: registry_purpose
 
-# The key that chains the audit journal and the secret that signs pagination
-# cursors. Losing either invalidates existing chains or cursors, so generate
-# them once and keep them.
+# The key that derives the keyed references in audit entries and the secret
+# that signs pagination cursors. Losing the audit key breaks the link between
+# references written before and after it; losing the cursor secret invalidates
+# issued cursors, so generate them once and keep them. The server appends audit
+# entries to the absolute JSON Lines file `path`, in an owner-only directory;
+# `bregctl` maintenance commands append to the sibling `audit.bregctl.jsonl`.
 audit:
   hashKeyRef: secret:file/audit-key
+  destination: file
+  path: /var/lib/breg/audit/audit.jsonl
 cursor:
   secretRef: secret:file/cursor-key
 
@@ -11511,115 +11351,6 @@ fn write_request_retention_erase_success(
     write_result(result, stderr)
 }
 
-fn write_audit_verify_success(
-    report: &AuditVerifySuccessReport,
-    format: OutputFormat,
-    stdout: &mut dyn Write,
-    stderr: &mut dyn Write,
-) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
-            .map_err(io::Error::other)
-            .and_then(|()| writeln!(stdout))
-    } else {
-        {
-            let verification = &report.outcome.verification;
-            let mut pairs = vec![("records", verification.records.to_string())];
-            for (label, hash) in [
-                ("start prev hash", &verification.start_prev_hash),
-                ("last hash", &verification.last_hash),
-                ("head hash", &verification.head_hash),
-            ] {
-                if let Some(hash) = hash {
-                    pairs.push((label, hash.clone()));
-                }
-            }
-            render_report(
-                &format!(
-                    "Verified the audit chain. {} checked.",
-                    report::counted_total(verification.records, "record")
-                ),
-                &pairs,
-                stdout,
-            )
-        }
-    };
-    write_result(result, stderr)
-}
-
-fn write_audit_export_success(
-    report: &AuditExportSuccessReport,
-    format: OutputFormat,
-    stdout: &mut dyn Write,
-    stderr: &mut dyn Write,
-) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
-            .map_err(io::Error::other)
-            .and_then(|()| writeln!(stdout))
-    } else {
-        {
-            let export = &report.outcome.export;
-            let mut pairs = vec![("records", export.records.to_string())];
-            if let Some(hash) = &export.last_hash {
-                pairs.push(("last hash", hash.clone()));
-            }
-            render_report(
-                &format!(
-                    "Exported the audit chain. {} written.",
-                    report::counted_total(export.records, "record")
-                ),
-                &pairs,
-                stdout,
-            )
-        }
-    };
-    write_result(result, stderr)
-}
-
-fn write_audit_prune_success(
-    report: &AuditPruneSuccessReport,
-    format: OutputFormat,
-    stdout: &mut dyn Write,
-    stderr: &mut dyn Write,
-) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        serde_json::to_writer_pretty(&mut *stdout, report)
-            .map_err(io::Error::other)
-            .and_then(|()| writeln!(stdout))
-    } else {
-        {
-            let prune = &report.outcome.prune;
-            let mut pairs = vec![
-                ("dry run", prune.dry_run.to_string()),
-                ("removed records", prune.removed_records.to_string()),
-                ("retained records", prune.retained_records.to_string()),
-            ];
-            if let Some(hash) = &prune.boundary_hash {
-                pairs.push(("boundary hash", hash.clone()));
-            }
-            if let Some(envelope_id) = &prune.first_retained_envelope_id {
-                pairs.push(("first retained envelope", envelope_id.clone()));
-            }
-            render_report(
-                &format!(
-                    "{} {} of the audit chain, {} retained.",
-                    if prune.dry_run {
-                        "Previewed pruning"
-                    } else {
-                        "Pruned"
-                    },
-                    report::counted_total(prune.removed_records, "record"),
-                    report::counted_total(prune.retained_records, "record")
-                ),
-                &pairs,
-                stdout,
-            )
-        }
-    };
-    write_result(result, stderr)
-}
-
 fn data_operation_name(operation: DataOperationArg) -> &'static str {
     match operation {
         DataOperationArg::Create => "create",
@@ -12872,22 +12603,6 @@ mod tests {
     }
 
     #[test]
-    fn an_undurable_export_is_not_reported_as_an_operation_that_did_nothing() {
-        let report = serde_json::to_value(audit_failure(
-            "audit export",
-            AuditCliError::OutputNotDurable,
-        ))
-        .expect("the failure report serializes");
-        assert_eq!(report["diagnostics"][0]["code"], "audit.output.not_durable");
-        assert_eq!(report["diagnostics"][0]["path"], "output");
-        let message = report["diagnostics"][0]["message"]
-            .as_str()
-            .expect("the message renders");
-        assert!(message.contains("written to its destination"));
-        assert!(message.contains("durable"));
-    }
-
-    #[test]
     fn public_command_surface_is_explicit() {
         let command = command();
         let names: Vec<_> = command
@@ -12918,7 +12633,6 @@ mod tests {
                 "webhook",
                 "request-retention",
                 "evidence-retention",
-                "audit",
                 "field-encryption"
             ]
         );

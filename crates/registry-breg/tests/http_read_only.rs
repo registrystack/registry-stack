@@ -2034,8 +2034,8 @@ async fn known_route_malformed_query_is_refusal_audited_before_response() {
 }
 
 /// The same refusal from a caller that presents no credential names no
-/// principal, so it is never appended to the hash-chained journal: an
-/// unauthenticated caller cannot grow the chain or contend for its head lock.
+/// principal, so it is never appended to the audit journal: an
+/// unauthenticated caller cannot grow the journal.
 #[tokio::test]
 async fn anonymous_malformed_query_is_refused_without_a_refusal_audit() {
     let harness = Harness::new(true);

@@ -19,6 +19,7 @@ use registry_breg::api::{
     router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
     VerifiedRequestClaims,
 };
+use registry_breg::audit::RegistryAudit;
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
@@ -649,26 +650,13 @@ async fn package_change_blocks_the_run_and_keeps_it_inspectable() {
     assert_eq!(body_json(refused).await["code"], "ingestion.run_blocked");
 
     // The blocking audit record carries the blocked state it wrote.
-    let blocked_records = harness
-        .database
-        .admin
-        .query(
-            "SELECT convert_from(envelope, 'UTF8')
-               FROM registry_internal.registry_audit
-              WHERE convert_from(envelope, 'UTF8') LIKE '%\"kind\":\"ingestionRun\"%'
-                AND convert_from(envelope, 'UTF8') LIKE '%\"outcome\":\"blocked\"%'",
-            &[],
-        )
-        .await
-        .expect("administrator inspects the run audit journal");
+    let blocked_records = blocked_run_records(&harness);
     assert!(
         !blocked_records.is_empty(),
         "the blocked transition is audited"
     );
-    for row in blocked_records {
-        let envelope: Value =
-            serde_json::from_str(&row.get::<_, String>(0)).expect("audit envelope is JSON");
-        assert_eq!(envelope["record"]["status"], "blocked");
+    for record in blocked_records {
+        assert_eq!(record["status"], "blocked");
     }
 
     // The creator may still cancel a blocked run.
@@ -1151,19 +1139,10 @@ async fn a_cancellation_committed_during_a_parked_block_answers_the_stored_statu
         stored.get::<_, Option<i64>>(2).is_none(),
         "the cancelled run keeps its chunkless attempt marker"
     );
-    let blocked_records = harness
-        .database
-        .admin
-        .query(
-            "SELECT convert_from(envelope, 'UTF8')
-               FROM registry_internal.registry_audit
-              WHERE convert_from(envelope, 'UTF8') LIKE '%\"kind\":\"ingestionRun\"%'
-                AND convert_from(envelope, 'UTF8') LIKE '%\"outcome\":\"blocked\"%'
-                AND convert_from(envelope, 'UTF8') LIKE $1",
-            &[&format!("%\"runId\":\"{run_id}\"%")],
-        )
-        .await
-        .expect("administrator inspects the run audit journal");
+    let blocked_records = blocked_run_records(&harness)
+        .into_iter()
+        .filter(|record| record["runId"] == run_id.as_str())
+        .collect::<Vec<_>>();
     assert!(
         blocked_records.is_empty(),
         "a cancelled run takes no blocked audit record"
@@ -1567,25 +1546,12 @@ async fn a_replayed_chunk_discloses_an_audited_receipt() {
     assert_eq!(replayed.status(), StatusCode::OK);
     assert_eq!(body_json(replayed).await["receipt"]["replayed"], true);
 
-    let records = harness
-        .database
-        .admin
-        .query(
-            "SELECT convert_from(envelope, 'UTF8')
-               FROM registry_internal.registry_audit
-              WHERE convert_from(envelope, 'UTF8') LIKE '%\"kind\":\"ingestionReceipt\"%'",
-            &[],
-        )
-        .await
-        .expect("administrator inspects the run audit journal");
+    let records = receipt_records(&harness);
     assert!(
         !records.is_empty(),
         "the replayed receipt is disclosed in the audit journal"
     );
-    for row in records {
-        let envelope: Value =
-            serde_json::from_str(&row.get::<_, String>(0)).expect("audit envelope is JSON");
-        let record = &envelope["record"];
+    for record in &records {
         assert_eq!(record["runId"], run_id);
         assert_eq!(record["chunkIndex"], 0);
         assert!(record["principalReference"].is_string());
@@ -1622,33 +1588,21 @@ async fn a_recovered_receipt_discloses_an_audited_receipt() {
         .await;
     assert_eq!(recovered.status(), StatusCode::OK);
 
-    let records = harness
-        .database
-        .admin
-        .query(
-            "SELECT convert_from(envelope, 'UTF8')
-               FROM registry_internal.registry_audit
-              WHERE convert_from(envelope, 'UTF8') LIKE '%\"kind\":\"ingestionReceipt\"%'",
-            &[],
-        )
-        .await
-        .expect("administrator inspects the run audit journal");
+    let records = receipt_records(&harness);
     assert!(
         !records.is_empty(),
         "the recovered receipt is disclosed in the audit journal"
     );
-    for row in records {
-        let envelope: Value =
-            serde_json::from_str(&row.get::<_, String>(0)).expect("audit envelope is JSON");
-        assert_eq!(envelope["record"]["runId"], run_id);
-        assert_eq!(envelope["record"]["chunkIndex"], 0);
+    for record in records {
+        assert_eq!(record["runId"], run_id);
+        assert_eq!(record["chunkIndex"], 0);
     }
 }
 
-/// An audit outage gates both release paths: while the journal cannot extend
-/// its chain, a keyed process answers an outage instead of releasing the
-/// retained answer unaudited, and the receipt releases once the chain
-/// extends again.
+/// An audit outage gates both release paths: once the writer refuses an
+/// append, the process answers an outage instead of releasing the retained
+/// answer unaudited, and a restarted process over a working destination
+/// releases the receipt again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_audit_outage_gates_the_receipt_release() {
     let harness = IngestionHarness::create().await;
@@ -1665,18 +1619,9 @@ async fn an_audit_outage_gates_the_receipt_release() {
         .await;
     assert_eq!(committed.status(), StatusCode::OK);
 
-    // A journal the runtime role can no longer extend refuses every further
-    // append, as a revoked grant or an unwritable journal would.
-    let role = harness.database.runtime_role.as_str().to_owned();
-    harness
-        .database
-        .admin
-        .execute(
-            &format!("REVOKE INSERT ON registry_internal.registry_audit FROM \"{role}\""),
-            &[],
-        )
-        .await
-        .expect("the audit insert grant is revoked");
+    // A destination that refuses every further append, as a full disk or an
+    // unwritable audit file would.
+    harness.database.audit_capture().fail_after(0);
 
     let replayed = harness
         .post_json(
@@ -1694,18 +1639,11 @@ async fn an_audit_outage_gates_the_receipt_release() {
         .await;
     assert_eq!(recovered.status(), StatusCode::SERVICE_UNAVAILABLE);
 
-    // Once the journal accepts appends again, the same replay discloses and
-    // releases.
-    harness
-        .database
-        .admin
-        .execute(
-            &format!("GRANT INSERT ON registry_internal.registry_audit TO \"{role}\""),
-            &[],
-        )
-        .await
-        .expect("the audit insert grant is restored");
-    let replayed = harness
+    // A failed writer stays failed; a restarted process over a destination
+    // that accepts appends again discloses and releases the same replay.
+    harness.database.audit_capture().restore();
+    let restarted = harness.restart(None).await;
+    let replayed = restarted
         .post_json(
             &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
             &claims,
@@ -2066,9 +2004,8 @@ async fn receipt_releases_fail_closed_without_key_state() {
 
 /// The binding a stale serving instance enforces is the one the database
 /// holds active, not the retired identity the process started under: the
-/// stale instance refuses the read, the successor reports the run blocked,
-/// and the next chunk submission takes the blocked transition durably even
-/// through the stale instance.
+/// successor reports the run blocked, and the next chunk submission takes the
+/// blocked transition durably even through the stale instance.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_stale_instance_reports_and_blocks_runs_against_the_durable_binding() {
     let harness = IngestionHarness::create().await;
@@ -2100,10 +2037,10 @@ async fn a_stale_instance_reports_and_blocks_runs_against_the_durable_binding() 
     assert_eq!(run["status"], "blocked");
     assert_eq!(run["blockedReason"], "activePackageChanged");
 
-    // The stale instance takes the blocking transition, and its refusal
-    // still answers an outage: the refusal envelope itself cannot be
-    // written under the retired identity, so the caller is told the process
-    // is unavailable while the run is durably blocked.
+    // The stale instance takes the blocking transition and answers the
+    // value-free blocked refusal once its audit response entry is accepted.
+    // That entry goes to the audit writer, not the database, so it does not
+    // depend on the identity the process started under.
     let refused = harness
         .post_json(
             &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
@@ -2111,7 +2048,8 @@ async fn a_stale_instance_reports_and_blocks_runs_against_the_durable_binding() 
             chunk_body(&chunks, 1),
         )
         .await;
-    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(refused).await["code"], "ingestion.run_blocked");
 
     let after = successor
         .get_json(
@@ -2125,18 +2063,7 @@ async fn a_stale_instance_reports_and_blocks_runs_against_the_durable_binding() 
     assert_eq!(after["committedItems"], 2);
     assert_eq!(after["nextChunkIndex"], 1);
 
-    let blocked_records = harness
-        .database
-        .admin
-        .query(
-            "SELECT convert_from(envelope, 'UTF8')
-               FROM registry_internal.registry_audit
-              WHERE convert_from(envelope, 'UTF8') LIKE '%\"kind\":\"ingestionRun\"%'
-                AND convert_from(envelope, 'UTF8') LIKE '%\"outcome\":\"blocked\"%'",
-            &[],
-        )
-        .await
-        .expect("administrator inspects the run audit journal");
+    let blocked_records = blocked_run_records(&harness);
     assert!(
         !blocked_records.is_empty(),
         "the stale instance wrote the blocked transition"
@@ -2533,17 +2460,12 @@ async fn service_level_chunk_refusals_are_audited() {
 
     let rows = harness
         .database
-        .admin
-        .query(
-            "SELECT convert_from(envelope, 'UTF8')
-               FROM registry_internal.registry_audit
-              WHERE convert_from(envelope, 'UTF8') LIKE '%\"phase\":\"refusal\"%'
-                AND convert_from(envelope, 'UTF8')
-                    LIKE '%\"operationId\":\"records.widget.batch\"%'",
-            &[],
-        )
-        .await
-        .expect("administrator inspects the audit journal");
+        .audit_records()
+        .into_iter()
+        .filter(|record| {
+            record["phase"] == "refusal" && record["operationId"] == "records.widget.batch"
+        })
+        .collect::<Vec<_>>();
     assert!(
         !rows.is_empty(),
         "the chunk refusal is audited like any mutation refusal"
@@ -3219,21 +3141,17 @@ async fn run_rows_and_audit_never_carry_source_values() {
         assert_eq!(row.get::<_, i64>(0), 0, "{table} carries no source canary");
     }
 
+    let audit_text = harness
+        .database
+        .audit_entries()
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
     for canary in [RECORD_CANARY, PRINCIPAL] {
-        let row = harness
-            .database
-            .admin
-            .query_one(
-                "SELECT count(*) FROM registry_internal.registry_audit
-                 WHERE envelope::text LIKE '%' || $1 || '%'",
-                &[&canary],
-            )
-            .await
-            .expect("audit envelopes are readable");
-        assert_eq!(
-            row.get::<_, i64>(0),
-            0,
-            "no audit envelope carries the canary"
+        assert!(
+            !audit_text.contains(canary),
+            "no audit entry carries the canary"
         );
     }
 }
@@ -3339,7 +3257,7 @@ impl IngestionHarness {
             registry.clone(),
             identity.clone(),
             lock_key,
-            audit_profile.clone(),
+            database.audit(audit_profile.clone()),
             None,
             field_encryption.clone(),
         );
@@ -3392,7 +3310,7 @@ impl IngestionHarness {
                 registry,
                 identity,
                 self.lock_key,
-                self.audit_profile.clone(),
+                self.database.audit(self.audit_profile.clone()),
                 fault,
                 field_encryption,
             ),
@@ -3530,7 +3448,7 @@ impl IngestionHarness {
                     Duration::from_secs(5),
                 )
                 .expect("timeouts are bounded"),
-                audit_profile: &self.audit_profile,
+                audit: &self.database.audit(self.audit_profile.clone()),
                 operator_reference: "ingestion-erasure-operator",
                 reason: "ingestion-receipt-erasure-proof",
                 target,
@@ -3547,7 +3465,7 @@ fn build_router(
     registry: Arc<registry_breg::CompiledRegistry>,
     identity: registry_breg::postgres::ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
-    profile: AuditProfile,
+    profile: RegistryAudit,
     fault: Option<MutationFaultPoint>,
     field_encryption: Option<Arc<FieldEncryptionService>>,
 ) -> axum::Router {
@@ -4191,25 +4109,30 @@ async fn poll_waiting_registry_locks(
     }
 }
 
-/// The parsed disclosure records the journal holds for one run.
+/// The parsed disclosure records the audit destination holds for one run.
 async fn receipt_disclosures(harness: &IngestionHarness, run_id: &str) -> Vec<Value> {
-    let rows = harness
-        .database
-        .admin
-        .query(
-            "SELECT convert_from(envelope, 'UTF8')
-               FROM registry_internal.registry_audit
-              WHERE convert_from(envelope, 'UTF8') LIKE '%\"kind\":\"ingestionReceipt\"%'",
-            &[],
-        )
-        .await
-        .expect("administrator inspects the run audit journal");
-    rows.iter()
-        .map(|row| {
-            let envelope: Value =
-                serde_json::from_str(&row.get::<_, String>(0)).expect("audit envelope is JSON");
-            envelope["record"].clone()
-        })
+    receipt_records(harness)
+        .into_iter()
         .filter(|record| record["runId"] == run_id)
+        .collect()
+}
+
+/// Every receipt disclosure record the audit destination holds.
+fn receipt_records(harness: &IngestionHarness) -> Vec<Value> {
+    harness
+        .database
+        .audit_records()
+        .into_iter()
+        .filter(|record| record["kind"] == "ingestionReceipt")
+        .collect()
+}
+
+/// Every blocked run transition record the audit destination holds.
+fn blocked_run_records(harness: &IngestionHarness) -> Vec<Value> {
+    harness
+        .database
+        .audit_records()
+        .into_iter()
+        .filter(|record| record["kind"] == "ingestionRun" && record["outcome"] == "blocked")
         .collect()
 }

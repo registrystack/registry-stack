@@ -75,7 +75,7 @@ async fn real_postgres_reference_and_temporal_races_leave_no_dangling_or_overlap
         RegistryLockKey::derive(PACKAGE_ID).expect("registry lock key is bounded"),
         Duration::from_secs(5),
         identity,
-        audit_profile,
+        database.audit(audit_profile),
     );
     let parent_plan = MutationPlan::from_compiled(&registry, "records.parent.create")
         .expect("parent create plan is compiler-owned");
@@ -447,18 +447,12 @@ async fn real_postgres_reference_and_temporal_races_leave_no_dangling_or_overlap
         .get(0);
     assert_eq!(overlaps, 0, "no committed periods overlap in one scope");
 
-    let refusal_count: i64 = database
-        .admin
-        .query_one(
-            "SELECT count(*)
-               FROM registry_internal.registry_audit
-              WHERE convert_from(envelope, 'UTF8') LIKE '%\"phase\":\"refusal\"%'",
-            &[],
-        )
-        .await
-        .expect("administrator verifies all constraint refusals were audited")
-        .get(0);
-    assert_eq!(refusal_count, 3);
+    let refusal_count = database
+        .audit_records()
+        .iter()
+        .filter(|record| record["phase"] == "refusal")
+        .count();
+    assert_eq!(refusal_count, 3, "every constraint refusal is audited");
     assert_diagnostics_are_minimized(&database, &parent_id).await;
 
     observer_task.abort();
@@ -668,14 +662,11 @@ async fn current_count(database: &TestDatabase, quoted_table: &str) -> i64 {
 
 async fn assert_diagnostics_are_minimized(database: &TestDatabase, parent_id: &str) {
     let audit = database
-        .admin
-        .query("SELECT envelope FROM registry_internal.registry_audit", &[])
-        .await
-        .expect("administrator inspects minimized audit envelopes")
-        .into_iter()
-        .flat_map(|row| row.get::<_, Vec<u8>>(0))
-        .collect::<Vec<_>>();
-    let audit = String::from_utf8_lossy(&audit);
+        .audit_entries()
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
     for canary in [
         PRINCIPAL_CANARY,
         CHILD_KEY_CANARY,

@@ -362,8 +362,11 @@ impl ContractHarness {
         .expect("active package identity is initialized");
         migration_task.abort();
         let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
-        let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x2d; 32].into())
-            .expect("test owns a keyed audit profile");
+        let audit_profile = registry_breg::audit::test_support::capturing(
+            AuditProfile::production_from_secret_bytes(vec![0x2d; 32].into())
+                .expect("test owns a keyed audit profile"),
+        )
+        .0;
         let pool = database
             .runtime_config
             .build_pool()
@@ -415,7 +418,7 @@ fn build_router(
     registry: Arc<registry_breg::CompiledRegistry>,
     identity: registry_breg::postgres::ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
-    profile: AuditProfile,
+    profile: registry_breg::audit::RegistryAudit,
 ) -> axum::Router {
     let cursors = Arc::new(
         CursorCodec::new(Zeroizing::new(vec![0x21; 32]), Duration::from_secs(300))

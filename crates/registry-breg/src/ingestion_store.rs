@@ -11,7 +11,7 @@
 
 use std::fmt;
 
-use registry_platform_audit::AuditProfile;
+use registry_platform_audit::AuditEntry;
 use registry_platform_canonical_json::parse_json_strict;
 use serde_json::{json, Value};
 use tokio_postgres::GenericClient;
@@ -1177,15 +1177,32 @@ pub(crate) async fn scrub_receipts_for_records(
     Ok(changed)
 }
 
-/// Append one value-free ingestion-run lifecycle record to the chained audit
-/// journal. Digests and counts are hashes and integers; no source row, chunk
-/// body, or bearer material ever appears.
+/// The audit schema of every ingestion-run lifecycle and receipt-disclosure
+/// entry.
+pub const INGESTION_AUDIT_SCHEMA: &str = "breg-ingestion-audit/v1";
+
+/// Append one value-free ingestion-run lifecycle or receipt-disclosure record
+/// as a `response` entry. Digests and counts are hashes and integers; no source
+/// row, chunk body, or bearer material ever appears. Callers append after the
+/// transaction that decided the record commits, and release nothing to the
+/// caller until the append is accepted. The entry correlates by the record's
+/// request correlation, or by its run id when the transition had no request.
 pub(crate) async fn append_run_audit(
-    transaction: &tokio_postgres::Transaction<'_>,
-    profile: &AuditProfile,
+    audit: &crate::audit::RegistryAudit,
     record: Value,
 ) -> Result<(), IngestionStoreError> {
-    crate::audit::append_envelope(transaction, profile, record)
+    let correlation = record
+        .get("correlation")
+        .or_else(|| record.get("runId"))
+        .and_then(Value::as_str)
+        .ok_or(IngestionStoreError::InvalidInput)?
+        .to_owned();
+    audit
+        .append(AuditEntry::response(
+            INGESTION_AUDIT_SCHEMA,
+            correlation,
+            record,
+        ))
         .await
         .map_err(|_| IngestionStoreError::Unavailable)
 }

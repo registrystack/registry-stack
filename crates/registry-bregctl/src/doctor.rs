@@ -5,7 +5,7 @@ use std::path::Path;
 
 use registry_breg::postgres::BaselineAdvisory;
 use registry_breg::runtime_config::RuntimeConfigError;
-use registry_breg::startup::{prepare, StartupError};
+use registry_breg::startup::{check, StartupError};
 use registry_breg::{Diagnostic, DiagnosticSeverity};
 
 /// The startup dependencies `prepare()` checks, in the order it checks them.
@@ -24,10 +24,11 @@ pub(crate) const CHECKED_DEPENDENCIES: [&str; 10] = [
     "fieldEncryption",
 ];
 
-/// Run startup preparation without binding a listener and discard its unbound
-/// prepared state, keeping only the PostgreSQL baseline advisories it decided.
-/// This verifies only the dependencies preparation currently opens and
-/// intentionally owns no parallel readiness logic.
+/// Run the startup dependency check without binding a listener, keeping only
+/// the PostgreSQL baseline advisories it decided. It verifies the dependencies
+/// preparation opens and intentionally owns no parallel readiness logic; the
+/// audit destination is checked as writable rather than opened, so doctor runs
+/// beside a serving process that holds it.
 pub(crate) fn run(runtime_config: &Path) -> Result<Vec<BaselineAdvisory>, Diagnostic> {
     if !runtime_config.is_absolute() {
         return Err(diagnostic(
@@ -48,8 +49,7 @@ pub(crate) fn run(runtime_config: &Path) -> Result<Vec<BaselineAdvisory>, Diagno
             )
         })?;
     runtime
-        .block_on(prepare(runtime_config))
-        .map(|prepared| prepared.postgres_advisories().to_vec())
+        .block_on(check(runtime_config))
         .map_err(startup_diagnostic)
 }
 
@@ -123,7 +123,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         StartupError::Audit => (
             "startup.audit.refused",
             "audit",
-            "the audit profile was refused",
+            "the audit profile or destination was refused: the hash key must resolve, a file destination's directory must be creatable or owned by this user and not group- or world-writable, and neither it nor its bregctl companion destination may end in an incomplete final entry; archive a torn file and restart on a fresh path",
         ),
         StartupError::Cursor => (
             "startup.cursor.refused",

@@ -10,6 +10,7 @@
 
 use std::path::Path;
 
+use registry_breg::audit::RegistryAudit;
 use registry_breg::migration_reconcile::{
     reconcile_failed_migration, ReconcileError, ReconcileReport, ReconcileRequest,
     ReconcileTimeouts,
@@ -26,6 +27,8 @@ const MAX_OPERATOR_REFERENCE_BYTES: usize = 512;
 #[derive(Debug)]
 pub(crate) enum ReconcileLifecycleError {
     RuntimeConfigPath,
+    /// The companion audit destination could not be opened.
+    Audit,
     TargetPackagePath,
     OperatorReference,
     RuntimeConfig(RuntimeConfigError),
@@ -104,7 +107,7 @@ pub(crate) fn run(
     let connection = config
         .migration_database_connection_config()
         .map_err(|_| ReconcileLifecycleError::DatabaseConfiguration)?;
-    let audit_profile = config
+    config
         .audit_profile()
         .map_err(ReconcileLifecycleError::RuntimeConfig)?;
     let timeouts = ReconcileTimeouts::new(
@@ -116,6 +119,9 @@ pub(crate) fn run(
         .enable_all()
         .build()
         .map_err(|_| ReconcileLifecycleError::Runtime)?;
+    let audit = runtime
+        .block_on(RegistryAudit::open_companion(&config))
+        .map_err(|_| ReconcileLifecycleError::Audit)?;
     let report = runtime
         .block_on(reconcile_failed_migration(ReconcileRequest {
             config: &connection,
@@ -125,7 +131,7 @@ pub(crate) fn run(
             migration_role: config.database().roles().migration(),
             runtime_role: config.database().roles().runtime(),
             timeouts,
-            audit_profile: &audit_profile,
+            audit: &audit,
             operator_reference: request.operator_reference,
             execute: request.execute,
         }))

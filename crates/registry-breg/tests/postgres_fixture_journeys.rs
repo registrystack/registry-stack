@@ -44,7 +44,6 @@ use registry_breg::startup::{
     prepare_schema_test_database_with_connection_configs_for_test,
     prepare_with_connection_config_for_test, PreparedServer,
 };
-use registry_platform_audit::{verify_chain, AuditEnvelope, AuditProfile};
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm, PrivateJwk};
 use registry_platform_testing::{fixtures as testing_fixtures, jwks_from_private_jwk, MockIdp};
@@ -137,8 +136,7 @@ async fn fixture_test_runs_strict_journeys_through_the_real_postgres_router() {
         prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
             .await
             .expect("verified startup constructs the authenticated fixture runtime");
-    let audit = AuditProfile::production_from_secret_bytes(vec![0x71; 32].into())
-        .expect("test audit profile is keyed");
+    let audit_path = package.directory.join("audit").join("audit.jsonl");
 
     let suite = validate_fixture_journeys(JOURNEY_SOURCE, &registry).expect("journeys preflight");
     let raw = PreparedServer::from_parts_for_test(
@@ -186,7 +184,7 @@ async fn fixture_test_runs_strict_journeys_through_the_real_postgres_router() {
         "a journey suite outside the signed package closure cannot execute"
     );
 
-    assert_exact_durable_journey_outcomes(&database, &registry, &audit).await;
+    assert_exact_durable_journey_outcomes(&database, &registry, &audit_path).await;
     drop(prepared);
     idp.stop().await;
     drop(package);
@@ -777,7 +775,7 @@ async fn prepare_runner(
 async fn assert_exact_durable_journey_outcomes(
     database: &TestDatabase,
     registry: &registry_breg::CompiledRegistry,
-    audit: &AuditProfile,
+    audit_path: &Path,
 ) {
     let table = &registry.physical_names().entities["widget"].table;
     let fields = &registry.physical_names().entities["widget"].fields;
@@ -844,8 +842,7 @@ async fn assert_exact_durable_journey_outcomes(
                    WHERE response_status = 201),
                  (SELECT count(*) FROM registry_internal.registry_idempotency
                    WHERE response_status = 200),
-                 (SELECT count(*) FROM registry_internal.registry_outbox),
-                 (SELECT count(*) FROM registry_internal.registry_audit)",
+                 (SELECT count(*) FROM registry_internal.registry_outbox)",
             &[],
         )
         .await
@@ -859,63 +856,54 @@ async fn assert_exact_durable_journey_outcomes(
     assert_eq!(counts.get::<_, i64>(6), 1);
     assert_eq!(counts.get::<_, i64>(7), 2);
     assert_eq!(counts.get::<_, i64>(8), 0);
-    assert_eq!(counts.get::<_, i64>(9), 11);
 
-    let audit_rows = database
-        .admin
-        .query(
-            "SELECT record_hash, envelope FROM registry_internal.registry_audit",
-            &[],
-        )
-        .await
-        .expect("administrator reads the closed audit chain");
-    let mut by_previous = BTreeMap::<Option<[u8; 32]>, AuditEnvelope>::new();
-    for row in audit_rows {
-        let stored =
-            <[u8; 32]>::try_from(row.get::<_, Vec<u8>>(0)).expect("stored audit hash is exact");
-        let envelope: AuditEnvelope = serde_json::from_slice(&row.get::<_, Vec<u8>>(1))
-            .expect("audit envelope is strict JSON");
-        assert_eq!(stored, envelope.record_hash);
-        assert!(by_previous.insert(envelope.prev_hash, envelope).is_none());
-    }
-    let mut ordered = Vec::new();
-    let mut prior = None;
-    while let Some(envelope) = by_previous.remove(&prior) {
-        prior = Some(envelope.record_hash);
-        ordered.push(envelope);
-    }
-    assert!(by_previous.is_empty());
-    assert_eq!(ordered.len(), 11);
-    verify_chain(&ordered, &audit.chain_hasher()).expect("keyed audit chain verifies exactly");
-    let phases = ordered
-        .iter()
-        .fold(BTreeMap::<&str, usize>::new(), |mut counts, envelope| {
-            let phase = envelope.record["phase"]
+    let audit_text = fs::read_to_string(audit_path).expect("the runtime audit file reads");
+    let entries = audit_text
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("audit line is JSON"))
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), 11);
+    let mut phases = BTreeMap::<(String, String), usize>::new();
+    for entry in &entries {
+        assert_eq!(entry["schema"], registry_breg::audit::AUDIT_SCHEMA);
+        let phase = (
+            entry["phase"]
                 .as_str()
-                .expect("audit phase is closed");
-            *counts.entry(phase).or_default() += 1;
-            counts
-        });
+                .expect("envelope phase is closed")
+                .to_owned(),
+            entry["record"]["phase"]
+                .as_str()
+                .expect("record phase is closed")
+                .to_owned(),
+        );
+        *phases.entry(phase).or_default() += 1;
+    }
     assert_eq!(
         phases,
-        BTreeMap::from([("attempt", 5), ("refusal", 1), ("terminal", 5)])
+        BTreeMap::from([
+            (("request".to_owned(), "attempt".to_owned()), 5),
+            (("response".to_owned(), "refusal".to_owned()), 1),
+            (("response".to_owned(), "terminal".to_owned()), 5),
+        ])
     );
-    let audit_bytes = serde_json::to_vec(&ordered).expect("audit inspection serializes");
-    let audit_text = String::from_utf8(audit_bytes).expect("audit inspection is UTF-8");
+    for terminal in entries
+        .iter()
+        .filter(|entry| entry["record"]["phase"] == "terminal")
+    {
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| {
+                    entry["phase"] == "request" && entry["correlation"] == terminal["correlation"]
+                })
+                .count(),
+            1,
+            "every terminal response shares its request correlation"
+        );
+    }
     for canary in ["fixture-operator", "zone-a", "terminal-first"] {
         assert!(!audit_text.contains(canary));
     }
-
-    let head = database
-        .admin
-        .query_one(
-            "SELECT last_hash FROM registry_internal.registry_audit_head WHERE singleton",
-            &[],
-        )
-        .await
-        .expect("audit head exists")
-        .get::<_, Vec<u8>>(0);
-    assert_eq!(head, ordered.last().unwrap().record_hash);
 }
 
 struct PackageFixture {
@@ -1140,6 +1128,11 @@ impl PackageFixture {
             .expect("static JWKS serializes"),
         );
         let path = self.directory.join("runtime.yaml");
+        let audit_path = secrets
+            .with_file_name("audit")
+            .join("audit.jsonl")
+            .display()
+            .to_string();
         fs::write(
             &path,
             format!(
@@ -1197,6 +1190,7 @@ authentication:
     purpose: purpose
 audit:
   hashKeyRef: secret:file/audit-key
+  path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
   maxAgeSeconds: 300
@@ -1253,6 +1247,11 @@ operationalTimeouts:
             .expect("static JWKS serializes"),
         );
         let path = self.directory.join("runtime-spatial.yaml");
+        let audit_path = secrets
+            .with_file_name("audit-spatial")
+            .join("audit.jsonl")
+            .display()
+            .to_string();
         fs::write(
             &path,
             format!(
@@ -1310,6 +1309,7 @@ authentication:
     purpose: registry_purpose
 audit:
   hashKeyRef: secret:file/audit-key
+  path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
   maxAgeSeconds: 300

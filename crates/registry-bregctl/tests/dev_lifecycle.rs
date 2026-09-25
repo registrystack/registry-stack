@@ -1026,12 +1026,18 @@ seed:
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    session.success(&[
-        "audit",
-        "verify",
-        "--runtime-config",
-        project.join(".breg/dev/runtime.yaml").to_str().unwrap(),
-    ]);
+    // The audit log the restarted runtime wrote is intact JSONL.
+    let runtime_file = project.join(".breg/dev/runtime.yaml");
+    let configuration: Value = serde_norway::from_slice(&fs::read(&runtime_file).unwrap()).unwrap();
+    let audit_path = runtime_file
+        .parent()
+        .unwrap()
+        .join(configuration["audit"]["path"].as_str().unwrap());
+    let audit = fs::read_to_string(&audit_path).unwrap();
+    assert!(!audit.is_empty());
+    for line in audit.lines() {
+        assert!(serde_json::from_str::<Value>(line).unwrap().is_object());
+    }
     session.remove();
     assert_eq!(
         docker_line(&[

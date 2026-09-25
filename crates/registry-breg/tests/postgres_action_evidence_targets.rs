@@ -152,7 +152,8 @@ fn app(
     fault: Option<MutationFaultPoint>,
 ) -> (axum::Router, RuntimePool) {
     let pool = database.runtime_config.build_pool().unwrap();
-    let audit = AuditProfile::production_from_secret_bytes(vec![0x42; 32].into()).unwrap();
+    let audit =
+        database.audit(AuditProfile::production_from_secret_bytes(vec![0x42; 32].into()).unwrap());
     let lock = RegistryLockKey::derive(PACKAGE).unwrap();
     let cursors = Arc::new(
         CursorCodec::new(Zeroizing::new(vec![0x63; 32]), Duration::from_secs(300)).unwrap(),

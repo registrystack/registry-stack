@@ -340,8 +340,9 @@ async fn bounded_update_refuses_when_table_exceeds_declared_budget_before_data_c
 }
 
 /// A standalone erasure of history recorded after the coverage baseline only
-/// narrows snapshot coverage. The erasure records itself in the audit journal,
-/// so the next package must still apply over it without a rebaseline.
+/// narrows snapshot coverage. The erasure records its position in the
+/// erasure-coverage state table in its own commit, so the next package must
+/// still apply over it without a rebaseline.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn recorded_post_baseline_erasure_does_not_freeze_the_next_package() {
     let database = TestDatabase::create(1).await;
@@ -352,6 +353,11 @@ async fn recorded_post_baseline_erasure_does_not_freeze_the_next_package() {
     assert!(outcome.coverage_ready);
     assert_eq!(outcome.unavailable_after_position, Some(1));
     assert_eq!(commit_head(&database).await, (true, Some(1)));
+    assert_eq!(
+        recorded_erasure_positions(&database).await,
+        vec![1],
+        "the erasure records its position as registry state, not only as audit"
+    );
 
     let successor = compiled_successor(&activated, &candidate);
     let upgraded = apply_verified_package(request(
@@ -376,8 +382,8 @@ async fn recorded_post_baseline_erasure_does_not_freeze_the_next_package() {
     database.cleanup().await;
 }
 
-/// A ready head whose unavailable-after position no erasure in the audit
-/// journal recorded is an arbitrary coverage gap, even beside a recorded
+/// A ready head whose unavailable-after position no erasure recorded in the
+/// erasure-coverage state table is an arbitrary coverage gap, even beside a recorded
 /// erasure at another position, and a successor package still refuses it
 /// before any maintenance state changes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -388,6 +394,7 @@ async fn unrecorded_coverage_gap_still_freezes_the_next_package() {
     let erased = create_asset(&database, &candidate, &activated, "B2").await;
     let outcome = erase_first_revision(&database, &activated, erased).await;
     assert_eq!(outcome.unavailable_after_position, Some(2));
+    assert_eq!(recorded_erasure_positions(&database).await, vec![2]);
     database
         .admin
         .execute(
@@ -427,6 +434,66 @@ async fn unrecorded_coverage_gap_still_freezes_the_next_package() {
         "the refused successor changed no maintenance state"
     );
     database.cleanup().await;
+}
+
+/// A database activated before audit left PostgreSQL still carries the
+/// retired journal and head tables. The next package apply removes them, so
+/// no audit state survives in the registry database.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn successor_apply_drops_the_retired_postgres_audit_tables() {
+    let database = TestDatabase::create(1).await;
+    let (candidate, activated) = activate_reviewed_successor(&database).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    migration
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_audit (
+                 sequence bigint PRIMARY KEY,
+                 envelope jsonb NOT NULL
+             );
+             CREATE TABLE registry_internal.registry_audit_head (
+                 singleton boolean PRIMARY KEY,
+                 sequence bigint NOT NULL
+             );",
+        )
+        .await
+        .expect("migration role recreates the retired audit tables it once owned");
+    migration_task.abort();
+    assert_eq!(retired_audit_tables(&database).await, 2);
+
+    let successor = compiled_successor(&activated, &candidate);
+    let upgraded = apply_verified_package(request(
+        &database,
+        &successor,
+        ApplyPrecondition::Successor {
+            current: &activated,
+        },
+    ))
+    .await
+    .expect("the next package applies over a database that still has them");
+    assert_eq!(upgraded.package_sequence, 3);
+    assert_eq!(
+        retired_audit_tables(&database).await,
+        0,
+        "the apply drops the retired audit journal and its head"
+    );
+    database.cleanup().await;
+}
+
+async fn retired_audit_tables(database: &TestDatabase) -> i64 {
+    database
+        .admin
+        .query_one(
+            "SELECT count(*)
+               FROM pg_catalog.pg_class class
+               JOIN pg_catalog.pg_namespace namespace
+                 ON namespace.oid = class.relnamespace
+              WHERE namespace.nspname = 'registry_internal'
+                AND class.relname IN ('registry_audit', 'registry_audit_head')",
+            &[],
+        )
+        .await
+        .expect("administrator reads the catalog")
+        .get(0)
 }
 
 async fn activate_reviewed_successor(
@@ -500,8 +567,10 @@ async fn erase_first_revision(
     record_id: Uuid,
 ) -> HistoryErasureOutcome {
     let (mut migration, migration_task) = database.connect_migration().await;
-    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x6d; 32].into())
-        .expect("test audit profile is keyed");
+    let audit = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x6d; 32].into())
+            .expect("test audit profile is keyed"),
+    );
     let outcome = erase_record_history(
         &mut migration,
         HistoryErasureRequest {
@@ -510,7 +579,7 @@ async fn erase_first_revision(
             lock_key: RegistryLockKey::derive(PACKAGE_ID).expect("lock identity is bounded"),
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
                 .expect("erasure timeouts are bounded"),
-            audit_profile: &audit_profile,
+            audit: &audit,
             operator_reference: "approved-maintenance-001",
             reason: "approved retention request",
             target: RecordHistoryErasureTarget::new("asset", record_id, 1),
@@ -544,6 +613,22 @@ fn compiled_successor(
                 .expect("active sequence is positive"),
         },
     )
+}
+
+async fn recorded_erasure_positions(database: &TestDatabase) -> Vec<i64> {
+    database
+        .admin
+        .query(
+            "SELECT unavailable_after_position
+               FROM registry_internal.registry_history_erasure_coverage
+              ORDER BY unavailable_after_position",
+            &[],
+        )
+        .await
+        .expect("administrator reads recorded erasure coverage")
+        .iter()
+        .map(|row| row.get(0))
+        .collect()
 }
 
 async fn commit_head(database: &TestDatabase) -> (bool, Option<i64>) {
@@ -1123,8 +1208,11 @@ fn mutation_revision_router(
             .expect("test cursor key is valid"),
     );
     let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock identity is bounded");
-    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x6d; 32].into())
-        .expect("test audit profile is keyed");
+    let audit_profile = registry_breg::audit::test_support::capturing(
+        AuditProfile::production_from_secret_bytes(vec![0x6d; 32].into())
+            .expect("test audit profile is keyed"),
+    )
+    .0;
     let records = Arc::new(PostgresRecordReadService::new(
         pool.clone(),
         Arc::clone(&registry),

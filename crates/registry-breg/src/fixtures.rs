@@ -3052,8 +3052,11 @@ impl SchemaTestRuntime {
             .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Authentication))?;
         let pool = database.pool();
         let registry = Arc::new(compiled);
-        let audit_profile = config
-            .audit_profile()
+        // The schema test runs from operator tooling beside the runtime, so it
+        // appends to the companion destination rather than contending for the
+        // runtime's single-writer lock.
+        let audit = crate::audit::RegistryAudit::open_companion(config)
+            .await
             .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Audit))?;
         let cursor_codec = Arc::new(
             config
@@ -3097,7 +3100,7 @@ impl SchemaTestRuntime {
             expected.clone(),
             database.lock_key(),
             config.operational_timeouts().record_lock,
-            audit_profile.clone(),
+            audit.clone(),
             Arc::clone(&cursor_codec),
         ));
         let revisions = Arc::new(PostgresRevisionReadService::new(
@@ -3106,7 +3109,7 @@ impl SchemaTestRuntime {
             expected.clone(),
             database.lock_key(),
             config.operational_timeouts().record_lock,
-            audit_profile.clone(),
+            audit.clone(),
         ));
         let evidence = config
             .activate_evidence(&registry)
@@ -3127,7 +3130,7 @@ impl SchemaTestRuntime {
             expected,
             database.lock_key(),
             config.operational_timeouts().record_lock,
-            audit_profile,
+            audit,
             Some(event_destinations),
         );
         let mutations = match review_authorities {

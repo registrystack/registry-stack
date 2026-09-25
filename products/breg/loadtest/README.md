@@ -129,9 +129,9 @@ Each measured run gets an owner-only directory under `.run/results/` with:
   samples with the system tag set restricted to status, method, operation name,
   scenario, and expected-response status;
 - `db-before.json`, `db-waits.jsonl`, and `db-after.json`: continuous wait
-  counts, table sizes, and audit-chain length from the development database.
-  A run whose wait sampler exits early fails its verdict; a run too short for
-  one sample reports its wait peaks as null;
+  counts and table sizes from the development database. A run whose wait
+  sampler exits early fails its verdict; a run too short for one sample reports
+  its wait peaks as null;
 - `result.json`: throughput, errors, drops, 504s, p50/p95/p99 by operation,
   per-phase counts, achieved rate, and latency, DB wait peaks, and the SLO
   verdict;
@@ -163,12 +163,12 @@ products/breg/loadtest/dbstats.sh analyze
 
 ## Interpreting results
 
-- Every request, reads included, appends an `attempt` and a `terminal` record
-  to the audit chain. Each append updates the singleton chain head and holds
-  its row lock until that transaction's commit is durable, so commit latency
-  bounds throughput for the whole registry. Audit lock waits in `result.json`
-  show when a run reached that bound. Measure the host's sync cost with
-  `docker exec <container> pg_test_fsync -s 1` before comparing hosts.
+- Every request, reads included, writes a request entry and a response
+  entry to the runtime's audit file, outside PostgreSQL. A mutation still
+  waits for its own commit to be durable, so measure the host's sync cost with
+  `docker exec <container> pg_test_fsync -s 1` before comparing hosts. The
+  audit file shares the host disk with the database under the development
+  stack.
 - 504 `request.timeout` responses are saturation, not successful throughput.
 - Capacity is the highest held rate that meets its full thresholds, not a rate
   merely touched during a ramp.

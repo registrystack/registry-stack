@@ -30,6 +30,7 @@ use registry_breg::api::{
     router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
     VerifiedRequestClaims,
 };
+use registry_breg::attachment_verification_worker::ATTACHMENT_VERIFICATION_AUDIT_SCHEMA;
 use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{parse_project_json, ModuleAssetSource};
 use registry_breg::cursor::CursorCodec;
@@ -2027,15 +2028,22 @@ async fn real_postgres_attachment_verification_quarantines_exact_bytes_and_survi
         verification.clone(),
     ));
     let verification_policy = verification.binding_digest();
-    let worker = AttachmentVerificationWorker::new(
-        database.runtime_config.build_pool().unwrap(),
-        identity.clone(),
-        RegistryLockKey::derive(PACKAGE_ID).unwrap(),
-        Duration::from_secs(2),
-        AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into()).unwrap(),
-        AttachmentStorage::Database,
-        verification,
-    );
+    // A worker process over the shared audit capture. A worker whose audit
+    // writer refused an append stays failed, as a process would, so each
+    // recovery below opens a fresh one.
+    let open_worker = || {
+        AttachmentVerificationWorker::new(
+            database.runtime_config.build_pool().unwrap(),
+            identity.clone(),
+            RegistryLockKey::derive(PACKAGE_ID).unwrap(),
+            Duration::from_secs(2),
+            database
+                .audit(AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into()).unwrap()),
+            AttachmentStorage::Database,
+            verification.clone(),
+        )
+    };
+    let worker = open_worker();
     let steward = claims("steward", "verification-steward", None);
     let submitter = claims("submitter", SUBMITTER, None);
     let site = create_record(
@@ -2150,17 +2158,36 @@ async fn real_postgres_attachment_verification_quarantines_exact_bytes_and_survi
         StatusCode::PRECONDITION_FAILED
     );
 
-    // An audit attempt refusal prevents the first outbound byte and rolls back
-    // the lease, so an ordinary restarted worker can immediately claim it.
-    database.admin.batch_execute("CREATE FUNCTION public.refuse_verifier_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF convert_from(NEW.envelope,'UTF8')::jsonb #>> '{record,kind}' = 'attachmentVerification' THEN RAISE EXCEPTION 'synthetic audit fault'; END IF; RETURN NEW; END $$; CREATE TRIGGER refuse_verifier_audit BEFORE INSERT ON registry_internal.registry_audit FOR EACH ROW EXECUTE FUNCTION public.refuse_verifier_audit()").await.unwrap();
+    // An attempt entry the destination refuses prevents the first content
+    // read and outbound byte. The committed lease stays with the job until it
+    // expires, and a restarted worker then claims it.
+    database.audit_capture().fail_after(0);
     assert!(worker.run_once().await.is_err());
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    database
-        .admin
-        .batch_execute("DROP TRIGGER refuse_verifier_audit ON registry_internal.registry_audit")
-        .await
-        .unwrap();
+    assert!(
+        verification_audit(&database).is_empty(),
+        "the refused attempt entry is not recorded"
+    );
+    database.audit_capture().restore();
+    database.admin.batch_execute("UPDATE registry_internal.registry_attachment_verification SET lease_expires_at=transaction_timestamp()-interval '1 second' WHERE lease_id IS NOT NULL").await.unwrap();
+    let worker = open_worker();
     assert!(worker.clone().run_once().await.unwrap());
+    let verification_entries = verification_audit(&database);
+    assert_eq!(
+        verification_entries
+            .iter()
+            .map(|entry| (
+                entry["phase"].as_str().unwrap(),
+                entry["record"]["phase"].as_str().unwrap()
+            ))
+            .collect::<Vec<_>>(),
+        [("request", "attempt"), ("response", "terminal")],
+        "one verification writes one request and one response entry"
+    );
+    assert_eq!(
+        verification_entries[0]["correlation"],
+        verification_entries[1]["correlation"]
+    );
     let approved = get_record(&app, &record_uri, submitter.clone()).await;
     assert_eq!(
         approved.body["data"]["evidence"]["verificationStatus"],
@@ -2249,32 +2276,27 @@ async fn real_postgres_attachment_verification_quarantines_exact_bytes_and_survi
     // A crash-held lease is durable and becomes reclaimable after expiry.
     database.admin.execute("UPDATE registry_internal.registry_attachment_verification SET lease_id=$1,lease_expires_at=transaction_timestamp()-interval '1 second' WHERE verdict='pending'", &[&Uuid::new_v4()]).await.unwrap();
     mode.store(0, Ordering::SeqCst);
-    database.admin.batch_execute("CREATE OR REPLACE FUNCTION public.refuse_verifier_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF convert_from(NEW.envelope,'UTF8')::jsonb #>> '{record,kind}' = 'attachmentVerification' AND convert_from(NEW.envelope,'UTF8')::jsonb #>> '{record,phase}' = 'terminal' THEN RAISE EXCEPTION 'synthetic terminal audit fault'; END IF; RETURN NEW; END $$; CREATE TRIGGER refuse_verifier_audit BEFORE INSERT ON registry_internal.registry_audit FOR EACH ROW EXECUTE FUNCTION public.refuse_verifier_audit()").await.unwrap();
+    // The attempt entry is accepted and the terminal entry refused. The
+    // verdict committed before the terminal append, so the worker answers an
+    // outage over a committed approval: the documented crash gap, in which
+    // the attempt entry has no response entry.
+    let entries_before = verification_audit(&database).len();
+    database.audit_capture().fail_after(1);
     assert!(worker.run_once().await.is_err());
-    assert_eq!(
-        get_record(&app, &record_uri, submitter.clone()).await.body["data"]["evidence"]
-            ["verificationStatus"],
-        "pending"
-    );
-    assert_eq!(
-        send(
-            &app,
-            Method::GET,
-            &download_uri,
-            Some(submitter.clone()),
-            &[],
-            vec![]
-        )
-        .await
-        .status(),
-        StatusCode::NOT_FOUND
-    );
-    database.admin.batch_execute("DROP TRIGGER refuse_verifier_audit ON registry_internal.registry_audit; UPDATE registry_internal.registry_attachment_verification SET lease_expires_at=transaction_timestamp()-interval '1 second' WHERE lease_id IS NOT NULL").await.unwrap();
-    assert!(worker.clone().run_once().await.unwrap());
+    database.audit_capture().restore();
+    let faulted = verification_audit(&database);
+    assert_eq!(faulted.len(), entries_before + 1);
+    assert_eq!(faulted[entries_before]["phase"], "request");
+    assert_eq!(faulted[entries_before]["record"]["phase"], "attempt");
     assert_eq!(
         get_record(&app, &record_uri, submitter.clone()).await.body["data"]["evidence"]
             ["verificationStatus"],
         "approved"
+    );
+    let worker = open_worker();
+    assert!(
+        !worker.clone().run_once().await.unwrap(),
+        "a committed verdict leaves no verification work behind"
     );
     let captured = observed.lock().unwrap().clone();
     assert_eq!(captured[0].0, "application/octet-stream");
@@ -2318,7 +2340,8 @@ async fn real_postgres_attachment_verification_quarantines_exact_bytes_and_survi
             database.migration_config.clone(),
             database.migration_role.clone(),
             database.runtime_role.clone(),
-            AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into()).unwrap(),
+            database
+                .audit(AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into()).unwrap()),
         )
         .with_verification_policy_for_test(verification_policy);
     let erased = retention
@@ -2506,7 +2529,7 @@ async fn s3_cleanup_with_all_requests_retained(
         database.migration_config.clone(),
         database.migration_role.clone(),
         database.runtime_role.clone(),
-        AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into()).unwrap(),
+        database.audit(AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into()).unwrap()),
     )
     .with_attachment_storage_for_test(storage.clone());
     assert_eq!(
@@ -2721,7 +2744,7 @@ fn attachment_runtime_config(root: &std::path::Path) -> Value {
         "database":{"runtimeUrlRef":"secret:file/database","migrationUrlRef":"secret:file/migration","pool":{"maxSize":4,"waitTimeoutMilliseconds":1000,"createTimeoutMilliseconds":1000,"recycleTimeoutMilliseconds":1000},"roles":{"migration":"registry_migration","runtime":"registry_runtime"}},
         "package":{"root":root,"trustAnchorPath":root.join("anchor"),"compilerSourceRevision":"test-source","activeRevision":PACKAGE_REVISION,"activeSequence":1},
         "authentication":{"oidc":{"issuer":"https://issuer.example","audience":"urn:breg:test","allowedAlgorithm":"EdDSA","accessTokenType":"JWT","scopeClaim":"scope","scopeSeparator":" ","allowedClients":["registry-client"],"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":60000,"jwksCache":{"cacheTtlSeconds":600,"negativeCacheTtlSeconds":60,"refreshCooldownSeconds":30,"maxDocumentBytes":65536,"requestTimeoutMilliseconds":5000,"outageToleranceSeconds":900}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
-        "audit":{"hashKeyRef":"secret:file/audit"},
+        "audit":{"hashKeyRef":"secret:file/audit","path":root.join("audit").join("audit.jsonl")},
         "cursor":{"secretRef":"secret:file/cursor","maxAgeSeconds":300},
         "eventDestinations":{},
         "operationalTimeouts":{"httpRequestMilliseconds":10000,"shutdownGraceMilliseconds":30000,"recordLockMilliseconds":5000,"migrationLockMilliseconds":30000,"migrationStatementMilliseconds":60000}
@@ -2871,7 +2894,20 @@ async fn attachment_audit_records(
     operation_id: &str,
     phase: &str,
 ) -> Vec<Value> {
-    database.admin.query("SELECT convert_from(envelope, 'UTF8')::jsonb -> 'record' FROM registry_internal.registry_audit WHERE convert_from(envelope, 'UTF8')::jsonb #>> '{record,operationId}' = $1 AND convert_from(envelope, 'UTF8')::jsonb #>> '{record,phase}' = $2", &[&operation_id, &phase]).await.unwrap().iter().map(|row| row.get(0)).collect()
+    database
+        .audit_records()
+        .into_iter()
+        .filter(|record| record["operationId"] == operation_id && record["phase"] == phase)
+        .collect()
+}
+
+/// The attachment verification worker's entries, in append order.
+fn verification_audit(database: &TestDatabase) -> Vec<Value> {
+    database
+        .audit_entries()
+        .into_iter()
+        .filter(|entry| entry["schema"] == ATTACHMENT_VERIFICATION_AUDIT_SCHEMA)
+        .collect()
 }
 
 async fn attachment_download_journey(
@@ -3435,9 +3471,11 @@ async fn attachment_download_journey(
             .as_ref(),
         bytes
     );
-    let audit: Value = database.admin.query_one(
-        "SELECT convert_from(envelope, 'UTF8')::jsonb -> 'record' FROM registry_internal.registry_audit WHERE convert_from(envelope, 'UTF8')::jsonb #>> '{record,attachment,slotId}' = 'evidence' AND convert_from(envelope, 'UTF8')::jsonb #>> '{record,method}' = 'GET' LIMIT 1", &[]
-    ).await.unwrap().get(0);
+    let audit = database
+        .audit_records()
+        .into_iter()
+        .find(|record| record["attachment"]["slotId"] == "evidence" && record["method"] == "GET")
+        .expect("the attachment download is audited");
     assert_eq!(
         audit["attachment"],
         json!({"slotId":"evidence","proposalVersion":1})
@@ -3938,7 +3976,8 @@ async fn attachment_download_journey(
             database.migration_config.clone(),
             database.migration_role.clone(),
             database.runtime_role.clone(),
-            AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into()).unwrap(),
+            database
+                .audit(AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into()).unwrap()),
         )
         .with_attachment_storage_for_test(storage.clone());
     for version in [1, 2] {
@@ -6209,8 +6248,10 @@ fn change_request_service_with_evidence_options(
 ) -> (Arc<HttpService>, registry_breg::postgres::RuntimePool) {
     let pool = database.runtime_config.build_pool().expect("pool builds");
     let lock_key = RegistryLockKey::derive(package_id).expect("lock key derives");
-    let audit = AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into())
-        .expect("test audit profile is keyed");
+    let audit = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into())
+            .expect("test audit profile is keyed"),
+    );
     let cursors = Arc::new(
         CursorCodec::new(Zeroizing::new(vec![0x49; 32]), Duration::from_secs(300))
             .expect("cursor codec builds"),

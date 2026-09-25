@@ -195,9 +195,57 @@ pub(crate) async fn install_history_commit_schema(
              CREATE INDEX IF NOT EXISTS registry_revision_commit_members_position_idx
                  ON registry_internal.registry_revision_commit_members
                      (commit_position, entity_id, record_id);
+             CREATE TABLE IF NOT EXISTS registry_internal.registry_history_erasure_coverage (
+                 unavailable_after_position bigint PRIMARY KEY
+                     CHECK (unavailable_after_position >= 0),
+                 recorded_at timestamptz NOT NULL DEFAULT transaction_timestamp()
+             );
+             CREATE TABLE IF NOT EXISTS
+                 registry_internal.registry_field_encryption_lifecycle_progress (
+                 lifecycle_reference text NOT NULL
+                     CHECK (
+                         lifecycle_reference <> ''
+                         AND octet_length(lifecycle_reference) <= 512
+                     ),
+                 progress_kind text NOT NULL
+                     CHECK (progress_kind IN ('record-erasure', 'request-scrub', 'terminal')),
+                 target_record_reference text
+                     CHECK (
+                         target_record_reference IS NULL
+                         OR (
+                             target_record_reference <> ''
+                             AND octet_length(target_record_reference) <= 512
+                         )
+                     ),
+                 erased_revision_count bigint NOT NULL DEFAULT 0
+                     CHECK (erased_revision_count >= 0),
+                 erased_commit_member_count bigint NOT NULL DEFAULT 0
+                     CHECK (erased_commit_member_count >= 0),
+                 scrubbed_change_context_count bigint NOT NULL DEFAULT 0
+                     CHECK (scrubbed_change_context_count >= 0),
+                 scrubbed_outbox_payload_count bigint NOT NULL DEFAULT 0
+                     CHECK (scrubbed_outbox_payload_count >= 0),
+                 scrubbed_cached_response_count bigint NOT NULL DEFAULT 0
+                     CHECK (scrubbed_cached_response_count >= 0),
+                 scrubbed_request_target_count bigint NOT NULL DEFAULT 0
+                     CHECK (scrubbed_request_target_count >= 0),
+                 scrubbed_request_proposal_count bigint NOT NULL DEFAULT 0
+                     CHECK (scrubbed_request_proposal_count >= 0),
+                 removed_descriptor_count bigint NOT NULL DEFAULT 0
+                     CHECK (removed_descriptor_count >= 0),
+                 recorded_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 CHECK (
+                     (progress_kind = 'record-erasure') = (target_record_reference IS NOT NULL)
+                 )
+             );
+             CREATE INDEX IF NOT EXISTS registry_field_encryption_lifecycle_progress_idx
+                 ON registry_internal.registry_field_encryption_lifecycle_progress
+                     (lifecycle_reference, progress_kind);
              REVOKE ALL ON registry_internal.registry_commit_head,
                  registry_internal.registry_revision_commits,
-                 registry_internal.registry_revision_commit_members FROM PUBLIC;",
+                 registry_internal.registry_revision_commit_members,
+                 registry_internal.registry_history_erasure_coverage,
+                 registry_internal.registry_field_encryption_lifecycle_progress FROM PUBLIC;",
         )
         .await
         .map_err(|_| HistoryCommitError::Unavailable)?;
@@ -206,7 +254,9 @@ pub(crate) async fn install_history_commit_schema(
         .batch_execute(&format!(
             "REVOKE ALL ON registry_internal.registry_commit_head,
                  registry_internal.registry_revision_commits,
-                 registry_internal.registry_revision_commit_members FROM {role};
+                 registry_internal.registry_revision_commit_members,
+                 registry_internal.registry_history_erasure_coverage,
+                 registry_internal.registry_field_encryption_lifecycle_progress FROM {role};
              GRANT SELECT ON registry_internal.registry_commit_head TO {role};
              GRANT UPDATE (latest_position, updated_at)
                  ON registry_internal.registry_commit_head TO {role};

@@ -3,7 +3,6 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use registry_platform_audit::AuditProfile;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::task::JoinHandle;
@@ -12,7 +11,6 @@ use tokio_postgres::NoTls;
 use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
 
-use crate::audit::append_envelope;
 use crate::event_destination::EventDestinationCompatibilityInventory;
 use crate::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
 use crate::generated_ddl::DdlStatementKind;
@@ -74,14 +72,6 @@ const FIELD_ENCRYPTION_DUPLICATE_PREFLIGHT_PAGE_SIZE: i64 = 512;
 /// mismatch as an unavailable Registry, which carries no wording of its own.
 const SCHEMA_FINGERPRINT_FINDING: &str =
     "managed schema fingerprint differs from the expected package";
-
-/// One chained audit record appended inside the same transaction as the
-/// maintenance transition it records, so a committed transition can never be
-/// missing from the journal.
-pub(crate) struct MaintenanceAuditRecord<'a> {
-    pub profile: &'a AuditProfile,
-    pub record: Value,
-}
 
 /// The durable ledger row one maintenance transition records, together with
 /// the exact catalog and roles it verifies in the same transaction.
@@ -1815,7 +1805,6 @@ impl DedicatedApplyConnection {
         current: Option<&ExpectedRegistryIdentity>,
         target: &ExpectedRegistryIdentity,
         transition: MaintenanceTransition<'_>,
-        audit: Option<MaintenanceAuditRecord<'_>>,
     ) -> Result<()> {
         let MaintenanceTransition {
             ledger,
@@ -1909,11 +1898,6 @@ impl DedicatedApplyConnection {
         };
         if changed != 1 {
             return Err(PostgresKernelError::RegistryUnavailable);
-        }
-        if let Some(audit) = audit {
-            append_envelope(&transaction, audit.profile, audit.record)
-                .await
-                .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
         }
         transaction.commit().await?;
         Ok(())
@@ -2148,7 +2132,6 @@ impl DedicatedApplyConnection {
         current: &ExpectedRegistryIdentity,
         target_revision: &str,
         transition: MaintenanceTransition<'_>,
-        audit: MaintenanceAuditRecord<'_>,
     ) -> Result<()> {
         let MaintenanceTransition {
             ledger,
@@ -2207,9 +2190,6 @@ impl DedicatedApplyConnection {
             return Err(PostgresKernelError::RegistryUnavailable);
         }
         record_failed(&transaction, ledger).await?;
-        append_envelope(&transaction, audit.profile, audit.record)
-            .await
-            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
         transaction.commit().await?;
         Ok(())
     }
@@ -2266,11 +2246,10 @@ async fn verify_history_coverage_can_begin_successor(
 ///
 /// Complete coverage admits it. So does coverage that a standalone erasure
 /// narrowed after the baseline: that erasure leaves the head ready with an
-/// unavailable-after position, and its terminal audit record carries the same
-/// position and no lifecycle reference. A lifecycle erasure, an erasure at or
-/// before the baseline, and every other gap leave the head not ready or
-/// unrecorded, and still freeze successors until a rebaseline. A pruned
-/// erasure record also freezes them, so the check fails closed.
+/// unavailable-after position, and records the same position in
+/// `registry_history_erasure_coverage` in its own commit. A lifecycle erasure,
+/// an erasure at or before the baseline, and every other gap leave the head
+/// not ready or unrecorded, and still freeze successors until a rebaseline.
 async fn history_coverage_admits_successor(
     client: &impl tokio_postgres::GenericClient,
 ) -> Result<Option<bool>> {
@@ -2296,19 +2275,10 @@ async fn history_coverage_admits_successor(
     }
     let recorded = client
         .query_one(
-            "WITH audited AS (
-                 SELECT convert_from(envelope, 'UTF8')::jsonb -> 'record' AS record
-                   FROM registry_internal.registry_audit
-             )
-             SELECT EXISTS (
+            "SELECT EXISTS (
                  SELECT 1
-                   FROM audited
-                  WHERE record ->> 'schema' = 'breg-history-erasure-audit/v1'
-                    AND record ->> 'phase' = 'terminal'
-                    AND record ->> 'outcome' = 'committed'
-                    AND record -> 'coverageReady' = 'true'::jsonb
-                    AND record -> 'unavailableAfterPosition' = to_jsonb($1::bigint)
-                    AND NOT record ? 'lifecycleReference'
+                   FROM registry_internal.registry_history_erasure_coverage
+                  WHERE unavailable_after_position = $1
              )",
             &[&unavailable_after_position],
         )
