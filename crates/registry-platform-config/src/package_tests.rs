@@ -241,6 +241,9 @@ fn a_revision_must_be_one_printable_line() {
         "trailing ",
         "two\nlines",
         "tab\there",
+        "hidden\u{200e}mark",
+        "override\u{202e}text",
+        "isolate\u{2066}text",
         &"x".repeat(MAX_REVISION_BYTES + 1),
     ] {
         let directory = populated();
@@ -260,6 +263,7 @@ fn a_revision_must_be_one_printable_line() {
     }
     assert!(check_revision(&"x".repeat(MAX_REVISION_BYTES)).is_ok());
     assert!(check_revision("v1.2.3 (git 0123abcd)").is_ok());
+    assert!(check_revision("إصدار-גרסה-1").is_ok());
 }
 
 #[test]
