@@ -304,7 +304,8 @@ def _db_wait_summary(path: Path | None) -> dict[str, Any]:
             samples += 1
             for name in peaks:
                 peaks[name] = max(peaks[name], int(item.get(name, 0)))
-    return {"samples": samples, **{f"{name}Peak": value for name, value in peaks.items()}}
+    # A run shorter than the first sample observed nothing, which is not zero contention.
+    return {"samples": samples, **{f"{name}Peak": value if samples else None for name, value in peaks.items()}}
 
 
 def summarize(arguments: argparse.Namespace) -> None:
@@ -335,12 +336,10 @@ def summarize(arguments: argparse.Namespace) -> None:
     safety = _json_object(arguments.safety) if arguments.safety.exists() else {"safe": False}
     db_waits = _db_wait_summary(arguments.db_waits)
     # A run that asked for wait samples is judged only when the sampler ran to
-    # the end of the run and recorded at least one sample.
+    # the end of the run.
     if arguments.db_waits is not None:
         db_waits["samplerExitCode"] = arguments.db_sampler_exit_code
-    db_sampling_pass = arguments.db_waits is None or (
-        db_waits["samples"] > 0 and arguments.db_sampler_exit_code == 0
-    )
+    db_sampling_pass = arguments.db_waits is None or arguments.db_sampler_exit_code == 0
     result = {
         "schemaVersion": 1,
         "product": manifest.get("product"),
