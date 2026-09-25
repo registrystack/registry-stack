@@ -31,8 +31,8 @@ use crate::logical_names::{
     default_api_name, default_sql_name, reserved_logical_name, valid_api_name,
 };
 use crate::model::{
-    leading_field_indexed, request_query_field_id_for_api, request_state_query_filter_fields,
-    request_state_query_sort_fields, REFERENCE_INDEX_PREFIX,
+    leading_field_indexed, leading_field_indexed_for_list_finding, request_query_field_id_for_api,
+    request_state_query_filter_fields, request_state_query_sort_fields, REFERENCE_INDEX_PREFIX,
 };
 use crate::model::{
     ChangeRequestOperation, CompiledAccessEntry, CompiledAccessInventory,
@@ -6147,7 +6147,12 @@ fn unindexed_field_findings<'a>(
             .fields
             .get(field)
             .is_some_and(|compiled| compiled.encryption.is_none())
-            && !leading_field_indexed(field, &entity.indexes, &entity.constraints)
+            && !leading_field_indexed_for_list_finding(
+                field,
+                &entity.indexes,
+                &entity.constraints,
+                entity.change_request.is_some(),
+            )
             && !consent_scope_indexed(field)
     };
     // A temporal exclusion constraint is backed by a GiST index that answers
