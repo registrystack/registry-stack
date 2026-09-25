@@ -85,7 +85,7 @@ available only to builds with the `postgres-test` feature and an explicit
 `testOnlyPlaintext: true` setting.
 
 `authentication.oidc` requires `issuer` and `audience`. The issuer is an exact
-`https` URL without credentials or fragment; plain `http` is accepted only for
+`https` URL without credentials, query, or fragment; plain `http` is accepted only for
 an IPv4 loopback address under development loopback, for the issuer and for a
 `kind: uri` key set alike. The audience is at most 512
 characters. `jwksSource` defaults to `kind: discovery`. `kind: uri` with `uri`

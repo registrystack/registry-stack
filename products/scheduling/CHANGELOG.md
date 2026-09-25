@@ -20,7 +20,7 @@
 - Add the optional `package.expectedDigest` pin, compared with the verified
   package's policy digest at startup.
 - BREAKING: `authentication.oidc.issuer` must be an absolute `https` URL
-  without credentials or fragment, or a loopback `http` URL under
+  without credentials, query, or fragment, or a loopback `http` URL under
   `development-loopback`, and `authentication.oidc.audience` is at most 512
   characters without control characters. Both are checked by the shared OIDC
   issuer block, the same one the other runtimes use.

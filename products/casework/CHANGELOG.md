@@ -14,7 +14,7 @@
 - BREAKING: `listener.bind` is required; the `127.0.0.1:8100` default is
   removed.
 - BREAKING: `authentication.oidc.issuer` must be an absolute `https` URL
-  without credentials or fragment, or IPv4-loopback `http` under
+  without credentials, query, or fragment, or IPv4-loopback `http` under
   `development-loopback`, and `authentication.oidc.audience` is at most 512
   characters.
 - BREAKING: `authentication.oidc.jwksUri` is removed. Declare

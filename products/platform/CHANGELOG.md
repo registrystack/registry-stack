@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- BREAKING: `OidcIssuerConfig::check` refuses an issuer carrying a query
+  component, as it already refused credentials and a fragment. The refusal
+  names the field and does not repeat the configured value.
 - BREAKING: `TransitSigner::initialize` returns `TransitInitializationError`,
   which names the fault it met: an unreachable socket, a refused metadata read,
   a provider server error on that read, a malformed response, unsafe custody,

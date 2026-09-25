@@ -448,21 +448,24 @@ pub struct OidcIssuerConfig {
 }
 
 impl OidcIssuerConfig {
-    /// The issuer is an absolute `https` URL without credentials or fragment,
-    /// the audience is non-empty bounded text without control characters, and
+    /// The issuer is an absolute `https` URL without credentials, query, or
+    /// fragment, the audience is non-empty bounded text without control characters, and
     /// the key source passes [`JwksSource::check`]. A loopback `http` issuer
     /// or key URI is accepted only when `allow_loopback_http` is set, for
     /// supervised local development. `field` is the dotted path of the block,
     /// such as `authentication.oidc`.
     pub fn check(&self, field: &str, allow_loopback_http: bool) -> Result<(), ConfigBlockError> {
         let issuer_ok = valid_jwks_uri(&self.issuer, allow_loopback_http)
-            && url::Url::parse(&self.issuer).is_ok_and(|url| url.fragment().is_none());
+            && url::Url::parse(&self.issuer)
+                .is_ok_and(|url| url.query().is_none() && url.fragment().is_none());
         if !issuer_ok {
             let field = format!("{field}.issuer");
             return Err(ConfigBlockError::new(
                 ConfigBlockErrorKind::InvalidUri,
                 &field,
-                format!("{field} must be an absolute https URL without credentials or fragment"),
+                format!(
+                    "{field} must be an absolute https URL without credentials, query, or fragment"
+                ),
             ));
         }
         let audience_ok = !self.audience.is_empty()
