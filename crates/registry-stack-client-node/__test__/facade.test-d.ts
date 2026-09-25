@@ -53,6 +53,16 @@ async function readEvidence(): Promise<Buffer | string> {
 }
 void readEvidence
 
+// The unified package bypasses each standalone napi-rs loader, so its product
+// namespaces cannot expose the generated loader diagnostic.
+type HasNoLoaderTarget<T> = '__napiBindingTarget' extends keyof T ? false : true
+type Assert<T extends true> = T
+type DiscoveryHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof discovery>>
+type EvidenceHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof evidence>>
+type RelayHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof relay>>
+type BregHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof breg>>
+type CaseworkHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof casework>>
+
 // @ts-expect-error Product query vocabularies remain distinct.
 bregClient.listRecords('people', { pageSize: 25 })
 // @ts-expect-error Product query vocabularies remain distinct.

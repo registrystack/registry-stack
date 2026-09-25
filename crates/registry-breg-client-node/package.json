@@ -24,7 +24,7 @@
     "check:types": "napi build --platform --dts index.d.ts.check && cmp index.d.ts index.d.ts.check && rm -f index.d.ts.check && tsc --noEmit --strict --skipLibCheck false --types node --moduleResolution node16 --module node16 --target es2022 client.d.ts index.d.ts __test__/facade.test-d.ts"
   },
   "devDependencies": {
-    "@napi-rs/cli": "3.8.2",
+    "@napi-rs/cli": "3.10.4",
     "@types/node": "22.20.1",
     "typescript": "6.0.3"
   }

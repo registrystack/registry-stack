@@ -180,10 +180,7 @@ test('every native progressive result getter is wrapped', () => {
   ]);
 });
 
-test('every class client.js exports is declared in client.d.ts or the index.d.ts it re-exports', () => {
-  // `client.d.ts` re-exports `index.d.ts` wholesale (`export * from './index'`)
-  // rather than repeating each declaration, so a name may legitimately live
-  // in either file.
+test('every class client.js exports is declared in client.d.ts or index.d.ts', () => {
   const clientDeclaration = fs.readFileSync(path.join(__dirname, '..', 'client.d.ts'), 'utf8');
   const indexDeclaration = fs.readFileSync(path.join(__dirname, '..', 'index.d.ts'), 'utf8');
   for (const name of Object.keys(wrapper)) {
@@ -193,6 +190,13 @@ test('every class client.js exports is declared in client.d.ts or the index.d.ts
       `neither client.d.ts nor index.d.ts mentions '${name}', which client.js exports`,
     );
   }
+});
+
+test('the public entry point excludes generated loader-only diagnostics', () => {
+  const clientDeclaration = fs.readFileSync(path.join(__dirname, '..', 'client.d.ts'), 'utf8');
+  assert.equal(Object.hasOwn(wrapper, '__napiBindingTarget'), false);
+  assert.doesNotMatch(clientDeclaration, /export \* from ['"]\.\/index['"]/);
+  assert.doesNotMatch(clientDeclaration, /\b__napiBindingTarget\b/);
 });
 
 test('the handwritten request-batch input types preserve the common and item field boundary', () => {
