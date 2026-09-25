@@ -6,8 +6,12 @@ Each row names one product runtime and the evidence that it conforms:
 - its generated runtime schema embeds every shared configuration block it
   uses unchanged from the canonical platform schema, and any block it carries
   under a shared name matches that schema too;
-- its runtime reads `runtime.yaml` through `RuntimeConfigLoader` and no longer
-  calls the legacy `expand_config_env_vars` expansion;
+- a runtime without a generated schema holds each shared block as a field of
+  its runtime struct, typed with the `registry_platform_config` type itself,
+  and a hand-written schema carrying a shared block keeps every canonical
+  keyword unchanged and narrows it only with `allOf`;
+- its non-test code reads `runtime.yaml` through `RuntimeConfigLoader` and no
+  source calls the legacy `expand_config_env_vars` expansion;
 - a named test proves a `*Ref` field refuses `${VAR}` substitution, and a named
   test proves an authored project file refuses an environment expression. The
   Rust test jobs run those tests; this gate fails when one is renamed or
@@ -36,12 +40,27 @@ from typing import Callable
 
 ROOT = Path(__file__).resolve().parents[3]
 CANONICAL_SCHEMA = "products/platform/generated/runtime-config-blocks.schema.json"
-GENERATOR_COMMAND = (
-    "cargo run --locked -p registry-platform-config --features schema "
-    "--example shared-blocks-schema -- --output products/platform/generated"
+GENERATOR_OUTPUT = "products/platform/generated"
+GENERATOR_ARGUMENTS: tuple[str, ...] = (
+    "cargo",
+    "run",
+    "--locked",
+    "-p",
+    "registry-platform-config",
+    "--features",
+    "schema",
+    "--example",
+    "shared-blocks-schema",
+    "--",
+    "--output",
 )
+GENERATOR_COMMAND = " ".join((*GENERATOR_ARGUMENTS, GENERATOR_OUTPUT))
 LEGACY_EXPANSION = re.compile(r"\bexpand_config_env_vars\w*\b")
-LOADER_USE = "RuntimeConfigLoader::new("
+LOADER_USE = re.compile(r"\bRuntimeConfigLoader\s*::\s*new\s*\(")
+PLATFORM_CRATE = "registry_platform_config"
+# Keywords a hand-written copy of a shared block may add: each one only
+# describes or narrows what the canonical block accepts.
+NARROWING_KEYWORDS = frozenset({"$comment", "allOf", "description", "title"})
 
 
 @dataclass(frozen=True)
@@ -56,6 +75,25 @@ class Exemption:
 
 
 @dataclass(frozen=True)
+class RustBlock:
+    """A runtime struct field that must hold a shared block type."""
+
+    path: str
+    struct: str
+    field: str
+    block: str
+
+
+@dataclass(frozen=True)
+class HandSchema:
+    """A shared block written by hand inside a product schema."""
+
+    path: str
+    pointer: tuple[str, ...]
+    block: str
+
+
+@dataclass(frozen=True)
 class Row:
     product: str
     loader_sources: tuple[str, ...]
@@ -63,6 +101,8 @@ class Row:
     shared_blocks: tuple[str, ...]
     reference_refusal: TestRef | Exemption
     authored_refusal: TestRef | Exemption
+    rust_blocks: tuple[RustBlock, ...] = ()
+    hand_schemas: tuple[HandSchema, ...] = ()
 
 
 ROWS: tuple[Row, ...] = (
@@ -101,6 +141,26 @@ ROWS: tuple[Row, ...] = (
             "crates/registry-render/src/manifest.rs",
             "an_authored_manifest_carrying_an_environment_expression_is_refused",
         ),
+        rust_blocks=(
+            RustBlock(
+                "crates/registry-render/src/runtime.rs",
+                "RenderRuntime",
+                "package",
+                "PackageConfig",
+            ),
+            RustBlock(
+                "crates/registry-render/src/runtime.rs",
+                "RenderRuntime",
+                "secret_providers",
+                "SecretProvidersConfig",
+            ),
+            RustBlock(
+                "crates/registry-render/src/runtime.rs",
+                "ListenerRuntime",
+                "bind",
+                "ListenerBind",
+            ),
+        ),
     ),
     Row(
         product="discovery",
@@ -111,6 +171,21 @@ ROWS: tuple[Row, ...] = (
         authored_refusal=Exemption(
             "the Discovery runtime serves a built index and reads no authored "
             "project file"
+        ),
+        rust_blocks=(
+            RustBlock(
+                "crates/registry-discovery/src/startup.rs",
+                "RuntimeConfig",
+                "listener",
+                "ListenerConfig",
+            ),
+        ),
+        hand_schemas=(
+            HandSchema(
+                "products/discovery/schemas/runtime.schema.json",
+                ("properties", "listener"),
+                "ListenerConfig",
+            ),
         ),
     ),
     Row(
@@ -158,6 +233,102 @@ def rust_sources(root: Path, directories: tuple[str, ...]) -> list[Path]:
     return sorted(
         path for directory in directories for path in (root / directory).rglob("*.rs")
     )
+
+
+RUST_LITERAL_OR_COMMENT = re.compile(
+    r"//[^\n]*"
+    r"|/\*.*?\*/"
+    r'|b?r(?P<hashes>#*)".*?"(?P=hashes)'
+    r'|b?"(?:\\.|[^"\\])*"'
+    r"|b?'(?:\\.|[^'\\])'",
+    re.DOTALL,
+)
+TEST_ONLY_ITEM = re.compile(r"#\[cfg\(test\)\]((?:\s*#\[[^\]]*\])*)\s*")
+MODULE_DECLARATION = re.compile(
+    r"(?:pub(?:\([^)]*\))?\s+)?mod\s+(?P<name>\w+)\s*(?P<end>[;{])"
+)
+PATH_ATTRIBUTE = re.compile(r"#\[path\s*=\s*\"(?P<path>[^\"]+)\"\s*\]")
+
+
+def blank(match: re.Match[str]) -> str:
+    return re.sub(r"[^\n]", " ", match.group(0))
+
+
+def code_only(text: str) -> str:
+    """Blank Rust comments and string and character literals, keeping offsets.
+
+    Nested block comments are not modelled; the product sources carry none.
+    """
+    return RUST_LITERAL_OR_COMMENT.sub(blank, text)
+
+
+def matching_brace(code: str, opening: int) -> int:
+    depth = 0
+    for index in range(opening, len(code)):
+        if code[index] == "{":
+            depth += 1
+        elif code[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return len(code) - 1
+
+
+def module_file(declaring: Path, name: str, path_attribute: str | None) -> list[Path]:
+    if path_attribute is not None:
+        return [declaring.parent / path_attribute]
+    if declaring.name in {"lib.rs", "main.rs", "mod.rs"}:
+        base = declaring.parent
+    else:
+        base = declaring.parent / declaring.stem
+    return [base / f"{name}.rs", base / name / "mod.rs"]
+
+
+def strip_test_items(path: Path, text: str) -> tuple[str, list[Path]]:
+    """Blank every `#[cfg(test)]` item and name the files of test-only modules."""
+
+    code = code_only(text)
+    test_files: list[Path] = []
+    position = 0
+    while (found := TEST_ONLY_ITEM.search(code, position)) is not None:
+        rest = found.end()
+        declaration = MODULE_DECLARATION.match(code, rest)
+        if declaration is not None and declaration.group("end") == ";":
+            # `code` blanks string literals; the `#[path]` value is read from
+            # the same offsets of the original text.
+            attribute = PATH_ATTRIBUTE.search(text, found.start(1), found.end(1))
+            test_files += module_file(
+                path,
+                declaration.group("name"),
+                attribute.group("path") if attribute else None,
+            )
+            end = declaration.end()
+        else:
+            opening = code.find("{", rest)
+            semicolon = code.find(";", rest)
+            if opening == -1 or (semicolon != -1 and semicolon < opening):
+                end = semicolon + 1 if semicolon != -1 else len(code)
+            else:
+                end = matching_brace(code, opening) + 1
+        code = code[: found.start()] + re.sub(
+            r"[^\n]", " ", code[found.start() : end]
+        ) + code[end:]
+        position = end
+    return code, test_files
+
+
+def production_code(paths: list[Path]) -> dict[Path, str]:
+    """Return the non-test code of each source, dropping test-only module files."""
+
+    stripped: dict[Path, str] = {}
+    test_files: set[Path] = set()
+    for path in paths:
+        code, files = strip_test_items(path, path.read_text(encoding="utf-8"))
+        stripped[path] = code
+        test_files.update(file.resolve() for file in files)
+    return {
+        path: code for path, code in stripped.items() if path.resolve() not in test_files
+    }
 
 
 def has_test(text: str, name: str) -> bool:
@@ -209,7 +380,8 @@ def check_loader(root: Path, row: Row) -> list[str]:
     sources = rust_sources(root, row.loader_sources)
     problems = []
     texts = {path: path.read_text(encoding="utf-8") for path in sources}
-    if not any(LOADER_USE in text for text in texts.values()):
+    production = production_code(sources)
+    if not any(LOADER_USE.search(code) for code in production.values()):
         problems.append(
             f"{row.product}: no source under {', '.join(row.loader_sources)} reads "
             "runtime.yaml through RuntimeConfigLoader"
@@ -220,6 +392,147 @@ def check_loader(root: Path, row: Row) -> list[str]:
                 f"{row.product}: {path.relative_to(root).as_posix()} calls "
                 "expand_config_env_vars; read runtime.yaml through "
                 "RuntimeConfigLoader instead"
+            )
+    return problems
+
+
+def struct_fields(code: str, struct: str) -> dict[str, str] | None:
+    declaration = re.search(
+        rf"\bstruct\s+{struct}\b[^{{;]*\{{", code
+    )
+    if declaration is None:
+        return None
+    body = code[declaration.end() : matching_brace(code, declaration.end() - 1)]
+    body = re.sub(r"#\[[^\]]*\]", " ", body)
+    fields: dict[str, str] = {}
+    depth = 0
+    current = ""
+    for character in body + ",":
+        if character in "<([":
+            depth += 1
+        elif character in ">)]":
+            depth -= 1
+        if character == "," and depth == 0:
+            field = re.fullmatch(
+                r"\s*(?:pub(?:\([^)]*\))?\s+)?(\w+)\s*:\s*(.+?)\s*", current, re.DOTALL
+            )
+            if field is not None:
+                fields[field.group(1)] = re.sub(r"\s+", "", field.group(2))
+            current = ""
+        else:
+            current += character
+    return fields
+
+
+def imports_from_platform(code: str, block: str) -> bool:
+    for use in re.finditer(rf"\buse\s+{PLATFORM_CRATE}\s*::\s*([^;]*);", code):
+        if re.search(rf"(?<![\w:]){block}\b(?!\s*as\b)", use.group(1)):
+            return True
+    return False
+
+
+def check_rust_blocks(root: Path, row: Row, canonical: dict[str, object]) -> list[str]:
+    problems: list[str] = []
+    for entry in row.rust_blocks:
+        if entry.block not in canonical:
+            problems.append(
+                f"{row.product}: shared block {entry.block} is not in {CANONICAL_SCHEMA}"
+            )
+            continue
+        path = root / entry.path
+        if not path.is_file():
+            problems.append(f"{row.product}: runtime source {entry.path} is missing")
+            continue
+        code = production_code([path]).get(path, "")
+        fields = struct_fields(code, entry.struct)
+        if fields is None:
+            problems.append(f"{row.product}: {entry.path} has no struct {entry.struct}")
+            continue
+        written = fields.get(entry.field)
+        if written == f"{PLATFORM_CRATE}::{entry.block}":
+            continue
+        if written != entry.block:
+            problems.append(
+                f"{row.product}: {entry.path} {entry.struct}.{entry.field} is not "
+                f"typed {entry.block}"
+            )
+            continue
+        if re.search(rf"\b(?:struct|enum|type|union)\s+{entry.block}\b", code):
+            problems.append(
+                f"{row.product}: {entry.path} declares its own {entry.block} "
+                "instead of using the shared block"
+            )
+        if not imports_from_platform(code, entry.block):
+            problems.append(
+                f"{row.product}: {entry.path} does not import {entry.block} from "
+                f"{PLATFORM_CRATE}"
+            )
+    return problems
+
+
+def resolve(node: object, canonical: dict[str, object]) -> object:
+    while isinstance(node, dict) and set(node) == {"$ref"}:
+        reference = node["$ref"]
+        if not isinstance(reference, str) or not reference.startswith("#/$defs/"):
+            break
+        node = canonical.get(reference.removeprefix("#/$defs/"))
+    return node
+
+
+def narrowing_drift(
+    hand: object, shared: object, canonical: dict[str, object], at: str
+) -> str | None:
+    """Name the first way `hand` departs from the shared block, or None."""
+
+    shared = resolve(shared, canonical)
+    if not isinstance(hand, dict) or not isinstance(shared, dict):
+        return None if hand == shared else f"the schema differs at {at}"
+    for keyword, expected in shared.items():
+        if keyword == "description":
+            continue
+        if keyword not in hand:
+            return f"{keyword} is missing at {at}"
+        if keyword == "properties" and isinstance(expected, dict):
+            written = hand[keyword]
+            if not isinstance(written, dict) or set(written) != set(expected):
+                return f"properties differ at {at}"
+            for name in sorted(expected):
+                inner = f"{at.rstrip('/')}/properties/{name}"
+                drift = narrowing_drift(written[name], expected[name], canonical, inner)
+                if drift is not None:
+                    return drift
+        elif hand[keyword] != expected:
+            return f"{keyword} differs at {at}"
+    for keyword in sorted(set(hand) - set(shared)):
+        if keyword not in NARROWING_KEYWORDS:
+            return f"{keyword} is not a narrowing keyword at {at}"
+    return None
+
+
+def check_hand_schemas(root: Path, row: Row, canonical: dict[str, object]) -> list[str]:
+    problems: list[str] = []
+    for entry in row.hand_schemas:
+        pointer = "/" + "/".join(entry.pointer)
+        if entry.block not in canonical:
+            problems.append(
+                f"{row.product}: shared block {entry.block} is not in {CANONICAL_SCHEMA}"
+            )
+            continue
+        try:
+            node: object = json.loads((root / entry.path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            problems.append(f"{row.product}: schema {entry.path} is missing or invalid")
+            continue
+        for step in entry.pointer:
+            node = node.get(step) if isinstance(node, dict) else None
+        if node is None:
+            problems.append(f"{row.product}: {entry.path} has no schema at {pointer}")
+            continue
+        drift = narrowing_drift(node, canonical[entry.block], canonical, "/")
+        if drift is not None:
+            problems.append(
+                f"{row.product}: {entry.path} at {pointer} does not match shared "
+                f"block {entry.block}: {drift}"
             )
     return problems
 
@@ -245,6 +558,8 @@ def check(root: Path, rows: tuple[Row, ...] = ROWS) -> list[str]:
         problems += check_exemption(row, "reference_refusal", row.reference_refusal)
         problems += check_exemption(row, "authored_refusal", row.authored_refusal)
         problems += check_schema(root, row, canonical)
+        problems += check_rust_blocks(root, row, canonical)
+        problems += check_hand_schemas(root, row, canonical)
         problems += check_loader(root, row)
         problems += check_test(
             root, row, row.reference_refusal, "a *Ref field must refuse ${VAR}"
@@ -260,8 +575,7 @@ def check(root: Path, rows: tuple[Row, ...] = ROWS) -> list[str]:
 
 def run_generator(root: Path) -> Callable[[Path], None]:
     def generate(output: Path) -> None:
-        command = GENERATOR_COMMAND.split()
-        command[command.index("products/platform/generated")] = str(output)
+        command = [*GENERATOR_ARGUMENTS, str(output)]
         completed = subprocess.run(command, cwd=root, check=False)
         if completed.returncode != 0:
             raise GeneratorFailed(
@@ -289,7 +603,7 @@ def check_canonical_freshness(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument(
         "--check-generated",
