@@ -68,7 +68,10 @@
 - BREAKING: Casework and its BReg sources run in lock-step. BReg now names its
   release in a `Registry-Engine-Version` header on `GET /v1/registry`, and the
   Casework BReg adapter refuses a source whose engine reports another release,
-  or no release, as a source outage. The runtime log names the source and both
+  or no release, as a source outage. One trailing `-dev`, which a build
+  without the release marker appends, is set aside on each side, so a release
+  build matches a development build of the same version (with a warning);
+  every other part of the version, a prerelease tag included, must match. The runtime log names the source and both
   versions, and `caseworkctl doctor` refuses at `sourceConnections` with the
   same message and the upgrade step. Upgrade each BReg source first, then
   Casework, to the same release; reads resume on the next matching contract

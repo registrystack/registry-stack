@@ -459,6 +459,14 @@ every registry contract read. It refuses any other release, and an engine that r
 rather than guessing what an older or newer contract means: a member such as a change request's
 `effects` that one release sends and another omits must never read as empty.
 
+A build made without the release marker reports its version followed by `-dev`, as
+`breg --version` and `casework --version` show. Casework sets one trailing `-dev` aside on each
+side, so a release build matches a development build of the same version and logs a warning that
+it did; every other part of the version, a prerelease tag included, must match exactly. `0.34.0`
+matches `0.34.0-dev`, and `0.34.0-rc.1` matches only `0.34.0-rc.1` and `0.34.0-rc.1-dev`. A
+development build is matched by its version alone, not by the source revision it was built from,
+so run release builds of both in production.
+
 To upgrade, upgrade each BReg source first, then Casework, to the same release:
 
 1. Upgrade and start BReg. Until Casework matches it, Casework refuses that source's reads by name:
