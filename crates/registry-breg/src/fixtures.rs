@@ -1194,6 +1194,11 @@ fn validate_claims(
             .is_some_and(|client| !profile.requester_clients.contains(client))
         || profile.actor_kind == Some(crate::contract::ActorKindSource::Agent)
             && (claims.requester_client.is_none() || claims.actor_subject.is_none())
+        // A delegated token acts for its principal; like
+        // `authorize_profile_claims`, only a profile written for agents admits
+        // one.
+        || claims.actor_subject.is_some()
+            && profile.actor_kind != Some(crate::contract::ActorKindSource::Agent)
     {
         return Err(FixtureError::AuthorityWideningRefused);
     }
@@ -6354,6 +6359,53 @@ mod tests {
             assert_exact_claims(&claims, &profile, &exact, &widened_scopes),
             Err(FixtureError::AuthorityWideningRefused)
         );
+    }
+
+    #[test]
+    fn fixture_claims_admit_a_delegated_actor_only_on_an_agent_profile() {
+        let profile = |actor_kind: Value| -> AccessProfileSource {
+            let mut profile = json!({
+                "id": "citizen",
+                "principalClaim": "sub",
+                "operations": ["get"],
+                "rowBoundaries": []
+            });
+            if !actor_kind.is_null() {
+                profile["actorKind"] = actor_kind;
+                profile["requesterClients"] = json!(["citizen-gateway"]);
+            }
+            serde_json::from_value(profile).unwrap()
+        };
+        let delegated = |actor_kind: Value| -> ClaimsSource {
+            let mut claims = json!({
+                "principal": "citizen-subject",
+                "actorSubject": "00000000-0000-4000-8000-000000000001"
+            });
+            if !actor_kind.is_null() {
+                claims["actorKind"] = actor_kind;
+                claims["requesterClient"] = json!("citizen-gateway");
+            }
+            serde_json::from_value(claims).unwrap()
+        };
+        assert_eq!(
+            validate_claims(
+                &delegated(json!("agent")),
+                &profile(json!("agent")),
+                ExpectedOutcome::Success
+            ),
+            Ok(())
+        );
+        // A profile that declares no actorKind, or another kind, refuses a
+        // token carrying `act` at runtime, so a journey cannot admit one.
+        for kind in [Value::Null, json!("human"), json!("service")] {
+            for outcome in [ExpectedOutcome::Success, ExpectedOutcome::Refusal] {
+                assert_eq!(
+                    validate_claims(&delegated(kind.clone()), &profile(kind.clone()), outcome),
+                    Err(FixtureError::AuthorityWideningRefused),
+                    "a delegated actor on a {kind} profile was admitted"
+                );
+            }
+        }
     }
 
     #[test]

@@ -784,6 +784,14 @@ class CiChangesTest(unittest.TestCase):
                     set(outputs["rust_packages"]) & BREG_PACKAGES
                 )
 
+        # The review page's real-registry journey runs in the PostgreSQL lane
+        # of the product gate, so a change to the page selects that gate.
+        review_outputs = classify(
+            self.workspace, ("crates/registry-breg-review/src/pages.rs",)
+        )
+        self.assertTrue(review_outputs["breg_contracts"])
+        self.assertIn("registry-breg-review", review_outputs["rust_packages"])
+
         product_outputs = classify(
             self.workspace,
             ("products/breg/contracts/definition-of-done.yaml",),
@@ -1477,6 +1485,37 @@ class CiChangesTest(unittest.TestCase):
             {"developer-tools", "evidence"},
         )
 
+    def test_mcp_gateway_change_runs_in_the_breg_shard(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-breg-mcp/src/gateway.rs",),
+        )
+        self.assertIn("registry-breg-mcp", outputs["rust_packages"])
+        breg = next(
+            entry
+            for entry in outputs["rust_matrix"]["include"]
+            if entry["name"] == "breg"
+        )
+        self.assertIn("registry-breg-mcp", breg["packages"])
+        self.assertTrue(
+            classify(self.workspace, ("crates/registry-breg-mcp/src/cli.rs",))["docs"]
+        )
+
+    def test_review_page_command_change_runs_docs(self) -> None:
+        # `breg-review`'s Clap tree is built in its lib.rs, which the CLI
+        # reference renders, so a change there rebuilds the docs.
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-breg-review/src/lib.rs",),
+        )
+        self.assertTrue(outputs["docs"])
+        self.assertIn("registry-breg-review", outputs["rust_packages"])
+        self.assertFalse(
+            classify(
+                self.workspace, ("crates/registry-breg-review/src/pages.rs",)
+            )["docs"]
+        )
+
     def test_the_python_binding_and_its_sdk_replay_the_tutorial_that_imports_them(
         self,
     ) -> None:
@@ -1734,6 +1773,7 @@ class CiChangesTest(unittest.TestCase):
         for entry_point in (
             "products/breg/scripts/check-contracts.sh",
             "products/breg/scripts/check-client-contract.sh",
+            "products/breg/scripts/check-mcp-gateway-boundary.sh",
             "products/breg/scripts/test-postgres.sh",
             "products/breg/scripts/test-postgres-tls.sh",
             "products/breg/scripts/test-adopter-workflow.sh",

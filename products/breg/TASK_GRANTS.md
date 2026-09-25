@@ -37,8 +37,36 @@ authentication:
 
 The access token keeps the citizen in `sub`. Its `act.sub` must equal the
 configured actor for the verified `azp` or `client_id`; BREG does not accept a
-caller-supplied actor alias. Custom contextual claim names, when needed for an
-existing issuer, are configured together in the closed `contextual` object.
+caller-supplied actor alias. `act` is exactly `{sub}` or exactly `{sub, iss}`,
+and `iss`, when present, must be a string equal to the verified token issuer;
+any other member, a different issuer, or a nested `act` refuses the token. A
+token carrying a verified trusted actor is an agent token whatever its
+`registry_actor_kind` claim says: a token exchange copies that claim from the
+subject token, so it describes the citizen, not the caller. Such a token is
+admitted only by an access profile, or an immediate-action permission, that
+declares `actorKind: agent`; a profile that declares another kind or no
+`actorKind` at all refuses it. A token without `act` is unaffected: a profile
+without `actorKind` still accepts every kind of direct token. Custom contextual claim
+names, when needed for an existing issuer, are configured together in the
+closed `contextual` object.
+
+A standing agent profile has a lower ceiling than a task-grant profile. A task
+grant carries the approval of the human who assigned the task; a standing
+agent carries none, so the human must confirm the change themselves by
+submitting it. A standing agent profile may read and may create, read, and
+patch change-request drafts. The compiler refuses it when it holds
+`submit_request`, `revise_request`, `cancel_request`, or `apply_request`,
+with `access_profile.standing_agent.operation_forbidden`, and when it holds
+`create` or `patch` on an entity without a `changeRequest`, or `tombstone` or
+`batch` on any entity, with
+`access_profile.standing_agent.direct_mutation_forbidden`. Profiles
+contributed by modules meet the same ceiling. An immediate action commits its
+effects at once, with no draft for the human to confirm, so the compiler also
+refuses a standing agent profile that holds any action permission, with
+`access_profile.standing_agent.action_forbidden`. Action permissions are
+authored only on project access profiles; a module contributes entity
+profiles, which cannot grant `invoke` at all. Give the lifecycle operations
+and immediate actions to a separate profile the citizen uses directly.
 
 ## Configure current status
 
@@ -102,3 +130,22 @@ package revision. The object also records the source issuer and grant deadline.
 It contains no subjects, bounds values or purpose value. BREG continues
 to record purpose presence separately. Later human review remains a separate
 actor, and the retained original grant continues to govern status checks.
+
+A request carrying a verified trusted actor records the same `authorization`
+object on the same records, with `actorKind: agent` and an `actorPseudonym`:
+the keyed pseudonym of `act.sub`, scoped to the package revision like the other
+identifiers. `principalPseudonym` then names the person the agent acts for and
+`clientPseudonym` the agent's client. A standing agent carries no grant, so its
+object has no grant, approver, source issuer or deadline. The raw actor
+identifier never reaches the journal. A task-grant token without `act` records
+exactly what it did before.
+
+Both kinds of token also carry the object on a read's terminal record: record
+reads, lists and lookups, revision reads, and history and snapshot reads. No
+agent token is admitted to an immediate action: action admission refuses every
+task-grant token, a standing agent profile cannot hold an action permission,
+and a permission on a profile without `actorKind: agent` refuses a token
+carrying a trusted actor. The refusal record carries the object. A direct
+token records no `authorization` object anywhere.
+Neither kind of token adds the object to a pre-I/O attempt record or to the
+refusal record a read or revision read writes.

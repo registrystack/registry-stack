@@ -72,6 +72,13 @@ include_breg=0
 if ((version_major > 0 || version_minor >= 26)); then
   include_breg=1
 fi
+# The citizen MCP gateway and its review page ship in the BReg release set.
+# They depend on the engine only through its client, so they build in the
+# bregctl group rather than beside the runtime.
+include_breg_services=0
+if ((version_major > 0 || version_minor >= 35)); then
+  include_breg_services=1
+fi
 include_casework=0
 if ((version_major > 0 || version_minor >= 30)) ||
    [[ "${include_casework_override}" -eq 1 ]]; then
@@ -176,6 +183,23 @@ build_bregctl() {
   stage bregctl "bregctl-${tag}-${asset}"
   test "$("${staged_executable}" --version)" = \
     "bregctl ${version}"
+
+  if [[ "${include_breg_services}" -ne 1 ]]; then
+    return
+  fi
+  "${cargo_bin}" build --release --locked \
+    -p registry-breg-mcp --bin breg-mcp \
+    --target "${target}"
+  "${cargo_bin}" build --release --locked \
+    -p registry-breg-review --bin breg-review \
+    --target "${target}"
+
+  local binary
+  for binary in breg-mcp breg-review; do
+    stage "${binary}" "${binary}-${tag}-${asset}"
+    test "$("${staged_executable}" --version)" = \
+      "${binary} ${version}"
+  done
 }
 
 build_casework() {
@@ -226,6 +250,9 @@ if [[ ("${group}" == breg || "${group}" == all) && "${include_breg}" -eq 1 ]]; t
 fi
 if [[ ("${group}" == bregctl || "${group}" == all) && "${include_breg}" -eq 1 ]]; then
   assets+=("bregctl-${tag}-${asset}")
+  if [[ "${include_breg_services}" -eq 1 ]]; then
+    assets+=("breg-mcp-${tag}-${asset}" "breg-review-${tag}-${asset}")
+  fi
 fi
 if [[ ("${group}" == casework || "${group}" == all) && "${include_casework}" -eq 1 ]]; then
   assets+=("casework-${tag}-${asset}" "caseworkctl-${tag}-${asset}")

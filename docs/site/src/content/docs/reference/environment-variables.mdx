@@ -7,7 +7,7 @@ source_repos:
   - registry-evidence
   - registry-relay
   - registry-stack
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-09-24"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -157,6 +157,17 @@ preserves the previous set. It does not verify release authenticity.
 
 {/* Evidence: crates/registry-breg/install.sh; crates/registry-breg/src/main.rs; crates/registry-breg/src/runtime_config.rs. */}
 
+## Base Registry Engine citizen gateway
+
+`breg-mcp` and `breg-review` are supporting services beside the Base Registry Engine: an MCP gateway a chat host uses to read a citizen's own data and prepare a change-request draft, and a review page the citizen submits it from. Each reads one fixed variable for its operational log level.
+
+| Name | Purpose | Default or required |
+| --- | --- | --- |
+| `BREG_MCP_LOG` | Level for the JSON operational records `breg-mcp` writes on standard output. | Defaults to `info`. |
+| `BREG_REVIEW_LOG` | Level for the JSON operational records `breg-review` writes on standard output. | Defaults to `info`. |
+
+Both are closed enumerations, not tracing filter directives. Each accepts exactly `error`, `warn`, and `info`; any other value is refused, and the process reports the error on standard error and exits with status 2 instead of falling back to `info`. `BREG_REVIEW_LOG` applies to the `breg_review` and `registry_breg_review` targets. A runtime configuration that cannot be loaded stops either process with status 1: `breg-mcp` reports it as an `ERROR` JSON record on standard output, and `breg-review` reports it on standard error. [Operate the citizen chat assistant](../../operate/breg-mcp/) lists the records worth watching.
+
 ## Source
 
 The fixed environment variable names in this reference are transcribed from the CLI definitions, binary entry points, and install
@@ -169,4 +180,6 @@ secret grammar in `contract.rs`, and resolution in `startup.rs`. Evidence CLI ow
 with logging and dispatch in `main.rs`. Base Registry Engine logging is in
 `crates/registry-breg/src/main.rs` and `startup.rs`, runtime-file expansion and the secret grammar in
 `runtime_config.rs` over `registry-platform-config`, and its installer is
-`crates/registry-breg/install.sh`.
+`crates/registry-breg/install.sh`. Citizen gateway logging is in
+`crates/registry-breg-mcp/src/main.rs`; review page logging is in
+`crates/registry-breg-review/src/main.rs`.

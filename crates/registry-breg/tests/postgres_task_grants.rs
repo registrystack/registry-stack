@@ -28,7 +28,7 @@ use registry_breg::task_grant::{TaskGrantBinding, TaskGrantError, TaskGrantStatu
 use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
 use registry_platform_audit::AuditProfile;
 use registry_platform_httputil::FetchUrlPolicy;
-use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
+use registry_platform_oidc::{ClaimNames, JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::{oidc_verifier_config, MockIdp};
 use serde_json::{json, Value};
 use std::{
@@ -46,6 +46,7 @@ const PACKAGE: &str = "task-authority-http";
 const AUDIENCE: &str = "urn:breg:task-test";
 const REVISION: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const SOURCE: &str = "https://casework.example";
+const ACTOR: &str = "00000000-0000-4000-8000-0000000000aa";
 const PROJECT: &str = r#"{
   "apiVersion":"registry.registrystack.org/v1alpha1",
   "kind":"RegistryProject",
@@ -93,6 +94,19 @@ const PROJECT: &str = r#"{
       }
     }
   ],
+  "actions":[
+    {
+      "id":"name-site",
+      "inputs":[
+        {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
+        {"id":"name","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}
+      ],
+      "effects":[
+        {"id":"site","target":{"entity":"asset-site"},"operation":"create",
+          "set":{"tenant":{"fromField":"tenant"},"name":{"fromField":"name"}}}
+      ]
+    }
+  ],
   "accessProfiles":[
     {
       "id":"steward",
@@ -114,6 +128,12 @@ const PROJECT: &str = r#"{
           "writableFields":["tenant","site"],
           "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
           "requestPresence":[{"requestType":"correction-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}]
+        },
+        {
+          "action":"name-site",
+          "operations":["invoke"],
+          "targets":[{"entity":"asset-site","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}],
+          "results":["site"]
         }
       ]
     },
@@ -135,6 +155,21 @@ const PROJECT: &str = r#"{
       "requesterClients":["task-agent"],
       "requiredPurposes":["review"],
       "taskGrant":{"sourceIssuer":"https://casework.example"}
+    },
+    {
+      "id":"standing-agent",
+      "principalClaim":"sub",
+      "permissions":[
+        {
+          "entity":"correction-request",
+          "operations":["create","get","patch"],
+          "readableFields":["tenant","placement","proposed-site","reason"],
+          "writableFields":["tenant","placement","proposed-site","reason"],
+          "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
+        }
+      ],
+      "actorKind":"agent",
+      "requesterClients":["citizen-agent"]
     },
     {
       "id":"reviewer",
@@ -363,12 +398,19 @@ fn app_with_services(
         FetchUrlPolicy::dev(),
     ));
     let mut verifier = oidc_verifier_config(idp.issuer(), vec![AUDIENCE.into()]);
-    verifier.allowed_clients = vec!["task-agent".into(), "human-client".into()];
+    verifier.allowed_clients = vec![
+        "task-agent".into(),
+        "human-client".into(),
+        "citizen-agent".into(),
+    ];
     let auth = RegistryAuthenticator::new(
         &registry,
         verifier,
         keys,
-        AuthorityClaimConfig::new("sub", Some("registry_purpose".into())),
+        AuthorityClaimConfig::new("sub", Some("registry_purpose".into())).with_contextual_claims(
+            ClaimNames::default(),
+            BTreeMap::from([("citizen-agent".to_owned(), ACTOR.to_owned())]),
+        ),
     )
     .unwrap();
     authenticated_router(
@@ -658,6 +700,14 @@ async fn external_review_counts(db: &TestDatabase) -> Vec<i64> {
     counts
 }
 async fn assert_grant_audit(db: &TestDatabase, grant: &str, phase: &str, outcome: &str) {
+    assert_grant_audit_where(db, grant, outcome, |record| record["phase"] == phase).await;
+}
+async fn assert_grant_audit_where(
+    db: &TestDatabase,
+    grant: &str,
+    outcome: &str,
+    matches: impl Fn(&Value) -> bool,
+) {
     let hasher = AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into())
         .unwrap()
         .key_hasher();
@@ -678,11 +728,31 @@ async fn assert_grant_audit(db: &TestDatabase, grant: &str, phase: &str, outcome
         .collect();
     let record = records
         .iter()
-        .find(|record| {
-            record["phase"] == phase && record["authorization"]["grantPseudonym"] == pseudonym
-        })
+        .find(|record| matches(record) && record["authorization"]["grantPseudonym"] == pseudonym)
         .expect("grant-bound write and refusal retain minimized grant audit context");
     let authorization = &record["authorization"];
+    let fields: Vec<&str> = authorization
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        fields,
+        [
+            "actorKind",
+            "approverPseudonym",
+            "clientPseudonym",
+            "expiresAt",
+            "grantPseudonym",
+            "operation",
+            "outcome",
+            "principalPseudonym",
+            "reason",
+            "sourceIssuer",
+        ],
+        "a task grant without a delegated actor keeps its authorization shape"
+    );
     assert_eq!(authorization["outcome"], outcome);
     assert_eq!(authorization["sourceIssuer"], SOURCE);
     assert!(authorization.get("authority").is_none());
@@ -713,6 +783,260 @@ async fn assert_grant_audit(db: &TestDatabase, grant: &str, phase: &str, outcome
             "audit must not contain {sensitive}"
         );
     }
+}
+
+async fn audit_records(db: &TestDatabase) -> Vec<(String, Value)> {
+    db.admin
+        .query(
+            "SELECT convert_from(envelope, 'UTF8') FROM registry_internal.registry_audit",
+            &[],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| {
+            let raw: String = row.get(0);
+            let record = serde_json::from_str::<Value>(&raw).unwrap()["record"].clone();
+            (raw, record)
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn standing_agent_audit_records_the_delegated_actor_by_pseudonym() {
+    let db = TestDatabase::create(8).await;
+    let registry = Arc::new(
+        compile_project(
+            &parse_project_json(PROJECT.as_bytes()).unwrap(),
+            &[],
+            CompileProfile::Authoring,
+        )
+        .unwrap(),
+    );
+    let identity = install(&db, &registry).await;
+    let idp = MockIdp::start().await;
+    let app = app(
+        &db,
+        registry.clone(),
+        identity,
+        &idp,
+        Arc::new(Status::default()),
+    );
+    let steward = human(&idp, "steward", "maintain");
+    let site = create(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        &steward,
+        "site",
+        json!({"tenant":"tenant-a","name":"site"}),
+    )
+    .await;
+    let placement = create(
+        &app,
+        "/v1/records/placements?accessProfile=steward",
+        &steward,
+        "placement",
+        json!({"tenant":"tenant-a","site":id(&site)}),
+    )
+    .await;
+    // A token exchange copies the citizen's kind claim; the trusted actor
+    // still makes this an agent token.
+    let agent = idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "client_id": "citizen-agent",
+        "registry_actor_kind": "human",
+        "sub": "citizen-subject",
+        "tenant_claim": "tenant-a",
+        "act": {"sub": ACTOR, "iss": idp.issuer()}
+    }));
+    let draft = create(
+        &app,
+        "/v1/records/correction-requests?accessProfile=standing-agent",
+        &agent,
+        "standing-draft",
+        json!({"tenant":"tenant-a","placement":id(&placement),"proposedSite":id(&site),"reason":"synthetic correction"}),
+    )
+    .await;
+    get(&app, &id(&draft), "standing-agent", &agent).await;
+    // No profile admits a delegated token to an immediate action: a standing
+    // agent cannot hold one, and the steward's permission declares no
+    // actorKind.
+    let invoked = send(
+        &app,
+        Method::POST,
+        "/v1/actions/name-site?accessProfile=steward",
+        &agent,
+        Some("standing-action"),
+        None,
+        json!({"input":{"tenant":"tenant-a","name":"agent-named"}}),
+    )
+    .await;
+    assert_eq!(invoked.status, StatusCode::NOT_FOUND, "{}", invoked.body);
+    // A direct token carries neither a grant nor an actor, so its read and
+    // write terminal records hold no authorization object.
+    let direct_read = send(
+        &app,
+        Method::GET,
+        &format!("/v1/records/sites/{}?accessProfile=steward", id(&site)),
+        &steward,
+        None,
+        None,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(direct_read.status, StatusCode::OK, "{}", direct_read.body);
+    let refused = send(
+        &app,
+        Method::POST,
+        "/v1/records/sites?accessProfile=standing-agent",
+        &agent,
+        Some("standing-site"),
+        None,
+        json!({"data":{"tenant":"tenant-a","name":"refused"}}),
+    )
+    .await;
+    assert_eq!(refused.status, StatusCode::NOT_FOUND, "{}", refused.body);
+
+    let hasher = AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into())
+        .unwrap()
+        .key_hasher();
+    let pseudonym = |domain, value| {
+        hasher
+            .audit_reference_hash(domain, REVISION, value)
+            .unwrap()
+    };
+    let records = audit_records(&db).await;
+    let find = |label: &str, matches: &dyn Fn(&Value) -> bool| {
+        records
+            .iter()
+            .map(|(_, record)| record)
+            .find(|record| matches(record))
+            .unwrap_or_else(|| panic!("the journal holds the {label} record"))
+            .clone()
+    };
+    let agent_record = |method: &'static str| {
+        move |record: &Value| {
+            record["phase"] == "terminal"
+                && record["method"] == method
+                && record["entityId"] == "correction-request"
+                && record["selectedAccessProfile"] == "standing-agent"
+        }
+    };
+    let refusal_record = |record: &Value| {
+        record["phase"] == "refusal" && record["method"] == "POST" && record["actionId"].is_null()
+    };
+    let action_refusal_record =
+        |record: &Value| record["phase"] == "refusal" && record["actionId"] == "name-site";
+    let steward_record = |method: &'static str| {
+        move |record: &Value| {
+            record["phase"] == "terminal"
+                && record["method"] == method
+                && record["selectedAccessProfile"] == "steward"
+        }
+    };
+    for (label, method) in [("steward write", "POST"), ("steward read", "GET")] {
+        let record = find(label, &steward_record(method));
+        assert!(
+            record.get("authorization").is_none(),
+            "a direct {label} records no authorization object"
+        );
+    }
+    for (label, record, outcome) in [
+        (
+            "write",
+            find("standing agent write", &agent_record("POST")),
+            "allowed",
+        ),
+        (
+            "read",
+            find("standing agent read", &agent_record("GET")),
+            "allowed",
+        ),
+        (
+            "refusal",
+            find("standing agent refusal", &refusal_record),
+            "denied",
+        ),
+        (
+            "immediate action refusal",
+            find(
+                "standing agent immediate action refusal",
+                &action_refusal_record,
+            ),
+            "denied",
+        ),
+    ] {
+        let authorization = &record["authorization"];
+        assert_eq!(
+            authorization["actorPseudonym"],
+            pseudonym("breg-actor-v1", ACTOR),
+            "a standing agent {label} records its actor"
+        );
+        assert_eq!(authorization["actorKind"], "agent");
+        assert_eq!(authorization["outcome"], outcome);
+        assert_eq!(
+            authorization["principalPseudonym"],
+            pseudonym("breg-principal-v1", "citizen-subject")
+        );
+        assert_eq!(
+            authorization["clientPseudonym"],
+            pseudonym("breg-client-v1", "citizen-agent")
+        );
+        for absent in ["grantPseudonym", "approverPseudonym", "sourceIssuer"] {
+            assert!(authorization.get(absent).is_none(), "{absent} is absent");
+        }
+    }
+    for (raw, _) in &records {
+        assert!(!raw.contains(ACTOR), "audit must not contain the raw actor");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn task_grant_read_records_the_grant_fields() {
+    let db = TestDatabase::create(8).await;
+    let registry = Arc::new(
+        compile_project(
+            &parse_project_json(PROJECT.as_bytes()).unwrap(),
+            &[],
+            CompileProfile::Authoring,
+        )
+        .unwrap(),
+    );
+    let identity = install(&db, &registry).await;
+    let idp = MockIdp::start().await;
+    let status = Arc::new(Status::default());
+    let app = app(&db, registry.clone(), identity, &idp, status.clone());
+    let steward = human(&idp, "steward", "maintain");
+    let site = create(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        &steward,
+        "site",
+        json!({"tenant":"tenant-a","name":"site"}),
+    )
+    .await;
+    let placement = create(
+        &app,
+        "/v1/records/placements?accessProfile=steward",
+        &steward,
+        "placement",
+        json!({"tenant":"tenant-a","site":id(&site)}),
+    )
+    .await;
+    let (grant, token) = agent(&idp, &status);
+    let draft = create(
+        &app,
+        "/v1/records/correction-requests?accessProfile=submitter",
+        &token,
+        "grant-draft",
+        json!({"tenant":"tenant-a","placement":id(&placement),"proposedSite":id(&site),"reason":"synthetic correction"}),
+    )
+    .await;
+    get(&app, &id(&draft), "submitter", &token).await;
+    assert_grant_audit_where(&db, &grant, "allowed", |record| {
+        record["phase"] == "terminal" && record["method"] == "GET"
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

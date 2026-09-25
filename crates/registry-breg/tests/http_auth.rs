@@ -521,6 +521,136 @@ async fn standing_citizen_agent_requires_the_registered_client_actor_pair() {
     assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
 }
 
+fn standing_agent_claims(act: Value) -> Value {
+    json!({
+        "aud": AUDIENCE,
+        "sub": PRINCIPAL,
+        "azp": "agent-client",
+        "registry_actor_kind": "agent",
+        "registry_purpose": "citizen-self-service",
+        "act": act
+    })
+}
+
+#[tokio::test]
+async fn standing_agent_actor_may_name_only_the_verified_token_issuer() {
+    let harness = contextual_harness().await;
+    let path = format!("/v1/records/cases/{RECORD_ID}?accessProfile=standing-agent");
+    let issuer = harness.idp.issuer();
+    let accepted = harness
+        .send(
+            &path,
+            &[bearer(&harness.signed_token(
+                standing_agent_claims(json!({"sub": ACTOR_ID, "iss": issuer})),
+                "JWT",
+            ))],
+            None,
+        )
+        .await;
+    assert_eq!(accepted.status(), StatusCode::OK);
+
+    for (case, act) in [
+        (
+            "another issuer",
+            json!({"sub": ACTOR_ID, "iss": "https://other-issuer.example"}),
+        ),
+        ("a non-string issuer", json!({"sub": ACTOR_ID, "iss": 42})),
+        (
+            "an extra member",
+            json!({"sub": ACTOR_ID, "iss": issuer, "client_id": "agent-client"}),
+        ),
+        (
+            "an extra member in place of the issuer",
+            json!({"sub": ACTOR_ID, "client_id": "agent-client"}),
+        ),
+        (
+            "a nested actor",
+            json!({"sub": ACTOR_ID, "iss": issuer, "act": {"sub": ACTOR_ID}}),
+        ),
+        ("an issuer without a subject", json!({"iss": issuer})),
+    ] {
+        let refused = harness
+            .send(
+                &path,
+                &[bearer(
+                    &harness.signed_token(standing_agent_claims(act), "JWT"),
+                )],
+                None,
+            )
+            .await;
+        assert_eq!(refused.status(), StatusCode::UNAUTHORIZED, "{case}");
+    }
+    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn trusted_actor_makes_the_token_an_agent_whatever_kind_it_carries() {
+    let harness = contextual_harness().await;
+    let agent_path = format!("/v1/records/cases/{RECORD_ID}?accessProfile=standing-agent");
+    let human_path = format!("/v1/records/cases/{RECORD_ID}?accessProfile=standing-human");
+    let act = json!({"sub": ACTOR_ID, "iss": harness.idp.issuer()});
+
+    // A token exchange copies the subject's kind into the delegated token.
+    let mut copied_kind = standing_agent_claims(act.clone());
+    copied_kind["registry_actor_kind"] = json!("human");
+    let accepted = harness
+        .send(
+            &agent_path,
+            &[bearer(&harness.signed_token(copied_kind, "JWT"))],
+            None,
+        )
+        .await;
+    assert_eq!(accepted.status(), StatusCode::OK);
+    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 1);
+
+    // The same delegation never passes as the human it acts for. Without the
+    // actor, the identical claims select the human profile.
+    let human = json!({
+        "aud": AUDIENCE,
+        "sub": PRINCIPAL,
+        "azp": "agent-client",
+        "scope": "registry.read",
+        "registry_actor_kind": "human",
+        "registry_purpose": "record-review"
+    });
+    let admitted = harness
+        .send(
+            &human_path,
+            &[bearer(&harness.signed_token(human.clone(), "JWT"))],
+            None,
+        )
+        .await;
+    assert_eq!(admitted.status(), StatusCode::OK);
+    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 2);
+    let mut delegated_human = human;
+    delegated_human["act"] = act;
+    let refused = harness
+        .send(
+            &human_path,
+            &[bearer(&harness.signed_token(delegated_human, "JWT"))],
+            None,
+        )
+        .await;
+    assert_ne!(refused.status(), StatusCode::OK);
+    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 2);
+
+    // Without an actor, a claimed agent kind still needs the trusted actor.
+    let mut unbound = standing_agent_claims(Value::Null);
+    unbound
+        .as_object_mut()
+        .expect("fixture claims are an object")
+        .remove("act");
+    let refused = harness
+        .send(
+            &agent_path,
+            &[bearer(&harness.signed_token(unbound, "JWT"))],
+            None,
+        )
+        .await;
+    assert_ne!(refused.status(), StatusCode::OK);
+    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 2);
+}
+
 #[test]
 fn task_profiles_allow_governed_draft_authoring_and_refuse_direct_target_mutation() {
     let direct = CONTEXTUAL_PROJECT.replace(

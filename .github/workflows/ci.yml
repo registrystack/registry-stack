@@ -914,6 +914,14 @@ jobs:
         if: matrix.lane == 'contracts'
         run: products/breg/scripts/check-client-contract.sh
 
+      - name: Enforce the citizen gateway's delegated-agent boundary
+        if: matrix.lane == 'contracts'
+        run: products/breg/scripts/check-mcp-gateway-boundary.sh
+
+      - name: Keep the citizen gateway and review page off the registry runtime
+        if: matrix.lane == 'contracts'
+        run: products/breg/scripts/check-service-dependencies.sh
+
       - name: Base Registry Engine PostgreSQL journeys
         if: matrix.lane != 'contracts'
         env:

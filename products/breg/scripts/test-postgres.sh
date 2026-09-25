@@ -92,6 +92,7 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_immediate_action_examples \
     --test postgres_immediate_action_activation \
     --test postgres_consent_examples \
+    --test postgres_citizen_address_correction \
     --test postgres_registry_extensibility \
     --test postgres_action_handlers \
     --test postgres_request_activation \
@@ -102,6 +103,14 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_spatial_migration \
     --test postgres_fixture_journeys \
     --test schema_fingerprint_rehearsal
+  # The citizen review page against the real registry: the page crate links
+  # the runtime only under this test feature.
+  cargo test --locked -p registry-breg-review --features postgres-test \
+    --test postgres_breg
+  # The citizen gateway against the real registry, under the same feature
+  # rule as the review page.
+  cargo test --locked -p registry-breg-mcp --features postgres-test \
+    --test postgres_gateway
 
   # Use Cargo's reported executable so configured target directories work too.
   # This proof must start the real Evidence service, never silently skip it.

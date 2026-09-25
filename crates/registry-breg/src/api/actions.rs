@@ -165,6 +165,13 @@ fn authorize_action<'a>(
             return None;
         }
     }
+    // A delegated token acts for its principal; only a grant written for
+    // agents may admit it, never one that accepts every kind.
+    if claims.actor_subject().is_some()
+        && grant.actor_kind != Some(crate::contract::ActorKindSource::Agent)
+    {
+        return None;
+    }
     if !grant.requester_clients.is_empty()
         && !claims
             .requester_client()
@@ -193,7 +200,8 @@ fn authorize_action<'a>(
             selected.to_owned(),
             target_authority,
             grant.results.clone(),
-        ),
+        )
+        .with_grant_audit(claims),
     })
 }
 

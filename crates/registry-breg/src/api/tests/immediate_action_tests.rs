@@ -61,9 +61,9 @@ accessProfiles:
         operations: [invoke]
         targets: [{entity: case, rowBoundaries: []}]
         results: []
-  - id: standing-agent
+  - id: client-human
     principalClaim: registry_principal
-    actorKind: agent
+    actorKind: human
     requesterClients: [agent-client]
     requiredScopes: [case.rename]
     requiredPurposes: [case-management]
@@ -532,8 +532,12 @@ async fn human_identity_is_the_principal_claim_and_a_human_token_without_it_is_r
     ));
 }
 
+/// The compiler admits no action permission on a standing agent profile, and
+/// action admission refuses every task-grant token, so a token carrying a
+/// verified trusted actor reaches no immediate action: a permission declaring
+/// no `actorKind` or another kind refuses it.
 #[tokio::test]
-async fn standing_agent_action_requires_a_trusted_actor_subject() {
+async fn delegated_token_is_refused_at_immediate_action_admission() {
     let registry = compiled();
     let idp = MockIdp::start().await;
     let audience = "urn:example:breg";
@@ -554,7 +558,7 @@ async fn standing_agent_action_requires_a_trusted_actor_subject() {
                 BTreeMap::from([("agent-client".to_owned(), actor.to_owned())]),
             ),
     )
-    .expect("standing agent verifier config is valid");
+    .expect("delegated verifier config is valid");
     let service = service_for(registry.clone(), true);
     let route = registry
         .actions()
@@ -562,30 +566,41 @@ async fn standing_agent_action_requires_a_trusted_actor_subject() {
         .iter()
         .find(|route| route.kind == ActionRouteKind::Invoke)
         .unwrap();
-    let options = QueryOptions::parse(Some("accessProfile=standing-agent"), false).unwrap();
+    // `registrar` declares no actorKind and admits every kind of direct token.
+    let registrar = QueryOptions::parse(Some("accessProfile=registrar"), false).unwrap();
+    // `client-human` binds the same client to a human actor.
+    let client_human = QueryOptions::parse(Some("accessProfile=client-human"), false).unwrap();
+    // A token exchange copies the citizen's kind claim from the subject token.
     let claims = json!({
         "aud": audience,
         "sub": "citizen-sub",
         "azp": "agent-client",
         "registry_principal": "citizen-sub",
-        "registry_actor_kind": "agent",
+        "registry_actor_kind": "human",
         "registry_purpose": "case-management",
         "regions": ["north"],
         "scope": "case.rename"
     });
-    let missing_actor = auth
+    let direct = auth
         .authenticate(&idp.mint_token(claims.clone()))
         .await
-        .expect("standing agent token without act still authenticates");
-    assert!(authorize_action(&service, route, &missing_actor, &options).is_none());
+        .expect("token without act authenticates");
+    assert!(authorize_action(&service, route, &direct, &registrar).is_some());
+    assert!(authorize_action(&service, route, &direct, &client_human).is_some());
 
-    let mut trusted_claims = claims;
-    trusted_claims["act"] = json!({"sub": actor});
-    let trusted_actor = auth
-        .authenticate(&idp.mint_token(trusted_claims))
-        .await
-        .expect("registered client and actor pair authenticates");
-    assert!(authorize_action(&service, route, &trusted_actor, &options).is_some());
+    for act in [
+        json!({"sub": actor}),
+        json!({"sub": actor, "iss": idp.issuer()}),
+    ] {
+        let mut delegated_claims = claims.clone();
+        delegated_claims["act"] = act;
+        let delegated = auth
+            .authenticate(&idp.mint_token(delegated_claims))
+            .await
+            .expect("registered client and actor pair authenticates");
+        assert!(authorize_action(&service, route, &delegated, &registrar).is_none());
+        assert!(authorize_action(&service, route, &delegated, &client_human).is_none());
+    }
 }
 
 #[tokio::test]

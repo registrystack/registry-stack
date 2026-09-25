@@ -13,6 +13,8 @@ workspace = true
 [features]
 default = ["test-utils"]
 test-utils = []
+# An in-process OAuth authorization server for tests; see `TestAuthorizationServer`.
+test-authorization-server = ["test-utils", "dep:sha2", "dep:url", "dep:uuid"]
 
 [dependencies]
 async-trait.workspace = true
@@ -27,9 +29,12 @@ registry-platform-httputil = { workspace = true }
 registry-platform-oidc = { workspace = true }
 reqwest.workspace = true
 serde_json.workspace = true
+sha2 = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio.workspace = true
 tower.workspace = true
+url = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
 wiremock.workspace = true
 
 [dev-dependencies]

@@ -482,6 +482,7 @@ pub struct AuthorizedActionContext {
     selected_profile: String,
     target_authority: BTreeMap<String, Vec<VerifiedRowBoundary>>,
     result_effects: BTreeSet<String>,
+    grant_audit: Option<crate::audit::GrantAuditContext>,
 }
 
 impl AuthorizedActionContext {
@@ -500,7 +501,16 @@ impl AuthorizedActionContext {
             selected_profile,
             target_authority,
             result_effects,
+            grant_audit: None,
         }
+    }
+
+    pub(crate) fn with_grant_audit(mut self, claims: &VerifiedRequestClaims) -> Self {
+        self.grant_audit = crate::audit::GrantAuditContext::from_claims(claims);
+        self
+    }
+    pub(crate) fn grant_audit(&self) -> Option<&crate::audit::GrantAuditContext> {
+        self.grant_audit.as_ref()
     }
 
     #[must_use]

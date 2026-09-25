@@ -1,0 +1,67 @@
+[package]
+name = "registry-breg-review"
+description = "A server-rendered page where a signed-in person reviews and submits their own Base Registry Engine change request."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "breg-review"
+path = "src/main.rs"
+
+[features]
+default = []
+# Runs the review page against a real Base Registry Engine on a disposable
+# PostgreSQL database named by BREG_TEST_DATABASE_URL. The engine is a
+# dev-dependency only: this feature enables its test features and never places
+# the runtime in the page's normal dependency graph.
+postgres-test = ["registry-breg/postgres-test", "registry-breg/tooling"]
+
+[lints]
+workspace = true
+
+[dependencies]
+axum.workspace = true
+base64.workspace = true
+clap.workspace = true
+getrandom.workspace = true
+jsonwebtoken.workspace = true
+minijinja.workspace = true
+registry-breg-client.workspace = true
+registry-platform-audit.workspace = true
+registry-platform-buildinfo.workspace = true
+registry-platform-config.workspace = true
+registry-platform-crypto.workspace = true
+registry-platform-httpsec = { workspace = true, features = ["server"] }
+registry-platform-httputil.workspace = true
+registry-platform-oidc.workspace = true
+registry-platform-ratelimit.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+serde_path_to_error.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+registry-breg.workspace = true
+registry-platform-canonical-json.workspace = true
+registry-platform-testing = { workspace = true, features = ["test-authorization-server"] }
+reqwest.workspace = true
+tempfile.workspace = true
+tokio-postgres.workspace = true
+
+[[test]]
+name = "postgres_breg"
+path = "tests/postgres_breg.rs"
+required-features = ["postgres-test"]

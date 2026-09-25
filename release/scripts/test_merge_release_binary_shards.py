@@ -61,8 +61,10 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         self.scheduling = self.write_shard("scheduling", SCHEDULING)
         self.output = self.root / "dist"
 
-    def write_shard(self, name: str, assets: list[str]) -> Path:
-        root = self.root / name
+    def write_shard(
+        self, name: str, assets: list[str], version: str = VERSION
+    ) -> Path:
+        root = self.root / version / name
         bin_dir = root / "bin"
         bin_dir.mkdir(parents=True)
         sums = []
@@ -75,7 +77,7 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         (root / "RELEASE_BINARY_SHARD").write_text(
             "registry-stack.release-binary-shard.v1\n"
             f"source_sha={SOURCE_SHA}\n"
-            f"version={VERSION}\n"
+            f"version={version}\n"
             f"group={name}\n",
             encoding="utf-8",
         )
@@ -174,6 +176,84 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
             ["scheduling-v0.33.0-linux-amd64"], rosters_033["scheduling"]
         )
         self.assertIn("scheduling", dict(images_033))
+        rosters_034, images_034 = MODULE.rosters("0.34.0")
+        self.assertEqual(
+            ["breg-v0.34.0-linux-amd64", "bregctl-v0.34.0-linux-amd64"],
+            rosters_034["breg"],
+        )
+        self.assertNotIn("breg-mcp", dict(images_034))
+        self.assertNotIn("breg-review", dict(images_034))
+        rosters_035, images_035 = MODULE.rosters("0.35.0")
+        self.assertEqual(
+            [
+                "breg-v0.35.0-linux-amd64",
+                "bregctl-v0.35.0-linux-amd64",
+                "breg-mcp-v0.35.0-linux-amd64",
+                "breg-review-v0.35.0-linux-amd64",
+            ],
+            rosters_035["breg"],
+        )
+        self.assertEqual(
+            [
+                "discovery",
+                "breg",
+                "breg-mcp",
+                "breg-review",
+                "casework",
+                "scheduling",
+                "evidence",
+                "relay",
+            ],
+            [name for name, _ in images_035],
+        )
+
+    def test_breg_services_merge_from_the_breg_shard_from_v0_35_0(self) -> None:
+        version = "0.35.0"
+        rosters, images = MODULE.rosters(version)
+        shards = {
+            name: self.write_shard(name, assets, version)
+            for name, assets in rosters.items()
+        }
+        output = self.root / "dist-0.35.0"
+        MODULE.merge(
+            version=version,
+            source_sha=SOURCE_SHA,
+            core=shards["core"],
+            breg=shards["breg"],
+            casework=shards["casework"],
+            scheduling=shards["scheduling"],
+            output=output,
+            builder_image=BUILDER,
+        )
+        for service in ("breg-mcp", "breg-review"):
+            with self.subTest(service=service):
+                asset = f"{service}-v{version}-linux-amd64"
+                expected = f"breg:{asset}\n".encode()
+                self.assertEqual(expected, (output / "bin" / asset).read_bytes())
+                self.assertEqual(
+                    expected, (output / "image-bin" / service).read_bytes()
+                )
+        self.assertEqual(
+            ["RELEASE_BUILDER_IMAGE", *(name for name, _ in images)],
+            [
+                line.split("  ", 1)[1]
+                for line in (output / "image-bin" / "SHA256SUMS")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ],
+        )
+        (shards["breg"] / "bin" / "breg-review-v0.35.0-linux-amd64").unlink()
+        with self.assertRaisesRegex(MODULE.ShardError, "breg"):
+            MODULE.merge(
+                version=version,
+                source_sha=SOURCE_SHA,
+                core=shards["core"],
+                breg=shards["breg"],
+                casework=shards["casework"],
+                scheduling=shards["scheduling"],
+                output=self.root / "dist-0.35.0-incomplete",
+                builder_image=BUILDER,
+            )
 
     def test_mint_is_retired_only_from_v0_31_0(self) -> None:
         for version in ("0.30.0", "0.30.1"):

@@ -250,6 +250,9 @@ for the asset project. See [change-request examples](CHANGE_REQUEST_EXAMPLES.md)
 for the approval workflows.
 For bounded institutional-agent authority and current-status checks, see
 [task grants for governed writes](TASK_GRANTS.md).
+For a chat assistant that reads a citizen's own data and prepares a
+change-request draft the citizen submits themselves, see the
+[citizen MCP gateway](MCP-GATEWAY.md).
 The separate `household-history` fixture proves correction batches and retained
 snapshot answers through the same compiler and runtime.
 The additional `spatial-service-sites` project covers governed Point queries

@@ -102,3 +102,12 @@ traceability:
   - {id: BREG-SEC-99, state: enforced, negativeId: BREG-NEG-99, negativeTest: {path: crates/registry-breg/tests/consent_access.rs, name: every_recipient_client_must_be_an_allowed_client}}
   - {id: BREG-SEC-100, state: enforced, negativeId: BREG-NEG-100, negativeTest: {path: crates/registry-breg/tests/postgres_consent_access.rs, name: real_postgres_consent_successors_match_fresh_install_when_added_changed_and_removed}}
   - {id: BREG-SEC-101, state: enforced, negativeId: BREG-NEG-101, negativeTest: {path: crates/registry-breg/tests/postgres_consent_examples.rs, name: self_action_answers_an_unknown_subject_like_a_subject_its_link_does_not_cover}}
+  - {id: BREG-SEC-102, state: enforced, negativeId: BREG-NEG-102, negativeTest: {path: crates/registry-breg/tests/standing_agent_ceiling.rs, name: standing_agent_cannot_hold_a_request_lifecycle_operation}}
+  - {id: BREG-SEC-103, state: enforced, negativeId: BREG-NEG-103, negativeTest: {path: crates/registry-breg/tests/standing_agent_ceiling.rs, name: standing_agent_cannot_hold_a_direct_target_mutation}}
+  - {id: BREG-SEC-104, state: enforced, negativeId: BREG-NEG-104, negativeTest: {path: crates/registry-breg/tests/http_auth.rs, name: standing_agent_actor_may_name_only_the_verified_token_issuer}}
+  - {id: BREG-SEC-105, state: enforced, negativeId: BREG-NEG-105, negativeTest: {path: crates/registry-breg/tests/http_auth.rs, name: trusted_actor_makes_the_token_an_agent_whatever_kind_it_carries}}
+  - {id: BREG-SEC-106, state: enforced, negativeId: BREG-NEG-106, negativeTest: {path: crates/registry-breg/src/api/tests/change_request_action_tests.rs, name: delegated_token_is_admitted_only_by_an_agent_profile}}
+  - {id: BREG-SEC-107, state: enforced, negativeId: BREG-NEG-107, negativeTest: {path: crates/registry-breg/src/api/tests/immediate_action_tests.rs, name: delegated_token_is_refused_at_immediate_action_admission}}
+  - {id: BREG-SEC-108, state: enforced, negativeId: BREG-NEG-108, negativeTest: {path: crates/registry-breg/src/audit.rs, name: delegated_actor_is_recorded_as_a_keyed_pseudonym_with_its_kind}}
+  - {id: BREG-SEC-109, state: enforced, negativeId: BREG-NEG-109, negativeTest: {path: crates/registry-breg/tests/postgres_task_grants.rs, name: standing_agent_audit_records_the_delegated_actor_by_pseudonym}}
+  - {id: BREG-SEC-110, state: enforced, negativeId: BREG-NEG-110, negativeTest: {path: crates/registry-breg/tests/standing_agent_ceiling.rs, name: standing_agent_cannot_hold_an_immediate_action}}

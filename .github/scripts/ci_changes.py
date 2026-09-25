@@ -34,6 +34,7 @@ SHARDS = {
         "registry-platform-httpsec",
         "registry-platform-httputil",
         "registry-platform-oidc",
+        "registry-platform-ratelimit",
         "registry-platform-script",
         "registry-platform-sdjwt",
         "registry-platform-sqlite",
@@ -55,6 +56,8 @@ SHARDS = {
         "registry-breg-client",
         "registry-breg-client-node",
         "registry-breg-client-py",
+        "registry-breg-mcp",
+        "registry-breg-review",
         "registry-bregctl",
         "registry-linkml",
     ),
@@ -303,6 +306,11 @@ CLI_REFERENCE_INPUTS = (
     ("crates/registry-relay-v2/src/cli.rs", "crates/registry-relay-v2/src/cli.rs"),
     ("crates/registry-relayctl/src/**", "crates/registry-relayctl/src/lib.rs"),
     ("crates/registry-breg/src/cli.rs", "crates/registry-breg/src/cli.rs"),
+    ("crates/registry-breg-mcp/src/cli.rs", "crates/registry-breg-mcp/src/cli.rs"),
+    (
+        "crates/registry-breg-review/src/lib.rs",
+        "crates/registry-breg-review/src/lib.rs",
+    ),
     ("crates/registry-bregctl/src/**", "crates/registry-bregctl/src/lib.rs"),
     (
         "crates/registry-casework/src/runtime.rs",

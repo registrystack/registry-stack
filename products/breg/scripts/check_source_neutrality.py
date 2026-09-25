@@ -124,6 +124,8 @@ FORBIDDEN_DOMAIN_COMPONENTS = (
 )
 SOURCE_ROOTS = (
     "crates/registry-breg-client",
+    "crates/registry-breg-mcp",
+    "crates/registry-breg-review",
     "crates/registry-breg",
     "crates/registry-bregctl",
 )

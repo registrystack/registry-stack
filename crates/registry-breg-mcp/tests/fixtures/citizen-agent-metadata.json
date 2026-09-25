@@ -1,0 +1,785 @@
+{
+  "entities": [
+    {
+      "changeRequest": {
+        "application": {},
+        "effects": [
+          {
+            "clear": [],
+            "id": "effect-1",
+            "operation": "patch",
+            "set": [
+              {
+                "field": "address-line",
+                "fromField": "new-address-line"
+              },
+              {
+                "field": "locality",
+                "fromField": "new-locality"
+              },
+              {
+                "field": "postal-code",
+                "fromField": "new-postal-code"
+              }
+            ],
+            "target": {
+              "entity": "person-address",
+              "fromField": "address"
+            }
+          }
+        ],
+        "onApproved": {
+          "mode": "manual"
+        },
+        "planner": {
+          "kind": "declarative"
+        },
+        "review": {
+          "authority": "casework",
+          "policyId": "citizen-address-correction"
+        }
+      },
+      "datasetIdentifier": "citizen-address-correction",
+      "id": "address-correction-request",
+      "operations": [
+        {
+          "accessProfile": "citizen-agent",
+          "operation": "create"
+        },
+        {
+          "accessProfile": "citizen-agent",
+          "operation": "get"
+        },
+        {
+          "accessProfile": "citizen-agent",
+          "operation": "patch"
+        }
+      ],
+      "readableFields": [
+        "address",
+        "new-address-line",
+        "new-locality",
+        "new-postal-code"
+      ],
+      "route": "address-correction-requests",
+      "schema": "/v1/schemas/address-correction-request"
+    },
+    {
+      "changeControl": {
+        "controlledOperations": [
+          "patch"
+        ],
+        "eligibleRequestTypes": [
+          {
+            "id": "address-correction-request",
+            "primaryDataset": "citizen-address-correction",
+            "route": "address-correction-requests"
+          }
+        ]
+      },
+      "datasetIdentifier": "citizen-address-correction",
+      "id": "person-address",
+      "operations": [
+        {
+          "accessProfile": "citizen-agent",
+          "operation": "get"
+        },
+        {
+          "accessProfile": "citizen-agent",
+          "operation": "list"
+        }
+      ],
+      "readableFields": [
+        "address-line",
+        "locality",
+        "postal-code"
+      ],
+      "route": "person-addresses",
+      "schema": "/v1/schemas/person-address"
+    }
+  ],
+  "id": "citizen-address-correction",
+  "metadataVersion": "1",
+  "operations": [
+    {
+      "accessProfile": "citizen-agent",
+      "createWritableFields": [
+        "address",
+        "new-address-line",
+        "new-locality",
+        "new-postal-code",
+        "owner"
+      ],
+      "entityLabel": "Address correction request",
+      "fields": [
+        {
+          "apiName": "address",
+          "id": "address",
+          "label": "Address",
+          "nullable": false,
+          "readOnly": false,
+          "reference": {
+            "manualEntry": true,
+            "operations": [
+              {
+                "accessProfile": "citizen-agent",
+                "labelFields": [
+                  "address-line"
+                ],
+                "operationId": "records.person-address.list"
+              },
+              {
+                "accessProfile": "citizen-agent",
+                "labelFields": [
+                  "address-line"
+                ],
+                "operationId": "records.person-address.get"
+              }
+            ],
+            "targetEntity": "person-address"
+          },
+          "removable": false,
+          "required": true,
+          "schema": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "newAddressLine",
+          "id": "new-address-line",
+          "label": "New address line",
+          "nullable": false,
+          "readOnly": false,
+          "removable": false,
+          "required": true,
+          "schema": {
+            "maxLength": 200,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "newLocality",
+          "id": "new-locality",
+          "label": "New locality",
+          "nullable": false,
+          "readOnly": false,
+          "removable": false,
+          "required": true,
+          "schema": {
+            "maxLength": 120,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "newPostalCode",
+          "id": "new-postal-code",
+          "label": "New postal code",
+          "nullable": false,
+          "readOnly": false,
+          "removable": false,
+          "required": true,
+          "schema": {
+            "maxLength": 16,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "owner",
+          "id": "owner",
+          "label": "Owner",
+          "nullable": false,
+          "readOnly": false,
+          "removable": false,
+          "required": true,
+          "schema": {
+            "maxLength": 128,
+            "minLength": 0,
+            "type": "string"
+          }
+        }
+      ],
+      "id": "records.address-correction-request.create",
+      "identifier": {
+        "apiName": "id",
+        "location": "envelope"
+      },
+      "method": "POST",
+      "operation": "create",
+      "patchWritableFields": [],
+      "path": "/v1/records/address-correction-requests",
+      "query": null,
+      "readableFields": [
+        "address",
+        "new-address-line",
+        "new-locality",
+        "new-postal-code"
+      ],
+      "readableRequestFields": [
+        "reason"
+      ],
+      "request": {
+        "body": "data_envelope",
+        "contentType": "application/json",
+        "fieldNames": "api",
+        "idempotencyKeyRequired": true,
+        "mutationSemantics": "direct",
+        "queryParameters": [],
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "$id": "urn:breg:entity:address-correction-request:input",
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "address": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "newAddressLine": {
+                  "maxLength": 200,
+                  "minLength": 0,
+                  "type": "string"
+                },
+                "newLocality": {
+                  "maxLength": 120,
+                  "minLength": 0,
+                  "type": "string"
+                },
+                "newPostalCode": {
+                  "maxLength": 16,
+                  "minLength": 0,
+                  "type": "string"
+                },
+                "owner": {
+                  "maxLength": 128,
+                  "minLength": 0,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "address",
+                "newAddressLine",
+                "newLocality",
+                "newPostalCode",
+                "owner"
+              ],
+              "type": "object",
+              "x-registry-mutationMode": "mutable"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "type": "object"
+        }
+      },
+      "requiredCapabilities": [],
+      "responseEntity": "address-correction-request",
+      "selectors": [],
+      "sourceEntity": "address-correction-request",
+      "titleFields": [
+        "new-address-line"
+      ]
+    },
+    {
+      "accessProfile": "citizen-agent",
+      "createWritableFields": [],
+      "entityLabel": "Address correction request",
+      "fields": [
+        {
+          "apiName": "address",
+          "id": "address",
+          "label": "Address",
+          "nullable": false,
+          "readOnly": false,
+          "reference": {
+            "manualEntry": true,
+            "operations": [
+              {
+                "accessProfile": "citizen-agent",
+                "labelFields": [
+                  "address-line"
+                ],
+                "operationId": "records.person-address.list"
+              },
+              {
+                "accessProfile": "citizen-agent",
+                "labelFields": [
+                  "address-line"
+                ],
+                "operationId": "records.person-address.get"
+              }
+            ],
+            "targetEntity": "person-address"
+          },
+          "removable": false,
+          "required": true,
+          "schema": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "newAddressLine",
+          "id": "new-address-line",
+          "label": "New address line",
+          "nullable": false,
+          "readOnly": false,
+          "removable": false,
+          "required": true,
+          "schema": {
+            "maxLength": 200,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "newLocality",
+          "id": "new-locality",
+          "label": "New locality",
+          "nullable": false,
+          "readOnly": false,
+          "removable": false,
+          "required": true,
+          "schema": {
+            "maxLength": 120,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "newPostalCode",
+          "id": "new-postal-code",
+          "label": "New postal code",
+          "nullable": false,
+          "readOnly": false,
+          "removable": false,
+          "required": true,
+          "schema": {
+            "maxLength": 16,
+            "minLength": 0,
+            "type": "string"
+          }
+        }
+      ],
+      "id": "records.address-correction-request.get",
+      "identifier": {
+        "apiName": "id",
+        "location": "envelope"
+      },
+      "method": "GET",
+      "operation": "get",
+      "patchWritableFields": [],
+      "path": "/v1/records/address-correction-requests/{record_id}",
+      "query": null,
+      "readableFields": [
+        "address",
+        "new-address-line",
+        "new-locality",
+        "new-postal-code"
+      ],
+      "readableRequestFields": [
+        "reason"
+      ],
+      "request": {
+        "fieldNames": "api",
+        "queryParameters": [
+          "$select"
+        ]
+      },
+      "requiredCapabilities": [],
+      "responseEntity": "address-correction-request",
+      "selectors": [],
+      "sourceEntity": "address-correction-request",
+      "titleFields": [
+        "new-address-line"
+      ]
+    },
+    {
+      "accessProfile": "citizen-agent",
+      "createWritableFields": [],
+      "entityLabel": "Address correction request",
+      "fields": [
+        {
+          "apiName": "address",
+          "id": "address",
+          "label": "Address",
+          "nullable": false,
+          "readOnly": false,
+          "reference": {
+            "manualEntry": true,
+            "operations": [
+              {
+                "accessProfile": "citizen-agent",
+                "labelFields": [
+                  "address-line"
+                ],
+                "operationId": "records.person-address.list"
+              },
+              {
+                "accessProfile": "citizen-agent",
+                "labelFields": [
+                  "address-line"
+                ],
+                "operationId": "records.person-address.get"
+              }
+            ],
+            "targetEntity": "person-address"
+          },
+          "removable": false,
+          "required": true,
+          "schema": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "newAddressLine",
+          "id": "new-address-line",
+          "label": "New address line",
+          "nullable": false,
+          "readOnly": false,
+          "removable": false,
+          "required": true,
+          "schema": {
+            "maxLength": 200,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "newLocality",
+          "id": "new-locality",
+          "label": "New locality",
+          "nullable": false,
+          "readOnly": false,
+          "removable": false,
+          "required": true,
+          "schema": {
+            "maxLength": 120,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "newPostalCode",
+          "id": "new-postal-code",
+          "label": "New postal code",
+          "nullable": false,
+          "readOnly": false,
+          "removable": false,
+          "required": true,
+          "schema": {
+            "maxLength": 16,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "owner",
+          "id": "owner",
+          "label": "Owner",
+          "nullable": false,
+          "readOnly": false,
+          "removable": false,
+          "required": true,
+          "schema": {
+            "maxLength": 128,
+            "minLength": 0,
+            "type": "string"
+          }
+        }
+      ],
+      "id": "records.address-correction-request.patch",
+      "identifier": {
+        "apiName": "id",
+        "location": "envelope"
+      },
+      "method": "PATCH",
+      "operation": "patch",
+      "patchWritableFields": [
+        "address",
+        "new-address-line",
+        "new-locality",
+        "new-postal-code",
+        "owner"
+      ],
+      "path": "/v1/records/address-correction-requests/{record_id}",
+      "query": null,
+      "readableFields": [
+        "address",
+        "new-address-line",
+        "new-locality",
+        "new-postal-code"
+      ],
+      "readableRequestFields": [
+        "reason"
+      ],
+      "request": {
+        "body": "json_patch",
+        "contentType": "application/json-patch+json",
+        "fieldNames": "api",
+        "idempotencyKeyRequired": true,
+        "ifMatchRequired": true,
+        "mutationSemantics": "direct",
+        "patchOperations": [
+          "add",
+          "replace",
+          "remove",
+          "test"
+        ],
+        "patchPathPrefix": "/data/",
+        "queryParameters": [],
+        "removeSemantics": "set_null",
+        "schema": {
+          "items": {
+            "additionalProperties": false,
+            "else": {
+              "required": [
+                "value"
+              ]
+            },
+            "if": {
+              "properties": {
+                "op": {
+                  "const": "remove"
+                }
+              }
+            },
+            "properties": {
+              "op": {
+                "enum": [
+                  "add",
+                  "replace",
+                  "remove",
+                  "test"
+                ],
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "value": true
+            },
+            "required": [
+              "op",
+              "path"
+            ],
+            "then": {
+              "not": {
+                "required": [
+                  "value"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "requiredCapabilities": [],
+      "responseEntity": "address-correction-request",
+      "selectors": [],
+      "sourceEntity": "address-correction-request",
+      "titleFields": [
+        "new-address-line"
+      ]
+    },
+    {
+      "accessProfile": "citizen-agent",
+      "createWritableFields": [],
+      "entityLabel": "Person address",
+      "fields": [
+        {
+          "apiName": "addressLine",
+          "id": "address-line",
+          "label": "Address line",
+          "nullable": false,
+          "readOnly": false,
+          "removable": false,
+          "required": true,
+          "schema": {
+            "maxLength": 200,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "locality",
+          "id": "locality",
+          "label": "Locality",
+          "nullable": false,
+          "readOnly": false,
+          "removable": false,
+          "required": true,
+          "schema": {
+            "maxLength": 120,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "postalCode",
+          "id": "postal-code",
+          "label": "Postal code",
+          "nullable": false,
+          "readOnly": false,
+          "removable": false,
+          "required": true,
+          "schema": {
+            "maxLength": 16,
+            "minLength": 0,
+            "type": "string"
+          }
+        }
+      ],
+      "id": "records.person-address.list",
+      "identifier": {
+        "apiName": "id",
+        "location": "envelope"
+      },
+      "method": "GET",
+      "operation": "list",
+      "patchWritableFields": [],
+      "path": "/v1/records/person-addresses",
+      "query": {
+        "allowCount": false,
+        "defaultPageSize": 100,
+        "filterableFields": [],
+        "kind": "list",
+        "maxFilterClauses": 32,
+        "maxInValues": 100,
+        "maxPageSize": 100,
+        "pagination": {
+          "exclusive": true,
+          "parameter": "$skiptoken",
+          "responsePath": "pageInfo.nextCursor"
+        },
+        "selectableFields": [
+          {
+            "apiName": "addressLine",
+            "id": "address-line"
+          },
+          {
+            "apiName": "locality",
+            "id": "locality"
+          },
+          {
+            "apiName": "postalCode",
+            "id": "postal-code"
+          }
+        ],
+        "sortableFields": [],
+        "temporal": null
+      },
+      "readableFields": [
+        "address-line",
+        "locality",
+        "postal-code"
+      ],
+      "readableRequestFields": [],
+      "request": {
+        "fieldNames": "api",
+        "queryParameters": [
+          "$select",
+          "$skiptoken",
+          "$top"
+        ]
+      },
+      "requiredCapabilities": [],
+      "responseEntity": "person-address",
+      "selectors": [],
+      "sourceEntity": "person-address",
+      "titleFields": [
+        "address-line"
+      ]
+    },
+    {
+      "accessProfile": "citizen-agent",
+      "createWritableFields": [],
+      "entityLabel": "Person address",
+      "fields": [
+        {
+          "apiName": "addressLine",
+          "id": "address-line",
+          "label": "Address line",
+          "nullable": false,
+          "readOnly": false,
+          "removable": false,
+          "required": true,
+          "schema": {
+            "maxLength": 200,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "locality",
+          "id": "locality",
+          "label": "Locality",
+          "nullable": false,
+          "readOnly": false,
+          "removable": false,
+          "required": true,
+          "schema": {
+            "maxLength": 120,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "postalCode",
+          "id": "postal-code",
+          "label": "Postal code",
+          "nullable": false,
+          "readOnly": false,
+          "removable": false,
+          "required": true,
+          "schema": {
+            "maxLength": 16,
+            "minLength": 0,
+            "type": "string"
+          }
+        }
+      ],
+      "id": "records.person-address.get",
+      "identifier": {
+        "apiName": "id",
+        "location": "envelope"
+      },
+      "method": "GET",
+      "operation": "get",
+      "patchWritableFields": [],
+      "path": "/v1/records/person-addresses/{record_id}",
+      "query": null,
+      "readableFields": [
+        "address-line",
+        "locality",
+        "postal-code"
+      ],
+      "readableRequestFields": [],
+      "request": {
+        "fieldNames": "api",
+        "queryParameters": [
+          "$select"
+        ]
+      },
+      "requiredCapabilities": [],
+      "responseEntity": "person-address",
+      "selectors": [],
+      "sourceEntity": "person-address",
+      "titleFields": [
+        "address-line"
+      ]
+    }
+  ],
+  "revision": "sha256:35894111290184de094f94b554748d41f6658b3810dd034ec471d7ea1d8687a8",
+  "version": "0.1.0"
+}

@@ -2831,6 +2831,13 @@ pub(crate) fn authorize_profile_claims(
             return Err("actor_kind_mismatched");
         }
     }
+    // A delegated token acts for its principal; only a profile written for
+    // agents may admit it, never one that accepts every kind.
+    if claims.actor_subject().is_some()
+        && profile.actor_kind != Some(crate::contract::ActorKindSource::Agent)
+    {
+        return Err("delegated_actor_requires_agent_profile");
+    }
     if !profile.requester_clients.is_empty()
         && !claims
             .requester_client()

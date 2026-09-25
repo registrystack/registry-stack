@@ -56,6 +56,8 @@ class ReleaseRepeatabilityWorkflowTest(unittest.TestCase):
         self.assertIn('"registry-manifest": "registry-manifest"', self.workflow)
         self.assertIn('"breg": "breg"', self.workflow)
         self.assertIn('"bregctl": "bregctl"', self.workflow)
+        self.assertIn('"breg-mcp": "breg-mcp"', self.workflow)
+        self.assertIn('"breg-review": "breg-review"', self.workflow)
         self.assertIn('"casework": "casework"', self.workflow)
         self.assertIn('"caseworkctl": "caseworkctl"', self.workflow)
         self.assertIn('"relay": "relay"', self.workflow)

@@ -1,11 +1,21 @@
 //! In-memory pseudonym-keyed request and failed-selector rate limits.
+//!
+//! Evidence's own configuration and error vocabulary stay here at the
+//! boundary; the limiting algorithms, key rules, tracked-key cap, and
+//! pruning live in `registry-platform-ratelimit`, shared across Registry
+//! Stack products.
 
-use std::{collections::HashMap, time::Duration};
+use std::time::Duration;
 
+use registry_platform_ratelimit::{
+    fixed_window::{FixedWindowConfig, FixedWindowCounter, FixedWindowError},
+    token_bucket::{TokenBucketConfig, TokenBucketError, TokenBucketLimiter},
+};
 use thiserror::Error;
-use tokio::time::Instant;
 
-const MAX_TRACKED_KEYS: usize = 100_000;
+/// Failed-selector attempts are counted over a fixed one-minute window,
+/// matching the request-rate configuration's per-minute unit.
+const SELECTOR_FAILURE_WINDOW: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy)]
 pub struct RateLimitConfig {
@@ -26,37 +36,45 @@ pub enum RateLimitError {
     Capacity,
 }
 
-#[derive(Debug)]
-struct TokenBucket {
-    tokens: f64,
-    updated_at: Instant,
+impl From<TokenBucketError> for RateLimitError {
+    fn from(error: TokenBucketError) -> Self {
+        match error {
+            TokenBucketError::Configuration => Self::Configuration,
+            TokenBucketError::Capacity => Self::Capacity,
+            TokenBucketError::Exceeded { .. } => Self::RequestExceeded,
+        }
+    }
 }
 
-#[derive(Debug)]
-struct FixedWindow {
-    started_at: Instant,
-    count: u32,
+impl From<FixedWindowError> for RateLimitError {
+    fn from(error: FixedWindowError) -> Self {
+        match error {
+            FixedWindowError::Configuration => Self::Configuration,
+            FixedWindowError::Capacity => Self::Capacity,
+            FixedWindowError::Exceeded => Self::FailedSelectorExceeded,
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct EvidenceRateLimiter {
-    config: RateLimitConfig,
-    requests: tokio::sync::Mutex<HashMap<String, TokenBucket>>,
-    selector_failures: tokio::sync::Mutex<HashMap<String, FixedWindow>>,
+    requests: TokenBucketLimiter,
+    selector_failures: FixedWindowCounter,
 }
 
 impl EvidenceRateLimiter {
     pub fn new(config: RateLimitConfig) -> Result<Self, RateLimitError> {
-        if config.requests_per_principal_per_minute == 0
-            || config.burst_per_principal == 0
-            || config.failed_selector_attempts_per_principal_authority_per_minute == 0
-        {
-            return Err(RateLimitError::Configuration);
-        }
+        let requests = TokenBucketLimiter::new(TokenBucketConfig {
+            requests_per_minute: config.requests_per_principal_per_minute,
+            burst: config.burst_per_principal,
+        })?;
+        let selector_failures = FixedWindowCounter::new(FixedWindowConfig {
+            window: SELECTOR_FAILURE_WINDOW,
+            limit: config.failed_selector_attempts_per_principal_authority_per_minute,
+        })?;
         Ok(Self {
-            config,
-            requests: tokio::sync::Mutex::new(HashMap::new()),
-            selector_failures: tokio::sync::Mutex::new(HashMap::new()),
+            requests,
+            selector_failures,
         })
     }
 
@@ -74,29 +92,7 @@ impl EvidenceRateLimiter {
         principal_pseudonym: &str,
         cost: u32,
     ) -> Result<(), RateLimitError> {
-        validate_pseudonym_key(principal_pseudonym)?;
-        let cost = f64::from(cost.max(1));
-        let now = Instant::now();
-        let mut buckets = self.requests.lock().await;
-        prune_buckets(&mut buckets, now);
-        if !buckets.contains_key(principal_pseudonym) && buckets.len() >= MAX_TRACKED_KEYS {
-            return Err(RateLimitError::Capacity);
-        }
-        let capacity = f64::from(self.config.burst_per_principal);
-        let refill_per_second = f64::from(self.config.requests_per_principal_per_minute) / 60.0;
-        let bucket = buckets
-            .entry(principal_pseudonym.to_owned())
-            .or_insert(TokenBucket {
-                tokens: capacity,
-                updated_at: now,
-            });
-        let elapsed = now.duration_since(bucket.updated_at).as_secs_f64();
-        bucket.tokens = (bucket.tokens + elapsed * refill_per_second).min(capacity);
-        bucket.updated_at = now;
-        if bucket.tokens < cost {
-            return Err(RateLimitError::RequestExceeded);
-        }
-        bucket.tokens -= cost;
+        self.requests.check(principal_pseudonym, cost).await?;
         Ok(())
     }
 
@@ -107,89 +103,28 @@ impl EvidenceRateLimiter {
         &self,
         principal_authority_pseudonym: &str,
     ) -> Result<(), RateLimitError> {
-        validate_pseudonym_key(principal_authority_pseudonym)?;
-        let now = Instant::now();
-        let mut windows = self.selector_failures.lock().await;
-        prune_windows(&mut windows, now);
-        match windows.get(principal_authority_pseudonym) {
-            Some(window)
-                if now.duration_since(window.started_at) < Duration::from_secs(60)
-                    && window.count
-                        >= self
-                            .config
-                            .failed_selector_attempts_per_principal_authority_per_minute =>
-            {
-                Err(RateLimitError::FailedSelectorExceeded)
-            }
-            _ => Ok(()),
-        }
+        self.selector_failures
+            .check(principal_authority_pseudonym)
+            .await?;
+        Ok(())
     }
 
     pub async fn record_selector_failure(
         &self,
         principal_authority_pseudonym: &str,
     ) -> Result<(), RateLimitError> {
-        validate_pseudonym_key(principal_authority_pseudonym)?;
-        let now = Instant::now();
-        let mut windows = self.selector_failures.lock().await;
-        prune_windows(&mut windows, now);
-        if !windows.contains_key(principal_authority_pseudonym) && windows.len() >= MAX_TRACKED_KEYS
-        {
-            return Err(RateLimitError::Capacity);
-        }
-        let window = windows
-            .entry(principal_authority_pseudonym.to_owned())
-            .or_insert(FixedWindow {
-                started_at: now,
-                count: 0,
-            });
-        if now.duration_since(window.started_at) >= Duration::from_secs(60) {
-            window.started_at = now;
-            window.count = 0;
-        }
-        window.count = window.count.saturating_add(1);
-        if window.count
-            > self
-                .config
-                .failed_selector_attempts_per_principal_authority_per_minute
-        {
-            return Err(RateLimitError::FailedSelectorExceeded);
-        }
+        self.selector_failures
+            .record(principal_authority_pseudonym)
+            .await?;
         Ok(())
     }
 
-    /// Total pseudonym keys currently tracked across both maps, toward the
-    /// shared [`MAX_TRACKED_KEYS`] capacity ceiling each map enforces.
-    ///
-    /// Each lock is held only long enough to read `.len()`; no other work
-    /// happens in either critical section, since the request path contends
-    /// on these same locks.
+    /// Total pseudonym keys currently tracked across both underlying
+    /// limiters, toward the shared tracked-key capacity ceiling each one
+    /// enforces.
     pub async fn tracked_key_count(&self) -> usize {
-        let requests_len = self.requests.lock().await.len();
-        let selector_failures_len = self.selector_failures.lock().await.len();
-        requests_len + selector_failures_len
+        self.requests.tracked_key_count().await + self.selector_failures.tracked_key_count().await
     }
-}
-
-fn validate_pseudonym_key(key: &str) -> Result<(), RateLimitError> {
-    if key.is_empty() || key.len() > 256 || key.chars().any(char::is_whitespace) {
-        return Err(RateLimitError::Configuration);
-    }
-    Ok(())
-}
-
-fn prune_buckets(buckets: &mut HashMap<String, TokenBucket>, now: Instant) {
-    if buckets.len() < MAX_TRACKED_KEYS / 2 {
-        return;
-    }
-    buckets.retain(|_, bucket| now.duration_since(bucket.updated_at) < Duration::from_secs(600));
-}
-
-fn prune_windows(windows: &mut HashMap<String, FixedWindow>, now: Instant) {
-    if windows.len() < MAX_TRACKED_KEYS / 2 {
-        return;
-    }
-    windows.retain(|_, window| now.duration_since(window.started_at) < Duration::from_secs(120));
 }
 
 #[cfg(test)]
@@ -205,51 +140,108 @@ mod tests {
         .expect("limiter builds")
     }
 
+    #[test]
+    fn zero_request_rate_is_refused_at_construction() {
+        assert_eq!(
+            EvidenceRateLimiter::new(RateLimitConfig {
+                requests_per_principal_per_minute: 0,
+                burst_per_principal: 1,
+                failed_selector_attempts_per_principal_authority_per_minute: 1,
+            })
+            .unwrap_err(),
+            RateLimitError::Configuration
+        );
+    }
+
+    #[test]
+    fn zero_burst_is_refused_at_construction() {
+        assert_eq!(
+            EvidenceRateLimiter::new(RateLimitConfig {
+                requests_per_principal_per_minute: 1,
+                burst_per_principal: 0,
+                failed_selector_attempts_per_principal_authority_per_minute: 1,
+            })
+            .unwrap_err(),
+            RateLimitError::Configuration
+        );
+    }
+
+    #[test]
+    fn zero_failed_selector_rate_is_refused_at_construction() {
+        assert_eq!(
+            EvidenceRateLimiter::new(RateLimitConfig {
+                requests_per_principal_per_minute: 1,
+                burst_per_principal: 1,
+                failed_selector_attempts_per_principal_authority_per_minute: 0,
+            })
+            .unwrap_err(),
+            RateLimitError::Configuration
+        );
+    }
+
     #[tokio::test]
-    async fn request_burst_and_refill_are_enforced() {
-        let limiter = EvidenceRateLimiter::new(RateLimitConfig {
-            requests_per_principal_per_minute: 6_000,
-            burst_per_principal: 2,
-            failed_selector_attempts_per_principal_authority_per_minute: 2,
-        })
-        .expect("limiter builds");
+    async fn request_budget_is_enforced_and_reports_request_exceeded() {
+        let limiter = limiter();
         limiter.check_request("pseudonym-a").await.expect("first");
         limiter.check_request("pseudonym-a").await.expect("second");
         assert_eq!(
             limiter.check_request("pseudonym-a").await,
             Err(RateLimitError::RequestExceeded)
         );
-        tokio::time::sleep(Duration::from_millis(11)).await;
-        limiter
-            .check_request("pseudonym-a")
-            .await
-            .expect("refilled");
     }
 
     #[tokio::test]
-    async fn request_budget_is_shared_by_every_use_of_a_principal_key() {
+    async fn selector_failure_budget_is_enforced_and_reports_failed_selector_exceeded() {
         let limiter = limiter();
-        let principal_key = "stable-principal-pseudonym";
-
-        for _request_context in [
-            ("adult", "service-enrolment", "audience-a"),
-            ("residence", "benefit-eligibility", "audience-b"),
-        ] {
-            limiter
-                .check_request(principal_key)
-                .await
-                .expect("shared principal budget has capacity");
-        }
-
-        assert_eq!(
-            limiter.check_request(principal_key).await,
-            Err(RateLimitError::RequestExceeded)
-        );
         limiter
-            .check_request("other-principal-pseudonym")
+            .record_selector_failure("authority-a")
             .await
-            .expect("another principal has an independent budget");
+            .expect("first failure");
+        limiter
+            .record_selector_failure("authority-a")
+            .await
+            .expect("second failure");
+        assert_eq!(
+            limiter.check_selector_failure_budget("authority-a").await,
+            Err(RateLimitError::FailedSelectorExceeded)
+        );
     }
+
+    #[tokio::test]
+    async fn tracked_key_count_sums_both_underlying_limiters() {
+        let limiter = limiter();
+        assert_eq!(limiter.tracked_key_count().await, 0);
+        limiter
+            .check_request("pseudonym-a")
+            .await
+            .expect("request key");
+        limiter
+            .record_selector_failure("authority-a")
+            .await
+            .expect("selector-failure key");
+        assert_eq!(limiter.tracked_key_count().await, 2);
+    }
+
+    #[tokio::test]
+    async fn an_invalid_pseudonym_key_is_refused() {
+        let limiter = limiter();
+        assert_eq!(
+            limiter.check_request("").await,
+            Err(RateLimitError::Configuration)
+        );
+        assert_eq!(
+            limiter.check_selector_failure_budget("has space").await,
+            Err(RateLimitError::Configuration)
+        );
+    }
+
+    // The three tests below are named and kept in this file to satisfy
+    // products/evidence/contracts/{acceptance,security}-test-traceability.yaml,
+    // which bind specific acceptance rows and security negatives to these
+    // exact Rust test items at this exact path. Their underlying algorithm
+    // coverage (atomicity, cap, pruning, retry-after) also lives in
+    // registry-platform-ratelimit's own suite; these prove the same
+    // guarantees hold through Evidence's own boundary type.
 
     #[tokio::test]
     async fn multi_token_admission_is_atomic_when_the_whole_cost_does_not_fit() {
@@ -295,34 +287,6 @@ mod tests {
             .check_selector_failure_budget("principal-authority-b")
             .await
             .expect("other authority remains available");
-    }
-
-    #[tokio::test]
-    async fn tracked_key_count_reports_the_total_across_both_maps() {
-        let limiter = limiter();
-        assert_eq!(limiter.tracked_key_count().await, 0);
-
-        limiter
-            .check_request("pseudonym-a")
-            .await
-            .expect("first principal");
-        limiter
-            .check_request("pseudonym-b")
-            .await
-            .expect("second principal");
-        limiter
-            .record_selector_failure("authority-a")
-            .await
-            .expect("first failure");
-
-        assert_eq!(limiter.tracked_key_count().await, 3);
-
-        // Reusing an already-tracked key does not grow the count.
-        limiter
-            .check_request("pseudonym-a")
-            .await
-            .expect("existing principal");
-        assert_eq!(limiter.tracked_key_count().await, 3);
     }
 
     #[tokio::test]

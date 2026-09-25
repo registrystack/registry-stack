@@ -550,6 +550,15 @@ export default defineConfig({
                 { label: 'Automate with OpenFn', slug: 'explanation/openfn-adaptors' },
               ],
             },
+            {
+              label: 'Citizen chat assistant',
+              collapsed: true,
+              items: [
+                { label: 'Run it locally', slug: 'tutorials/first-citizen-mcp' },
+                { label: 'Configure the gateway and review page', slug: 'configure/breg-mcp' },
+                { label: 'Operate the gateway and review page', slug: 'operate/breg-mcp' },
+              ],
+            },
             { label: 'Configuration reference', slug: 'reference/breg-configuration' },
             { label: 'API reference', slug: 'reference/breg-api' },
             { label: 'PublicSchema wizard prompts', slug: 'reference/bregctl-publicschema-wizard' },

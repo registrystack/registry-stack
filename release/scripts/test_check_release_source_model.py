@@ -106,6 +106,20 @@ class MonorepoSourceModelTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("registry-evidence-oid4vci crate", result.stderr)
 
+    def test_monorepo_mode_requires_both_breg_service_crates(self) -> None:
+        for crate, name in (
+            ("registry-breg-mcp", "registry-breg-mcp gateway crate"),
+            ("registry-breg-review", "registry-breg-review page crate"),
+        ):
+            with self.subTest(crate=crate):
+                with MonorepoFixture() as stack_root:
+                    shutil.rmtree(stack_root / "crates" / crate)
+
+                    result = run_monorepo_validator(stack_root)
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(name, result.stderr)
+
     def test_monorepo_mode_requires_every_casework_crate(self) -> None:
         for crate, name in (
             ("registry-casework-core", "registry-casework core crate"),
@@ -257,6 +271,8 @@ class MonorepoFixture:
             "crates/registry-breg-client",
             "crates/registry-breg-client-node",
             "crates/registry-breg-client-py",
+            "crates/registry-breg-mcp",
+            "crates/registry-breg-review",
             "crates/registry-casework-core",
             "crates/registry-casework-breg",
             "crates/registry-casework",

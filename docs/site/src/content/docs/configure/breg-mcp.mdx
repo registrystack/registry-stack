@@ -1,0 +1,500 @@
+---
+title: Configure the citizen chat assistant
+description: Prepare the registry and the authorization server, write the breg-mcp and breg-review runtime configurations, and look up the gateway's MCP tools and error codes.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-25"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+Configure `breg-mcp` and `breg-review` when a citizen should be able to ask a chat host, such as an
+AI assistant, to read their own Base Registry Engine (BReg) record and prepare a change to it, and
+then confirm that change themselves. This page covers what the registry and the authorization
+server must provide, both runtime configurations, and the Model Context Protocol (MCP) tools the
+gateway serves. [Operate the citizen chat assistant](../../operate/breg-mcp/) covers running both
+services. To see both working first, [run a citizen chat assistant locally](../../tutorials/first-citizen-mcp/).
+
+## How the two services fit
+
+Both are supporting services beside BReg, not products of their own. They add no registry
+semantics: what a citizen may read or change is decided by BReg, under the access profile each
+service names.
+
+- `breg-mcp` is the MCP gateway. A chat host calls it with an access token issued to the chat host
+  for one signed-in citizen. The gateway reads that citizen's own record and creates or edits a
+  change-request draft, which it calls an application.
+- `breg-review` is a server-rendered page. The citizen opens the link the gateway returns, signs in,
+  reads the draft beside the record it would change, and submits it.
+
+After submission the change request goes to the review authority its entity declares, Registry
+Casework in the reference project, and BReg applies it only after approval. The two services are
+separate processes with separate configuration and credentials, so no single process holds both
+the authority to prepare a change and the authority to submit it.
+
+{/* Evidence: products/breg/MCP-GATEWAY.md;
+    products/breg/acceptance/citizen-address-correction/registry.yaml;
+    crates/registry-breg-mcp/README.md; crates/registry-breg-review/README.md. */}
+
+## What the design guarantees
+
+These properties hold for every deployment, whatever the chat host does:
+
+- The gateway never submits, revises, cancels, or applies a change request, and writes no record
+  directly. It has no code path to do so: the gateway's lint configuration disallows the client
+  methods that would, and a boundary check proves the list still refuses each one.
+- BReg enforces the same split. The gateway's access profile is a standing agent, and the BReg
+  compiler refuses a standing agent profile any lifecycle operation, direct write, or immediate
+  action.
+- The target of an application comes from the citizen's own linked record, never from tool
+  arguments. The gateway resolves that record through the agent profile's linked lookup and writes
+  the target and owner fields itself. A tool argument or edit naming either field is refused before
+  any registry call.
+- The chat host's token is never forwarded. The gateway removes it from the request once verified
+  and performs an RFC 8693 token exchange on every tool call, calling BReg only with the delegated
+  token that exchange returns.
+- The gateway never uses a delegated token after the citizen's own token expires.
+- The review page re-reads the draft's target under the citizen's own token before it offers
+  submission, and again before it submits, so a draft naming a record the citizen cannot read
+  never reaches a submittable form.
+
+Registry-level target binding is not yet in place, so any client other than these two services
+must not rely on BReg to tie a change request's target to the requester's own record.
+
+{/* Evidence: crates/registry-breg-mcp/clippy.toml;
+    products/breg/scripts/check-mcp-gateway-boundary.sh;
+    crates/registry-breg/tests/standing_agent_ceiling.rs;
+    crates/registry-breg-mcp/src/tools.rs, a_smuggled_target_argument_is_refused_before_any_call;
+    crates/registry-breg-mcp/src/inbound.rs, require_caller();
+    crates/registry-breg-mcp/src/outbound.rs, delegated(),
+    the_exchanged_token_never_outlives_the_citizens_token;
+    crates/registry-breg-review/README.md;
+    products/breg/acceptance/citizen-address-correction/README.md. */}
+
+## Prepare the registry
+
+The registry project declares what both services may do. The
+[citizen address correction project](https://github.com/registrystack/registry-stack/blob/main/products/breg/acceptance/citizen-address-correction/registry.yaml)
+is the reference; adapt its shape to your own entities.
+
+| Declaration | What it needs |
+|---|---|
+| A record entity | The citizen's own record, such as an address |
+| A link entity | A steward-provisioned link from a verified principal to one record, with an active flag |
+| A change-request entity | A draft entity whose fields reference the target record and record the owner's principal |
+| An agent access profile | `actorKind: agent`, the gateway's exchange client in `requesterClients`, and no `taskGrant` |
+| A review access profile | `actorKind: human` and the review page's client in `requesterClients` |
+
+The agent profile reads the citizen's record through a membership boundary on the active link,
+and may `create`, `get`, and `patch` the change-request entity under a row boundary where the owner
+field equals the principal claim, with `requestVisibility: owner`. Its writable fields include the
+target and owner fields, because the gateway writes both. A lookup that finds no record, or more
+than one, refuses the call and creates nothing.
+
+The review profile may `get`, `patch`, and `submit_request` the same change-request entity under the
+same row boundary, with the owner field not writable, and may `get` the target record through the
+same membership boundary.
+
+In the BReg runtime configuration, set `authentication.oidc.audience` to the resource both services
+request, admit both clients in `authentication.oidc.allowedClients`, and map the gateway's exchange
+client to the actor subject the authorization server writes in `act.sub` under
+`authentication.authorityClaims.trustedActors`:
+
+```yaml
+authentication:
+  authorityClaims:
+    principal: sub
+    trustedActors:
+      <gateway-exchange-client-id>: <gateway-actor-subject>
+```
+
+BReg treats a token with a verified trusted actor as an agent, whatever its own actor-kind claim
+says. [Configure BReg](../../configure/breg/) describes access profiles and the standing agent
+ceiling in full.
+
+{/* Evidence: products/breg/acceptance/citizen-address-correction/registry.yaml;
+    crates/registry-breg-mcp/tests/support/real_registry.rs, trustedActors;
+    crates/registry-breg/src/auth.rs, optional_actor_subject(), trusted_actors;
+    crates/registry-breg-mcp/src/gateway.rs, resolve_own. */}
+
+## Prepare the authorization server
+
+Both services are identity-provider neutral. Each takes an issuer, endpoints, and keys, not a
+vendor. The authorization server must support the following.
+
+For the chat host's token, which the gateway verifies:
+
+- RFC 9068 JWT access tokens (`typ` of `at+jwt`) whose audience is exactly the gateway's resource
+  identifier, `https://<gateway-host>/mcp`, issued to a preregistered chat-host client, carrying
+  the required scopes, and signed with RS256, RS384, ES256, ES384, or EdDSA.
+
+For the gateway's token exchange:
+
+- `private_key_jwt` client authentication for the gateway's exchange client.
+- A `client_credentials` grant for that client that honors the RFC 8707 `resource` parameter and
+  issues the actor token for the gateway's own resource identifier, never with the registry's
+  audience. An actor token the registry would accept is a standing registry credential with no
+  citizen behind it.
+- RFC 8693 token exchange that accepts an already-issued access token as `subject_token`, with
+  `subject_token_type` set to the access-token type, and an `actor_token`. The issued token names
+  the citizen in `sub`, the registry in its audience, the gateway's client as its client, and
+  writes the actor as an `act` claim of exactly `sub`, or `sub` and `iss` where `iss` equals the
+  token's issuer. BReg refuses any other `act` shape, including a nested `act`.
+
+For the review page's sign-in:
+
+- OpenID Connect discovery at the issuer, publishing `authorization_endpoint`, `token_endpoint`,
+  and `jwks_uri`.
+- The authorization code flow with PKCE (S256), `private_key_jwt` client authentication with the
+  issuer as the assertion audience, and the RFC 8707 `resource` parameter.
+- ID tokens signed with EdDSA, ES256, ES384, RS256, or PS256.
+- A registry access token for the review client that carries `registry_actor_kind: human`.
+
+The gateway serves no authorization, token, or registration endpoint. Register every chat host you
+accept, and the review page's client, with the authorization server ahead of time, each with its
+own client identity and key.
+
+ThunderID 1.0.1 has been shown to perform the gateway's token exchange when the subject token came
+from a client-credentials grant. A browser sign-in through ThunderID, for the chat host or for the
+review page, has not been proven.
+
+{/* Evidence: crates/registry-breg-mcp/src/inbound.rs, verifier_config();
+    crates/registry-breg-mcp/src/config.rs, AccessTokenAlgorithm;
+    crates/registry-breg-mcp/src/outbound.rs, ExchangeAuthorization,
+    the_actor_token_is_requested_for_the_gateway_not_the_registry,
+    the_exchanged_token_names_the_citizen_and_the_gateway_as_actor;
+    crates/registry-breg/src/auth.rs, optional_actor_subject();
+    crates/registry-breg-review/src/lib.rs, router(), ID_TOKEN_ALGORITHMS;
+    crates/registry-breg-review/src/signin.rs, code_challenge_method;
+    products/breg/MCP-GATEWAY.md;
+    crates/registry-thunderid-tooling/src/bootstrap.rs, thunderid:1.0.1. */}
+
+## Handle secrets
+
+Both services refuse an inline credential. Every key is a reference: `secret:file/<name>` reads
+`<name>` under `secretProviders.file.root`, and `secret:env/<NAME>` reads an environment variable
+when `secretProviders.environment` is enabled. A secret file must be a regular file owned by the
+runtime user, with mode `0400` or `0600` and exactly one hard link.
+
+Each service needs two secrets: a private JSON Web Key (JWK) for its own `private_key_jwt` client,
+and an audit key of at least 32 bytes that keys its audit journal and pseudonyms. Give the two
+services different keys.
+
+{/* Evidence: crates/registry-breg-mcp/src/config.rs, InlineCredential;
+    crates/registry-breg-review/src/config.rs, InvalidSecretReference;
+    crates/registry-platform-audit/src/lib.rs, MIN_AUDIT_SECRET_BYTES. */}
+
+## Configure breg-mcp
+
+`breg-mcp` reads one closed YAML document named by `--runtime-config`, which must be an absolute
+path. Unknown keys are refused, and an error names the key path without echoing its value.
+
+```yaml
+apiVersion: registry.registrystack.org/breg-mcp-runtime/v1alpha1
+kind: BRegMcpRuntimeConfig
+listener:
+  bind: 10.0.0.10:8110
+  tlsTermination: operator-controlled-upstream
+  networkExposure: private-address
+secretProviders:
+  file:
+    root: /run/secrets/breg-mcp
+resourceServer:
+  resource: https://assistant.example.com/mcp
+  issuer: https://login.example.com
+  jwks:
+    kind: uri
+    uri: https://login.example.com/jwks.json
+  algorithms:
+    - ES256
+  allowedClients:
+    - <chat-host-client-id>
+  requiredScopes:
+    - address-correction:self
+registry:
+  baseUrl: https://registry.example.com/
+  accessProfile: citizen-agent
+  audience: https://registry.example.com/citizen-address-correction
+  scopes:
+    - address-correction:self
+exchange:
+  tokenEndpoint: https://login.example.com/token
+  clientId: <gateway-exchange-client-id>
+  privateKeyRef: secret:file/gateway-key
+service:
+  name: Address correction
+  description: Correct the postal address the registry holds for you.
+  disclosure: The assistant you use will see your current address and the correction you request.
+  details:
+    entity: person-address
+  application:
+    entity: address-correction-request
+    targetField: address
+    ownerField: owner
+  reviewBaseUrl: https://review.example.com/
+audit:
+  path: /var/lib/breg-mcp/audit/audit.jsonl
+  hashKeyRef: secret:file/audit-key
+rateLimits:
+  perCitizen:
+    requestsPerMinute: 30
+    burst: 10
+  perClient:
+    requestsPerMinute: 600
+    burst: 100
+```
+
+Every URL must use `https` with no credentials, query, or fragment. Plain `http` is accepted only for
+a loopback host under `tlsTermination: development-loopback`.
+
+### Listener
+
+`listener.bind` defaults to `127.0.0.1:8110`. `listener.tlsTermination` is
+`operator-controlled-upstream`, for a service behind your TLS proxy, or `development-loopback`,
+which also turns off HSTS and admits loopback `http` URLs. `listener.networkExposure` decides which
+addresses the listener may bind:
+
+| `networkExposure` | Addresses accepted |
+|---|---|
+| `private-address` (default) | IPv4 loopback or private, IPv6 loopback or unique-local |
+| `container-private` | The same, plus the unspecified address, such as `0.0.0.0` inside a container |
+
+`development-loopback` accepts only a loopback address with `private-address`.
+
+### Inbound tokens
+
+| Key | Meaning |
+|---|---|
+| `resource` | The gateway's resource identifier: the exact `https` URL of its `/mcp` endpoint |
+| `issuer` | The issuer every accepted token must name |
+| `jwks` | `kind: uri` with `uri`, or `kind: static` with `documentRef`, a secret holding the key set |
+| `algorithms` | Accepted signature algorithms: `RS256`, `RS384`, `ES256`, `ES384`, or `EdDSA` |
+| `allowedClients` | The chat-host clients whose tokens are accepted |
+| `requiredScopes` | Scopes every accepted token must carry |
+| `scopeClaim` | The claim holding scopes; defaults to `scope` |
+| `maxTokenLifetimeSeconds` | The longest token lifetime accepted; defaults to 3600 |
+
+`allowedClients` and `requiredScopes` take between 1 and 128 entries. A `jwks.uri` key set is fetched
+under a strict policy that refuses loopback, private-range, and cloud-metadata addresses; use a
+`static` key set when the issuer's keys are reachable only on a private network. The gateway
+publishes RFC 9728 protected-resource metadata naming the issuer and the required scopes.
+
+### Registry and exchange
+
+| Key | Meaning |
+|---|---|
+| `registry.baseUrl` | The BReg deployment the gateway acts on |
+| `registry.accessProfile` | The standing agent access profile every call names |
+| `registry.audience` | The registry's RFC 8707 resource, requested in the exchange; must differ from `resourceServer.resource` |
+| `registry.scopes` | The scopes requested for the delegated token |
+| `registry.requestTimeoutMilliseconds` | The timeout for each registry call; defaults to 10000 |
+| `exchange.tokenEndpoint` | The authorization server's token endpoint |
+| `exchange.clientId` | The gateway's own client; must not appear in `resourceServer.allowedClients` |
+| `exchange.privateKeyRef` | The secret holding that client's private JWK |
+| `exchange.assertionAudience` | Optional client-assertion audience, when the server expects one other than its token endpoint |
+
+### Service
+
+| Key | Meaning |
+|---|---|
+| `name`, `description` | What `describe_service` tells the chat host about the service |
+| `disclosure` | What the citizen is told about the data the chat host will see |
+| `details.entity` | The entity holding the citizen's own record |
+| `application.entity` | The change-request entity the gateway drafts |
+| `application.targetField` | The field identifier of the reference to the citizen's record |
+| `application.ownerField` | The field identifier of the field recording the citizen's principal |
+| `reviewBaseUrl` | The review page's `publicOrigin`; the gateway returns `<reviewBaseUrl>/requests/<id>` |
+
+`name`, `description`, and `disclosure` are each at most 4096 bytes. The two field keys take the
+field identifier as the project declares it, such as `new-address-line`, not the API name
+`newAddressLine` the registry's metadata publishes for it.
+
+### Audit and limits
+
+`audit.path` is the absolute path of the active journal file; sealed segments are written beside
+it. `audit.hashKeyRef` names the audit key, and `audit.maximumFileBytes` sets the segment size,
+64 MiB by default.
+
+`rateLimits.perCitizen` and `rateLimits.perClient` are required, each with `requestsPerMinute` and
+`burst` greater than zero. `limits.maxRequestBodyBytes` defaults to 64 KiB and accepts at most
+1 MiB.
+
+{/* Evidence: crates/registry-breg-mcp/src/config.rs, RuntimeConfig, valid_listener(),
+    default_listener_bind(), default_max_token_lifetime(), default_registry_timeout(),
+    ExchangeClientAdmittedInbound, AudienceReused;
+    crates/registry-breg-mcp/src/inbound.rs, jwks_fetch_policy(), METADATA_PREFIX;
+    crates/registry-breg-mcp/src/gateway.rs, prepare_review;
+    crates/registry-breg-mcp/tests/support/gateway.rs, document(). */}
+
+## Configure breg-review
+
+`breg-review` reads one closed YAML document with the same rules for paths, unknown keys, and error
+messages.
+
+```yaml
+apiVersion: registry.registrystack.org/breg-review-runtime/v1alpha1
+kind: BRegReviewRuntimeConfig
+listener:
+  bind: 10.0.0.11:8115
+  tlsTermination: operator-controlled-upstream
+  networkExposure: private-address
+publicOrigin: https://review.example.com
+secretProviders:
+  file:
+    root: /run/secrets/breg-review
+signIn:
+  issuer: https://login.example.com
+  clientId: <review-page-client-id>
+  clientKeyRef: secret:file/client-key.jwk
+  scopes:
+    - address-correction:self
+registry:
+  baseUrl: https://registry.example.com
+  resource: https://registry.example.com/citizen-address-correction
+  entity: address-correction-request
+  targetField: address
+  accessProfile: citizen-review
+audit:
+  path: /var/lib/breg-review/audit/journal.jsonl
+  hashKeyRef: secret:file/audit-key
+```
+
+`listener` follows the same rules as the gateway's and defaults to `127.0.0.1:8115`.
+`development-loopback` also drops the `Secure` cookie attribute and the `__Host-` cookie prefix.
+
+| Key | Meaning |
+|---|---|
+| `publicOrigin` | The page's own `https` origin, with no path or query. The redirect URI to register is `publicOrigin` followed by `/signin/callback` |
+| `signIn.issuer` | The OpenID Connect issuer the citizen signs in with |
+| `signIn.clientId` | The page's client identifier |
+| `signIn.clientKeyRef` | The secret holding the page's private JWK |
+| `signIn.scopes` | 1 to 16 unique scopes to request besides `openid`, which the page always adds |
+| `registry.baseUrl` | The BReg deployment |
+| `registry.resource` | The registry's RFC 8707 resource, requested at sign-in |
+| `registry.entity`, `registry.accessProfile` | The change-request entity and the review access profile |
+| `registry.targetField` | The field identifier of the target reference, such as `address` |
+
+`registry.targetField` takes the field identifier as the project declares it, the same form as
+the gateway's `application.targetField`.
+
+In production the page fetches the issuer's discovery document, key set, and token endpoint under
+a strict policy that refuses loopback, private-range, and cloud-metadata addresses, so the
+authorization server must be reachable at a public address.
+
+### Limits and sessions
+
+Both sections are optional:
+
+| Key | Default |
+|---|---|
+| `limits.perCitizen` | 120 requests per minute, burst 30, for each signed-in citizen |
+| `limits.globalSignIn` | 600 requests per minute, burst 120, shared by everyone on the sign-in routes |
+| `session.maximumSessions` | 10000, from 1 to 1000000 |
+| `session.maximumPendingSignIns` | 10000, from 1 to 1000000 |
+| `session.maximumLifetimeSeconds` | 3600, from 60 to 86400 |
+| `session.signInLifetimeSeconds` | 600, from 60 to 3600 |
+
+Startup refuses a `maximumPendingSignIns` smaller than the sign-ins `globalSignIn` admits within
+`signInLifetimeSeconds`: its burst plus its rate over that lifetime. A session ends at
+`maximumLifetimeSeconds` or when the citizen's access token expires, whichever comes first.
+
+{/* Evidence: crates/registry-breg-review/src/config.rs, RuntimeConfig, CALLBACK_PATH,
+    default_per_citizen(), default_global_sign_in(), PendingSignInsFillable, valid_listener();
+    crates/registry-breg-review/src/lib.rs, router(), FetchUrlPolicy;
+    crates/registry-breg-review/README.md. */}
+
+## Check both configurations
+
+Validate each document before you serve it:
+
+```sh
+breg-mcp --runtime-config /etc/breg-mcp/runtime.yaml check
+breg-review --runtime-config /etc/breg-review/runtime.yaml check
+```
+
+`breg-mcp check` resolves every secret without opening a socket or the audit journal.
+`breg-review check` reads and parses its secrets without fetching the issuer's discovery document
+or opening its journal. Neither command proves the authorization server or the registry accepts
+the configuration; the first `serve` does.
+
+{/* Evidence: crates/registry-breg-mcp/src/main.rs; crates/registry-breg-review/src/lib.rs, check(). */}
+
+## MCP tool reference
+
+The gateway serves MCP at `/mcp` over streamable HTTP, statelessly, with JSON responses. It serves
+six tools:
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `describe_service` | None | The configured name, description, and disclosure |
+| `get_my_details` | None | The citizen's own record as labelled fields |
+| `start_application` | The editable application fields | A new draft's `applicationId`, `revision`, and `status` |
+| `update_application` | `applicationId`, `expectedRevision`, `patch` | The edited draft |
+| `prepare_review` | `applicationId` | The draft and its `reviewUrl` |
+| `get_application_status` | `applicationId` | The draft's `status` |
+
+Tool input schemas come from the registry's metadata for the agent access profile, so a field the
+profile cannot write is never offered, and the target and owner fields never are. `patch` holds 1 to
+64 edits, each an `add`, `replace`, or `remove` on one editable field path such as `/newLocality`;
+`expectedRevision` must match the draft's current revision. Registry text is returned as labelled
+data with a notice that it is data, never instructions.
+
+`status` is one of `prepared`, `submitted`, `under_review`, `approved`, `rejected`, `applied`, or
+`cancelled`, as BReg reports it. The agent profile in the reference project reads no review outcome,
+so its status stays `submitted` until the change is applied or the request closes.
+
+Writes carry an idempotency key derived from the citizen, the tool, and the arguments, so a
+retried call replays its first answer instead of creating a second draft. A `start_application`
+identical to one whose draft is still open returns that draft; after 32 closed identical
+applications it answers `not-permitted`.
+
+{/* Evidence: crates/registry-breg-mcp/src/tools.rs, start_input_schema(), update_input_schema();
+    crates/registry-breg-mcp/src/gateway.rs, application_summary(), REGISTRY_DATA_NOTICE;
+    crates/registry-breg-mcp/src/server.rs, NeverSessionManager;
+    crates/registry-breg-mcp/src/idempotency.rs; crates/registry-breg-mcp/README.md. */}
+
+### Tool errors
+
+A failed tool call answers `{"error":{"code":"<code>","message":"<text>"}}`, with a `traceId` when
+the registry supplied one. Each code carries fixed text:
+
+- `invalid-arguments`: the arguments do not match what the tool accepts.
+- `record-not-resolved`: the registry found no single record for the citizen, so nothing was
+  created.
+- `not-found`: no application with that identifier is available to the citizen. An application that
+  no longer names the citizen's own record answers the same way.
+- `application-not-editable`: the application can no longer be changed.
+- `stale-application`: the application changed since it was read, possibly by an earlier call whose
+  answer was lost. Read its status before trying again.
+- `idempotency-conflict`: an earlier identical request is still being processed or differed. After
+  request retention erases a closed application, an identical start answers this code; a start with
+  any different value succeeds.
+- `not-permitted`: the registry does not permit the action.
+- `authorization-failed`: the registry did not accept the delegated authorization.
+- `registry-unavailable`: the registry is temporarily unavailable.
+- `service-unavailable`: the gateway is not available.
+- `unexpected-response`: the registry returned a response the gateway cannot use.
+
+{/* Evidence: crates/registry-breg-mcp/src/problems.rs, ToolErrorCode, ToolError. */}
+
+### HTTP refusals
+
+A request refused before it reaches a tool gets an RFC 9457 problem document with a stable `code`:
+
+| Status | `code` |
+|---|---|
+| 401 | `unauthorized` or `invalid-token`, with an RFC 6750 `WWW-Authenticate` challenge naming the metadata URL |
+| 403 | `insufficient-scope`, or `forbidden` when the `Host` does not match the resource or an `Origin` header is present |
+| 404 | `not-found` |
+| 429 | `rate-limited`, with `Retry-After` |
+| 503 | `temporarily-unavailable` |
+
+The endpoint serves chat-host back ends, not browser pages, so any request carrying an `Origin`
+header is refused.
+
+{/* Evidence: crates/registry-breg-mcp/src/server.rs, require_resource_host(), forbidden();
+    crates/registry-breg-mcp/src/inbound.rs, require_caller();
+    crates/registry-breg-mcp/README.md. */}

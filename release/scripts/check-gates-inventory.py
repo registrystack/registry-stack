@@ -201,6 +201,14 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: products/breg/scripts/check-client-contract.sh",
     ),
     (
+        "Enforce the citizen gateway's delegated-agent boundary",
+        "run: products/breg/scripts/check-mcp-gateway-boundary.sh",
+    ),
+    (
+        "Keep the citizen gateway and review page off the registry runtime",
+        "run: products/breg/scripts/check-service-dependencies.sh",
+    ),
+    (
         "Base Registry Engine PostgreSQL journeys",
         "run: products/breg/scripts/test-postgres.sh",
     ),

@@ -26,6 +26,8 @@ export const legacyReviewSchemaVersion = 'registry.cli-reference-review/v2';
 export const reviewSchemaVersion = 'registry.cli-reference-review/v3';
 export const expectedBinaries = [
   'breg',
+  'breg-mcp',
+  'breg-review',
   'bregctl',
   'casework',
   'caseworkctl',
@@ -52,6 +54,7 @@ const hiddenCommands = new Set([
 ]);
 const groups = [
   { title: 'Base Registry Engine', binaries: ['breg', 'bregctl'] },
+  { title: 'Base Registry Engine citizen gateway', binaries: ['breg-mcp', 'breg-review'] },
   { title: 'Registry Casework', binaries: ['casework', 'caseworkctl'] },
   { title: 'Registry Scheduling', binaries: ['scheduling', 'schedulingctl'] },
   { title: 'Registry Relay', binaries: ['relay', 'relayctl'] },

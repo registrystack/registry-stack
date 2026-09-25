@@ -1,0 +1,188 @@
+---
+title: Run a citizen chat assistant locally
+description: Run the breg-mcp gateway and the breg-review page against a local Base Registry Engine, and follow one address correction from a chat tool call to an applied change.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-25"
+doc_type: tutorial
+persona:
+  - operator
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+A chat host, the application a citizen chats with, can help that citizen correct their own record
+in a Base Registry Engine (BReg) without ever holding the power to change it. Two supporting
+services make that possible: `breg-mcp`, the Model Context Protocol (MCP) gateway the chat host
+calls, and `breg-review`, the page where the citizen reads and submits what the assistant
+prepared. In this tutorial you run both against a local registry and watch one address correction
+travel from a chat tool call to an applied change.
+
+<QuickstartMeta
+  outcome="One citizen address correction drafted over MCP, submitted on the review page, approved, and applied."
+  time="About 5 to 15 minutes, most of it the first Rust build"
+  level="Local evaluation with synthetic data"
+  prerequisites={['macOS on Apple Silicon or Linux', 'Git', 'Rust 1.95.0 through rustup', 'Running Docker', 'Bash', 'About 10 GB of free disk for the build']}
+/>
+
+The run is maintained as a script in the repository. It is verified on macOS on Apple Silicon; no
+continuous integration job runs it.
+
+{/* Evidence: products/breg/acceptance/citizen-address-correction/run-local.sh;
+    products/breg/acceptance/citizen-address-correction/README.md;
+    crates/registry-breg-mcp/examples/citizen_local_run.rs, main(). */}
+
+## Before you start
+
+Clone the repository and confirm the script is present:
+
+```sh
+git clone --depth 1 --quiet https://github.com/registrystack/registry-stack.git
+cd registry-stack
+test -x products/breg/acceptance/citizen-address-correction/run-local.sh
+printf 'checkout ready\n'
+```
+
+The last command reports:
+
+```text
+checkout ready
+```
+
+The repository pins its Rust toolchain in `rust-toolchain.toml`, so `rustup` installs Rust 1.95.0
+the first time `cargo` runs in the checkout. If another `cargo` comes first on your `PATH`, such as
+one from Homebrew, put `~/.cargo/bin` ahead of it for the commands in this tutorial.
+
+{/* Evidence: rust-toolchain.toml. */}
+
+## Know what runs
+
+The script starts five parties on loopback addresses. Three of them are real, one is a test server,
+and one is a stub:
+
+| Party | What runs |
+|---|---|
+| Base Registry Engine | The synthetic citizen address correction project on PostgreSQL 17 |
+| Authorization server | A test server that issues the chat host's token, performs the gateway's token exchange, and signs the citizen in to the review page |
+| Gateway | The `breg-mcp` binary |
+| Review page | The `breg-review` binary |
+| Review authority | A stub standing in for Registry Casework, which serves one approval |
+
+The driver program plays the remaining roles: the chat host calling MCP tools, the citizen's
+browser on the review page, and the registry staff member who applies the approved change. All
+names, identifiers, and addresses in the project are invented.
+
+{/* Evidence: products/breg/acceptance/citizen-address-correction/README.md;
+    products/breg/acceptance/citizen-address-correction/registry.yaml;
+    crates/registry-breg-mcp/tests/support/real_registry.rs, citizen_journey(). */}
+
+## Run the journey
+
+From the repository root, run the script:
+
+```sh
+products/breg/acceptance/citizen-address-correction/run-local.sh
+```
+
+The script starts a disposable `postgres:17` container on a loopback port, builds `breg-mcp`,
+`breg-review`, and the driver, and then runs the journey. The first build compiles the workspace
+dependencies and takes most of the run. Cargo's progress lines appear between the `build:` line
+and the `registry:` line; they are left out here. Ports and identifiers differ on every run:
+
+```text
+postgres: a disposable postgres:17 container is ready on 127.0.0.1:<port>
+build: breg-mcp, breg-review, and the local run driver
+registry: the acceptance project is served on PostgreSQL at http://127.0.0.1:<port>
+authorization server: the test server issues at http://127.0.0.1:<port>
+breg-mcp: started, logging to <work-directory>/breg-mcp.log
+breg-review: started, logging to <work-directory>/breg-review.log
+breg-mcp: ready at http://127.0.0.1:<gateway-port>/ready
+breg-review: ready at http://127.0.0.1:<page-port>/ready
+registry: seeded a person, their address, and their self-service link
+gateway: the chat host connected over MCP at http://127.0.0.1:<gateway-port>/mcp
+tool describe_service: answered
+tool get_my_details: the current address is 4 Mill Street
+tool start_application: application <application-id> is prepared
+tool update_application: the locality is now Old Town
+tool prepare_review: the review link is http://127.0.0.1:<page-port>/requests/<application-id>
+review page: the citizen signed in through the authorization server
+review page: GET http://127.0.0.1:<page-port>/requests/<application-id> 200 OK, showing 4 Mill Street beside Old Town
+review page: POST http://127.0.0.1:<page-port>/requests/<application-id>/submit 200 OK
+tool get_application_status: submitted
+registry: the stored address is still 4 Mill Street
+review authority (stub standing in for Casework): approved
+tool get_application_status: submitted (the agent profile reads no review outcome)
+registry: the applier applied the approved proposal
+tool get_application_status: applied
+tool get_my_details: the current address is 2 Quay, Old Town
+registry: the stored address is 2 Quay, Old Town, PS-200
+local run: the citizen journey reached applied
+```
+
+The script exits with status 0 after the last line. It prints no credential.
+
+{/* Evidence: crates/registry-breg-mcp/examples/citizen_local_run.rs, main(), wait_ready();
+    crates/registry-breg-mcp/tests/support/real_registry.rs, citizen_journey(). */}
+
+## Read what happened
+
+The chat host never held a registry credential. It sent its own access token to the gateway, and
+for every tool call the gateway exchanged that token at the authorization server for a delegated
+registry token naming the citizen as subject and the gateway as actor. The chat host's token never
+reached the registry.
+
+The chat host never named the record it wanted to change. `start_application` took only the
+proposed address fields; the gateway found the citizen's own linked address through the registry
+and wrote the application's target and owner itself.
+
+The chat host could draft, but not decide. The gateway's registry access profile is a standing
+agent, and the registry compiler refuses such a profile any submit, direct write, or immediate
+action. `prepare_review` returned a link and nothing more; the submission happened on the review
+page, under the citizen's own sign-in, after the page read the current address beside the
+proposed one.
+
+The review authority decided, and registry staff applied. Between the approval and the apply,
+`get_application_status` still answered `submitted`: the agent profile cannot read the review
+outcome, so the chat host learns the result only once the change is applied.
+
+{/* Evidence: crates/registry-breg-mcp/src/outbound.rs, delegated();
+    crates/registry-breg-mcp/src/tools.rs, start_input_schema();
+    crates/registry-breg/tests/standing_agent_ceiling.rs;
+    products/breg/acceptance/citizen-address-correction/README.md. */}
+
+## Clean up
+
+The script removes what it created when it exits. On success it removes the PostgreSQL container
+and the temporary work directory that held both runtime configurations, their generated keys, and
+the two logs. On failure it still removes the container, keeps the work directory for diagnosis,
+and prints its path on standard error:
+
+```text
+the run failed; the binaries' logs and configuration stay in <work-directory>
+```
+
+Remove that directory when you are done with it. The build output stays in `target/`; run
+`cargo clean` to reclaim the disk space.
+
+{/* Evidence: products/breg/acceptance/citizen-address-correction/run-local.sh, finish(). */}
+
+To run the journey against a PostgreSQL 17 server you already have, set `BREG_TEST_DATABASE_URL`
+before you run the script. The script then creates a fresh database on that server and drops it at
+the end, and starts no container.
+
+:::caution
+Point `BREG_TEST_DATABASE_URL` only at a disposable server. The run creates and drops databases on
+it.
+:::
+
+## Next
+
+- [Configure the citizen chat assistant](../../configure/breg-mcp/) to write both runtime
+  configurations and prepare your authorization server.
+- [Operate the citizen chat assistant](../../operate/breg-mcp/) to run both services behind your
+  proxy.
+- [Configure BReg](../../configure/breg/) to learn how standing agent access profiles are declared.

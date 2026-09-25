@@ -30,7 +30,7 @@ PLACEHOLDER = re.compile(r"\b(?:TODO|TBD|FIXME|placeholder)\b", re.IGNORECASE)
 CONTRACT_STATES = {"enforced", "partial", "planned"}
 V1_REQUIREMENT_IDS = tuple(f"BREG-V1-{index:02d}" for index in range(1, 45))
 ACCEPTANCE_JOURNEY_IDS = tuple(f"BREG-J{index:02d}" for index in range(1, 24))
-SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 102))
+SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 111))
 ACCEPTANCE_FIXTURES = {
     "BREG-J01": ("asset-site-placement", "acceptance/asset-site-placement"),
     "BREG-J02": ("asset-site-placement", "acceptance/asset-site-placement"),
@@ -78,6 +78,9 @@ FORBIDDEN_EMBEDDED_ROLES = {
     "signing-key",
 }
 POSTGRES_ENTRYPOINT = PRODUCT_ROOT / "scripts/test-postgres.sh"
+# The citizen review page and gateway link the runtime only under their own
+# PostgreSQL test feature, so their suites run in the product's lane.
+POSTGRES_TEST_PACKAGES = frozenset({"registry-breg", "registry-breg-review", "registry-breg-mcp"})
 POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-breg --features runtime,tooling,schema --test http_auth",
     "cargo test --locked -p registry-breg --features runtime,tooling,schema --test http_read_only",
@@ -116,6 +119,9 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_registry_extensibility",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_consent_access",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_consent_examples",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_citizen_address_correction",
+    "cargo test --locked -p registry-breg-review --features postgres-test --test postgres_breg",
+    "cargo test --locked -p registry-breg-mcp --features postgres-test --test postgres_gateway",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_membership_access",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_action_handlers",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_action_evidence",
@@ -518,7 +524,9 @@ def validate_postgres_entrypoint(errors: list[str]) -> None:
             continue
         if (
             len(arguments) < 9
-            or arguments[:6] != ["cargo", "test", "--locked", "-p", "registry-breg", "--features"]
+            or arguments[:4] != ["cargo", "test", "--locked", "-p"]
+            or arguments[4] not in POSTGRES_TEST_PACKAGES
+            or arguments[5] != "--features"
         ):
             errors.append("PostgreSQL entrypoint: unsupported Cargo invocation")
             continue

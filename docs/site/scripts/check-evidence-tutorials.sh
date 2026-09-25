@@ -131,6 +131,7 @@ EXCLUDED_EVIDENCE_TUTORIALS=(
 	connect-an-institution-source                    # how-to against the reader's own OpenAPI source; no fixed scenario this gate can replay
 	first-run-with-solmara-lab                       # historical; the Solmara Lab stack is replayed by check-tutorial.sh, not here
 	first-breg                            # Base Registry Engine journey; product CI runs quickstart/run.sh --smoke, reader execution checks the documented steps
+	first-citizen-mcp                                # Base Registry Engine citizen services journey; one maintained script needing Docker and a workspace build, verified in reader mode outside the Evidence runner
 	first-casework                                   # Registry Casework journey; replayed end to end by check-casework-tutorial.sh in the casework-tutorial job
 	first-render-document                            # Registry Render journey; offline render CLI steps against the products/render example bundles, verified in reader mode outside the Evidence runner
 	review-breg-changes-in-casework                  # cross-product boundary guide with no Evidence CLI journey; real BReg-to-Casework composition runs in the owning product aggregate
