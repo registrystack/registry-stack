@@ -193,7 +193,7 @@ A reproduction that fails names the contract that broke, which says a case faile
 stage it stopped at. Ask the Evidence Gateway fixture run to explain itself:
 
 ```sh
-evidence --runtime runtime.yaml evaluate --fixture "bundle/fixtures/<cases>.yaml" --explain
+evidence evaluate --runtime-config runtime.yaml --fixture "bundle/fixtures/<cases>.yaml" --explain
 evidencectl test "<candidate>" --explain
 ```
 

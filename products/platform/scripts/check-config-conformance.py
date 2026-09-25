@@ -189,6 +189,62 @@ ROWS: tuple[Row, ...] = (
         ),
     ),
     Row(
+        product="evidence",
+        loader_sources=("crates/registry-evidence/src",),
+        runtime_schema=Exemption(
+            "Evidence publishes the frozen hand-written "
+            "products/evidence/contracts/runtime.schema.yaml, held by its own "
+            "contract checks, not a generated runtime schema"
+        ),
+        shared_blocks=(),
+        reference_refusal=TestRef(
+            "crates/registry-evidence/src/config.rs",
+            "environment_substitution_fills_values_and_never_a_secret_reference",
+        ),
+        authored_refusal=TestRef(
+            "crates/registry-evidence/src/config.rs",
+            "an_authored_bundle_carrying_an_environment_expression_is_refused",
+        ),
+        rust_blocks=(
+            RustBlock(
+                "crates/registry-evidence/src/config.rs",
+                "RuntimeConfig",
+                "package",
+                "PackageConfig",
+            ),
+            RustBlock(
+                "crates/registry-evidence/src/config.rs",
+                "RuntimeConfig",
+                "secret_providers",
+                "SecretProvidersConfig",
+            ),
+            RustBlock(
+                "crates/registry-evidence/src/config.rs",
+                "ListenerConfig",
+                "bind",
+                "ListenerBind",
+            ),
+            RustBlock(
+                "crates/registry-evidence/src/config.rs",
+                "MetricsListenerConfig",
+                "bind",
+                "ListenerBind",
+            ),
+            RustBlock(
+                "crates/registry-evidence/src/config.rs",
+                "OidcAuthenticationConfig",
+                "provider",
+                "OidcIssuerConfig",
+            ),
+            RustBlock(
+                "crates/registry-evidence/src/config.rs",
+                "AuditConfig",
+                "key",
+                "AuditKeyConfig",
+            ),
+        ),
+    ),
+    Row(
         product="scheduling",
         loader_sources=("crates/registry-scheduling/src",),
         runtime_schema="products/scheduling/generated/runtime/runtime.schema.json",

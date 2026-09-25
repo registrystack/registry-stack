@@ -75,13 +75,13 @@ fn successful_view_delegates_to_stopped_core_and_prints_only_aliases() {
     assert_eq!(
         arguments.lines().collect::<Vec<_>>(),
         [
-            "--runtime",
+            "local-audit-last-operation",
+            "--runtime-config",
             fs::canonicalize(&fixture.root)
                 .expect("canonical project")
                 .join(".evidence/dev/runtime.yaml")
                 .to_str()
                 .expect("runtime path"),
-            "local-audit-last-operation",
         ]
     );
     let rendered = String::from_utf8_lossy(&output.stdout);

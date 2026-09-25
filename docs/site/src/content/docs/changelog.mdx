@@ -293,6 +293,44 @@ relevant product pages on this site rather than duplicating release notes.
 
 - **Breaking:** Registry Discovery reads `runtime.yaml` through the shared
 
+- BREAKING: Evidence Gateway reads `runtime.yaml` through the shared
+  runtime configuration loader and declares its access-token issuer and
+  audit key through the shared blocks. The runtime file now opens with
+  `apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1` and
+  `kind: EvidenceRuntimeConfig` instead of `version: 1`;
+  `bundleDirectory` is `package.root`, with an optional
+  `package.expectedDigest` pin; and `listener.bindHost` with
+  `listener.port` is one `listener.bind: host:port` value, as it is for
+  `metricsListener`. `secretProviders.environment: {}` enables
+  `secret:env/NAME` references beside `secret:file/name`, and runtime string
+  values accept `${VAR}` outside secret references and `secretProviders`,
+  while a `${...}` expression in the governed bundle is refused with the
+  field that holds it.
+  In the governed bundle, the flat `authentication` fields move under
+  `authentication.oidc`, `kind: oidc-access-token` is dropped, the one-entry
+  `audiences` list is a single `audience`, `jwksUri` is
+  `jwksSource: {kind: uri, uri: ...}`, and `audit.hashSecretRef` is
+  `audit.hashKeyRef`; `audit.hashKeyVersion` is unchanged. Every subcommand
+  that reads the runtime file takes the required
+  `--runtime-config FILE` after the subcommand; the global `--runtime`
+  flag, the `REGISTRY_EVIDENCE_RUNTIME` variable, and the default path are
+  gone, and the container image passes the flag in its default command. A
+  removed key, flag, or variable is refused with the name of its
+  replacement. To migrate, rewrite the project's `governance.yaml` and
+  `runtime.yaml` with the new keys, rebuild the candidate with the matching
+  `evidencectl`, and replace `--runtime FILE` with
+  `<subcommand> --runtime-config FILE` in service definitions. See
+  [configure Evidence Gateway](../configure/evidence/#the-runtime-file).
+
+{/* Evidence: crates/registry-evidence/src/config.rs, EVIDENCE_RUNTIME_REMOVED_KEYS,
+    every_removed_runtime_key_is_refused_with_its_replacement_named,
+    every_removed_bundle_authentication_and_audit_key_is_refused_with_its_replacement_named,
+    environment_substitution_fills_values_and_never_a_secret_reference and
+    the_environment_secret_provider_is_enabled_only_by_declaration and
+    an_authored_bundle_carrying_an_environment_expression_is_refused;
+    crates/registry-evidence/tests/cli.rs, the_removed_runtime_inputs_are_refused_with_their_replacement_named;
+    release/docker/Dockerfile.evidence. */}
+
 - BREAKING: Registry Relay reads `runtime.yaml` through the shared
   runtime configuration loader. The file now opens with
   `apiVersion: registry.registrystack.org/relay-runtime/v1alpha1` and

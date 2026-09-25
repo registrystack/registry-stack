@@ -13,7 +13,6 @@ use crate::{
     config::{AssuranceProfile, ConceptForm, ResponseFormat, SubjectBindingMode},
     model::{JwksDocument, RequestedSubject},
     runtime::{validate_verification_material, ValidatedVerificationMaterial},
-    secrets::{SecretProvider, SecretResolver},
     selector::{resolve_request_origin_subjects, ResolvedSubject},
     verifier::{
         ExpectedFormDocument, ExpectedOutputDocument, ExpectedScalarFormDocument,
@@ -123,11 +122,12 @@ pub async fn prepare_local_relying_procedure(
         resolve_request_origin_subjects(bundle, requirement, &input.purpose, &input.subjects)
             .map_err(|_| LocalProcedureError)?;
 
-    let secrets = SecretResolver::new(
-        [SecretProvider::File],
-        &deployment.runtime().config.secret_providers.file.root,
-    )
-    .map_err(|_| LocalProcedureError)?;
+    let secrets = deployment
+        .runtime()
+        .config
+        .secret_providers
+        .resolver()
+        .map_err(|_| LocalProcedureError)?;
     let ValidatedVerificationMaterial {
         subject_binding_secret,
         signer: _,

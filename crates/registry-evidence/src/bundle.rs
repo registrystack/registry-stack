@@ -47,6 +47,7 @@ const ACQUISITION_CAPABILITIES: &str = "acquisitionCapabilities";
 const PROVIDER_PUBLICATION: &str = "publication";
 const SIGNING: &str = "signing";
 const AUTHENTICATION: &str = "authentication";
+const OIDC: &str = "oidc";
 const ACTIVE_PUBLIC_JWK_FILE: &str = "activePublicJwkFile";
 const PUBLISHED_PUBLIC_JWK_FILES: &str = "publishedPublicJwkFiles";
 const REVOKED_KEY_IDS: &str = "revokedKeyIds";
@@ -409,10 +410,16 @@ impl RuntimeDocument {
             writable_runtime,
         )
         .map_err(|error| error.in_artifact(RUNTIME_FILE))?;
-        let config = RuntimeConfig::parse_yaml(&bytes).map_err(|error| {
-            BundleError::Config(ArtifactFault::new(RUNTIME_FILE, error.fault()))
-        })?;
-        validate_secret_root(Path::new(&config.secret_providers.file.root))?;
+        // `${NAME}` in a string value reads the process environment; the
+        // loader refuses it in a secret reference and under secretProviders.
+        let loaded = RuntimeConfig::parse_yaml_with(&bytes, |name| std::env::var(name).ok())
+            .map_err(|error| {
+                BundleError::Config(ArtifactFault::new(RUNTIME_FILE, error.fault()))
+            })?;
+        let config = loaded.config;
+        if let Some(file) = &config.secret_providers.file {
+            validate_secret_root(&file.root)?;
+        }
 
         let mut ca_bundles = BTreeMap::new();
         for (profile, binding) in config.outbound_tls.trust_profiles.iter() {
@@ -442,7 +449,12 @@ impl RuntimeDocument {
                 .map_err(|error| error.in_artifact(&source_extract_artifact(profile)))?;
             source_extracts.insert(profile.to_owned(), extract);
         }
-        let revision = compute_runtime_revision(&bytes, &ca_bundles, &source_extracts)?;
+        let revision = compute_runtime_revision(
+            &bytes,
+            &loaded.effective_digest,
+            &ca_bundles,
+            &source_extracts,
+        )?;
         Ok(Self {
             path: path.to_path_buf(),
             config,
@@ -489,7 +501,18 @@ pub struct DeploymentInputs {
 impl DeploymentInputs {
     pub fn load(runtime_path: impl AsRef<Path>) -> Result<Self, BundleError> {
         let runtime = RuntimeDocument::load(runtime_path)?;
-        let bundle = Bundle::load(&runtime.config.bundle_directory)?;
+        let bundle = Bundle::load(&runtime.config.package.root)?;
+        if runtime
+            .config
+            .package
+            .verify_digest(Some(bundle.revision()))
+            .is_err()
+        {
+            return Err(invalid_artifact(
+                "package.expectedDigest does not match the revision of the bundle at package.root",
+            )
+            .in_artifact(RUNTIME_FILE));
+        }
         validate_runtime_bindings(&bundle.config, &runtime.config)?;
         Ok(Self { bundle, runtime })
     }
@@ -2503,7 +2526,36 @@ fn validate_runtime_bindings(
             "runtime signer kind does not match the bundle assurance profile",
         ));
     }
-    let audit_ref = &bundle.audit.hash_key_ref;
+    // A governed reference resolves only through a provider the operator
+    // enabled, so the bundle cannot reach the process environment unless the
+    // runtime file opts in to it.
+    let governed_refs = bundle
+        .sources
+        .iter()
+        .filter_map(|(_, source)| source.authentication())
+        .chain(
+            bundle
+                .source_connections
+                .iter()
+                .map(|(_, connection)| connection.authentication.as_ref()),
+        )
+        .flat_map(|authentication| authentication.secret_refs())
+        .chain([
+            &bundle.audit.key.hash_key_ref,
+            &bundle.subject_binding.secret_ref,
+        ]);
+    for reference in governed_refs {
+        if runtime
+            .secret_providers
+            .check_reference("secretProviders", reference.as_str())
+            .is_err()
+        {
+            return Err(invalid_artifact(
+                "a bundle secret reference names a provider the runtime secretProviders does not enable",
+            ));
+        }
+    }
+    let audit_ref = &bundle.audit.key.hash_key_ref;
     let subject_ref = &bundle.subject_binding.secret_ref;
     if let Some(signing_ref) = runtime.signer.private_key_ref() {
         if signing_ref == audit_ref || signing_ref == subject_ref {
@@ -2512,7 +2564,11 @@ fn validate_runtime_bindings(
             ));
         }
     }
-    let secret_root = Path::new(&runtime.secret_providers.file.root);
+    let secret_root = runtime
+        .secret_providers
+        .file
+        .as_ref()
+        .map(|file| file.root.as_path());
     if let Some(audit_path) = runtime.audit.path.as_deref().map(Path::new) {
         let configured_secret_paths = [
             Some(audit_ref),
@@ -2522,7 +2578,7 @@ fn validate_runtime_bindings(
         .into_iter()
         .flatten()
         .filter_map(|reference| reference.as_str().strip_prefix("secret:file/"))
-        .map(|name| secret_root.join(name));
+        .filter_map(|name| secret_root.map(|root| root.join(name)));
         if configured_secret_paths
             .into_iter()
             .any(|path| path == audit_path)
@@ -2543,7 +2599,7 @@ fn validate_runtime_bindings(
         .sources
         .iter()
         .filter_map(|(_, source)| source.tls_trust_profile())
-        .chain(bundle.authentication.tls_trust_profile.as_deref())
+        .chain(bundle.authentication.oidc.tls_trust_profile.as_deref())
         .collect::<BTreeSet<_>>();
     let configured = runtime
         .outbound_tls
@@ -2693,10 +2749,20 @@ fn validate_ca_bundle(bytes: &[u8]) -> Result<(), BundleError> {
 
 fn compute_runtime_revision(
     runtime_bytes: &[u8],
+    effective_digest: &str,
     ca_bundles: &BTreeMap<String, Vec<u8>>,
     source_extracts: &BTreeMap<String, SourceExtract>,
 ) -> Result<String, BundleError> {
-    let mut files = BTreeMap::from([("runtime.yaml".to_owned(), runtime_bytes.to_vec())]);
+    // The authored bytes and the configuration they became after `${NAME}`
+    // substitution both enter the revision, so one file started under two
+    // environments reports two revisions.
+    let mut files = BTreeMap::from([
+        ("runtime.yaml".to_owned(), runtime_bytes.to_vec()),
+        (
+            "runtime.effective".to_owned(),
+            effective_digest.as_bytes().to_vec(),
+        ),
+    ]);
     for (profile, bytes) in ca_bundles {
         files.insert(format!("trust-profile/{profile}.pem"), bytes.clone());
     }
@@ -2943,13 +3009,14 @@ fn remove_signing_key_trust(members: &mut JsonMap<String, JsonValue>) -> Result<
 fn remove_caller_token_revocations(
     members: &mut JsonMap<String, JsonValue>,
 ) -> Result<(), BundleError> {
-    let authentication = members
+    let oidc = members
         .get_mut(AUTHENTICATION)
+        .and_then(|authentication| authentication.get_mut(OIDC))
         .and_then(JsonValue::as_object_mut)
         .ok_or_else(|| {
             invalid_artifact("the authentication configuration does not project as a mapping")
         })?;
-    authentication.remove(REVOKED_KEY_IDS);
+    oidc.remove(REVOKED_KEY_IDS);
     Ok(())
 }
 
@@ -3619,8 +3686,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn revoking_a_caller_token_key_leaves_every_requirement_revision_alone() {
-        const UNREVOKED: &str = "maximumTokenLifetimeSeconds: 300\n  revokedKeyIds: []";
-        const REVOKED: &str = "maximumTokenLifetimeSeconds: 300\n  revokedKeyIds: [-RNgdUjduVCNV-y15KSAVZnF2gNjGb_02KQ2-MoMu4U]";
+        const UNREVOKED: &str = "maximumTokenLifetimeSeconds: 300\n    revokedKeyIds: []";
+        const REVOKED: &str = "maximumTokenLifetimeSeconds: 300\n    revokedKeyIds: [-RNgdUjduVCNV-y15KSAVZnF2gNjGb_02KQ2-MoMu4U]";
 
         let directory = tempfile::tempdir().expect("temporary bundle");
         copy_acceptance_bundle("all-definitions", directory.path());
@@ -3714,10 +3781,10 @@ mod tests {
         assert!(!projected_signing.contains_key(REVOKED_KEY_IDS));
         // The authentication member loses only its revoked caller token keys;
         // the issuer, JWKS location, and claims authorization reads stay.
-        let configured_authentication = configured[AUTHENTICATION]
+        let configured_authentication = configured[AUTHENTICATION][OIDC]
             .as_object()
             .expect("the authentication configuration is a mapping");
-        let projected_authentication = projected[AUTHENTICATION]
+        let projected_authentication = projected[AUTHENTICATION][OIDC]
             .as_object()
             .expect("the projected authentication configuration is a mapping");
         assert!(configured_authentication.contains_key(REVOKED_KEY_IDS));
@@ -4663,7 +4730,7 @@ mod tests {
         fs::write(
             &runtime_path,
             format!(
-                "version: 1\nbundleDirectory: /etc/registry-evidence/bundle\nlistener:\n  bindHost: 127.0.0.1\n  port: 8080\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 30000\nsecretProviders:\n  file: {{root: {}}}\nsigner:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000\naudit:\n  path: /var/lib/registry-evidence/audit/evidence.jsonl\noutboundTls:\n  systemRoots: true\n  trustProfiles:\n    internal-pki: {{caBundleFile: {}}}\n",
+                "apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1\nkind: EvidenceRuntimeConfig\npackage:\n  root: /etc/registry-evidence/bundle\nlistener:\n  bind: 127.0.0.1:8080\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 30000\nsecretProviders:\n  file: {{root: {}}}\nsigner:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000\naudit:\n  path: /var/lib/registry-evidence/audit/evidence.jsonl\noutboundTls:\n  systemRoots: true\n  trustProfiles:\n    internal-pki: {{caBundleFile: {}}}\n",
                 secret_root.display(),
                 ca_path.display()
             ),
@@ -4706,11 +4773,13 @@ mod tests {
     /// One operator runtime document, written the way a deployment that
     /// predates the acquisition gate is written: it says nothing about
     /// acquisition capabilities, because there was nothing to say.
-    const OPERATOR_RUNTIME_DOCUMENT: &str = "version: 1
-bundleDirectory: /etc/registry-evidence/bundle
+    const OPERATOR_RUNTIME_DOCUMENT: &str =
+        "apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+kind: EvidenceRuntimeConfig
+package:
+  root: /etc/registry-evidence/bundle
 listener:
-  bindHost: 127.0.0.1
-  port: 8080
+  bind: 127.0.0.1:8080
   tlsTermination: operator-controlled-upstream
   trustProxyIdentityHeaders: false
   maximumRequestBytes: 65536
@@ -4874,8 +4943,8 @@ outboundTls:
         let naming = EvidenceConfig::parse_yaml(
             ACCEPTANCE
                 .replace(
-                    "  jwksUri: https://identity.invalid/.well-known/jwks.json\n",
-                    "  jwksUri: https://identity.invalid/.well-known/jwks.json\n  tlsTrustProfile: issuer-pki\n",
+                    "      uri: https://identity.invalid/.well-known/jwks.json\n",
+                    "      uri: https://identity.invalid/.well-known/jwks.json\n    tlsTrustProfile: issuer-pki\n",
                 )
                 .as_bytes(),
         )
@@ -4906,23 +4975,74 @@ outboundTls:
             .expect("a profile only the issuer names is bound, not unused");
     }
 
-    /// New operator surface must not move the revision of a deployment that did
-    /// not ask for it. The runtime revision digests the exact runtime.yaml
-    /// bytes, so a file written before the acquisition gate existed keeps the
-    /// revision it already published; the pinned digest is what proves the
-    /// digest is still taken over those bytes and not over a serialization that
-    /// grew a member. The absent list also projects to nothing, so the same
-    /// deployment would keep its revision either way.
+    /// A governed reference to the process environment binds only where the
+    /// runtime file enables the environment provider, so a bundle author
+    /// cannot reach an operator's environment on their own.
     #[test]
-    fn an_absent_acquisition_capability_list_leaves_the_runtime_revision_byte_identical() {
-        let revision = compute_runtime_revision(
-            OPERATOR_RUNTIME_DOCUMENT.as_bytes(),
+    fn a_bundle_environment_reference_binds_only_where_the_runtime_enables_it() {
+        const ACCEPTANCE: &str = include_str!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        );
+        let environment = ACCEPTANCE.replace(
+            "hashKeyRef: secret:file/audit-hash-key",
+            "hashKeyRef: secret:env/EVIDENCE_AUDIT_HASH_KEY",
+        );
+        assert_ne!(
+            environment, ACCEPTANCE,
+            "fixture mutation must remain effective"
+        );
+        let bundle = EvidenceConfig::parse_yaml(environment.as_bytes())
+            .expect("a bundle naming an environment secret validates on its own");
+        let file_only = RuntimeConfig::parse_yaml(OPERATOR_RUNTIME_DOCUMENT.as_bytes())
+            .expect("the operator runtime document parses");
+        let refused = validate_runtime_bindings(&bundle, &file_only)
+            .expect_err("the environment provider is not enabled");
+        assert_eq!(
+            refused.artifact_fault().map(|fault| fault.fault().cause()),
+            Some(
+                "a bundle secret reference names a provider the runtime secretProviders does not enable"
+            )
+        );
+
+        let enabled = RuntimeConfig::parse_yaml(
+            OPERATOR_RUNTIME_DOCUMENT
+                .replace(
+                    "  file: {root: /run/secrets/registry-evidence}\n",
+                    "  file: {root: /run/secrets/registry-evidence}\n  environment: {}\n",
+                )
+                .as_bytes(),
+        )
+        .expect("a runtime enabling the environment provider parses");
+        validate_runtime_bindings(&bundle, &enabled)
+            .expect("an enabled environment provider binds the reference");
+    }
+
+    /// The runtime revision of a runtime document read with no environment and
+    /// no CA bundles or source extracts.
+    fn runtime_revision_of(bytes: &[u8]) -> String {
+        let loaded =
+            RuntimeConfig::parse_yaml_with(bytes, |_| None).expect("the runtime document parses");
+        compute_runtime_revision(
+            bytes,
+            &loaded.effective_digest,
             &BTreeMap::new(),
             &BTreeMap::new(),
         )
-        .expect("the runtime revision computes");
+        .expect("the runtime revision computes")
+    }
+
+    /// New operator surface must not move the revision of a deployment that did
+    /// not ask for it. The runtime revision digests the exact runtime.yaml
+    /// bytes and the digest of the document after substitution, so a file
+    /// that does not name the acquisition gate keeps the revision it already
+    /// published; the pinned digest is what proves the digest is still taken
+    /// over those inputs and not over a serialization that grew a member. The absent list also projects to nothing, so the same
+    /// deployment would keep its revision either way.
+    #[test]
+    fn an_absent_acquisition_capability_list_leaves_the_runtime_revision_byte_identical() {
+        let revision = runtime_revision_of(OPERATOR_RUNTIME_DOCUMENT.as_bytes());
         assert_eq!(
-            revision, "sha256:b83a1f816b4201e5d12c14c9c8677354d3adab3827735eb22688e2bf54be48fc",
+            revision, "sha256:425e5f8f4ba8511948ac69048c30a8e5fac6805d915afdfc11530fce2ee66de0",
             "an operator who adopted nothing must keep the revision they published"
         );
 
@@ -4942,16 +5062,11 @@ outboundTls:
         let adopted = format!(
             "{OPERATOR_RUNTIME_DOCUMENT}acquisitionCapabilities: [search-then-fetch-set]\n"
         );
-        assert_ne!(
-            compute_runtime_revision(adopted.as_bytes(), &BTreeMap::new(), &BTreeMap::new())
-                .expect("the runtime revision computes"),
-            revision
-        );
+        assert_ne!(runtime_revision_of(adopted.as_bytes()), revision);
         let source_batch =
             format!("{OPERATOR_RUNTIME_DOCUMENT}acquisitionCapabilities: [source-batch]\n");
         assert_ne!(
-            compute_runtime_revision(source_batch.as_bytes(), &BTreeMap::new(), &BTreeMap::new())
-                .expect("the source-batch runtime revision computes"),
+            runtime_revision_of(source_batch.as_bytes()),
             revision,
             "the operator's source-batch authorization must affect runtime identity"
         );

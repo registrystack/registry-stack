@@ -22,6 +22,7 @@ use registry_platform_crypto::{canonicalize_json, domain_separated_sha256};
 use serde_json::{json, Map, Value};
 use url::{Host, Url};
 
+use crate::evidence_binary::{EVIDENCE_RUNTIME_API_VERSION, EVIDENCE_RUNTIME_KIND};
 use crate::suggest::{
     narrow,
     openapi::Spec,
@@ -3782,18 +3783,19 @@ fn render_local_bundle(
             "jurisdictions": [local_uri("jurisdiction")],
         },
         "authentication": {
-            "kind": "oidc-access-token",
-            "issuer": issuer_origin,
-            "audiences": [audience],
-            "tokenTypes": ["at+jwt"],
-            "algorithms": ["RS256"],
-            "jwksUri": format!("{issuer_origin}/oauth2/jwks"),
-            "principalClaim": "sub",
-            "requesterTagsClaim": "evidence_tags",
-            "evidenceAudienceClaim": "evidence_audience",
-            "requiredScopes": ["evidence:invoke"],
-            "maximumTokenLifetimeSeconds": 300,
-            "revokedKeyIds": [],
+            "oidc": {
+                "issuer": issuer_origin,
+                "audience": audience,
+                "jwksSource": {"kind": "uri", "uri": format!("{issuer_origin}/oauth2/jwks")},
+                "tokenTypes": ["at+jwt"],
+                "algorithms": ["RS256"],
+                "principalClaim": "sub",
+                "requesterTagsClaim": "evidence_tags",
+                "evidenceAudienceClaim": "evidence_audience",
+                "requiredScopes": ["evidence:invoke"],
+                "maximumTokenLifetimeSeconds": 300,
+                "revokedKeyIds": [],
+            },
         },
         "audit": {
             "hashKeyRef": "secret:file/audit-hmac-key",
@@ -3831,13 +3833,13 @@ fn render_local_bundle(
         bail!("task grant policies require active local clients");
     }
     if !admission.allowed_clients.is_empty() {
-        bundle["authentication"]["allowedClients"] = json!(admission.allowed_clients);
+        bundle["authentication"]["oidc"]["allowedClients"] = json!(admission.allowed_clients);
     } else if has_task_grants {
         let admitted = active_client_policies.keys().collect::<Vec<_>>();
-        bundle["authentication"]["allowedClients"] = json!(admitted);
+        bundle["authentication"]["oidc"]["allowedClients"] = json!(admitted);
     }
     if !admission.assertion_issuers.is_empty() {
-        bundle["authentication"]["assertionIssuers"] = json!(admission.assertion_issuers);
+        bundle["authentication"]["oidc"]["assertionIssuers"] = json!(admission.assertion_issuers);
     }
     Ok(bundle)
 }
@@ -4114,11 +4116,11 @@ fn write_plan(
     let secret_root = fs::canonicalize(project_root.join(SECRETS_DIRECTORY))
         .context("resolving local secret directory")?;
     let runtime = json!({
-        "version": 1,
-        "bundleDirectory": canonical_staging.join("bundle").to_string_lossy(),
+        "apiVersion": EVIDENCE_RUNTIME_API_VERSION,
+        "kind": EVIDENCE_RUNTIME_KIND,
+        "package": {"root": canonical_staging.join("bundle").to_string_lossy()},
         "listener": {
-            "bindHost": "127.0.0.1",
-            "port": ports.evidence,
+            "bind": format!("127.0.0.1:{}", ports.evidence),
             "tlsTermination": "operator-controlled-upstream",
             "trustProxyIdentityHeaders": false,
             "maximumRequestBytes": 65536,
@@ -4177,7 +4179,7 @@ fn write_plan(
     Ok(CompiledProject {
         runtime_path,
         questions,
-        local_audience: plan.bundle["authentication"]["audiences"][0]
+        local_audience: plan.bundle["authentication"]["oidc"]["audience"]
             .as_str()
             .context("local Evidence audience missing")?
             .to_owned(),
@@ -4528,9 +4530,9 @@ fn set_bundle_modes(root: &Path, directory_mode: u32, file_mode: u32) -> Result<
 fn check_with_evidence(evidence_bin: &Path, runtime_path: &Path) -> Result<()> {
     let mut command = Command::new(evidence_bin);
     command
-        .arg("--runtime")
-        .arg(runtime_path)
         .arg("check")
+        .arg("--runtime-config")
+        .arg(runtime_path)
         .env_remove("REGISTRY_EVIDENCE_RUNTIME");
     let run = run_bounded_evidence(
         command,
@@ -5217,7 +5219,10 @@ properties:
                 &fs::read(fixture.staging.join("bundle/evidence.yaml")).unwrap(),
             )
             .unwrap();
-            assert_eq!(bundle["authentication"]["audiences"], json!([audience]));
+            assert_eq!(
+                bundle["authentication"]["oidc"]["audience"],
+                json!(audience)
+            );
             assert_eq!(
                 bundle["service"]["providerId"],
                 format!("{audience}:provider")
@@ -5274,7 +5279,7 @@ properties:
         )
         .unwrap();
         assert_eq!(
-            bundle["authentication"]["allowedClients"],
+            bundle["authentication"]["oidc"]["allowedClients"],
             json!(["age-checker", "records-reader"])
         );
         assert!(
@@ -5307,7 +5312,7 @@ properties:
         )
         .unwrap();
         assert_eq!(
-            bundle["authentication"]["assertionIssuers"],
+            bundle["authentication"]["oidc"]["assertionIssuers"],
             json!({"task-agent": ["https://casework.invalid"]})
         );
     }
@@ -6495,7 +6500,10 @@ factSchema: schemas/source-facts.schema.yaml
         let requirement = &bundle["requirements"][0];
 
         assert_eq!(bundle["assuranceProfile"], "local");
-        assert_eq!(bundle["authentication"]["issuer"], "http://127.0.0.1:8081");
+        assert_eq!(
+            bundle["authentication"]["oidc"]["issuer"],
+            "http://127.0.0.1:8081"
+        );
         assert_eq!(bundle["signing"]["algorithm"], "ES256");
         let public_key = bundle["signing"]["activePublicJwkFile"]
             .as_str()
@@ -7249,7 +7257,7 @@ factSchema: schemas/source-facts.schema.yaml
         )
         .unwrap();
         assert_eq!(
-            bundle["authentication"]["allowedClients"],
+            bundle["authentication"]["oidc"]["allowedClients"],
             json!(["task-agent"])
         );
         let profile = &bundle["authorityProfiles"][&policy.requester_tag];
@@ -7572,7 +7580,10 @@ fn prepare(selectors, context) {
             bundle["sources"]["people"]["request"]["concurrencyLimit"],
             3
         );
-        assert_eq!(bundle["authentication"]["issuer"], "http://127.0.0.1:8081");
+        assert_eq!(
+            bundle["authentication"]["oidc"]["issuer"],
+            "http://127.0.0.1:8081"
+        );
         assert_eq!(bundle["assuranceProfile"], "local");
         assert_eq!(runtime["outboundTls"], tls);
         assert_eq!(runtime["signer"]["kind"], "local-jwk");
@@ -8344,7 +8355,7 @@ factSchema: schemas/family-facts.schema.yaml
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, false);
         fs::write(
             &fixture.evidence,
-            "#!/bin/sh\nif test \"$1\" = render-discovery-description; then printf '{}\\n'; exit 0; fi\nbundle=\"$(dirname \"$2\")/bundle\"\nchmod -R u+rwX \"$bundle\"\nrm -rf \"$bundle\"\necho 'script rejected' >&2\nexit 1\n",
+            "#!/bin/sh\nif test \"$1\" = render-discovery-description; then printf '{}\\n'; exit 0; fi\nbundle=\"$(dirname \"$3\")/bundle\"\nchmod -R u+rwX \"$bundle\"\nrm -rf \"$bundle\"\necho 'script rejected' >&2\nexit 1\n",
         )
         .expect("stub that removes the generation it rejects");
 
@@ -8364,7 +8375,7 @@ factSchema: schemas/family-facts.schema.yaml
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, false);
         fs::write(
             &fixture.evidence,
-            "#!/bin/sh\nif test \"$1\" = render-discovery-description; then printf '{}\\n'; exit 0; fi\nrm -f \"$2\"\necho 'script rejected' >&2\nexit 1\n",
+            "#!/bin/sh\nif test \"$1\" = render-discovery-description; then printf '{}\\n'; exit 0; fi\nrm -f \"$3\"\necho 'script rejected' >&2\nexit 1\n",
         )
         .expect("stub that removes the settings it rejects");
 
@@ -8568,7 +8579,7 @@ factSchema: schemas/family-facts.schema.yaml
                 .open(&evidence)
                 .expect("stub");
             let script = if check_succeeds {
-                "#!/bin/sh\nif test \"$1\" = render-discovery-description; then printf '{}\\n'; exit 0; fi\ntest \"$1\" = --runtime && test \"$3\" = check\n"
+                "#!/bin/sh\nif test \"$1\" = render-discovery-description; then printf '{}\\n'; exit 0; fi\ntest \"$1\" = check && test \"$2\" = --runtime-config\n"
             } else {
                 "#!/bin/sh\nif test \"$1\" = render-discovery-description; then printf '{}\\n'; exit 0; fi\necho 'script rejected' >&2\nexit 1\n"
             };

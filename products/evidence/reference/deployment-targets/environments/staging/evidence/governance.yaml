@@ -4,17 +4,19 @@ service: {providerId: https://evidence.staging.example.org, publicOrigin: https:
 issuer: {id: https://authority.example.org}
 publication: {serviceId: urn:example:staging:evidence-service, title: Staging Evidence service, description: Staging minimum-disclosure Evidence service, endpointUrl: https://evidence.staging.example.org, jurisdictions: [urn:example:jurisdiction:staging]}
 authentication:
-  kind: oidc-access-token
-  issuer: https://issuer.staging.example.org
-  audiences: [evidence.staging.example.org]
-  tokenTypes: [at+jwt]
-  algorithms: [ES256]
-  jwksUri: https://issuer.staging.example.org/.well-known/jwks.json
-  principalClaim: sub
-  requesterTagsClaim: evidence_tags
-  evidenceAudienceClaim: evidence_audience
-  maximumTokenLifetimeSeconds: 300
-  revokedKeyIds: []
+  oidc:
+    issuer: https://issuer.staging.example.org
+    audience: evidence.staging.example.org
+    tokenTypes: [at+jwt]
+    algorithms: [ES256]
+    jwksSource:
+      kind: uri
+      uri: https://issuer.staging.example.org/.well-known/jwks.json
+    principalClaim: sub
+    requesterTagsClaim: evidence_tags
+    evidenceAudienceClaim: evidence_audience
+    maximumTokenLifetimeSeconds: 300
+    revokedKeyIds: []
 audit: {hashKeyRef: secret:file/evidence-audit-hmac, hashKeyVersion: 1}
 subjectBinding: {secretRef: secret:file/evidence-subject-binding, keyVersion: 1}
 rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}

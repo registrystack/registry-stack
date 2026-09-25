@@ -51,7 +51,7 @@ target-context check before starting the service:
 
 ```sh
 docker compose -f docker-compose.yaml run --rm evidence \
-  --runtime /etc/registry-evidence/runtime.yaml check \
+  check --runtime-config /etc/registry-evidence/runtime.yaml \
   --require-runtime-dependencies \
   --require-audit-under /var/lib/registry-evidence
 ```

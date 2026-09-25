@@ -10,17 +10,19 @@ issuer:
 # issuer. Evidence and the protected registry API verify that issuer under
 # their independently configured resource-server policies.
 authentication:
-  kind: oidc-access-token
-  issuer: https://tokens.gov.example
-  audiences: [registry-evidence]
-  tokenTypes: [at+jwt]
-  algorithms: [ES256]
-  jwksUri: https://tokens.gov.example/.well-known/jwks.json
-  principalClaim: sub
-  requesterTagsClaim: evidence_tags
-  evidenceAudienceClaim: evidence_audience
-  maximumTokenLifetimeSeconds: 300
-  revokedKeyIds: []
+  oidc:
+    issuer: https://tokens.gov.example
+    audience: registry-evidence
+    tokenTypes: [at+jwt]
+    algorithms: [ES256]
+    jwksSource:
+      kind: uri
+      uri: https://tokens.gov.example/.well-known/jwks.json
+    principalClaim: sub
+    requesterTagsClaim: evidence_tags
+    evidenceAudienceClaim: evidence_audience
+    maximumTokenLifetimeSeconds: 300
+    revokedKeyIds: []
 audit:
   hashKeyRef: secret:file/audit-hmac-key
   hashKeyVersion: 1

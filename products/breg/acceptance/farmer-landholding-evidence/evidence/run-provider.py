@@ -155,8 +155,8 @@ def main():
     origin = "http://127.0.0.1:" + str(port)
     config = yaml.safe_load((bundle / "evidence.yaml").read_text())
     config["service"]["publicOrigin"] = origin
-    config["authentication"]["issuer"] = issuer
-    config["authentication"]["jwksUri"] = issuer + "/.well-known/jwks.json"
+    config["authentication"]["oidc"]["issuer"] = issuer
+    config["authentication"]["oidc"]["jwksSource"] = {"kind": "uri", "uri": issuer + "/.well-known/jwks.json"}
     for source_config in config["sources"].values():
         source_config["baseUrl"] = issuer
     for path in (bundle / "public-keys").iterdir():
@@ -165,8 +165,9 @@ def main():
     write_json(bundle / public_path, signing_public)
     config["signing"]["activePublicJwkFile"] = public_path
     (bundle / "evidence.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
-    runtime = {"version": 1, "bundleDirectory": str(bundle), "listener": {
-        "bindHost": "127.0.0.1", "port": port, "tlsTermination": "operator-controlled-upstream", "trustProxyIdentityHeaders": False,
+    runtime = {"apiVersion": "registry.registrystack.org/evidence-runtime/v1alpha1", "kind": "EvidenceRuntimeConfig",
+        "package": {"root": str(bundle)}, "listener": {
+        "bind": "127.0.0.1:" + str(port), "tlsTermination": "operator-controlled-upstream", "trustProxyIdentityHeaders": False,
         "maximumRequestBytes": 65536, "maximumConcurrentRequests": 16, "requestTimeoutMilliseconds": 10000, "shutdownGraceMilliseconds": 1000},
         "secretProviders": {"file": {"root": str(secrets)}}, "signer": {"kind": "local-jwk", "privateKeyRef": "secret:file/signing-key"},
         "audit": {"path": str(output / "audit.jsonl")}, "outboundTls": {"systemRoots": True, "trustProfiles": {}}}
@@ -200,7 +201,7 @@ def main():
         stop.set()
     threading.Thread(target=stdin_stop, daemon=True).start()
     with (output / "service.log").open("wb") as log:
-        process = subprocess.Popen([str(args.evidence.resolve()), "--runtime", str(runtime_path), "serve"], stdout=log, stderr=log)
+        process = subprocess.Popen([str(args.evidence.resolve()), "serve", "--runtime-config", str(runtime_path)], stdout=log, stderr=log)
         try:
             deadline = time.monotonic() + 15
             while True:

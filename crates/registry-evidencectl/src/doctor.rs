@@ -987,13 +987,13 @@ fn resolve_bundle_directory(
     runtime_path: &Path,
     project: &Path,
 ) -> Result<PathBuf> {
-    match runtime.get("bundleDirectory") {
+    match runtime
+        .get("package")
+        .and_then(|package| package.get("root"))
+    {
         Some(value) => {
             let value = value.as_str().ok_or_else(|| {
-                anyhow!(
-                    "bundleDirectory in {} is not a string",
-                    runtime_path.display()
-                )
+                anyhow!("package.root in {} is not a string", runtime_path.display())
             })?;
             Ok(resolve_against(runtime_path, project, Path::new(value)))
         }

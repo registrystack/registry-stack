@@ -171,8 +171,8 @@ governed verifier configuration (`products/evidence/contracts/jws-profile.yaml`,
 
 ## 3. Authentication and authorization
 
-Evidence Gateway runs one authentication kind, `oidc-access-token`, whose issuer, audiences, accepted token
-types, algorithms, JWKS URI, and claim paths are fixed in the immutable bundle
+Evidence Gateway accepts access tokens from one OIDC issuer, `authentication.oidc`, whose issuer, single
+audience, accepted token types, algorithms, fixed JWKS URI, and claim paths are fixed in the immutable bundle
 (`products/evidence/contracts/bundle.schema.yaml`).
 
 REQ-PR-EVIDENCE-005: Both evidence-production operations and definition discovery MUST require

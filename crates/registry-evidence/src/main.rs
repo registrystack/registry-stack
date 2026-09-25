@@ -66,6 +66,7 @@ use registry_evidence::{
     },
 };
 use registry_platform_audit::{require_audit_under, PersistentRootFault};
+use registry_platform_config::SecretProvidersConfig;
 use registry_platform_crypto::{canonicalize_json, parse_json_strict, LocalJwkSigner, PrivateJwk};
 use serde_json::{Map as JsonMap, Value};
 use zeroize::Zeroizing;
@@ -161,7 +162,17 @@ struct FixtureSummary {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    match run(Cli::parse()).await {
+    let runtime_environment_set =
+        std::env::var_os(registry_evidence::cli::REMOVED_RUNTIME_ENVIRONMENT_VARIABLE).is_some();
+    if let Some(refusal) = registry_evidence::cli::removed_runtime_input(
+        std::env::args_os().skip(1),
+        runtime_environment_set,
+    ) {
+        eprintln!("evidence: {refusal}");
+        return ExitCode::FAILURE;
+    }
+    let cli = Cli::parse();
+    match run(cli).await {
         Ok(code) => code,
         Err(error) => {
             eprintln!("evidence: {error}");
@@ -173,6 +184,7 @@ async fn main() -> ExitCode {
 async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
     match cli.command {
         Command::Check {
+            runtime_config,
             require_runtime_dependencies,
             require_audit_under: audit_root,
             without_audit_lock,
@@ -180,7 +192,8 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             // The inputs are captured once. Every proof below, and the runtime
             // the dependency check initializes, reads this capture rather than
             // the pathname again, so what passed is what gets opened.
-            let deployment = DeploymentInputs::load(&cli.runtime).map_err(deployment_load_error)?;
+            let deployment =
+                DeploymentInputs::load(&runtime_config).map_err(deployment_load_error)?;
             let runtime = deployment.runtime().clone();
             let bundle = Arc::new(deployment.bundle().clone());
             OfflineKernel::compile(Arc::clone(&bundle))
@@ -199,11 +212,10 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             // deployment the server would refuse fails check instead of first
             // start.
             // Source credentials stay unresolved: readiness owns them.
-            let secrets = SecretResolver::new(
-                [SecretProvider::File],
-                &runtime.config.secret_providers.file.root,
-            )
-            .map_err(|_| runtime_initialization_error(RuntimeInitializationError::Secrets))?;
+            let secrets =
+                runtime.config.secret_providers.resolver().map_err(|_| {
+                    runtime_initialization_error(RuntimeInitializationError::Secrets)
+                })?;
             validate_secret_material(&bundle, &runtime.config, &secrets)
                 .await
                 .map_err(runtime_initialization_error)?;
@@ -246,12 +258,14 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Evaluate {
+            runtime_config,
             fixture,
             case,
             explain,
             explain_format,
         } => {
-            let deployment = DeploymentInputs::load(&cli.runtime).map_err(deployment_load_error)?;
+            let deployment =
+                DeploymentInputs::load(&runtime_config).map_err(deployment_load_error)?;
             let (bundle, runtime) = deployment.into_parts();
             let bundle = Arc::new(bundle);
             let kernel = OfflineKernel::compile(Arc::clone(&bundle)).map_err(|error| {
@@ -398,10 +412,10 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Command::Serve => {
+        Command::Serve { runtime_config } => {
             install_operational_logging();
             let runtime = Arc::new(
-                EvidenceRuntime::initialize(&cli.runtime)
+                EvidenceRuntime::initialize(&runtime_config)
                     .await
                     .map_err(runtime_initialization_error)?,
             );
@@ -445,10 +459,13 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             &policy,
             at.as_deref(),
         )?),
-        Command::PrepareLocalRelyingProcedure { input } => {
-            prepare_local_relying_procedure_command(&cli.runtime, &input).await
+        Command::PrepareLocalRelyingProcedure {
+            runtime_config,
+            input,
+        } => prepare_local_relying_procedure_command(&runtime_config, &input).await,
+        Command::LocalAuditLastOperation { runtime_config } => {
+            local_audit_last_operation_command(&runtime_config)
         }
-        Command::LocalAuditLastOperation => local_audit_last_operation_command(&cli.runtime),
     }
 }
 
@@ -593,7 +610,7 @@ fn compile_source_plans(
     compile_source_plans_with_runtime(
         &bundle.config,
         &source_statements(bundle, Some(&runtime.source_extracts))?,
-        &runtime.config.secret_providers.file.root,
+        &runtime.config.secret_providers,
         &runtime.config.outbound_tls,
         &runtime.ca_bundles,
     )
@@ -602,12 +619,13 @@ fn compile_source_plans(
 fn compile_source_plans_with_runtime(
     config: &EvidenceConfig,
     statements: &BTreeMap<String, StatementInputs<'_>>,
-    secret_root: &str,
+    secret_providers: &SecretProvidersConfig,
     outbound_tls: &OutboundTlsConfig,
     ca_bundles: &BTreeMap<String, Vec<u8>>,
 ) -> Result<BTreeMap<String, SourceExecutor>, CommandError> {
     let secrets = Arc::new(
-        SecretResolver::new([SecretProvider::File], secret_root)
+        secret_providers
+            .resolver()
             .map_err(|_| CliError("source plan compilation failed"))?,
     );
     let connection_pool = registry_evidence::source::SourceConnectionPool::new(
@@ -5058,6 +5076,15 @@ mod tests {
     use registry_evidence::verifier::{ExpectedListItemForm, ExpectedValueForm};
     use std::fs;
 
+    fn file_secret_providers() -> SecretProvidersConfig {
+        SecretProvidersConfig {
+            file: Some(registry_platform_config::FileSecretProviderConfig {
+                root: "/run/secrets/evidence".into(),
+            }),
+            environment: None,
+        }
+    }
+
     /// The issuer trust refusal covers every way a named profile fails to
     /// resolve, not only a file that holds no certificate.
     #[test]
@@ -5112,7 +5139,6 @@ mod tests {
 
     fn render_discovery_description_cli(config: &Path) -> Cli {
         Cli {
-            runtime: PathBuf::from("/nonexistent/registry-evidence/runtime.yaml"),
             command: Command::RenderDiscoveryDescription {
                 config: config.to_path_buf(),
             },
@@ -5805,7 +5831,7 @@ mod tests {
         let source_plans = compile_source_plans_with_runtime(
             &bundle.config,
             &source_statements(&bundle, None).expect("source statements bind"),
-            "/run/secrets/evidence",
+            &file_secret_providers(),
             &OutboundTlsConfig {
                 system_roots: true,
                 trust_profiles: Default::default(),
@@ -6340,7 +6366,7 @@ mod tests {
             compile_source_plans_with_runtime(
                 &valid_config,
                 &BTreeMap::new(),
-                "/run/secrets/evidence",
+                &file_secret_providers(),
                 &outbound_tls,
                 &Default::default(),
             )
@@ -6356,7 +6382,7 @@ mod tests {
             compile_source_plans_with_runtime(
                 &invalid_config,
                 &BTreeMap::new(),
-                "/run/secrets/evidence",
+                &file_secret_providers(),
                 &outbound_tls,
                 &Default::default(),
             )
@@ -6386,7 +6412,7 @@ mod tests {
         let source_plans = compile_source_plans_with_runtime(
             &bundle.config,
             &source_statements(&bundle, None).expect("statement sources bind"),
-            "/run/secrets/evidence",
+            &file_secret_providers(),
             &OutboundTlsConfig {
                 system_roots: true,
                 trust_profiles: Default::default(),
@@ -6547,7 +6573,7 @@ mod tests {
             let source_plans = compile_source_plans_with_runtime(
                 &bundle.config,
                 &source_statements(&bundle, None).expect("statement sources bind"),
-                "/run/secrets/evidence",
+                &file_secret_providers(),
                 &OutboundTlsConfig {
                     system_roots: true,
                     trust_profiles: Default::default(),
@@ -6602,7 +6628,7 @@ mod tests {
         let source_plans = compile_source_plans_with_runtime(
             &bundle.config,
             &source_statements(&bundle, None).expect("statement sources bind"),
-            "/run/secrets/evidence",
+            &file_secret_providers(),
             &OutboundTlsConfig {
                 system_roots: true,
                 trust_profiles: Default::default(),
@@ -6678,7 +6704,7 @@ mod tests {
         let source_plans = compile_source_plans_with_runtime(
             &bundle.config,
             &source_statements(&bundle, None).expect("statement sources bind"),
-            "/run/secrets/evidence",
+            &file_secret_providers(),
             &OutboundTlsConfig {
                 system_roots: true,
                 trust_profiles: Default::default(),
@@ -6733,7 +6759,7 @@ mod tests {
         let source_plans = compile_source_plans_with_runtime(
             &bundle.config,
             &source_statements(&bundle, None).expect("statement sources bind"),
-            "/run/secrets/evidence",
+            &file_secret_providers(),
             &OutboundTlsConfig {
                 system_roots: true,
                 trust_profiles: Default::default(),
@@ -6826,7 +6852,7 @@ mod tests {
             let source_plans = compile_source_plans_with_runtime(
                 &bundle.config,
                 &source_statements(&bundle, None).expect("statement sources bind"),
-                "/run/secrets/evidence",
+                &file_secret_providers(),
                 &outbound_tls,
                 &ca_bundles,
             )

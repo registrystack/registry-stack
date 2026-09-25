@@ -89,7 +89,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
         "--profile", "local", environment=environment)
     assert not list((project / "sources").iterdir()), "starter must not hold a generated copy"
     settings = yaml.safe_load((project / "targets/local/settings.yaml").read_text())
-    settings["runtime"]["bundleDirectory"] = str(candidate / "bundle")
+    settings["runtime"]["package"]["root"] = str(candidate / "bundle")
     settings["runtime"]["secretProviders"]["file"]["root"] = str(project / "secrets")
     settings["runtime"]["audit"]["path"] = str(workspace / "audit/evidence.jsonl")
     settings_path = workspace / "resolved-settings.json"
@@ -233,7 +233,7 @@ def verify_default_init(workspace: Path, binaries: dict[str, Path]) -> dict[str,
     run(binaries["evidencectl"], "new", project, "--starter", INPUTS / "default-starter",
         "--profile", "local", environment=environment)
     settings = yaml.safe_load((project / "targets/local/settings.yaml").read_text())
-    settings["runtime"]["bundleDirectory"] = str(candidate / "bundle")
+    settings["runtime"]["package"]["root"] = str(candidate / "bundle")
     settings["runtime"]["secretProviders"]["file"]["root"] = str(project / "secrets")
     settings["runtime"]["audit"]["path"] = str(project / "audit/evidence.jsonl")
     settings_path = workspace / "resolved-settings.json"
@@ -608,7 +608,7 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
             source_authentication["audience"] = session["audience"]
             source_authentication["resource"] = session["resource"]
             source_authentication["scope"] = " ".join(source["scopes"])
-            settings["runtime"]["bundleDirectory"] = str(candidate / "bundle")
+            settings["runtime"]["package"]["root"] = str(candidate / "bundle")
             settings["runtime"]["secretProviders"]["file"]["root"] = str(project / "secrets")
             settings["runtime"]["audit"]["path"] = str(project / "audit/evidence.jsonl")
             settings_path = workspace / "settings.json"

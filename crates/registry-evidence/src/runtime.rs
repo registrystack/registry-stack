@@ -52,7 +52,7 @@ use crate::{
     problem::ProblemCode,
     rate_limit::{EvidenceRateLimiter, RateLimitConfig, RateLimitError},
     sdjwt_vc,
-    secrets::{ProtectedSecret, SecretProvider, SecretResolver},
+    secrets::{ProtectedSecret, SecretResolver},
     selector::{
         match_entitlement, resolve_selectors, validate_entitlement_context,
         validate_subject_binding_key, AuthorizationError, MatchedEntitlement,
@@ -268,7 +268,7 @@ pub async fn validate_secret_material(
     secrets: &SecretResolver,
 ) -> Result<ValidatedSecretMaterial, RuntimeInitializationError> {
     let audit_secret = secrets
-        .resolve(bundle.config.audit.hash_key_ref.as_str())
+        .resolve(bundle.config.audit.key.hash_key_ref.as_str())
         .map_err(|_| RuntimeInitializationError::Audit(AuditInitializationFault::Secret))?;
     AuditProfile::production_from_secret_bytes(Zeroizing::new(
         audit_secret.expose_secret().to_vec(),
@@ -541,7 +541,13 @@ fn issuer_trust_roots(
     bundle: &Bundle,
     runtime_document: &RuntimeDocument,
 ) -> Result<Vec<reqwest::Certificate>, RuntimeInitializationError> {
-    let Some(profile_name) = bundle.config.authentication.tls_trust_profile.as_deref() else {
+    let Some(profile_name) = bundle
+        .config
+        .authentication
+        .oidc
+        .tls_trust_profile
+        .as_deref()
+    else {
         return Ok(Vec::new());
     };
     crate::source::trust_profile_roots(
@@ -605,11 +611,10 @@ async fn assemble<A>(
         .map_err(|_| RuntimeInitializationError::Bundle)?;
 
     let secrets = Arc::new(
-        SecretResolver::new(
-            [SecretProvider::File],
-            &runtime_config.secret_providers.file.root,
-        )
-        .map_err(|_| RuntimeInitializationError::Secrets)?,
+        runtime_config
+            .secret_providers
+            .resolver()
+            .map_err(|_| RuntimeInitializationError::Secrets)?,
     );
 
     let material = validate_secret_material(&bundle, &runtime_config, &secrets).await?;
@@ -830,7 +835,7 @@ impl EvidenceRuntime {
         self.authenticator.key_source_ready().await
     }
 
-    /// Attempt the access-token issuer's key set once, so a `jwksUri` this
+    /// Attempt the access-token issuer's key set once, so a `jwksSource.uri` this
     /// deployment cannot use is named at startup rather than discovered one
     /// rejected request at a time. It reports; it does not refuse to start.
     pub async fn announce_key_source(&self) {
@@ -839,7 +844,7 @@ impl EvidenceRuntime {
 
     /// The sources whose mounted extract is already older than they allow.
     ///
-    /// Startup names these for the same reason it names an unusable `jwksUri`,
+    /// Startup names these for the same reason it names an unusable `jwksSource.uri`,
     /// and with the same standing: it reports, it does not refuse to start, and
     /// it does not decide readiness. Age is an evaluation-time question, asked
     /// against the instant each evaluation carries, so this is a startup

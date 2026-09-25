@@ -45,9 +45,9 @@ provider can satisfy the Version 1 request and cardinality boundary.
 8. Write sanitized [fixtures](deployment-projects/FIXTURES.md) covering positive,
    false-as-success, boundary, no-match, ambiguity, missing data, protocol
    failure, privacy canaries, and exact request transport.
-9. Run `evidence check --runtime <absolute-runtime-yaml>` to validate the
+9. Run `evidence check --runtime-config <absolute-runtime-yaml>` to validate the
    complete immutable bundle and runtime bindings.
-10. Run `evidence evaluate --runtime <absolute-runtime-yaml> --fixture
+10. Run `evidence evaluate --runtime-config <absolute-runtime-yaml> --fixture
     <bundle-relative-fixture-path>` for every referenced fixture before
     deployment. Add `--explain` to a run that failed to see the stages each
     case reached and how each one ended, described in

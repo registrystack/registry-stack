@@ -257,9 +257,10 @@ fn invoke_check(
         tempfile::tempfile().context("creating private Evidence doctor diagnostics")?;
     let mut command = Command::new(evidence);
     command
-        .arg("--runtime")
-        .arg(runtime_config)
         .arg("check")
+        .arg("--runtime-config")
+        .arg(runtime_config)
+        .env_remove("REGISTRY_EVIDENCE_RUNTIME")
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout.try_clone()?))
         .stderr(Stdio::from(stderr.try_clone()?));
@@ -424,7 +425,7 @@ mod tests {
         assert_eq!(
             invoked,
             format!(
-                "--runtime\n{}\ncheck\n--require-runtime-dependencies\n--require-audit-under\n{}\n",
+                "check\n--runtime-config\n{}\n--require-runtime-dependencies\n--require-audit-under\n{}\n",
                 runtime.display(),
                 root.path().display()
             )
@@ -438,7 +439,7 @@ mod tests {
         assert_eq!(
             fs::read_to_string(root.path().join("arguments")).expect("arguments"),
             format!(
-                "--runtime\n{}\ncheck\n--require-runtime-dependencies\n--without-audit-lock\n",
+                "check\n--runtime-config\n{}\n--require-runtime-dependencies\n--without-audit-lock\n",
                 runtime.display()
             )
         );

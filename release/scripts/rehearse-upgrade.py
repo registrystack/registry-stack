@@ -346,18 +346,6 @@ def wait_for_casework_audit(postgres: Postgres) -> None:
     raise RehearsalError("the previous Casework release did not drain its audit outbox")
 
 
-def upgrade_evidence_audit_configuration(bundle: dict[str, Any], runtime: dict[str, Any]) -> None:
-    audit = bundle["audit"]
-    if "hashSecretRef" in audit:
-        bundle["audit"] = {"hashKeyRef": audit["hashSecretRef"],
-                           "hashKeyVersion": audit["hashKeyVersion"]}
-    if "auditStorage" in runtime:
-        storage = runtime.pop("auditStorage")
-        runtime["audit"] = {"path": storage["path"]}
-        if "maximumFileBytes" in storage:
-            runtime["audit"]["rotateBytes"] = storage["maximumFileBytes"]
-
-
 def breg_view_differences(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
     # An ETag binds the active package revision, which changes on rebuild.
     # Record identifiers, domain data, and stored revisions must still match.
@@ -1292,6 +1280,83 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
 EVIDENCE_KID = "upgrade-rehearsal-evidence-issuer"
 EVIDENCE_REQUIREMENT = "urn:example:requirement:record-status:v1"
 EVIDENCE_PURPOSE = "record-status-check"
+EVIDENCE_RUNTIME_API_VERSION = "registry.registrystack.org/evidence-runtime/v1alpha1"
+EVIDENCE_RUNTIME_KIND = "EvidenceRuntimeConfig"
+
+
+def migrate_evidence_governance(document: dict[str, Any]) -> dict[str, Any]:
+    """Rewrite bundle-shaped governance written before the access-token rules
+    moved under `authentication.oidc`, `audit.hashSecretRef` became
+    `audit.hashKeyRef`, and `audit.format` and `audit.failClosed` were
+    removed. A current document is returned unchanged."""
+
+    migrated = json.loads(json.dumps(document))
+    authentication = migrated.get("authentication")
+    if isinstance(authentication, dict) and "oidc" not in authentication:
+        rules = {key: value for key, value in authentication.items() if key != "kind"}
+        audiences = rules.pop("audiences", None)
+        if audiences is not None:
+            if len(audiences) != 1:
+                raise RehearsalError("Evidence governance must name exactly one audience "
+                                     "to move it under authentication.oidc")
+            rules["audience"] = audiences[0]
+        jwks_uri = rules.pop("jwksUri", None)
+        if jwks_uri is not None:
+            rules["jwksSource"] = {"kind": "uri", "uri": jwks_uri}
+        migrated["authentication"] = {"oidc": rules}
+    audit = migrated.get("audit")
+    if isinstance(audit, dict) and ({"hashSecretRef", "format", "failClosed"} & audit.keys()):
+        migrated["audit"] = {"hashKeyRef": audit.get("hashKeyRef", audit.get("hashSecretRef")),
+                             "hashKeyVersion": audit["hashKeyVersion"]}
+    return migrated
+
+
+def evidence_bind(host: str, port: int) -> str:
+    return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+
+
+def migrate_evidence_runtime(document: dict[str, Any]) -> dict[str, Any]:
+    """Rewrite an Evidence runtime file written before the apiVersion/kind
+    envelope, `package.root`, `host:port` bind addresses, and the `audit`
+    destination block that replaced `auditStorage`. A current document is
+    returned unchanged."""
+
+    if "apiVersion" in document and "auditStorage" not in document:
+        return json.loads(json.dumps(document))
+    migrated: dict[str, Any] = {"apiVersion": EVIDENCE_RUNTIME_API_VERSION,
+                                "kind": EVIDENCE_RUNTIME_KIND}
+    for key, value in document.items():
+        if key == "version":
+            continue
+        if key == "auditStorage":
+            migrated["audit"] = {"path": value["path"]}
+            if "maximumFileBytes" in value:
+                migrated["audit"]["rotateBytes"] = value["maximumFileBytes"]
+        elif key == "bundleDirectory":
+            migrated["package"] = {"root": value}
+        elif key in ("listener", "metricsListener") and isinstance(value, dict):
+            listener = {}
+            for name, setting in value.items():
+                if name == "bindHost":
+                    listener["bind"] = evidence_bind(setting, value["port"])
+                elif name != "port":
+                    listener[name] = setting
+            migrated[key] = listener
+        else:
+            migrated[key] = json.loads(json.dumps(value))
+    return migrated
+
+
+def evidence_arguments(reads_runtime_config: bool, runtime: Path, subcommand: str) -> list[str]:
+    """Name the runtime file the way one side's `evidence` binary reads it."""
+
+    if reads_runtime_config:
+        return [subcommand, "--runtime-config", str(runtime)]
+    return ["--runtime", str(runtime), subcommand]
+
+
+def reads_runtime_config(side: Side) -> bool:
+    return "--runtime-config" in side.run("evidence", "check", "--help").stdout
 
 
 class Evidence:
@@ -1315,19 +1380,56 @@ class Evidence:
                  str(self.target))
         governance_path = self.target / "governance.yaml"
         governance = load_yaml(governance_path)
-        governance["authentication"]["issuer"] = self.issuer
-        governance["authentication"]["jwksUri"] = f"{self.issuer}/oauth2/jwks"
+        authentication = governance["authentication"]
+        if "oidc" in authentication:
+            authentication["oidc"]["issuer"] = self.issuer
+            authentication["oidc"]["jwksSource"] = {"kind": "uri",
+                                                    "uri": f"{self.issuer}/oauth2/jwks"}
+        else:
+            authentication["issuer"] = self.issuer
+            authentication["jwksUri"] = f"{self.issuer}/oauth2/jwks"
         dump_yaml(governance_path, governance)
         self.governance = governance
         side.run("evidencectl", "build", "--project", str(self.project), "--target",
                  str(self.target), "--output", str(self.candidate))
         runtime = load_yaml(self.candidate / "runtime.yaml")
-        runtime["bundleDirectory"] = str(self.candidate / "bundle")
+        if "package" in runtime:
+            runtime["package"]["root"] = str(self.candidate / "bundle")
+            runtime["listener"]["bind"] = f"127.0.0.1:{self.port}"
+        else:
+            runtime["bundleDirectory"] = str(self.candidate / "bundle")
+            runtime["listener"]["port"] = self.port
         runtime["auditStorage" if "auditStorage" in runtime else "audit"]["path"] = str(self.audit / "evidence.jsonl")
-        runtime["listener"]["port"] = self.port
         runtime["sourceExtracts"] = {"record-status-extract": {"path": str(self.extract())}}
         dump_yaml(self.runtime, runtime)
         # Evidence refuses a deployment input it could rewrite.
+        self.runtime.chmod(0o444)
+
+    def upgrade(self, side: Side) -> None:
+        """Carry the deployment into the configuration grammar this side reads.
+
+        This is the documented upgrade step for a release that renames
+        Evidence configuration keys: rewrite the target's governance and
+        runtime, rebuild the candidate with this side's evidencectl, and point
+        the operative runtime at it. The audit chain, secrets, and keys stay
+        where they are.
+        """
+
+        governance_path = self.target / "governance.yaml"
+        governance = load_yaml(governance_path)
+        if not reads_runtime_config(side) or "oidc" in governance["authentication"]:
+            return
+        self.governance = migrate_evidence_governance(governance)
+        dump_yaml(governance_path, self.governance)
+        target_runtime = self.target / "runtime.yaml"
+        dump_yaml(target_runtime, migrate_evidence_runtime(load_yaml(target_runtime)))
+        upgraded = self.work / "candidate-upgraded"
+        side.run("evidencectl", "build", "--project", str(self.project), "--target",
+                 str(self.target), "--output", str(upgraded))
+        runtime = migrate_evidence_runtime(load_yaml(self.runtime))
+        runtime["package"]["root"] = str(upgraded / "bundle")
+        self.runtime.chmod(0o600)
+        dump_yaml(self.runtime, runtime)
         self.runtime.chmod(0o444)
 
     def extract(self) -> Path:
@@ -1350,8 +1452,10 @@ class Evidence:
 
     def request(self) -> tuple[int, Any]:
         authentication = self.governance["authentication"]
+        authentication = authentication.get("oidc", authentication)
+        audience = authentication.get("audience") or authentication["audiences"][0]
         profile = next(iter(self.governance["authorityProfiles"].values()))
-        claims = {"iss": self.issuer, "aud": authentication["audiences"][0],
+        claims = {"iss": self.issuer, "aud": audience,
                   "sub": "upgrade-rehearsal-caller", "client_id": "upgrade-rehearsal-caller",
                   "scope": " ".join(authentication["requiredScopes"]),
                   "registry_actor_kind": "service",
@@ -1369,26 +1473,23 @@ class Evidence:
                       "values": {"record_reference": "REC-0001"}}}]})
         return status, body
 
-    def upgrade_audit_configuration(self) -> None:
-        bundle_path = self.candidate / "bundle" / "evidence.yaml"
-        bundle = load_yaml(bundle_path)
-        runtime = load_yaml(self.runtime)
-        upgrade_evidence_audit_configuration(bundle, runtime)
-        for path, document in ((bundle_path, bundle), (self.runtime, runtime)):
-            path.chmod(0o600)
-            dump_yaml(path, document)
-            path.chmod(0o444)
-
 
 def rehearse_evidence(work: Path, keys: Keys, old: Side, new: Side,
                       report: dict[str, Any]) -> None:
     evidence = Evidence(work, keys)
     try:
         evidence.author(old)
-        runtime = ["--runtime", str(evidence.runtime)]
-        old.run("evidence", *runtime, "check")
+        old_reads = reads_runtime_config(old)
+
+        def on_old(subcommand: str) -> list[str]:
+            return evidence_arguments(old_reads, evidence.runtime, subcommand)
+
+        def on_new(subcommand: str) -> list[str]:
+            return evidence_arguments(True, evidence.runtime, subcommand)
+
+        old.run("evidence", *on_old("check"))
         ready = f"http://127.0.0.1:{evidence.port}/ready"
-        service = Service(old, "evidence", [*runtime, "serve"], work / "evidence-old.log", ready)
+        service = Service(old, "evidence", on_old("serve"), work / "evidence-old.log", ready)
         try:
             status, before = evidence.request()
             expect_status("previous release evidence request", status, before, 200)
@@ -1399,10 +1500,10 @@ def rehearse_evidence(work: Path, keys: Keys, old: Side, new: Side,
         records_before = audit_record_count(evidence.audit, "evidence.jsonl")
         archive = work / "audit-archive"
         archive_audit_files(evidence.audit, "evidence.jsonl", archive)
-        evidence.upgrade_audit_configuration()
 
-        new.run("evidence", *runtime, "check")
-        service = Service(new, "evidence", [*runtime, "serve"], work / "evidence-new.log", ready)
+        evidence.upgrade(new)
+        new.run("evidence", *on_new("check"))
+        service = Service(new, "evidence", on_new("serve"), work / "evidence-new.log", ready)
         try:
             status, after = evidence.request()
             expect_status("upgraded evidence request", status, after, 200)

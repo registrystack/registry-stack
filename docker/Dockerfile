@@ -69,13 +69,12 @@ WORKDIR /var/lib/registry-evidence
 # deployment artifacts; mount them read-only under /etc/registry-evidence.
 # Point the runtime's audit destination under /var/lib/registry-evidence,
 # which is writable by the nonroot user.
-ENV REGISTRY_EVIDENCE_RUNTIME=/etc/registry-evidence/runtime.yaml
 EXPOSE 8080
 
 # No HEALTHCHECK: distroless has no shell or curl and the binary has no
 # healthcheck subcommand. The service serves GET /health for HTTP probes.
 ENTRYPOINT ["/usr/local/bin/evidence"]
-CMD ["serve"]
+CMD ["serve", "--runtime-config", "/etc/registry-evidence/runtime.yaml"]
 
 FROM chef AS casework-builder
 ARG SOURCE_DATE_EPOCH

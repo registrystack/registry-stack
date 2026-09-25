@@ -313,9 +313,12 @@ impl FixtureTarget {
 
     fn check(&self, evidence_bin: &Path) -> StepOutcome {
         match self {
-            Self::Deployment { runtime_path, .. } => {
-                run_evidence_step(evidence_bin, &["--runtime"], Some(runtime_path), &["check"])
-            }
+            Self::Deployment { runtime_path, .. } => run_evidence_step(
+                evidence_bin,
+                &["check", "--runtime-config"],
+                Some(runtime_path),
+                &[],
+            ),
             Self::Editable { compilation, .. } => run_evidence_step(
                 evidence_bin,
                 &["bundle-check", "--bundle"],
@@ -346,12 +349,17 @@ impl FixtureTarget {
         // having evaluated nothing.
         let mut outcome = match self {
             Self::Deployment { runtime_path, .. } => {
-                let mut args = vec!["evaluate", "--fixture", fixture];
+                let mut args = vec!["--fixture", fixture];
                 if let Some(case) = case {
                     args.extend(["--case", case]);
                 }
                 args.extend(["--explain", "--explain-format", "json"]);
-                run_evidence_step(evidence_bin, &["--runtime"], Some(runtime_path), &args)
+                run_evidence_step(
+                    evidence_bin,
+                    &["evaluate", "--runtime-config"],
+                    Some(runtime_path),
+                    &args,
+                )
             }
             Self::Editable { compilation, .. } => {
                 let mut args = vec!["--fixture", fixture];
@@ -388,7 +396,7 @@ impl FixtureTarget {
 }
 
 /// Resolve the bundle directory a project's `runtime.yaml` names. A relative
-/// `bundleDirectory` is resolved against the runtime file's own directory, an
+/// `package.root` is resolved against the runtime file's own directory, an
 /// absolute one is used as-is, and `<project>/bundle` is the default only when
 /// the key is absent. This is discovery, not validation: `evidence check` is
 /// left to reject a runtime configuration that is otherwise malformed.
@@ -405,13 +413,13 @@ fn resolve_bundle_directory(runtime_path: &Path, project: &Path) -> Result<PathB
             runtime_path.display()
         )
     })?;
-    match document.get("bundleDirectory") {
+    match document
+        .get("package")
+        .and_then(|package| package.get("root"))
+    {
         Some(value) => {
             let value = value.as_str().ok_or_else(|| {
-                anyhow!(
-                    "bundleDirectory in {} is not a string",
-                    runtime_path.display()
-                )
+                anyhow!("package.root in {} is not a string", runtime_path.display())
             })?;
             let path = Path::new(value);
             if path.is_absolute() {
@@ -473,7 +481,8 @@ fn discover_fixtures(bundle_config_path: &Path) -> Result<Vec<String>> {
     Ok(fixture_paths)
 }
 
-/// Run one `evidence --runtime <runtime_path> <args...>` invocation.
+/// Run one `evidence <prefix...> <path> <args...>` invocation, such as
+/// `evidence check --runtime-config <runtime_path>`.
 ///
 /// Standard output and standard error are captured rather than inherited so
 /// steps never interleave, and any failure to even spawn the process is
@@ -485,7 +494,7 @@ fn run_evidence_step(
     args: &[&str],
 ) -> StepOutcome {
     let mut command = Command::new(evidence_bin);
-    command.args(prefix);
+    command.args(prefix).env_remove("REGISTRY_EVIDENCE_RUNTIME");
     if let Some(path) = path {
         command.arg(path);
     }

@@ -69,8 +69,8 @@ the machine-readable `org.registrystack.runtime.uid` and
 
 The runtime file, governed bundle, and secret root are startup-only
 artifacts; mount them read-only under `/etc/registry-evidence`. The image
-expects the operator runtime at `/etc/registry-evidence/runtime.yaml`
-(`REGISTRY_EVIDENCE_RUNTIME`). The runtime's `bundleDirectory`, secret
+expects the operator runtime at `/etc/registry-evidence/runtime.yaml`, which
+its default command passes as `--runtime-config`. The runtime's `package.root`, secret
 provider `root`, audit `path`, and any `trustProfiles.*.caBundleFile` are
 validated absolute paths, interpreted inside the container: every one of
 them must resolve to a mount. Point the audit destination under
@@ -96,7 +96,7 @@ docker run --rm \
   registry-evidence
 ```
 
-with `listener.bindHost: 0.0.0.0` and
+with `listener.bind: 0.0.0.0:8080` and
 `listener.networkExposure: container-private` in `runtime.yaml`. TLS and
 public exposure are upstream concerns by design; front this listener with your
 operator-network proxy. `evidence check` validates the bundle without serving.
@@ -106,7 +106,8 @@ writability, signer readiness, source credentials, and JWKS reachability:
 ```sh
 docker run --rm -v "$PWD/deploy/evidence:/etc/registry-evidence:ro" \
   -v evidence-audit:/var/lib/registry-evidence \
-  registry-evidence check --require-runtime-dependencies \
+  registry-evidence check --runtime-config /etc/registry-evidence/runtime.yaml \
+  --require-runtime-dependencies \
   --require-audit-under /var/lib/registry-evidence
 ```
 

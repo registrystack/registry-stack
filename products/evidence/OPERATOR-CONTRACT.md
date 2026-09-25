@@ -140,7 +140,7 @@ bytes, runtime bindings, trust files, or secrets change:
 ```sh
 evidencectl doctor --runtime-config '<candidate>/runtime.yaml'
 evidencectl test '<candidate>'
-evidence --runtime '<candidate>/runtime.yaml' serve
+evidence serve --runtime-config '<candidate>/runtime.yaml'
 ```
 
 `doctor` delegates the runtime-owned startup dependency preflight without
@@ -153,8 +153,8 @@ independently prepared `production` policy and trusted keys, and confirm that
 its access and disclosure audit entries reached the audit destination.
 
 Configure an HTTPS OIDC issuer independently of Evidence. Its client registration
-must bind the approved resource and scopes; the Evidence runtime pins issuer,
-JWKS URI, audiences, allowed algorithms, token types, and claim mappings.
+must bind the approved resource and scopes; the governed bundle pins issuer,
+JWKS URI, audience, allowed algorithms, token types, and claim mappings.
 Inspect the candidate with `evidencectl artifact inspect <candidate>` and verify
 an actual issuer-to-resource request at handoff. Inspection does not register a
 client, decide authority, or issue a token. Maintained local tooling uses pinned
@@ -871,14 +871,13 @@ absent serves none of it.
 
 ```yaml
 metricsListener:
-  bindHost: 127.0.0.1
-  port: 9090
+  bind: 127.0.0.1:9090
 ```
 
-`bindHost` accepts a numeric loopback, RFC 1918 private IPv4, or RFC 4193
-unique-local IPv6 address. Hostnames and unspecified, multicast, and public
-addresses are rejected at startup, as is a `bindHost` and `port` pair that
-repeats the evidence listener binding. Both listeners bind before either
+`bind` is a `host:port` socket address whose host is a numeric loopback, RFC
+1918 private IPv4, or RFC 4193 unique-local IPv6 address. Hostnames and
+unspecified, multicast, and public addresses are rejected at startup, as are
+port `0` and an address that repeats the evidence listener binding. Both listeners bind before either
 serves, so a rejected telemetry binding fails startup rather than leaving a
 service that reports healthy while publishing nothing. The two share one
 lifecycle: the telemetry listener cannot outlive a failed evidence listener.
@@ -954,7 +953,7 @@ the registry even though no individual request is described.
 
 The accepted address range is therefore a floor, not a boundary. Startup
 rejects the mistake that actually exposes telemetry, a public or unspecified
-`bindHost`, but an accepted RFC 1918 or unique-local address only means the
+`bind` host, but an accepted RFC 1918 or unique-local address only means the
 endpoint is unreachable from the public internet. On a flat pod network or a
 shared VPC every workload already holds such an address, so binding one there
 makes the endpoint scrapable by every neighbouring workload. `127.0.0.1` with
@@ -1004,11 +1003,13 @@ summary line's verdict and evaluated-case count move inside the document rather
 than trailing it, and the exit code and the operator message on standard error
 are unchanged. See the fixture reference for what it prints.
 
-All commands accept `--runtime <absolute-path>`. The same path may be supplied
-through `REGISTRY_EVIDENCE_RUNTIME`; the reference default is
+Every command that reads a deployment takes `--runtime-config <absolute-path>`
+after the subcommand; the maintained container image passes
 `/etc/registry-evidence/runtime.yaml`. That file supplies the absolute
-`bundleDirectory`. Command-line or environment values cannot override governed
-bundle fields. The runtime file, bundle directory, and every captured artifact must
+`package.root`. The earlier `--runtime` flag and `REGISTRY_EVIDENCE_RUNTIME`
+variable are refused with the replacement named, so a stale invocation fails
+instead of silently reading another file. Command-line or environment values
+cannot override governed bundle fields. The runtime file, bundle directory, and every captured artifact must
 be non-writable to the service process. Evidence Version 1 supports Unix targets
 only because its secret and audit invariants require owner, mode, no-follow,
 link-count, and open-file identity checks. A read-only mount is preferred;
@@ -1082,7 +1083,7 @@ the option, a held lock refuses the check with `another process holds the
 single-writer lock beside the audit file`.
 
 For `assuranceProfile: local`, a supervised issuer may use the exact canonical
-issuer origin `http://127.0.0.1:<non-zero-port>` only when `jwksUri` is the
+issuer origin `http://127.0.0.1:<non-zero-port>` only when `jwksSource.uri` is the
 same origin plus `/.well-known/jwks.json` or `/oauth2/jwks`. Production and evidence-grade, and
 every other authentication location, remain HTTPS-only.
 
@@ -1143,10 +1144,10 @@ to publish a fresh extract and restart. Startup itself does not refuse an
 already-stale extract because a restart racing a republish would otherwise
 crashloop.
 
-The access-token issuer's `jwksUri` is retrieved once at startup and again on
+The access-token issuer's `jwksSource.uri` is retrieved once at startup and again on
 each readiness check, subject to the verifier cache lifecycle and a short
 suppression interval after a failure. Both report and neither refuses: a
-`jwksUri` that cannot be used is named in the log at startup rather than
+`jwksSource.uri` that cannot be used is named in the log at startup rather than
 discovered one rejected request at a time, but the issuer is a shared
 dependency this deployment does not own, so an issuer outage does not withhold
 its readiness or prevent it from starting. A key set already retrieved keeps
