@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use registry_platform_audit::{ChainState, JsonlFileSink};
+use registry_platform_audit::{AuditDestination, AuditWriter, FileDestination};
 use registry_platform_sqlite::{
     inspect_schema as inspect_sqlite_schema, materialize_fixture, CapturedSnapshot,
     DatabaseProfile, LiveDatabaseFile, SchemaObjectKind,
@@ -843,15 +843,19 @@ pub fn test_project(options: &TestOptions) -> Result<ToolingReport, ToolingError
         requests_per_minute: quota.requests_per_minute,
         burst: quota.burst,
     });
-    let sink = Arc::new(JsonlFileSink::new(temporary.path().join("audit.jsonl")));
+    // Fixture runs write audit through the production file writer, inside the
+    // owner-only workspace that is removed when the run ends.
+    let audit_destination = temporary
+        .path()
+        .canonicalize()
+        .ok()
+        .and_then(|workspace| FileDestination::new(workspace.join("audit.jsonl")).ok())
+        .map(AuditDestination::File)
+        .ok_or(ToolingError::Inspect)?;
     let fixture_report = executor
         .block_on(async {
-            let chain = Arc::new(
-                ChainState::bootstrap_unkeyed_dev_only(sink.as_ref())
-                    .await
-                    .map_err(|_| ())?,
-            );
-            let audit = RelayAudit::new(chain, sink);
+            let writer = AuditWriter::open(audit_destination).await.map_err(|_| ())?;
+            let audit = RelayAudit::new(writer);
             let service = Arc::new(RelayService::new(
                 Arc::clone(&registry),
                 Arc::new(artifacts),
@@ -1582,7 +1586,7 @@ server: {bind: "127.0.0.1:8080"}
 packagePath: package
 sources: {registry: {path: registry.sqlite}}
 authentication: {issuer: null}
-audit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/RELAY_AUDIT_KEY}
+audit: {destination: file, path: var/audit.jsonl}
 limits: {requestTimeoutMilliseconds: 1500, concurrentQueries: 8}
 "#;
 

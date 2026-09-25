@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
+mod audit_lines;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use audit_lines::AuditLines;
 use axum::body::{to_bytes, Body};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
@@ -18,9 +20,7 @@ use http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, LINK, VARY}
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
 use jsonschema::{Draft, JSONSchema};
 use oxjsonld::JsonLdParser;
-use registry_platform_audit::{
-    AuditChainHasher, AuditEnvelope, AuditError, AuditSink, ChainState, JsonlFileSink,
-};
+use registry_platform_audit::AuditWriter;
 use registry_platform_crypto::PublicJwk;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier};
@@ -315,104 +315,6 @@ fn complete<T>(outcome: Conditional<T>, operation: &str) -> registry_relay_clien
     match outcome {
         Conditional::Complete(value) => value,
         Conditional::NotModified(_) => panic!("{operation} unexpectedly returned 304"),
-    }
-}
-
-struct ControlledAuditSink {
-    fail_on_write: usize,
-    writes: AtomicUsize,
-    records: Mutex<Vec<Value>>,
-}
-
-impl ControlledAuditSink {
-    fn new(fail_on_write: usize) -> Self {
-        Self {
-            fail_on_write,
-            writes: AtomicUsize::new(0),
-            records: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn writes(&self) -> usize {
-        self.writes.load(Ordering::SeqCst)
-    }
-
-    fn values(&self) -> Vec<Value> {
-        self.records.lock().expect("audit records lock").clone()
-    }
-}
-
-#[async_trait::async_trait]
-impl AuditSink for ControlledAuditSink {
-    async fn write(&self, envelope: &AuditEnvelope) -> Result<(), AuditError> {
-        let write = self.writes.fetch_add(1, Ordering::SeqCst) + 1;
-        if write == self.fail_on_write {
-            return Err(AuditError::Io(std::io::Error::other(
-                "controlled audit failure",
-            )));
-        }
-        self.records
-            .lock()
-            .expect("audit records lock")
-            .push(envelope.record.clone());
-        Ok(())
-    }
-
-    #[allow(deprecated)]
-    async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
-        Ok(None)
-    }
-
-    async fn tail_hash_with_hasher(
-        &self,
-        _hasher: &AuditChainHasher,
-    ) -> Result<Option<[u8; 32]>, AuditError> {
-        Ok(None)
-    }
-}
-
-#[derive(Default)]
-struct SourceAccessTripwireAuditSink {
-    attempts: AtomicUsize,
-    records: Mutex<Vec<Value>>,
-}
-
-impl SourceAccessTripwireAuditSink {
-    fn attempts(&self) -> usize {
-        self.attempts.load(Ordering::SeqCst)
-    }
-
-    fn values(&self) -> Vec<Value> {
-        self.records.lock().expect("audit records lock").clone()
-    }
-}
-
-#[async_trait::async_trait]
-impl AuditSink for SourceAccessTripwireAuditSink {
-    async fn write(&self, envelope: &AuditEnvelope) -> Result<(), AuditError> {
-        if envelope.record["phase"] == "attempt" {
-            self.attempts.fetch_add(1, Ordering::SeqCst);
-            return Err(AuditError::Io(std::io::Error::other(
-                "source access tripwire reached",
-            )));
-        }
-        self.records
-            .lock()
-            .expect("audit records lock")
-            .push(envelope.record.clone());
-        Ok(())
-    }
-
-    #[allow(deprecated)]
-    async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
-        Ok(None)
-    }
-
-    async fn tail_hash_with_hasher(
-        &self,
-        _hasher: &AuditChainHasher,
-    ) -> Result<Option<[u8; 32]>, AuditError> {
-        Ok(None)
     }
 }
 
@@ -1120,12 +1022,8 @@ async fn stock_issuer_registered_authority_drives_a_protected_relay_lookup() {
 
 #[tokio::test]
 async fn business_list_with_a_late_malformed_row_fails_atomically() {
-    let sink = Arc::new(ControlledAuditSink::new(usize::MAX));
-    let harness = ProjectHarness::open_with_audit(
-        "business-registry",
-        Some(Arc::clone(&sink) as Arc<dyn AuditSink>),
-    )
-    .await;
+    let sink = AuditLines::recording();
+    let harness = ProjectHarness::open_with_audit("business-registry", Some(sink.writer())).await;
     let response = harness
         .app
         .oneshot(
@@ -1211,11 +1109,11 @@ async fn malformed_disclosed_property_type_and_requiredness_fail_closed() {
         ("wrong property type", wrong_type),
         ("missing required property", missing_required),
     ] {
-        let sink = Arc::new(ControlledAuditSink::new(usize::MAX));
+        let sink = AuditLines::recording();
         let harness = ProjectHarness::open_with_fixture_sql(
             "business-registry",
             fixture_sql,
-            Some(Arc::clone(&sink) as Arc<dyn AuditSink>),
+            Some(sink.writer()),
             true,
         )
         .await;
@@ -1526,13 +1424,44 @@ async fn trusted_purpose_and_row_binding_refusals_use_only_verified_claims() {
 }
 
 #[tokio::test]
+async fn a_released_read_writes_one_request_and_one_response_entry_sharing_correlation() {
+    let audit = AuditLines::recording();
+    let harness = ProjectHarness::open_with_audit("business-registry", Some(audit.writer())).await;
+    let response = harness
+        .app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/resources/registered-business/records/BIZ-SYNTH-0001")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("router responds");
+    response_body(response, StatusCode::OK).await;
+
+    let entries = audit.entries();
+    assert_eq!(entries.len(), 2, "one request and one response entry");
+    for entry in &entries {
+        assert_eq!(entry["schema"], "registry.relay.audit/v2alpha2");
+    }
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[0]["record"]["phase"], "attempt");
+    assert!(entries[0]["record"].get("outcome").is_none());
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[1]["record"]["phase"], "terminal");
+    assert_eq!(entries[1]["record"]["outcome"], "released");
+    assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
+    assert_eq!(
+        entries[0]["correlation"],
+        entries[0]["record"]["operationId"]
+    );
+    assert_ne!(entries[0]["eventId"], entries[1]["eventId"]);
+}
+
+#[tokio::test]
 async fn audit_attempt_failure_prevents_source_access() {
-    let sink = Arc::new(ControlledAuditSink::new(1));
-    let harness = ProjectHarness::open_with_audit(
-        "business-registry",
-        Some(Arc::clone(&sink) as Arc<dyn AuditSink>),
-    )
-    .await;
+    let sink = AuditLines::failing_on_line(1);
+    let harness = ProjectHarness::open_with_audit("business-registry", Some(sink.writer())).await;
     let response = harness
         .app
         .oneshot(
@@ -1557,12 +1486,8 @@ async fn audit_attempt_failure_prevents_source_access() {
 
 #[tokio::test]
 async fn audit_terminal_failure_discards_held_record_bytes() {
-    let sink = Arc::new(ControlledAuditSink::new(2));
-    let harness = ProjectHarness::open_with_audit(
-        "business-registry",
-        Some(Arc::clone(&sink) as Arc<dyn AuditSink>),
-    )
-    .await;
+    let sink = AuditLines::failing_on_line(2);
+    let harness = ProjectHarness::open_with_audit("business-registry", Some(sink.writer())).await;
     let response = harness
         .app
         .oneshot(
@@ -1590,13 +1515,13 @@ async fn audit_terminal_failure_discards_held_record_bytes() {
 
 #[tokio::test]
 async fn spatial_terminal_audit_failure_discards_held_feature_bytes() {
-    let sink = Arc::new(ControlledAuditSink::new(2));
+    let sink = AuditLines::failing_on_line(2);
     let fixture_sql = fs::read_to_string(project_root("business-registry").join("fixture.sql"))
         .expect("business fixture reads");
     let harness = ProjectHarness::open_with_fixture_sql(
         "business-registry",
         fixture_sql,
-        Some(Arc::clone(&sink) as Arc<dyn AuditSink>),
+        Some(sink.writer()),
         true,
     )
     .await;
@@ -1641,13 +1566,13 @@ async fn spatial_terminal_audit_failure_discards_held_feature_bytes() {
 
 #[tokio::test]
 async fn bbox_shape_refusals_are_audited_before_any_search_attempt() {
-    let sink = Arc::new(SourceAccessTripwireAuditSink::default());
+    let sink = AuditLines::source_access_tripwire();
     let fixture_sql = fs::read_to_string(project_root("business-registry").join("fixture.sql"))
         .expect("business fixture reads");
     let harness = ProjectHarness::open_with_fixture_sql(
         "business-registry",
         fixture_sql,
-        Some(Arc::clone(&sink) as Arc<dyn AuditSink>),
+        Some(sink.writer()),
         true,
     )
     .await;
@@ -1666,7 +1591,7 @@ async fn bbox_shape_refusals_are_audited_before_any_search_attempt() {
     assert_problem_code(response, StatusCode::BAD_REQUEST, "filter.invalid_value").await;
 
     assert_eq!(
-        sink.attempts(),
+        sink.request_entries_reached(),
         0,
         "invalid bbox must not reach the attempt boundary before source execution"
     );
@@ -2297,12 +2222,8 @@ async fn operation_bound_metadata_is_no_store_and_links_only_visible_artifacts()
 
 #[tokio::test]
 async fn invalid_bearer_on_unknown_data_routes_is_audited_fail_closed() {
-    let sink = Arc::new(ControlledAuditSink::new(usize::MAX));
-    let harness = ProjectHarness::open_with_audit(
-        "civil-event",
-        Some(Arc::clone(&sink) as Arc<dyn AuditSink>),
-    )
-    .await;
+    let sink = AuditLines::recording();
+    let harness = ProjectHarness::open_with_audit("civil-event", Some(sink.writer())).await;
     for (method, uri) in [
         (Method::GET, "/v2/resources/unknown/records"),
         (Method::GET, "/v2/resources/civil-event/records"),
@@ -2358,12 +2279,8 @@ async fn invalid_bearer_on_unknown_data_routes_is_audited_fail_closed() {
         assert!(!audit_wire.contains(hidden));
     }
 
-    let failing_sink = Arc::new(ControlledAuditSink::new(1));
-    let harness = ProjectHarness::open_with_audit(
-        "civil-event",
-        Some(Arc::clone(&failing_sink) as Arc<dyn AuditSink>),
-    )
-    .await;
+    let failing_sink = AuditLines::failing_on_line(1);
+    let harness = ProjectHarness::open_with_audit("civil-event", Some(failing_sink.writer())).await;
     assert_problem_code(
         harness
             .app
@@ -2385,12 +2302,8 @@ async fn invalid_bearer_on_unknown_data_routes_is_audited_fail_closed() {
 
 #[tokio::test]
 async fn insufficient_scope_and_unknown_data_surfaces_are_indistinguishable() {
-    let sink = Arc::new(ControlledAuditSink::new(usize::MAX));
-    let harness = ProjectHarness::open_with_audit(
-        "civil-event",
-        Some(Arc::clone(&sink) as Arc<dyn AuditSink>),
-    )
-    .await;
+    let sink = AuditLines::recording();
+    let harness = ProjectHarness::open_with_audit("civil-event", Some(sink.writer())).await;
     let journey = project_journey("civil-event");
     let read_fixture = journey
         .authorizations
@@ -2499,12 +2412,8 @@ async fn insufficient_scope_and_unknown_data_surfaces_are_indistinguishable() {
 
 #[tokio::test]
 async fn list_uri_refusal_uses_the_resolved_access_context() {
-    let sink = Arc::new(ControlledAuditSink::new(usize::MAX));
-    let harness = ProjectHarness::open_with_audit(
-        "business-registry",
-        Some(Arc::clone(&sink) as Arc<dyn AuditSink>),
-    )
-    .await;
+    let sink = AuditLines::recording();
+    let harness = ProjectHarness::open_with_audit("business-registry", Some(sink.writer())).await;
     let padding = "x".repeat(20_000);
     let response = harness
         .app
@@ -3771,16 +3680,16 @@ impl ProjectHarness {
         Self::open_with_audit(project, None).await
     }
 
-    async fn open_with_audit(project: &str, sink: Option<Arc<dyn AuditSink>>) -> Self {
+    async fn open_with_audit(project: &str, audit: Option<AuditWriter>) -> Self {
         let root = project_root(project);
         let fixture_sql = fs::read_to_string(root.join("fixture.sql")).expect("fixture SQL reads");
-        Self::open_with_fixture_sql(project, fixture_sql, sink, false).await
+        Self::open_with_fixture_sql(project, fixture_sql, audit, false).await
     }
 
     async fn open_with_fixture_sql(
         project: &str,
         fixture_sql: String,
-        sink: Option<Arc<dyn AuditSink>>,
+        audit: Option<AuditWriter>,
         accept_fixture_fingerprint: bool,
     ) -> Self {
         let root = project_root(project);
@@ -3902,14 +3811,7 @@ impl ProjectHarness {
             )
             .expect("SQLite runtime opens"),
         );
-        let sink: Arc<dyn AuditSink> =
-            sink.unwrap_or_else(|| Arc::new(JsonlFileSink::new(temp.path().join("audit.jsonl"))));
-        let chain = Arc::new(
-            ChainState::bootstrap_unkeyed_dev_only(sink.as_ref())
-                .await
-                .expect("test audit chain starts"),
-        );
-        let audit = RelayAudit::new(chain, sink);
+        let audit = RelayAudit::new(audit.unwrap_or_else(|| AuditLines::recording().writer()));
 
         let (authenticator, idp) = if let Some(issuer) = runtime.authentication.issuer.as_ref() {
             let idp = MockIdp::start().await;

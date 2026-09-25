@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
+mod audit_lines;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use audit_lines::AuditLines;
 use axum::body::{to_bytes, Body};
 use http::header::{ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG};
 use http::{HeaderMap, HeaderValue, Request, Response, StatusCode};
 use jsonschema::{Draft, JSONSchema};
-use registry_platform_audit::{AuditChainHasher, AuditEnvelope, AuditError, AuditSink, ChainState};
+use registry_platform_audit::AuditWriter;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier};
 use registry_platform_sqlite::{
@@ -76,59 +78,6 @@ impl CapturedResponse {
     }
 }
 
-struct ControlledAuditSink {
-    fail_on_write: usize,
-    writes: AtomicUsize,
-    records: Mutex<Vec<Value>>,
-}
-
-impl ControlledAuditSink {
-    fn new(fail_on_write: usize) -> Self {
-        Self {
-            fail_on_write,
-            writes: AtomicUsize::new(0),
-            records: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn writes(&self) -> usize {
-        self.writes.load(Ordering::SeqCst)
-    }
-
-    fn values(&self) -> Vec<Value> {
-        self.records.lock().expect("audit records lock").clone()
-    }
-}
-
-#[async_trait::async_trait]
-impl AuditSink for ControlledAuditSink {
-    async fn write(&self, envelope: &AuditEnvelope) -> Result<(), AuditError> {
-        let write = self.writes.fetch_add(1, Ordering::SeqCst) + 1;
-        if write == self.fail_on_write {
-            return Err(AuditError::Io(std::io::Error::other(
-                "controlled audit failure",
-            )));
-        }
-        self.records
-            .lock()
-            .expect("audit records lock")
-            .push(envelope.record.clone());
-        Ok(())
-    }
-
-    #[allow(deprecated)]
-    async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
-        Ok(None)
-    }
-
-    async fn tail_hash_with_hasher(
-        &self,
-        _hasher: &AuditChainHasher,
-    ) -> Result<Option<[u8; 32]>, AuditError> {
-        Ok(None)
-    }
-}
-
 #[tokio::test]
 async fn sdmx_data_and_structure_inherit_the_dataset_access_rule() {
     let harness = Harness::open(None, None).await;
@@ -167,8 +116,8 @@ async fn sdmx_data_and_structure_inherit_the_dataset_access_rule() {
 
 #[tokio::test]
 async fn protected_sdmx_structure_refusals_are_indistinguishable_and_value_free() {
-    let sink = Arc::new(ControlledAuditSink::new(usize::MAX));
-    let harness = Harness::open(None, Some(Arc::clone(&sink) as Arc<dyn AuditSink>)).await;
+    let sink = AuditLines::recording();
+    let harness = Harness::open(None, Some(sink.writer())).await;
     let wrong_scope = harness.token(
         "wrong-scope",
         &["statistics:unrelated:read"],
@@ -334,8 +283,8 @@ async fn official_schema(url: &str, digest: &str, identifier: &str) -> Value {
 
 #[tokio::test]
 async fn sdmx_denial_mapping_is_fixed_and_value_free() {
-    let sink = Arc::new(ControlledAuditSink::new(usize::MAX));
-    let harness = Harness::open(None, Some(Arc::clone(&sink) as Arc<dyn AuditSink>)).await;
+    let sink = AuditLines::recording();
+    let harness = Harness::open(None, Some(sink.writer())).await;
     let wrong_scope = harness.token(
         "wrong-scope",
         &["statistics:unrelated:read"],
@@ -455,12 +404,8 @@ async fn duplicate_sdmx_observation_keys_fail_closed_across_page_boundaries() {
         ),
     );
     assert_ne!(duplicated, without_key, "duplicate observation is inserted");
-    let sink = Arc::new(ControlledAuditSink::new(usize::MAX));
-    let harness = Harness::open(
-        Some(duplicated),
-        Some(Arc::clone(&sink) as Arc<dyn AuditSink>),
-    )
-    .await;
+    let sink = AuditLines::recording();
+    let harness = Harness::open(Some(duplicated), Some(sink.writer())).await;
     let response = harness
         .request(
             concat!(
@@ -487,12 +432,8 @@ async fn duplicate_sdmx_observation_keys_fail_closed_across_page_boundaries() {
 
 #[tokio::test]
 async fn sdmx_source_rows_must_use_governed_codelist_values() {
-    let dimension_sink = Arc::new(ControlledAuditSink::new(usize::MAX));
-    let dimension_harness = Harness::open(
-        None,
-        Some(Arc::clone(&dimension_sink) as Arc<dyn AuditSink>),
-    )
-    .await;
+    let dimension_sink = AuditLines::recording();
+    let dimension_harness = Harness::open(None, Some(dimension_sink.writer())).await;
     let dimension_response = dimension_harness
         .request(
             concat!(
@@ -509,12 +450,9 @@ async fn sdmx_source_rows_must_use_governed_codelist_values() {
     let original = fixture_sql();
     let invalid_attribute = original.replacen("'PERCENT'", "'UNKNOWN_UNIT'", 1);
     assert_ne!(invalid_attribute, original);
-    let attribute_sink = Arc::new(ControlledAuditSink::new(usize::MAX));
-    let attribute_harness = Harness::open(
-        Some(invalid_attribute),
-        Some(Arc::clone(&attribute_sink) as Arc<dyn AuditSink>),
-    )
-    .await;
+    let attribute_sink = AuditLines::recording();
+    let attribute_harness =
+        Harness::open(Some(invalid_attribute), Some(attribute_sink.writer())).await;
     let attribute_response = attribute_harness
         .request(
             concat!(
@@ -533,11 +471,7 @@ async fn sdmx_source_rows_must_use_governed_codelist_values() {
     attribute_harness.stop().await;
 }
 
-fn assert_source_code_refusal(
-    response: &CapturedResponse,
-    sink: &ControlledAuditSink,
-    hidden: &[&str],
-) {
+fn assert_source_code_refusal(response: &CapturedResponse, sink: &AuditLines, hidden: &[&str]) {
     assert_problem(
         response,
         StatusCode::SERVICE_UNAVAILABLE,
@@ -560,8 +494,8 @@ fn assert_source_code_refusal(
 
 #[tokio::test]
 async fn sdmx_data_and_structure_use_distinct_value_free_audit_surfaces() {
-    let sink = Arc::new(ControlledAuditSink::new(usize::MAX));
-    let harness = Harness::open(None, Some(Arc::clone(&sink) as Arc<dyn AuditSink>)).await;
+    let sink = AuditLines::recording();
+    let harness = Harness::open(None, Some(sink.writer())).await;
     for path in [PUBLIC_DATA, PUBLIC_DATAFLOW, PUBLIC_DSD] {
         let response = harness.request(path, None, None).await;
         assert_eq!(response.status, StatusCode::OK);
@@ -623,7 +557,7 @@ async fn sdmx_data_and_structure_use_distinct_value_free_audit_surfaces() {
 }
 
 #[tokio::test]
-async fn sdmx_json_and_csv_terminal_audits_bind_exact_wire_bytes() {
+async fn sdmx_json_and_csv_terminal_audits_gate_release_of_exact_wire_bytes() {
     for (accept, expected_wire, held_values) in [
         (
             "application/vnd.sdmx.data+json;version=2.1.0",
@@ -636,8 +570,8 @@ async fn sdmx_json_and_csv_terminal_audits_bind_exact_wire_bytes() {
             &["STRUCTURE", "61.2", "EX-A"][..],
         ),
     ] {
-        let sink = Arc::new(ControlledAuditSink::new(2));
-        let harness = Harness::open(None, Some(Arc::clone(&sink) as Arc<dyn AuditSink>)).await;
+        let sink = AuditLines::failing_on_line(2);
+        let harness = Harness::open(None, Some(sink.writer())).await;
         let response = harness.request(PUBLIC_DATA, Some(accept), None).await;
         assert_problem(
             &response,
@@ -658,8 +592,8 @@ async fn sdmx_json_and_csv_terminal_audits_bind_exact_wire_bytes() {
 
 #[tokio::test]
 async fn sdmx_attempt_audit_failure_prevents_sqlite_execution() {
-    let sink = Arc::new(ControlledAuditSink::new(1));
-    let harness = Harness::open(None, Some(Arc::clone(&sink) as Arc<dyn AuditSink>)).await;
+    let sink = AuditLines::failing_on_line(1);
+    let harness = Harness::open(None, Some(sink.writer())).await;
     let response = harness.request(PUBLIC_DATA, None, None).await;
     assert_problem(
         &response,
@@ -677,8 +611,8 @@ async fn sdmx_attempt_audit_failure_prevents_sqlite_execution() {
 
 #[tokio::test]
 async fn authorized_sdmx_query_without_observations_is_value_free_not_found() {
-    let sink = Arc::new(ControlledAuditSink::new(usize::MAX));
-    let harness = Harness::open(None, Some(Arc::clone(&sink) as Arc<dyn AuditSink>)).await;
+    let sink = AuditLines::recording();
+    let harness = Harness::open(None, Some(sink.writer())).await;
     let response = harness
         .request(
             concat!(
@@ -695,6 +629,11 @@ async fn authorized_sdmx_query_without_observations_is_value_free_not_found() {
     assert_eq!(records[0]["phase"], "attempt");
     assert_eq!(records[1]["phase"], "terminal");
     assert_eq!(records[1]["outcome"], "not-found");
+    let entries = sink.entries();
+    assert_eq!(
+        entries[0]["correlation"], entries[1]["correlation"],
+        "the attempt and its terminal share one correlation"
+    );
     let wire = format!(
         "{}{}",
         String::from_utf8(response.bytes).expect("problem is UTF-8"),
@@ -707,7 +646,7 @@ async fn authorized_sdmx_query_without_observations_is_value_free_not_found() {
 }
 
 impl Harness {
-    async fn open(fixture_override: Option<String>, sink: Option<Arc<dyn AuditSink>>) -> Self {
+    async fn open(fixture_override: Option<String>, audit: Option<AuditWriter>) -> Self {
         let root = Path::new(PROJECT_ROOT);
         let contract_yaml = fs::read_to_string(root.join("registry.yaml")).expect("contract reads");
         let mut contract = RegistryContract::parse_yaml(&contract_yaml).expect("contract parses");
@@ -829,13 +768,7 @@ impl Harness {
             )
             .expect("SQLite runtime opens"),
         );
-        let sink = sink.unwrap_or_else(|| Arc::new(ControlledAuditSink::new(usize::MAX)));
-        let chain = Arc::new(
-            ChainState::bootstrap_unkeyed_dev_only(sink.as_ref())
-                .await
-                .expect("test audit chain starts"),
-        );
-        let audit = RelayAudit::new(chain, sink);
+        let audit = RelayAudit::new(audit.unwrap_or_else(|| AuditLines::recording().writer()));
         let idp = MockIdp::start().await;
         let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
             idp.jwks_uri(),

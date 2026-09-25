@@ -157,7 +157,7 @@ server: {bind: '127.0.0.1:18080'}
 packagePath: package
 sources: {other: {path: fixture.sqlite}}
 authentication: {issuer: null}
-audit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}
+audit: {path: var/audit.jsonl}
 limits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}
 "#;
         let report = check_project_documents(valid_contract(), Some(runtime), &governed_files());

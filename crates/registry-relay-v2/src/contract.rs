@@ -5,7 +5,9 @@ use std::collections::HashSet;
 use std::fmt;
 use std::net::SocketAddr;
 use std::ops::Deref;
+use std::path::PathBuf;
 
+use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
 use serde::de::{self, MapAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -1255,6 +1257,11 @@ impl RelayRuntime {
     pub fn parse_yaml(input: &str) -> Result<Self, ContractParseError> {
         let runtime: Self =
             serde_norway::from_str(input).map_err(|source| ContractParseError { source })?;
+        if let Err(error) = runtime.audit.check_shape() {
+            return Err(ContractParseError {
+                source: <serde_norway::Error as de::Error>::custom(error),
+            });
+        }
         if runtime.is_valid() {
             Ok(runtime)
         } else {
@@ -1272,8 +1279,7 @@ impl RelayRuntime {
             || self.server.bind.parse::<SocketAddr>().is_err()
             || self.package_path.trim().is_empty()
             || self.sources.is_empty()
-            || self.audit.sink.trim().is_empty()
-            || !valid_secret_reference(&self.audit.integrity_key_ref)
+            || self.audit.check_shape().is_err()
             || self.limits.request_timeout_milliseconds == 0
             || self.limits.request_timeout_milliseconds > 120_000
             || self.limits.concurrent_queries == 0
@@ -1522,12 +1528,39 @@ fn canonical_trusted_issuer(raw: &str, allow_supervised_loopback: bool) -> Optio
     (canonical == raw || canonical_root_without_slash).then(|| raw.to_owned())
 }
 
+/// Where Relay writes its audit lines, in the shape every Registry Stack
+/// product shares. A relative `path` is resolved against the runtime file's
+/// directory at startup.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuditRuntime {
-    pub sink: String,
-    pub integrity_key_ref: String,
+    #[serde(default)]
+    pub destination: AuditDestinationKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotate_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retain_days: Option<u32>,
+}
+
+impl AuditRuntime {
+    /// Check the destination shape before any path is resolved. A relative
+    /// `path` cannot be judged absolute until startup resolves it against the
+    /// runtime directory, so an absolute stand-in takes its place here; startup
+    /// checks the resolved path again with the same rules.
+    pub fn check_shape(&self) -> Result<(), AuditDestinationError> {
+        let path = match self.path.as_deref() {
+            Some(path) if path.trim().is_empty() => {
+                return Err(AuditDestinationError::MissingPath);
+            }
+            Some(_) => Some(PathBuf::from("/relay-runtime/audit.jsonl")),
+            None => None,
+        };
+        AuditDestination::from_settings(self.destination, path, self.rotate_bytes, self.retain_days)
+            .map(|_| ())
+    }
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1622,7 +1655,7 @@ server: {bind: "127.0.0.1:8080"}
 packagePath: /srv/relay/package
 sources: {db: {path: /srv/registry.sqlite}}
 authentication: {issuer: null}
-audit: {sink: /var/log/relay.jsonl, integrityKeyRef: secret:key}
+audit: {path: /var/log/relay.jsonl}
 limits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 4}
 disclosureProfiles: {}
 "#;
@@ -1630,13 +1663,80 @@ disclosureProfiles: {}
     }
 
     #[test]
+    fn runtime_audit_accepts_only_the_shared_destination_shape() {
+        let template = |audit: &str| {
+            format!(
+                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:8080'}}\npackagePath: /srv/relay/package\nsources: {{db: {{path: /srv/registry.sqlite}}}}\nauthentication: {{issuer: null}}\naudit: {audit}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 4}}\n"
+            )
+        };
+        for valid in [
+            "{path: /var/log/relay/audit.jsonl}",
+            "{destination: file, path: var/audit.jsonl}",
+            "{destination: file, path: /var/log/relay/audit.jsonl, rotateBytes: 1048576, retainDays: 30}",
+            "{destination: stdout}",
+        ] {
+            let runtime = RelayRuntime::parse_yaml(&template(valid))
+                .unwrap_or_else(|error| panic!("{valid}: {error}"));
+            assert_eq!(
+                runtime.audit.destination,
+                if valid.contains("stdout") {
+                    AuditDestinationKind::Stdout
+                } else {
+                    AuditDestinationKind::File
+                }
+            );
+        }
+        for (invalid, reason) in [
+            ("{}", "audit.path is required"),
+            ("{destination: file}", "audit.path is required"),
+            ("{path: ''}", "audit.path is required"),
+            (
+                "{destination: stdout, path: /var/log/relay.jsonl}",
+                "applies only when",
+            ),
+            (
+                "{destination: stdout, rotateBytes: 1048576}",
+                "applies only when",
+            ),
+            ("{destination: stdout, retainDays: 30}", "applies only when"),
+            (
+                "{path: /var/log/relay.jsonl, rotateBytes: 1}",
+                "audit.rotateBytes",
+            ),
+            (
+                "{path: /var/log/relay.jsonl, retainDays: 0}",
+                "audit.retainDays",
+            ),
+            (
+                "{destination: syslog, path: /var/log/relay.jsonl}",
+                "unknown variant",
+            ),
+            ("{sink: /var/log/relay.jsonl}", "unknown field"),
+            (
+                "{path: /var/log/relay.jsonl, integrityKeyRef: secret:env/RELAY_KEY}",
+                "unknown field",
+            ),
+            (
+                "{path: /var/log/relay.jsonl, hashKeyRef: secret:env/RELAY_KEY}",
+                "unknown field",
+            ),
+        ] {
+            let error = RelayRuntime::parse_yaml(&template(invalid))
+                .expect_err(invalid)
+                .detail()
+                .to_string();
+            assert!(error.contains(reason), "{invalid}: {error}");
+        }
+    }
+
+    #[test]
     fn runtime_accepts_only_the_supported_secret_reference_grammars() {
         let template = |reference: &str| {
             format!(
-                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:8080'}}\npackagePath: /srv/relay/package\nsources: {{db: {{path: /srv/registry.sqlite}}}}\nauthentication: {{issuer: null}}\naudit: {{sink: /var/log/relay.jsonl, integrityKeyRef: {reference}}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 4}}\n"
+                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:8080'}}\npackagePath: /srv/relay/package\nsources: {{db: {{path: /srv/registry.sqlite}}}}\nauthentication: {{issuer: null}}\naudit: {{path: /var/log/relay.jsonl}}\ncursor: {{integrityKeyRef: {reference}, maximumAgeSeconds: 300}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 4}}\n"
             )
         };
-        for valid in ["secret:env/RELAY_KEY", "secret:file/audit-integrity-key"] {
+        for valid in ["secret:env/RELAY_KEY", "secret:file/cursor-integrity-key"] {
             assert!(
                 RelayRuntime::parse_yaml(&template(valid)).is_ok(),
                 "{valid}"
@@ -1661,7 +1761,7 @@ disclosureProfiles: {}
     fn runtime_accepts_exactly_one_startup_supported_issuer_algorithm() {
         let runtime = |algorithms: &str| {
             format!(
-                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:8080'}}\npackagePath: /srv/relay/package\nsources: {{db: {{path: /srv/registry.sqlite}}}}\nauthentication:\n  issuer:\n    id: issuer\n    discoveryUrl: https://issuer.example.invalid/.well-known/openid-configuration\n    audience: registry\n    tokenTypes: [at+jwt]\n    algorithms: {algorithms}\naudit: {{sink: /var/log/relay.jsonl, integrityKeyRef: secret:env/RELAY_KEY}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 4}}\n"
+                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:8080'}}\npackagePath: /srv/relay/package\nsources: {{db: {{path: /srv/registry.sqlite}}}}\nauthentication:\n  issuer:\n    id: issuer\n    discoveryUrl: https://issuer.example.invalid/.well-known/openid-configuration\n    audience: registry\n    tokenTypes: [at+jwt]\n    algorithms: {algorithms}\naudit: {{path: /var/log/relay.jsonl}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 4}}\n"
             )
         };
 
@@ -1675,7 +1775,7 @@ disclosureProfiles: {}
     fn issuer_audience_is_bounded_inside_the_authentication_envelope() {
         let runtime = |audience: &str| {
             format!(
-                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:8080'}}\npackagePath: /srv/relay/package\nsources: {{db: {{path: /srv/registry.sqlite}}}}\nauthentication:\n  issuer:\n    id: issuer\n    discoveryUrl: https://issuer.example.invalid/.well-known/openid-configuration\n    audience: '{audience}'\n    tokenTypes: [at+jwt]\n    algorithms: [EdDSA]\naudit: {{sink: /var/log/relay.jsonl, integrityKeyRef: secret:env/RELAY_KEY}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 4}}\n"
+                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:8080'}}\npackagePath: /srv/relay/package\nsources: {{db: {{path: /srv/registry.sqlite}}}}\nauthentication:\n  issuer:\n    id: issuer\n    discoveryUrl: https://issuer.example.invalid/.well-known/openid-configuration\n    audience: '{audience}'\n    tokenTypes: [at+jwt]\n    algorithms: [EdDSA]\naudit: {{path: /var/log/relay.jsonl}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 4}}\n"
             )
         };
 
@@ -1704,7 +1804,7 @@ disclosureProfiles: {}
     fn runtime_issuer_discovery_matches_the_exact_startup_profile() {
         let runtime = |discovery_url: &str| {
             format!(
-                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:8080'}}\npackagePath: /srv/relay/package\nsources: {{db: {{path: /srv/registry.sqlite}}}}\nauthentication:\n  issuer:\n    id: issuer\n    discoveryUrl: {discovery_url}\n    audience: registry\n    tokenTypes: [at+jwt]\n    algorithms: [EdDSA]\naudit: {{sink: /var/log/relay.jsonl, integrityKeyRef: secret:env/RELAY_KEY}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 4}}\n"
+                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:8080'}}\npackagePath: /srv/relay/package\nsources: {{db: {{path: /srv/registry.sqlite}}}}\nauthentication:\n  issuer:\n    id: issuer\n    discoveryUrl: {discovery_url}\n    audience: registry\n    tokenTypes: [at+jwt]\n    algorithms: [EdDSA]\naudit: {{path: /var/log/relay.jsonl}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 4}}\n"
             )
         };
         let valid = "https://identity.example.invalid/.well-known/openid-configuration";
@@ -1737,7 +1837,7 @@ disclosureProfiles: {}
     fn runtime_separates_trusted_issuer_from_one_key_transport() {
         let runtime = |transport: &str| {
             format!(
-                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:8080'}}\npackagePath: /srv/relay/package\nsources: {{db: {{path: /srv/registry.sqlite}}}}\nauthentication:\n  issuer:\n    id: issuer\n    trustedIssuer: https://issuer.example.invalid\n{transport}    audience: registry\n    tokenTypes: [at+jwt]\n    algorithms: [EdDSA]\naudit: {{sink: /var/log/relay.jsonl, integrityKeyRef: secret:env/RELAY_KEY}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 4}}\n"
+                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:8080'}}\npackagePath: /srv/relay/package\nsources: {{db: {{path: /srv/registry.sqlite}}}}\nauthentication:\n  issuer:\n    id: issuer\n    trustedIssuer: https://issuer.example.invalid\n{transport}    audience: registry\n    tokenTypes: [at+jwt]\n    algorithms: [EdDSA]\naudit: {{path: /var/log/relay.jsonl}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 4}}\n"
             )
         };
 
@@ -1834,7 +1934,7 @@ disclosureProfiles: {}
         let mut contract = RegistryContract::parse_yaml(crate::compiler::tests::valid_contract())
             .expect("base contract");
         let mut runtime = RelayRuntime::parse_yaml(
-            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:8080'}\npackagePath: package\nsources: {db: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
+            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:8080'}\npackagePath: package\nsources: {db: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {path: var/audit.jsonl}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
         )
         .expect("runtime without cursor");
         let mut protected_resource = contract.resources[0].clone();

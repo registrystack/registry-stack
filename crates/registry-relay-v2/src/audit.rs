@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Relay V2's closed, value-free audit event vocabulary and release gate.
 
-use std::sync::Arc;
-use std::{future::Future, pin::Pin};
-
-use registry_platform_audit::{AuditError, AuditSink, ChainState};
+use registry_platform_audit::{AuditEntry, AuditUnavailable, AuditWriter};
 use serde::Serialize;
 use serde_json::Value;
 use ulid::Ulid;
@@ -12,42 +9,25 @@ use ulid::Ulid;
 use crate::problem::TraceId;
 use crate::sqlite_runtime::SourceRevision;
 
-pub const AUDIT_SCHEMA: &str = "registry.relay.audit/v2alpha1";
+/// Schema identifier carried in the envelope of every Relay audit line.
+pub const AUDIT_SCHEMA: &str = "registry.relay.audit/v2alpha2";
 
+/// Relay's audit release gate over the platform audit writer.
+///
+/// An `attempt` is a `request` entry written before source access; a
+/// `refusal` or `terminal` is a `response` entry written before any response
+/// byte leaves the process. Both halves of one request share its operation
+/// identifier as the envelope `correlation`. An append that is not accepted
+/// returns `AuditUnavailable`, and callers refuse with `audit.unavailable`.
 #[derive(Clone)]
 pub struct RelayAudit {
-    chain: Arc<ChainState>,
-    sink: Arc<dyn AuditSink>,
-    readiness: AuditReadiness,
+    writer: AuditWriter,
 }
-
-type AuditReadiness = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>;
 
 impl RelayAudit {
     #[must_use]
-    pub fn new(chain: Arc<ChainState>, sink: Arc<dyn AuditSink>) -> Self {
-        let observed_chain = Arc::clone(&chain);
-        Self {
-            chain,
-            sink,
-            readiness: Arc::new(move || {
-                let ready = observed_chain.try_last_hash().is_some();
-                Box::pin(async move { ready })
-            }),
-        }
-    }
-
-    /// Install an async, value-free concrete sink probe. Production startup
-    /// uses this with the keyed sink verifier it already owns, allowing
-    /// readiness to detect an unavailable or replaced audit destination.
-    #[must_use]
-    pub fn with_readiness_check<F, Fut>(mut self, check: F) -> Self
-    where
-        F: Fn() -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = bool> + Send + 'static,
-    {
-        self.readiness = Arc::new(move || Box::pin(check()));
-        self
+    pub fn new(writer: AuditWriter) -> Self {
+        Self { writer }
     }
 
     #[must_use]
@@ -55,7 +35,7 @@ impl RelayAudit {
         Ulid::new().to_string()
     }
 
-    pub async fn attempt(&self, context: &AuditContext) -> Result<(), AuditError> {
+    pub async fn attempt(&self, context: &AuditContext) -> Result<(), AuditUnavailable> {
         self.append(AuditEvent::from_context(context, AuditPhase::Attempt, None))
             .await
     }
@@ -64,7 +44,7 @@ impl RelayAudit {
         &self,
         context: &AuditContext,
         outcome: AuditOutcome,
-    ) -> Result<(), AuditError> {
+    ) -> Result<(), AuditUnavailable> {
         self.append(AuditEvent::from_context(
             context,
             AuditPhase::Refusal,
@@ -73,12 +53,14 @@ impl RelayAudit {
         .await
     }
 
+    /// Record the outcome of an operation that reached its source. Callers
+    /// hold the exact serialized response bytes until this returns `Ok`, so
+    /// the entry gates their release; it does not describe or bind them.
     pub async fn terminal(
         &self,
         context: &AuditContext,
         outcome: AuditOutcome,
-        _exact_response_bytes: Option<&[u8]>,
-    ) -> Result<(), AuditError> {
+    ) -> Result<(), AuditUnavailable> {
         self.append(AuditEvent::from_context(
             context,
             AuditPhase::Terminal,
@@ -87,14 +69,25 @@ impl RelayAudit {
         .await
     }
 
-    async fn append(&self, event: AuditEvent) -> Result<(), AuditError> {
-        self.chain.append(self.sink.as_ref(), event).await?;
-        Ok(())
+    async fn append(&self, event: AuditEvent) -> Result<(), AuditUnavailable> {
+        let correlation = event.operation_id.clone();
+        // The record is a closed struct of strings, enums, and lists, so it
+        // always serializes to an object. Should that ever fail, the writer
+        // refuses the null record as an invalid entry and the caller refuses
+        // the request rather than proceeding unaudited.
+        let record = serde_json::to_value(&event).unwrap_or(Value::Null);
+        let entry = match event.phase {
+            AuditPhase::Attempt => AuditEntry::request(AUDIT_SCHEMA, correlation, record),
+            AuditPhase::Refusal | AuditPhase::Terminal => {
+                AuditEntry::response(AUDIT_SCHEMA, correlation, record)
+            }
+        };
+        self.writer.append(entry).await
     }
 
     #[must_use]
     pub async fn ready(&self) -> bool {
-        self.chain.try_last_hash().is_some() && (self.readiness)().await
+        self.writer.ready().await
     }
 }
 
@@ -196,7 +189,6 @@ enum AuditPhase {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AuditEvent {
-    schema: &'static str,
     phase: AuditPhase,
     operation_id: String,
     trace_id: String,
@@ -243,7 +235,6 @@ impl AuditEvent {
         outcome: Option<AuditOutcome>,
     ) -> Self {
         Self {
-            schema: AUDIT_SCHEMA,
             phase,
             operation_id: context.operation_id.clone(),
             trace_id: context.trace_id.as_str().to_owned(),
@@ -327,5 +318,9 @@ mod tests {
         assert_eq!(value["accessProfile"], "public");
         assert_eq!(value["operationSurface"], "record-read");
         assert!(value.get("representation").is_none());
+        assert!(
+            value.get("schema").is_none(),
+            "the schema identifier lives in the envelope"
+        );
     }
 }

@@ -108,7 +108,7 @@ mod tests {
     #[test]
     fn governed_source_observation_uses_the_runtime_request_timeout() {
         let runtime = RelayRuntime::parse_yaml(
-            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:8080'}\npackagePath: package\nsources: {db: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}\nlimits: {requestTimeoutMilliseconds: 37, concurrentQueries: 1}\n",
+            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:8080'}\npackagePath: package\nsources: {db: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {path: var/audit.jsonl}\nlimits: {requestTimeoutMilliseconds: 37, concurrentQueries: 1}\n",
         )
         .expect("runtime parses");
 
