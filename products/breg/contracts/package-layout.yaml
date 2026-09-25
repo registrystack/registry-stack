@@ -2,6 +2,8 @@ apiVersion: registry.registrystack.org/product-contract/v1
 product: breg
 packageVersion: v1
 entries:
+  - {path: SHA256SUMS, role: shared-checksum-envelope, required: true}
+  - {path: REVISION, role: operator-revision, required: false}
   - {path: package.json, role: identity, required: true}
   - {path: effective-model.json, role: governed-model, required: true}
   - {path: inventories/physical-names.json, role: physical-name-inventory, required: true}

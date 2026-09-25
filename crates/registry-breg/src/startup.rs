@@ -31,7 +31,8 @@ use crate::metrics::{self, Metrics};
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use crate::model::CompiledRegistry;
 use crate::package::{
-    load_package, PackageError, PackageIntent, PackageLoadContext, VerifiedPackage,
+    load_package_with_verified_envelope, PackageError, PackageIntent, PackageLoadContext,
+    VerifiedPackage,
 };
 use crate::postgres::{
     inspect_baseline, verify_catalog_identity_for_catalog, AdvisorySeverity, BaselineAdvisory,
@@ -522,13 +523,14 @@ impl PreparedServer {
 /// database connection, OIDC discovery, audit profile, or listener bind.
 pub async fn prepare(config_path: &Path) -> Result<PreparedServer> {
     let config = load_runtime_config(config_path).map_err(map_runtime_config_error)?;
-    config
+    let shared = config
         .verify_package_envelope()
         .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
     let package_root = config.package().root().to_path_buf();
     let package = {
         let package_context = config.package_load_context();
-        load_package(&package_root, &package_context).map_err(StartupError::PackageRefused)?
+        load_package_with_verified_envelope(&package_root, &package_context, &shared)
+            .map_err(StartupError::PackageRefused)?
     };
     let connection = config
         .runtime_database_connection_config()
@@ -546,10 +548,14 @@ pub async fn prepare(config_path: &Path) -> Result<PreparedServer> {
 /// can append.
 pub async fn check(config_path: &Path) -> Result<Vec<BaselineAdvisory>> {
     let config = load_runtime_config(config_path).map_err(map_runtime_config_error)?;
+    let shared = config
+        .verify_package_envelope()
+        .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
     let package_root = config.package().root().to_path_buf();
     let package = {
         let package_context = config.package_load_context();
-        load_package(&package_root, &package_context).map_err(StartupError::PackageRefused)?
+        load_package_with_verified_envelope(&package_root, &package_context, &shared)
+            .map_err(StartupError::PackageRefused)?
     };
     let connection = config
         .runtime_database_connection_config()
@@ -738,13 +744,14 @@ pub async fn prepare_with_connection_config_for_test(
     connection: crate::postgres::ConnectionConfig,
 ) -> Result<PreparedServer> {
     let config = load_runtime_config(config_path).map_err(map_runtime_config_error)?;
-    config
+    let shared = config
         .verify_package_envelope()
         .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
     let package_root = config.package().root().to_path_buf();
     let package = {
         let package_context = config.package_load_context();
-        load_package(&package_root, &package_context).map_err(StartupError::PackageRefused)?
+        load_package_with_verified_envelope(&package_root, &package_context, &shared)
+            .map_err(StartupError::PackageRefused)?
     };
     prepare_verified_package_with_connection(config, package, connection, AuditOpening::Serve).await
 }
@@ -756,10 +763,14 @@ pub async fn check_with_connection_config_for_test(
     connection: crate::postgres::ConnectionConfig,
 ) -> Result<()> {
     let config = load_runtime_config(config_path).map_err(map_runtime_config_error)?;
+    let shared = config
+        .verify_package_envelope()
+        .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
     let package_root = config.package().root().to_path_buf();
     let package = {
         let package_context = config.package_load_context();
-        load_package(&package_root, &package_context).map_err(StartupError::PackageRefused)?
+        load_package_with_verified_envelope(&package_root, &package_context, &shared)
+            .map_err(StartupError::PackageRefused)?
     };
     prepare_verified_package_with_connection(config, package, connection, AuditOpening::CheckOnly)
         .await
@@ -774,13 +785,14 @@ pub async fn prepare_with_connection_and_key_source_for_test(
     key_source: Arc<JwksFetcher>,
 ) -> Result<PreparedServer> {
     let config = load_runtime_config(config_path).map_err(map_runtime_config_error)?;
-    config
+    let shared = config
         .verify_package_envelope()
         .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
     let package_root = config.package().root().to_path_buf();
     let package = {
         let package_context = config.package_load_context();
-        load_package(&package_root, &package_context).map_err(StartupError::PackageRefused)?
+        load_package_with_verified_envelope(&package_root, &package_context, &shared)
+            .map_err(StartupError::PackageRefused)?
     };
     prepare_verified_package_with_key_source(config, package, connection, key_source).await
 }
@@ -1636,7 +1648,7 @@ pub async fn prepare_startup(
     if !matches!(context.intent, PackageIntent::Startup { .. }) {
         return Err(StartupError::PackageRefused(PackageError::Binding));
     }
-    registry_platform_config::package::verify_package(
+    let shared = registry_platform_config::package::verify_package(
         package_root,
         &crate::package::shared_package_limits(),
         "bregctl package",
@@ -1644,7 +1656,19 @@ pub async fn prepare_startup(
     .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
     // Ordering is security-relevant: no database call precedes package closure,
     // signature, binding, and compiler-derivation verification.
-    let package = load_package(package_root, context).map_err(StartupError::PackageRefused)?;
+    let package = load_package_with_verified_envelope(package_root, context, &shared)
+        .map_err(StartupError::PackageRefused)?;
+    prepare_loaded_startup(package, client, migration_role, runtime_role).await
+}
+
+/// Verify database readiness for a package already loaded through the runtime
+/// configuration's retained shared envelope.
+pub(crate) async fn prepare_loaded_startup(
+    package: VerifiedPackage,
+    client: &mut Client,
+    migration_role: &SqlIdentifier,
+    runtime_role: &SqlIdentifier,
+) -> Result<VerifiedStartup> {
     verify_opened_startup(package, client, migration_role, runtime_role).await
 }
 

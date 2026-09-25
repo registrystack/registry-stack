@@ -5275,6 +5275,30 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
 }
 
 #[test]
+fn apply_refuses_a_stale_shared_envelope_before_database_authority() {
+    let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    fs::write(fixture.package.join("SHA256SUMS"), b"stale\n").expect("shared sum file is replaced");
+
+    let refused = bregctl(&[
+        "--format",
+        "json",
+        "apply",
+        "--runtime-config",
+        path(&fixture.runtime_config),
+        "--package",
+        path(&fixture.package),
+        "--initial",
+    ]);
+    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+    assert_eq!(
+        json_stdout(&refused)["diagnostics"][0]["code"],
+        "apply.package.refused"
+    );
+    let rendered = String::from_utf8(refused.stdout).expect("diagnostic is UTF-8");
+    assert!(!rendered.contains("VERIFY_DATABASE_SECRET_IS_NOT_OPENED"));
+}
+
+#[test]
 fn apply_requires_safe_field_encryption_custody_before_database_authority() {
     let fixture = RuntimePackageFixture::production_with_module(
         "127.0.0.1:1".parse().unwrap(),

@@ -35,12 +35,13 @@ use registry_breg::migration_plan::{
 };
 use registry_breg::package::{
     change_set_to_applicable_migration_plan, compiled_registry_change_set, derive_package_revision,
-    load_package, load_predecessor_package, prepare_package, CompiledRegistryChangeClass,
-    CompiledRegistryChangeCode, PackageBindingField, PackageBuildRequest, PackageEnvelope,
-    PackageError, PackageFile, PackageFileRole, PackageIntent, PackageLoadContext, PackageManifest,
-    PackageMigrationPlanInput, PackageModuleSource, PackageSignature, PackageSourceFile,
-    PackageTrustAnchor, PredecessorPackageContext, SignaturePolicy, TrustAnchorKey,
-    MAX_PACKAGE_SOURCE_FILE_BYTES, TRUST_ANCHOR_API_VERSION,
+    load_package, load_package_with_verified_envelope, load_predecessor_package, prepare_package,
+    CompiledRegistryChangeClass, CompiledRegistryChangeCode, PackageBindingField,
+    PackageBuildRequest, PackageEnvelope, PackageError, PackageFile, PackageFileRole,
+    PackageIntent, PackageLoadContext, PackageManifest, PackageMigrationPlanInput,
+    PackageModuleSource, PackageSignature, PackageSourceFile, PackageTrustAnchor,
+    PredecessorPackageContext, SignaturePolicy, TrustAnchorKey, MAX_PACKAGE_SOURCE_FILE_BYTES,
+    TRUST_ANCHOR_API_VERSION,
 };
 use registry_breg::postgres::{
     begin_record_transaction, install_compiled_schema, managed_schema_fingerprint, ClaimContext,
@@ -122,6 +123,18 @@ fn package_builder_is_deterministic_and_local_publication_loads() {
         .digest(),
         first_shared.digest()
     );
+    let replacement_root = TempRoot::create();
+    second
+        .publish_to_directory_with_revision(replacement_root.path(), Vec::new(), Some("source-2"))
+        .expect("same signed package publishes with different operator revision");
+    assert!(matches!(
+        load_package_with_verified_envelope(
+            replacement_root.path(),
+            &local_context(PackageIntent::InitialActivation),
+            &first_shared,
+        ),
+        Err(PackageError::Envelope)
+    ));
     load_package(
         root.path(),
         &local_context(PackageIntent::InitialActivation),

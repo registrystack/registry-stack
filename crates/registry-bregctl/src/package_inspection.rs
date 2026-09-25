@@ -5,9 +5,10 @@
 use std::path::Path;
 
 use registry_breg::package::{
-    inspect_package_with_context, load_predecessor_package, load_predecessor_rehearsal_baseline,
-    IntegrityInspectedPackage, PackageError, PackageInspectionContext, PredecessorPackageContext,
-    VerifiedPredecessorPackage,
+    inspect_package_with_context_and_verified_envelope,
+    load_predecessor_package_with_verified_envelope,
+    load_predecessor_rehearsal_baseline_with_verified_envelope, IntegrityInspectedPackage,
+    PackageError, PackageInspectionContext, PredecessorPackageContext, VerifiedPredecessorPackage,
 };
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 use registry_breg::CompiledRegistry;
@@ -30,7 +31,7 @@ pub(crate) fn inspect_runtime_package(
     }
     let config = load_runtime_config(runtime_config)
         .map_err(RuntimePackageInspectionError::RuntimeConfig)?;
-    config
+    let shared = config
         .verify_package_envelope()
         .map_err(|error| RuntimePackageInspectionError::SharedPackage(error.to_string()))?;
     let context = PackageInspectionContext {
@@ -45,7 +46,7 @@ pub(crate) fn inspect_runtime_package(
         expected_package_revision: config.package().active_revision(),
         expected_sequence: config.package().active_sequence(),
     };
-    inspect_package_with_context(config.package().root(), &context)
+    inspect_package_with_context_and_verified_envelope(config.package().root(), &context, &shared)
         .map_err(RuntimePackageInspectionError::Package)
 }
 
@@ -57,8 +58,15 @@ pub(crate) fn inspect_runtime_predecessor_package(
     runtime_config: &Path,
 ) -> Result<VerifiedPredecessorPackage, RuntimePackageInspectionError> {
     let config = load_predecessor_runtime_config(runtime_config)?;
-    load_predecessor_package(config.package().root(), &predecessor_context(&config))
-        .map_err(RuntimePackageInspectionError::Package)
+    let shared = config
+        .verify_package_envelope()
+        .map_err(|error| RuntimePackageInspectionError::SharedPackage(error.to_string()))?;
+    load_predecessor_package_with_verified_envelope(
+        config.package().root(),
+        &predecessor_context(&config),
+        &shared,
+    )
+    .map_err(RuntimePackageInspectionError::Package)
 }
 
 /// Verify the same predecessor package as [`inspect_runtime_predecessor_package`]
@@ -68,8 +76,15 @@ pub(crate) fn inspect_runtime_predecessor_rehearsal_baseline(
     runtime_config: &Path,
 ) -> Result<(VerifiedPredecessorPackage, CompiledRegistry), RuntimePackageInspectionError> {
     let config = load_predecessor_runtime_config(runtime_config)?;
-    load_predecessor_rehearsal_baseline(config.package().root(), &predecessor_context(&config))
-        .map_err(RuntimePackageInspectionError::Package)
+    let shared = config
+        .verify_package_envelope()
+        .map_err(|error| RuntimePackageInspectionError::SharedPackage(error.to_string()))?;
+    load_predecessor_rehearsal_baseline_with_verified_envelope(
+        config.package().root(),
+        &predecessor_context(&config),
+        &shared,
+    )
+    .map_err(RuntimePackageInspectionError::Package)
 }
 
 fn load_predecessor_runtime_config(
@@ -80,9 +95,6 @@ fn load_predecessor_runtime_config(
     }
     let config = load_runtime_config(runtime_config)
         .map_err(RuntimePackageInspectionError::RuntimeConfig)?;
-    config
-        .verify_package_envelope()
-        .map_err(|error| RuntimePackageInspectionError::SharedPackage(error.to_string()))?;
     Ok(config)
 }
 

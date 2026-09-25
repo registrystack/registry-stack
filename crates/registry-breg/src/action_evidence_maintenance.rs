@@ -40,15 +40,17 @@ impl ActionEvidenceRetentionOperatorService {
             return Err(MutationError::InvalidRequest);
         }
         let config = load_runtime_config(path).map_err(|_| MutationError::Unavailable)?;
+        let package = config
+            .load_active_package()
+            .map_err(|_| MutationError::Unavailable)?;
         let pool = config
             .runtime_database_connection_config()
             .map_err(|_| MutationError::Unavailable)?
             .build_pool()
             .map_err(|_| MutationError::Unavailable)?;
         let mut client = pool.get().await.map_err(|_| MutationError::Unavailable)?;
-        let startup = crate::startup::prepare_startup(
-            config.package().root(),
-            &config.package_load_context(),
+        let startup = crate::startup::prepare_loaded_startup(
+            package,
             &mut client,
             config.database().roles().migration(),
             config.database().roles().runtime(),
