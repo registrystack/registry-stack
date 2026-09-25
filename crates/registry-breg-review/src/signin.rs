@@ -235,21 +235,27 @@ async fn complete(
     })?;
     let session_cookie = fresh(app)?;
     let csrf = fresh(app)?;
+    // The session is opened before the sign-in is audited: it is cheap,
+    // in-memory, and reversible, so a browser that never receives it never
+    // has a "succeeded" audit record made in its name. An audit failure
+    // after this point removes the session again rather than leave it
+    // behind unconfirmed.
+    let registry = Arc::new(app.registry.with_bearer_token(redeemed.into_access_token()));
+    app.sessions
+        .insert(
+            &session_cookie,
+            Session::new(citizen.clone(), registry, csrf, expires_at),
+        )
+        .map_err(|_| app.problem(Problem::SessionsExhausted))?;
     if let Err(error) = app
         .journal
         .record(Action::SignIn, Outcome::Succeeded, Some(&citizen), None)
         .await
     {
         tracing::error!(%error, "the sign-in could not be audited");
+        app.sessions.remove(&session_cookie);
         return Err(app.problem(Problem::AuditUnavailable));
     }
-    let registry = Arc::new(app.registry.with_bearer_token(redeemed.into_access_token()));
-    app.sessions
-        .insert(
-            &session_cookie,
-            Session::new(citizen, registry, csrf, expires_at),
-        )
-        .map_err(|_| app.problem(Problem::SessionsExhausted))?;
 
     let max_age = expires_at
         .saturating_duration_since(Instant::now())

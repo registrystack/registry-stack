@@ -885,3 +885,78 @@ async fn the_global_cap_still_limits_sign_in_starts() {
     let page = harness.get(&review_path(), Some(&a)).await;
     assert_eq!(page.status, StatusCode::OK, "{}", page.body);
 }
+
+/// A page whose session store holds at most `maximum_sessions` sessions.
+async fn limited_sessions(maximum_sessions: u32) -> Harness {
+    Harness::start_with(Options {
+        extra_document: format!("session:\n  maximumSessions: {maximum_sessions}\n"),
+        ..Options::default()
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_sign_in_when_sessions_are_full_records_no_succeeded_sign_in() {
+    let harness = limited_sessions(1).await;
+    harness.sign_in(CITIZEN_A).await;
+
+    // The one session slot is already spent, so this callback cannot open a
+    // second session. It must not have audited one either: the audit and
+    // the session it describes stand or fall together.
+    let second = harness.sign_in_page(CITIZEN_B).await;
+    assert_eq!(
+        second.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        second.body
+    );
+    assert_eq!(second.error_code(), Some("sessions-exhausted"));
+    assert!(second.set_cookie("breg-review-session").is_none());
+
+    let journal = harness.environment.audit_text();
+    let succeeded_sign_ins = journal
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap()["record"].clone())
+        .filter(|record| record["action"] == "sign-in" && record["outcome"] == "succeeded")
+        .count();
+    assert_eq!(succeeded_sign_ins, 1, "{journal}");
+}
+
+#[tokio::test]
+async fn an_audit_failure_during_sign_in_leaves_no_session_behind() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let harness = limited_sessions(1).await;
+    let audit_path = &harness.environment.audit_path;
+    let original = std::fs::metadata(audit_path)
+        .expect("audit file metadata")
+        .permissions();
+    std::fs::set_permissions(audit_path, std::fs::Permissions::from_mode(0o644))
+        .expect("audit file permissions widen");
+
+    let first = harness.sign_in_page(CITIZEN_A).await;
+    assert_eq!(
+        first.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        first.body
+    );
+    assert_eq!(first.error_code(), Some("audit-unavailable"));
+    assert!(first.set_cookie("breg-review-session").is_none());
+
+    // The audit sink refuses every write for the rest of this process once
+    // one durable write has failed, so this second sign-in fails on the
+    // audit too, never on session capacity. If the first attempt's session
+    // had leaked, the one slot would already be spent and this would report
+    // sessions-exhausted instead.
+    let second = harness.sign_in_page(CITIZEN_B).await;
+    assert_eq!(
+        second.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        second.body
+    );
+    assert_eq!(second.error_code(), Some("audit-unavailable"));
+
+    std::fs::set_permissions(audit_path, original).expect("audit file permissions restore");
+}
