@@ -229,6 +229,15 @@ rules kept behind the same governed extension boundary.
 PostgreSQL is the sole Version 1 database. The administrator installs
 `btree_gist`; neither the runtime nor migration role installs extensions.
 
+The compiler gives every reference column a btree index unless an authored
+index or unique constraint already leads with it, and an authoring compile
+reports `entity.list.unindexed_filter` or `entity.list.unindexed_sort` for a
+granted list filter or sort that no index leads with. A database activated by
+an engine that predates reference indexes gains them through an ordinary
+successor package: `bregctl package` classifies each one as a compatible
+additive index and the migration transaction creates it with a plain
+`CREATE INDEX`, which blocks writes to that table until it commits.
+
 ## Product contracts
 
 The files in `contracts/` are the authoritative machine-readable delivery
