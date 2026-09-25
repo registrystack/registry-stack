@@ -442,17 +442,16 @@ async fn check_pinned_work(
 
 pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
     let config = RuntimeConfig::load(path)?;
-    let package_digest = config.package_digest()?;
+    let package = config.load_package()?;
+    let package_digest = package.digest;
     tracing::info!(package_digest = %package_digest, "verified Casework package");
-    let project_path = config.policy_path();
-    let project = CaseworkProject::load(&project_path)?;
+    let project = package.project;
     let secrets = secret_resolver(&config)?;
     let store = PostgresStore::connect_runtime(&config.database, &secrets)?;
     store.ready().await?;
     validate_retained_completion_destinations(&store, &config.review_completion_destinations)
         .await?;
 
-    let project_root = config.package.root.as_path();
     let mut adapters: Vec<Arc<dyn SourceAdapter>> = Vec::new();
     for source in &project.sources {
         let binding = config
@@ -460,7 +459,14 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             .get(&source.id)
             .ok_or_else(|| RuntimeError::SourceConfiguration(source.id.clone()))?;
         let adapter = binding
-            .build_adapter(source, project_root, &secrets)
+            .build_adapter_from_description(
+                source,
+                package
+                    .source_descriptions
+                    .get(&source.description)
+                    .ok_or_else(|| RuntimeError::SourceConfiguration(source.id.clone()))?,
+                &secrets,
+            )
             .map_err(|_| RuntimeError::SourceConfiguration(source.id.clone()))?;
         adapters.push(Arc::new(adapter));
     }
