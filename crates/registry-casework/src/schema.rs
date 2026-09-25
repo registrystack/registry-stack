@@ -12,7 +12,7 @@ use crate::{RuntimeConfig, RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND};
 pub const RUNTIME_CONFIG_SCHEMA_FILE: &str = "runtime.schema.json";
 pub const RUNTIME_CONFIG_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/casework/runtime/runtime.v1alpha1.schema.json";
-const POLICY_DIGEST_SCHEMA_PATTERN: &str = "^sha256:[0-9a-f]{64}$";
+const PACKAGE_DIGEST_SCHEMA_PATTERN: &str = "^sha256:[0-9a-f]{64}$";
 
 pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
     let mut derived = serde_json::to_value(schemars::schema_for!(RuntimeConfig))?;
@@ -83,9 +83,9 @@ fn install_runtime_constraints(schema: &mut Value) {
     set_definition_property(
         schema,
         "RuntimePackageConfig",
-        "expectedPolicyDigest",
+        "expectedDigest",
         "pattern",
-        Value::String(POLICY_DIGEST_SCHEMA_PATTERN.to_owned()),
+        Value::String(PACKAGE_DIGEST_SCHEMA_PATTERN.to_owned()),
     );
     set_jwks_document_provider_requirement(schema);
     if let Some(sources) = schema
@@ -594,11 +594,11 @@ mod tests {
     }
 
     #[test]
-    fn expected_policy_digest_schema_matches_runtime_validation() {
+    fn expected_digest_schema_matches_runtime_validation() {
         let schema = runtime_schema();
         let with = |digest: &str| {
             let mut instance = runtime_instance("secret:env/CASEWORK_JWKS", "environment");
-            instance["package"]["expectedPolicyDigest"] = Value::String(digest.to_owned());
+            instance["package"]["expectedDigest"] = Value::String(digest.to_owned());
             instance
         };
         assert!(schema.is_valid(&with(&format!("sha256:{}", "0a".repeat(32)))));

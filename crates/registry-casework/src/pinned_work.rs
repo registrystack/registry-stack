@@ -159,25 +159,22 @@ pub enum PinnedWorkVerdict {
     /// The package strands pinned work and `package.acknowledgeStrandedWork`
     /// names its exact digest.
     Acknowledged,
-    /// The project is authored for loopback development without a package
-    /// digest to acknowledge, so stranded work is reported and not refused.
-    Development,
     /// The package strands pinned work the operator has not acknowledged.
     Refused,
 }
 
-/// Decide activation of the package with `package_digest`, or of an
-/// unpackaged development project when it is `None`.
+/// Decide activation of the package with `package_digest`.
 pub fn pinned_work_verdict(
     conflicts: &[StrandedWork],
-    package_digest: Option<&str>,
+    package_digest: &str,
     acknowledged: Option<&str>,
 ) -> PinnedWorkVerdict {
-    match package_digest {
-        _ if conflicts.is_empty() => PinnedWorkVerdict::Clear,
-        None => PinnedWorkVerdict::Development,
-        Some(digest) if acknowledged == Some(digest) => PinnedWorkVerdict::Acknowledged,
-        Some(_) => PinnedWorkVerdict::Refused,
+    if conflicts.is_empty() {
+        PinnedWorkVerdict::Clear
+    } else if acknowledged == Some(package_digest) {
+        PinnedWorkVerdict::Acknowledged
+    } else {
+        PinnedWorkVerdict::Refused
     }
 }
 
@@ -795,24 +792,20 @@ mod tests {
             reviews: 1,
         }];
         assert_eq!(
-            pinned_work_verdict(&[], Some(&digest), None),
+            pinned_work_verdict(&[], &digest, None),
             PinnedWorkVerdict::Clear
         );
         assert_eq!(
-            pinned_work_verdict(&conflicts, Some(&digest), None),
+            pinned_work_verdict(&conflicts, &digest, None),
             PinnedWorkVerdict::Refused
         );
         assert_eq!(
-            pinned_work_verdict(&conflicts, Some(&digest), Some(&other)),
+            pinned_work_verdict(&conflicts, &digest, Some(&other)),
             PinnedWorkVerdict::Refused
         );
         assert_eq!(
-            pinned_work_verdict(&conflicts, Some(&digest), Some(&digest)),
+            pinned_work_verdict(&conflicts, &digest, Some(&digest)),
             PinnedWorkVerdict::Acknowledged
-        );
-        assert_eq!(
-            pinned_work_verdict(&conflicts, None, Some(&digest)),
-            PinnedWorkVerdict::Development
         );
         assert_eq!(
             stranded_work_refusal(&conflicts, &digest),

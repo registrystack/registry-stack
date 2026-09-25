@@ -1451,6 +1451,7 @@ fn start(args: StartArgs) -> Result<Value> {
         }
     }
     probe(state.database_port)?;
+    package_session(&root, &project)?;
     remove_socket(&root)?;
     state.status = Status::Starting;
     state.failure = None;
@@ -1522,6 +1523,36 @@ fn reap_failed_supervisor(supervisor: &mut Child) -> Result<()> {
         }
         thread::sleep(Duration::from_millis(20).min(remaining));
     }
+}
+
+/// The session directory holding the package the supervised runtime serves.
+pub(super) const SESSION_PACKAGE: &str = "package";
+
+/// Build the session package from the authored project, replacing the one the
+/// previous start served. The runtime verifies it like any deployed package;
+/// the reader keeps editing the authored project, and the next start packages
+/// those edits.
+fn package_session(root: &Path, project: &Path) -> Result<()> {
+    let staged = root.join(".package-staged");
+    let retired = root.join(".package-retired");
+    for owned in [&staged, &retired] {
+        if fs::symlink_metadata(owned).is_ok() {
+            fs::remove_dir_all(owned)
+                .with_context(|| format!("removing the owned {}", owned.display()))?;
+        }
+    }
+    crate::project::package(project, &staged, None)
+        .context("packaging the authored project for the local session")?;
+    let current = root.join(SESSION_PACKAGE);
+    if fs::symlink_metadata(&current).is_ok() {
+        fs::rename(&current, &retired)?;
+    }
+    fs::rename(&staged, &current)?;
+    if fs::symlink_metadata(&retired).is_ok() {
+        fs::remove_dir_all(&retired)
+            .with_context(|| format!("removing the owned {}", retired.display()))?;
+    }
+    Ok(())
 }
 
 /// Stage the whole session beside its final path and rename it into place, so

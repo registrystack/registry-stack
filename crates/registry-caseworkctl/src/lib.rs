@@ -160,9 +160,12 @@ struct PackageArgs {
     /// New directory for the verified policy package. Required unless --dry-run.
     #[arg(long, value_name = "DIRECTORY", required_unless_present = "dry_run")]
     output: Option<PathBuf>,
-    /// Report the same policyDigest and files a package would produce, without writing one.
+    /// Report the same packageDigest and files a package would produce, without writing one.
     #[arg(long, conflicts_with = "output", required_unless_present = "output")]
     dry_run: bool,
+    /// Free-text revision recorded in the package's REVISION file and covered by its digest.
+    #[arg(long, value_name = "TEXT")]
+    revision: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -995,8 +998,8 @@ fn run(cli: Cli) -> Result<Value> {
         Command::Explain(args) => project::explain(&args.project),
         Command::Lifecycle => lifecycle::lifecycle(),
         Command::Package(args) => match args.output {
-            Some(output) => project::package(&args.project, &output),
-            None => project::package_dry_run(&args.project),
+            Some(output) => project::package(&args.project, &output, args.revision.as_deref()),
+            None => project::package_dry_run(&args.project, args.revision.as_deref()),
         },
         Command::Simulate(args) => project::simulate(&args.project, &args.fixture),
         Command::Test(args) => project::test(&args.project),

@@ -73,7 +73,7 @@ impl MetricsReadings for PostgresStore {
 struct MetricsInner {
     store: Arc<dyn MetricsReadings>,
     source_ids: Vec<String>,
-    package_digest: Option<String>,
+    package_digest: String,
     read_timeout: std::time::Duration,
     /// The last readings and when they were taken. Held across a reading, so
     /// concurrent scrapes wait for the one reading in flight.
@@ -84,7 +84,7 @@ impl MetricsState {
     pub(crate) fn new(
         store: Arc<dyn MetricsReadings>,
         source_ids: Vec<String>,
-        package_digest: Option<String>,
+        package_digest: String,
     ) -> Self {
         Self::with_read_timeout(store, source_ids, package_digest, READINGS_TIMEOUT)
     }
@@ -92,7 +92,7 @@ impl MetricsState {
     fn with_read_timeout(
         store: Arc<dyn MetricsReadings>,
         source_ids: Vec<String>,
-        package_digest: Option<String>,
+        package_digest: String,
         read_timeout: std::time::Duration,
     ) -> Self {
         Self {
@@ -165,7 +165,7 @@ async fn metrics(State(state): State<MetricsState>) -> Response {
     let database = inner.readings().await;
     let body = render(
         registry_platform_buildinfo::DISPLAY_VERSION,
-        inner.package_digest.as_deref(),
+        &inner.package_digest,
         database.as_deref(),
         Utc::now(),
     );
@@ -180,7 +180,7 @@ async fn metrics(State(state): State<MetricsState>) -> Response {
 /// Casework database, which `casework_database_up` reports as `0`.
 fn render(
     version: &str,
-    package_digest: Option<&str>,
+    package_digest: &str,
     database: Option<&[SourceReconciliationHealth]>,
     now: DateTime<Utc>,
 ) -> String {
@@ -194,7 +194,7 @@ fn render(
         out,
         "casework_build_info{{version=\"{}\",package_digest=\"{}\"}} 1",
         escape(version),
-        escape(package_digest.unwrap_or(""))
+        escape(package_digest)
     );
     gauge(
         &mut out,
@@ -275,7 +275,7 @@ mod tests {
             source("permits", 0, Some(now - chrono::Duration::seconds(90))),
             source("licences", 4, None),
         ];
-        let rendered = render("1.2.3", Some("sha256:abc"), Some(&health), now);
+        let rendered = render("1.2.3", "sha256:abc", Some(&health), now);
         for line in [
             "casework_build_info{version=\"1.2.3\",package_digest=\"sha256:abc\"} 1",
             "casework_database_up 1",
@@ -299,12 +299,12 @@ mod tests {
     fn a_scrape_without_the_database_reports_it_down_and_omits_database_series() {
         let rendered = render(
             "1.2.3",
-            None,
+            "sha256:abc",
             None,
             Utc.with_ymd_and_hms(2026, 9, 25, 12, 0, 0).unwrap(),
         );
         assert!(rendered.contains("casework_database_up 0\n"));
-        assert!(rendered.contains("package_digest=\"\"} 1\n"));
+        assert!(rendered.contains("package_digest=\"sha256:abc\"} 1\n"));
         assert!(!rendered.contains("casework_audit_"));
         assert!(!rendered.contains("casework_source_reconciliation"));
     }
@@ -338,7 +338,7 @@ mod tests {
         MetricsState::with_read_timeout(
             readings,
             vec!["permits".to_owned()],
-            Some("sha256:abc".to_owned()),
+            "sha256:abc".to_owned(),
             read_timeout,
         )
     }

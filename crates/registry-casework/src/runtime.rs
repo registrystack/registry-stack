@@ -406,7 +406,7 @@ async fn check_pinned_work(
     store: &PostgresStore,
     project: &CaseworkProject,
     adapters: &[Arc<dyn SourceAdapter>],
-    package_digest: Option<&str>,
+    package_digest: &str,
     acknowledged: Option<&str>,
 ) -> Result<(), RuntimeError> {
     let adapters = adapters
@@ -414,44 +414,25 @@ async fn check_pinned_work(
         .map(|adapter| adapter.as_ref())
         .collect::<Vec<_>>();
     let conflicts = crate::stranded_pinned_work(store, project, &adapters).await?;
-    match (
-        crate::pinned_work_verdict(&conflicts, package_digest, acknowledged),
-        package_digest,
-    ) {
-        (crate::PinnedWorkVerdict::Clear, _) => Ok(()),
-        (crate::PinnedWorkVerdict::Acknowledged, _) => {
+    match crate::pinned_work_verdict(&conflicts, package_digest, acknowledged) {
+        crate::PinnedWorkVerdict::Clear => Ok(()),
+        crate::PinnedWorkVerdict::Acknowledged => {
             tracing::warn!(
                 stranded = %crate::describe_stranded_work(&conflicts),
                 "activating an acknowledged Casework policy package that strands pinned work"
             );
             Ok(())
         }
-        (crate::PinnedWorkVerdict::Development, _) => {
-            tracing::warn!(
-                stranded = %crate::describe_stranded_work(&conflicts),
-                "the authored Casework policy strands work pinned under an earlier policy"
-            );
-            Ok(())
-        }
-        (crate::PinnedWorkVerdict::Refused, Some(digest)) => Err(RuntimeError::StrandedPinnedWork(
-            crate::stranded_work_refusal(&conflicts, digest),
-        )),
-        (crate::PinnedWorkVerdict::Refused, None) => Err(RuntimeError::StrandedPinnedWork(
-            crate::describe_stranded_work(&conflicts),
+        crate::PinnedWorkVerdict::Refused => Err(RuntimeError::StrandedPinnedWork(
+            crate::stranded_work_refusal(&conflicts, package_digest),
         )),
     }
 }
 
 pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
     let config = RuntimeConfig::load(path)?;
-    let package_digest = config.policy_package_digest()?;
-    match &package_digest {
-        Some(digest) => tracing::info!(
-            policy_package_digest = %digest,
-            "verified Casework policy package"
-        ),
-        None => tracing::info!("loading authored Casework policy for loopback development"),
-    }
+    let package_digest = config.package_digest()?;
+    tracing::info!(package_digest = %package_digest, "verified Casework package");
     let project_path = config.policy_path();
     let project = CaseworkProject::load(&project_path)?;
     let secrets = secret_resolver(&config)?;
@@ -488,7 +469,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         &store,
         &project,
         &adapters,
-        package_digest.as_deref(),
+        &package_digest,
         config.package.acknowledge_stranded_work.as_deref(),
     )
     .await?;

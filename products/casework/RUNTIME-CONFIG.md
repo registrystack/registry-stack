@@ -26,16 +26,22 @@ kind: CaseworkRuntimeConfig
 ```
 
 `package.root` selects one directory. The runtime always loads
-`package.root/casework.yaml`; no second project selector can override it. With
-`listener.tlsTermination: operator-controlled-upstream`, the directory must
-also contain a matching `casework.package.json`. Development loopback may
-select an authored project directory without that manifest.
+`package.root/casework.yaml`; no second project selector can override it. In
+every listener mode, with or without `package.expectedDigest`, the directory
+must be a package `caseworkctl package` wrote: a `SHA256SUMS` file listing
+exactly `casework.yaml` and the source descriptions it names, each matching its
+digest. A directory without `SHA256SUMS`, such as an authored project, is
+refused and names `caseworkctl package`; so is a directory that holds the
+retired `casework.package.json`. `caseworkctl dev` packages the authored
+project on every start and serves that package.
 
-`package.expectedPolicyDigest` is optional. When set, it is `sha256:` followed
-by 64 lowercase hexadecimal digits, and the runtime starts only on the verified
-package whose manifest names that `policyDigest`. A package naming any other
-digest, or a directory without `casework.package.json`, is refused before the
-runtime starts, and the refusal names the expected digest and the one found.
+`package.expectedDigest` is optional. When set, it is `sha256:` followed by 64
+lowercase hexadecimal digits, and the runtime starts only on the verified
+package whose package digest, the SHA-256 digest of its `SHA256SUMS`, is that
+value. Any other package, or a directory without `SHA256SUMS`, is refused
+before the runtime starts, and the refusal names the expected digest and the
+one found. The retired `package.expectedPolicyDigest` is refused with
+`package.expectedDigest` named as its replacement.
 Set it to the digest printed by `caseworkctl package` for the package you
 reviewed, so that replacing the files under `package.root` cannot change the
 policy a restart loads.
@@ -53,8 +59,7 @@ requires. The refusal names each conflict with its counts and the package
 digest. Let that work finish under the earlier package, or set
 `package.acknowledgeStrandedWork` to that exact digest to activate the package
 anyway; the acknowledgement admits only the package it names, so it never
-carries over to a later one. A development-loopback project without a manifest
-has no digest to acknowledge, so the runtime logs the conflicts and starts.
+carries over to a later one.
 `caseworkctl doctor` runs the same comparison as its `pinnedWork` check, so
 pointing it at a runtime file whose `package.root` holds the next package
 previews the refusal before a restart.
