@@ -1846,6 +1846,7 @@ class RegistryReleaseTest(TestCase):
                 "casework-postgres",
                 "scheduling-contracts",
                 "scheduling-postgres",
+                "config-conformance",
             },
             set(rust_result["needs"]),
         )

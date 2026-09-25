@@ -144,6 +144,19 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Platform hygiene alignment",
         "run: products/platform/scripts/check-hygiene-alignment.sh",
     ),
+    ("Runtime configuration conformance job", "config-conformance:"),
+    (
+        "Runtime configuration conformance path filter",
+        "config_conformance: ${{ steps.filter.outputs.config_conformance }}",
+    ),
+    (
+        "Runtime configuration conformance gate",
+        "run: products/platform/scripts/check-config-conformance.py --check-generated",
+    ),
+    (
+        "Runtime configuration conformance gate tests",
+        "run: python3 -m unittest products/platform/scripts/test_check_config_conformance.py",
+    ),
     ("Secret scan job", "secrets:"),
     ("Gitleaks version pin", 'GITLEAKS_VERSION: "8.30.1"'),
     ("Gitleaks archive checksum", "GITLEAKS_LINUX_X64_SHA256:"),
