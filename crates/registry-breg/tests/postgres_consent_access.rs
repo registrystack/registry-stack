@@ -1428,10 +1428,9 @@ async fn real_postgres_consent_successors_match_fresh_install_when_added_changed
         managed_schema_fingerprint, reconcile_compiled_runtime_acl_for_test,
     };
     // Without the household permission every policy of the gated profile
-    // depends on its probe, so renaming the profile below leaves nothing the
-    // compiler-applicable plan does not drop. Removing a profile that still
-    // grants an ordinary permission leaves that policy behind, independently
-    // of consent.
+    // depends on its probe. Renaming the profile below therefore proves that
+    // the compiler-applicable plan removes the complete predecessor policy set
+    // before retiring its consent helper.
     let mut gated = consent_fixture::source();
     gated["accessProfiles"][0]["permissions"]
         .as_array_mut()

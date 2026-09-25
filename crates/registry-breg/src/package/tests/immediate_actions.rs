@@ -31,6 +31,149 @@ fn source_without_actions() -> Value {
     value
 }
 
+fn ordinary_policy_source(auditor_operations: Option<&[&str]>) -> Value {
+    let mut source = json!({
+        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
+        "registry":{"id":"policy-package", "version":"1", "defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+        "entities":[{"id":"person", "primaryDataset":"test-dataset", "route":"people", "mutationMode":"mutable",
+            "fields":[
+                {"id":"person-code", "type":"string", "maxLength":40, "required":true, "classification":"internal"},
+                {"id":"sensitive-note", "type":"string", "maxLength":120, "classification":"internal"}
+            ]}],
+        "accessProfiles":[{"id":"operator", "default":true, "principalClaim":"principal",
+            "permissions":[{"entity":"person", "operations":["create","get","list"],
+                "readableFields":["person-code","sensitive-note"],
+                "writableFields":["person-code","sensitive-note"], "rowBoundaries":[]}]}]
+    });
+    if let Some(operations) = auditor_operations {
+        let mut permission = json!({
+            "entity":"person", "operations":operations, "rowBoundaries":[]
+        });
+        if operations
+            .iter()
+            .any(|operation| matches!(*operation, "get" | "list"))
+        {
+            permission["readableFields"] = json!(["person-code", "sensitive-note"]);
+        }
+        if operations.contains(&"create") {
+            permission["writableFields"] = json!(["person-code", "sensitive-note"]);
+        }
+        source["accessProfiles"]
+            .as_array_mut()
+            .expect("accessProfiles is an array")
+            .push(json!({
+                "id":"auditor", "principalClaim":"principal",
+                "requiredScopes":["registry.audit"], "permissions":[permission]
+            }));
+    }
+    source
+}
+
+fn assert_complete_person_policy_drops(
+    before: &CompiledRegistry,
+    after: &CompiledRegistry,
+    plan: &MigrationPlan,
+) {
+    let before = before
+        .ddl()
+        .tables
+        .iter()
+        .find(|table| table.entity_id == "person")
+        .expect("predecessor person table is compiled")
+        .policies
+        .iter()
+        .map(|policy| (policy.name.as_str(), policy))
+        .collect::<BTreeMap<_, _>>();
+    let after = after
+        .ddl()
+        .tables
+        .iter()
+        .find(|table| table.entity_id == "person")
+        .expect("candidate person table is compiled")
+        .policies
+        .iter()
+        .map(|policy| (policy.name.as_str(), policy))
+        .collect::<BTreeMap<_, _>>();
+    let expected_drops = before
+        .iter()
+        .filter(|(name, policy)| after.get(*name) != Some(policy))
+        .map(|(name, _)| format!("entity.person.policy.{name}.drop"))
+        .collect::<BTreeSet<_>>();
+    let actual_drop_ids = plan
+        .statements
+        .iter()
+        .filter(|statement| statement.sql.starts_with("DROP POLICY "))
+        .map(|statement| statement.id.clone())
+        .collect::<Vec<_>>();
+    let actual_drops = actual_drop_ids.iter().cloned().collect::<BTreeSet<_>>();
+    assert_eq!(actual_drop_ids.len(), actual_drops.len());
+    assert_eq!(actual_drops, expected_drops);
+    assert!(plan
+        .statements
+        .iter()
+        .all(|statement| !statement.sql.starts_with("CREATE POLICY ")));
+}
+
+#[test]
+fn compiler_successor_drops_every_policy_for_removed_read_profile() {
+    let before = compile(&ordinary_policy_source(Some(&["get", "list"])));
+    let after = compile(&ordinary_policy_source(None));
+    let changes = compiled_registry_change_set(&before, &after, "prior-package");
+    let plan = change_set_to_applicable_migration_plan(&changes)
+        .expect("ordinary profile removal is compiler-applicable");
+
+    assert!(change_codes(&plan).contains(&CompiledRegistryChangeCode::AccessProfileRemoved));
+    assert_complete_person_policy_drops(&before, &after, &plan);
+    assert!(drop_policy_sql(&plan)
+        .iter()
+        .any(|statement| statement.contains("registry_rls_select_")));
+}
+
+#[test]
+fn compiler_successor_drops_create_returning_policy_for_removed_create_profile() {
+    let before = compile(&ordinary_policy_source(Some(&["create"])));
+    let after = compile(&ordinary_policy_source(None));
+    let changes = compiled_registry_change_set(&before, &after, "prior-package");
+    let plan = change_set_to_applicable_migration_plan(&changes)
+        .expect("create-only profile removal is compiler-applicable");
+
+    assert_complete_person_policy_drops(&before, &after, &plan);
+    let drops = drop_policy_sql(&plan);
+    assert!(drops
+        .iter()
+        .any(|statement| statement.contains("registry_rls_insert_")));
+    assert!(drops
+        .iter()
+        .any(|statement| statement.contains("registry_create_returning_rls_")));
+}
+
+#[test]
+fn compiler_successor_replaces_complete_policy_set_when_profile_is_narrowed() {
+    let before = compile(&ordinary_policy_source(Some(&["get", "list"])));
+    let after = compile(&ordinary_policy_source(Some(&["create"])));
+    let changes = compiled_registry_change_set(&before, &after, "prior-package");
+    let plan = change_set_to_applicable_migration_plan(&changes)
+        .expect("ordinary profile narrowing is compiler-applicable");
+
+    assert!(change_codes(&plan).contains(&CompiledRegistryChangeCode::AccessProfileChanged));
+    assert_complete_person_policy_drops(&before, &after, &plan);
+    let drops = drop_policy_sql(&plan);
+    assert!(drops
+        .iter()
+        .any(|statement| statement.contains("registry_rls_select_")));
+    assert_eq!(create_policy_sql(&plan), Vec::<String>::new());
+}
+
+#[test]
+fn reviewed_successor_uses_the_same_complete_ordinary_policy_drops() {
+    let before = compile(&ordinary_policy_source(Some(&["get", "list"])));
+    let after = compile(&ordinary_policy_source(None));
+    let plan = reviewed_plan(&before, &after);
+
+    assert!(change_codes(&plan).contains(&CompiledRegistryChangeCode::AccessProfileRemoved));
+    assert_complete_person_policy_drops(&before, &after, &plan);
+}
+
 #[test]
 fn action_configuration_and_disclosure_changes_are_visible_in_package_diffs() {
     let value = source();
