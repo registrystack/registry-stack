@@ -1247,6 +1247,55 @@ async fn field_encryption_erasure_resumes_rebaseline_after_final_erase_crash() {
     insert_erase_field_flip(&transaction, "household").await;
     transaction.commit().await.expect("flip marker persists");
 
+    // The destination refuses the lifecycle's request entry. It is appended
+    // before the first scrub, so no request snapshot, record history,
+    // lifecycle progress, or coverage changes.
+    let entries_before_refusal = database.audit_entries().len();
+    database.audit_capture().fail_after(0);
+    let request_refusal = erase_field_encryption_history(
+        &mut migration,
+        FieldEncryptionHistoryErasureRequest {
+            expected: &expected,
+            migration_role: &database.migration_role,
+            lock_key,
+            timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
+                .unwrap(),
+            audit: &database.audit(audit_profile.clone()),
+            operator_reference: "field-encryption-operator",
+            reason: "request audit precedes the first scrub",
+            registry: &registry,
+        },
+    )
+    .await
+    .expect_err("a refused field request entry stops the lifecycle");
+    database.audit_capture().restore();
+    assert_eq!(
+        request_refusal,
+        FieldEncryptionHistoryErasureError::Unavailable
+    );
+    assert_eq!(database.audit_entries().len(), entries_before_refusal);
+    let untouched = migration
+        .query_one(
+            "SELECT
+                 (SELECT count(*) FROM registry_internal.registry_field_encryption_lifecycle_progress)::bigint,
+                 (SELECT count(*) FROM registry_internal.registry_request_targets
+                   WHERE erased_at IS NULL AND base_snapshot IS NOT NULL)::bigint,
+                 (SELECT count(*) FROM registry_internal.registry_request_proposals
+                   WHERE erased_at IS NULL AND snapshot IS NOT NULL)::bigint,
+                 (SELECT count(*) FROM registry_internal.registry_revisions
+                   WHERE erased_at IS NULL AND snapshot IS NOT NULL)::bigint,
+                 (SELECT unavailable_after_position IS NOT NULL
+                    FROM registry_internal.registry_commit_head WHERE singleton)",
+            &[],
+        )
+        .await
+        .expect("refused lifecycle state reads");
+    assert_eq!(untouched.get::<_, i64>(0), 0);
+    assert_eq!(untouched.get::<_, i64>(1), 1);
+    assert_eq!(untouched.get::<_, i64>(2), 1);
+    assert_eq!(untouched.get::<_, i64>(3), 1);
+    assert!(untouched.get::<_, bool>(4));
+
     // The destination refuses the lifecycle's terminal entry. It is appended
     // after the closing commit, so the lifecycle answers an outage over
     // committed coverage: the documented crash gap, in which the closing
