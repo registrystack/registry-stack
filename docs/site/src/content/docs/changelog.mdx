@@ -340,15 +340,21 @@ relevant product pages on this site rather than duplicating release notes.
   required. `authentication.oidc.issuer` must be an `https` URL without
   credentials, query, or fragment, with plain `http` accepted only on an IPv4
   loopback host under `development-loopback`, and `audience` is at most 512
-  characters. `authentication.oidc.jwksUri` is removed: declare `jwksSource`
+  characters. Under `operator-controlled-upstream`,
+  `authentication.oidc.allowedClients` must name at least one client, because
+  an empty list admits every client the issuer verifies;
+  `development-loopback` still accepts an empty list.
+  `authentication.oidc.jwksUri` is removed: declare `jwksSource`
   with `kind: uri` and the same URL as `uri`. `audit.hashKeyRef` must be an
   exact secret reference. To migrate, add `listener.bind` if it was omitted,
+  list the admitted clients in `allowedClients` for a production deployment,
   replace `jwksUri`, and move any environment expression out of
   `casework.yaml`. See
   [configure the runtime](../operate/casework/).
 
 {/* Evidence: crates/registry-casework/src/config.rs, the_runtime_configuration_is_read_through_the_shared_loader,
     a_removed_jwks_uri_names_its_replacement, the_oidc_issuer_and_clients_are_the_shared_blocks,
+    production_names_its_allowed_clients_while_loopback_may_leave_them_empty,
     environment_expressions_substitute_values_but_never_secret_references and
     an_authored_project_carrying_an_environment_expression_is_refused;
     crates/registry-caseworkctl/src/lib.rs, removed_runtime_keys_name_the_replacement_path_and_action and
