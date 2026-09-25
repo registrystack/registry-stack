@@ -1673,9 +1673,9 @@ impl MutationCoordinator {
     }
 
     /// Move an open ingestion run to `blocked` for `reason`, recording the
-    /// attempt in the caller's transaction, and answer the refusal the caller
-    /// returns with the blocked audit record it appends once that transaction
-    /// commits.
+    /// attempt that names the same cause in the caller's transaction, and
+    /// answer the refusal the caller returns with the blocked audit record it
+    /// appends once that transaction commits.
     ///
     /// The blocking transition verifies it changed the row: the run row lock
     /// serializes this against every other transition, so a zero-row update
@@ -1687,9 +1687,18 @@ impl MutationCoordinator {
         run: &crate::ingestion_store::IngestionRunRecord,
         chunk_index: i64,
         reason: crate::ingestion_store::IngestionBlockedReason,
-        refusal: IngestionRefusal,
         correlation: &RequestCorrelation,
     ) -> Result<(IngestionRefusal, Option<Value>), MutationError> {
+        let (outcome, refusal) = match reason {
+            crate::ingestion_store::IngestionBlockedReason::ActivePackageChanged => (
+                IngestionAttemptOutcome::BindingChanged,
+                IngestionRefusal::BindingChanged,
+            ),
+            crate::ingestion_store::IngestionBlockedReason::ImportAuthorityClosed => (
+                IngestionAttemptOutcome::ImportAuthorityClosed,
+                IngestionRefusal::AuthorityClosed,
+            ),
+        };
         let changed = crate::ingestion_store::mark_blocked(transaction, run.run_id, reason)
             .await
             .map_err(|_| MutationError::Unavailable)?;
@@ -1704,14 +1713,9 @@ impl MutationCoordinator {
             .map_err(|_| MutationError::Unavailable)?;
             return Ok((IngestionRefusal::RunNotOpen, None));
         }
-        record_attempt(
-            transaction,
-            run.run_id,
-            IngestionAttemptOutcome::BindingChanged,
-            chunk_index,
-        )
-        .await
-        .map_err(|_| MutationError::Unavailable)?;
+        record_attempt(transaction, run.run_id, outcome, chunk_index)
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
         let mut audited_run = run.clone();
         audited_run.status = IngestionRunStatus::Blocked;
         audited_run.blocked_reason = Some(reason);
@@ -1875,7 +1879,6 @@ impl MutationCoordinator {
                         &run,
                         chunk_binding.chunk_index,
                         crate::ingestion_store::IngestionBlockedReason::ActivePackageChanged,
-                        IngestionRefusal::BindingChanged,
                         &request.correlation,
                     )
                     .await?;
@@ -1923,7 +1926,6 @@ impl MutationCoordinator {
                             &run,
                             chunk_binding.chunk_index,
                             crate::ingestion_store::IngestionBlockedReason::ImportAuthorityClosed,
-                            IngestionRefusal::AuthorityClosed,
                             &request.correlation,
                         )
                         .await?;

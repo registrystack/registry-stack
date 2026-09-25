@@ -178,6 +178,7 @@ pub enum BRegIngestionAttemptOutcome {
     InvalidItem,
     Refused,
     BindingChanged,
+    ImportAuthorityClosed,
     ChunkMismatch,
     RunNotOpen,
     Unavailable,
@@ -185,12 +186,13 @@ pub enum BRegIngestionAttemptOutcome {
 
 impl BRegIngestionAttemptOutcome {
     /// Every attempt outcome the wire contract names.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Committed,
         Self::Replayed,
         Self::InvalidItem,
         Self::Refused,
         Self::BindingChanged,
+        Self::ImportAuthorityClosed,
         Self::ChunkMismatch,
         Self::RunNotOpen,
         Self::Unavailable,
@@ -204,6 +206,7 @@ impl BRegIngestionAttemptOutcome {
             Self::InvalidItem => "invalidItem",
             Self::Refused => "refused",
             Self::BindingChanged => "bindingChanged",
+            Self::ImportAuthorityClosed => "importAuthorityClosed",
             Self::ChunkMismatch => "chunkMismatch",
             Self::RunNotOpen => "runNotOpen",
             Self::Unavailable => "unavailable",
