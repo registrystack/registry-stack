@@ -3321,11 +3321,20 @@ fn validate_response_contracts(
     let exact_validator = exact_options
         .build(&exact_schema)
         .expect("the exact generated operation response schema compiles locally");
-    assert!(
-        exact_validator.is_valid(document),
-        "{project}/{} runtime response must conform to its exact generated operation schema",
-        step.id
-    );
+    if let Err(errors) = exact_validator.validate(document) {
+        let errors = errors
+            .map(|error| {
+                format!(
+                    "{error} at instance {} and schema {}",
+                    error.instance_path, error.schema_path
+                )
+            })
+            .collect::<Vec<_>>();
+        panic!(
+            "{project}/{} runtime response must conform to its exact generated operation schema: {errors:?}",
+            step.id
+        );
+    }
 
     let operation_kind = match operation.kind {
         OperationKind::List => "list",
