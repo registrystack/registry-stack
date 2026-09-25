@@ -2065,8 +2065,9 @@ fn additive_migration_plan(
         &previous.physical_names,
         &previous.actions,
     );
-    let (policy_drops, policy_creates) =
-        successor_managed_policy_delta(&previous_ddl, candidate.ddl());
+    // Automatic apply may reconcile candidate policies before executing DDL.
+    // Only retire obsolete policies here; reconciliation owns candidate creates.
+    let (policy_drops, _) = successor_managed_policy_delta(&previous_ddl, candidate.ddl());
     let mut dropped_policy_statement_ids = policy_drops
         .iter()
         .map(|statement| statement.id.clone())
@@ -2409,7 +2410,6 @@ fn additive_migration_plan(
             );
         }
     }
-    statements.extend(policy_creates);
     MigrationPlan {
         from_revision: Some(prior_package_revision.to_owned()),
         prior_baseline: Some(previous.clone()),
@@ -2544,6 +2544,13 @@ fn reviewed_successor_migration_plan(
                 .cloned(),
         );
     }
+    let previous_ddl = generate_ddl_with_actions(
+        &baseline.entities,
+        &baseline.physical_names,
+        &baseline.actions,
+    );
+    let (_, policy_creates) = successor_managed_policy_delta(&previous_ddl, candidate.ddl());
+    statements.extend(policy_creates);
     Ok(MigrationPlan {
         from_revision: Some(change_set.from_revision.clone()),
         prior_baseline: Some(baseline.clone()),
@@ -2633,11 +2640,14 @@ fn reviewed_successor_created_policies(table: &DdlTable) -> BTreeMap<&str, &DdlP
 }
 
 fn drop_policy_statement(entity_id: &str, table: &DdlTable, policy_name: &str) -> DdlStatement {
+    // A signed predecessor baseline may come from an older compiler that did
+    // not emit this reconstructed policy. Tolerate absence of this exact name;
+    // candidate catalog verification still refuses any unmanaged policies.
     DdlStatement {
         id: format!("entity.{entity_id}.policy.{policy_name}.drop"),
         kind: DdlStatementKind::Policy,
         sql: format!(
-            "DROP POLICY {} ON registry_data.{}",
+            "DROP POLICY IF EXISTS {} ON registry_data.{}",
             quote_sql_identifier(policy_name),
             quote_sql_identifier(&table.physical_name)
         ),
