@@ -450,6 +450,19 @@ impl RequestRetentionOperatorService {
             .get()
             .await
             .map_err(|_| RequestRetentionError::Unavailable)?;
+        // The request entry is accepted before the erasure transaction opens,
+        // so an audit outage erases nothing; the committed response shares
+        // its correlation.
+        let correlation = RequestCorrelation::breg_created();
+        self.audit
+            .append(retention_request_entry(
+                self.audit.profile(),
+                &self.expected,
+                scope.clone(),
+                &correlation,
+            )?)
+            .await
+            .map_err(|_| RequestRetentionError::Unavailable)?;
         let transaction = self.begin_verified_transaction(&mut client).await?;
         let plan = load_erasure_plan(&transaction, &self.registry, scope.clone(), true).await?;
         let (erasure, current_revision) =
@@ -476,8 +489,13 @@ impl RequestRetentionOperatorService {
             .await
             .map_err(map_history_commit_error)?;
         }
-        let entry =
-            retention_terminal_entry(self.audit.profile(), &self.expected, scope.clone(), erasure)?;
+        let entry = retention_terminal_entry(
+            self.audit.profile(),
+            &self.expected,
+            scope.clone(),
+            erasure,
+            correlation,
+        )?;
         transaction
             .commit()
             .await
@@ -1401,20 +1419,61 @@ async fn set_request_table_force_row_security(
 
 /// Build the `response` entry for one request-detail erasure. The caller
 /// appends it after the erasure transaction commits.
-fn retention_terminal_entry(
+fn retention_record_reference(
     profile: &AuditProfile,
     expected: &ExpectedRegistryIdentity,
-    scope: RequestDetailErasureScope<'_>,
-    erasure: RequestDetailErasure,
-) -> Result<AuditEntry> {
-    let record_reference = profile
+    scope: &RequestDetailErasureScope<'_>,
+) -> Result<String> {
+    profile
         .key_hasher()
         .audit_reference_hash(
             "breg-record-v1",
             &expected.package_revision,
             &scope.request_id.to_string(),
         )
-        .map_err(|_| RequestRetentionError::Unavailable)?;
+        .map_err(|_| RequestRetentionError::Unavailable)
+}
+
+/// The `request` entry of one request-detail erasure. It names only what the
+/// erasure's `response` entry already records: the operation, the package
+/// revision, the operator profile, and the keyed record reference.
+fn retention_request_entry(
+    profile: &AuditProfile,
+    expected: &ExpectedRegistryIdentity,
+    scope: RequestDetailErasureScope<'_>,
+    correlation: &RequestCorrelation,
+) -> Result<AuditEntry> {
+    if !crate::audit::profile_is_keyed(profile) {
+        return Err(RequestRetentionError::Unavailable);
+    }
+    let record_reference = retention_record_reference(profile, expected, &scope)?;
+    Ok(AuditEntry::request(
+        crate::audit::AUDIT_SCHEMA,
+        correlation.request_id().to_string(),
+        serde_json::json!({
+            "phase": "attempt",
+            "method": "DELETE",
+            "operationId": RETENTION_OPERATION_ID,
+            "entityId": scope.request_entity_id,
+            "requestId": correlation.request_id().to_string(),
+            "traceId": correlation.trace_id().as_str(),
+            "packageRevision": expected.package_revision,
+            "selectedAccessProfile": "operator",
+            "purposePresent": false,
+            "principalReference": null,
+            "recordReference": record_reference,
+        }),
+    ))
+}
+
+fn retention_terminal_entry(
+    profile: &AuditProfile,
+    expected: &ExpectedRegistryIdentity,
+    scope: RequestDetailErasureScope<'_>,
+    erasure: RequestDetailErasure,
+    correlation: RequestCorrelation,
+) -> Result<AuditEntry> {
+    let record_reference = retention_record_reference(profile, expected, &scope)?;
     let count = erasure
         .proposal_snapshots
         .checked_add(erasure.target_snapshots)
@@ -1447,7 +1506,7 @@ fn retention_terminal_entry(
                 usize::try_from(count).map_err(|_| RequestRetentionError::Unavailable)?,
             ),
             field_set_reference: Some(RETENTION_REFERENCE.to_owned()),
-            correlation: RequestCorrelation::breg_created(),
+            correlation,
         },
     )
     .map_err(|_| RequestRetentionError::Unavailable)
