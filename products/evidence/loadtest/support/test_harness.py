@@ -144,6 +144,8 @@ class EvidenceHarnessTests(unittest.TestCase):
         self.assertIn("'http_reqs{status:429}': ['count==0']", steady)
         self.assertIn("recovery:", burst)
         self.assertIn("'http_req_failed{scenario:recovery}'", burst)
+        self.assertIn("checks: ['rate>0.99']", burst)
+        self.assertIn("'checks{scenario:recovery}': ['rate==1']", burst)
         self.assertIn("'http_reqs{status:429}': ['count>0']", limiter)
         self.assertIn("--http-debug | --http-debug=* | --system-tags | --system-tags=*", runner)
         self.assertIn("K6_HTTP_DEBUG", runner)

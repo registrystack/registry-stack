@@ -133,6 +133,8 @@ class RegistryCaseworkHarnessTests(unittest.TestCase):
         self.assertIn("executor: 'constant-arrival-rate'", steady)
         self.assertIn("recovery:", burst)
         self.assertIn("'http_req_failed{scenario:recovery}'", burst)
+        self.assertIn("checks: ['rate>0.99']", burst)
+        self.assertIn("'checks{scenario:recovery}': ['rate==1']", burst)
         self.assertIn("RANDOM_SEED", workload)
         self.assertNotIn("Math.random", workload)
         self.assertIn("--http-debug|--http-debug=*|--system-tags|--system-tags=*", runner)
