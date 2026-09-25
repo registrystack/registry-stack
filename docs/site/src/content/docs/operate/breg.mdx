@@ -399,7 +399,8 @@ runtime file's `identity.databaseInitializationEnvironment` is `local`, and `bre
     crates/registry-bregctl/src/doctor.rs, startup_diagnostic(). */}
 
 `issuer` must be an `https` URL without credentials, query, or fragment; plain `http` is accepted
-only on an IPv4 loopback host, for local development. `audience` is at most 512 characters. `jwksSource`
+only on an IPv4 loopback host, for local development or an issuer or proxy the operator runs on the
+same host. Use an `https` issuer in production. `audience` is at most 512 characters. `jwksSource`
 takes one of three kinds: `discovery` (the default) reads the key set location from the issuer's
 discovery document, `uri` names it directly with a `uri` member under the same URL rule, and
 `static` pins a document through `documentRef`.
