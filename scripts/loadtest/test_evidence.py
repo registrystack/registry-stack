@@ -167,7 +167,7 @@ class EvidenceTests(unittest.TestCase):
                     )
                     self.assertIs(json.loads(out.read_text(encoding="utf-8"))["pass"], passed)
 
-    def test_summary_fails_when_the_wait_sampler_stopped_early_or_recorded_nothing(self) -> None:
+    def test_summary_fails_when_the_wait_sampler_stopped_early(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             manifest = root / "manifest.json"
@@ -190,10 +190,12 @@ class EvidenceTests(unittest.TestCase):
             samples = root / "samples.json"
             samples.write_text("", encoding="utf-8")
             sample = json.dumps({"auditLockWaiters": 0, "lockWaiters": 0, "blockedBackends": 0}) + "\n"
-            for name, waits, sampler_exit_code, passed in (
-                ("sampled", sample, 0, True),
-                ("no samples", "", 0, False),
-                ("sampler failed", sample, 2, False),
+            # A run shorter than the first sample passes, but reports its wait
+            # peaks as unknown rather than as zero contention.
+            for name, waits, sampler_exit_code, passed, peak in (
+                ("sampled", sample, 0, True, 0),
+                ("no samples", "", 0, True, None),
+                ("sampler failed", sample, 2, False, 0),
             ):
                 with self.subTest(name):
                     db_waits = root / "db-waits.jsonl"
@@ -215,6 +217,7 @@ class EvidenceTests(unittest.TestCase):
                     result = json.loads(out.read_text(encoding="utf-8"))
                     self.assertEqual(result["database"]["waits"]["samplerExitCode"], sampler_exit_code)
                     self.assertIs(result["pass"], passed)
+                    self.assertEqual(result["database"]["waits"]["lockWaitersPeak"], peak)
 
     def test_safety_check_rejects_secret_record_id_and_unsafe_sample_tag(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
