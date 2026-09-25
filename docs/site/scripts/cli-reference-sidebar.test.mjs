@@ -41,10 +41,10 @@ test('seats every published command page in command order', async (t) => {
   await writeFile(index, page('CLI reference'));
   await writeFile(resolve(root, 'breg.mdx'), page('breg command reference'));
   await writeFile(resolve(root, 'bregctl.mdx'), page('bregctl command reference'));
-  await mkdir(resolve(root, 'bregctl/audit'), { recursive: true });
-  await writeFile(resolve(root, 'bregctl/audit.mdx'), page('bregctl audit command reference'));
-  await writeFile(resolve(root, 'bregctl/audit/verify.mdx'), page('bregctl audit verify'));
-  await writeFile(resolve(root, 'bregctl/audit/export.mdx'), page('bregctl audit export'));
+  await mkdir(resolve(root, 'bregctl/data'), { recursive: true });
+  await writeFile(resolve(root, 'bregctl/data.mdx'), page('bregctl data command reference'));
+  await writeFile(resolve(root, 'bregctl/data/import.mdx'), page('bregctl data import'));
+  await writeFile(resolve(root, 'bregctl/data/export.mdx'), page('bregctl data export'));
   await writeFile(resolve(root, 'bregctl/check.mdx'), page('bregctl check command reference'));
   // A draft page is absent from the built site, so it must take no seat.
   await writeFile(resolve(root, 'bregctl/doctor.mdx'), draftPage('bregctl doctor'));
@@ -57,9 +57,9 @@ test('seats every published command page in command order', async (t) => {
     { label: 'Overview', slug: 'reference/cli' },
     { label: 'breg', slug: 'reference/cli/breg' },
     { label: 'bregctl', slug: 'reference/cli/bregctl' },
-    { label: 'bregctl audit', slug: 'reference/cli/bregctl/audit' },
-    { label: 'bregctl audit export', slug: 'reference/cli/bregctl/audit/export' },
-    { label: 'bregctl audit verify', slug: 'reference/cli/bregctl/audit/verify' },
     { label: 'bregctl check', slug: 'reference/cli/bregctl/check' },
+    { label: 'bregctl data', slug: 'reference/cli/bregctl/data' },
+    { label: 'bregctl data export', slug: 'reference/cli/bregctl/data/export' },
+    { label: 'bregctl data import', slug: 'reference/cli/bregctl/data/import' },
   ]);
 });

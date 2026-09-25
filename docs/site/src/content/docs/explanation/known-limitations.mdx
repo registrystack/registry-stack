@@ -118,6 +118,9 @@ the product does not do.
 - PostgreSQL only: the store is a PostgreSQL database with the `btree_gist` extension installed,
   plus PostGIS where the registry declares spatial fields. There is no SQLite, other SQL engine,
   file, or HTTP source, and no adapter layer to add one.
+- Audit is outside PostgreSQL: each process writes its own file or stdout stream. A crash after a
+  mutation commits can leave a request entry without its response. Revision history still records
+  the change; external append-only storage supplies audit tamper evidence and completeness.
 - Every production change is a signed package: a one-line access widening goes through `check`,
   `test` against a schema-test database, `package`, external signing, and `apply`. No runtime
   administration API edits access rules, record shapes, or webhook destinations, and nothing hot
@@ -468,8 +471,10 @@ Read the full security boundary in the [security model](../../spec/rs-sec-g/).
   rate limiting, deployment configuration, and incident response are operator responsibilities,
   not behaviors the stack guarantees.
 - Audit retention is not audit completeness: the local audit log of Evidence, Relay, Render,
-  Casework, and Scheduling is not chained or signed, so it detects neither edits nor deletion, and
-  each runtime deletes sealed files after `retainDays`. None of them ships sealed history for you;
+  Base Registry Engine, Casework, and Scheduling is not chained or signed, so it provides no
+  cryptographic tamper evidence for retained history. A running writer detects external changes to
+  its active file and fails closed, while each runtime deletes sealed files after `retainDays`.
+  None of them ships sealed history for you;
   tamper evidence and completeness come only from the append-only storage the operator ships audit
   entries to.
 - Demo and template code is not a production profile: Demo helper code and generated workflow

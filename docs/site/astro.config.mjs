@@ -576,6 +576,7 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'API contract', slug: 'reference/apis/registry-scheduling' },
+            { label: 'Audit upgrades and retention', slug: 'operate/retention-and-persistent-state' },
             ...openAPISidebarGroups.slice(2, 3),
           ],
         }] : []),
@@ -604,7 +605,7 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'operate/advanced' },
             { label: 'Operator handoff', slug: 'operate' },
-            { label: 'Verify the Evidence audit chain', slug: 'operate/evidence-audit' },
+            { label: 'Operate the Evidence audit log', slug: 'operate/evidence-audit' },
             { label: 'Rotate Evidence signing keys', slug: 'tutorials/rotate-evidence-signing-keys' },
             { label: 'Rotate credentials and trust', slug: 'operate/advanced/rotate-credentials-and-trust' },
             { label: 'Inspect and diagnose', slug: 'operate/advanced/inspect-and-diagnose' },

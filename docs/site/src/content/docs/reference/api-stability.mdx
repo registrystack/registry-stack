@@ -211,10 +211,14 @@ The promise is machine-checked where a checker exists:
   Evidence Gateway binaries, verifies them against the signed `SHA256SUMS` as `release/VERIFY.md`
   describes, and writes records, review work, and audit entries with them against disposable
   PostgreSQL. It then runs the upgrade steps with the binaries built from the pull request and
-  fails when any captured view is served differently or any table holds fewer rows. It refuses to
+  fails when captured domain data or stored revisions change, other captured views differ, or
+  retained tables lose rows. BReg rebuilds and applies a successor before serving; its
+  package-bound ETags may change. Audit
+  tables retired by this breaking upgrade must first be preserved in an archive whose row counts
+  are checked. Old audit files are preserved separately from the new entry stream. It refuses to
   start from a release before `v0.33.0`. Scheduling state is not rehearsed.
 
-{/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, fetch_release(), view_differences(), row_count_losses(), and check_forward_path(). */}
+{/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, fetch_release(), breg_view_differences(), view_differences(), row_count_losses(), and check_forward_path(). */}
 
 A change that a gate flags as breaking lands only in a release whose version number permits
 it, together with the deprecation and migration steps required by the

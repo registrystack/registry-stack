@@ -45,8 +45,9 @@ on your machine.
 
 ## What it does not need
 
-The process keeps no local state: the records, their history, the audit journal, the pending
-change requests, and the outbox of undelivered events all live in PostgreSQL. Webhook delivery
+Records, their history, pending change requests, and the outbox of undelivered events live in
+PostgreSQL. The default audit destination needs a writable local directory per process; alternatively,
+collect the best-effort `stdout` stream through your platform. Webhook delivery
 runs inside the process from that outbox, so there is no message broker. No cache, object store,
 or second service takes part in a request. Registry Relay and Evidence Gateway are separate
 products, not dependencies.
@@ -64,7 +65,7 @@ binaries, with an installer that verifies them against the release checksums and
 together or not at all. Each release also publishes a
 container image built on a distroless base with no shell,
 running as a non-root user, that holds the runtime binary and nothing else; configuration, package,
-trust anchor, and secrets mount read-only into it.
+trust anchor, and secrets mount read-only into it. File audit needs a separate writable volume.
 
 The release ships no Helm chart, Compose file, or hosted offering. Scheduling, TLS termination,
 and the proxy in front of the listener are yours. The Docker use in the first tutorial is a
@@ -88,8 +89,9 @@ additive needs no more; one it marks for review needs a reviewed migration with 
 destructive one names its backup. A failed activation holds the database in maintenance until you
 reconcile or restore.
 
-**The audit journal.** Every admitted request appends a hash-chained record in PostgreSQL. You
-verify the chain, export it, and prune it; a prune keeps no copy, so export first.
+**The audit journal.** Each audited request writes minimized entries through a file or stdout writer.
+You ship the streams from every process to append-only storage and verify delivery before local
+retention expires. The product does not provide tamper evidence.
 
 **Retention and erasure.** Erasing a record's history is a bounded operator command with no undo.
 It removes at most 10,000 revisions per transaction, and restoring snapshot coverage afterwards is
@@ -99,7 +101,7 @@ at most 30.
 
 {/* Evidence: crates/registry-breg/src/runtime_config.rs, AuditConfig, CursorConfig, DatabaseConfig,
     and MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS; crates/registry-bregctl/src/lib.rs, ApplyArgs and MigrationCommand;
-    crates/registry-breg/src/migration_reconcile.rs; crates/registry-breg/src/audit_tooling.rs;
+    crates/registry-breg/src/migration_reconcile.rs; crates/registry-breg/src/audit.rs;
     crates/registry-breg/src/history_erasure.rs, MAX_ERASURE_REVISIONS;
     crates/registry-breg/src/history_rebaseline.rs, MAX_REBASELINE_LIVE_ROWS. */}
 
