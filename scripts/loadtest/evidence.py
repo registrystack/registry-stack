@@ -389,7 +389,26 @@ def summarize(arguments: argparse.Namespace) -> None:
 
 def aggregate_sweep(arguments: argparse.Namespace) -> None:
     rows = []
-    for path in sorted(arguments.root.glob("rate-*/result.json")):
+    # Every held rate leaves a directory; one without a result (k6 crashed or
+    # summarize failed) is a failed rate, never a silently skipped one.
+    for directory in sorted(path for path in arguments.root.glob("rate-*") if path.is_dir()):
+        path = directory / "result.json"
+        if not path.is_file():
+            rows.append(
+                {
+                    "offeredOperationsPerSecond": float(directory.name.removeprefix("rate-")),
+                    "achievedOperationsPerSecond": None,
+                    "httpRequestsPerSecond": None,
+                    "droppedOperations": None,
+                    "failedRequestRate": None,
+                    "p95Ms": None,
+                    "p99Ms": None,
+                    "pass": False,
+                    "missing": True,
+                    "artifact": directory.name,
+                }
+            )
+            continue
         result = _json_object(path)
         rate = float(result["offered"]["rateOps"])
         rows.append(
@@ -402,12 +421,17 @@ def aggregate_sweep(arguments: argparse.Namespace) -> None:
                 "p95Ms": result["latency"]["overall"]["p95Ms"],
                 "p99Ms": result["latency"]["overall"]["p99Ms"],
                 "pass": result["pass"],
-                "artifact": str(path.parent.relative_to(arguments.root)),
+                "missing": False,
+                "artifact": directory.name,
             }
         )
     rows.sort(key=lambda row: row["offeredOperationsPerSecond"])
     knee = next((row["offeredOperationsPerSecond"] for row in rows if not row["pass"]), None)
-    _write_json(arguments.out, {"schemaVersion": 1, "profile": "sweep", "firstFailingRate": knee, "rates": rows})
+    passed = bool(rows) and all(row["pass"] is True for row in rows)
+    _write_json(
+        arguments.out,
+        {"schemaVersion": 1, "profile": "sweep", "pass": passed, "firstFailingRate": knee, "rates": rows},
+    )
 
 
 def assert_safe(arguments: argparse.Namespace) -> None:

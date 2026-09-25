@@ -134,7 +134,8 @@ Each measured run gets an owner-only directory under `.run/results/` with:
   response bodies were not persisted.
 
 The sweep also creates `sweep-result.json`, including the first held rate that
-failed its thresholds. The warmup is excluded from measurement. The stock dev
+failed its thresholds and an overall `pass`. A held rate that left no
+`result.json` is recorded as failed with `missing: true`. The warmup is excluded from measurement. The stock dev
 database does not enable `pg_stat_statements`, so this harness does not claim
 per-statement timings.
 
