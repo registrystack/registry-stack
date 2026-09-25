@@ -457,6 +457,15 @@ impl PackageError {
     pub fn root(&self) -> &Path {
         &self.root
     }
+
+    /// Name the package by `label`, such as the field `package.root`, instead
+    /// of its directory, for a product whose refusals never carry a
+    /// configured value.
+    #[must_use]
+    pub fn naming_root_as(mut self, label: &str) -> Self {
+        self.root = PathBuf::from(label);
+        self
+    }
 }
 
 impl fmt::Display for PackageError {
