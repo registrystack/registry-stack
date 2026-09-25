@@ -170,6 +170,7 @@ pub async fn erase_record_history_with_connection(
 /// Run one targeted historical erasure through an already opened migration
 /// connection. The transaction uses the exclusive Registry advisory lock, then
 /// the commit-head row, preserving the runtime lock order. The erasure's
+/// `request` entry is accepted before the transaction opens, and its
 /// `response` entry is appended after the transaction commits.
 pub async fn erase_record_history(
     client: &mut Client,
@@ -199,6 +200,16 @@ async fn erase_record_history_scoped(
 ) -> Result<HistoryErasureOutcome, HistoryErasureError> {
     validate_request(&request)?;
     verify_migration_role(client, request.migration_role).await?;
+    // A standalone erasure's request entry is accepted before its
+    // transaction opens, so an audit outage erases nothing. A lifecycle
+    // erasure runs under the request entry its parent lifecycle appended.
+    if lifecycle_reference.is_none() {
+        append_maintenance_entries(
+            request.audit,
+            vec![history_erasure_request_entry(&request)?],
+        )
+        .await?;
+    }
 
     let transaction = client
         .transaction()
@@ -606,25 +617,29 @@ fn lifecycle_target_record_reference(
         .map_err(|_| HistoryErasureError::InvalidInput)
 }
 
-/// Build the erasure's `response` entry, correlated by the parent lifecycle
-/// reference or, for a standalone erasure, by its keyed target reference.
-fn history_erasure_entry(
+/// The keyed operator, target, and reason references one erasure's entries
+/// carry instead of the values they name.
+struct ErasureReferences {
+    operator: String,
+    target: String,
+    reason: String,
+}
+
+fn erasure_references(
     request: &HistoryErasureRequest<'_>,
-    outcome: &HistoryErasureOutcome,
-    lifecycle_reference: Option<&str>,
-) -> Result<AuditEntry, HistoryErasureError> {
+) -> Result<ErasureReferences, HistoryErasureError> {
     if !profile_is_keyed(request.audit.profile()) {
         return Err(HistoryErasureError::InvalidInput);
     }
     let key_hasher = request.audit.profile().key_hasher();
-    let operator_reference = key_hasher
+    let operator = key_hasher
         .audit_reference_hash(
             "breg-history-erasure-operator-v1",
             &request.expected.package_revision,
             request.operator_reference,
         )
         .map_err(|_| HistoryErasureError::InvalidInput)?;
-    let target_reference = key_hasher
+    let target = key_hasher
         .audit_reference_hash(
             "breg-history-erasure-target-v1",
             &request.expected.package_revision,
@@ -636,13 +651,54 @@ fn history_erasure_entry(
             ),
         )
         .map_err(|_| HistoryErasureError::InvalidInput)?;
-    let reason_reference = key_hasher
+    let reason = key_hasher
         .audit_reference_hash(
             "breg-history-erasure-reason-v1",
             &request.expected.package_revision,
             request.reason,
         )
         .map_err(|_| HistoryErasureError::InvalidInput)?;
+    Ok(ErasureReferences {
+        operator,
+        target,
+        reason,
+    })
+}
+
+/// Build a standalone erasure's `request` entry, correlated by its keyed
+/// target reference as its `response` entry is. It names only the references
+/// that response entry already records.
+fn history_erasure_request_entry(
+    request: &HistoryErasureRequest<'_>,
+) -> Result<AuditEntry, HistoryErasureError> {
+    let references = erasure_references(request)?;
+    Ok(AuditEntry::request(
+        HISTORY_ERASURE_AUDIT_SCHEMA,
+        references.target.clone(),
+        json!({
+            "phase": "attempt",
+            "outcome": "started",
+            "operationId": AUDIT_OPERATION_ID,
+            "packageRevision": request.expected.package_revision,
+            "operatorReference": references.operator,
+            "targetReference": references.target,
+            "reasonReference": references.reason,
+        }),
+    ))
+}
+
+/// Build the erasure's `response` entry, correlated by the parent lifecycle
+/// reference or, for a standalone erasure, by its keyed target reference.
+fn history_erasure_entry(
+    request: &HistoryErasureRequest<'_>,
+    outcome: &HistoryErasureOutcome,
+    lifecycle_reference: Option<&str>,
+) -> Result<AuditEntry, HistoryErasureError> {
+    let ErasureReferences {
+        operator: operator_reference,
+        target: target_reference,
+        reason: reason_reference,
+    } = erasure_references(request)?;
     let mut record = json!({
         "phase": "terminal",
         "outcome": "committed",

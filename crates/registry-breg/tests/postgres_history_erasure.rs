@@ -89,7 +89,7 @@ use registry_breg::field_encryption_backfill::{
     FieldEncryptionHistoryErasureRequest, FIELD_ENCRYPTION_AUDIT_SCHEMA,
 };
 use registry_breg::history_erasure::{
-    erase_record_history, HistoryErasureRequest, HistoryErasureTimeouts,
+    erase_record_history, HistoryErasureError, HistoryErasureRequest, HistoryErasureTimeouts,
     RecordHistoryErasureTarget, HISTORY_ERASURE_AUDIT_SCHEMA,
 };
 use registry_breg::mutation::install_mutation_schema;
@@ -1577,6 +1577,86 @@ async fn prebaseline_unindexed_revision_is_erased_and_marks_coverage_unready() {
     database.cleanup().await;
 }
 
+/// A standalone erasure appends its request entry before its transaction
+/// opens: a writer that refuses that entry answers an outage and deletes,
+/// scrubs, and narrows nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn erasure_changes_nothing_when_the_audit_writer_refuses_its_request_entry() {
+    let database = TestDatabase::create(4).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let registry = compiled_registry();
+    let expected = install_ready_history_registry(&database, &mut migration, &registry).await;
+    let lock_key = RegistryLockKey::derive(&expected.package_id).expect("lock key derives");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x75; 32].into())
+        .expect("test owns a keyed audit profile");
+    let record_id = Uuid::parse_str("018feaa0-68f9-4a45-b9e3-58436df07afb").unwrap();
+
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("migration can begin transaction");
+    insert_revision(&transaction, record_id, 1, OLD_PACKAGE, "migration").await;
+    transaction.commit().await.expect("revision commits");
+    let coverage_before: (bool, Option<i64>) = {
+        let row = migration
+            .query_one(
+                "SELECT coverage_ready, unavailable_after_position
+                   FROM registry_internal.registry_commit_head WHERE singleton",
+                &[],
+            )
+            .await
+            .expect("coverage head reads");
+        (row.get(0), row.get(1))
+    };
+
+    database.audit_capture().fail_after(0);
+    let refused = erase_record_history(
+        &mut migration,
+        HistoryErasureRequest {
+            expected: &expected,
+            migration_role: &database.migration_role,
+            lock_key,
+            timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
+                .unwrap(),
+            audit: &database.audit(audit_profile.clone()),
+            operator_reference: "operator-run-refused",
+            reason: "refused retention request",
+            target: RecordHistoryErasureTarget::new(ENTITY, record_id, 1),
+        },
+    )
+    .await
+    .expect_err("a refused request entry refuses the erasure");
+    database.audit_capture().restore();
+    assert_eq!(refused, HistoryErasureError::Unavailable);
+
+    let retained: i64 = migration
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_revisions
+              WHERE entity_id = $1 AND record_id = $2",
+            &[&ENTITY, &record_id],
+        )
+        .await
+        .expect("retained revisions count")
+        .get(0);
+    assert_eq!(retained, 1);
+    let coverage_after: (bool, Option<i64>) = {
+        let row = migration
+            .query_one(
+                "SELECT coverage_ready, unavailable_after_position
+                   FROM registry_internal.registry_commit_head WHERE singleton",
+                &[],
+            )
+            .await
+            .expect("coverage head reads");
+        (row.get(0), row.get(1))
+    };
+    assert_eq!(coverage_after, coverage_before);
+    assert!(database.audit_entries().is_empty());
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sparse_high_revision_number_erases_when_actual_target_count_is_bounded() {
     let database = TestDatabase::create(4).await;
@@ -2241,14 +2321,23 @@ fn field_encryption_terminal_entries(database: &TestDatabase) -> Vec<serde_json:
         .collect()
 }
 
-/// An erasure writes exactly one post-commit response entry, and it carries
-/// no erased value, reason, or operator.
+/// An erasure writes one request entry before its transaction and one
+/// response entry after its commit, under one correlation, and neither
+/// carries an erased value, reason, or operator.
 fn assert_erasure_audit_is_minimized(database: &TestDatabase) {
     let entries = database.audit_entries();
-    assert_eq!(entries.len(), 1);
+    assert_eq!(entries.len(), 2);
     assert_eq!(entries[0]["schema"], HISTORY_ERASURE_AUDIT_SCHEMA);
-    assert_eq!(entries[0]["phase"], "response");
-    let audit_text = entries[0].to_string();
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[0]["record"]["phase"], "attempt");
+    assert_eq!(entries[1]["schema"], HISTORY_ERASURE_AUDIT_SCHEMA);
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
+    assert_eq!(
+        entries[0]["record"]["targetReference"],
+        entries[1]["record"]["targetReference"]
+    );
+    let audit_text = serde_json::Value::Array(entries).to_string();
     assert!(audit_text.contains("history-erasure-maintenance"));
     assert!(audit_text.contains("saved_exports_event_consumers_and_backups"));
     assert!(!audit_text.contains(RECORD_CANARY));
