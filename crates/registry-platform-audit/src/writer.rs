@@ -340,7 +340,20 @@ impl FileDestination {
         }
         match fs::symlink_metadata(&self.path) {
             Ok(metadata) if metadata.file_type().is_symlink() => Err(symlink_error()),
-            Ok(metadata) => validate_active_metadata(&metadata),
+            Ok(metadata) => {
+                validate_active_metadata(&metadata)?;
+                // The writer opens the active file for read and append.
+                rustix::fs::access(
+                    &self.path,
+                    rustix::fs::Access::READ_OK | rustix::fs::Access::WRITE_OK,
+                )
+                .map_err(|_| {
+                    AuditError::Io(io::Error::new(
+                        ErrorKind::PermissionDenied,
+                        "audit file is not readable and writable",
+                    ))
+                })
+            }
             Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
             Err(error) => Err(AuditError::Io(error)),
         }
@@ -2002,6 +2015,42 @@ mod tests {
             .expect("absolute")
             .check_writable()
             .expect_err("group-readable audit file");
+    }
+
+    #[test]
+    fn check_writable_refuses_an_existing_file_the_writer_cannot_append_to() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path.parent().expect("parent"))
+            .expect("audit directory");
+        fs::write(&path, "").expect("file");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).expect("mode");
+        destination
+            .check_writable()
+            .expect_err("read-only audit file");
+    }
+
+    #[test]
+    fn check_writable_refuses_a_missing_directory_below_an_unusable_ancestor() {
+        let directory = directory();
+        let file = directory.path().join("file");
+        fs::write(&file, "").expect("file");
+        FileDestination::new(file.join("audit").join("audit.jsonl"))
+            .expect("absolute")
+            .check_writable()
+            .expect_err("ancestor is a regular file");
+
+        let unsearchable = directory.path().join("unsearchable");
+        fs::create_dir(&unsearchable).expect("dir");
+        fs::set_permissions(&unsearchable, fs::Permissions::from_mode(0o600)).expect("mode");
+        let refused = FileDestination::new(unsearchable.join("audit").join("audit.jsonl"))
+            .expect("absolute")
+            .check_writable();
+        fs::set_permissions(&unsearchable, fs::Permissions::from_mode(0o700)).expect("mode");
+        refused.expect_err("ancestor cannot be searched");
     }
 
     #[tokio::test]
