@@ -6038,7 +6038,6 @@ dependencies = [
  "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-httpsec",
- "registry-platform-testing",
  "rustix 1.1.5",
  "serde",
  "serde_json",
@@ -6055,7 +6054,7 @@ dependencies = [
  "typst",
  "typst-assets",
  "typst-pdf",
- "zeroize",
+ "uuid",
 ]
 
 [[package]]

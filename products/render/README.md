@@ -9,15 +9,15 @@ library.
 > returns the identical PDF every time, with the hashes and audit events an
 > institution needs to stand behind the printed artifact.
 
-Render is a **pure function**: data in, PDF out. Two secret files in serve
-mode (caller API key, audit chain key), no database, no outbound calls. It
-runs three ways with the same guarantees:
+Render is a **pure function**: data in, PDF out. One secret file in serve
+mode (the caller API key), no database, no outbound calls. It runs three ways
+with the same guarantees:
 
 - **CLI** — `registry-render compile --bundle … --data … --issued-at … --out …`,
   offline, zero config: branch printing, template authoring, CI.
 - **Service** — `registry-render serve`: one POST endpoint (`/v1/render/{type}`),
-  API-key auth, supervised worker processes, a keyed hash-chained audit
-  ledger appended before every response.
+  API-key auth, supervised worker processes, and value-free audit entries
+  written before every render and before every response.
 - **Library** — `registry_render::render(bundle, document, request)` for
   embedding.
 
@@ -74,7 +74,7 @@ exits 101):
 | 16 | `render-panicked` | render worker panicked; the worker is recycled |
 | 17 | `unauthorized` | missing or wrong API key (serve, HTTP 401) |
 | 18 | `rate-limited` | caller exceeded a limit (reserved; HTTP 429) |
-| 19 | `audit-failed` | audit ledger refused or failed (fail closed) |
+| 19 | `audit-failed` | audit destination refused or failed (fail closed) |
 | 20 | `runtime-invalid` | serve runtime configuration invalid |
 | 21 | `internal` | internal invariant broke; never carries data |
 | 22 | `body-too-large` | request body over the configured ceiling (serve, HTTP 413) |
@@ -94,6 +94,15 @@ exits 101):
   once, and Typst consumes those exact verified bytes.
 - **Resource-bounded**: serves render in a supervised worker process,
   killed at the timeout, memory-capped on Linux, recycled on panic.
-- **Auditable**: one value-free event per service render (hashes, versions,
-  caller fingerprint, trace/correlation ids — never data), appended before
-  the response, failing closed. `registry-render audit-verify` proves the chain.
+- **Auditable**: value-free events (hashes, versions, caller fingerprint,
+  trace/correlation ids, never data) written through the shared Registry
+  Stack audit writer. A render writes a `request` entry before the worker
+  starts and a `response` entry with the outcome before the document leaves,
+  both failing closed; a refusal before any render is one `response` entry.
+  Each line is the envelope `{schema, eventId, time, phase, correlation,
+  record}` with schema `render.registrystack.org/audit/v1`; `correlation` is
+  the caller's `Idempotency-Key`, or a random id when there is none. The
+  runtime's `audit` block names a `file` (the default, with `path` and
+  optional `rotateBytes` and `retainDays`) or `stdout` destination. The log
+  carries no hash chain or signature, so it is not tamper-evident on the
+  host; ship it to append-only storage when that matters.

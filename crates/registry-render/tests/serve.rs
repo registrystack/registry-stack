@@ -1,15 +1,15 @@
 //! End-to-end serve tests: the real `registry-render` binary serving real
-//! requests, spawning real supervised workers, writing a real keyed audit
-//! ledger. These tests are the DoD's serve-mode acceptance coverage.
+//! requests, spawning real supervised workers, writing a real audit file
+//! through the platform audit writer. These tests are the DoD's serve-mode
+//! acceptance coverage.
 
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
 
 const API_KEY: &str = "test-key-0123456789abcdef0123456789abcdef";
-const AUDIT_KEY: &str = "audit-key-0123456789abcdef0123456789abcd";
 
 const DEFAULT_LIMITS: &str = "limits:\n  renderTimeoutSeconds: 20\n  maxOutputBytes: 8388608\n  maxRequestBodyBytes: 8388608\n  maxConcurrency: 2\n";
 
@@ -72,20 +72,19 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
-/// Build a deployment home: sealed receipt bundle, key files, audit dir,
+/// Build a deployment home: sealed receipt bundle, key file, audit dir,
 /// runtime.yaml. Returns (home, runtime_path, port).
 fn deployment(limits: &str, bundle_source: &Path) -> (PathBuf, PathBuf, u16) {
     let (home_guard, home) = physical_tempdir();
     let bundle = home.join("bundle");
     copy_dir(bundle_source, &bundle);
     write_secret(&home.join("api.key"), API_KEY);
-    write_secret(&home.join("audit.key"), AUDIT_KEY);
     std::fs::create_dir(home.join("audit")).unwrap();
     let port = free_port();
     let runtime = format!(
-        "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nserver:\n  bind: 127.0.0.1:{port}\n  shutdownGraceSeconds: 5\nbundle:\n  path: {}\nauth:\n  apiKeyRef: secret:file/api.key\n{limits}audit:\n  directory: {}\n  integrityKeyRef: secret:file/audit.key\n",
+        "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nserver:\n  bind: 127.0.0.1:{port}\n  shutdownGraceSeconds: 5\nbundle:\n  path: {}\nauth:\n  apiKeyRef: secret:file/api.key\n{limits}audit:\n  path: {}\n",
         bundle.display(),
-        home.join("audit").display()
+        audit_file(&home).display()
     );
     let runtime_path = home.join("runtime.yaml");
     std::fs::write(&runtime_path, runtime).unwrap();
@@ -93,17 +92,44 @@ fn deployment(limits: &str, bundle_source: &Path) -> (PathBuf, PathBuf, u16) {
     (home, runtime_path, port)
 }
 
+fn audit_file(home: &Path) -> PathBuf {
+    home.join("audit").join("render.jsonl")
+}
+
+/// Point a deployment's audit at standard output instead of its file.
+fn audit_to_stdout(home: &Path, runtime_path: &Path) {
+    let text = std::fs::read_to_string(runtime_path).unwrap();
+    let text = text.replace(
+        &format!("  path: {}\n", audit_file(home).display()),
+        "  destination: stdout\n",
+    );
+    assert!(text.contains("destination: stdout"), "{text}");
+    std::fs::write(runtime_path, text).unwrap();
+}
+
 fn start_server(runtime_path: &Path) -> Server {
     start_server_at(runtime_path, None)
 }
 
 fn start_server_at(runtime_path: &Path, current_dir: Option<&Path>) -> Server {
+    spawn_server(runtime_path, current_dir, Stdio::null())
+}
+
+/// Start a server whose standard output the test reads: the audit stream
+/// of a `stdout` destination.
+fn start_server_with_stdout(runtime_path: &Path) -> (Server, ChildStdout) {
+    let mut server = spawn_server(runtime_path, None, Stdio::piped());
+    let stdout = server.child.stdout.take().expect("piped stdout");
+    (server, stdout)
+}
+
+fn spawn_server(runtime_path: &Path, current_dir: Option<&Path>, stdout: Stdio) -> Server {
     let mut command = Command::new(env!("CARGO_BIN_EXE_registry-render"));
     command
         .arg("serve")
         .arg("--runtime")
         .arg(runtime_path)
-        .stdout(Stdio::null())
+        .stdout(stdout)
         .stderr(Stdio::null());
     if let Some(dir) = current_dir {
         command.current_dir(dir);
@@ -285,13 +311,12 @@ fn relative_runtime_paths_anchor_to_the_runtime_files_directory() {
     let deploy = home.join("deploy");
     std::fs::create_dir_all(&deploy).unwrap();
     write_secret(&deploy.join("api.key"), API_KEY);
-    write_secret(&deploy.join("audit.key"), AUDIT_KEY);
     std::fs::create_dir(home.join("audit")).unwrap();
     let port = free_port();
     std::fs::write(
         deploy.join("runtime.yaml"),
         format!(
-            "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nserver:\n  bind: 127.0.0.1:{port}\nbundle:\n  path: ../bundle\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n  directory: ../audit\n  integrityKeyRef: secret:file/audit.key\n"
+            "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nserver:\n  bind: 127.0.0.1:{port}\nbundle:\n  path: ../bundle\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n  path: ../audit/render.jsonl\n"
         ),
     )
     .unwrap();
@@ -319,7 +344,7 @@ fn relative_runtime_paths_anchor_to_the_runtime_files_directory() {
     let lines = audit_lines(&home);
     assert!(
         lines.iter().any(|l| l.contains("\"outcome\":\"rendered\"")),
-        "the render was audited into the anchored audit directory: {lines:?}"
+        "the render was audited into the anchored audit file: {lines:?}"
     );
 }
 
@@ -431,8 +456,8 @@ fn a_refused_bind_is_caught_before_startup_touches_the_filesystem() {
     let audit = home.join("audit-elsewhere");
     let text = std::fs::read_to_string(&runtime).unwrap();
     let text = text.replace("bind: 127.0.0.1:", "bind: 0.0.0.0:").replace(
-        &format!("directory: {}", home.join("audit").display()),
-        &format!("directory: {}", audit.display()),
+        &format!("path: {}", audit_file(&home).display()),
+        &format!("path: {}", audit.join("render.jsonl").display()),
     );
     std::fs::write(&runtime, text).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_registry-render"))
@@ -553,7 +578,7 @@ fn render_returns_pdf_with_hash_headers_matching_golden() {
     let sha = sha256_hex(&reply.body);
     assert_eq!(sha, golden_receipt_sha());
     drop(server);
-    // The audit ledger recorded the render, value-free.
+    // The audit file recorded the render, value-free.
     let lines = audit_lines(&home);
     assert!(
         lines
@@ -629,13 +654,176 @@ fn missing_issued_at_and_bad_data_are_named_problems() {
 }
 
 #[test]
-fn audit_chain_verifies_from_the_cli() {
+fn a_render_writes_a_request_entry_then_a_response_entry_sharing_correlation() {
     let (home, runtime, _) = deployment(
         DEFAULT_LIMITS,
         &repo_root().join("products/render/bundles/receipt"),
     );
     let server = start_server(&runtime);
     let body = receipt_body();
+    for key in [Some("effect-1234"), None] {
+        let bearer = format!("Bearer {API_KEY}");
+        let mut headers = vec![
+            ("Authorization", bearer.as_str()),
+            ("Content-Type", "application/json"),
+        ];
+        if let Some(key) = key {
+            headers.push(("Idempotency-Key", key));
+        }
+        let reply = request(
+            server.port,
+            "POST",
+            "/v1/render/receipt",
+            &headers,
+            Some(&body),
+        );
+        assert_eq!(
+            reply.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&reply.body)
+        );
+    }
+    drop(server);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(audit_file(&home))
+            .expect("audit file")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "the audit file is owner-only");
+    }
+    let entries: Vec<serde_json::Value> = audit_lines(&home)
+        .iter()
+        .map(|line| serde_json::from_str(line).expect("one JSON entry per line"))
+        .collect();
+    assert_eq!(entries.len(), 4, "{entries:?}");
+    for pair in entries.chunks(2) {
+        let (request, response) = (&pair[0], &pair[1]);
+        for entry in pair {
+            assert_eq!(entry["schema"], "render.registrystack.org/audit/v1");
+            let fields: Vec<&str> = entry
+                .as_object()
+                .expect("envelope object")
+                .keys()
+                .map(String::as_str)
+                .collect();
+            assert_eq!(
+                fields,
+                [
+                    "correlation",
+                    "eventId",
+                    "phase",
+                    "record",
+                    "schema",
+                    "time"
+                ],
+                "the shared envelope and nothing else: {entry}"
+            );
+        }
+        assert_eq!(request["phase"], "request");
+        assert!(
+            request["record"].get("outcome").is_none(),
+            "the request entry is written before any outcome exists: {request}"
+        );
+        assert_eq!(response["phase"], "response");
+        assert_eq!(response["record"]["outcome"], "rendered");
+        assert_eq!(response["record"]["pdfSha256"], golden_receipt_sha());
+        assert_eq!(
+            request["correlation"], response["correlation"],
+            "the response carries its request's correlation"
+        );
+        for field in [
+            "documentId",
+            "documentVersion",
+            "bundleVersion",
+            "bundleHash",
+            "caller",
+        ] {
+            assert_eq!(
+                request["record"][field], response["record"][field],
+                "{field}"
+            );
+        }
+    }
+    assert_eq!(entries[0]["correlation"], "effect-1234");
+    assert_eq!(entries[0]["record"]["correlationId"], "effect-1234");
+    let drawn = entries[2]["correlation"].as_str().expect("correlation");
+    assert_eq!(drawn.len(), 36, "a drawn random id: {drawn}");
+    assert!(
+        entries[2]["record"].get("correlationId").is_none(),
+        "a drawn correlation stays in the envelope: {}",
+        entries[2]
+    );
+}
+
+/// Read one audit line from a `stdout` destination.
+fn next_audit_entry(reader: &mut BufReader<ChildStdout>) -> serde_json::Value {
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("audit line");
+    serde_json::from_str(&line).unwrap_or_else(|err| panic!("audit entry {line:?}: {err}"))
+}
+
+#[test]
+fn a_refused_response_entry_withholds_the_pdf() {
+    let (home, runtime, _) = deployment(
+        DEFAULT_LIMITS,
+        &repo_root().join("products/render/bundles/receipt"),
+    );
+    audit_to_stdout(&home, &runtime);
+    let (server, stdout) = start_server_with_stdout(&runtime);
+    let port = server.port;
+    let body = receipt_body();
+    let render = std::thread::spawn(move || {
+        request(
+            port,
+            "POST",
+            "/v1/render/receipt",
+            &[
+                ("Authorization", &format!("Bearer {API_KEY}")),
+                ("Content-Type", "application/json"),
+            ],
+            Some(&body),
+        )
+    });
+    // The request entry arrives before the render; closing the stream then
+    // makes the response entry the write that fails.
+    let mut reader = BufReader::new(stdout);
+    let entry = next_audit_entry(&mut reader);
+    assert_eq!(entry["phase"], "request", "{entry}");
+    drop(reader);
+    let reply = render.join().expect("render thread");
+    let text = String::from_utf8_lossy(&reply.body);
+    assert_eq!(reply.status, 503, "{text}");
+    assert!(text.contains("audit-failed"), "{text}");
+    assert!(
+        !reply.body.windows(5).any(|w| w == b"%PDF-"),
+        "no document leaves without an accepted response entry"
+    );
+    assert!(
+        !reply
+            .headers
+            .iter()
+            .any(|(name, _)| name == "x-registry-pdf-sha256"),
+        "no document metadata leaves either"
+    );
+    let ready = request(port, "GET", "/ready", &[], None);
+    assert_eq!(ready.status, 503, "a stopped audit stream is not ready");
+}
+
+#[test]
+fn a_refused_request_entry_prevents_the_render() {
+    let (home, runtime, _) = deployment(
+        DEFAULT_LIMITS,
+        &repo_root().join("products/render/bundles/receipt"),
+    );
+    audit_to_stdout(&home, &runtime);
+    let (server, stdout) = start_server_with_stdout(&runtime);
+    let ready = request(server.port, "GET", "/ready", &[], None);
+    assert_eq!(ready.status, 200);
+    // Nobody reads the audit stream any more: the request entry fails.
+    drop(stdout);
     let reply = request(
         server.port,
         "POST",
@@ -644,20 +832,12 @@ fn audit_chain_verifies_from_the_cli() {
             ("Authorization", &format!("Bearer {API_KEY}")),
             ("Content-Type", "application/json"),
         ],
-        Some(&body),
+        Some(&receipt_body()),
     );
-    assert_eq!(reply.status, 200);
-    drop(server);
-    let output = Command::new(env!("CARGO_BIN_EXE_registry-render"))
-        .args(["audit-verify", "--runtime", runtime.to_str().unwrap()])
-        .output()
-        .expect("run audit-verify");
-    assert!(
-        output.status.success(),
-        "audit-verify: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let _ = home;
+    let text = String::from_utf8_lossy(&reply.body);
+    assert_eq!(reply.status, 503, "{text}");
+    assert!(text.contains("audit-failed"), "{text}");
+    assert!(!reply.body.windows(5).any(|w| w == b"%PDF-"));
 }
 
 #[test]
@@ -667,7 +847,7 @@ fn audit_events_are_value_free() {
         &repo_root().join("products/render/bundles/receipt"),
     );
     let server = start_server(&runtime);
-    // Canary in the data must never reach the ledger — even though the
+    // Canary in the data must never reach the audit, even though the
     // rendered document itself carries it.
     let body = receipt_body().replace("RCP-2026-W03-000123", "CANARY-DO-NOT-LOG");
     let reply = request(
