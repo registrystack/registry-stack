@@ -204,11 +204,8 @@ pub fn load(path: &Path) -> Result<(RenderRuntime, String), RenderProblem> {
             .check_reference(field, reference)
             .map_err(|error| in_file(error.to_string()))?;
     }
-    if !runtime.audit.directory.is_absolute() {
-        return Err(in_file(
-            "audit.directory must be an absolute path".to_owned(),
-        ));
-    }
+    registry_platform_config::require_absolute("audit.directory", &runtime.audit.directory)
+        .map_err(|error| in_file(error.to_string()))?;
     if runtime.limits.max_output_bytes > crate::render::DEFAULT_MAX_OUTPUT_BYTES {
         return Err(invalid(format!(
             "maxOutputBytes {} exceeds the hard ceiling {}",
@@ -368,6 +365,13 @@ mod tests {
             ),
             (
                 minimal(&home).replace("directory: /var/lib/render/audit", "directory: audit"),
+                "audit.directory",
+            ),
+            (
+                minimal(&home).replace(
+                    "directory: /var/lib/render/audit",
+                    "directory: /var/lib/render/../../etc/audit",
+                ),
                 "audit.directory",
             ),
         ] {

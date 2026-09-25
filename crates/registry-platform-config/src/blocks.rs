@@ -71,7 +71,10 @@ impl ConfigBlockError {
     }
 }
 
-fn require_absolute(field: &str, path: &Path) -> Result<(), ConfigBlockError> {
+/// Refuse a configured path that is not absolute or that carries a `..`
+/// component. The shared blocks apply this to their own paths; a runtime
+/// applies it to the paths it configures outside them.
+pub fn require_absolute(field: &str, path: &Path) -> Result<(), ConfigBlockError> {
     let normal = path.is_absolute()
         && path.components().all(|component| {
             matches!(
