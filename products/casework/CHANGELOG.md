@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The metrics listener no longer lets the scrape rate set the database load.
+  Scrapes within five seconds of a database reading reuse it, concurrent
+  scrapes wait for the one reading in flight, and a reading that takes longer
+  than five seconds reports `casework_database_up 0`.
+
 - Casework database connections now use `connect_timeout=5`,
   `keepalives_idle=15`, `keepalives_interval=5`, `keepalives_retries=3`, and
   `tcp_user_timeout=30`, all in seconds, unless the database URL sets them,
