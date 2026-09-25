@@ -6126,7 +6126,8 @@ async fn audience_scoped_credential_issuance_answers_at_most_one_holder_key() {
         .json(&serde_json::to_value(adult_request()).expect("request serializes"))
         .await;
     keyless.assert_status_ok();
-    assert!(!keyless.text().contains("cnf"));
+    let keyless_payload = released_credential_payload(&keyless.text());
+    assert!(keyless_payload.get("cnf").is_none());
 
     // One key, echoed into the confirmation without changing the binding mode.
     let mut body = serde_json::to_value(adult_request()).expect("request serializes");
@@ -6491,7 +6492,8 @@ async fn sd_jwt_holder_key_wrong_algorithm_rejected() {
         .json(&body)
         .await;
     accepted.assert_status_ok();
-    assert!(!accepted.text().contains("cnf"));
+    let payload = released_credential_payload(&accepted.text());
+    assert!(payload.get("cnf").is_none());
 }
 
 #[tokio::test]
