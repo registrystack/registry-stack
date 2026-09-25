@@ -122,7 +122,6 @@ class BRegProductCatalogTests(unittest.TestCase):
                 "dep:registry-platform-audit",
                 "dep:registry-platform-authcommon",
                 "dep:registry-platform-buildinfo",
-                "dep:registry-platform-config",
                 "dep:registry-platform-crypto",
                 "registry-platform-crypto/transit",
                 "registry-platform-hooks/postgres",
@@ -158,7 +157,6 @@ class BRegProductCatalogTests(unittest.TestCase):
             "registry-platform-audit",
             "registry-platform-authcommon",
             "registry-platform-buildinfo",
-            "registry-platform-config",
             "registry-platform-crypto",
             "registry-platform-httpsec",
             "registry-platform-httputil",
@@ -174,6 +172,14 @@ class BRegProductCatalogTests(unittest.TestCase):
             "zeroize",
         ):
             self.assertTrue(breg["dependencies"][dependency]["optional"])
+        # The compiler refuses an environment expression in an authored
+        # project or module through the shared configuration crate, so that
+        # crate is part of the default compiler surface. It carries no async
+        # runtime, network, or database dependency.
+        self.assertEqual(
+            {"workspace": True},
+            breg["dependencies"]["registry-platform-config"],
+        )
 
         ctl = tomllib.loads(
             (
