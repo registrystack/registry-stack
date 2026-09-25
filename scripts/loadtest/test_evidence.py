@@ -116,6 +116,7 @@ class EvidenceTests(unittest.TestCase):
                     samples=root / "missing-samples.json",
                     db_after=None,
                     db_waits=None,
+                    db_sampler_exit_code=0,
                     safety=safety,
                     k6_exit_code=0,
                     out=out,
@@ -124,6 +125,55 @@ class EvidenceTests(unittest.TestCase):
             result = json.loads(out.read_text(encoding="utf-8"))
             self.assertIsNone(result["database"])
             self.assertEqual(result["product"], "evidence")
+
+    def test_summary_fails_when_the_wait_sampler_stopped_early_or_recorded_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = root / "manifest.json"
+            manifest.write_text(
+                json.dumps({"product": "casework", "profile": "steady", "configuration": {"parameters": {}}}),
+                encoding="utf-8",
+            )
+            k6_summary = root / "summary.json"
+            k6_summary.write_text(
+                json.dumps(
+                    {
+                        "state": {"testRunDurationMs": 1000},
+                        "metrics": {"http_req_failed": {"values": {"rate": 0}, "thresholds": {"rate==0": {"ok": True}}}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            safety = root / "safety.json"
+            safety.write_text(json.dumps({"safe": True}), encoding="utf-8")
+            samples = root / "samples.json"
+            samples.write_text("", encoding="utf-8")
+            sample = json.dumps({"auditLockWaiters": 0, "lockWaiters": 0, "blockedBackends": 0}) + "\n"
+            for name, waits, sampler_exit_code, passed in (
+                ("sampled", sample, 0, True),
+                ("no samples", "", 0, False),
+                ("sampler failed", sample, 2, False),
+            ):
+                with self.subTest(name):
+                    db_waits = root / "db-waits.jsonl"
+                    db_waits.write_text(waits, encoding="utf-8")
+                    out = root / "result.json"
+                    evidence.summarize(
+                        argparse.Namespace(
+                            manifest=manifest,
+                            k6_summary=k6_summary,
+                            samples=samples,
+                            db_after=None,
+                            db_waits=db_waits,
+                            db_sampler_exit_code=sampler_exit_code,
+                            safety=safety,
+                            k6_exit_code=0,
+                            out=out,
+                        )
+                    )
+                    result = json.loads(out.read_text(encoding="utf-8"))
+                    self.assertEqual(result["database"]["waits"]["samplerExitCode"], sampler_exit_code)
+                    self.assertIs(result["pass"], passed)
 
     def test_safety_check_rejects_secret_record_id_and_unsafe_sample_tag(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -244,6 +294,7 @@ class EvidenceTests(unittest.TestCase):
                     samples=samples,
                     db_after=db_after,
                     db_waits=db_waits,
+                    db_sampler_exit_code=0,
                     safety=safety,
                     k6_exit_code=0,
                     out=out,

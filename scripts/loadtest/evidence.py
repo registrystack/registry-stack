@@ -329,6 +329,14 @@ def summarize(arguments: argparse.Namespace) -> None:
     threshold_pass = all(all(expressions.values()) for expressions in thresholds.values())
     db_after = _json_object(arguments.db_after) if arguments.db_after and arguments.db_after.exists() else None
     safety = _json_object(arguments.safety) if arguments.safety.exists() else {"safe": False}
+    db_waits = _db_wait_summary(arguments.db_waits)
+    # A run that asked for wait samples is judged only when the sampler ran to
+    # the end of the run and recorded at least one sample.
+    if arguments.db_waits is not None:
+        db_waits["samplerExitCode"] = arguments.db_sampler_exit_code
+    db_sampling_pass = arguments.db_waits is None or (
+        db_waits["samples"] > 0 and arguments.db_sampler_exit_code == 0
+    )
     result = {
         "schemaVersion": 1,
         "product": manifest.get("product"),
@@ -357,7 +365,7 @@ def summarize(arguments: argparse.Namespace) -> None:
         "httpStatuses": sample_details["statuses"],
         "phases": sample_details["phaseResults"],
         "database": (
-            {"snapshot": db_after, "waits": _db_wait_summary(arguments.db_waits)}
+            {"snapshot": db_after, "waits": db_waits}
             if arguments.db_after or arguments.db_waits
             else None
         ),
@@ -368,6 +376,7 @@ def summarize(arguments: argparse.Namespace) -> None:
             and threshold_pass
             and dropped == 0
             and sample_details["tagViolation"] is None
+            and db_sampling_pass
         ),
     }
     if sample_details["tagViolation"] is not None:
@@ -462,6 +471,7 @@ def parser() -> argparse.ArgumentParser:
     summary.add_argument("--samples", type=Path, required=True)
     summary.add_argument("--db-after", type=Path)
     summary.add_argument("--db-waits", type=Path)
+    summary.add_argument("--db-sampler-exit-code", type=int, default=0)
     summary.add_argument("--safety", type=Path, required=True)
     summary.add_argument("--k6-exit-code", type=int, required=True)
     summary.add_argument("--out", type=Path, required=True)
