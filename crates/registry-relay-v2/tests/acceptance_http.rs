@@ -1067,10 +1067,11 @@ async fn stock_issuer_registered_authority_drives_a_protected_relay_lookup() {
     let mut issuer = relay
         .runtime
         .authentication
-        .issuer
+        .oidc
         .clone()
         .expect("social-assistance declares an issuer");
-    issuer.discovery_url = Some(format!("{}/.well-known/openid-configuration", stock.issuer));
+    issuer.issuer = stock.issuer.clone();
+    issuer.jwks_source = registry_platform_config::JwksSource::Discovery;
     issuer.audience = audience;
     issuer.algorithms = vec!["RS256".into()];
     let authenticator = build_authenticator_for_supervised_local_development(&issuer)
@@ -2003,7 +2004,7 @@ async fn real_jwt_path_rejects_malformed_audience_time_and_expired_tokens() {
     let expected_audience = &harness
         .runtime
         .authentication
-        .issuer
+        .oidc
         .as_ref()
         .expect("issuer exists")
         .audience;
@@ -2090,7 +2091,7 @@ async fn real_jwt_path_rejects_malformed_audience_time_and_expired_tokens() {
         &harness
             .runtime
             .authentication
-            .issuer
+            .oidc
             .as_ref()
             .expect("issuer exists")
             .audience,
@@ -2151,12 +2152,11 @@ async fn real_jwt_path_uses_trusted_issuer_not_the_jwks_transport_host() {
     let mut issuer = harness
         .runtime
         .authentication
-        .issuer
+        .oidc
         .clone()
         .expect("social-assistance declares an issuer");
-    issuer.trusted_issuer = Some(TRUSTED_ISSUER.into());
-    issuer.discovery_url = None;
-    issuer.jwks_url = Some(jwks_url);
+    issuer.issuer = TRUSTED_ISSUER.into();
+    issuer.jwks_source = registry_platform_config::JwksSource::Uri { uri: jwks_url };
     issuer.algorithms = vec!["EdDSA".into()];
     let audience = issuer.audience.clone();
     let authenticator = build_authenticator_for_supervised_local_development(&issuer)
@@ -3911,7 +3911,7 @@ impl ProjectHarness {
         );
         let audit = RelayAudit::new(chain, sink);
 
-        let (authenticator, idp) = if let Some(issuer) = runtime.authentication.issuer.as_ref() {
+        let (authenticator, idp) = if let Some(issuer) = runtime.authentication.oidc.as_ref() {
             let idp = MockIdp::start().await;
             let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
                 idp.jwks_uri(),
@@ -4102,7 +4102,7 @@ impl ProjectHarness {
         let audience = &self
             .runtime
             .authentication
-            .issuer
+            .oidc
             .as_ref()
             .expect("runtime has issuer")
             .audience;

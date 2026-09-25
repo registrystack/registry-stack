@@ -1,21 +1,25 @@
-apiVersion: relay.registrystack.org/v2alpha1
-kind: RelayRuntime
-server:
+apiVersion: registry.registrystack.org/relay-runtime/v1alpha1
+kind: RelayRuntimeConfig
+listener:
   bind: 127.0.0.1:18083
-packagePath: package
+package:
+  root: /srv/relay/package
+secretProviders:
+  environment: {}
 sources:
   events:
     path: fixture.sqlite
 authentication:
-  issuer:
-    id: institutional-issuer
-    discoveryUrl: https://issuer.example.invalid/.well-known/openid-configuration
+  oidc:
+    issuer: https://issuer.example.invalid
+    jwksSource:
+      kind: discovery
     audience: relay-civil-events
     tokenTypes: [at+jwt]
     algorithms: [ES256]
 audit:
   sink: var/audit.jsonl
-  integrityKeyRef: secret:env/RELAY_TEST_AUDIT_KEY
+  hashKeyRef: secret:env/RELAY_TEST_AUDIT_KEY
 limits:
   requestTimeoutMilliseconds: 1500
   concurrentQueries: 16

@@ -92,18 +92,19 @@ bundle, or the sealed Relay package. It assumes you have already configured your
   `secret:env/<NAME>` or `secret:file/<name>`, and never as a literal value. `<NAME>` is uppercase
   ASCII, digits, and underscores starting with a letter; `<name>` is a single flat lowercase
   filename with no directory component, so a nested or traversing path is rejected rather than
-  resolved. No secret may exceed 64 KiB.
+  resolved. A file secret resolves under `secretProviders.file.root`, and an environment secret
+  needs `secretProviders.environment: {}`. No secret may exceed 64 KiB.
 - Relay: on Unix, a `secret:file/<name>` target must be a regular file owned by the running user
   with mode `0400` or `0600` and a link count of one; a hard-linked file is refused under every
   name.
   Relay refuses to start at all on a non-Unix target, because the runtime file's own path-trust
   check fails closed where Unix ownership and sticky-directory semantics are unavailable, so do not
   treat a non-Unix host as a degraded-but-working option.
-- Relay: `audit.integrityKeyRef` and, where a cursor is required, `cursor.integrityKeyRef` are
+- Relay: `audit.hashKeyRef` and, where a cursor is required, `cursor.integrityKeyRef` are
   separate secret references. Give each independently generated random material and hold each under
   your own custody and retention controls.
 - Relay: pick the single OIDC signing algorithm the deployment actually uses.
-  `authentication.issuer.algorithms` must contain exactly one of `EdDSA`, `ES256`, or `RS256`, and
+  `authentication.oidc.algorithms` must contain exactly one of `EdDSA`, `ES256`, or `RS256`, and
   `tokenTypes` must be exactly `["at+jwt"]`. There is no allowlist to prune and no `HS*` or `none`
   to exclude: anything else fails the closed runtime profile before the process serves. Evidence
   Gateway's own access-token allowlist is configured per bundle from the same three, while its
@@ -165,7 +166,7 @@ bundle, or the sealed Relay package. It assumes you have already configured your
 
 ## Freeze the Relay source and package
 
-- Mount the sealed package at `packagePath` read-only. Relay re-runs the compiler and the artifact
+- Mount the sealed package at `package.root` read-only. Relay re-runs the compiler and the artifact
   generator over the sealed inputs at startup and compares the results byte for byte, so a modified
   package fails to start rather than serving quietly. That check proves integrity, not
   authenticity: `packageRevision` is a digest and nothing signs a Relay package, so provenance is
@@ -222,7 +223,7 @@ bundle, or the sealed Relay package. It assumes you have already configured your
 - Relay: readiness re-verifies the audit sink rather than trusting the check made at startup, so
   replacing the audit file under a running process revokes readiness. Treat a sudden readiness loss
   with a healthy source as an audit-path problem first.
-- Relay: give `audit.integrityKeyRef` deployment-specific random material and retain it for as long
+- Relay: give `audit.hashKeyRef` deployment-specific random material and retain it for as long
   as the chain it keys must remain verifiable. Rotating it makes new records incomparable to old
   ones.
 - If you rotate an audit hash secret in any service, retain the old secret under your audit
@@ -311,9 +312,10 @@ serve, and a startup that fails rather than degrades.
   path. Record the bundle revision you deployed, because that identifier plus the digests is the
   only description of what the process is enforcing.
 
-{/* Evidence: RelayRuntime is a closed deny_unknown_fields schema over apiVersion, kind, server,
-     packagePath, sources, authentication, audit, cursor, limits, quotas, and shutdown only, with
-     ServerRuntime carrying exactly one field (bind), crates/registry-relay-v2/src/contract.rs:1062-1180;
+{/* Evidence: RelayRuntime is a closed deny_unknown_fields schema over apiVersion, kind, listener,
+     package, secretProviders, sources, authentication, audit, cursor, limits, quotas, and shutdown
+     only, with the shared ListenerConfig carrying exactly one field (bind),
+     crates/registry-relay-v2/src/contract.rs;
      validate_runtime_contract() with the test
      protected_contracts_require_issuer_lists_require_cursor_and_lookups_require_quota,
      crates/registry-relay-v2/src/startup.rs:469-492; QuotaLimiter is an in-memory per-operation

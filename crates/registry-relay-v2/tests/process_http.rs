@@ -6,7 +6,7 @@ use std::fs;
 use std::io::Read as _;
 use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -36,7 +36,7 @@ impl RelayProcess {
     fn spawn(runtime: &Path) -> Self {
         let child = Command::new(env!("CARGO_BIN_EXE_relay"))
             .arg("serve")
-            .arg("--runtime")
+            .arg("--runtime-config")
             .arg(runtime)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -98,91 +98,202 @@ impl Drop for RelayProcess {
     }
 }
 
-#[tokio::test]
-async fn built_relay_serves_a_sealed_package_over_real_tcp_and_shuts_down() {
-    let temporary = tempfile::tempdir().expect("temporary image layout");
-    let image_root = temporary
-        .path()
-        .canonicalize()
-        .expect("temporary image root canonicalizes");
-    let etc = image_root.join("etc/relay");
-    let data = image_root.join("var/lib/relay/data");
-    let audit = image_root.join("var/lib/relay/audit");
-    fs::create_dir_all(&etc).expect("runtime directory creates");
-    fs::create_dir_all(&data).expect("data directory creates");
-    fs::create_dir_all(&audit).expect("audit directory creates");
-    fs::set_permissions(&audit, fs::Permissions::from_mode(0o700))
-        .expect("audit directory becomes owner-only");
-    copy_tree(Path::new(BUSINESS_PROJECT), &etc);
+/// One copied acceptance project laid out like the official image, with its
+/// sealed package built and its runtime configuration written.
+struct BusinessImage {
+    _temporary: tempfile::TempDir,
+    runtime_path: PathBuf,
+    runtime: RelayRuntime,
+    address: std::net::SocketAddr,
+}
 
-    let source = data.join("business-registry.sqlite");
-    materialize_fixture(
-        &source,
-        &fs::read_to_string(etc.join("fixture.sql")).expect("fixture SQL reads"),
-    )
-    .expect("fixture materializes");
-    make_business_project_public_only(&etc, &source);
+impl BusinessImage {
+    fn prepare() -> Self {
+        let temporary = tempfile::tempdir().expect("temporary image layout");
+        let image_root = temporary
+            .path()
+            .canonicalize()
+            .expect("temporary image root canonicalizes");
+        let etc = image_root.join("etc/relay");
+        let data = image_root.join("var/lib/relay/data");
+        let audit = image_root.join("var/lib/relay/audit");
+        let secrets = image_root.join("run/secrets/relay");
+        fs::create_dir_all(&etc).expect("runtime directory creates");
+        fs::create_dir_all(&data).expect("data directory creates");
+        fs::create_dir_all(&audit).expect("audit directory creates");
+        fs::create_dir_all(&secrets).expect("secrets directory creates");
+        fs::set_permissions(&audit, fs::Permissions::from_mode(0o700))
+            .expect("audit directory becomes owner-only");
+        copy_tree(Path::new(BUSINESS_PROJECT), &etc);
 
-    let package = data.join("business-registry-package");
-    let runtime_path = etc.join("runtime.yaml");
-    let mut runtime = RelayRuntime::parse_yaml(
-        &fs::read_to_string(&runtime_path).expect("acceptance runtime reads"),
-    )
-    .expect("acceptance runtime parses");
-    let reservation = TcpListener::bind("127.0.0.1:0").expect("loopback port reserves");
-    let address = reservation.local_addr().expect("reserved address");
-    drop(reservation);
-    runtime.server.bind = address.to_string();
-    runtime.package_path = package.to_string_lossy().into_owned();
-    runtime.authentication.issuer = None;
-    let mut runtime_value = serde_json::to_value(&runtime).expect("runtime becomes a value");
-    *runtime_value
-        .pointer_mut("/sources/companies/path")
-        .expect("business source binding") = Value::String(source.to_string_lossy().into_owned());
-    runtime = serde_json::from_value(runtime_value).expect("modified runtime remains valid");
-    runtime.audit.sink = audit.join("events.jsonl").to_string_lossy().into_owned();
-    runtime.audit.integrity_key_ref = "secret:file/audit-integrity-key".into();
-    runtime
-        .cursor
-        .as_mut()
-        .expect("business cursor")
-        .integrity_key_ref = "secret:file/cursor-integrity-key".into();
+        let source = data.join("business-registry.sqlite");
+        materialize_fixture(
+            &source,
+            &fs::read_to_string(etc.join("fixture.sql")).expect("fixture SQL reads"),
+        )
+        .expect("fixture materializes");
+        make_business_project_public_only(&etc, &source);
+
+        let package = data.join("business-registry-package");
+        let runtime_path = etc.join("runtime.yaml");
+        let mut runtime = RelayRuntime::parse_yaml(
+            &fs::read_to_string(&runtime_path).expect("acceptance runtime reads"),
+        )
+        .expect("acceptance runtime parses");
+        let reservation = TcpListener::bind("127.0.0.1:0").expect("loopback port reserves");
+        let address = reservation.local_addr().expect("reserved address");
+        drop(reservation);
+        let mut runtime_value = serde_json::to_value(&runtime).expect("runtime becomes a value");
+        *runtime_value
+            .pointer_mut("/listener/bind")
+            .expect("listener binding") = Value::String(address.to_string());
+        *runtime_value
+            .pointer_mut("/package/root")
+            .expect("package root") = Value::String(package.to_string_lossy().into_owned());
+        *runtime_value
+            .pointer_mut("/sources/companies/path")
+            .expect("business source binding") =
+            Value::String(source.to_string_lossy().into_owned());
+        // File secrets resolve under secretProviders.file.root, a directory
+        // apart from the runtime configuration.
+        *runtime_value
+            .pointer_mut("/secretProviders")
+            .expect("secret providers") = serde_json::json!({
+            "file": {"root": secrets.to_string_lossy()}
+        });
+        runtime_value
+            .as_object_mut()
+            .expect("runtime object")
+            .remove("authentication");
+        runtime = serde_json::from_value(runtime_value).expect("modified runtime remains valid");
+        runtime.audit.sink = audit.join("events.jsonl").to_string_lossy().into_owned();
+        runtime.audit.hash_key_ref = "secret:file/audit-integrity-key".into();
+        runtime
+            .cursor
+            .as_mut()
+            .expect("business cursor")
+            .integrity_key_ref = "secret:file/cursor-integrity-key".into();
+        runtime
+            .check()
+            .expect("modified runtime passes the shared blocks");
+        write_runtime(&runtime_path, &runtime);
+        write_secret(
+            &secrets.join("audit-integrity-key"),
+            b"a-32-byte-minimum-synthetic-audit-key",
+        );
+        write_secret(
+            &secrets.join("cursor-integrity-key"),
+            b"a-32-byte-minimum-synthetic-cursor-key",
+        );
+
+        let report = package_project(&PackageOptions {
+            project_root: etc.clone(),
+            output_dir: package,
+        })
+        .expect("sealed package operation succeeds");
+        assert!(
+            report.is_success(),
+            "acceptance project packages: {report:?}"
+        );
+        Self {
+            _temporary: temporary,
+            runtime_path,
+            runtime,
+            address,
+        }
+    }
+}
+
+fn write_runtime(path: &Path, runtime: &RelayRuntime) {
     fs::write(
-        &runtime_path,
-        serde_norway::to_string(&runtime).expect("runtime serializes"),
+        path,
+        serde_norway::to_string(runtime).expect("runtime serializes"),
     )
     .expect("absolute runtime writes");
-    write_secret(
-        &etc.join("audit-integrity-key"),
-        b"a-32-byte-minimum-synthetic-audit-key",
-    );
-    write_secret(
-        &etc.join("cursor-integrity-key"),
-        b"a-32-byte-minimum-synthetic-cursor-key",
-    );
+}
 
-    let report = package_project(&PackageOptions {
-        project_root: etc.clone(),
-        output_dir: package,
-    })
-    .expect("sealed package operation succeeds");
-    assert!(
-        report.is_success(),
-        "acceptance project packages: {report:?}"
-    );
+fn relay_check(runtime: &Path) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_relay"))
+        .arg("check")
+        .arg("--runtime-config")
+        .arg(runtime)
+        .stdin(Stdio::null())
+        .output()
+        .expect("built relay check runs")
+}
 
+#[tokio::test]
+async fn built_relay_serves_a_sealed_package_over_real_tcp_and_shuts_down() {
+    let image = BusinessImage::prepare();
     let client = Client::builder()
         .no_proxy()
         .timeout(Duration::from_secs(1))
         .build()
         .expect("HTTP client builds");
-    let base = format!("http://{address}");
-    let first = serve_one_lifecycle(&runtime_path, &client, &base).await;
-    let second = serve_one_lifecycle(&runtime_path, &client, &base).await;
+    let base = format!("http://{}", image.address);
+    let first = serve_one_lifecycle(&image.runtime_path, &client, &base).await;
+    let second = serve_one_lifecycle(&image.runtime_path, &client, &base).await;
     assert_eq!(
         first, second,
         "the same sealed package and snapshot must serialize identically after restart"
     );
+}
+
+#[test]
+fn built_relay_check_honors_a_package_digest_pin() {
+    let image = BusinessImage::prepare();
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(image.runtime.package.root.join("relay-package.json"))
+            .expect("package manifest reads"),
+    )
+    .expect("package manifest parses");
+    let revision = manifest["packageRevision"]
+        .as_str()
+        .expect("package revision")
+        .to_owned();
+
+    let mut pinned = image.runtime.clone();
+    pinned.package.expected_digest = Some(revision);
+    write_runtime(&image.runtime_path, &pinned);
+    let output = relay_check(&image.runtime_path);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wrong = format!("sha256:{}", "0".repeat(64));
+    pinned.package.expected_digest = Some(wrong);
+    write_runtime(&image.runtime_path, &pinned);
+    let output = relay_check(&image.runtime_path);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("package.expectedDigest"), "{stderr}");
+    assert!(
+        stderr.contains("deploy the pinned package or update package.expectedDigest"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn built_relay_refuses_removed_keys_and_relative_paths_by_field() {
+    let image = BusinessImage::prepare();
+    let text = fs::read_to_string(&image.runtime_path).expect("runtime reads");
+    fs::write(&image.runtime_path, format!("{text}packagePath: package\n"))
+        .expect("runtime with a removed key writes");
+    let output = relay_check(&image.runtime_path);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("packagePath"), "{stderr}");
+    assert!(stderr.contains("package.root"), "{stderr}");
+    assert!(
+        !stderr.contains(&*image.runtime_path.to_string_lossy()),
+        "{stderr}"
+    );
+
+    let output = relay_check(Path::new("runtime.yaml"));
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("runtime configuration is refused"));
 }
 
 fn make_business_project_public_only(project: &Path, source: &Path) {

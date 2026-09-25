@@ -77,9 +77,9 @@ authenticate, authorize, serve, audit.
   `503 audit.unavailable` instead of an answer, and Relay re-checks its audit sink for readiness
   rather than trusting the check it did at startup (REQ-SEC-G-009).
 
-{/* Evidence: IssuerRuntime::profile() requires token_types == ["at+jwt"], exactly one of
-     EdDSA/ES256/RS256, and one canonical https discovery URL,
-     crates/registry-relay-v2/src/contract.rs:1215-1255; PurposeConstraint and AuthorityRowBinding
+{/* Evidence: OidcRuntime::checked_profile() requires token_types == ["at+jwt"], exactly one of
+     EdDSA/ES256/RS256, a canonical https issuer, and keys from its discovery document or one
+     canonical https JWKS URI, crates/registry-relay-v2/src/contract.rs:1516-1591; PurposeConstraint and AuthorityRowBinding
      are read from the verified principal, crates/registry-relay-v2/src/auth.rs:204-257; every
      audit failure maps to ProblemCode::AuditUnavailable (503),
      crates/registry-relay-v2/src/api.rs, with the test
@@ -166,7 +166,7 @@ process does not serve. Those checks are the security surface worth reviewing:
 - The package is verified first. Before Relay opens a source, a sink, or a socket, it re-runs the
   compiler and the artifact generator over the sealed inputs and compares the results byte for byte
   against what the package contains. A package that does not re-derive does not start.
-- The runtime file cannot widen the package. `runtime.yaml` (`kind: RelayRuntime`) is a closed
+- The runtime file cannot widen the package. `runtime.yaml` (`kind: RelayRuntimeConfig`) is a closed
   schema that rejects unknown fields, and it binds only local concerns: listen address, package
   path, source paths, the audit sink, an optional OIDC issuer, cursor settings, limits, quotas, and
   shutdown. Nothing in it can add an operation, a readable column, or a disclosure.
@@ -174,8 +174,8 @@ process does not serve. Those checks are the security surface worth reviewing:
   issuer, and a contract that declares any lookup requires quotas. Neither is a warning.
 - Secrets are referenced, never inlined. The runtime file accepts exactly two reference grammars,
   `secret:env/<NAME>` and `secret:file/<name>`, and nothing else. A file secret must be a single
-  flat filename, owned by the running user, with mode `0400` or `0600` and a link count of one,
-  and no secret may exceed 64 KiB.
+  flat filename under the declared `secretProviders.file.root`, owned by the running user, with
+  mode `0400` or `0600` and a link count of one, and no secret may exceed 64 KiB.
 - The source is opened read-only and pinned. Relay opens SQLite with
   `SQLITE_OPEN_READ_ONLY | SQLITE_OPEN_URI | SQLITE_OPEN_NO_MUTEX`, refuses a symlink, refuses a
   `-wal` or `-journal` sidecar beside a snapshot, and requires a snapshot to sit on a read-only
@@ -184,17 +184,18 @@ process does not serve. Those checks are the security surface worth reviewing:
   `debug`, or `trace`; any other value falls back to the crate's own `info` filter rather than
   enabling a dependency's logging.
 - Unix only, and it fails closed off it. On a non-Unix target Relay's permission check returns
-  false unconditionally and runtime-path validation returns an error, so the process refuses to
-  start rather than running without the ownership and mode checks it relies on.
+  false unconditionally and the runtime configuration loader refuses to read `runtime.yaml`, so
+  the process refuses to start rather than running without the ownership and mode checks it relies
+  on.
 
 {/* Evidence: verify_compiled_derivation() and verify_artifact_derivation() re-run the compiler and
      generator and compare bytes, and safe_permissions() returns false unconditionally under
      #[cfg(not(unix))], crates/registry-relay-v2/src/package.rs; prepare() verifies the package
      first, validate_runtime_contract() requires an issuer for protected access and quotas for
-     lookups, and #[cfg(not(unix))] validate_runtime_path returns StartupError::RuntimeInvalid,
-     crates/registry-relay-v2/src/startup.rs:96-104 and :469-492; RelayRuntime is a closed
-     deny_unknown_fields schema, crates/registry-relay-v2/src/contract.rs:1062-1079; the two secret
-     grammars, the 64 KiB bound, and the uid, 0400-or-0600 mode, and nlink==1 file checks with
+     lookups, crates/registry-relay-v2/src/startup.rs; #[cfg(not(unix))]
+     require_trusted_ownership returns an error, crates/registry-platform-config/src/loader.rs;
+     RelayRuntime is a closed deny_unknown_fields schema, crates/registry-relay-v2/src/contract.rs;
+     the two secret grammars, the 64 KiB bound, and the uid, 0400-or-0600 mode, and nlink==1 file checks with
      their tests references_use_only_the_two_exact_contract_grammars and
      file_secret_accepts_only_owner_read_and_optional_owner_write_modes,
      crates/registry-platform-config/src/secrets.rs; the open flags,

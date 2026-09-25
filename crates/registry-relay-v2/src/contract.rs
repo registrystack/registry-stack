@@ -3,9 +3,12 @@
 
 use std::collections::HashSet;
 use std::fmt;
-use std::net::SocketAddr;
 use std::ops::Deref;
 
+use registry_platform_config::{
+    ConfigBlockError, JwksSource, ListenerConfig, PackageConfig, RemovedKey, RuntimeConfigError,
+    RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig,
+};
 use serde::de::{self, MapAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -15,7 +18,6 @@ use url::Url;
 const OIDC_DISCOVERY_SUFFIX: &str = "/.well-known/openid-configuration";
 
 pub(crate) const MAXIMUM_ACCESS_PROFILE_IDENTIFIER_BYTES: usize = 128;
-pub(crate) const MAXIMUM_RUNTIME_BYTES: u64 = 1024 * 1024;
 
 // A JSON string byte can expand to six bytes (`\u00XX`). Capping the authored
 // audience at 8 KiB therefore leaves more than 16,000 bytes in the 64 KiB
@@ -1230,6 +1232,80 @@ pub enum Visibility {
     OperatorOnly,
 }
 
+/// `apiVersion` of the Relay runtime configuration.
+pub const RELAY_RUNTIME_API_VERSION: &str = "registry.registrystack.org/relay-runtime/v1alpha1";
+/// `kind` of the Relay runtime configuration.
+pub const RELAY_RUNTIME_KIND: &str = "RelayRuntimeConfig";
+
+/// The envelope every Relay runtime configuration carries.
+pub const RELAY_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
+    api_version: RELAY_RUNTIME_API_VERSION,
+    kind: RELAY_RUNTIME_KIND,
+};
+
+/// Keys an earlier Relay runtime configuration accepted, each refused with the
+/// key that replaced it.
+pub const RELAY_REMOVED_RUNTIME_KEYS: &[RemovedKey] = &[
+    RemovedKey {
+        path: "server",
+        replacement: "declare the listener address as listener.bind",
+    },
+    RemovedKey {
+        path: "packagePath",
+        replacement: "declare package.root as the absolute path of the sealed package",
+    },
+    RemovedKey {
+        path: "audit.integrityKeyRef",
+        replacement: "declare audit.hashKeyRef",
+    },
+    RemovedKey {
+        path: "authentication.issuer",
+        replacement: "declare authentication.oidc with issuer, audience, jwksSource, \
+                      tokenTypes and algorithms",
+    },
+];
+
+/// A refused Relay runtime configuration. It names the field and never a
+/// configured value or a filesystem path.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+#[error("{message}")]
+pub struct RuntimeRefusal {
+    field: String,
+    message: String,
+}
+
+impl RuntimeRefusal {
+    fn new(field: &str, message: impl Into<String>) -> Self {
+        Self {
+            field: field.to_owned(),
+            message: message.into(),
+        }
+    }
+
+    /// The dotted field the refusal concerns; `/` for the whole document.
+    #[must_use]
+    pub fn field(&self) -> &str {
+        &self.field
+    }
+
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl From<RuntimeConfigError> for RuntimeRefusal {
+    fn from(error: RuntimeConfigError) -> Self {
+        Self::new(error.field(), error.message())
+    }
+}
+
+impl From<ConfigBlockError> for RuntimeRefusal {
+    fn from(error: ConfigBlockError) -> Self {
+        Self::new(error.field(), error.to_string())
+    }
+}
+
 /// Deployment-local bindings. No governed field is accepted here.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -1237,9 +1313,11 @@ pub enum Visibility {
 pub struct RelayRuntime {
     pub api_version: String,
     pub kind: String,
-    pub server: ServerRuntime,
-    pub package_path: String,
+    pub listener: ListenerConfig,
+    pub package: PackageConfig,
+    pub secret_providers: SecretProvidersConfig,
     pub sources: OrderedMap<RuntimeSource>,
+    #[serde(default)]
     pub authentication: AuthenticationRuntime,
     pub audit: AuditRuntime,
     #[serde(default)]
@@ -1252,88 +1330,108 @@ pub struct RelayRuntime {
 }
 
 impl RelayRuntime {
-    pub fn parse_yaml(input: &str) -> Result<Self, ContractParseError> {
-        let runtime: Self =
-            serde_norway::from_str(input).map_err(|source| ContractParseError { source })?;
-        if runtime.is_valid() {
-            Ok(runtime)
-        } else {
-            Err(ContractParseError {
-                source: <serde_norway::Error as de::Error>::custom(
-                    "the deployment binding violates the closed runtime profile",
-                ),
-            })
-        }
+    /// The shared loader under Relay's envelope, removed keys, and trusted
+    /// ownership rule.
+    #[must_use]
+    pub const fn loader() -> RuntimeConfigLoader {
+        RuntimeConfigLoader::new(RELAY_RUNTIME_ENVELOPE)
+            .removed_keys(RELAY_REMOVED_RUNTIME_KEYS)
+            .require_trusted_ownership()
     }
 
-    fn is_valid(&self) -> bool {
-        if self.api_version != "relay.registrystack.org/v2alpha1"
-            || self.kind != "RelayRuntime"
-            || self.server.bind.parse::<SocketAddr>().is_err()
-            || self.package_path.trim().is_empty()
-            || self.sources.is_empty()
-            || self.audit.sink.trim().is_empty()
-            || !valid_secret_reference(&self.audit.integrity_key_ref)
-            || self.limits.request_timeout_milliseconds == 0
+    /// Parse an in-memory runtime document with an empty environment: an
+    /// environment expression takes its `:-` default, and one without a
+    /// default is refused. Authoring tools check unsaved buffers this way, so
+    /// what they report never depends on the checking process's environment.
+    pub fn parse_yaml(input: &str) -> Result<Self, RuntimeRefusal> {
+        Self::parse_yaml_with(input, |_| None)
+    }
+
+    /// Parse an in-memory runtime document, substituting environment
+    /// expressions from `lookup`.
+    pub fn parse_yaml_with(
+        input: &str,
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> Result<Self, RuntimeRefusal> {
+        let runtime: Self = Self::loader().parse_str(input, lookup)?.config;
+        runtime.check()?;
+        Ok(runtime)
+    }
+
+    /// Check every rule the shared blocks and the closed Relay profile place
+    /// on a parsed document.
+    pub fn check(&self) -> Result<(), RuntimeRefusal> {
+        self.package.check()?;
+        self.secret_providers.check()?;
+        self.secret_providers
+            .check_reference("audit.hashKeyRef", &self.audit.hash_key_ref)?;
+        if let Some(cursor) = &self.cursor {
+            self.secret_providers
+                .check_reference("cursor.integrityKeyRef", &cursor.integrity_key_ref)?;
+            if cursor.maximum_age_seconds == 0 || cursor.maximum_age_seconds > 86_400 {
+                return Err(RuntimeRefusal::new(
+                    "cursor.maximumAgeSeconds",
+                    "cursor.maximumAgeSeconds must be between 1 and 86400",
+                ));
+            }
+        }
+        if self.sources.is_empty() {
+            return Err(RuntimeRefusal::new(
+                "sources",
+                "sources must bind at least one governed source",
+            ));
+        }
+        for (id, source) in self.sources.iter() {
+            if !valid_runtime_id(id) || source.path.trim().is_empty() {
+                return Err(RuntimeRefusal::new(
+                    "sources",
+                    "each source binding needs a lowercase identifier and a non-empty path",
+                ));
+            }
+        }
+        if self.audit.sink.trim().is_empty() {
+            return Err(RuntimeRefusal::new(
+                "audit.sink",
+                "audit.sink must name the audit journal file",
+            ));
+        }
+        if self.limits.request_timeout_milliseconds == 0
             || self.limits.request_timeout_milliseconds > 120_000
-            || self.limits.concurrent_queries == 0
-            || self.limits.concurrent_queries > 256
         {
-            return false;
+            return Err(RuntimeRefusal::new(
+                "limits.requestTimeoutMilliseconds",
+                "limits.requestTimeoutMilliseconds must be between 1 and 120000",
+            ));
         }
-        if self
-            .sources
-            .iter()
-            .any(|(id, source)| !valid_runtime_id(id) || source.path.trim().is_empty())
-        {
-            return false;
-        }
-        if self.cursor.as_ref().is_some_and(|cursor| {
-            !valid_secret_reference(&cursor.integrity_key_ref)
-                || cursor.maximum_age_seconds == 0
-                || cursor.maximum_age_seconds > 86_400
-        }) {
-            return false;
+        if self.limits.concurrent_queries == 0 || self.limits.concurrent_queries > 256 {
+            return Err(RuntimeRefusal::new(
+                "limits.concurrentQueries",
+                "limits.concurrentQueries must be between 1 and 256",
+            ));
         }
         if self.quotas.as_ref().is_some_and(|quota| {
             quota.requests_per_minute == 0 || quota.burst == 0 || quota.burst > 100_000
         }) {
-            return false;
+            return Err(RuntimeRefusal::new(
+                "quotas",
+                "quotas.requestsPerMinute must be positive and quotas.burst between 1 and 100000",
+            ));
         }
         if self
             .shutdown
             .as_ref()
             .is_some_and(|shutdown| shutdown.grace_period_milliseconds == 0)
         {
-            return false;
+            return Err(RuntimeRefusal::new(
+                "shutdown.gracePeriodMilliseconds",
+                "shutdown.gracePeriodMilliseconds must be positive",
+            ));
         }
-        self.authentication
-            .issuer
-            .as_ref()
-            .is_none_or(|issuer| issuer.profile().is_some())
+        if let Some(oidc) = &self.authentication.oidc {
+            oidc.check(false)?;
+        }
+        Ok(())
     }
-}
-
-fn valid_secret_reference(value: &str) -> bool {
-    if let Some(name) = value.strip_prefix("secret:env/") {
-        let bytes = name.as_bytes();
-        return matches!(bytes.first(), Some(b'A'..=b'Z'))
-            && bytes.len() <= 128
-            && bytes[1..]
-                .iter()
-                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || *byte == b'_');
-    }
-    if let Some(name) = value.strip_prefix("secret:file/") {
-        let bytes = name.as_bytes();
-        return matches!(bytes.first(), Some(b'a'..=b'z'))
-            && bytes.len() <= 128
-            && bytes[1..].iter().all(|byte| {
-                byte.is_ascii_lowercase()
-                    || byte.is_ascii_digit()
-                    || matches!(byte, b'.' | b'_' | b'-')
-            });
-    }
-    false
 }
 
 fn valid_runtime_id(value: &str) -> bool {
@@ -1348,41 +1446,36 @@ fn valid_runtime_id(value: &str) -> bool {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ServerRuntime {
-    pub bind: String,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RuntimeSource {
+    /// SQLite file of this source, absolute or relative to the directory of
+    /// the runtime configuration.
     pub path: String,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuthenticationRuntime {
-    pub issuer: Option<IssuerRuntime>,
+    /// The one OIDC issuer whose access tokens protected operations accept.
+    /// A Registry whose every operation is public declares none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oidc: Option<OidcRuntime>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct IssuerRuntime {
-    pub id: String,
-    /// Exact issuer accepted in access-token `iss` claims.
-    ///
-    /// Existing runtimes may omit this when `discoveryUrl` uses the canonical
-    /// issuer origin. A distinct discovery transport or direct JWKS transport
-    /// requires this field so network routing never changes token identity.
-    #[serde(default)]
-    pub trusted_issuer: Option<String>,
-    #[serde(default)]
-    pub discovery_url: Option<String>,
-    #[serde(default)]
-    pub jwks_url: Option<String>,
+pub struct OidcRuntime {
+    /// Exact issuer accepted in access-token `iss` claims, an absolute
+    /// `https` URL.
+    pub issuer: String,
     pub audience: String,
+    /// Where the issuer's signing keys come from: `{kind: discovery}` reads
+    /// the issuer's OpenID Connect discovery document, and
+    /// `{kind: uri, uri}` fetches the key set directly. Relay does not
+    /// accept `kind: static`.
+    #[serde(default)]
+    pub jwks_source: JwksSource,
     pub token_types: Vec<String>,
     pub algorithms: Vec<String>,
 }
@@ -1406,70 +1499,91 @@ pub(crate) enum IssuerAlgorithm {
     Rs256,
 }
 
-impl IssuerRuntime {
+impl OidcRuntime {
     pub(crate) fn profile(&self) -> Option<IssuerProfile> {
-        self.profile_with_supervised_loopback(false)
+        self.checked_profile(false).ok()
     }
 
     #[cfg(feature = "tooling")]
     pub(crate) fn supervised_local_profile(&self) -> Option<IssuerProfile> {
-        self.profile_with_supervised_loopback(true)
+        self.checked_profile(true).ok()
     }
 
-    fn profile_with_supervised_loopback(
+    fn check(&self, allow_supervised_loopback: bool) -> Result<(), RuntimeRefusal> {
+        self.checked_profile(allow_supervised_loopback).map(|_| ())
+    }
+
+    fn checked_profile(
         &self,
         allow_supervised_loopback: bool,
-    ) -> Option<IssuerProfile> {
-        if !valid_runtime_id(&self.id)
-            || self.audience.trim().is_empty()
-            || self.audience.len() > MAXIMUM_ISSUER_AUDIENCE_BYTES
-            || self.token_types.as_slice() != ["at+jwt"]
-        {
-            return None;
+    ) -> Result<IssuerProfile, RuntimeRefusal> {
+        if self.audience.trim().is_empty() || self.audience.len() > MAXIMUM_ISSUER_AUDIENCE_BYTES {
+            return Err(RuntimeRefusal::new(
+                "authentication.oidc.audience",
+                "authentication.oidc.audience must be non-empty and at most 8192 bytes",
+            ));
         }
-        let algorithm = match self.algorithms.as_slice() {
-            [algorithm] if algorithm == "EdDSA" => IssuerAlgorithm::EdDsa,
-            [algorithm] if algorithm == "ES256" => IssuerAlgorithm::Es256,
-            [algorithm] if algorithm == "RS256" => IssuerAlgorithm::Rs256,
-            _ => return None,
-        };
-        let (issuer_identifier, key_transport) =
-            match (self.discovery_url.as_deref(), self.jwks_url.as_deref()) {
-                (Some(discovery_url), None) => {
-                    let discovery_url =
-                        canonical_issuer_transport_url(discovery_url, allow_supervised_loopback)?;
-                    if !discovery_url.path().ends_with(OIDC_DISCOVERY_SUFFIX) {
-                        return None;
-                    }
-                    let discovery_url = discovery_url.to_string();
-                    let issuer_identifier = match self.trusted_issuer.as_deref() {
-                        Some(issuer) => {
-                            canonical_trusted_issuer(issuer, allow_supervised_loopback)?
-                        }
-                        None => discovery_url
-                            .strip_suffix(OIDC_DISCOVERY_SUFFIX)?
-                            .to_owned(),
-                    };
-                    (
-                        issuer_identifier,
-                        IssuerKeyTransport::Discovery(discovery_url),
-                    )
-                }
-                (None, Some(jwks_url)) => {
-                    let issuer_identifier = canonical_trusted_issuer(
-                        self.trusted_issuer.as_deref()?,
-                        allow_supervised_loopback,
-                    )?;
-                    let jwks_url =
-                        canonical_issuer_transport_url(jwks_url, allow_supervised_loopback)?;
-                    (
-                        issuer_identifier,
-                        IssuerKeyTransport::Jwks(jwks_url.to_string()),
-                    )
-                }
-                _ => return None,
+        if self.token_types.as_slice() != ["at+jwt"] {
+            return Err(RuntimeRefusal::new(
+                "authentication.oidc.tokenTypes",
+                "authentication.oidc.tokenTypes must be exactly [at+jwt]",
+            ));
+        }
+        let algorithm =
+            match self.algorithms.as_slice() {
+                [algorithm] if algorithm == "EdDSA" => IssuerAlgorithm::EdDsa,
+                [algorithm] if algorithm == "ES256" => IssuerAlgorithm::Es256,
+                [algorithm] if algorithm == "RS256" => IssuerAlgorithm::Rs256,
+                _ => return Err(RuntimeRefusal::new(
+                    "authentication.oidc.algorithms",
+                    "authentication.oidc.algorithms must list exactly one of EdDSA, ES256 or RS256",
+                )),
             };
-        Some(IssuerProfile {
+        let issuer_identifier = canonical_trusted_issuer(&self.issuer, allow_supervised_loopback)
+            .ok_or_else(|| {
+            RuntimeRefusal::new(
+                "authentication.oidc.issuer",
+                "authentication.oidc.issuer must be an absolute https URL without \
+                     credentials, query or fragment",
+            )
+        })?;
+        let key_transport = match &self.jwks_source {
+            JwksSource::Discovery => {
+                let discovery_url = format!(
+                    "{}{OIDC_DISCOVERY_SUFFIX}",
+                    issuer_identifier.trim_end_matches('/')
+                );
+                canonical_issuer_transport_url(&discovery_url, allow_supervised_loopback)
+                    .ok_or_else(|| {
+                        RuntimeRefusal::new(
+                            "authentication.oidc.issuer",
+                            "authentication.oidc.issuer does not yield a canonical discovery URL",
+                        )
+                    })?;
+                IssuerKeyTransport::Discovery(discovery_url)
+            }
+            JwksSource::Uri { uri } => {
+                self.jwks_source
+                    .check("authentication.oidc.jwksSource", allow_supervised_loopback)?;
+                let uri = canonical_issuer_transport_url(uri, allow_supervised_loopback)
+                    .ok_or_else(|| {
+                        RuntimeRefusal::new(
+                            "authentication.oidc.jwksSource.uri",
+                            "authentication.oidc.jwksSource.uri must be a canonical absolute \
+                             https URL without credentials, query or fragment",
+                        )
+                    })?;
+                IssuerKeyTransport::Jwks(uri.to_string())
+            }
+            JwksSource::Static { .. } => {
+                return Err(RuntimeRefusal::new(
+                    "authentication.oidc.jwksSource.kind",
+                    "Relay does not accept authentication.oidc.jwksSource kind: static; \
+                     declare kind: discovery or kind: uri",
+                ))
+            }
+        };
+        Ok(IssuerProfile {
             issuer_identifier,
             algorithm,
             key_transport,
@@ -1526,8 +1640,11 @@ fn canonical_trusted_issuer(raw: &str, allow_supervised_loopback: bool) -> Optio
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuditRuntime {
+    /// Audit journal file, absolute or relative to the directory of the
+    /// runtime configuration.
     pub sink: String,
-    pub integrity_key_ref: String,
+    /// Secret reference for the key that chains the audit journal.
+    pub hash_key_ref: String,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1613,32 +1730,106 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
         assert!(RegistryContract::parse_yaml(input).is_err());
     }
 
+    fn runtime_document(authentication: &str, audit_ref: &str) -> String {
+        format!(
+            "apiVersion: registry.registrystack.org/relay-runtime/v1alpha1\nkind: RelayRuntimeConfig\nlistener: {{bind: '127.0.0.1:8080'}}\npackage: {{root: /srv/relay/package}}\nsecretProviders: {{environment: {{}}, file: {{root: /run/secrets/relay}}}}\nsources: {{db: {{path: /srv/registry.sqlite}}}}\n{authentication}audit: {{sink: /var/log/relay.jsonl, hashKeyRef: {audit_ref}}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 4}}\n"
+        )
+    }
+
+    fn oidc_runtime(oidc: &str) -> String {
+        runtime_document(
+            &format!("authentication:\n  oidc:\n{oidc}"),
+            "secret:env/RELAY_KEY",
+        )
+    }
+
+    fn oidc_block(issuer: &str, jwks_source: &str, audience: &str, algorithms: &str) -> String {
+        format!(
+            "    issuer: {issuer}\n{jwks_source}    audience: '{audience}'\n    tokenTypes: [at+jwt]\n    algorithms: {algorithms}\n"
+        )
+    }
+
+    fn refusal(yaml: &str) -> RuntimeRefusal {
+        RelayRuntime::parse_yaml(yaml).expect_err("runtime refused")
+    }
+
+    #[test]
+    fn runtime_accepts_the_shared_envelope_and_refuses_any_other() {
+        let valid = runtime_document("", "secret:env/RELAY_KEY");
+        let runtime = RelayRuntime::parse_yaml(&valid).expect("shared envelope");
+        assert_eq!(runtime.api_version, RELAY_RUNTIME_API_VERSION);
+        assert_eq!(runtime.kind, RELAY_RUNTIME_KIND);
+        assert_eq!(runtime.listener.bind.socket_addr().port(), 8080);
+        assert_eq!(
+            runtime.package.root,
+            std::path::Path::new("/srv/relay/package")
+        );
+        assert!(runtime.authentication.oidc.is_none());
+
+        let old_version = valid.replace(
+            "registry.registrystack.org/relay-runtime/v1alpha1",
+            "relay.registrystack.org/v2alpha1",
+        );
+        let error = refusal(&old_version);
+        assert_eq!(error.field(), "apiVersion");
+        assert!(
+            error.message().contains(RELAY_RUNTIME_API_VERSION),
+            "{error}"
+        );
+
+        let old_kind = valid.replace("kind: RelayRuntimeConfig", "kind: RelayRuntime");
+        assert_eq!(refusal(&old_kind).field(), "kind");
+    }
+
     #[test]
     fn runtime_rejects_governed_override() {
-        let input = r#"
-apiVersion: relay.registrystack.org/v2alpha1
-kind: RelayRuntime
-server: {bind: "127.0.0.1:8080"}
-packagePath: /srv/relay/package
-sources: {db: {path: /srv/registry.sqlite}}
-authentication: {issuer: null}
-audit: {sink: /var/log/relay.jsonl, integrityKeyRef: secret:key}
-limits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 4}
-disclosureProfiles: {}
-"#;
-        assert!(RelayRuntime::parse_yaml(input).is_err());
+        let input = format!(
+            "{}disclosureProfiles: {{}}\n",
+            runtime_document("", "secret:env/RELAY_KEY")
+        );
+        assert!(RelayRuntime::parse_yaml(&input).is_err());
+    }
+
+    #[test]
+    fn removed_runtime_keys_are_refused_with_their_replacement() {
+        let valid = runtime_document("", "secret:env/RELAY_KEY");
+        let cases = [
+            (
+                format!("{valid}server: {{bind: '127.0.0.1:8080'}}\n"),
+                "server",
+                "listener.bind",
+            ),
+            (
+                format!("{valid}packagePath: package\n"),
+                "packagePath",
+                "package.root",
+            ),
+            (
+                valid.replace(
+                    "hashKeyRef: secret:env/RELAY_KEY",
+                    "integrityKeyRef: secret:env/RELAY_KEY",
+                ),
+                "audit.integrityKeyRef",
+                "audit.hashKeyRef",
+            ),
+            (
+                format!("{valid}authentication: {{issuer: null}}\n"),
+                "authentication.issuer",
+                "authentication.oidc",
+            ),
+        ];
+        for (yaml, field, replacement) in cases {
+            let error = refusal(&yaml);
+            assert_eq!(error.field(), field, "{error}");
+            assert!(error.message().contains(replacement), "{error}");
+        }
     }
 
     #[test]
     fn runtime_accepts_only_the_supported_secret_reference_grammars() {
-        let template = |reference: &str| {
-            format!(
-                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:8080'}}\npackagePath: /srv/relay/package\nsources: {{db: {{path: /srv/registry.sqlite}}}}\nauthentication: {{issuer: null}}\naudit: {{sink: /var/log/relay.jsonl, integrityKeyRef: {reference}}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 4}}\n"
-            )
-        };
         for valid in ["secret:env/RELAY_KEY", "secret:file/audit-integrity-key"] {
             assert!(
-                RelayRuntime::parse_yaml(&template(valid)).is_ok(),
+                RelayRuntime::parse_yaml(&runtime_document("", valid)).is_ok(),
                 "{valid}"
             );
         }
@@ -1650,33 +1841,101 @@ disclosureProfiles: {}
             "secret:file/nested/key",
             "secret:vault/key",
         ] {
-            assert!(
-                RelayRuntime::parse_yaml(&template(invalid)).is_err(),
-                "{invalid}"
-            );
+            let error = refusal(&runtime_document("", invalid));
+            assert_eq!(error.field(), "audit.hashKeyRef", "{invalid}");
+            assert!(!error.message().contains(invalid), "{error}");
         }
+    }
+
+    #[test]
+    fn a_secret_reference_needs_its_provider_declared() {
+        let file_only = runtime_document("", "secret:env/RELAY_KEY").replace(
+            "secretProviders: {environment: {}, file: {root: /run/secrets/relay}}",
+            "secretProviders: {file: {root: /run/secrets/relay}}",
+        );
+        let error = refusal(&file_only);
+        assert_eq!(error.field(), "audit.hashKeyRef");
+        assert!(
+            error.message().contains("secretProviders.environment"),
+            "{error}"
+        );
+
+        let env_only = runtime_document("", "secret:file/audit-key").replace(
+            "secretProviders: {environment: {}, file: {root: /run/secrets/relay}}",
+            "secretProviders: {environment: {}}",
+        );
+        assert!(refusal(&env_only)
+            .message()
+            .contains("secretProviders.file"));
+
+        let cursor = format!(
+            "{}cursor: {{integrityKeyRef: secret:env/CURSOR_KEY, maximumAgeSeconds: 300}}\n",
+            runtime_document("", "secret:file/audit-key").replace(
+                "secretProviders: {environment: {}, file: {root: /run/secrets/relay}}",
+                "secretProviders: {file: {root: /run/secrets/relay}}",
+            )
+        );
+        assert_eq!(refusal(&cursor).field(), "cursor.integrityKeyRef");
+
+        let relative_root = runtime_document("", "secret:file/audit-key")
+            .replace("root: /run/secrets/relay", "root: secrets");
+        assert_eq!(refusal(&relative_root).field(), "secretProviders.file.root");
+    }
+
+    #[test]
+    fn environment_substitution_never_reaches_a_secret_reference() {
+        let yaml = runtime_document("", "'${RELAY_AUDIT_REF}'");
+        let error = RelayRuntime::parse_yaml_with(&yaml, |_| Some("secret:env/KEY".to_owned()))
+            .expect_err("substituted reference refused");
+        assert_eq!(error.field(), "audit.hashKeyRef");
+
+        let bind = runtime_document("", "secret:env/RELAY_KEY")
+            .replace("'127.0.0.1:8080'", "'${RELAY_BIND:-127.0.0.1:9090}'");
+        let runtime = RelayRuntime::parse_yaml(&bind).expect("default substitutes");
+        assert_eq!(runtime.listener.bind.socket_addr().port(), 9090);
+        let runtime = RelayRuntime::parse_yaml_with(&bind, |name| {
+            (name == "RELAY_BIND").then(|| "127.0.0.1:9191".to_owned())
+        })
+        .expect("environment substitutes");
+        assert_eq!(runtime.listener.bind.socket_addr().port(), 9191);
+    }
+
+    #[test]
+    fn package_root_must_be_absolute() {
+        let relative = runtime_document("", "secret:env/RELAY_KEY")
+            .replace("root: /srv/relay/package", "root: package");
+        assert_eq!(refusal(&relative).field(), "package.root");
     }
 
     #[test]
     fn runtime_accepts_exactly_one_startup_supported_issuer_algorithm() {
         let runtime = |algorithms: &str| {
-            format!(
-                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:8080'}}\npackagePath: /srv/relay/package\nsources: {{db: {{path: /srv/registry.sqlite}}}}\nauthentication:\n  issuer:\n    id: issuer\n    discoveryUrl: https://issuer.example.invalid/.well-known/openid-configuration\n    audience: registry\n    tokenTypes: [at+jwt]\n    algorithms: {algorithms}\naudit: {{sink: /var/log/relay.jsonl, integrityKeyRef: secret:env/RELAY_KEY}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 4}}\n"
-            )
+            oidc_runtime(&oidc_block(
+                "https://issuer.example.invalid",
+                "",
+                "registry",
+                algorithms,
+            ))
         };
 
         for algorithm in ["EdDSA", "ES256", "RS256"] {
             assert!(RelayRuntime::parse_yaml(&runtime(&format!("[{algorithm}]"))).is_ok());
         }
-        assert!(RelayRuntime::parse_yaml(&runtime("[EdDSA, ES256]")).is_err());
+        assert_eq!(
+            refusal(&runtime("[EdDSA, ES256]")).field(),
+            "authentication.oidc.algorithms"
+        );
     }
 
     #[test]
     fn issuer_audience_is_bounded_inside_the_authentication_envelope() {
         let runtime = |audience: &str| {
-            format!(
-                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:8080'}}\npackagePath: /srv/relay/package\nsources: {{db: {{path: /srv/registry.sqlite}}}}\nauthentication:\n  issuer:\n    id: issuer\n    discoveryUrl: https://issuer.example.invalid/.well-known/openid-configuration\n    audience: '{audience}'\n    tokenTypes: [at+jwt]\n    algorithms: [EdDSA]\naudit: {{sink: /var/log/relay.jsonl, integrityKeyRef: secret:env/RELAY_KEY}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 4}}\n"
-            )
+            oidc_runtime(&oidc_block(
+                "https://issuer.example.invalid",
+                "",
+                audience,
+                "[EdDSA]",
+            ))
         };
 
         let boundary = "a".repeat(MAXIMUM_ISSUER_AUDIENCE_BYTES);
@@ -1700,143 +1959,133 @@ disclosureProfiles: {}
         assert!(encoded_claims_upper_bound + 16 * 1024 < 128 * 1024);
     }
 
+    fn profile_of(yaml: &str) -> IssuerProfile {
+        RelayRuntime::parse_yaml(yaml)
+            .expect("runtime parses")
+            .authentication
+            .oidc
+            .as_ref()
+            .and_then(OidcRuntime::profile)
+            .expect("issuer profile")
+    }
+
     #[test]
-    fn runtime_issuer_discovery_matches_the_exact_startup_profile() {
-        let runtime = |discovery_url: &str| {
-            format!(
-                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:8080'}}\npackagePath: /srv/relay/package\nsources: {{db: {{path: /srv/registry.sqlite}}}}\nauthentication:\n  issuer:\n    id: issuer\n    discoveryUrl: {discovery_url}\n    audience: registry\n    tokenTypes: [at+jwt]\n    algorithms: [EdDSA]\naudit: {{sink: /var/log/relay.jsonl, integrityKeyRef: secret:env/RELAY_KEY}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 4}}\n"
-            )
-        };
-        let valid = "https://identity.example.invalid/.well-known/openid-configuration";
-        let parsed = RelayRuntime::parse_yaml(&runtime(valid)).expect("exact discovery URL");
-        assert_eq!(
-            parsed
-                .authentication
-                .issuer
-                .as_ref()
-                .and_then(IssuerRuntime::profile)
-                .map(|profile| profile.issuer_identifier),
-            Some("https://identity.example.invalid".to_owned())
-        );
+    fn discovery_key_source_derives_the_issuer_discovery_document() {
+        for jwks_source in ["", "    jwksSource: {kind: discovery}\n"] {
+            let profile = profile_of(&oidc_runtime(&oidc_block(
+                "https://identity.example.invalid",
+                jwks_source,
+                "registry",
+                "[EdDSA]",
+            )));
+            assert_eq!(
+                profile.issuer_identifier,
+                "https://identity.example.invalid"
+            );
+            assert_eq!(
+                profile.key_transport,
+                IssuerKeyTransport::Discovery(
+                    "https://identity.example.invalid/.well-known/openid-configuration".to_owned()
+                )
+            );
+        }
+
+        for (issuer, discovery) in [
+            (
+                "https://issuer.example.invalid/",
+                "https://issuer.example.invalid/.well-known/openid-configuration",
+            ),
+            (
+                "https://issuer.example.invalid/tenant/",
+                "https://issuer.example.invalid/tenant/.well-known/openid-configuration",
+            ),
+        ] {
+            let profile = profile_of(&oidc_runtime(&oidc_block(
+                issuer, "", "registry", "[EdDSA]",
+            )));
+            assert_eq!(profile.issuer_identifier, issuer);
+            assert_eq!(
+                profile.key_transport,
+                IssuerKeyTransport::Discovery(discovery.to_owned())
+            );
+        }
 
         for invalid in [
-            "https://operator:credential@identity.example.invalid/.well-known/openid-configuration",
-            "https://identity.example.invalid/.well-known/openid-configuration?tenant=x",
-            "https://identity.example.invalid/.well-known/openid-configuration#fragment",
-            "https://identity.example.invalid/.well-known/oauth-authorization-server",
-            "https:///.well-known/openid-configuration",
+            "https://operator:credential@identity.example.invalid",
+            "https://identity.example.invalid/?tenant=x",
+            "https://identity.example.invalid/#fragment",
+            "http://identity.example.invalid",
+            "'http://127.0.0.1:8443'",
+            "https:///",
         ] {
+            let error = refusal(&oidc_runtime(&oidc_block(
+                invalid, "", "registry", "[EdDSA]",
+            )));
+            assert_eq!(error.field(), "authentication.oidc.issuer", "{invalid}");
+        }
+    }
+
+    #[test]
+    fn uri_key_source_keeps_the_issuer_separate_from_the_key_transport() {
+        let runtime = |uri: &str| {
+            oidc_runtime(&oidc_block(
+                "https://issuer.example.invalid",
+                &format!("    jwksSource: {{kind: uri, uri: '{uri}'}}\n"),
+                "registry",
+                "[EdDSA]",
+            ))
+        };
+        for uri in [
+            "https://keys.example.invalid/issuer.jwks.json",
+            "https://keys.example.invalid/",
+        ] {
+            let profile = profile_of(&runtime(uri));
+            assert_eq!(profile.issuer_identifier, "https://issuer.example.invalid");
+            assert_eq!(
+                profile.key_transport,
+                IssuerKeyTransport::Jwks(uri.to_owned())
+            );
+        }
+        for invalid in [
+            "http://keys.example.invalid/issuer.jwks.json",
+            "https://keys.example.invalid/issuer.jwks.json?tenant=x",
+            "https://keys.example.invalid",
+        ] {
+            let error = refusal(&runtime(invalid));
             assert!(
-                RelayRuntime::parse_yaml(&runtime(invalid)).is_err(),
-                "{invalid}"
+                error.field().starts_with("authentication.oidc.jwksSource"),
+                "{invalid}: {error}"
             );
         }
     }
 
     #[test]
-    fn runtime_separates_trusted_issuer_from_one_key_transport() {
-        let runtime = |transport: &str| {
-            format!(
-                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:8080'}}\npackagePath: /srv/relay/package\nsources: {{db: {{path: /srv/registry.sqlite}}}}\nauthentication:\n  issuer:\n    id: issuer\n    trustedIssuer: https://issuer.example.invalid\n{transport}    audience: registry\n    tokenTypes: [at+jwt]\n    algorithms: [EdDSA]\naudit: {{sink: /var/log/relay.jsonl, integrityKeyRef: secret:env/RELAY_KEY}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 4}}\n"
-            )
-        };
+    fn static_key_source_is_refused() {
+        let error = refusal(&oidc_runtime(&oidc_block(
+            "https://issuer.example.invalid",
+            "    jwksSource: {kind: static, documentRef: secret:file/issuer-jwks}\n",
+            "registry",
+            "[EdDSA]",
+        )));
+        assert_eq!(error.field(), "authentication.oidc.jwksSource.kind");
+        assert!(error.message().contains("kind: uri"), "{error}");
+    }
 
-        let discovery = RelayRuntime::parse_yaml(
-            &runtime(
-                "    discoveryUrl: https://discovery.example.invalid/.well-known/openid-configuration\n",
-            ),
-        )
-        .expect("distinct discovery transport parses");
-        let profile = discovery
-            .authentication
-            .issuer
-            .as_ref()
-            .and_then(IssuerRuntime::profile)
-            .expect("distinct discovery transport validates");
-        assert_eq!(profile.issuer_identifier, "https://issuer.example.invalid");
-        assert_eq!(
-            profile.key_transport,
-            IssuerKeyTransport::Discovery(
-                "https://discovery.example.invalid/.well-known/openid-configuration".to_owned()
-            )
-        );
-
-        let jwks = RelayRuntime::parse_yaml(&runtime(
-            "    jwksUrl: https://keys.example.invalid/issuer.jwks.json\n",
-        ))
-        .expect("direct JWKS transport parses");
-        let profile = jwks
-            .authentication
-            .issuer
-            .as_ref()
-            .and_then(IssuerRuntime::profile)
-            .expect("direct JWKS transport validates");
-        assert_eq!(profile.issuer_identifier, "https://issuer.example.invalid");
-        assert_eq!(
-            profile.key_transport,
-            IssuerKeyTransport::Jwks("https://keys.example.invalid/issuer.jwks.json".to_owned())
-        );
-
-        let root_jwks =
-            RelayRuntime::parse_yaml(&runtime("    jwksUrl: https://keys.example.invalid/\n"))
-                .expect("canonical root JWKS transport parses");
-        assert_eq!(
-            root_jwks
-                .authentication
-                .issuer
-                .as_ref()
-                .and_then(IssuerRuntime::profile)
-                .expect("canonical root JWKS transport validates")
-                .key_transport,
-            IssuerKeyTransport::Jwks("https://keys.example.invalid/".to_owned())
-        );
-
-        for trusted_issuer in [
-            "https://issuer.example.invalid/",
-            "https://issuer.example.invalid/tenant/",
-        ] {
-            let trailing_slash =
-                runtime("    jwksUrl: https://keys.example.invalid/issuer.jwks.json\n").replace(
-                    "trustedIssuer: https://issuer.example.invalid",
-                    &format!("trustedIssuer: {trusted_issuer}"),
-                );
-            let profile = RelayRuntime::parse_yaml(&trailing_slash)
-                .expect("canonical trailing-slash issuer parses")
-                .authentication
-                .issuer
-                .as_ref()
-                .and_then(IssuerRuntime::profile)
-                .expect("canonical trailing-slash issuer validates");
-            assert_eq!(profile.issuer_identifier, trusted_issuer);
-        }
-
-        for invalid in [
-            runtime(""),
-            runtime(
-                "    discoveryUrl: https://discovery.example.invalid/.well-known/openid-configuration\n    jwksUrl: https://keys.example.invalid/issuer.jwks.json\n",
-            ),
-            runtime("    jwksUrl: http://keys.example.invalid/issuer.jwks.json\n"),
-        ] {
-            assert!(
-                RelayRuntime::parse_yaml(&invalid).is_err(),
-                "runtime accepted an invalid issuer transport contract"
-            );
-        }
-
-        let missing_trusted_issuer =
-            runtime("    jwksUrl: https://keys.example.invalid/issuer.jwks.json\n")
-                .replace("    trustedIssuer: https://issuer.example.invalid\n", "");
-        assert!(RelayRuntime::parse_yaml(&missing_trusted_issuer).is_err());
+    #[test]
+    fn refusals_name_the_field_and_never_the_value() {
+        let yaml = runtime_document("", "secret:env/RELAY_KEY")
+            .replace("concurrentQueries: 4", "concurrentQueries: 999");
+        let error = refusal(&yaml);
+        assert_eq!(error.field(), "limits.concurrentQueries");
+        assert!(!error.message().contains("999"), "{error}");
     }
 
     #[test]
     fn cursor_requirement_counts_only_potentially_visible_metadata_resources() {
         let mut contract = RegistryContract::parse_yaml(crate::compiler::tests::valid_contract())
             .expect("base contract");
-        let mut runtime = RelayRuntime::parse_yaml(
-            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:8080'}\npackagePath: package\nsources: {db: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
-        )
-        .expect("runtime without cursor");
+        let mut runtime = RelayRuntime::parse_yaml(&runtime_document("", "secret:env/KEY"))
+            .expect("runtime without cursor");
         let mut protected_resource = contract.resources[0].clone();
         protected_resource.id = "protected-record".into();
         protected_resource.operations.read = Some(

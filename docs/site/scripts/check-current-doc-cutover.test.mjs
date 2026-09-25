@@ -158,7 +158,7 @@ test('accepts the Relay V2 command surface', async () => {
         '`relayctl test`',
         '`relayctl diff`',
         '`relayctl package`',
-        '`relay serve --runtime runtime.yaml`',
+        '`relay serve --runtime-config /etc/relay/runtime.yaml`',
         '`relay healthcheck --url http://127.0.0.1:8080/health`',
       ].join('\n'),
     );

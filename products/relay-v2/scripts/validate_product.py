@@ -52,6 +52,7 @@ SECURITY_INVARIANT_IDS = {
     "sec-provider-public-projection",
     "sec-contract-runtime-separation",
     "sec-package-activation-integrity",
+    "sec-runtime-secret-provider-boundary",
     "sec-one-registry-boundary",
     "sec-sqlite-read-only",
     "sec-sqlite-connection-recovery",

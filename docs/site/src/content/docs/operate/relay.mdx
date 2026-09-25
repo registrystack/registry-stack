@@ -51,23 +51,47 @@ checks.
 The runtime file names local deployment bindings and must not restate or override governed policy:
 
 ```yaml
-apiVersion: relay.registrystack.org/v2alpha1
-kind: RelayRuntime
-server: {bind: "127.0.0.1:8080"}
-packagePath: /etc/relay/business/package
+apiVersion: registry.registrystack.org/relay-runtime/v1alpha1
+kind: RelayRuntimeConfig
+listener: {bind: "127.0.0.1:8080"}
+package: {root: /etc/relay/business/package}
+secretProviders:
+  file: {root: /run/secrets/relay}
 sources: {companies: {path: /srv/registries/business.sqlite}}
-authentication: {issuer: null}
 audit:
   sink: /var/lib/relay/business/audit.jsonl
-  integrityKeyRef: secret:file/audit-integrity-key
+  hashKeyRef: secret:file/audit-integrity-key
 cursor: {integrityKeyRef: secret:file/cursor-integrity-key, maximumAgeSeconds: 300}
 limits: {requestTimeoutMilliseconds: 1500, concurrentQueries: 32}
 quotas: {requestsPerMinute: 120, burst: 20}
 ```
 
-`authentication.issuer: null` is valid only when every compiled access rule is public, including
-Record access profiles and fixed statistical-dataset access rules. A package with either kind of
-protected access needs the configured issuer at startup.
+`package.root` is an absolute path. Add `package.expectedDigest` with the package's
+`sha256:` revision to refuse any other package at that path. A `secret:file/` reference resolves
+under `secretProviders.file.root`, never beside the runtime file; a `secret:env/` reference needs
+`secretProviders.environment: {}`. Other values may use `${VAR}` or `${VAR:-default}`
+substitution, but a field ending in `Ref` refuses it. A removed key such as `server`,
+`packagePath`, `audit.integrityKeyRef`, or `authentication.issuer` is refused with the name of its
+replacement.
+
+A package with protected access declares its one issuer:
+
+```yaml
+authentication:
+  oidc:
+    issuer: https://identity.example.org
+    audience: relay-business
+    tokenTypes: [at+jwt]
+    algorithms: [ES256]
+```
+
+`jwksSource` defaults to `kind: discovery`, which reads the issuer's
+`/.well-known/openid-configuration`. Use `jwksSource: {kind: uri, uri: <exact JWKS URL>}` when the
+keys are served elsewhere; token `iss` validation stays bound to `issuer` either way.
+
+Leaving `authentication.oidc` out is valid only when every compiled access rule is public,
+including Record access profiles and fixed statistical-dataset access rules. A package with either
+kind of protected access needs the configured issuer at startup.
 The issuer's verified claims may establish scopes, purpose, and row authority, but cannot enable an
 operation or access profile the package did not compile.
 A syntactically valid unknown access profile and a valid principal without its scope receive the
@@ -80,7 +104,7 @@ order, selected fields, authorization context, optional bbox, wire format, forma
 expiry. Treat cursors as opaque continuation tokens even though they contain no plaintext filter,
 order, or bbox values.
 
-`relay serve --runtime <file>` opens only the sealed package at `packagePath`.
+`relay serve --runtime-config <file>` opens only the sealed package at `package.root`.
 It rejects unsafe paths, a package inventory mismatch, source-schema drift, missing mandatory audit
 inputs, and incompatible runtime bindings before listening.
 There is no deployment switch that disables fail-closed audit behavior.
@@ -124,7 +148,7 @@ change its time granularity, or add another statistical format or query.
 Start the process using the exact runtime file:
 
 ```sh
-sudo -u <relay-user> /usr/local/bin/relay serve --runtime /etc/relay/business/runtime.yaml
+sudo -u <relay-user> /usr/local/bin/relay serve --runtime-config /etc/relay/business/runtime.yaml
 ```
 
 Relay reports its listener only after it verifies the package, source, issuer when configured,

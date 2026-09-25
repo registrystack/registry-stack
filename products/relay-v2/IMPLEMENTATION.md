@@ -123,13 +123,14 @@ source requiredness and full SHACL cardinality, including every Point whether
 or not a particular access profile discloses it. Semantic generation includes
 the Point once as its property and never duplicates carrier metadata.
 
-`RelayRuntime` is a separate strict deployment file. It binds listener,
-`packagePath`, SQLite paths, at most one issuer and audience, secrets, cursor
-key, audit sink, timeouts, concurrency, quotas, and
-shutdown.
+`RelayRuntimeConfig` is a separate strict deployment file read by the shared
+platform runtime loader. It binds `listener.bind`, `package.root`, SQLite
+paths, at most one `authentication.oidc` issuer and audience, the
+`secretProviders` that resolve secret references, cursor key, audit sink,
+timeouts, concurrency, quotas, and shutdown.
 It cannot add or weaken a resource, operation, disclosure, access rule,
 classification, semantic mapping, or metadata visibility decision.
-Audit sink and integrity key are mandatory. There is no `failClosed` switch;
+Audit sink and hash key (`audit.hashKeyRef`) are mandatory. There is no `failClosed` switch;
 durable refusal, source-access, and response-release gating cannot be disabled
 by deployment configuration.
 
@@ -178,8 +179,8 @@ deployment bindings; Relay captures a snapshot digest or explicitly reports an
 unversioned live source. Snapshot execution verifies the captured digest before
 and after every statement; operators still provide external immutability,
 preferably a read-only mount, because no process can exclude a privileged
-change-and-restore entirely between those checks. `relay serve --runtime <file>` resolves the sealed
-package only from the runtime's `packagePath`; it never accepts a mutable
+change-and-restore entirely between those checks. `relay serve --runtime-config <file>` resolves the sealed
+package only from the runtime's absolute `package.root`; it never accepts a mutable
 authoring project or loose contract file.
 
 The complete governed file closure is captured into memory with file count,
@@ -254,7 +255,7 @@ Editor authoring remains another caller of the compiler, not another compiler.
 `registry.yaml`, holds the bounded governed closure in memory, and passes the
 current buffers to `registry-relay-v2::authoring`. It never observes SQLite or
 source values. `relayctl tooling editor` embeds reproducible JSON Schemas
-derived from the strict `RegistryContract` and `RelayRuntime` Rust types and
+derived from the strict `RegistryContract` and `RelayRuntimeConfig` Rust types and
 writes collision-safe project-local mappings for VS Code and Zed.
 
 ### Registry Record and response shapes

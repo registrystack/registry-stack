@@ -16,7 +16,7 @@ portability tooling, not a Version one runtime input.
 The intended boundaries are firmer than the syntax:
 
 - `RegistryContract` is governed, versioned, compiled and sealed by `relayctl package`, verified at startup, and cannot be overridden by runtime configuration;
-- `RelayRuntime` binds deployment-local paths, listeners, token issuers, and audit storage without changing resources, operations, disclosure, or semantics;
+- `RelayRuntimeConfig` binds deployment-local paths, listeners, token issuers, and audit storage without changing resources, operations, disclosure, or semantics;
 - SQLite views and columns are source bindings, while resources and properties are the public model;
 - one contract describes one Registry; each resource is a Record type within it;
 - every resource declares required `datasetIdentifier` and `entityTypeIdentifier` values beside `id`; Relay never infers either value from the resource id, route, view, or semantic class;
@@ -307,38 +307,41 @@ metadataVisibility:
   processing: operation-bound
 
 ---
-apiVersion: relay.registrystack.org/v2alpha1
-kind: RelayRuntime
-server: {bind: "127.0.0.1:8080"}
-packagePath: /srv/relay/social-assistance-package
+apiVersion: registry.registrystack.org/relay-runtime/v1alpha1
+kind: RelayRuntimeConfig
+listener: {bind: "127.0.0.1:8080"}
+package: {root: /srv/relay/social-assistance-package}
+secretProviders:
+  file: {root: /run/secrets/relay}
 sources:
   assistance: {path: /srv/registries/social-assistance.sqlite}
 authentication:
-  issuer:
-    id: institutional-authorization-server
-    trustedIssuer: https://identity.example.invalid
-    discoveryUrl: https://identity-transport.example.invalid/.well-known/openid-configuration
+  oidc:
+    issuer: https://identity.example.invalid
+    jwksSource:
+      kind: uri
+      uri: https://identity-transport.example.invalid/jwks
     audience: relay-social-assistance
     tokenTypes: [at+jwt]
     algorithms: [ES256]
 audit:
   sink: /var/lib/relay/audit/social-assistance.jsonl
-  integrityKeyRef: secret:file/audit-integrity-key
+  hashKeyRef: secret:file/audit-integrity-key
 limits: {requestTimeoutMilliseconds: 1500, concurrentQueries: 16}
 quotas: {requestsPerMinute: 120, burst: 20}
 ```
 
-`trustedIssuer` is the exact JWT `iss` value Relay accepts. `discoveryUrl` is
-the operator-selected metadata transport and may use a different hostname;
-the returned discovery document must still declare the exact trusted issuer.
-Existing runtimes may omit `trustedIssuer` only when `discoveryUrl` is the
-canonical issuer plus `/.well-known/openid-configuration`. As a controlled
-alternative, set `trustedIssuer` with `jwksUrl` and omit `discoveryUrl`; Relay
-then binds that exact key endpoint directly while preserving exact token issuer
-validation. Defining both transports or neither fails startup. Run `relay
-check --runtime <runtime.yaml>` before routing traffic to prove the sealed
-package, source, audit, secret, and issuer key transport without binding the
-listener.
+`authentication.oidc.issuer` is the exact JWT `iss` value Relay accepts.
+`jwksSource` says where the signing keys come from. The default, `kind:
+discovery`, reads the issuer plus `/.well-known/openid-configuration`, and the
+returned discovery document must declare the exact issuer. `kind: uri` binds
+one exact key endpoint instead, which may use a different hostname, while token
+issuer validation stays exact. `kind: static` is refused. A `secret:file/`
+reference resolves under `secretProviders.file.root`, and a `secret:env/`
+reference needs `secretProviders.environment: {}`. Run `relay check
+--runtime-config /etc/relay/runtime.yaml` before routing traffic to prove the
+sealed package, source, audit, secret, and issuer key transport without binding
+the listener.
 
 What this example must prove:
 
@@ -527,16 +530,17 @@ metadataVisibility:
   processing: public
 
 ---
-apiVersion: relay.registrystack.org/v2alpha1
-kind: RelayRuntime
-server: {bind: "127.0.0.1:8080"}
-packagePath: /srv/relay/business-register-package
+apiVersion: registry.registrystack.org/relay-runtime/v1alpha1
+kind: RelayRuntimeConfig
+listener: {bind: "127.0.0.1:8080"}
+package: {root: /srv/relay/business-register-package}
+secretProviders:
+  file: {root: /run/secrets/relay}
 sources:
   companies: {path: /srv/registries/business-register.sqlite}
-authentication: {issuer: null}
 audit:
   sink: /var/lib/relay/audit/business-register.jsonl
-  integrityKeyRef: secret:file/audit-integrity-key
+  hashKeyRef: secret:file/audit-integrity-key
 limits: {requestTimeoutMilliseconds: 1500, concurrentQueries: 32}
 ```
 
@@ -856,22 +860,23 @@ metadataVisibility:
   processing: operation-bound
 
 ---
-apiVersion: relay.registrystack.org/v2alpha1
-kind: RelayRuntime
-server: {bind: "127.0.0.1:8080"}
-packagePath: /srv/relay/civil-events-package
+apiVersion: registry.registrystack.org/relay-runtime/v1alpha1
+kind: RelayRuntimeConfig
+listener: {bind: "127.0.0.1:8080"}
+package: {root: /srv/relay/civil-events-package}
+secretProviders:
+  file: {root: /run/secrets/relay}
 sources:
   events: {path: /srv/registries/civil-events.sqlite}
 authentication:
-  issuer:
-    id: civil-registry-authorization-server
-    discoveryUrl: https://identity.example.invalid/.well-known/openid-configuration
+  oidc:
+    issuer: https://identity.example.invalid
     audience: relay-civil-events
     tokenTypes: [at+jwt]
     algorithms: [ES256]
 audit:
   sink: /var/lib/relay/audit/civil-events.jsonl
-  integrityKeyRef: secret:file/audit-integrity-key
+  hashKeyRef: secret:file/audit-integrity-key
 limits: {requestTimeoutMilliseconds: 1500, concurrentQueries: 16}
 quotas: {requestsPerMinute: 120, burst: 20}
 ```
@@ -1222,19 +1227,18 @@ statisticalDatasets[].title
 ```text
 apiVersion
 audit
-audit.integrityKeyRef
+audit.hashKeyRef
 audit.sink
 authentication
-authentication.issuer
-authentication.issuer.algorithms
-authentication.issuer.algorithms[]
-authentication.issuer.audience
-authentication.issuer.discoveryUrl
-authentication.issuer.id
-authentication.issuer.jwksUrl
-authentication.issuer.tokenTypes
-authentication.issuer.tokenTypes[]
-authentication.issuer.trustedIssuer
+authentication.oidc
+authentication.oidc.algorithms
+authentication.oidc.algorithms[]
+authentication.oidc.audience
+authentication.oidc.issuer
+authentication.oidc.jwksSource
+authentication.oidc.jwksSource.kind
+authentication.oidc.tokenTypes
+authentication.oidc.tokenTypes[]
 cursor
 cursor.integrityKeyRef
 cursor.maximumAgeSeconds
@@ -1242,12 +1246,15 @@ kind
 limits
 limits.concurrentQueries
 limits.requestTimeoutMilliseconds
-packagePath
+listener
+listener.bind
+package
+package.root
 quotas
 quotas.burst
 quotas.requestsPerMinute
-server
-server.bind
+secretProviders
+secretProviders.environment
 shutdown
 shutdown.gracePeriodMilliseconds
 sources

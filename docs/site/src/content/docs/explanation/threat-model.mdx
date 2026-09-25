@@ -272,7 +272,9 @@ through a governed read, and privacy regressions that expose raw subject identif
   one HTTP source that resolves none is the `none` authentication kind, and it is credential-free by
   allowance rather than by construction: only a `local` assurance bundle may declare it, only at a
   canonical numeric-loopback origin, and production and evidence-grade bundles reject that kind.
-  {/* Evidence: valid_secret_reference(), crates/registry-relay-v2/src/contract.rs;
+  {/* Evidence: RelayRuntime::check() refuses a reference whose provider is not declared,
+       crates/registry-relay-v2/src/contract.rs, through check_reference() in
+       crates/registry-platform-config/src/blocks.rs;
        SecretReference, validate_file_metadata(), and the tests
        references_use_only_the_two_exact_contract_grammars,
        file_secret_accepts_only_owner_read_and_optional_owner_write_modes, and
@@ -363,7 +365,7 @@ through a governed read, and privacy regressions that expose raw subject identif
   no origin, no scheme, no host, no port, and no network path into a registry data tier, so there
   is nothing for a URL security rule or a redirect denial to govern and no destination an attacker
   could steer.
-  {/* Evidence: IssuerRuntime::profile() and canonical_issuer_transport_url() discovery-URL
+  {/* Evidence: OidcRuntime::checked_profile() and canonical_issuer_transport_url() key-URL
        constraints, crates/registry-relay-v2/src/contract.rs; healthcheck() rejects userinfo,
        password, query, and fragment and uses .no_proxy() with redirect::Policy::none(),
        crates/registry-relay-v2/src/startup.rs. The statement transport's absences, contract
@@ -590,8 +592,8 @@ conformance claim:
   and open-file identity checks. Relay refuses to start on a non-Unix target outright, because
   its package and runtime trust checks have no equivalent there, and its published binary is
   built for Linux amd64 only.
-  {/* Evidence: #[cfg(not(unix))] validate_runtime_path returns Err(StartupError::RuntimeInvalid)
-       and safe_runtime_permissions returns false, crates/registry-relay-v2/src/startup.rs; the
+  {/* Evidence: #[cfg(not(unix))] require_trusted_ownership returns an error, so the loader
+       refuses every runtime configuration, crates/registry-platform-config/src/loader.rs; the
        non-Unix safe_permissions in crates/registry-relay-v2/src/package.rs returns false
        unconditionally; the installer refuses any platform other than Linux amd64, proven by
        unsupported_platform_fails_before_download_or_install,

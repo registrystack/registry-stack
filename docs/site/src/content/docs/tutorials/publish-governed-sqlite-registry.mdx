@@ -606,30 +606,37 @@ cannot be produced from a revision that would fail `check --production`.
 
 ## Serve it
 
-`runtime.yaml` from `relayctl init` already points at `registry.sqlite` and `package`, so it
-needs no edit. Read it once:
+`runtime.yaml` from `relayctl init` already points at `registry.sqlite`, so it needs no edit.
+Read it once:
 
 ```yaml
-apiVersion: relay.registrystack.org/v2alpha1
-kind: RelayRuntime
-server: {bind: "127.0.0.1:8080"}
-packagePath: package
+apiVersion: registry.registrystack.org/relay-runtime/v1alpha1
+kind: RelayRuntimeConfig
+listener: {bind: "127.0.0.1:8080"}
+package: {root: "${RELAY_PACKAGE_ROOT:-/srv/relay/package}"}
+secretProviders: {environment: {}}
 sources: {registry: {path: registry.sqlite}}
-authentication: {issuer: null}
-audit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/RELAY_AUDIT_KEY}
+audit: {sink: var/audit.jsonl, hashKeyRef: secret:env/RELAY_AUDIT_KEY}
 limits: {requestTimeoutMilliseconds: 1500, concurrentQueries: 8}
 ```
 
-`authentication: {issuer: null}` works here only because every access profile in the contract is
-public. Add one protected profile and Relay refuses to start without a reachable token issuer,
-even for requests that would have been anonymous.
+`package.root` must be absolute. It reads the `RELAY_PACKAGE_ROOT` environment variable and falls
+back to `/srv/relay/package` when that is unset, so you point it at the package you just sealed
+without editing the file. The audit key is a secret reference, never a substituted value, and
+`secretProviders.environment` is what lets it resolve from the environment.
 
-Create the audit directory and the integrity key, then start the service:
+There is no `authentication` block because every access profile in the contract is public. Add
+one protected profile and Relay refuses to start without a reachable token issuer, even for
+requests that would have been anonymous.
+
+Create the audit directory and the integrity key, then start the service. The runtime path is
+absolute too:
 
 ```sh
 mkdir -m 700 var
 export RELAY_AUDIT_KEY="$(openssl rand -base64 32)"
-relay serve --runtime runtime.yaml
+export RELAY_PACKAGE_ROOT="$PWD/package"
+relay serve --runtime-config "$PWD/runtime.yaml"
 ```
 
 Mode `700` is required, not tidiness. The audit directory must be owner-only, and Relay refuses

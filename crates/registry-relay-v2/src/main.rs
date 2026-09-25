@@ -11,10 +11,14 @@ async fn main() -> ExitCode {
     install_operational_logging();
     let result = match Cli::parse().command {
         Command::Check {
-            runtime,
+            runtime_config,
             require_audit_under,
-        } => registry_relay_v2::startup::check(&runtime, require_audit_under.as_deref()).await,
-        Command::Serve { runtime } => registry_relay_v2::startup::serve(&runtime).await,
+        } => {
+            registry_relay_v2::startup::check(&runtime_config, require_audit_under.as_deref()).await
+        }
+        Command::Serve { runtime_config } => {
+            registry_relay_v2::startup::serve(&runtime_config).await
+        }
         Command::Healthcheck { url } => registry_relay_v2::startup::healthcheck(&url).await,
     };
     match result {
@@ -27,7 +31,9 @@ async fn main() -> ExitCode {
 }
 
 /// Install bounded structured operational logs on stderr. Relay-owned events
-/// deliberately carry only fixed messages and value-free dimensions.
+/// deliberately carry only fixed messages and value-free dimensions; a
+/// refused runtime configuration adds the refused field's name and the rule it
+/// broke, never a configured value or the file's path.
 fn install_operational_logging() {
     let configured = std::env::var("RELAY_LOG").ok();
     let filter =

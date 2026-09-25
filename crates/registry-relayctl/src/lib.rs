@@ -575,7 +575,7 @@ mod tests {
             "    {\n",
             "      \"severity\": \"error\",\n",
             "      \"code\": \"runtime.issuer_missing\",\n",
-            "      \"location\": \"runtime.yaml.authentication.issuer\",\n",
+            "      \"location\": \"runtime.yaml.authentication.oidc\",\n",
             "      \"message\": \"a Registry with protected operations requires one configured issuer\"\n",
             "    }\n",
             "  ],\n",
