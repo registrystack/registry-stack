@@ -140,13 +140,16 @@ configured domain or a compatible additive schema change.
 3. `bregctl package` reproduces that tested candidate and stops at
    `awaiting_signatures`. An external signer reviews and signs the exact
    `signing-input.json`; rerunning `package` with the detached signature
-   document publishes the verified package. The CLI accepts no private signing
-   key.
+   document publishes the verified package with `SHA256SUMS` and reports its
+   shared package digest. `--revision <text>` optionally records a source label
+   in the hash-covered `REVISION` file. The CLI accepts no private signing key.
 4. An operator with the migration database credential runs
    `bregctl apply --runtime-config <file> --package <directory>` and
    then `bregctl verify --runtime-config <file>`. Initial activation
    also requires `--initial`.
-5. `breg --runtime-config <file>` serves the active package. Authorized
+5. `breg --runtime-config <file>` verifies `SHA256SUMS`, the optional
+   `package.expectedDigest` pin, and BReg's existing signatures and deployment
+   bindings before it serves the active package. Authorized
    bulk operations use `bregctl data validate`, `data import`, and
    `data export`, which reuse the packaged plans and normal authenticated API
    paths.

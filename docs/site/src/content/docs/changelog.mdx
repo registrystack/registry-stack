@@ -91,6 +91,17 @@ relevant product pages on this site rather than duplicating release notes.
   [Evidence audit](../operate/evidence-audit/), and
   [audit upgrades](../operate/retention-and-persistent-state/#upgrade-casework-and-scheduling-audit).
 
+- BREAKING: published Base Registry Engine packages now carry the shared
+  `SHA256SUMS` envelope. `bregctl package` reports its `packageDigest` and can
+  add a hash-covered `REVISION` with `--revision`. `breg` verifies every listed
+  file at startup in addition to the existing BReg signatures and deployment
+  bindings, and `package.expectedDigest` can pin the shared digest. Rebuild old
+  package directories with `bregctl package` before starting this version.
+
+{/* Evidence: crates/registry-breg/src/package.rs, PreparedPackage::publish_to_directory_with_revision;
+    crates/registry-breg/src/runtime_config.rs, RuntimeConfig::verify_package_envelope;
+    crates/registry-breg/tests/runtime_config.rs, shared_package_envelope_and_pin_are_checked_before_startup. */}
+
 - `evidence check --require-runtime-dependencies` and `evidence serve` name
   the fault that stopped a Transit signer from initializing, after the
   unchanged `evidence: runtime signing initialization failed:` prefix: no

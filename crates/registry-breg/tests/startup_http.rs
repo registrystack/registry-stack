@@ -633,6 +633,7 @@ fn expected_startup_error(error: StartupError) -> &'static str {
     match error {
         StartupError::RuntimeConfig(_) => "the Registry runtime configuration was refused",
         StartupError::PackageRefused(_) => "the Registry package was refused",
+        StartupError::PackageEnvelopeRefused(_) => "the Registry package was refused",
         StartupError::DatabaseConnection => "the Registry database connection was refused",
         StartupError::DatabaseUnready => "the Registry database is not ready for this package",
         StartupError::InstanceClaimMismatch => {

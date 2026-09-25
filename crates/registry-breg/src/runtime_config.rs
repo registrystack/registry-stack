@@ -16,8 +16,9 @@ use base64::Engine as _;
 use jsonwebtoken::jwk::JwkSet;
 use registry_platform_audit::{AuditDestination, AuditDestinationKind, AuditProfile};
 use registry_platform_config::{
-    AuditKeyConfig, JwksSource, ListenerBind, OidcIssuerConfig, RuntimeConfigErrorKind,
-    RuntimeConfigLoader, RuntimeEnvelope, SecretError, SecretReference, SecretResolver,
+    AuditKeyConfig, JwksSource, ListenerBind, OidcIssuerConfig,
+    PackageConfig as SharedPackageConfig, RuntimeConfigErrorKind, RuntimeConfigLoader,
+    RuntimeEnvelope, SecretError, SecretReference, SecretResolver,
 };
 use registry_platform_crypto::{parse_json_strict, PublicJwk, SigningAlgorithm};
 #[cfg(feature = "schema")]
@@ -873,6 +874,20 @@ impl RuntimeConfig {
         &self.package
     }
 
+    /// Verify the shared package envelope and optional package digest pin
+    /// before any product-specific signature or deployment-binding work.
+    pub fn verify_package_envelope(
+        &self,
+    ) -> std::result::Result<
+        registry_platform_config::package::VerifiedPackage,
+        registry_platform_config::package::PackageError,
+    > {
+        self.package
+            .shared
+            .verify_package(&crate::package::shared_package_limits(), "bregctl package")
+            .map_err(|error| error.naming_root_as("package.root"))
+    }
+
     pub fn authentication(&self) -> &AuthenticationConfig {
         &self.authentication
     }
@@ -1013,7 +1028,7 @@ impl RuntimeConfig {
 
     fn validate_loaded_paths(&self) -> Result<()> {
         validate_existing_directory(
-            &self.package.root,
+            self.package.root(),
             RuntimeConfigError::UnsafePackageRoot,
             RuntimeConfigError::PackageRootUnavailable,
         )?;
@@ -1388,7 +1403,7 @@ impl fmt::Debug for DatabaseConfig {
 
 #[derive(Clone)]
 pub struct PackageConfig {
-    root: PathBuf,
+    shared: SharedPackageConfig,
     trust_anchor_path: PathBuf,
     compiler_source_revision: String,
     active_revision: String,
@@ -1397,7 +1412,9 @@ pub struct PackageConfig {
 
 impl PackageConfig {
     fn from_raw(raw: RawPackageConfig) -> Result<Self> {
-        validate_absolute_lexical_path(&raw.root, RuntimeConfigError::InvalidPackage)?;
+        raw.shared
+            .check()
+            .map_err(|_| RuntimeConfigError::InvalidPackage)?;
         validate_absolute_lexical_path(&raw.trust_anchor_path, RuntimeConfigError::InvalidPackage)?;
         validate_deployment_value(&raw.compiler_source_revision)?;
         validate_deployment_value(&raw.active_revision)?;
@@ -1405,7 +1422,7 @@ impl PackageConfig {
             return Err(RuntimeConfigError::InvalidPackage);
         }
         Ok(Self {
-            root: raw.root,
+            shared: raw.shared,
             trust_anchor_path: raw.trust_anchor_path,
             compiler_source_revision: raw.compiler_source_revision,
             active_revision: raw.active_revision,
@@ -1414,7 +1431,11 @@ impl PackageConfig {
     }
 
     pub fn root(&self) -> &Path {
-        &self.root
+        &self.shared.root
+    }
+
+    pub fn shared(&self) -> &SharedPackageConfig {
+        &self.shared
     }
 
     pub fn trust_anchor_path(&self) -> &Path {
@@ -1438,7 +1459,7 @@ impl fmt::Debug for PackageConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PackageConfig")
-            .field("root", &"<redacted>")
+            .field("shared", &"<redacted>")
             .field("trust_anchor_path", &"<redacted>")
             .field("compiler_source_revision", &"<redacted>")
             .field("active_revision", &"<redacted>")
@@ -2594,7 +2615,8 @@ struct RawSqlRoles {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawPackageConfig {
-    root: PathBuf,
+    #[serde(flatten)]
+    shared: SharedPackageConfig,
     trust_anchor_path: PathBuf,
     compiler_source_revision: String,
     active_revision: String,
