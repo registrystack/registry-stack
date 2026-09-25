@@ -34,11 +34,9 @@ COPY --from=runtime-root /workspace/runtime-root/ /
 
 WORKDIR /var/lib/registry-evidence
 
-ENV REGISTRY_EVIDENCE_RUNTIME=/etc/registry-evidence/runtime.yaml
-
 EXPOSE 8080
 
 # Evidence serves GET /health for the platform's HTTP probe. The Distroless
 # image has no shell or HTTP client, and Evidence has no healthcheck subcommand.
 ENTRYPOINT ["/usr/local/bin/evidence"]
-CMD ["serve"]
+CMD ["serve", "--runtime-config", "/etc/registry-evidence/runtime.yaml"]

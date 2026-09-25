@@ -1635,17 +1635,17 @@ assuranceProfile: production
 service: {{providerId: urn:example:providers:evidence, trustDomain: urn:example:trust-domains:acceptance, publicOrigin: https://evidence.example.test}}
 issuer: {{id: urn:example:issuers:evidence}}
 authentication:
-  kind: oidc-access-token
-  issuer: {identity}
-  audiences: [{TOKEN_AUDIENCE}]
-  tokenTypes: [at+jwt]
-  algorithms: [ES256]
-  jwksUri: {identity}/.well-known/jwks.json
-  principalClaim: sub
-  requesterTagsClaim: evidence_tags
-  evidenceAudienceClaim: evidence_audience
-  maximumTokenLifetimeSeconds: 300
-  revokedKeyIds: []
+  oidc:
+    issuer: {identity}
+    audience: {TOKEN_AUDIENCE}
+    jwksSource: {{kind: uri, uri: {identity}/.well-known/jwks.json}}
+    tokenTypes: [at+jwt]
+    algorithms: [ES256]
+    principalClaim: sub
+    requesterTagsClaim: evidence_tags
+    evidenceAudienceClaim: evidence_audience
+    maximumTokenLifetimeSeconds: 300
+    revokedKeyIds: []
 audit: {{hashKeyRef: 'secret:file/audit-hmac-key', hashKeyVersion: 1}}
 subjectBinding: {{secretRef: 'secret:file/subject-binding-hmac-key', keyVersion: 1}}
 rateLimits: {{requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}}
@@ -1676,7 +1676,7 @@ authorityProfiles:
         fs::write(
             &self.target_runtime,
             format!(
-                "version: 1\nbundleDirectory: {bundle}\nlistener:\n  bindHost: 127.0.0.1\n  port: {port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 5000\nsecretProviders:\n  file:\n    root: {secrets}\nsigner:\n  kind: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  timeoutMilliseconds: 2000\naudit:\n  path: {audit}\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
+                "apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1\nkind: EvidenceRuntimeConfig\npackage:\n  root: {bundle}\nlistener:\n  bind: 127.0.0.1:{port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 5000\nsecretProviders:\n  file:\n    root: {secrets}\nsigner:\n  kind: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  timeoutMilliseconds: 2000\naudit:\n  path: {audit}\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
                 bundle = self.candidate.join("bundle").display(),
                 port = self.evidence_port,
                 secrets = self.secrets.display(),
@@ -1816,7 +1816,7 @@ authorityProfiles:
         fs::write(
             &runtime,
             format!(
-                "version: 1\nbundleDirectory: {bundle}\nlistener:\n  bindHost: 127.0.0.1\n  port: {port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 131072\n  maximumConcurrentRequests: 32\n  requestTimeoutMilliseconds: 15000\n  shutdownGraceMilliseconds: 10000\nsecretProviders:\n  file:\n    root: {secrets}\nsigner:\n  kind: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  timeoutMilliseconds: 2000\naudit:\n  path: {audit}\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
+                "apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1\nkind: EvidenceRuntimeConfig\npackage:\n  root: {bundle}\nlistener:\n  bind: 127.0.0.1:{port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 131072\n  maximumConcurrentRequests: 32\n  requestTimeoutMilliseconds: 15000\n  shutdownGraceMilliseconds: 10000\nsecretProviders:\n  file:\n    root: {secrets}\nsigner:\n  kind: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  timeoutMilliseconds: 2000\naudit:\n  path: {audit}\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
                 // This absolute host path stands for the unchanged read-only
                 // candidate/bundle mount in the container execution context.
                 bundle = self.candidate.join("bundle").display(),
@@ -1875,9 +1875,9 @@ authorityProfiles:
     fn start_evidence(&self, evidence: &Path) -> Child {
         let log = owner_only_log(&self.root.join("evidence.log"));
         Command::new(evidence)
-            .arg("--runtime")
-            .arg(self.candidate.join("runtime.yaml"))
             .arg("serve")
+            .arg("--runtime-config")
+            .arg(self.candidate.join("runtime.yaml"))
             .env("SSL_CERT_FILE", &self.ca)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log.try_clone().expect("clone Evidence log")))
@@ -2226,9 +2226,9 @@ fn assert_requirement_forms(
 fn check_revisions(evidence: &Path, runtime: &Path, label: &str) -> (String, String) {
     let output = assert_success(
         Command::new(evidence)
-            .arg("--runtime")
-            .arg(runtime)
             .arg("check")
+            .arg("--runtime-config")
+            .arg(runtime)
             .output()
             .expect("Evidence check starts"),
         label,

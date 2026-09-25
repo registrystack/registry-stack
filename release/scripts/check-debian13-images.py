@@ -152,7 +152,7 @@ ENTRYPOINT ["/usr/local/bin/relay"]
 CMD ["serve", "--runtime-config", "/etc/relay/runtime.yaml"]
 """
 # Each entry pins the runtime instructions that bind one HTTP-probed service to
-# its configuration. Discovery reads no environment variable, so it declares no
+# its configuration. A service that reads no environment variable declares no
 # `environment` and binds its runtime file through the command instead.
 HTTP_PROBE_DOCKERFILES = {
     Path("release/docker/Dockerfile.discovery"): {
@@ -162,9 +162,8 @@ HTTP_PROBE_DOCKERFILES = {
     },
     Path("release/docker/Dockerfile.evidence"): {
         "binary": "evidence",
-        "environment": "ENV REGISTRY_EVIDENCE_RUNTIME=/etc/registry-evidence/runtime.yaml",
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/evidence"]',
-        "command": 'CMD ["serve"]',
+        "command": 'CMD ["serve", "--runtime-config", "/etc/registry-evidence/runtime.yaml"]',
     },
     Path("release/docker/Dockerfile.breg"): {
         "binary": "breg",

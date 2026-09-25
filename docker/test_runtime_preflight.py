@@ -673,26 +673,19 @@ class RuntimePreflightTest(unittest.TestCase):
                         deployment({"evidence": selected}),
                     )
 
-    def test_official_configuration_paths_may_not_be_overridden(self) -> None:
-        fixed = {
-            "evidence": (
-                "REGISTRY_EVIDENCE_RUNTIME",
-                "/etc/registry-evidence/runtime.yaml",
-            ),
-        }
-        for product, (name, expected) in fixed.items():
-            with self.subTest(product=product):
-                selected = service(product)
-                selected["environment"] = {name: expected}
-                self.module.validate_service(
-                    self.module.ServiceSelection(product, product),
-                    deployment({product: selected}),
-                )
-                selected["environment"] = {name: "/tmp/alternate.yaml"}
-                with self.assertRaises(self.module.PreflightError):
+    def test_removed_evidence_runtime_variable_is_refused(self) -> None:
+        # The official image passes --runtime-config itself, and Evidence
+        # refuses to start while the removed variable is set, whatever it says.
+        for value in ("/etc/registry-evidence/runtime.yaml", "/tmp/alternate.yaml"):
+            with self.subTest(value=value):
+                selected = service("evidence")
+                selected["environment"] = {"REGISTRY_EVIDENCE_RUNTIME": value}
+                with self.assertRaisesRegex(
+                    self.module.PreflightError, "REGISTRY_EVIDENCE_RUNTIME"
+                ):
                     self.module.validate_service(
-                        self.module.ServiceSelection(product, product),
-                        deployment({product: selected}),
+                        self.module.ServiceSelection("evidence", "evidence"),
+                        deployment({"evidence": selected}),
                     )
 
     def test_native_failure_is_value_free(self) -> None:

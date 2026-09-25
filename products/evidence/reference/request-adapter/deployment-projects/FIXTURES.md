@@ -452,8 +452,8 @@ arbitrary string remains only the shape `string`; the trace never substitutes
 raw category text or a concept identifier for an ordinal.
 
 ```sh
-evidence --runtime "<candidate>/runtime.yaml" \
-  evaluate --fixture "<path>" --explain --explain-format json \
+evidence evaluate --runtime-config "<candidate>/runtime.yaml" \
+  --fixture "<path>" --explain --explain-format json \
   | jq -r '.cases[] | "\(.id)\t\(.failure // "passed")"'
 ```
 

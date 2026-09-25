@@ -13,6 +13,15 @@ use std::{
 
 use anyhow::{Context as _, Result};
 
+/// The `apiVersion` of the runtime document the matching `evidence` binary
+/// reads. evidencectl writes runtime documents; the runtime owns the grammar
+/// and refuses any other envelope.
+pub(crate) const EVIDENCE_RUNTIME_API_VERSION: &str =
+    "registry.registrystack.org/evidence-runtime/v1alpha1";
+
+/// The `kind` of the runtime document the matching `evidence` binary reads.
+pub(crate) const EVIDENCE_RUNTIME_KIND: &str = "EvidenceRuntimeConfig";
+
 /// How long a delegated `evidence` run may take before evidencectl stops it.
 ///
 /// Compilation and fixture evaluation are local, bounded work against a bundle

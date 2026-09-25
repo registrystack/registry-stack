@@ -10,7 +10,7 @@ use std::{
     collections::BTreeSet,
     future::{Future, IntoFuture},
     io,
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -283,7 +283,7 @@ where
     let metrics_config = runtime.runtime_config().metrics_listener.clone();
     let bundle_revision = runtime.bundle().revision().to_owned();
     let runtime_revision = runtime.runtime_revision().to_owned();
-    let listener = bind(&listener_config.bind_host, listener_config.port).await?;
+    let listener = bind(listener_config.bind.socket_addr()).await?;
     let startup_runtime = Arc::clone(&runtime);
     let (app, evaluations, metrics) = build_app_with_tracker(runtime);
 
@@ -291,7 +291,7 @@ where
     // metrics binding fails startup instead of leaving a service that reports
     // healthy while publishing no telemetry.
     let metrics_listener = match &metrics_config {
-        Some(config) => Some(bind(&config.bind_host, config.port).await?),
+        Some(config) => Some(bind(config.bind.socket_addr()).await?),
         None => None,
     };
 
@@ -304,8 +304,7 @@ where
         target: "registry_evidence::startup",
         bundle_revision,
         runtime_revision,
-        bind_host = listener_config.bind_host,
-        port = listener_config.port,
+        bind = %listener_config.bind.socket_addr(),
         metrics = metrics_config.is_some(),
         "evidence service listening"
     );
@@ -360,18 +359,10 @@ where
 /// controls neither exclusively. Without the address, the two most common
 /// causes read alike and neither points at its fix: a port already taken by
 /// another process, and an address this host does not own.
-async fn bind(bind_host: &str, port: u16) -> io::Result<TcpListener> {
-    let ip = bind_host.parse::<IpAddr>().map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{bind_host} is not an address: {error}"),
-        )
-    })?;
-    TcpListener::bind(SocketAddr::new(ip, port))
+async fn bind(address: SocketAddr) -> io::Result<TcpListener> {
+    TcpListener::bind(address)
         .await
-        .map_err(|error| {
-            io::Error::new(error.kind(), format!("could not bind {ip}:{port}: {error}"))
-        })
+        .map_err(|error| io::Error::new(error.kind(), format!("could not bind {address}: {error}")))
 }
 
 /// Serve a pre-bound listener and drain client-bound handlers on shutdown.
@@ -862,7 +853,7 @@ async fn protected_resource_metadata(
     let public_origin = &state.runtime.bundle().config.service.public_origin;
     let metadata = ProtectedResourceMetadata {
         resource: public_origin,
-        authorization_servers: [&state.runtime.bundle().config.authentication.issuer],
+        authorization_servers: [state.runtime.bundle().config.authentication.oidc.issuer()],
         jwks_uri: format!(
             "{}{}",
             public_origin,
@@ -1130,10 +1121,12 @@ mod tests {
     /// the configuration is wrong or a previous instance is still running.
     #[tokio::test]
     async fn a_taken_port_is_refused_by_address() {
-        let held = bind("127.0.0.1", 0).await.expect("an ephemeral port binds");
+        let held = bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .await
+            .expect("an ephemeral port binds");
         let taken = held.local_addr().expect("the held listener has an address");
 
-        let refused = bind("127.0.0.1", taken.port())
+        let refused = bind(taken)
             .await
             .expect_err("a held port cannot be bound twice");
         assert_eq!(refused.kind(), io::ErrorKind::AddrInUse);
@@ -1142,17 +1135,6 @@ mod tests {
                 .to_string()
                 .starts_with(&format!("could not bind 127.0.0.1:{}: ", taken.port())),
             "the refusal names the address it failed on: {refused}"
-        );
-
-        let malformed = bind("localhost", 0)
-            .await
-            .expect_err("a host name is not an address");
-        assert_eq!(malformed.kind(), io::ErrorKind::InvalidInput);
-        assert!(
-            malformed
-                .to_string()
-                .starts_with("localhost is not an address: "),
-            "the refusal names the value it could not parse: {malformed}"
         );
     }
 

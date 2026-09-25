@@ -655,7 +655,7 @@ impl std::fmt::Display for RuntimeStructureDiagnostic {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "deployment runtime does not satisfy Version 1: {}",
+            "deployment runtime does not satisfy the published runtime contract: {}",
             self.rules.join("; ")
         )
     }
@@ -2273,9 +2273,12 @@ factSchema: schemas/record-status-facts.schema.yaml
         let runtime = include_str!(
             "../../../products/evidence/reference/deployment-targets/environments/production/evidence/runtime.yaml"
         );
-        let runtime = runtime.replace("version: 1", "version: 1\nunknown: true");
+        let runtime = runtime.replace(
+            "kind: EvidenceRuntimeConfig\n",
+            "kind: EvidenceRuntimeConfig\nunknown: true\n",
+        );
         let error = validate_runtime_structure(runtime.as_bytes()).unwrap_err();
-        assert!(format!("{error:#}").contains("Version 1"));
+        assert!(format!("{error:#}").contains("published runtime contract"));
     }
 
     #[test]

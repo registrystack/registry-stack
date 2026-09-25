@@ -868,13 +868,8 @@ pub fn resolve_offline_fixture_authorization(
             .grant_source_issuer
             .as_deref()
             .ok_or(AuthorizationError::Unauthorized)?;
-        let resource = bundle
-            .config
-            .authentication
-            .audiences
-            .first()
-            .ok_or(AuthorizationError::Unauthorized)?;
-        let names = &bundle.config.authentication.claims;
+        let resource = bundle.config.authentication.oidc.audience();
+        let names = &bundle.config.authentication.oidc.claims;
         let now = chrono::Utc::now().timestamp();
         let mut grant_claims = serde_json::json!({
             "sub": "offline-fixture-principal",

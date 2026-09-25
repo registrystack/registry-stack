@@ -113,6 +113,7 @@ CONFIG_CONFORMANCE_PACKAGES = frozenset(
     {
         "registry-platform-config",
         "registry-discovery",
+        "registry-evidence",
         "registry-relay-v2",
         "registry-relayctl",
         "registry-render",

@@ -4,17 +4,19 @@ service: {providerId: https://evidence.example.org, publicOrigin: https://eviden
 issuer: {id: https://authority.example.org}
 publication: {serviceId: urn:example:production:evidence-service, title: Production Evidence service, description: Production minimum-disclosure Evidence service, endpointUrl: https://evidence.example.org, jurisdictions: [urn:example:jurisdiction:production]}
 authentication:
-  kind: oidc-access-token
-  issuer: https://issuer.example.org
-  audiences: [evidence.example.org]
-  tokenTypes: [at+jwt]
-  algorithms: [ES256]
-  jwksUri: https://issuer.example.org/.well-known/jwks.json
-  principalClaim: sub
-  requesterTagsClaim: evidence_tags
-  evidenceAudienceClaim: evidence_audience
-  maximumTokenLifetimeSeconds: 300
-  revokedKeyIds: []
+  oidc:
+    issuer: https://issuer.example.org
+    audience: evidence.example.org
+    tokenTypes: [at+jwt]
+    algorithms: [ES256]
+    jwksSource:
+      kind: uri
+      uri: https://issuer.example.org/.well-known/jwks.json
+    principalClaim: sub
+    requesterTagsClaim: evidence_tags
+    evidenceAudienceClaim: evidence_audience
+    maximumTokenLifetimeSeconds: 300
+    revokedKeyIds: []
 audit: {hashKeyRef: secret:file/evidence-audit-hmac, hashKeyVersion: 1}
 subjectBinding: {secretRef: secret:file/evidence-subject-binding, keyVersion: 1}
 rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}

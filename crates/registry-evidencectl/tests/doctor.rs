@@ -659,7 +659,7 @@ const LOCAL_SIGNER: &str =
 const TRANSIT_SIGNER: &str = "signer:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  timeoutMilliseconds: 2000\n";
 
 fn runtime_document(signer: &str) -> String {
-    format!("bundleDirectory: bundle\nsecretProviders:\n  file:\n    root: secrets\n{signer}audit:\n  path: audit/evidence.jsonl\n")
+    format!("package:\n  root: bundle\nsecretProviders:\n  file:\n    root: secrets\n{signer}audit:\n  path: audit/evidence.jsonl\n")
 }
 
 fn rewrite_runtime(project: &Path, signer: &str) {
@@ -686,15 +686,17 @@ fn provision(project: &Path) {
     fs::write(
         project.join("bundle/evidence.yaml"),
         r#"authentication:
-  kind: oidc-access-token
-  issuer: https://identity.invalid
-  audiences: [evidence-scaffold]
-  tokenTypes: [at+jwt]
-  algorithms: [ES256]
-  jwksUri: https://identity.invalid/.well-known/jwks.json
-  principalClaim: sub
-  requesterTagsClaim: evidence_tags
-  evidenceAudienceClaim: evidence_audience
+  oidc:
+    issuer: https://identity.invalid
+    audience: evidence-scaffold
+    jwksSource:
+      kind: uri
+      uri: https://identity.invalid/.well-known/jwks.json
+    tokenTypes: [at+jwt]
+    algorithms: [ES256]
+    principalClaim: sub
+    requesterTagsClaim: evidence_tags
+    evidenceAudienceClaim: evidence_audience
 signing: secret:file/signing-p256-private-jwk
 audit: secret:file/audit-hmac-key
 subjectBinding: secret:file/subject-binding-hmac-key

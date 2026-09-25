@@ -358,8 +358,8 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                 )
 
     def test_http_probed_images_bind_fixed_config_and_entrypoint(self) -> None:
-        # Discovery reads no environment variable, so its configuration binding
-        # is the command; the others bind it through the environment.
+        # A service that reads no environment variable binds its configuration
+        # through the command; one that declares an environment binds it there.
         wrong = {
             "environment": "ENV WRONG_CONFIG=/tmp/config.yaml",
             "command": 'CMD ["--runtime", "/tmp/runtime.yaml"]',

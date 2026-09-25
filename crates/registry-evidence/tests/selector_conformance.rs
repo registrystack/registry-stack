@@ -1719,11 +1719,12 @@ fn rewrite_source_origin(bundle_root: &Path, source_origin: &str) {
 fn write_runtime(runtime_path: &Path, bundle_root: &Path, secret_root: &Path, audit_path: &Path) {
     let runtime = format!(
         concat!(
-            "version: 1\n",
-            "bundleDirectory: {}\n",
+            "apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1\n",
+            "kind: EvidenceRuntimeConfig\n",
+            "package:\n",
+            "  root: {}\n",
             "listener:\n",
-            "  bindHost: 127.0.0.1\n",
-            "  port: 8080\n",
+            "  bind: 127.0.0.1:8080\n",
             "  tlsTermination: operator-controlled-upstream\n",
             "  trustProxyIdentityHeaders: false\n",
             "  maximumRequestBytes: 65536\n",
