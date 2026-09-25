@@ -342,8 +342,14 @@ async fn recipient_added_successor_matches_fresh_install_and_refuses_consumed_ke
         .collect::<Vec<_>>();
     assert_eq!(
         statements,
-        vec!["entity.consent-decision.field.recipient.vocabulary"],
-        "a recipient added to its vocabulary replaces only the recipient check"
+        vec![
+            "entity.consent-decision.policy.registry_action_rls_insert_18c2deac1df83f2bbf7c42e1.drop",
+            "entity.consent-decision.policy.registry_action_rls_select_f13c1f2f332145d8ba2b99c4.drop",
+            "entity.person.policy.registry_action_link_rls_lock_update_f8ce4ad62f29d16690131d38.drop",
+            "entity.person.policy.registry_action_link_rls_select_28ce629670ff4cb963953600.drop",
+            "entity.consent-decision.field.recipient.vocabulary",
+        ],
+        "a recipient addition retires changed action policies before replacing the recipient check"
     );
     // The recipient widens the action contract, whose fingerprint the action
     // policies embed, so the rehearsal must reconcile policies as activation

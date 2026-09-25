@@ -153,16 +153,11 @@ fn project_rhai_planner_package_is_deterministic_and_rederives_exact_source() {
     assert!(policy_plan
         .statements
         .iter()
-        .all(|statement| statement.sql.starts_with("DROP POLICY ")
-            || statement.sql.starts_with("CREATE POLICY ")));
+        .all(|statement| statement.sql.starts_with("DROP POLICY IF EXISTS ")));
     assert!(policy_plan
         .statements
         .iter()
         .any(|statement| statement.sql.starts_with("DROP POLICY ")));
-    assert!(policy_plan
-        .statements
-        .iter()
-        .any(|statement| statement.sql.starts_with("CREATE POLICY ")));
 
     let inspected = inspect_prepared(&first);
     let rederived = inspected.registry().entities()["request"]
