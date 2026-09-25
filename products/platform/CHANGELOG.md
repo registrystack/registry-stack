@@ -9,6 +9,23 @@
   stops the writer until restart so the caller fails closed. The file
   destination refuses a second writer on the same path and a directory that is
   group- or world-writable.
+- BREAKING: remove the audit hash chain. Tamper evidence is now a deployment
+  concern: ship the audit stream to append-only storage. Removed from
+  `registry-platform-audit`: `ChainState`, `AuditChainHasher`,
+  `AuditChainProfile`, `AuditProfile::chain_hasher`,
+  `AuditProfile::bootstrap_or_start_empty`, `AuditEnvelope`, `AuditSink`,
+  `JsonlFileSink`, `JsonlStdoutSink`, `SyslogSink`, `DurableSegmentedJsonlSink`,
+  `DurableSegmentedAuditLog`, `SegmentedAuditSummary`,
+  `verify_segmented_audit_chain`, `visit_stopped_segmented_audit_chain`,
+  `segmented_audit_paths`, `verify_chain`, `verify_jsonl_lines`,
+  `verify_jsonl_lines_with_hasher`, `quarantine_and_recover_chain`,
+  `ChainRecoveryOutcome`, `CHAIN_BREAK_EVENT`, `ChainBreakRecord`,
+  `OptionalHashHex`, `ChainVerification`, `ChainVerificationError`, and the
+  `AuditError` variants `InvalidHashHex`, `NonTailableSink`, `HashMismatch`,
+  `ChainVerification`, `ChainForkDetected`, and `SegmentMissing`. Removed from
+  `registry-platform-testing`: `assert_chain_integrity` and
+  `ChainAssertionError`. Keyed audit references from `AuditProfile` and
+  `AuditKeyHasher` are unchanged byte for byte.
 
 ## v0.34.0 - 2026-09-25
 

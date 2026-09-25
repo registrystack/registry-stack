@@ -1,89 +1,83 @@
 # registry-platform-audit
 
-Tamper-evident audit envelopes, async sinks, JSONL verification, and redaction
-helpers for registry services.
+The audit writer, keyed audit references, redaction helpers, and the shared
+authorization event shape for Registry Stack services.
 
 ## What It Provides
 
-- `ChainState` for serialized append-only audit chains.
-- `AuditEnvelope` records with ULID ids, timestamps, previous hashes, payloads,
-  and record hashes.
-- `AuditSink` for pluggable persistence.
-- Built-in `JsonlFileSink`, `DurableSegmentedJsonlSink`, `JsonlStdoutSink`, and
-  `SyslogSink`.
-- `DurableSegmentedAuditLog` for keyed chain-head ownership, concurrent
-  append ordering, and group commit over `DurableSegmentedJsonlSink`.
-- `verify_chain` and `verify_jsonl_lines` for retained audit consistency
-  checks.
-- `AuditChainProfile`, `AuditProfile`, `AuditKeyHasher`, and `redact` helpers
-  for production keyed chains and privacy-safe audit fields.
+- `AuditWriter`, the one audit writer every product uses. It appends one JSON
+  object per line (`schema`, `eventId`, `time`, `phase`, `correlation`,
+  `record`): a `request` entry before protected I/O and a `response` entry with
+  the outcome, both carrying the same `correlation`.
+- `AuditDestination::File` (durable: fsync with group commit, size rotation,
+  age-based retention) and `AuditDestination::Stdout` (one flushed line per
+  entry, best-effort).
+- `AuditProfile` and `AuditKeyHasher` for production keyed references derived
+  from one deployment secret.
 - `AuditKeyHasher::audit_reference_hash` for versioned, scoped audit reference
   handles whose service-owned canonical input stays outside the platform domain.
 - `AuditKeyHasher::sensitive_value_hash` for generic field-bound audit lookup
   values used by redaction helpers.
+- `redact` helpers for query strings, email addresses, and phone numbers.
 - `AuthorizationAuditEvent` for one privacy-safe authorization event shape
   across products, using pseudonyms from each product's existing audit profile.
+- `require_audit_under` to keep an audit path under a persistent root.
 
 ## Typical Use
 
 ```rust
-use registry_platform_audit::{AuditProfile, JsonlFileSink};
+use registry_platform_audit::{
+    AuditDestination, AuditEntry, AuditProfile, AuditWriter, FileDestination,
+};
 use serde_json::json;
 
-async fn write_audit_event() -> Result<(), registry_platform_audit::AuditError> {
-    let sink = JsonlFileSink::new("audit.jsonl");
+async fn write_audit_entries() -> Result<(), Box<dyn std::error::Error>> {
     let profile = AuditProfile::production_from_env("REGISTRY_AUDIT_HASH_SECRET")?;
-    let chain = profile.bootstrap_or_start_empty(&sink).await?;
+    let destination = FileDestination::new("/var/lib/registry/audit/audit.jsonl")?;
+    let writer = AuditWriter::open(AuditDestination::File(destination)).await?;
 
-    let envelope = chain
-        .append(&sink, json!({
-            "event": "credential.issued",
-            "subject_ref": profile.key_hasher().hash("did:example:123"),
-        }))
+    let subject_ref = profile.key_hasher().hash("did:example:123");
+    writer
+        .append(AuditEntry::request(
+            "registry.example.audit/v1",
+            "request-1",
+            json!({ "operationId": "credential.issue", "subjectRef": subject_ref }),
+        ))
         .await?;
-
-    assert!(envelope.prev_hash.is_some() || chain.last_hash().await.is_some());
+    // ... protected I/O happens only after the request entry is accepted ...
+    writer
+        .append(AuditEntry::response(
+            "registry.example.audit/v1",
+            "request-1",
+            json!({ "operationId": "credential.issue", "outcome": "success" }),
+        ))
+        .await?;
     Ok(())
 }
 ```
 
 ## Operational Notes
 
-- `JsonlFileSink::new` rotates at 10 MiB and retains 50 files by default.
-- `JsonlFileSink::with_rotation(path, 0, max_files)` disables size rotation.
-- `DurableSegmentedJsonlSink` is the parallel evidence-grade file contract. It
-  seals the active file as `<path>.<eight-digit-sequence>` when the configured
-  threshold is reached, keeps the keyed chain continuous across segments, and
-  never deletes or compacts sealed history. It requires an owner-only audit
-  directory for direct use.
-- `DurableSegmentedAuditLog` adds keyed startup verification and group commit.
-  It retains Evidence's established owner-controlled directory contract while
-  keeping active and lock files owner-only. Use this type when each append must
-  return only after its own bytes are durable.
-- Use `verify_segmented_audit_chain` for operator full-chain verification.
-  Use `visit_stopped_segmented_audit_chain` only for a bounded, caller-owned
-  projection that requires a stopped writer and the complete retained chain
-  starting at sealed segment one.
-- `AuditProfile::bootstrap_or_start_empty` and
-  `AuditChainProfile::bootstrap_or_start_empty` read the sink tail hash before
-  new appends, which is the normal startup path for persistent sinks.
-- `JsonlStdoutSink` and `SyslogSink` cannot report a historical tail hash, so
-  each process starts a fresh chain unless a consumer stores the tail elsewhere.
+- The file destination takes a process-lifetime single-writer lock beside the
+  active file. Each process writes its own stream; run one path per process and
+  aggregate in the log pipeline.
+- The file destination refuses a directory that is group- or world-writable
+  and keeps its files owner-only.
+- A failed write stops the writer until restart, so every later audited request
+  fails closed.
+- `stdout` is best-effort by nature: a flush does not prove the entry reached
+  durable storage.
 
 ## Security Notes
 
-- The chain APIs detect edits, insertions, reordering, and deletions of
-  interior records inside the retained set. The first retained envelope's
-  `prev_hash` is the retained-set boundary.
-- The chain APIs prove internal consistency of retained records. They do not
-  prove completeness: removal of trailing records leaves a self-consistent
-  shorter chain, and they do not detect deletion of leading retained records
-  or a self-consistent full rewrite by an actor who can replace all retained
-  logs.
-- The chain does not replace durable storage, retention policy, clock integrity,
-  or off-host log shipping.
-- Use `AuditProfile::production_from_env` in production. `unkeyed_dev_only` is
-  for tests and local development.
+- Entries are not hash-chained. Tamper evidence is a deployment concern: ship
+  the stream to append-only storage or a SIEM that the service cannot rewrite.
+- Use `AuditProfile::production_from_env` or
+  `AuditProfile::production_from_secret_bytes` in production.
+  `unkeyed_dev_only` is for tests and local development.
+- The identifier key is an HKDF-derived sub-key of the deployment secret. Its
+  derivation and the reference framing are pinned by known-answer tests, so
+  keyed references stay stable across releases.
 - Use `AuditKeyHasher::audit_reference_hash` for audit references
   instead of concatenating ad hoc hash inputs in each service. Keep service
   semantics and canonicalization in the consuming service.

@@ -14,23 +14,18 @@ workspace = true
 schema = ["dep:schemars"]
 
 [dependencies]
-async-trait.workspace = true
 hmac.workspace = true
-registry-platform-canonical-json.workspace = true
 rustix.workspace = true
 schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-subtle.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-ulid.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
 tempfile = { version = "3" }
-tracing-subscriber.workspace = true
