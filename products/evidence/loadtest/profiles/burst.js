@@ -10,10 +10,10 @@ import {
   startTime,
 } from '../../../../scripts/loadtest/k6/config.js';
 import { writeSummary } from '../../../../scripts/loadtest/k6/summary.js';
-import { Workload, READ_MIX } from '../lib/workload.js';
+import { Workload } from '../lib/workload.js';
 
-const baselineOps = positiveNumber('OPS', __ENV.OPS, 50);
-const peakOps = positiveNumber('PEAK_OPS', __ENV.PEAK_OPS, 250);
+const baselineOps = positiveNumber('OPS', __ENV.OPS, 20);
+const peakOps = positiveNumber('PEAK_OPS', __ENV.PEAK_OPS, 100);
 if (peakOps <= baselineOps) throw new Error('PEAK_OPS must be greater than OPS');
 
 const baselineDuration = __ENV.BASELINE_DURATION || '30s';
@@ -27,9 +27,10 @@ const peakMs = durationMilliseconds('PEAK_DURATION', peakDuration);
 function capacity(rate) {
   return {
     preAllocatedVUs: Math.min(500, Math.max(50, Math.ceil(rate))),
-    // The server timeout is 10s. Leave enough VU headroom to keep the offered
-    // rate independent of that timeout, then treat any drops as a test failure.
-    maxVUs: Math.max(1000, Math.ceil(peakOps * 12)),
+    // The listener request timeout is 10s. Leave enough VU headroom to keep
+    // the offered rate independent of that timeout, then treat any drops as a
+    // test failure.
+    maxVUs: Math.max(200, Math.ceil(peakOps * 12)),
   };
 }
 
@@ -88,6 +89,7 @@ export const options = {
   thresholds: {
     dropped_iterations: ['count==0'],
     http_req_failed: ['rate<0.01'],
+    'http_reqs{status:429}': ['count==0'],
     'http_req_failed{scenario:recovery}': ['rate==0'],
     'http_req_duration{scenario:recovery}': ['p(99)<250'],
   },
@@ -96,10 +98,10 @@ export const options = {
   noConnectionReuse: false,
 };
 
-const workload = new Workload(__ENV.BREG_URL);
+const workload = new Workload(__ENV.EVIDENCE_URL);
 
 export function campaignStep() {
-  workload.step(workload.token(), READ_MIX);
+  workload.step();
 }
 
 export const handleSummary = writeSummary;

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import stat
 import subprocess
@@ -269,22 +270,27 @@ def main() -> int:
     if not env_path.is_file():
         print(f"no load-test environment at {env_path}; run up.sh first", file=sys.stderr)
         return 2
-    environment = json.loads(env_path.read_text(encoding="utf-8"))
     repository = Path(__file__).resolve().parents[3]
-    expected_bregctl = repository / "target/debug/bregctl"
-    expected_project = (arguments.run_dir / "project").resolve()
-    if Path(environment.get("bregctl", "")).resolve() != expected_bregctl or Path(
-        environment.get("project", "")
-    ).resolve() != expected_project:
-        print("load-test environment references paths outside its owned checkout state", file=sys.stderr)
-        return 2
     helper = Path(__file__).resolve().parent / "support/loadenv.py"
-    tokens = DevTokenSource(
-        helper,
-        Path(environment["bregctl"]),
-        Path(environment["project"]),
-        "loadtest-driver",
-    )
+    try:
+        described = subprocess.run(
+            [sys.executable, str(helper), "describe", "--root", str(arguments.run_dir), "--repository", str(repository)],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.split()
+    except subprocess.CalledProcessError as error:
+        print(error.stderr.strip() or "load-test environment is not usable", file=sys.stderr)
+        return 2
+    breg_url, bregctl, project = described[:3]
+    runtime_library_path = described[3] if len(described) > 3 else ""
+    if runtime_library_path:
+        existing = os.environ.get("DYLD_FALLBACK_LIBRARY_PATH")
+        os.environ["DYLD_FALLBACK_LIBRARY_PATH"] = (
+            f"{runtime_library_path}:{existing}" if existing else runtime_library_path
+        )
+    environment = {"breg_url": breg_url}
+    tokens = DevTokenSource(helper, Path(bregctl), Path(project), "loadtest-driver")
     seed_dir = arguments.run_dir / "seed"
     seed_dir.mkdir(parents=True, exist_ok=True)
     seed_summary = seed_dir / "seed-summary.json"

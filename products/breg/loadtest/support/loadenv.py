@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 CLIENT_ID = "loadtest-driver"
 DATABASE_NAME = "breg_dev"
 DEV_POOL_MAX = 4
+BUILD_PROFILES = ("debug", "release")
 PROJECT_REPLACEMENTS = {
     "  environment: acceptance": "  environment: local",
     "  instanceId: business-establishments-acceptance": "  instanceId: business-establishments-loadtest",
@@ -135,7 +136,13 @@ def local_project(fixture: Path, project: Path) -> None:
     (project / "dev-clients.yaml").write_text(DEV_CLIENTS, encoding="utf-8")
 
 
-def write_environment(root: Path, dev_report: Path, bregctl: Path) -> None:
+def write_environment(
+    root: Path,
+    dev_report: Path,
+    bregctl: Path,
+    build_profile: str,
+    runtime_library_path: str,
+) -> None:
     root = _require_root(root)
     report = _read_json_object(dev_report)
     project = (root / "project").resolve()
@@ -154,14 +161,44 @@ def write_environment(root: Path, dev_report: Path, bregctl: Path) -> None:
     executable = bregctl.resolve()
     if not executable.is_file():
         raise LoadtestError("bregctl path must be a regular file")
+    if build_profile not in BUILD_PROFILES:
+        raise LoadtestError("build profile must be debug or release")
+    if ":" in runtime_library_path or (runtime_library_path and not Path(runtime_library_path).is_dir()):
+        raise LoadtestError("runtime library path must be one existing directory")
     environment = {
         "breg_url": report["bregUrl"],
         "bregctl": str(executable),
+        "build_profile": build_profile,
+        "runtime_library_path": runtime_library_path,
         "project": str(project),
         "pool_max": DEV_POOL_MAX,
         "database": {"container": container, "database": DATABASE_NAME},
     }
     _write_new(root / "env.json", json.dumps(environment, indent=2, sort_keys=True) + "\n")
+
+
+def describe(root: Path, repository: Path) -> tuple[str, str, str, str]:
+    """Validate an owned environment and return its non-secret shell fields."""
+    root = _require_root(root)
+    environment = _read_json_object(root / "env.json")
+    build_profile = environment.get("build_profile", "debug")
+    if build_profile not in BUILD_PROFILES:
+        raise LoadtestError("environment records an unknown build profile")
+    bregctl = Path(str(environment.get("bregctl", "")))
+    if bregctl != repository.resolve() / "target" / build_profile / "bregctl" or not bregctl.is_file():
+        raise LoadtestError(
+            "the bregctl recorded by this environment is unavailable; preserve state and restore the matching build"
+        )
+    project = Path(str(environment.get("project", "")))
+    if project != root / "project":
+        raise LoadtestError("load-test environment references paths outside its owned checkout state")
+    library_path = str(environment.get("runtime_library_path", ""))
+    if ":" in library_path or any(character.isspace() for character in library_path):
+        raise LoadtestError("runtime library path must be one directory without separators")
+    for value in (str(bregctl), str(project)):
+        if any(character.isspace() for character in value):
+            raise LoadtestError("load-test paths must not contain whitespace")
+    return str(environment["breg_url"]), str(bregctl), str(project), library_path
 
 
 def fresh_header(bregctl: Path, project: Path, client: str) -> Path:
@@ -197,6 +234,11 @@ def parser() -> argparse.ArgumentParser:
     environment.add_argument("--root", type=Path, required=True)
     environment.add_argument("--dev-report", type=Path, required=True)
     environment.add_argument("--bregctl", type=Path, required=True)
+    environment.add_argument("--build-profile", choices=BUILD_PROFILES, required=True)
+    environment.add_argument("--runtime-library-path", default="")
+    describe_command = commands.add_parser("describe")
+    describe_command.add_argument("--root", type=Path, required=True)
+    describe_command.add_argument("--repository", type=Path, required=True)
     header = commands.add_parser("header")
     header.add_argument("--bregctl", type=Path, required=True)
     header.add_argument("--project", type=Path, required=True)
@@ -212,7 +254,15 @@ def main() -> int:
         elif arguments.command == "local-project":
             local_project(arguments.fixture, arguments.project)
         elif arguments.command == "environment":
-            write_environment(arguments.root, arguments.dev_report, arguments.bregctl)
+            write_environment(
+                arguments.root,
+                arguments.dev_report,
+                arguments.bregctl,
+                arguments.build_profile,
+                arguments.runtime_library_path,
+            )
+        elif arguments.command == "describe":
+            print(" ".join(describe(arguments.root, arguments.repository)))
         elif arguments.command == "header":
             print(fresh_header(arguments.bregctl, arguments.project, arguments.client))
     except (

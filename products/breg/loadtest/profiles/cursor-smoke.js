@@ -1,8 +1,8 @@
 // One live list request plus its continuation. The threshold proves page two
 // was executed, rather than merely trusting the workload source shape.
 
-import { SAFE_SYSTEM_TAGS, SUMMARY_TREND_STATS } from '../lib/config.js';
-import { writeSummary } from '../lib/summary.js';
+import { SAFE_SYSTEM_TAGS, SUMMARY_TREND_STATS } from '../../../../scripts/loadtest/k6/config.js';
+import { writeSummary } from '../../../../scripts/loadtest/k6/summary.js';
 import { Workload } from '../lib/workload.js';
 
 export const options = {

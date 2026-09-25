@@ -19,12 +19,15 @@ export function positiveInteger(name, raw, fallback) {
 }
 
 export function durationMilliseconds(name, value) {
-  const match = /^(\d+(?:\.\d+)?)(ms|s|m|h)$/.exec(value);
-  if (!match) {
+  // k6 and the runners accept compound durations such as 1m30s.
+  if (!/^(\d+(?:\.\d+)?(ms|s|m|h))+$/.test(value)) {
     throw new Error(`${name} must be a k6 duration using ms, s, m, or h`);
   }
   const multipliers = { ms: 1, s: 1000, m: 60_000, h: 3_600_000 };
-  const milliseconds = Number(match[1]) * multipliers[match[2]];
+  let milliseconds = 0;
+  for (const part of value.matchAll(/(\d+(?:\.\d+)?)(ms|s|m|h)/g)) {
+    milliseconds += Number(part[1]) * multipliers[part[2]];
+  }
   if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
     throw new Error(`${name} must be a positive duration`);
   }

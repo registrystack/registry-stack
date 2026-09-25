@@ -7,16 +7,16 @@ run_dir="$loadtest_dir/.run"
 marker="$run_dir/.launcher-owned"
 
 if [[ $# -ne 0 ]]; then
-  printf '%s\n' 'usage: products/breg/loadtest/down.sh' >&2
+  printf '%s\n' 'usage: products/casework/loadtest/down.sh' >&2
   exit 2
 fi
 if ! command -v docker >/dev/null 2>&1; then
-  printf '%s\n' 'docker is required to stop the owned bregctl development session.' >&2
+  printf '%s\n' 'docker is required to stop the owned caseworkctl development session.' >&2
   exit 2
 fi
 if [[ -L "$run_dir" || ! -d "$run_dir" || ! -f "$marker" ]] ||
-  [[ "$(<"$marker")" != registry-stack-breg-loadtest-v2 ]]; then
-  printf '%s\n' 'No owned Base Registry Engine load-test state was found; refusing teardown.' >&2
+  [[ "$(<"$marker")" != registry-stack-casework-loadtest-v1 ]]; then
+  printf '%s\n' 'No owned Registry Casework load-test state was found; refusing teardown.' >&2
   exit 2
 fi
 if [[ -L "$run_dir/project" || ! -d "$run_dir/project" || ! -f "$run_dir/env.json" ]]; then
@@ -25,11 +25,11 @@ if [[ -L "$run_dir/project" || ! -d "$run_dir/project" || ! -f "$run_dir/env.jso
 fi
 
 environment_fields=$(python3 "$loadtest_dir/support/loadenv.py" describe --root "$run_dir" --repository "$repository_root") || exit 2
-read -r _ bregctl _ runtime_library_path <<<"$environment_fields"
+read -r _ caseworkctl _ runtime_library_path <<<"$environment_fields"
 if [[ -n "$runtime_library_path" ]]; then
   export DYLD_FALLBACK_LIBRARY_PATH="$runtime_library_path${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
 fi
 
-"$bregctl" --format json dev stop --remove --docker-bin "$(command -v docker)" "$run_dir/project" >"$run_dir/stop-report.json"
-printf '%s\n' 'Load-test services and their owned database were removed through bregctl dev.'
+"$caseworkctl" --format json dev stop --remove --docker-bin "$(command -v docker)" "$run_dir/project" >"$run_dir/stop-report.json"
+printf '%s\n' 'Load-test services and their owned database were removed through caseworkctl dev.'
 printf '%s\n' "Evidence and synthetic seeds remain at $run_dir; move that directory aside before another start."
