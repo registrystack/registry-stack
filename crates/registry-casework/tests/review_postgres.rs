@@ -2909,6 +2909,25 @@ fn audited_response(
     response["record"].clone()
 }
 
+/// The replayed operation wrote exactly its request entry and one response
+/// entry naming the replayed outcome, under one correlation.
+fn assert_replay_audited(capture: &registry_casework::AuditCapture, event: &str) {
+    let entries = capture.entries();
+    assert_eq!(
+        entries.len(),
+        2,
+        "one request and one response entry for the {event} replay"
+    );
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[0]["record"]["event"], format!("casework.{event}"));
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[1]["correlation"], entries[0]["correlation"]);
+    assert_eq!(
+        entries[1]["record"],
+        json!({"event": format!("casework.{event}"), "outcome": "replayed"})
+    );
+}
+
 async fn history_event(fixture: &Fixture, request_id: Uuid, task: Uuid, kind: &str) -> Uuid {
     fixture
         .database
@@ -3233,8 +3252,9 @@ async fn review_decisions_are_audited_after_the_decision_commits() {
     assert_eq!(entries[0]["record"]["event"], "casework.review_decided");
 
     // Retrying the same idempotency key replays the committed decision; it
-    // writes a request entry and no second decision response.
-    let responses_before = audit.responses("review_decided").len();
+    // writes a request entry and a replayed outcome, never a second decision
+    // response.
+    let responses_before = audit.responses("review_decided");
     service
         .decide_review_task(
             &fixture.reviewer_a,
@@ -3248,7 +3268,13 @@ async fn review_decisions_are_audited_after_the_decision_commits() {
         .await
         .expect("a retried decision replays");
     assert_eq!(decided_history().await, 1);
-    assert_eq!(audit.responses("review_decided").len(), responses_before);
+    let responses_after = audit.responses("review_decided");
+    assert_eq!(responses_after.len(), responses_before.len() + 1);
+    assert_eq!(
+        responses_after[responses_before.len()],
+        json!({"event": "casework.review_decided", "outcome": "replayed"}),
+        "the replay appends only its terminal outcome"
+    );
 }
 
 #[tokio::test]
@@ -4845,9 +4871,9 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
         Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
     ));
     set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
+    let (replay_service, replay_audit) = service_with_audit(&fixture, project("1"));
     assert_eq!(
-        fixture
-            .service_v1
+        replay_service
             .claim_review_task(
                 &fixture.reviewer_a,
                 task,
@@ -4860,6 +4886,7 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
             .expect("replay claim through restored staff authority"),
         claimed
     );
+    assert_replay_audited(&replay_audit, "task_claimed");
     let claim_history_count = fixture
         .database
         .query_one(
@@ -4932,9 +4959,9 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
         Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
     ));
     set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
+    let (replay_service, replay_audit) = service_with_audit(&fixture, project("1"));
     assert_eq!(
-        fixture
-            .service_v1
+        replay_service
             .release_review_task(
                 &fixture.reviewer_a,
                 task,
@@ -4945,6 +4972,7 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
             .expect("replay release through restored staff authority"),
         released
     );
+    assert_replay_audited(&replay_audit, "task_released");
     let release_history_count = fixture
         .database
         .query_one(
@@ -5050,8 +5078,9 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
         Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
     ));
     set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
+    let (replay_service, replay_audit) = service_with_audit(&fixture, answer_project(false));
     assert_eq!(
-        answer_service
+        replay_service
             .decide_review_task(
                 &fixture.reviewer_a,
                 answer_task,
@@ -5065,6 +5094,96 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
             .expect("replay terminal decision through restored staff authority"),
         decided
     );
+    assert_replay_audited(&replay_audit, "review_decided");
+}
+
+#[tokio::test]
+async fn a_retained_decision_replay_is_withheld_until_its_response_entry_is_accepted() {
+    let fixture = fixture().await;
+    let answer_service = CaseworkService::new(
+        fixture.store.clone(),
+        answer_project(false),
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("answer replay service");
+    let mut answer_request = request(
+        "record-withheld-decision-replay",
+        "producer-ref-withheld-decision-replay",
+    );
+    answer_request.kind = "registry-answer".to_owned();
+    let answer = answer_service
+        .create_review_request(
+            &fixture.producer,
+            answer_request,
+            "create-withheld-decision-replay",
+        )
+        .await
+        .expect("create withheld decision replay review");
+    let answer_task = task_id(&fixture, answer.accepted.request_id, 0).await;
+    answer_service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            answer_task,
+            None,
+            "",
+            1,
+            "claim-withheld-decision-replay",
+        )
+        .await
+        .expect("claim withheld decision replay task");
+    let decision = || ReviewTaskDecisionRequest {
+        decision: ReviewerDecisionKind::Answer {
+            outcome: "found".to_owned(),
+            reason: Some("private withheld replay reason".to_owned()),
+            result: Some(json!({"correction": "protected withheld replay result"})),
+        },
+    };
+    answer_service
+        .decide_review_task(
+            &fixture.reviewer_a,
+            answer_task,
+            decision(),
+            None,
+            "",
+            2,
+            "decide-withheld-decision-replay",
+        )
+        .await
+        .expect("settle withheld decision replay review");
+
+    // The writer accepts the replay's request entry and refuses its response
+    // entry: the retained transition is not returned.
+    let (refusing, refused) = service_with_audit(&fixture, answer_project(false));
+    refused.refuse_after(1);
+    assert!(matches!(
+        refusing
+            .decide_review_task(
+                &fixture.reviewer_a,
+                answer_task,
+                decision(),
+                None,
+                "",
+                2,
+                "decide-withheld-decision-replay",
+            )
+            .await,
+        Err(ReviewRuntimeError::Store(StoreError::AuditUnavailable))
+    ));
+    let entries = refused.entries();
+    assert_eq!(entries.len(), 1, "only the request entry was accepted");
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[0]["record"]["event"], "casework.review_decided");
+    let decided_events = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE request_id=$1 AND kind='review_decided'",
+            &[&answer.accepted.request_id],
+        )
+        .await
+        .expect("count decision history")
+        .get::<_, i64>(0);
+    assert_eq!(decided_events, 1, "a replay records no domain event");
 }
 
 #[tokio::test]

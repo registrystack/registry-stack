@@ -2730,6 +2730,7 @@ impl PostgresStore {
         )
         .await?
         {
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
             audit.commit(transaction).await?;
             return serde_json::from_value(response).map_err(ReviewRuntimeError::from);
         }
@@ -2756,6 +2757,7 @@ impl PostgresStore {
                 &serde_json::to_value(&response)?,
             )
             .await?;
+            audit.record_outcome(crate::audit::AuditOutcome::Unchanged);
             audit.commit(transaction).await?;
             return Ok(response);
         }
@@ -2854,6 +2856,7 @@ impl PostgresStore {
         )
         .await?
         {
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
             audit.commit(transaction).await?;
             return serde_json::from_value(response).map_err(ReviewRuntimeError::from);
         }
@@ -3098,6 +3101,7 @@ impl PostgresStore {
         )
         .await?
         {
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
             audit.commit(transaction).await?;
             return serde_json::from_value(response).map_err(ReviewRuntimeError::from);
         }
@@ -3863,6 +3867,7 @@ impl PostgresStore {
         )
         .await?
         {
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
             audit.commit(transaction).await?;
             return serde_json::from_value(response).map_err(ReviewRuntimeError::from);
         }
@@ -3997,6 +4002,7 @@ impl PostgresStore {
         )
         .await?
         {
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
             audit.commit(transaction).await?;
             return serde_json::from_value(response).map_err(ReviewRuntimeError::from);
         }

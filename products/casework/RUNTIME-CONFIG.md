@@ -71,7 +71,10 @@ operation's request entry and its response entries. The runtime writes the
 request entry before it opens the operation's transaction, and the response
 entries after that transaction commits; a destination that refuses either
 fails the request with `service.unavailable`, and a refused response leaves the
-committed change in place. The database holds no audit state. `sources` is keyed by the exact source ids declared by the
+committed change in place. A requested operation that records no domain event,
+such as an idempotent replay, writes one response entry whose `outcome` is
+`replayed` or `unchanged`, and returns its result only after that entry is
+accepted. The database holds no audit state. `sources` is keyed by the exact source ids declared by the
 selected policy; missing, extra, or empty ids are refused. Source access remains
 bound to each source's configured reader profile and does not grant a caller a
 Casework access profile.

@@ -3,9 +3,12 @@
 //!
 //! Every audited operation appends one `request` entry before its transaction
 //! opens and, once the transaction commits, one `response` entry per domain
-//! event it recorded, all sharing one correlation. Entries carry only event
-//! metadata and keyed references, never source selectors, free-text reasons,
-//! receipts, or issuer and subject identities.
+//! event it recorded, all sharing one correlation. A caller-requested
+//! operation that recorded no domain event, such as an idempotent replay,
+//! appends one `response` entry naming its terminal outcome instead, so no
+//! caller-requested result is released without an accepted `response` entry.
+//! Entries carry only event metadata and keyed references, never source
+//! selectors, free-text reasons, receipts, or issuer and subject identities.
 
 use registry_platform_audit::{AuditEntry, AuditKeyHasher, AuditWriter};
 use serde_json::{json, Map, Value};
@@ -54,6 +57,11 @@ impl CaseworkAudit {
     /// no transaction and reads no protected row unless this is accepted.
     pub(crate) async fn begin(&self, request: Value) -> Result<AuditOperation, StoreError> {
         let record = self.minimized(request)?;
+        let event = record
+            .get("event")
+            .and_then(Value::as_str)
+            .ok_or(StoreError::Corrupt)?
+            .to_owned();
         let correlation = Uuid::new_v4().to_string();
         self.writer
             .append(AuditEntry::request(
@@ -66,6 +74,8 @@ impl CaseworkAudit {
         Ok(AuditOperation {
             audit: self.clone(),
             correlation,
+            request_event: Some(event),
+            outcome: None,
             responses: Vec::new(),
         })
     }
@@ -81,6 +91,8 @@ impl CaseworkAudit {
         Ok(AuditOperation {
             audit: self.clone(),
             correlation: Uuid::new_v4().to_string(),
+            request_event: None,
+            outcome: None,
             responses: Vec::new(),
         })
     }
@@ -127,6 +139,26 @@ pub(crate) fn request_record(
     Value::Object(record)
 }
 
+/// The terminal outcome of a caller-requested operation that succeeded
+/// without recording a domain event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AuditOutcome {
+    /// It returned the result retained for an earlier request it repeats,
+    /// such as one under the same idempotency key.
+    Replayed,
+    /// The state it asked for already held, so it recorded no domain event.
+    Unchanged,
+}
+
+impl AuditOutcome {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Replayed => "replayed",
+            Self::Unchanged => "unchanged",
+        }
+    }
+}
+
 /// One audited operation whose `request` entry was accepted. It collects the
 /// minimized `response` records its transaction produces and appends them
 /// once the transaction commits.
@@ -134,10 +166,35 @@ pub(crate) fn request_record(
 pub(crate) struct AuditOperation {
     audit: CaseworkAudit,
     correlation: String,
+    /// The event of the accepted `request` entry; absent for background work,
+    /// which writes no `request` entry.
+    request_event: Option<String>,
+    outcome: Option<AuditOutcome>,
     responses: Vec<(Uuid, Value)>,
 }
 
 impl AuditOperation {
+    /// Name the terminal outcome of a caller-requested operation that may
+    /// record no domain event. It is appended as the operation's `response`
+    /// entry only when no domain event was recorded; background work ignores
+    /// it.
+    pub(crate) fn record_outcome(&mut self, outcome: AuditOutcome) {
+        self.outcome = Some(outcome);
+    }
+
+    /// Refuse a caller-requested operation that has neither a domain event
+    /// nor a terminal outcome to append, since its result would leave without
+    /// an accepted `response` entry.
+    fn ensure_terminal(&self) -> Result<(), StoreError> {
+        if self.request_event.is_some() && self.responses.is_empty() && self.outcome.is_none() {
+            tracing::error!(
+                "a Casework audited operation has no response entry to append; its result is withheld"
+            );
+            return Err(StoreError::AuditUnavailable);
+        }
+        Ok(())
+    }
+
     /// Record one domain event. A record that cannot be minimized fails the
     /// caller before its transaction commits.
     pub(crate) fn record(&mut self, event_id: Uuid, record: Value) -> Result<(), StoreError> {
@@ -189,21 +246,39 @@ impl AuditOperation {
     }
 
     /// Collect the trigger-written invalidations, commit `transaction`, and
-    /// append one `response` entry per recorded event.
+    /// append one `response` entry per recorded event, or the terminal
+    /// outcome when none was recorded. A caller-requested operation with
+    /// neither is refused before `transaction` commits.
     pub(crate) async fn commit(
         mut self,
         transaction: deadpool_postgres::Transaction<'_>,
     ) -> Result<(), StoreError> {
         self.collect_task_invalidations(&transaction).await?;
+        self.ensure_terminal()?;
         transaction.commit().await?;
         self.complete().await
     }
 
-    /// Append one `response` entry per recorded event. The caller's
-    /// transaction has committed, so a refusal here reports the destination
-    /// unavailable while the committed change stays in place.
+    /// Append one `response` entry per recorded event, or one naming the
+    /// terminal outcome of a caller-requested operation that recorded none.
+    /// The caller's transaction has committed, so a refusal here reports the
+    /// destination unavailable while the committed change stays in place.
     pub(crate) async fn complete(self) -> Result<(), StoreError> {
-        for (_, record) in self.responses {
+        self.ensure_terminal()?;
+        let mut records: Vec<Value> = self
+            .responses
+            .into_iter()
+            .map(|(_, record)| record)
+            .collect();
+        if records.is_empty() {
+            if let (Some(event), Some(outcome)) = (&self.request_event, self.outcome) {
+                records.push(
+                    self.audit
+                        .minimized(json!({"event": event, "outcome": outcome.as_str()}))?,
+                );
+            }
+        }
+        for record in records {
             self.audit
                 .writer
                 .append(AuditEntry::response(
@@ -231,6 +306,7 @@ fn published_audit_record(record: Value, identifiers: &AuditKeyHasher) -> Result
         "directoryRevision",
         "actorRef",
         "accountabilityEventId",
+        "outcome",
     ] {
         if let Some(value) = raw.get(field) {
             published.insert(field.to_owned(), value.clone());
@@ -501,6 +577,99 @@ mod tests {
             Err(StoreError::AuditUnavailable)
         ));
         assert_eq!(capture.entries().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_requested_operation_without_a_response_record_is_refused() {
+        let (audit, capture) = CaseworkAudit::capture();
+        let operation = audit
+            .begin(request_record("task_claimed", None, "officer", json!({})))
+            .await
+            .unwrap();
+        assert!(matches!(
+            operation.complete().await,
+            Err(StoreError::AuditUnavailable)
+        ));
+        let entries = capture.entries();
+        assert_eq!(entries.len(), 1, "only the request entry was written");
+        assert_eq!(entries[0]["phase"], "request");
+    }
+
+    #[tokio::test]
+    async fn a_replayed_operation_appends_one_minimized_terminal_outcome() {
+        let (audit, capture) = CaseworkAudit::capture();
+        let actor = actor();
+        let mut operation = audit
+            .begin(request_record(
+                "review_decided",
+                Some(&actor),
+                &actor.profile_id,
+                json!({"itemId": Uuid::new_v4()}),
+            ))
+            .await
+            .unwrap();
+        operation.record_outcome(AuditOutcome::Replayed);
+        operation.complete().await.unwrap();
+
+        let entries = capture.entries();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1]["phase"], "response");
+        assert_eq!(entries[1]["correlation"], entries[0]["correlation"]);
+        assert_eq!(
+            entries[1]["record"],
+            json!({"event": "casework.review_decided", "outcome": "replayed"})
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_terminal_outcome_reports_the_destination_unavailable() {
+        let (audit, capture) = CaseworkAudit::capture();
+        let mut operation = audit
+            .begin(request_record(
+                "review_cancelled",
+                None,
+                "producer",
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        operation.record_outcome(AuditOutcome::Unchanged);
+        capture.refuse_after(1);
+        assert!(matches!(
+            operation.complete().await,
+            Err(StoreError::AuditUnavailable)
+        ));
+        assert_eq!(capture.entries().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_domain_event_is_the_terminal_entry_when_one_was_recorded() {
+        let (audit, capture) = CaseworkAudit::capture();
+        let mut operation = audit
+            .begin(request_record("task_revoked", None, "officer", json!({})))
+            .await
+            .unwrap();
+        operation.record_outcome(AuditOutcome::Unchanged);
+        let event = Uuid::new_v4();
+        operation
+            .record(
+                event,
+                json!({"event": "casework.task_invalidated", "profileId": "system:task-grants"}),
+            )
+            .unwrap();
+        operation.complete().await.unwrap();
+        let entries = capture.entries();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1]["record"]["eventId"], event.to_string());
+        assert!(entries[1]["record"].get("outcome").is_none());
+    }
+
+    #[tokio::test]
+    async fn background_work_without_a_domain_event_appends_nothing() {
+        let (audit, capture) = CaseworkAudit::capture();
+        let operation = audit.begin_background().await.unwrap();
+        operation.complete().await.unwrap();
+        assert!(capture.entries().is_empty());
     }
 
     #[test]
