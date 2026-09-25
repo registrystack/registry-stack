@@ -58,7 +58,7 @@ use serde::Serialize;
 use crate::audit::AuditJournal;
 use crate::auth::{AuthenticationError, MessagingAuthenticator};
 use crate::callbacks;
-use crate::limits::{CallerLimits, LimitRefusal};
+use crate::limits::{CallbackLimits, CallerLimits, LimitRefusal};
 use crate::messages::{
     prepare_submission, valid_idempotency_key, MessageService, SubmissionAnswer, SubmissionRefusal,
     MESSAGE_REFUSED_EVENT, MESSAGE_REPLAYED_EVENT,
@@ -135,6 +135,9 @@ pub struct HttpState {
     /// The callback receiver of each activated provider that declares
     /// `receipts: callback`, by provider id.
     pub callbacks: Arc<CallbackReceivers>,
+    /// The rate the callback routes admit, charged before a callback is
+    /// verified.
+    pub callback_limits: Arc<CallbackLimits>,
 }
 
 /// The audited event for every preview an authenticated caller asked for.
@@ -348,12 +351,13 @@ pub const OPERATIONS: &[Operation] = &[
 /// a verifier refusal, and a token on the wrong route all answer
 /// `callback.unverified`, so the route does not reveal which providers
 /// receive callbacks.
-const CALLBACK_PROBLEMS: [ProblemCode; 6] = [
+const CALLBACK_PROBLEMS: [ProblemCode; 7] = [
     ProblemCode::RequestInvalid,
     ProblemCode::CallbackUnverified,
     ProblemCode::RequestMethodNotAllowed,
     ProblemCode::RequestBodyTooLarge,
     ProblemCode::CallbackUnreadable,
+    ProblemCode::RateLimitExceeded,
     ProblemCode::ServiceUnavailable,
 ];
 
@@ -857,6 +861,14 @@ fn refusal_response(refusal: SubmissionRefusal) -> Response {
     response
 }
 
+/// Render a request refused by a rate limit, with the wait it needs.
+pub(crate) fn rate_limited_response(retry_after: std::time::Duration) -> Response {
+    refusal_response(SubmissionRefusal {
+        problem: ProblemCode::RateLimitExceeded,
+        retry_after: Some(retry_after),
+    })
+}
+
 /// Whole seconds to wait, rounded up and never below one.
 fn retry_after_seconds(wait: std::time::Duration) -> u64 {
     let seconds = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
@@ -922,6 +934,7 @@ mod tests {
         authenticator, authenticator_over, operator_claims, sender_claims, token,
         token_signed_with, UNPROFILED_CLIENT,
     };
+    use crate::limits::{CALLBACK_BURST, CALLBACK_REQUESTS_PER_MINUTE};
     use axum::body::{to_bytes, Body};
     use axum::http::Request;
     use registry_messaging_core::ProblemDocument;
@@ -957,6 +970,9 @@ mod tests {
             audit: Arc::new(audit),
             messages: None,
             callbacks: Arc::default(),
+            callback_limits: Arc::new(
+                CallbackLimits::new(CALLBACK_REQUESTS_PER_MINUTE, CALLBACK_BURST).unwrap(),
+            ),
         }
     }
 
@@ -1828,6 +1844,12 @@ mod tests {
     /// A router whose `sms-gateway` receives callbacks through `verifier`,
     /// with no message store.
     fn callback_app(verifier: serde_json::Value) -> (Router, Arc<Metrics>) {
+        let state = callback_state(verifier);
+        let metrics = Arc::clone(&state.metrics);
+        (router(state), metrics)
+    }
+
+    fn callback_state(verifier: serde_json::Value) -> HttpState {
         let mut state = state_with(authenticator(), true);
         state.callbacks = Arc::new(crate::providers::tests::callback_receivers(
             verifier,
@@ -1836,8 +1858,7 @@ mod tests {
                 ("callback-secret", CALLBACK_SECRET),
             ],
         ));
-        let metrics = Arc::clone(&state.metrics);
-        (router(state), metrics)
+        state
     }
 
     fn path_token_verifier() -> serde_json::Value {
@@ -1959,6 +1980,85 @@ mod tests {
         )
         .await;
         callbacks_counted(&metrics, "unverified", 2);
+    }
+
+    #[tokio::test]
+    async fn callbacks_past_the_rate_are_refused_before_they_are_verified() {
+        let mut state = callback_state(path_token_verifier());
+        state.callback_limits = Arc::new(CallbackLimits::new(60, 2).unwrap());
+        let metrics = Arc::clone(&state.metrics);
+        let app = router(state);
+        for _ in 0..2 {
+            expect_problem(
+                post(
+                    app.clone(),
+                    "/v1/provider-callbacks/sms-gateway/callback-token-000000",
+                    None,
+                    Some("application/json"),
+                    b"{}".to_vec(),
+                )
+                .await,
+                ProblemCode::CallbackUnverified,
+            )
+            .await;
+        }
+        // The provider's budget is spent, so even its own token is refused
+        // before it is checked, and the provider is told how long to wait.
+        let headers = expect_problem(
+            post(
+                app.clone(),
+                "/v1/provider-callbacks/sms-gateway/callback-token-4f1b90",
+                None,
+                Some("application/json"),
+                b"{}".to_vec(),
+            )
+            .await,
+            ProblemCode::RateLimitExceeded,
+        )
+        .await;
+        assert_eq!(headers.get(RETRY_AFTER).unwrap(), "1");
+        callbacks_counted(&metrics, "unverified", 2);
+        callbacks_counted(&metrics, "unavailable", 0);
+
+        // Paths naming no receiving provider share one budget of their own
+        // and are refused alike, so the refusal names no provider either.
+        for uri in [
+            "/v1/provider-callbacks/no-such-provider",
+            "/v1/provider-callbacks/another-one/callback-token-4f1b90",
+        ] {
+            expect_problem(
+                post(
+                    app.clone(),
+                    uri,
+                    None,
+                    Some("application/json"),
+                    b"{}".to_vec(),
+                )
+                .await,
+                ProblemCode::CallbackUnverified,
+            )
+            .await;
+        }
+        let headers = expect_problem(
+            post(
+                app,
+                "/v1/provider-callbacks/mail-relay",
+                None,
+                Some("application/json"),
+                b"{}".to_vec(),
+            )
+            .await,
+            ProblemCode::RateLimitExceeded,
+        )
+        .await;
+        assert_eq!(headers.get(RETRY_AFTER).unwrap(), "1");
+        callbacks_counted(&metrics, "unverified", 4);
+        let text = metrics.render(None);
+        assert!(
+            text.contains("messaging_limit_refusals_total{limit=\"callback\"} 2\n"),
+            "{text}"
+        );
+        assert!(text.contains("messaging_limit_refusals_total{limit=\"rate\"} 0\n"));
     }
 
     #[tokio::test]

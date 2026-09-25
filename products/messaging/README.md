@@ -187,7 +187,7 @@ never hand-edited.
 | `GET /v1/messages/{message_id}` | bearer, the submitting principal (the same issuer and subject) or an operator | `200` with the status derived from the dispatch state and the delivery report, both of those, the recipient's channel with the value `redacted`, and the attempts; `404 message.not-visible` for any other message |
 | `POST /v1/messages/{message_id}/cancel` | bearer, the submitting principal (the same issuer and subject) or an operator | `200` with the cancelled status; `409 message.dispatch-started` once dispatch started, `409 message.terminal` once it is final |
 | `POST /v1/templates/{template_id}/versions/{version}/preview` | bearer, a sender profile listing the template | `200` with the rendered parts and the SMS segment count; persists nothing |
-| `POST /v1/provider-callbacks/{provider_id}` and `POST /v1/provider-callbacks/{provider_id}/{token}` | the provider's configured callback verifier, no bearer | `204` once the receipt is read; `403 callback.unverified` for any callback that does not verify, `422 callback.unreadable` for one the receipt script cannot read |
+| `POST /v1/provider-callbacks/{provider_id}` and `POST /v1/provider-callbacks/{provider_id}/{token}` | the provider's configured callback verifier, no bearer | `204` once the receipt is read; `403 callback.unverified` for any callback that does not verify, `422 callback.unreadable` for one the receipt script cannot read; `429 rate-limit.exceeded` with `Retry-After`, before verification, past the provider's fixed callback rate |
 | `GET /metrics` | metrics listener only | Prometheus text; never served on the public listener |
 
 Every response carries a `traceparent` header. Problems are

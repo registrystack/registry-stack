@@ -106,11 +106,14 @@ pub enum LimitKind {
     Daily,
     /// A provider's send rate had no slot for an attempt in its allowance.
     Pacing,
+    /// The callback rate refused a provider callback before it was
+    /// verified.
+    Callback,
 }
 
 impl LimitKind {
     /// Every limit, in the order the exposition lists them.
-    pub const ALL: [Self; 3] = [Self::Rate, Self::Daily, Self::Pacing];
+    pub const ALL: [Self; 4] = [Self::Rate, Self::Daily, Self::Pacing, Self::Callback];
 
     /// The limit's label value.
     #[must_use]
@@ -119,6 +122,7 @@ impl LimitKind {
             Self::Rate => "rate",
             Self::Daily => "daily",
             Self::Pacing => "pacing",
+            Self::Callback => "callback",
         }
     }
 }
@@ -319,8 +323,8 @@ impl Metrics {
             AttemptOutcome::ALL.map(AttemptOutcome::as_str),
         );
         text.push_str(
-            "# HELP messaging_limit_refusals_total Submissions and attempts a limit refused, \
-             by the limit.\n",
+            "# HELP messaging_limit_refusals_total Submissions, attempts, and provider \
+             callbacks a limit refused, by the limit.\n",
         );
         text.push_str("# TYPE messaging_limit_refusals_total counter\n");
         closed_counter(

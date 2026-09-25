@@ -78,7 +78,7 @@ The metrics are Prometheus text, every label closed:
 | `messaging_authentication_refusals_total` | counter | `reason` |
 | `messaging_provider_callbacks_total` | counter | `outcome` |
 | `messaging_provider_attempts_total` | counter | `outcome`: `accepted`, `transient`, `permanent`, `maybe-sent` |
-| `messaging_limit_refusals_total` | counter | `limit`: `rate`, `daily`, `pacing` |
+| `messaging_limit_refusals_total` | counter | `limit`: `rate`, `daily`, `pacing`, `callback` |
 | `messaging_retention_runs_total` | counter | `outcome`: `erased`, `idle`, `failed` |
 | `messaging_dispatch_jobs` | gauge | `state`: `pending`, `leased`, `unknown` |
 
@@ -241,6 +241,14 @@ service.unavailable`, so the provider retries. The metrics listener counts
 callbacks in `messaging_provider_callbacks_total{outcome}`, with `outcome`
 one of `unverified`, `unreadable`, `ignored`, `applied`, `unchanged`,
 `unmatched`, `ambiguous`, or `unavailable`.
+
+Callbacks are rate limited before they are verified, at a fixed 6000 a
+minute with a burst of 600 for each provider with a verifier, and the same
+again shared by every other callback path. The rate is not configurable. A
+callback past it answers `429 rate-limit.exceeded` with `Retry-After`, which
+a provider retries, and is counted in
+`messaging_limit_refusals_total{limit="callback"}`, not in
+`messaging_provider_callbacks_total`.
 
 ## The package
 

@@ -1446,6 +1446,29 @@
             },
             "description": "A problem: callback.unreadable."
           },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "rate-limit.exceeded"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: rate-limit.exceeded."
+          },
           "503": {
             "content": {
               "application/problem+json": {
@@ -1629,6 +1652,29 @@
               }
             },
             "description": "A problem: callback.unreadable."
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "rate-limit.exceeded"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: rate-limit.exceeded."
           },
           "503": {
             "content": {

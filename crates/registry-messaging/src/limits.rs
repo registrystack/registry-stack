@@ -115,6 +115,59 @@ impl CallerLimits {
     }
 }
 
+/// The sustained rate, per runtime process, at which each provider's
+/// callbacks are admitted: one hundred a second.
+pub const CALLBACK_REQUESTS_PER_MINUTE: u32 = 6_000;
+
+/// How many callbacks one provider may send at once before the sustained
+/// rate applies.
+pub const CALLBACK_BURST: u32 = 600;
+
+/// The one budget every callback path naming no receiving provider shares.
+/// A provider id is a lowercase kebab identifier, so this key is never one.
+const UNROUTED_CALLBACK_KEY: &str = "_unrouted";
+
+/// The rate the unauthenticated callback routes admit, charged before a
+/// callback is verified so a flood spends neither verification nor a
+/// receipt script. Each receiving provider has its own budget, keyed by its
+/// configured id, and every path naming no receiving provider shares one
+/// more, so a refusal is the same for both and names no provider.
+#[derive(Debug)]
+pub struct CallbackLimits {
+    limiter: TokenBucketLimiter,
+}
+
+impl CallbackLimits {
+    /// # Errors
+    ///
+    /// [`LimitConfigurationError`] when the rate or the burst is zero.
+    pub fn new(requests_per_minute: u32, burst: u32) -> Result<Self, LimitConfigurationError> {
+        TokenBucketLimiter::new(TokenBucketConfig {
+            requests_per_minute,
+            burst,
+        })
+        .map(|limiter| Self { limiter })
+        .map_err(|_| LimitConfigurationError {
+            kind: "provider callback",
+            id: "every provider".to_owned(),
+        })
+    }
+
+    /// Charge one callback to `provider`, a provider that receives
+    /// callbacks, or to the shared budget when the path named none.
+    ///
+    /// # Errors
+    ///
+    /// [`LimitRefusal::Exceeded`] when the budget is spent, and
+    /// [`LimitRefusal::Unavailable`] when the limiter cannot decide.
+    pub async fn check(&self, provider: Option<&str>) -> Result<(), LimitRefusal> {
+        self.limiter
+            .check(provider.unwrap_or(UNROUTED_CALLBACK_KEY), 1)
+            .await?;
+        Ok(())
+    }
+}
+
 /// One provider's send rate: at most one send starts every
 /// `1 / ratePerSecond` seconds, and waiting attempts take their turn in the
 /// order they arrived.
@@ -244,6 +297,29 @@ mod tests {
             limits.check("narrow", "has space").await,
             Err(LimitRefusal::Unavailable)
         );
+    }
+
+    #[tokio::test]
+    async fn each_callback_provider_and_the_unrouted_paths_have_separate_budgets() {
+        let limits = CallbackLimits::new(60, 2).unwrap();
+        for _ in 0..2 {
+            limits.check(Some("sms-gateway")).await.unwrap();
+            limits.check(None).await.unwrap();
+        }
+        let Err(LimitRefusal::Exceeded { retry_after }) = limits.check(Some("sms-gateway")).await
+        else {
+            panic!("the third callback inside the burst is refused");
+        };
+        assert!(retry_after > Duration::ZERO && retry_after <= Duration::from_secs(1));
+        assert!(limits.check(None).await.is_err());
+        limits.check(Some("mail-gateway")).await.unwrap();
+    }
+
+    #[test]
+    fn a_zero_callback_rate_or_burst_is_refused() {
+        assert!(CallbackLimits::new(0, 1).is_err());
+        assert!(CallbackLimits::new(1, 0).is_err());
+        assert!(CallbackLimits::new(CALLBACK_REQUESTS_PER_MINUTE, CALLBACK_BURST).is_ok());
     }
 
     #[test]

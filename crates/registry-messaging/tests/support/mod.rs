@@ -24,7 +24,9 @@ use registry_messaging::auth::MessagingAuthenticator;
 use registry_messaging::config::RuntimeConfig;
 use registry_messaging::dispatch::Transports;
 use registry_messaging::http::{metrics_router, router, HttpState, Readiness};
-use registry_messaging::limits::CallerLimits;
+use registry_messaging::limits::{
+    CallbackLimits, CallerLimits, CALLBACK_BURST, CALLBACK_REQUESTS_PER_MINUTE,
+};
 use registry_messaging::messages::{MessageService, MessageStore};
 use registry_messaging::metrics::Metrics;
 use registry_messaging::outbox::Publisher;
@@ -173,6 +175,10 @@ fn copy_tree(from: &Path, to: &Path) {
 /// Caller limits no suite of another behavior reaches: the starter's burst
 /// of ten would refuse a suite that submits more. The request rate itself
 /// is proven by the HTTP unit tests.
+pub fn standard_callback_limits() -> CallbackLimits {
+    CallbackLimits::new(CALLBACK_REQUESTS_PER_MINUTE, CALLBACK_BURST).expect("the callback limits")
+}
+
 pub fn unmetered_limits(package: &Package) -> CallerLimits {
     let profiles = package
         .access_profiles()
@@ -278,6 +284,7 @@ impl Harness {
             audit: Arc::clone(&audit),
             messages: Some(Arc::clone(&service)),
             callbacks: Arc::new(callbacks),
+            callback_limits: Arc::new(standard_callback_limits()),
         });
         Self {
             root,
@@ -429,6 +436,7 @@ impl Harness {
             audit: Arc::clone(&self.audit),
             messages: Some(service),
             callbacks: Arc::default(),
+            callback_limits: Arc::new(standard_callback_limits()),
         })
     }
 

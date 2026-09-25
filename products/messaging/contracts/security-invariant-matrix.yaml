@@ -121,9 +121,12 @@ invariants:
     state: enforced
     threat: >-
       A forged, replayed, or reordered provider callback changes a delivery
-      report or regresses it to an earlier state.
+      report or regresses it to an earlier state, or a flood of
+      unauthenticated callbacks spends the runtime's verification and store
+      work without bound.
     enforcementPoint: >-
-      POST /v1/provider-callbacks/{provider_id} verifies each callback with
+      POST /v1/provider-callbacks/{provider_id} charges each callback to a
+      fixed per-provider rate before anything else, then verifies it with
       the verifier kind the runtime configuration gives that provider
       (hmac-sha1-url-form, hmac-sha256-body, or path-token; none is not a
       kind) before its body is read, then applies the receipt its receipt
@@ -135,10 +138,11 @@ invariants:
       repeats a report the message already holds or has passed, so it
       changes nothing.
     refusal: >-
-      Refuse an unknown provider, a missing or wrong signature or token, and
-      a token on the wrong route alike with 403 callback.unverified and
-      record nothing; answer a duplicate or regressing receipt 204 without
-      moving the report.
+      Refuse a callback past its provider's rate with 429
+      rate-limit.exceeded and Retry-After before it is verified; refuse an
+      unknown provider, a missing or wrong signature or token, and a token on
+      the wrong route alike with 403 callback.unverified and record nothing;
+      answer a duplicate or regressing receipt 204 without moving the report.
     negativeTest:
       path: crates/registry-messaging/tests/postgres_callbacks.rs
       name: duplicate_and_out_of_order_receipts_never_regress_the_report

@@ -81,6 +81,8 @@ entries:
       - {path: crates/registry-messaging/src/http.rs, name: a_path_token_callback_verifies_only_on_the_token_route_with_its_token}
       - {path: crates/registry-messaging/src/http.rs, name: a_body_signed_callback_refuses_a_token_route_and_a_forged_signature}
       - {path: crates/registry-messaging/src/http.rs, name: a_callback_body_over_the_edge_limit_is_refused}
+      - {path: crates/registry-messaging/src/http.rs, name: callbacks_past_the_rate_are_refused_before_they_are_verified}
+      - {path: crates/registry-messaging/src/limits.rs, name: each_callback_provider_and_the_unrouted_paths_have_separate_budgets}
       - {path: crates/registry-messaging-core/src/callback.rs, name: hmac_sha1_url_form_refuses_every_forgery}
       - {path: crates/registry-messaging-core/src/callback.rs, name: hmac_sha256_body_refuses_every_forgery}
       - {path: crates/registry-messaging-core/src/callback.rs, name: path_token_accepts_only_the_exact_token}

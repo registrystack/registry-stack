@@ -38,7 +38,7 @@ use crate::auth::MessagingAuthenticator;
 use crate::config::{describe_secret_failure, RetentionConfig, RuntimeConfig, RuntimeConfigError};
 use crate::dispatch::{dispatcher, MessageDispatcher, MessageSender, Transports};
 use crate::http::{metrics_router, router, HttpState, Readiness};
-use crate::limits::CallerLimits;
+use crate::limits::{CallbackLimits, CallerLimits, CALLBACK_BURST, CALLBACK_REQUESTS_PER_MINUTE};
 use crate::messages::{MessageService, MessageStore};
 use crate::metrics::Metrics;
 use crate::outbox::Publisher;
@@ -365,6 +365,10 @@ pub async fn assemble(
         CallerLimits::new(loaded.package.access_profiles())
             .map_err(|error| RuntimeError::Limits(error.to_string()))?,
     );
+    let callback_limits = Arc::new(
+        CallbackLimits::new(CALLBACK_REQUESTS_PER_MINUTE, CALLBACK_BURST)
+            .map_err(|error| RuntimeError::Limits(error.to_string()))?,
+    );
     Ok(Assembled {
         public: router(HttpState {
             authenticator,
@@ -378,6 +382,7 @@ pub async fn assemble(
             audit,
             messages: Some(Arc::new(messages)),
             callbacks,
+            callback_limits,
         }),
         metrics: metrics_router(Arc::clone(&metrics), Some(store.clone())),
         worker,

@@ -79,7 +79,11 @@
   the message's delivery report only forward, joins a bounded history of
   distinct receipts, and is audited as `messaging.receipt.recorded` in the
   same transaction. A receipt naming no message answers 204 and is counted
-  in `messaging_provider_callbacks_total`.
+  in `messaging_provider_callbacks_total`. Callbacks are charged to a fixed
+  per-provider rate of 6000 a minute (burst 600) before they are verified,
+  with one shared bucket for every other callback path; past it they answer
+  `429 rate-limit.exceeded` with `Retry-After` and are counted in
+  `messaging_limit_refusals_total{limit="callback"}`.
 - Add the problems `callback.unverified` (403) and `callback.unreadable`
   (422).
 - Serve the message view's `dispatch` member (`queued`, `sending`,

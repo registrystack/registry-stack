@@ -146,7 +146,7 @@ provider id nor a path token becomes a label, and the request counters label
 the callback routes by their templates. The rest of the set is closed the
 same way: `messaging_provider_attempts_total` by attempt outcome (`accepted`,
 `transient`, `permanent`, `maybe-sent`), `messaging_limit_refusals_total` by
-limit (`rate`, `daily`, `pacing`), `messaging_retention_runs_total` by sweep
+limit (`rate`, `daily`, `pacing`, `callback`), `messaging_retention_runs_total` by sweep
 outcome (`erased`, `idle`, `failed`), and the `messaging_dispatch_jobs` gauge
 by state (`pending`, `leased`, `unknown`). No provider, sender profile,
 access profile, or template becomes a label, so a series never tells which
@@ -521,8 +521,9 @@ Threat: a forged, replayed, or reordered provider callback changes a
 delivery report or regresses it; a callback route becomes an oracle for
 which providers receive callbacks or which messages exist; a callback's
 body, a path token, or a provider reference reaches a log, a label, or the
-journal; a provider repeating itself grows the store without bound
-(MESSAGING-SEC-07, enforced).
+journal; a provider repeating itself grows the store without bound; a flood
+of unauthenticated callbacks spends verification, receipt-script, and store
+work without bound (MESSAGING-SEC-07, enforced).
 
 `POST /v1/provider-callbacks/{provider_id}` and
 `POST /v1/provider-callbacks/{provider_id}/{token}` are served on the public
@@ -548,6 +549,17 @@ than 401 because there is no challenge scheme a provider could answer. The
 refusal is logged with the provider id only when the provider is configured,
 and with a value-free reason; nothing about the request is read before it
 verifies.
+
+Before it is verified, a callback is charged to a token bucket of 6000 a
+minute with a burst of 600, held in the runtime process (MESSAGING-DEC-28).
+Each provider with a verifier has its own bucket, keyed by its configured
+id; every other path shares one bucket of the same size, so a refusal, like
+`403 callback.unverified`, does not tell which providers receive callbacks.
+Past the burst the callback answers `429 rate-limit.exceeded` with
+`Retry-After`, is counted in
+`messaging_limit_refusals_total{limit="callback"}` rather than by outcome, and
+is not logged, so a flood cannot flood the log either; a limiter that cannot
+decide answers `503 service.unavailable`. The rate is fixed, not configured.
 
 A verified callback is read by the package's `receiptScript` on the blocking
 pool, under the same bounded Rhai engine and budget as `interpret`. A script
@@ -602,15 +614,23 @@ operator-configured external `url`, not the URL the request arrived on, so a
 reverse proxy that rewrites the path does not break it, but a wrong `url`
 refuses every callback. HMAC-SHA1 is kept only because a widely deployed
 provider signs with it; it is used as a MAC, where SHA-1's collision
-weakness does not apply.
+weakness does not apply. The callback rate is charged before verification,
+so anyone who knows a provider's id can spend that provider's budget and
+delay its genuine callbacks, which the provider then retries; the separate
+buckets keep such a flood from delaying another provider, and the budget is
+per process, so it does not add up across replicas. A provider reporting
+faster than 100 callbacks a second is refused in bursts until the rate is
+made configurable.
 
 Tests: MESSAGING-SEC-07 in `contracts/security-test-traceability.yaml`: the
 PostgreSQL suite `tests/postgres_callbacks.rs` (each verifier kind valid and
 forged, duplicate and out-of-order receipts, a final report kept, the
 history bound, unknown, foreign, and ambiguous references, unreadable and
 ignored callbacks, and the absence of the reference, secrets, and token from
-logs and the journal), the route tests in `http.rs`, and the verifier and
-report-order tests in `registry-messaging-core`.
+logs and the journal), the route tests in `http.rs` (the callback rate
+refusing before verification among them), the callback budget test in
+`limits.rs`, and the verifier and report-order tests in
+`registry-messaging-core`.
 
 ## Templates
 

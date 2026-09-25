@@ -31,13 +31,15 @@ use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, StatusCode, Uri};
+use axum::response::{IntoResponse, Response};
 use registry_messaging_core::{
     verify_callback, CallbackRequest, ProblemCode, Receipt, PROVIDER_CALLBACK_PATH,
 };
 
-use crate::http::{HttpError, HttpState};
+use crate::http::{rate_limited_response, HttpError, HttpState};
 use crate::http_provider::ReceiptScriptError;
-use crate::metrics::CallbackOutcome;
+use crate::limits::LimitRefusal;
+use crate::metrics::{CallbackOutcome, LimitKind};
 use crate::receipts::ReceiptOutcome;
 
 const FORM_MEDIA_TYPE: &str = "application/x-www-form-urlencoded";
@@ -49,7 +51,7 @@ pub(crate) async fn receive(
     uri: Uri,
     headers: HeaderMap,
     body: Bytes,
-) -> Result<StatusCode, HttpError> {
+) -> Result<StatusCode, Response> {
     answer(&state, &provider_id, None, &uri, &headers, body).await
 }
 
@@ -60,11 +62,13 @@ pub(crate) async fn receive_with_token(
     uri: Uri,
     headers: HeaderMap,
     body: Bytes,
-) -> Result<StatusCode, HttpError> {
+) -> Result<StatusCode, Response> {
     answer(&state, &provider_id, Some(token), &uri, &headers, body).await
 }
 
-/// Count the callback by its outcome and answer it.
+/// Charge the callback to its provider's rate, then count it by its outcome
+/// and answer it. A callback the rate refuses is counted as a limit refusal
+/// only: it was never verified, so it has no outcome.
 async fn answer(
     state: &HttpState,
     provider_id: &str,
@@ -72,11 +76,27 @@ async fn answer(
     uri: &Uri,
     headers: &HeaderMap,
     body: Bytes,
-) -> Result<StatusCode, HttpError> {
+) -> Result<StatusCode, Response> {
+    let routed = state
+        .callbacks
+        .contains_key(provider_id)
+        .then_some(provider_id);
+    match state.callback_limits.check(routed).await {
+        Ok(()) => {}
+        Err(LimitRefusal::Exceeded { retry_after }) => {
+            state.metrics.record_limit_refusal(LimitKind::Callback);
+            return Err(rate_limited_response(retry_after));
+        }
+        Err(LimitRefusal::Unavailable) => {
+            tracing::error!("the Messaging callback-rate limiter could not decide");
+            state.metrics.record_callback(CallbackOutcome::Unavailable);
+            return Err(HttpError(ProblemCode::ServiceUnavailable).into_response());
+        }
+    }
     let (outcome, answer) =
         match receive_callback(state, provider_id, token, uri, headers, body).await {
             Ok(outcome) => (outcome, Ok(StatusCode::NO_CONTENT)),
-            Err((outcome, problem)) => (outcome, Err(HttpError(problem))),
+            Err((outcome, problem)) => (outcome, Err(HttpError(problem).into_response())),
         };
     state.metrics.record_callback(outcome);
     answer

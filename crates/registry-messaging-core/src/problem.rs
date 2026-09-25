@@ -272,7 +272,7 @@ impl ProblemCode {
                 "Your Messaging access profile has accepted its daily limit of messages. Try again after the time in Retry-After."
             }
             Self::RateLimitExceeded => {
-                "Your Messaging access profile's request rate is exceeded. Try again after the time in Retry-After."
+                "The request rate accepted from this caller is exceeded. Try again after the time in Retry-After."
             }
             Self::RequestBodyTooLarge => "The request body exceeds the accepted size.",
             Self::RequestInvalid => "The request could not be read as a Messaging request.",
@@ -449,10 +449,14 @@ mod tests {
     /// A caller over its access profile's request rate, and one over its
     /// daily limit, answer 429 with codes that say which: the rate refusal
     /// clears within seconds, the quota refusal only as the day's oldest
-    /// accepted messages age out.
+    /// accepted messages age out. A provider over its callback rate gets the
+    /// same rate refusal, so its detail names no access profile.
     #[test]
     fn limit_refusals_answer_too_many_requests() {
         assert_eq!(ProblemCode::RateLimitExceeded.http_status(), 429);
+        assert!(!ProblemCode::RateLimitExceeded
+            .detail()
+            .contains("access profile"));
         assert_eq!(ProblemCode::QuotaExceeded.http_status(), 429);
         assert_eq!(
             ProblemCode::from_code("rate-limit.exceeded"),
