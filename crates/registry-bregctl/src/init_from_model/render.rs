@@ -371,7 +371,9 @@ fn registry(plan: &Plan) -> String {
         "One entity per selected concept. The first field of each is its identifier: the model \
          has no identifying property of its own, so the derivation adds one, required and \
          unique, that the caller supplies when a record is created. Every other field is a \
-         selected property, under the model's name in kebab case.",
+         selected property, under the model's name in kebab case. Each field `operator` may \
+         filter by is indexed: the unique identifier and a reference are indexed already, and \
+         every other one gets an `indexes` entry.",
     );
     yaml.line(0, "entities:");
     for entity in &plan.entities {
@@ -393,6 +395,26 @@ fn registry(plan: &Plan) -> String {
                 scalar(&entity.identifier.id)
             ),
         );
+        let indexed: Vec<&PlannedField> = entity
+            .fields
+            .iter()
+            .filter(|field| {
+                field.kind.filterable() && !matches!(field.kind, FieldKind::Reference { .. })
+            })
+            .collect();
+        if !indexed.is_empty() {
+            yaml.line(2, "indexes:");
+            for field in indexed {
+                yaml.line(
+                    3,
+                    &format!(
+                        "- {{id: {}, fields: [{}]}}",
+                        scalar(&format!("by-{}", field.id)),
+                        scalar(&field.id)
+                    ),
+                );
+            }
+        }
     }
     yaml.blank();
 

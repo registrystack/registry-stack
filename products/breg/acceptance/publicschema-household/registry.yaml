@@ -130,10 +130,10 @@ manifestProjection:
 modules:
   - id: publicschema-household-core
     version: 0.1.0
-    digest: "sha256:5912df9af7a077322436ddb1e9ce1c2846a7fcfebca20e338b48782b4e818b4a"
+    digest: "sha256:219861d0446cb43d732adf6cb52a065dce512ab18e69d41073084bf940e262d2"
   - id: publicschema-household-demographics
     version: 0.1.0
-    digest: "sha256:757030499f6d05cb5eb515fcb7fbb32a657bb7e9a8f115f31e18ca69183b8f57"
+    digest: "sha256:a6cee2013ce963009c7367aefcfdb7cb4dfa2709643adca445643dd92df5286e"
 accessProfiles:
   - id: household-operator
     default: true

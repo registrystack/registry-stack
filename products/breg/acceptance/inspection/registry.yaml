@@ -78,6 +78,10 @@ entities:
       - kind: unique
         fields:
           - inspection-code
+    indexes:
+      - id: by-facility-code
+        fields:
+          - facility-code
   - id: inspection-observation
     primaryDataset: "inspection"
     route: inspection-observations
@@ -137,6 +141,10 @@ entities:
         field: finding-grade
         minimum: 0
         maximum: 4
+    indexes:
+      - id: by-inspection-domain
+        fields:
+          - inspection-domain
   - id: permit
     primaryDataset: "inspection"
     route: permits
@@ -195,6 +203,13 @@ entities:
       - kind: unique
         fields:
           - permit-code
+    indexes:
+      - id: by-permit-status
+        fields:
+          - permit-status
+      - id: by-valid-from
+        fields:
+          - valid-from
 
 accessProfiles:
   - id: inspection-inspector

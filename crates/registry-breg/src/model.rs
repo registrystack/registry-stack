@@ -884,6 +884,30 @@ pub struct CompiledMembershipBoundary {
     pub active_column: String,
 }
 
+/// Member-id prefix of the compiler-owned index on a reference column in
+/// [`CompiledEntity::indexes`]. Authored index ids cannot contain `:`.
+pub const REFERENCE_INDEX_PREFIX: &str = "reference:";
+
+/// Whether an index or a whole-table unique constraint leads with `field`,
+/// so an equality match or an ordered scan on it can use a btree index. A
+/// partial unique index covers only the rows its predicate admits.
+pub(crate) fn leading_field_indexed(
+    field: &str,
+    indexes: &BTreeMap<String, Vec<String>>,
+    constraints: &BTreeMap<String, crate::contract::ConstraintSource>,
+) -> bool {
+    indexes
+        .values()
+        .any(|fields| fields.first().is_some_and(|first| first == field))
+        || constraints.values().any(|constraint| {
+            matches!(
+                constraint,
+                crate::contract::ConstraintSource::Unique { fields, when: None, .. }
+                    if fields.first().is_some_and(|first| first == field)
+            )
+        })
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledEntity {

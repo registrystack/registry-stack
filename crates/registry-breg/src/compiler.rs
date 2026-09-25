@@ -31,8 +31,8 @@ use crate::logical_names::{
     default_api_name, default_sql_name, reserved_logical_name, valid_api_name,
 };
 use crate::model::{
-    request_query_field_id_for_api, request_state_query_filter_fields,
-    request_state_query_sort_fields,
+    leading_field_indexed, request_query_field_id_for_api, request_state_query_filter_fields,
+    request_state_query_sort_fields, REFERENCE_INDEX_PREFIX,
 };
 use crate::model::{
     ChangeRequestOperation, CompiledAccessEntry, CompiledAccessInventory,
@@ -323,6 +323,9 @@ pub fn compile_project_with_assets(
     )
     .map_err(CompileFailure::from_one)?;
     let query_inventory = compile_query_inventory(&entities, &mut diagnostics);
+    if profile == CompileProfile::Authoring {
+        findings.extend(unindexed_list_findings(&entities));
+    }
     let event_delivery_inventory =
         compile_event_delivery_inventory(&project.registry.id, &entities, &origins.hooks, assets)
             .map_err(CompileFailure::from_one)?;
@@ -5409,6 +5412,28 @@ fn compile_entities(
                 );
             }
         }
+        for field in &source.fields {
+            // A reference column is where the foreign key's delete check and
+            // read-path joins look rows up, so it carries a compiler-owned
+            // btree index unless an authored index or a whole-table unique
+            // constraint already leads with it. The reserved member id cannot
+            // collide with an authored index id.
+            if !matches!(field.field_type, FieldTypeSource::Reference { .. })
+                || leading_field_indexed(&field.id, &indexes, &constraints)
+            {
+                continue;
+            }
+            let physical = builder
+                .derive(
+                    "ri",
+                    &format!("{}.{}", source.id, field.id),
+                    "entities[].fields[].target",
+                )
+                .map_err(CompileFailure::from_one)?;
+            let id = format!("{REFERENCE_INDEX_PREFIX}{}", field.id);
+            index_names.insert(id.clone(), physical);
+            indexes.insert(id, vec![field.id.clone()]);
+        }
         let mut profiles = BTreeMap::new();
         let mut policy_names = BTreeMap::new();
         for access in &source.access_profiles {
@@ -6053,6 +6078,94 @@ fn compile_query_inventory(
     }
     operations.sort_by(|left, right| left.id.cmp(&right.id));
     CompiledQueryInventory { operations }
+}
+
+/// A list filter or sort over a stored field that no index leads with scans
+/// the table on every page. Production compiles stay silent: the entity may
+/// be small, and only its author knows.
+fn unindexed_list_findings(entities: &BTreeMap<String, CompiledEntity>) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    for entity in entities.values() {
+        for profile in entity.access_profiles.values() {
+            let path = format!(
+                "entities[id={}].accessProfiles[id={}]",
+                entity.id, profile.id
+            );
+            if profile.operations.contains(&Operation::List) {
+                unindexed_field_findings(
+                    entity,
+                    &path,
+                    &profile.filterable_fields,
+                    &profile.sortable_fields,
+                    &mut findings,
+                );
+            }
+            for grant in &profile.read_paths {
+                let Some(target) = entity
+                    .read_paths
+                    .get(&grant.path)
+                    .and_then(|path| entities.get(&path.to))
+                else {
+                    continue;
+                };
+                unindexed_field_findings(
+                    target,
+                    &format!("{path}.readPaths[path={}]", grant.path),
+                    &grant.filterable_fields,
+                    &grant.sortable_fields,
+                    &mut findings,
+                );
+            }
+        }
+    }
+    findings
+}
+
+fn unindexed_field_findings<'a>(
+    entity: &CompiledEntity,
+    path: &str,
+    filterable_fields: impl IntoIterator<Item = &'a String>,
+    sortable_fields: impl IntoIterator<Item = &'a String>,
+    findings: &mut Vec<Diagnostic>,
+) {
+    // Only plaintext stored columns can carry an authored index; the
+    // canonical id is the primary key, and derived fields are views.
+    let unindexed = |field: &str| {
+        entity
+            .fields
+            .get(field)
+            .is_some_and(|compiled| compiled.encryption.is_none())
+            && !leading_field_indexed(field, &entity.indexes, &entity.constraints)
+    };
+    // A temporal exclusion constraint is backed by a GiST index that answers
+    // equality on its first scope field but cannot return rows in order.
+    let exclusion_leading = |field: &str| {
+        entity.constraints.values().any(|constraint| {
+            matches!(
+                constraint,
+                ConstraintSource::TemporalNonOverlap { scope_fields, .. }
+                    if scope_fields.first().is_some_and(|first| first == field)
+            )
+        })
+    };
+    for field in filterable_fields {
+        if unindexed(field) && !exclusion_leading(field) {
+            findings.push(Diagnostic::finding(
+                "entity.list.unindexed_filter",
+                format!("{path}.filterableFields[field={field}]"),
+                "no index leads with this filterable field, so a filtered list scans every row the caller may read. If this entity will hold more than a few thousand rows, declare an index that leads with the field under entities[].indexes",
+            ));
+        }
+    }
+    for field in sortable_fields {
+        if unindexed(field) {
+            findings.push(Diagnostic::finding(
+                "entity.list.unindexed_sort",
+                format!("{path}.sortableFields[field={field}]"),
+                "no index leads with this sortable field, so a sorted list orders every row the caller may read before returning a page. If this entity will hold more than a few thousand rows, declare an index that leads with the field under entities[].indexes",
+            ));
+        }
+    }
 }
 
 fn read_path_query_operation(

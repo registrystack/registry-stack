@@ -706,6 +706,7 @@ fn new_reference_constraint_and_index_are_supported_additive_statements() {
             "entity.asset.field.site.reference",
             "entity.asset.constraint.code-unique",
             "entity.asset.index.code-idx",
+            "entity.asset.index.reference:site",
             "entity.asset.source-view",
         ]
     );

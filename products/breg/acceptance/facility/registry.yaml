@@ -76,6 +76,10 @@ entities:
       - kind: unique
         fields:
           - facility-code
+    indexes:
+      - id: by-administrative-boundary
+        fields:
+          - administrative-boundary
   - id: permit
     primaryDataset: "facility"
     route: permits
@@ -138,6 +142,13 @@ entities:
           - permit-number
         startField: valid-from
         endField: valid-to
+    indexes:
+      - id: by-administrative-boundary
+        fields:
+          - administrative-boundary
+      - id: by-valid-from
+        fields:
+          - valid-from
   - id: installation
     primaryDataset: "facility"
     route: installations
@@ -201,6 +212,10 @@ entities:
         fields:
           - import-source
           - source-record-id
+    indexes:
+      - id: by-administrative-boundary
+        fields:
+          - administrative-boundary
   - id: discharge-report
     primaryDataset: "facility"
     route: discharge-reports
@@ -254,6 +269,16 @@ entities:
           - substance-code
         startField: period-start
         endField: period-end
+    indexes:
+      - id: by-administrative-boundary
+        fields:
+          - administrative-boundary
+      - id: by-substance-code
+        fields:
+          - substance-code
+      - id: by-period-start
+        fields:
+          - period-start
 accessProfiles:
   - id: facility-operator
     principalClaim: registry_principal
