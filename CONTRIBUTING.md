@@ -39,6 +39,10 @@ certification is true.
 - Maintainers may push directly to `main` for release, documentation, CI,
   administrative, or urgent fixes.
 - CI remains the reference gate for normal pull requests.
+- The merge queue rebases each entry onto `main` itself before merging, so a
+  pull request that shows BEHIND does not need a manual rebase for that
+  reason alone. Rebase or force-push only to resolve a real conflict or to
+  pick up a fix for red CI that `main` has since fixed.
 - Required human review should be enabled only when maintainer capacity can
   satisfy it reliably.
 
