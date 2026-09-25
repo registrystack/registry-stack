@@ -95,6 +95,9 @@ pub struct WebhookOperatorService {
 impl WebhookOperatorService {
     pub async fn from_runtime_config(path: &Path) -> Result<Self, WebhookOperatorError> {
         let config = load_runtime_config(path).map_err(|_| WebhookOperatorError::Unavailable)?;
+        config
+            .verify_package_envelope()
+            .map_err(|_| WebhookOperatorError::Unavailable)?;
         let package_root = config.package().root().to_path_buf();
         {
             let context = config.package_load_context();

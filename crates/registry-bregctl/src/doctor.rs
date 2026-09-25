@@ -104,8 +104,13 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             &format!("the runtime package was refused: {cause}"),
         );
     }
+    if let StartupError::PackageEnvelopeRefused(cause) = error {
+        return diagnostic("startup.package.refused", "package", &cause);
+    }
     let (code, path, message) = match error {
-        StartupError::RuntimeConfig(_) | StartupError::PackageRefused(_) => {
+        StartupError::RuntimeConfig(_)
+        | StartupError::PackageRefused(_)
+        | StartupError::PackageEnvelopeRefused(_) => {
             unreachable!("handled above")
         }
         StartupError::ReviewAuthorityMissing { .. } => unreachable!("handled above"),

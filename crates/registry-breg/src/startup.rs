@@ -52,6 +52,8 @@ pub enum StartupError {
     RuntimeConfig(RuntimeConfigError),
     #[error("the Registry package was refused")]
     PackageRefused(PackageError),
+    #[error("{0}")]
+    PackageEnvelopeRefused(String),
     #[error("the Registry database connection was refused")]
     DatabaseConnection,
     #[error("the Registry database is not ready for this package")]
@@ -330,6 +332,7 @@ impl StartupError {
         match self {
             Self::RuntimeConfig(_) => "the Registry runtime configuration was refused",
             Self::PackageRefused(_) => "the Registry package was refused",
+            Self::PackageEnvelopeRefused(_) => "the Registry package was refused",
             Self::DatabaseConnection => "the Registry database connection was refused",
             Self::DatabaseUnready => "the Registry database is not ready for this package",
             Self::InstanceClaimMismatch => {
@@ -502,6 +505,9 @@ impl PreparedServer {
 /// database connection, OIDC discovery, audit profile, or listener bind.
 pub async fn prepare(config_path: &Path) -> Result<PreparedServer> {
     let config = load_runtime_config(config_path).map_err(map_runtime_config_error)?;
+    config
+        .verify_package_envelope()
+        .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
     let package_root = config.package().root().to_path_buf();
     let package = {
         let package_context = config.package_load_context();
@@ -692,6 +698,9 @@ pub async fn prepare_with_connection_config_for_test(
     connection: crate::postgres::ConnectionConfig,
 ) -> Result<PreparedServer> {
     let config = load_runtime_config(config_path).map_err(map_runtime_config_error)?;
+    config
+        .verify_package_envelope()
+        .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
     let package_root = config.package().root().to_path_buf();
     let package = {
         let package_context = config.package_load_context();
@@ -708,6 +717,9 @@ pub async fn prepare_with_connection_and_key_source_for_test(
     key_source: Arc<JwksFetcher>,
 ) -> Result<PreparedServer> {
     let config = load_runtime_config(config_path).map_err(map_runtime_config_error)?;
+    config
+        .verify_package_envelope()
+        .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
     let package_root = config.package().root().to_path_buf();
     let package = {
         let package_context = config.package_load_context();
@@ -1500,6 +1512,12 @@ pub async fn prepare_startup(
     if !matches!(context.intent, PackageIntent::Startup { .. }) {
         return Err(StartupError::PackageRefused(PackageError::Binding));
     }
+    registry_platform_config::package::verify_package(
+        package_root,
+        &crate::package::shared_package_limits(),
+        "bregctl package",
+    )
+    .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
     // Ordering is security-relevant: no database call precedes package closure,
     // signature, binding, and compiler-derivation verification.
     let package = load_package(package_root, context).map_err(StartupError::PackageRefused)?;

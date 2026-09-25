@@ -20,6 +20,7 @@ use registry_breg::runtime_config::{
     parse_runtime_config_with_env, RuntimeConfigError, RUNTIME_CONFIG_API_VERSION,
     RUNTIME_CONFIG_KIND,
 };
+use registry_platform_config::package::{write_sum_file, PackageLimits};
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::destination::{
     DestinationDnsFamily, DestinationSendError, EventDeliveryHeaders,
@@ -168,6 +169,82 @@ fn runtime_with_event_destinations(fixture: &RuntimeFixture, bindings: &str) -> 
         "eventDestinations: {}\n",
         &format!("eventDestinations:\n{bindings}"),
     )
+}
+
+#[test]
+fn shared_package_envelope_and_pin_are_checked_before_startup() {
+    let fixture = RuntimeFixture::new();
+    let governed = fixture.package_root.join("package.json");
+    fs::write(&governed, b"governed-package\n").expect("governed package placeholder writes");
+    let written = write_sum_file(
+        &fixture.package_root,
+        Some("source-1"),
+        &PackageLimits::default(),
+        "bregctl package",
+    )
+    .expect("shared package envelope writes");
+    let raw = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    )
+    .replace(
+        &format!("  root: {}\n", fixture.package_root.display()),
+        &format!(
+            "  root: {}\n  expectedDigest: {}\n",
+            fixture.package_root.display(),
+            written.digest()
+        ),
+    );
+    let config = parse_runtime_config(&raw).expect("runtime with matching pin parses");
+    assert_eq!(
+        config
+            .verify_package_envelope()
+            .expect("matching package pin verifies")
+            .digest(),
+        written.digest()
+    );
+
+    fs::write(&governed, b"changed\n").expect("governed package changes");
+    let changed = config
+        .verify_package_envelope()
+        .expect_err("changed governed bytes are refused")
+        .to_string();
+    assert!(changed.contains("package.json"), "{changed}");
+
+    fs::write(&governed, b"governed-package\n").expect("governed package restores");
+    fs::write(fixture.package_root.join("extra.txt"), b"extra\n")
+        .expect("extra package file writes");
+    let extra = config
+        .verify_package_envelope()
+        .expect_err("extra package file is refused")
+        .to_string();
+    assert!(extra.contains("extra.txt"), "{extra}");
+    fs::remove_file(fixture.package_root.join("extra.txt")).expect("extra package file removes");
+
+    fs::remove_file(&governed).expect("governed package removes");
+    let missing = config
+        .verify_package_envelope()
+        .expect_err("missing governed file is refused")
+        .to_string();
+    assert!(missing.contains("package.json"), "{missing}");
+
+    fs::write(&governed, b"governed-package\n").expect("governed package restores again");
+    let wrong_pin = raw.replace(
+        written.digest(),
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    );
+    let mismatch = parse_runtime_config(&wrong_pin)
+        .expect("runtime with a well-formed wrong pin parses")
+        .verify_package_envelope()
+        .expect_err("wrong package pin is refused")
+        .to_string();
+    assert!(mismatch.contains(written.digest()), "{mismatch}");
+    assert!(
+        mismatch
+            .contains("sha256:0000000000000000000000000000000000000000000000000000000000000000"),
+        "{mismatch}"
+    );
 }
 
 fn event_destination_binding(

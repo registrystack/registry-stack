@@ -49,6 +49,8 @@ use registry_breg::postgres::{
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_breg::startup::{prepare_startup, StartupError};
 use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_config::package::verify_package as verify_shared_package;
+use registry_platform_config::package::PackageLimits as SharedPackageLimits;
 use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm, PrivateJwk};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -101,9 +103,25 @@ fn package_builder_is_deterministic_and_local_publication_loads() {
     assert_eq!(first.registry(), second.registry());
 
     let root = TempRoot::create();
-    first
-        .publish_to_directory(root.path(), Vec::new())
+    let first_shared = first
+        .publish_to_directory_with_revision(root.path(), Vec::new(), Some("source-1"))
         .expect("local package publishes");
+    let repeated_root = TempRoot::create();
+    let repeated_shared = second
+        .publish_to_directory_with_revision(repeated_root.path(), Vec::new(), Some("source-1"))
+        .expect("the same local package publishes again");
+    assert_eq!(first_shared.digest(), repeated_shared.digest());
+    assert_eq!(first_shared.revision(), Some("source-1"));
+    assert_eq!(
+        verify_shared_package(
+            root.path(),
+            &SharedPackageLimits::default(),
+            "bregctl package"
+        )
+        .expect("shared package verifies")
+        .digest(),
+        first_shared.digest()
+    );
     load_package(
         root.path(),
         &local_context(PackageIntent::InitialActivation),

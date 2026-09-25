@@ -11,6 +11,10 @@ use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
+use registry_platform_config::package::{
+    write_sum_file, PackageLimits as SharedPackageLimits, VerifiedPackage as SharedVerifiedPackage,
+    REVISION_FILE, SUM_FILE,
+};
 use registry_platform_crypto::{verify, PublicJwk};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1018,6 +1022,19 @@ impl PreparedPackage {
         destination: &Path,
         signatures: Vec<PackageSignature>,
     ) -> Result<()> {
+        self.publish_to_directory_with_revision(destination, signatures, None)
+            .map(|_| ())
+    }
+
+    /// Publish the existing signed BReg package inside the shared Registry
+    /// Stack package envelope. BReg signatures and deployment bindings remain
+    /// authoritative until the package-ledger work removes them.
+    pub fn publish_to_directory_with_revision(
+        &self,
+        destination: &Path,
+        signatures: Vec<PackageSignature>,
+        revision: Option<&str>,
+    ) -> Result<SharedVerifiedPackage> {
         reject_symlink_components(destination)?;
         if destination.exists() {
             return Err(PackageError::Closure);
@@ -1052,12 +1069,36 @@ impl PreparedPackage {
                 &destination.join(MANIFEST_PATH),
                 &manifest_bytes,
                 self.manifest.environment != "local",
+            )?;
+            let package = write_sum_file(
+                destination,
+                revision,
+                &shared_package_limits(),
+                "bregctl package",
             )
+            .map_err(|_| PackageError::Closure)?;
+            if self.manifest.environment != "local" {
+                set_safe_file_permissions(&destination.join(SUM_FILE))?;
+                if revision.is_some() {
+                    set_safe_file_permissions(&destination.join(REVISION_FILE))?;
+                }
+            }
+            Ok(package)
         })();
         if publish.is_err() {
             let _ = remove_created_package_dir(destination);
         }
         publish
+    }
+}
+
+pub(crate) fn shared_package_limits() -> SharedPackageLimits {
+    SharedPackageLimits {
+        max_files: MAX_PACKAGE_FILES + 2,
+        max_file_bytes: MAX_FILE_BYTES,
+        max_total_bytes: MAX_PACKAGE_BYTES,
+        max_depth: MAX_PATH_COMPONENTS,
+        max_path_bytes: MAX_PATH_BYTES,
     }
 }
 
@@ -4896,6 +4937,10 @@ fn load_closure(
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
     expected.insert(MANIFEST_PATH.to_owned());
+    expected.insert(SUM_FILE.to_owned());
+    if actual.contains(REVISION_FILE) {
+        expected.insert(REVISION_FILE.to_owned());
+    }
     if actual != expected {
         return Err(PackageError::Closure);
     }

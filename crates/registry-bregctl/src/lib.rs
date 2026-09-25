@@ -543,6 +543,10 @@ struct PackageArgs {
     /// New build directory containing signing-input.json and, once approved, package/.
     #[arg(long, value_name = "DIRECTORY")]
     output: PathBuf,
+
+    /// One printable line recorded in the published package as REVISION.
+    #[arg(long, value_name = "TEXT")]
+    revision: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1597,6 +1601,10 @@ struct PackageSuccessReport {
     signature_threshold: u16,
     provided_signatures: usize,
     package_files: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    package_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revision: Option<String>,
     signing_input: ArtifactReport,
 }
 
@@ -4174,6 +4182,9 @@ fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
                     runtime_config_diff_failure(error)
                 }
                 RuntimePackageInspectionError::Package(error) => package_diff_failure(error),
+                RuntimePackageInspectionError::SharedPackage(message) => {
+                    diff_failure("diff.package.integrity_refused", "package", &message)
+                }
             })?;
             (inspected, BaselineAssurance::RuntimeBound)
         }
@@ -4234,9 +4245,14 @@ fn package(args: &PackageArgs) -> Result<PackageSuccessReport, FailureReport> {
         args.schema_fingerprint.as_deref(),
     )
     .map_err(package_lifecycle_failure)?;
-    let outcome =
-        package_lifecycle::run(prepared, receipt, &args.output, args.signatures.as_deref())
-            .map_err(package_lifecycle_failure)?;
+    let outcome = package_lifecycle::run(
+        prepared,
+        receipt,
+        &args.output,
+        args.signatures.as_deref(),
+        args.revision.as_deref(),
+    )
+    .map_err(package_lifecycle_failure)?;
     Ok(PackageSuccessReport {
         ok: true,
         command: "package",
@@ -4249,6 +4265,8 @@ fn package(args: &PackageArgs) -> Result<PackageSuccessReport, FailureReport> {
         signature_threshold: outcome.signature_threshold,
         provided_signatures: outcome.provided_signatures,
         package_files: outcome.package_files,
+        package_digest: outcome.package_digest,
+        revision: outcome.revision,
         signing_input: ArtifactReport {
             path: "signing-input.json".to_owned(),
             media_type: "application/json".to_owned(),
@@ -5546,9 +5564,27 @@ fn inspection_failure(
     prefix: &'static str,
     error: RuntimePackageInspectionError,
 ) -> FailureReport {
-    if let RuntimePackageInspectionError::RuntimeConfig(error) = error {
-        return runtime_config_failure(command, prefix, error);
-    }
+    let error = match error {
+        RuntimePackageInspectionError::RuntimeConfig(error) => {
+            return runtime_config_failure(command, prefix, error);
+        }
+        RuntimePackageInspectionError::SharedPackage(message) => {
+            return FailureReport {
+                ok: false,
+                command,
+                diagnostics: vec![tool_diagnostic(
+                    diagnostic(
+                        &format!("{prefix}.package.integrity_refused"),
+                        "package",
+                        &message,
+                    ),
+                    DiagnosticArtifact::VerifiedPackage,
+                    SuggestedAction::VerifyPackageIntegrity,
+                )],
+            };
+        }
+        other => other,
+    };
     let (code, path, message, artifact, action) = match error {
         RuntimePackageInspectionError::RuntimeConfigPath => (
             format!("{prefix}.runtime_config.path_invalid"),
@@ -5558,6 +5594,7 @@ fn inspection_failure(
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
         RuntimePackageInspectionError::RuntimeConfig(_) => unreachable!("handled before match"),
+        RuntimePackageInspectionError::SharedPackage(_) => unreachable!("handled before match"),
         RuntimePackageInspectionError::Package(error) => {
             let (suffix, action) = match error {
                 PackageError::UnsafePath => ("path_refused", SuggestedAction::VerifyPackagePath),

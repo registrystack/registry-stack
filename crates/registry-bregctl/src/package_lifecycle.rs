@@ -40,6 +40,8 @@ pub(crate) struct PackageLifecycleOutcome {
     pub signature_threshold: u16,
     pub provided_signatures: usize,
     pub package_files: usize,
+    pub package_digest: Option<String>,
+    pub revision: Option<String>,
 }
 
 /// Canonical receipt bytes that have been rederived against one exact
@@ -112,6 +114,7 @@ pub(crate) fn run(
     test_receipt: ValidatedTestReceipt,
     build_directory: &Path,
     signature_document: Option<&Path>,
+    revision: Option<&str>,
 ) -> Result<PackageLifecycleOutcome, PackageLifecycleError> {
     let signed_bytes = prepared.canonical_signed_bytes();
     ensure_reviewer_evidence(build_directory, signed_bytes, &test_receipt.bytes)?;
@@ -130,8 +133,12 @@ pub(crate) fn run(
         ));
     }
 
-    prepared
-        .publish_to_directory(&build_directory.join(PACKAGE_DIRECTORY), signatures.clone())
+    let shared = prepared
+        .publish_to_directory_with_revision(
+            &build_directory.join(PACKAGE_DIRECTORY),
+            signatures.clone(),
+            revision,
+        )
         .map_err(PackageLifecycleError::Package)?;
     Ok(PackageLifecycleOutcome {
         state: PackageLifecycleState::Published,
@@ -140,7 +147,9 @@ pub(crate) fn run(
         signing_input_bytes: signed_bytes.len(),
         signature_threshold: threshold,
         provided_signatures: signatures.len(),
-        package_files: prepared.file_bytes().len() + 1,
+        package_files: shared.files().count() + 1,
+        package_digest: Some(shared.digest().to_owned()),
+        revision: shared.revision().map(str::to_owned),
     })
 }
 
@@ -291,6 +300,8 @@ fn outcome(
         signature_threshold: prepared.manifest().signature_policy.threshold,
         provided_signatures,
         package_files: prepared.file_bytes().len() + 1,
+        package_digest: None,
+        revision: None,
     }
 }
 

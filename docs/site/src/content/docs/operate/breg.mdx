@@ -313,6 +313,7 @@ database:
     runtime: registry_runtime
 package:
   root: /var/lib/breg/packages/build-1/package
+  expectedDigest: sha256:<digest of the package SHA256SUMS file>
   trustAnchorPath: /etc/breg/package-trust-anchor.json
   compilerSourceRevision: civil-registry-0.1.0
   activeRevision: sha256:<package revision reported by package>
@@ -340,6 +341,16 @@ cursor:
   secretRef: secret:file/cursor-key
 eventDestinations: {}
 ```
+
+`package.expectedDigest` is optional. When you set it, copy the `packageDigest`
+reported by the successful `bregctl package` publication. Startup checks that
+digest before the existing BReg signature, environment, database, sequence, and
+active-revision checks. Rebuild a candidate with `bregctl package`; do not edit
+`SHA256SUMS`, `REVISION`, or files below `package.root` in place.
+
+{/* Evidence: crates/registry-breg/src/runtime_config.rs, RuntimeConfig::verify_package_envelope;
+    crates/registry-breg/src/package.rs, PreparedPackage::publish_to_directory_with_revision;
+    crates/registry-breg/src/startup.rs, prepare(). */}
 
 `publicOrigin` may include a deployment path prefix, such as
 `https://registry.example.org/registry-a`. Discovery, paging, and schema links preserve the
