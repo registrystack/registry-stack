@@ -41,6 +41,7 @@ CREATE TABLE messaging_messages (
     initial_retry_delay_ms bigint NOT NULL CHECK (initial_retry_delay_ms > 0),
     maximum_retry_delay_ms bigint NOT NULL CHECK (maximum_retry_delay_ms >= initial_retry_delay_ms),
     on_uncertain text NOT NULL CHECK (on_uncertain IN ('hold', 'retry')),
+    provider_idempotent_submit boolean NOT NULL,
     accepted_at timestamptz NOT NULL,
     not_before timestamptz,
     expires_at timestamptz NOT NULL,

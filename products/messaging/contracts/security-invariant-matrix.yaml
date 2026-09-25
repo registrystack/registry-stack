@@ -27,7 +27,8 @@ invariants:
       access profile, applied by POST /v1/messages after authentication and
       before the store is reached: the sender profile and the template must
       each be listed, direct content needs the profile's explicit opt-in, and
-      only the sender role submits.
+      only the sender role submits. Authentication, role checks, and per-caller
+      rate admission happen before the router buffers the submission body.
     refusal: >-
       Refuse with profile.not-authorized for a sender profile, template, or
       direct content outside the profile, and with operation.not-authorized
@@ -111,7 +112,9 @@ invariants:
       every attempt its transport's timeout cuts off, as unknown unless the
       sender profile opts into retry, which the package allows only over a
       provider that declares idempotentSubmit or a profile that sets
-      acceptDuplicates.
+      acceptDuplicates. The provider idempotency capability is stored at
+      acceptance and controls the key sent on every later attempt, even
+      after a package upgrade removes that capability.
     refusal: >-
       Record unknown and never send again without an operator settle.
     negativeTest:
@@ -129,8 +132,11 @@ invariants:
       fixed per-provider rate before anything else, then verifies it with
       the verifier kind the runtime configuration gives that provider
       (hmac-sha1-url-form, hmac-sha256-body, or path-token; none is not a
-      kind) before its body is read, then applies the receipt its receipt
-      script reads in one transaction under the message row's lock: the
+      kind) over the bounded raw body where required, before parsing a receipt
+      or reaching the store. Rate admission precedes body buffering. It
+      applies the receipt its receipt
+      script reads in one transaction. Assignment and lookup share a
+      provider-reference advisory lock; the message row is then locked: the
       report moves only forward (none, sent, then delivered or undelivered,
       final once terminal), and a receipt already in the message's bounded
       history is not stored or audited again. There is no replay window: the
@@ -155,7 +161,8 @@ invariants:
       Audit records carry operation, caller pseudonym, sender profile,
       template reference, correlation, outcome class, and a keyed recipient
       reference; log fields never carry payload values; metric labels are
-      closed sets fixed in code.
+      closed sets fixed in code. Startup publishes every pending outbox batch
+      before its runtime-start record; recovery failure refuses startup.
     refusal: >-
       Nothing to refuse at the caller: the absence is the control, proven over
       the journal, the outbox, the logs, and the metrics of a full journey

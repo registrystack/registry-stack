@@ -70,7 +70,11 @@ function cloneJson(value, budget, depth) {
       if (typeof key !== 'string') throw normalized({}, 'invalid_request');
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor || !Object.hasOwn(descriptor, 'value')) throw normalized({}, 'invalid_request');
-      if (descriptor.enumerable) result[key] = cloneJson(descriptor.value, budget, depth + 1);
+      if (descriptor.enumerable) {
+        budget.bytes += Buffer.byteLength(key, 'utf8');
+        if (budget.bytes > MAX_JSON_STRING_BYTES) throw normalized({}, 'invalid_request');
+        result[key] = cloneJson(descriptor.value, budget, depth + 1);
+      }
     }
     return result;
   } finally {

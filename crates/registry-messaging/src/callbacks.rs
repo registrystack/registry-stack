@@ -6,12 +6,13 @@
 //!
 //! No bearer token is involved. The path names the provider, the verifier
 //! its runtime configuration names decides whether the request is that
-//! provider's, and nothing about the request is read before it verifies. A
-//! path naming no receiving provider, a request that does not verify, and a
-//! token segment on a provider whose verifier is not `path-token` (or none
-//! on one whose verifier is) all answer `callback.unverified` alike, so the
-//! route reveals neither which providers receive callbacks nor why a
-//! request was refused.
+//! provider's. The callback rate is charged before the bounded body is
+//! buffered; the verifier then authenticates the raw request before a receipt
+//! script or store sees it. A path naming no receiving provider, a request
+//! that does not verify, and a token segment on a provider whose verifier is
+//! not `path-token` (or none on one whose verifier is) all answer
+//! `callback.unverified` alike, so the route reveals neither which providers
+//! receive callbacks nor why a request was refused.
 //!
 //! A verified callback answers 204 when its receipt was applied, changed
 //! nothing, reported nothing this runtime records, or named no message:
@@ -28,7 +29,7 @@
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Request, State};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
@@ -36,7 +37,7 @@ use registry_messaging_core::{
     verify_callback, CallbackRequest, ProblemCode, Receipt, PROVIDER_CALLBACK_PATH,
 };
 
-use crate::http::{rate_limited_response, HttpError, HttpState};
+use crate::http::{rate_limited_response, read_request_body, HttpError, HttpState};
 use crate::http_provider::ReceiptScriptError;
 use crate::limits::LimitRefusal;
 use crate::metrics::{CallbackOutcome, LimitKind};
@@ -48,22 +49,18 @@ const FORM_MEDIA_TYPE: &str = "application/x-www-form-urlencoded";
 pub(crate) async fn receive(
     State(state): State<HttpState>,
     Path(provider_id): Path<String>,
-    uri: Uri,
-    headers: HeaderMap,
-    body: Bytes,
+    request: Request,
 ) -> Result<StatusCode, Response> {
-    answer(&state, &provider_id, None, &uri, &headers, body).await
+    answer(&state, &provider_id, None, request).await
 }
 
 /// `POST /v1/provider-callbacks/{provider_id}/{token}`.
 pub(crate) async fn receive_with_token(
     State(state): State<HttpState>,
     Path((provider_id, token)): Path<(String, String)>,
-    uri: Uri,
-    headers: HeaderMap,
-    body: Bytes,
+    request: Request,
 ) -> Result<StatusCode, Response> {
-    answer(&state, &provider_id, Some(token), &uri, &headers, body).await
+    answer(&state, &provider_id, Some(token), request).await
 }
 
 /// Charge the callback to its provider's rate, then count it by its outcome
@@ -73,9 +70,7 @@ async fn answer(
     state: &HttpState,
     provider_id: &str,
     token: Option<String>,
-    uri: &Uri,
-    headers: &HeaderMap,
-    body: Bytes,
+    request: Request,
 ) -> Result<StatusCode, Response> {
     let routed = state
         .callbacks
@@ -93,8 +88,13 @@ async fn answer(
             return Err(HttpError(ProblemCode::ServiceUnavailable).into_response());
         }
     }
+    let uri = request.uri().clone();
+    let headers = request.headers().clone();
+    let body = read_request_body(request)
+        .await
+        .map_err(IntoResponse::into_response)?;
     let (outcome, answer) =
-        match receive_callback(state, provider_id, token, uri, headers, body).await {
+        match receive_callback(state, provider_id, token, &uri, &headers, body).await {
             Ok(outcome) => (outcome, Ok(StatusCode::NO_CONTENT)),
             Err((outcome, problem)) => (outcome, Err(HttpError(problem).into_response())),
         };

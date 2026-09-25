@@ -82,6 +82,7 @@ pub struct PreparedSubmission {
     request: SubmitMessageRequest,
     content: PreparedContent,
     profile: SenderProfile,
+    provider_idempotent_submit: bool,
     not_before: Option<SystemTime>,
     expires_at: Option<SystemTime>,
 }
@@ -152,11 +153,15 @@ pub fn prepare_submission(
         .sender_profile(&content.sender_profile)
         .cloned()
         .ok_or(ProblemCode::ServiceUnavailable)?;
+    let provider_idempotent_submit = package
+        .provider(&profile.provider)
+        .is_some_and(|provider| provider.idempotent_submit);
     Ok(PreparedSubmission {
         request_hash,
         request,
         content,
         profile,
+        provider_idempotent_submit,
         not_before,
         expires_at,
     })
@@ -1217,9 +1222,10 @@ async fn insert_message(
                   sender_profile, channel, provider, sender, recipient_kind, content_source, \
                   template_id, template_version, template_locale, package_digest, \
                   correlation_id, sms_segments, maximum_attempts, initial_retry_delay_ms, \
-                  maximum_retry_delay_ms, on_uncertain, accepted_at, not_before, expires_at) \
+                  maximum_retry_delay_ms, on_uncertain, provider_idempotent_submit, accepted_at, \
+                  not_before, expires_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, \
-                     $17, $18, $19, $20, transaction_timestamp(), $21, $22)",
+                     $17, $18, $19, $20, $21, transaction_timestamp(), $22, $23)",
             &[
                 &message_id,
                 &caller.identity.issuer,
@@ -1241,6 +1247,7 @@ async fn insert_message(
                 &initial_ms,
                 &maximum_ms,
                 &profile.on_uncertain.as_str(),
+                &submission.provider_idempotent_submit,
                 &window.not_before,
                 &window.expires_at,
             ],

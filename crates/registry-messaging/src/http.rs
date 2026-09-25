@@ -34,7 +34,7 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{FromRequest, Path, Request, State};
 use axum::http::header::{
     AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER, WWW_AUTHENTICATE,
 };
@@ -462,11 +462,16 @@ async fn ready(State(state): State<HttpState>) -> Result<StatusCode, HttpError> 
 
 async fn submit_message(
     State(state): State<HttpState>,
-    headers: HeaderMap,
-    body: axum::body::Bytes,
+    request: Request,
 ) -> Result<Response, HttpError> {
-    let caller = authenticate(&state, &headers).await?;
-    let result = accept_submission(&state, &caller, &headers, &body).await;
+    let caller = authenticate(&state, request.headers()).await?;
+    let result = match admit_submission(&state, &caller, request.headers()).await {
+        Ok(key) => {
+            let body = read_request_body(request).await?;
+            accept_submission(&state, &caller, &key, &body).await
+        }
+        Err(refusal) => Err(refusal),
+    };
     let record = match &result {
         Ok(answer) if !answer.replayed => None,
         Ok(answer) => Some(SubmissionRecord::replayed(&state, &caller, answer)?),
@@ -502,16 +507,14 @@ fn count_limit_refusal(metrics: &Metrics, problem: ProblemCode) {
     }
 }
 
-/// Every check a submission passes before it is recorded, in the order a
-/// caller learns of them: the role, the caller's request rate, the media
-/// type, the idempotency key, and then the body. The daily limit is
-/// counted when the submission is recorded.
-async fn accept_submission(
+/// Admit a submission before its body is read: require the sender role,
+/// charge the caller's request rate, then validate the body-independent
+/// headers.
+async fn admit_submission(
     state: &HttpState,
     caller: &Caller,
     headers: &HeaderMap,
-    body: &[u8],
-) -> Result<SubmissionAnswer, SubmissionRefusal> {
+) -> Result<String, SubmissionRefusal> {
     if caller.role() != AccessRole::Sender {
         return Err(ProblemCode::OperationNotAuthorized.into());
     }
@@ -524,6 +527,17 @@ async fn accept_submission(
         .filter(|key| valid_idempotency_key(key.as_bytes()))
         .and_then(|key| key.to_str().ok())
         .ok_or(ProblemCode::RequestInvalid)?;
+    Ok(key.to_owned())
+}
+
+/// Read and accept a submission after its caller passed admission. The daily
+/// limit is counted when the submission is recorded.
+async fn accept_submission(
+    state: &HttpState,
+    caller: &Caller,
+    key: &str,
+    body: &[u8],
+) -> Result<SubmissionAnswer, SubmissionRefusal> {
     let submission = prepare_submission(&state.package, caller, body)?;
     message_service(state)?
         .submit(caller, key, &submission)
@@ -675,10 +689,11 @@ pub fn preview_json(preview: &TemplatePreview) -> Result<Vec<u8>, serde_json::Er
 async fn preview_template(
     State(state): State<HttpState>,
     Path((template_id, version)): Path<(String, String)>,
-    headers: HeaderMap,
-    body: axum::body::Bytes,
+    request: Request,
 ) -> Result<Response, HttpError> {
-    let caller = authenticate(&state, &headers).await?;
+    let caller = authenticate(&state, request.headers()).await?;
+    let headers = request.headers().clone();
+    let body = read_request_body(request).await?;
     let outcome = render_preview(
         &state.package,
         &caller,
@@ -698,6 +713,21 @@ async fn preview_template(
         HttpError(ProblemCode::ServiceUnavailable)
     })?;
     Ok((StatusCode::OK, [(CONTENT_TYPE, "application/json")], body).into_response())
+}
+
+/// Buffer the request only after the route's authentication or rate admission
+/// has succeeded. This uses the same Axum extraction as the former handler
+/// arguments, including the edge's configured body limit and rejection shape.
+pub(crate) async fn read_request_body(request: Request) -> Result<axum::body::Bytes, HttpError> {
+    axum::body::Bytes::from_request(request, &())
+        .await
+        .map_err(|rejection| {
+            let problem = match rejection.into_response().status() {
+                StatusCode::PAYLOAD_TOO_LARGE => ProblemCode::RequestBodyTooLarge,
+                _ => ProblemCode::RequestInvalid,
+            };
+            HttpError(problem)
+        })
 }
 
 /// A preview's result, with the locale the request named once the body
@@ -1043,6 +1073,13 @@ mod tests {
         .await
     }
 
+    /// A body whose first bytes beyond the edge limit expose any attempt to
+    /// poll it. The request deliberately carries no `Content-Length`, so the
+    /// edge layer cannot reject it from headers alone.
+    fn body_poll_canary() -> Vec<u8> {
+        vec![b'a'; registry_platform_httpsec::DEFAULT_REQUEST_BODY_LIMIT_BYTES + 1]
+    }
+
     fn journal(sink: &MemorySink) -> Vec<serde_json::Value> {
         sink.records.lock().unwrap().clone()
     }
@@ -1344,6 +1381,18 @@ mod tests {
         )
         .await;
         assert_eq!(headers.get(WWW_AUTHENTICATE).unwrap(), "Bearer");
+        expect_problem(
+            post(
+                app.clone(),
+                PREVIEW,
+                None,
+                Some("application/json"),
+                body_poll_canary(),
+            )
+            .await,
+            ProblemCode::AuthenticationRefused,
+        )
+        .await;
         let forged = token_signed_with(sender_claims(), b"another-secret-another-secret-another!");
         expect_problem(
             post_json(app.clone(), PREVIEW, Some(&forged), &sample_request()).await,
@@ -1576,6 +1625,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_submission_authentication_refusal_does_not_poll_the_body() {
+        let (app, sink) = preview_app();
+        let request = Request::builder()
+            .method("POST")
+            .uri(MESSAGES_PATH)
+            .header(IDEMPOTENCY_KEY_HEADER, "key-1")
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(body_poll_canary()))
+            .unwrap();
+        let headers = expect_problem(
+            app.oneshot(request).await.unwrap(),
+            ProblemCode::AuthenticationRefused,
+        )
+        .await;
+        assert_eq!(headers.get(WWW_AUTHENTICATE).unwrap(), "Bearer");
+        assert!(journal(&sink).is_empty());
+    }
+
+    #[tokio::test]
     async fn a_caller_past_its_profile_rate_is_refused_with_the_wait_needed() {
         let (sink, journal_handle) = memory_journal();
         let mut state = state_over(authenticator(), true, journal_handle);
@@ -1593,8 +1661,17 @@ mod tests {
             )
             .await;
         }
+        // The rate refusal is decided without polling this over-limit body.
+        // Before delayed collection, Axum extracted it first and answered 413.
         let headers = expect_problem(
-            submit_json(app.clone(), &sender, &submission()).await,
+            submit(
+                app.clone(),
+                &sender,
+                Some("key-1"),
+                Some("application/json"),
+                body_poll_canary(),
+            )
+            .await,
             ProblemCode::RateLimitExceeded,
         )
         .await;
@@ -2004,13 +2081,15 @@ mod tests {
         }
         // The provider's budget is spent, so even its own token is refused
         // before it is checked, and the provider is told how long to wait.
+        // The rate refusal is decided without polling this over-limit body.
+        // Before delayed collection, Axum extracted it first and answered 413.
         let headers = expect_problem(
             post(
                 app.clone(),
                 "/v1/provider-callbacks/sms-gateway/callback-token-4f1b90",
                 None,
                 Some("application/json"),
-                b"{}".to_vec(),
+                body_poll_canary(),
             )
             .await,
             ProblemCode::RateLimitExceeded,
@@ -2064,14 +2143,13 @@ mod tests {
     #[tokio::test]
     async fn a_callback_body_over_the_edge_limit_is_refused() {
         let (app, _) = callback_app(path_token_verifier());
-        let body = vec![b'a'; registry_platform_httpsec::DEFAULT_REQUEST_BODY_LIMIT_BYTES + 1];
         expect_problem(
             post(
                 app,
                 "/v1/provider-callbacks/sms-gateway/callback-token-4f1b90",
                 None,
                 Some("application/json"),
-                body,
+                body_poll_canary(),
             )
             .await,
             ProblemCode::RequestBodyTooLarge,

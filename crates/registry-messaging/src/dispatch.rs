@@ -138,7 +138,8 @@ const POLICY_COLUMNS: &str = "message.provider, message.sender_profile, \
      message.maximum_retry_delay_ms, message.on_uncertain, message.expires_at";
 const PAYLOAD_SELECT: SelectSql = SelectSql {
     columns: "message.channel, message.sender_profile, message.sender, payload.recipient, \
-              payload.subject, payload.text_body, payload.html_body, payload.erased_at IS NOT NULL",
+              payload.subject, payload.text_body, payload.html_body, payload.erased_at IS NOT NULL, \
+              message.provider_idempotent_submit",
     joins: "JOIN {schema}.messaging_messages AS message \
                 ON message.message_id = state.message_id \
             JOIN {schema}.messaging_message_payloads AS payload \
@@ -170,6 +171,9 @@ pub struct OutboundMessage {
     /// A key stable across every attempt of this generation, for a provider
     /// that deduplicates submissions.
     pub idempotency_key: String,
+    /// Whether the provider declared idempotent submission when this message
+    /// was accepted. A later package cannot withdraw the key from a retry.
+    pub provider_idempotent_submit: bool,
     /// What is left of the attempt's timeout. The worker stops waiting when
     /// it is spent.
     pub budget: Duration,
@@ -630,6 +634,14 @@ impl DispatchStore for MessageDispatchStore {
                     SendOutcome::Transient { .. } | SendOutcome::MaybeSent => (None, None),
                 };
                 let class = outcome_class(&sent.outcome);
+                if let Some(reference) = &reference {
+                    crate::receipts::lock_provider_reference(
+                        transaction,
+                        &job.job.provider,
+                        reference,
+                    )
+                    .await?;
+                }
                 let changed = transaction
                     .execute(
                         "UPDATE messaging_attempts \
@@ -802,6 +814,7 @@ struct Payload {
     sender: String,
     recipient: String,
     parts: RenderedParts,
+    provider_idempotent_submit: bool,
 }
 
 fn decode_payload(row: &Row, first: usize) -> Result<Option<Payload>, DispatchError> {
@@ -829,6 +842,7 @@ fn decode_payload(row: &Row, first: usize) -> Result<Option<Payload>, DispatchEr
             text,
             html: row.try_get(first + 6)?,
         },
+        provider_idempotent_submit: row.try_get(first + 8)?,
     }))
 }
 
@@ -950,6 +964,7 @@ impl MessageSender {
             sender_profile: payload.sender_profile,
             sender: payload.sender,
             idempotency_key,
+            provider_idempotent_submit: payload.provider_idempotent_submit,
             recipient: payload.recipient,
             parts: payload.parts,
             budget,
@@ -1080,6 +1095,7 @@ mod tests {
                 text: text.to_owned(),
                 html: None,
             },
+            provider_idempotent_submit: true,
         };
         let first = provider_idempotency_key(id, 1, &payload("hello"));
         assert_eq!(first, provider_idempotency_key(id, 1, &payload("hello")));
@@ -1105,6 +1121,7 @@ mod tests {
                 html: None,
             },
             idempotency_key: "sha256:00".to_owned(),
+            provider_idempotent_submit: true,
             budget: Duration::from_secs(1),
         };
         let debug = format!("{message:?}");

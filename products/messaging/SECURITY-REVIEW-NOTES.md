@@ -69,6 +69,15 @@ such as an operator submitting, is refused `403 operation.not-authorized`.
   is consulted. The `postgres_messages` suite has a second sender read and
   cancel a real message.
 
+## Node request normalization
+
+The Node facade snapshots plain JSON before handing a request or token to
+native code. Its aggregate UTF-8 text budget counts enumerable property
+names as well as string values, so one oversized key cannot bypass the
+one-MiB bound. `__test__/sanitizer.test.js` verifies refusal before any
+native submission call; the unified client copies the same facade through
+the maintained synchronization script.
+
 ## Configuration and secrets
 
 Threat: a credential reaches the runtime from a place review does not see,
@@ -204,7 +213,14 @@ journal reads back from its newest record to its newest outbox record and
 the publisher marks that one first. Every record read back is held to the
 chain head the keyed bootstrap verified, record by record, so an outbox
 record altered in an older sealed segment, which bootstrap does not read,
-refuses the start rather than naming the wrong record.
+refuses the start rather than naming the wrong record. The runtime drains
+every pending outbox batch before appending `messaging.runtime.started` or
+serving requests. A failed recovery pass refuses startup, preserving the
+order between committed pre-restart events and new runtime activity.
+
+Test: `postgres_package.rs`
+`startup_publishes_every_pending_outbox_batch_before_its_start_record`
+uses more than one pending publication batch.
 
 Reads are not journaled: the status route and `messagingctl messages list`
 and `show` leave no record (MESSAGING-DEC-15). Scheduling's appointment read
@@ -330,6 +346,9 @@ mid-attempt, stops the message as `unknown` unless the sender profile set
 declares `idempotentSubmit` or a profile that sets `acceptDuplicates`. A
 retry then carries the same provider idempotency key, derived from the
 message, its generation, and a digest of its content (MESSAGING-DEC-11).
+The provider capability is persisted with the accepted message, so removing
+`idempotentSubmit` from a later package does not withdraw that key from a
+previously accepted retry.
 Each provider kind decides whether a failure happened after the message
 left: an `smtp` drop, timeout, or unreadable reply once the end-of-data
 marker was written, and an `http` failure after the request was written,
@@ -506,7 +525,8 @@ connection is not activated: startup logs a warning, and its messages fail
 `provider-unconfigured` without a send (MESSAGING-DEC-12).
 
 The HTTP transport passes the idempotency key to the prepare script only
-when the package declares `idempotentSubmit` for the provider. Channel,
+when the acceptance-time package declared `idempotentSubmit` for the
+provider. That declaration is stored with the message. Channel,
 sender, and provider come from the persisted message, so a later package
 cannot redirect a retry; the SMS segment bound comes from the active
 package's sender profile.
@@ -538,7 +558,9 @@ a configured header), `hmac-sha256-body` (HMAC-SHA256 over the raw body, hex
 or base64 in a configured header), or `path-token` (a secret token as the
 last path segment). `none` is not a kind. Tags and tokens are compared in
 constant time by the `registry-platform-crypto` MAC helpers. The secret or
-token is a `secret:` reference resolved once at startup.
+token is a `secret:` reference resolved once at startup. A path token must
+resolve to UTF-8 of at most 1024 bytes, matching the route verifier's bound;
+an unusable token refuses activation without revealing its value.
 
 An unknown provider, a provider without a verifier, a missing or wrong
 signature or token, a token segment on a provider whose verifier is not
@@ -547,10 +569,11 @@ signature or token, a token segment on a provider whose verifier is not
 providers receive callbacks nor why a request was refused. It is 403 rather
 than 401 because there is no challenge scheme a provider could answer. The
 refusal is logged with the provider id only when the provider is configured,
-and with a value-free reason; nothing about the request is read before it
-verifies.
+and with a value-free reason. Rate admission precedes body buffering;
+verification may read the bounded raw bytes for HMAC, but the receipt script
+and store are reached only after verification.
 
-Before it is verified, a callback is charged to a token bucket of 6000 a
+Before its body is buffered or it is verified, a callback is charged to a token bucket of 6000 a
 minute with a burst of 600, held in the runtime process (MESSAGING-DEC-28).
 Each provider with a verifier has its own bucket, keyed by its configured
 id; every other path shares one bucket of the same size, so a refusal, like
@@ -599,7 +622,11 @@ changes nothing and, as an exact duplicate, is not stored or audited again.
 
 A verified receipt whose reference names no message of the provider, or
 names more than one, answers 204 so the provider does not retry it, changes
-nothing, journals nothing, and is counted as `unmatched` or `ambiguous`. A
+nothing, journals nothing, and is counted as `unmatched` or `ambiguous`.
+Reference assignment and receipt lookup take the same transaction advisory
+lock, keyed by provider and reference, before either can commit a decision;
+a concurrently assigned duplicate reference is therefore checked as
+ambiguous. Hash collisions only serialize unrelated references. A
 store or journal failure, or a provider without a receipt script, answers
 `503 service.unavailable`, so the provider retries it.
 

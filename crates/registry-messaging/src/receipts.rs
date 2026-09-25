@@ -58,6 +58,23 @@ pub enum ReceiptOutcome {
     Ambiguous,
 }
 
+/// Serialize assignment and resolution of one provider reference. Hash
+/// collisions can only serialize unrelated references; both callers still
+/// decide over their exact provider and reference values.
+pub(crate) async fn lock_provider_reference(
+    transaction: &tokio_postgres::Transaction<'_>,
+    provider: &str,
+    reference: &str,
+) -> Result<(), tokio_postgres::Error> {
+    transaction
+        .query_one(
+            "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+            &[&provider, &reference],
+        )
+        .await?;
+    Ok(())
+}
+
 /// Apply `receipt` from `provider` to the message it names.
 ///
 /// # Errors
@@ -76,6 +93,7 @@ pub async fn record_receipt(
     }
     let mut client = store.client().await?;
     let transaction = client.transaction().await?;
+    lock_provider_reference(&transaction, provider, &receipt.provider_reference).await?;
     let matches = transaction
         .query(
             "SELECT DISTINCT attempt.message_id \

@@ -128,6 +128,7 @@ fn outbound(
             html: None,
         },
         idempotency_key: IDEMPOTENCY_KEY.to_owned(),
+        provider_idempotent_submit: true,
         budget: Duration::from_secs(5),
     }
 }
@@ -250,7 +251,7 @@ async fn configured_providers_become_transports_that_send_what_was_accepted() {
 }
 
 #[tokio::test]
-async fn the_idempotency_key_is_sent_only_when_the_package_declares_idempotent_submission() {
+async fn the_idempotency_key_follows_the_capability_persisted_at_acceptance() {
     let upstream = MockHttpUpstream::start().await;
     upstream
         .expect("POST", "/v1/messages")
@@ -275,9 +276,50 @@ async fn the_idempotency_key_is_sent_only_when_the_package_declares_idempotent_s
     )
     .expect("providers activate");
     let gateway = transports.get("sms-gateway").expect("http transport");
+    let mut accepted_without_deduplication = sms();
+    accepted_without_deduplication.provider_idempotent_submit = false;
+    gateway.send(&accepted_without_deduplication).await;
+    // The active package no longer declares the capability, but a message
+    // accepted while it did still carries its key after a restart.
     gateway.send(&sms()).await;
     let requests = received(&upstream).await;
     assert!(requests[0].headers.get("idempotency-key").is_none());
+    assert_eq!(
+        requests[1]
+            .headers
+            .get("idempotency-key")
+            .and_then(|value| value.to_str().ok()),
+        Some(IDEMPOTENCY_KEY)
+    );
+}
+
+#[test]
+fn a_path_token_must_be_bounded_utf8_before_callback_activation() {
+    for token in [
+        vec![0xff],
+        vec![b'a'; MAXIMUM_CALLBACK_PATH_TOKEN_BYTES + 1],
+    ] {
+        let project = project(
+            json!({
+                "sms-gateway": http_connection_to(
+                    "http://127.0.0.1:9/v1/",
+                    json!({"kind": "none"})
+                )
+            }),
+            |_| {},
+            &[("callback-token", &token)],
+        );
+        let error = activate_providers(
+            &project.config,
+            &project.loaded,
+            &project.secrets,
+            &mut Transports::new(),
+        )
+        .expect_err("an unusable path token");
+        let text = error.to_string();
+        assert!(text.contains("callbackVerifier.tokenRef"), "{text}");
+        assert!(text.contains("UTF-8"), "{text}");
+    }
 }
 
 #[tokio::test]

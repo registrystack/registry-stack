@@ -278,6 +278,51 @@ async fn an_accepted_send_carries_the_rendered_parts_and_leaves_the_message_subm
     assert!(view.attempts[0].provider_reference);
 }
 
+#[tokio::test]
+async fn accepted_idempotency_capability_is_loaded_after_worker_reconstruction() {
+    let harness = Harness::start_with(Value::Null, |package| {
+        let path = package.join("messaging.yaml");
+        let source = std::fs::read_to_string(&path).unwrap();
+        let mut manifest: Value = serde_norway::from_str(&source).unwrap();
+        manifest["senderProfiles"][1]["onUncertain"] = Value::String("retry".to_owned());
+        std::fs::write(path, serde_norway::to_string(&manifest).unwrap()).unwrap();
+    })
+    .await;
+    let id = harness.accepted(&sms_submission()).await;
+    let stored: bool = harness
+        .isolated
+        .admin
+        .query_one(
+            "SELECT provider_idempotent_submit FROM messaging_messages WHERE message_id = $1",
+            &[&id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(stored);
+
+    // Build a new worker over the persisted message, as a restarted runtime
+    // does. Its outbound contract still carries the acceptance-time flag.
+    let transport = Scripted::new(Script::Accepted);
+    let mut transports = Transports::new();
+    transports.insert("sms-gateway", transport.clone()).unwrap();
+    let transports = Arc::new(transports);
+    let dispatcher = dispatcher(
+        harness.store.clone(),
+        &harness.isolated.schema,
+        Arc::clone(&transports),
+    )
+    .unwrap();
+    let sender = MessageSender::new(dispatcher.clone(), transports, Arc::clone(&harness.metrics));
+    assert_eq!(
+        dispatcher.dispatch_once(&sender).await.unwrap(),
+        DispatchOutcome::Delivered
+    );
+    let seen = transport.seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].provider_idempotent_submit);
+}
+
 /// Two workers draining one table never send one message twice.
 #[tokio::test]
 async fn two_workers_never_send_one_message_twice() {

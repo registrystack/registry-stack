@@ -36,6 +36,9 @@ use crate::http_provider::{HttpProvider, HttpProviderMessage};
 use crate::package::LoadedPackage;
 use crate::smtp::{SmtpMessage, SmtpProvider};
 
+/// The longest resolved `path-token` secret accepted for one URL segment.
+pub const MAXIMUM_CALLBACK_PATH_TOKEN_BYTES: usize = 1024;
+
 /// Why a configured provider could not be activated. The reason names the
 /// member or secret reference, never a secret value.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -118,10 +121,6 @@ pub fn activate_providers(
                         }),
                     );
                 }
-                let idempotent_submit = loaded
-                    .package
-                    .provider(id)
-                    .is_some_and(|declared| declared.idempotent_submit);
                 let maximum_segments = loaded
                     .package
                     .sender_profiles()
@@ -130,7 +129,6 @@ pub fn activate_providers(
                     .collect();
                 Arc::new(HttpTransport {
                     provider,
-                    idempotent_submit,
                     maximum_segments,
                 })
             }
@@ -159,6 +157,21 @@ fn resolve(
     secrets
         .resolve(reference)
         .map_err(|error| describe_secret_failure(field, reference, &error))
+}
+
+fn resolve_path_token(
+    secrets: &SecretResolver,
+    token_ref: &str,
+) -> Result<ProtectedSecret, String> {
+    let token = resolve(secrets, "callbackVerifier.tokenRef", token_ref)?;
+    let bytes = token.expose_secret();
+    if bytes.len() > MAXIMUM_CALLBACK_PATH_TOKEN_BYTES || std::str::from_utf8(bytes).is_err() {
+        return Err(format!(
+            "callbackVerifier.tokenRef must resolve to UTF-8 no longer than \
+             {MAXIMUM_CALLBACK_PATH_TOKEN_BYTES} bytes"
+        ));
+    }
+    Ok(token)
 }
 
 /// One `http` provider's delivery callback: the verifier with its secret
@@ -276,7 +289,7 @@ impl CallbackVerifierSecret {
                     .map_err(field)?,
             },
             CallbackVerifierConfig::PathToken { token_ref } => Self::PathToken {
-                token: resolve(secrets, "callbackVerifier.tokenRef", token_ref).map_err(field)?,
+                token: resolve_path_token(secrets, token_ref).map_err(field)?,
             },
         })
     }
@@ -316,9 +329,6 @@ impl MessageTransport for SmtpTransport {
 /// An HTTP provider as a dispatch transport.
 struct HttpTransport {
     provider: Arc<HttpProvider>,
-    /// Whether the package declares `idempotentSubmit`, the one condition
-    /// under which the prepare script sees the idempotency key.
-    idempotent_submit: bool,
     /// The SMS segment bound of each sender profile routed through this
     /// provider, by profile id.
     maximum_segments: BTreeMap<String, Option<u8>>,
@@ -365,8 +375,8 @@ impl MessageTransport for HttpTransport {
                 profile: &profile,
                 recipient: &message.recipient,
                 parts: &message.parts,
-                idempotency_key: self
-                    .idempotent_submit
+                idempotency_key: message
+                    .provider_idempotent_submit
                     .then_some(message.idempotency_key.as_str()),
             })
             .await

@@ -222,7 +222,7 @@ callback, and is one of
 |---|---|---|
 | `hmac-sha1-url-form` | `url`, `header`, `secretRef` | HMAC-SHA1 over `url` and the request's query, then the form parameters sorted by name, base64 in `header` |
 | `hmac-sha256-body` | `header`, `encoding` (`hex` or `base64`), `secretRef` | HMAC-SHA256 over the raw body, encoded in `header` |
-| `path-token` | `tokenRef` | The secret token as the last path segment |
+| `path-token` | `tokenRef` | The secret token as the last path segment; it must resolve to UTF-8 of at most 1024 bytes |
 
 `url` is the external callback URL the provider was given and signs, exactly
 as given, `http` or `https`, without a query or fragment, at most 2048 bytes;

@@ -254,6 +254,59 @@ async fn migrated(isolated: &Isolated) -> Deployment {
 }
 
 #[tokio::test]
+async fn startup_publishes_every_pending_outbox_batch_before_its_start_record() {
+    let isolated = isolated_schema().await;
+    let deployment = migrated(&isolated).await;
+    let config = deployment.config();
+    apply_package(&config, true).await.expect("apply");
+
+    // More than one publication batch must precede the restart marker.
+    for sequence in 0..125 {
+        let event_id = Uuid::new_v4();
+        let record = json!({
+            "event": "messaging.test.committed-before-restart",
+            "eventId": event_id.to_string(),
+            "sequence": sequence
+        });
+        isolated.admin.execute(
+            &format!("INSERT INTO {}.messaging_audit_outbox (event_id, audit_record) VALUES ($1, $2)", isolated.schema),
+            &[&event_id, &record],
+        ).await.expect("a committed pre-restart audit event");
+    }
+
+    let app = registry_messaging::runtime::assemble(
+        &config,
+        registry_messaging::dispatch::Transports::new(),
+    )
+    .await
+    .expect("assemble after recovering the pending outbox");
+    let records: Vec<Value> = std::fs::read_to_string(&config.audit.path)
+        .expect("the startup journal")
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(records.len(), 126);
+    for (sequence, record) in records.iter().take(125).enumerate() {
+        assert_eq!(record["record"]["sequence"], sequence);
+    }
+    assert_eq!(records[125]["record"]["event"], "messaging.runtime.started");
+    let pending: i64 = isolated
+        .admin
+        .query_one(
+            &format!(
+                "SELECT count(*) FROM {}.messaging_audit_outbox WHERE published_at IS NULL",
+                isolated.schema
+            ),
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(pending, 0);
+    drop(app);
+}
+
+#[tokio::test]
 async fn apply_previews_by_default_records_once_and_is_idempotent() {
     let isolated = isolated_schema().await;
     let deployment = migrated(&isolated).await;

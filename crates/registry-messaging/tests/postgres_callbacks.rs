@@ -19,23 +19,29 @@ mod support;
 
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
+use async_trait::async_trait;
 use aws_lc_rs::hmac;
 use axum::body::Body;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{Request, StatusCode};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use registry_messaging::dispatch::{dispatcher, MessageDispatcher, MessageSender};
+use registry_messaging::dispatch::{
+    dispatcher, MessageDispatcher, MessageSender, MessageTransport, OutboundMessage, Transports,
+};
 use registry_messaging::messages::{OperatorAction, SettleOutcome};
 use registry_messaging::receipts::{MAXIMUM_STORED_RECEIPTS, RECEIPT_RECORDED_EVENT};
 use registry_messaging::retention::RetentionSweep;
 use registry_messaging_core::MessageStatus;
 use registry_platform_dispatch::postgres::DispatchOutcome;
+use registry_platform_dispatch::{ReceiverReference, SendOutcome};
 use serde_json::{json, Value};
 use support::{
     assert_absent, assert_logs_clean, captured_logs, email_submission, sender_token,
     sms_submission, Harness, NAME, OFFICE, RECIPIENT,
 };
+use tokio::sync::Notify;
 use uuid::Uuid;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request as GatewayRequest, ResponseTemplate};
@@ -66,6 +72,21 @@ struct Deployment {
     dispatcher: MessageDispatcher,
     sender: MessageSender,
     verifier: Verifier,
+}
+
+struct FixedReference {
+    reference: String,
+    attempted: Notify,
+}
+
+#[async_trait]
+impl MessageTransport for FixedReference {
+    async fn send(&self, _message: &OutboundMessage) -> SendOutcome {
+        self.attempted.notify_one();
+        SendOutcome::Accepted {
+            receiver_reference: Some(ReceiverReference::new(&self.reference).unwrap()),
+        }
+    }
 }
 
 /// An environment variable holding `value`, as the secret reference that
@@ -655,6 +676,78 @@ async fn a_reference_two_messages_carry_is_received_and_applied_to_neither() {
         .await;
     let (answer, _) = deployment.report(&reference, "delivered", None).await;
     assert_eq!(answer, StatusCode::NO_CONTENT);
+    assert_eq!(deployment.counted("ambiguous"), 1);
+    assert_eq!(deployment.stored_report(first).await, None);
+    assert_eq!(deployment.stored_report(second).await, None);
+    assert!(deployment.receipt_records().await.is_empty());
+}
+
+#[tokio::test]
+async fn receipt_resolution_waits_for_a_concurrent_reference_assignment() {
+    let deployment = deployment(Verifier::Body).await;
+    let first = deployment.sent().await;
+    let second = deployment.harness.accepted(&sms_submission()).await;
+    let reference = reference_for(first);
+    let admin = &deployment.harness.isolated.admin;
+
+    // Hold the reference lock while a real dispatch finish tries to assign
+    // the same reference to the second message.
+    admin
+        .query_one(
+            "SELECT pg_advisory_lock(hashtext($1), hashtext($2))",
+            &[&"sms-gateway", &reference],
+        )
+        .await
+        .unwrap();
+    let transport = Arc::new(FixedReference {
+        reference: reference.clone(),
+        attempted: Notify::new(),
+    });
+    let attempted = transport.attempted.notified();
+    let mut transports = Transports::new();
+    transports.insert("sms-gateway", transport.clone()).unwrap();
+    let transports = Arc::new(transports);
+    let dispatcher = dispatcher(
+        deployment.harness.store.clone(),
+        &deployment.harness.isolated.schema,
+        Arc::clone(&transports),
+    )
+    .unwrap();
+    let sender = MessageSender::new(
+        dispatcher.clone(),
+        transports,
+        Arc::clone(&deployment.harness.metrics),
+    );
+    let mut dispatch = tokio::spawn(async move { dispatcher.dispatch_once(&sender).await });
+    attempted.await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut dispatch)
+            .await
+            .is_err(),
+        "dispatch assigned the reference while its lock was held"
+    );
+
+    let callback = deployment.report(&reference, "delivered", None);
+    tokio::pin!(callback);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), callback.as_mut())
+            .await
+            .is_err(),
+        "receipt resolution did not wait for reference assignment"
+    );
+    assert!(admin
+        .query_one(
+            "SELECT pg_advisory_unlock(hashtext($1), hashtext($2))",
+            &[&"sms-gateway", &reference],
+        )
+        .await
+        .unwrap()
+        .get::<_, bool>(0));
+
+    assert_eq!(dispatch.await.unwrap().unwrap(), DispatchOutcome::Delivered);
+
+    let (answer, body) = callback.await;
+    assert_eq!(answer, StatusCode::NO_CONTENT, "{body}");
     assert_eq!(deployment.counted("ambiguous"), 1);
     assert_eq!(deployment.stored_report(first).await, None);
     assert_eq!(deployment.stored_report(second).await, None);

@@ -326,7 +326,7 @@ pub async fn assemble(
     // The publisher first confirms the last outbox record the journal held
     // when it was opened, authenticated against the verified chain, so a
     // record a crash left unmarked is not appended twice.
-    let publisher = Publisher::new(store.clone(), Arc::clone(&audit));
+    let mut publisher = Publisher::new(store.clone(), Arc::clone(&audit));
     let schema = store
         .current_schema()
         .await
@@ -353,6 +353,14 @@ pub async fn assemble(
         config.retention,
         loaded.receipt_providers(),
     );
+    // Recover committed events before any new runtime record or request can
+    // reach the journal. One pass is bounded, so drain every pending batch.
+    while publisher
+        .publish_pass()
+        .await
+        .map_err(|failure| RuntimeError::AuditPublication(failure.as_str()))?
+        != 0
+    {}
     audit
         .append(RuntimeStarted::new(
             config.retention,
@@ -542,6 +550,8 @@ pub enum RuntimeError {
     Config(#[from] RuntimeConfigError),
     #[error("the Messaging audit journal could not be opened or extended: {0}")]
     AuditJournal(String),
+    #[error("the Messaging startup audit recovery failed at {0}")]
+    AuditPublication(&'static str),
     #[error("{0}")]
     AuditSecret(String),
     /// A database step of provisioning or startup failed. The step is named
