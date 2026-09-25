@@ -27,9 +27,6 @@ Start release preparation when:
 - The `IDENTIFIER_PUBLISHER_TOKEN` repository secret is a fine-grained token
   with Actions read/write access only to `registrystack/registrystack-id`.
   Cloudflare credentials remain in that publisher repository.
-- A reviewed `registrystack-id` synchronization pull request for the exact
-  release source commit and identifier catalog digest has been merged. The
-  release dispatch deploys that committed bundle and fails closed if it differs.
 - Every dependency pinned to a long-term-support line has been checked for
   remaining upstream support: more than six months must remain, or the
   next-LTS migration is already promoted to a release blocker for this cut.
@@ -877,6 +874,13 @@ The command verifies the exact source and workflow ancestry, candidate
 attestations, bundle payload hashes, image digests, SPDX SBOMs, scans, and
 advisory verdict. For an initial publication it also requires the release tag,
 GitHub Release, and final image destinations to be unused.
+
+Before publishing, merge a reviewed `registrystack-id` synchronization pull
+request for this exact release source commit and identifier catalog digest.
+That commit exists only once the release PR above has merged, so this step
+cannot happen earlier. Publication dispatches `registrystack-id` with the
+released tag, source commit, and catalog digest, and fails closed if the
+committed bundle differs.
 
 ## Tag and publish
 
