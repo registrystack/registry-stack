@@ -133,6 +133,9 @@ must be absolute, free of symbolic links, at most 1 MiB, and owned by root or
 the service identity with no group- or world-writable ancestor other than a
 root-owned sticky directory. `relayctl` and the editor check the runtime with
 an empty environment, so a substitution without a default is reported there.
+Substitution applies to `runtime.yaml` only: an environment expression in the
+authored `registry.yaml` is refused as `contract.environment_expression` with
+the field that holds it.
 `relayctl init` writes a starter whose `package.root` reads
 `RELAY_PACKAGE_ROOT` and defaults to `/srv/relay/package`.
 

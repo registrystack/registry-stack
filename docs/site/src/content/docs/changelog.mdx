@@ -305,12 +305,15 @@ relevant product pages on this site rather than duplicating release notes.
   `secret:env/` needs `secretProviders.environment`. `relay check` and
   `relay serve` take the required absolute `--runtime-config FILE`; the
   `--runtime` flag, the `RELAY_RUNTIME` variable, and the default path are
-  gone. A removed key is refused with the name of its replacement. See
+  gone. A removed key is refused with the name of its replacement, and an
+  environment expression such as `${VAR}` in the authored `registry.yaml`
+  is refused as `contract.environment_expression`. See
   [operate Registry Relay](../operate/relay/#bind-deployment-inputs-without-editing-the-package).
 
 {/* Evidence: crates/registry-relay-v2/src/contract.rs, RELAY_REMOVED_RUNTIME_KEYS and
     removed_runtime_keys_are_refused_with_their_replacement;
     crates/registry-relay-v2/src/cli.rs, the_runtime_configuration_is_named_explicitly_on_every_command;
+    crates/registry-relay-v2/src/contract.rs, an_authored_contract_carrying_an_environment_expression_is_refused;
     release/docker/Dockerfile.relay. */}
 
 - BREAKING: Registry Discovery reads `runtime.yaml` through the shared
@@ -339,12 +342,15 @@ relevant product pages on this site rather than duplicating release notes.
   `audit.directory`, `audit.integrityKeyRef`, and `audit.maxSegmentBytes`,
   is refused with the name of its replacement. `serve`, `healthcheck`, and
   `check` take `--runtime-config FILE`, and none reads a default
-  path or the `REGISTRY_RENDER_RUNTIME` variable. See
+  path or the `REGISTRY_RENDER_RUNTIME` variable. An environment
+  expression such as `${VAR}` in the authored bundle `manifest.yaml` is
+  refused with the field that holds it. See
   [run Registry Render in serve mode](../operate/registry-render/).
 
 {/* Evidence: crates/registry-render/src/runtime.rs, RENDER_REMOVED_KEYS and load();
     crates/registry-render/src/cli.rs, Command::Serve;
-    crates/registry-render/src/runtime.rs, removed_keys_name_their_replacements. */}
+    crates/registry-render/src/runtime.rs, removed_keys_name_their_replacements;
+    crates/registry-render/src/manifest.rs, an_authored_manifest_carrying_an_environment_expression_is_refused. */}
 
 - BREAKING: Registry Scheduling reads `runtime.yaml` through the shared
   runtime configuration loader. `authentication.oidc.jwksUri` is removed
