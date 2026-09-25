@@ -471,6 +471,27 @@ exit 7
         self.assertIn("The database wait sampler failed with status $sampler_status", runner)
         self.assertIn('--db-sampler-exit-code "$sampler_status"', runner)
 
+    def test_runner_refuses_to_disable_thresholds(self) -> None:
+        runner = LOADTEST / "run.sh"
+        environment = {name: value for name, value in os.environ.items() if not name.startswith("K6_")}
+        for arguments, variables, message in (
+            (["--no-thresholds"], {}, "--no-thresholds is disabled"),
+            (["--no-thresholds=true"], {}, "--no-thresholds=true is disabled"),
+            ([], {"K6_NO_THRESHOLDS": "true"}, "K6_NO_THRESHOLDS is disabled"),
+        ):
+            with self.subTest(arguments=arguments, variables=variables):
+                result = subprocess.run(
+                    ["bash", str(runner), "--profile", "smoke", *arguments],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                    env={**environment, **variables},
+                )
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assertIn("a run without thresholds has no verdict", result.stderr)
+
     def test_shell_entrypoints_parse(self) -> None:
         for script in ("up.sh", "down.sh", "run.sh", "dbstats.sh"):
             subprocess.run(["bash", "-n", str(LOADTEST / script)], check=True)

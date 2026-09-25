@@ -326,7 +326,11 @@ def summarize(arguments: argparse.Namespace) -> None:
             for expression, detail in metric["thresholds"].items()
             if isinstance(detail, dict)
         }
-    threshold_pass = all(all(expressions.values()) for expressions in thresholds.values())
+    # A run that evaluated no threshold (k6 --no-thresholds, K6_NO_THRESHOLDS, or
+    # a profile without any) has no verdict to report, so it cannot pass.
+    threshold_pass = any(thresholds.values()) and all(
+        all(expressions.values()) for expressions in thresholds.values()
+    )
     db_after = _json_object(arguments.db_after) if arguments.db_after and arguments.db_after.exists() else None
     safety = _json_object(arguments.safety) if arguments.safety.exists() else {"safe": False}
     db_waits = _db_wait_summary(arguments.db_waits)

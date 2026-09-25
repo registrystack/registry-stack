@@ -292,6 +292,29 @@ exit 7
         self.assertIn("The database wait sampler failed with status $sampler_status", runner)
         self.assertIn('--db-sampler-exit-code "$sampler_status"', runner)
 
+    def test_runner_refuses_to_disable_thresholds(self) -> None:
+        runner = MODULE_PATH.parent.parent / "run.sh"
+        environment = {name: value for name, value in os.environ.items() if not name.startswith("K6_")}
+        for arguments, variables, message in (
+            (["--no-thresholds"], {}, "--no-thresholds is disabled"),
+            (["--no-thresholds=true"], {}, "--no-thresholds=true is disabled"),
+            ([], {"K6_NO_THRESHOLDS": "true"}, "K6_NO_THRESHOLDS is disabled"),
+        ):
+            with self.subTest(arguments=arguments, variables=variables):
+                result = subprocess.run(
+                    ["bash", str(runner), "--profile", "steady", *arguments],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                    env={**environment, **variables},
+                )
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assertIn("a run without thresholds has no verdict", result.stderr)
+        # The sweep warmup is excluded from evidence and passes the flag to k6 itself.
+        self.assertIn("k6 run --quiet --no-thresholds --summary-mode disabled", runner.read_text(encoding="utf-8"))
+
     def test_shell_entrypoints_parse(self) -> None:
         loadtest = MODULE_PATH.parent.parent
         # bash -n checks only its first file operand, so check each script alone.

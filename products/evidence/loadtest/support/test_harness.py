@@ -4,6 +4,7 @@ import argparse
 import base64
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -485,6 +486,27 @@ class EvidenceHarnessTests(unittest.TestCase):
                 (root / "env.json").unlink()
                 with self.assertRaises(loadenv.LoadtestError):
                     loadenv.write_environment(root, report, evidencectl, "release", "", 4242, 4711, 3)
+
+    def test_runner_refuses_to_disable_thresholds(self) -> None:
+        runner = LOADTEST / "run.sh"
+        environment = {name: value for name, value in os.environ.items() if not name.startswith("K6_")}
+        for arguments, variables, message in (
+            (["--no-thresholds"], {}, "--no-thresholds is disabled"),
+            (["--no-thresholds=true"], {}, "--no-thresholds=true is disabled"),
+            ([], {"K6_NO_THRESHOLDS": "true"}, "K6_NO_THRESHOLDS is disabled"),
+        ):
+            with self.subTest(arguments=arguments, variables=variables):
+                result = subprocess.run(
+                    ["bash", str(runner), "--profile", "smoke", *arguments],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                    env={**environment, **variables},
+                )
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assertIn("a run without thresholds has no verdict", result.stderr)
 
     def test_shell_entrypoints_parse_and_keep_their_safety_contracts(self) -> None:
         for script in ("up.sh", "down.sh", "run.sh"):
