@@ -97,7 +97,7 @@ async fn an_accepted_message_carries_the_relays_queue_id_and_the_derived_message
     assert_eq!(
         sent.outcome,
         SendOutcome::Accepted {
-            provider_reference: Some(ProviderReference::new("4BCD12345").expect("reference")),
+            receiver_reference: Some(ReceiverReference::new("4BCD12345").expect("reference")),
         }
     );
     assert_eq!(
@@ -154,7 +154,7 @@ async fn an_acceptance_without_a_usable_queue_id_has_no_reference() {
         assert_eq!(
             send(&loopback(&stub)).await.outcome,
             SendOutcome::Accepted {
-                provider_reference: None
+                receiver_reference: None
             },
             "{reply}"
         );

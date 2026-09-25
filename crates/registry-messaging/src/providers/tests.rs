@@ -209,7 +209,7 @@ async fn configured_providers_become_transports_that_send_what_was_accepted() {
     assert_eq!(gateway.attempt_timeout(), Duration::from_secs(3));
     let outcome = gateway.send(&sms()).await;
     assert!(
-        matches!(&outcome, SendOutcome::Accepted { provider_reference: Some(reference) } if reference.as_str() == "gw-7731"),
+        matches!(&outcome, SendOutcome::Accepted { receiver_reference: Some(reference) } if reference.as_str() == "gw-7731"),
         "{outcome:?}"
     );
     let requests = received(&upstream).await;

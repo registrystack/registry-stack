@@ -43,8 +43,8 @@ Outbound HTTP utilities for registry services.
   `DataDestinationRequestTemplate::new_script_send` and refused by every
   read-only constructor. It sends a POST with a JSON or form body, or a GET
   whose content travels in the query string only behind an explicit
-  `QueryStringContentAcknowledgement` that the content reaches provider access
-  logs.
+  `QueryStringContentAcknowledgement` that the content reaches the
+  destination's access logs.
 - `ProductionAddressPolicy`, the production fixed-destination private-CIDR
   validation and resolved-address classification for a product that opens its
   own non-HTTP connection: it resolves once, classifies every answer, and

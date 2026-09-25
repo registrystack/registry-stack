@@ -43,7 +43,7 @@ use lettre::transport::smtp::extension::{ClientId, Extension, MailBodyParameter,
 use lettre::transport::smtp::response::Response;
 use lettre::{Address, Message};
 use registry_messaging_core::RenderedParts;
-use registry_platform_dispatch::{FailureCode, ProviderReference, SendOutcome, Sent};
+use registry_platform_dispatch::{FailureCode, ReceiverReference, SendOutcome, Sent};
 use registry_platform_httputil::destination::ProductionAddressPolicy;
 use tokio::time::{timeout_at, Instant};
 
@@ -396,7 +396,7 @@ impl SmtpProvider {
         }
         Sent {
             outcome: SendOutcome::Accepted {
-                provider_reference: queue_reference(&response),
+                receiver_reference: queue_reference(&response),
             },
             detail: SmtpAttemptDetail {
                 stage: SmtpStage::EndOfData,
@@ -511,13 +511,13 @@ fn valid_message_id(value: &str) -> bool {
 
 /// The queue id a relay names in its acceptance, such as Postfix's
 /// `250 2.0.0 Ok: queued as 4BCD12345`, when it fits a provider reference.
-fn queue_reference(response: &Response) -> Option<ProviderReference> {
+fn queue_reference(response: &Response) -> Option<ReceiverReference> {
     const MARKER: &str = "queued as ";
     response.message().find_map(|line| {
         let lower = line.to_ascii_lowercase();
         let start = lower.find(MARKER)? + MARKER.len();
         let token = line.get(start..)?.split_whitespace().next()?;
-        ProviderReference::new(token).ok()
+        ReceiverReference::new(token).ok()
     })
 }
 

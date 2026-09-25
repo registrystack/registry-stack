@@ -3,7 +3,7 @@
 //! Generic at-least-once dispatch core for Registry Stack.
 //!
 //! A product that hands work to something outside its own transaction (a
-//! webhook destination, a message provider) needs the same few guarantees:
+//! webhook destination, a remote service) needs the same few guarantees:
 //! one worker at a time holds a job, the attempt is recorded before anything
 //! leaves the process, a stalled worker can never overwrite the work of the
 //! worker that replaced it, retries follow a policy frozen with the job, and
@@ -34,8 +34,8 @@ pub mod postgres;
 pub use idempotency::idempotency_key;
 pub use identifier::is_plain_identifier;
 pub use outcome::{
-    ConfigError, DispatchError, FailureCode, ProviderReference, SendOutcome, Sent,
-    MAX_FAILURE_CODE_BYTES, MAX_PROVIDER_REFERENCE_BYTES,
+    ConfigError, DispatchError, FailureCode, ReceiverReference, SendOutcome, Sent,
+    MAX_FAILURE_CODE_BYTES, MAX_RECEIVER_REFERENCE_BYTES,
 };
 pub use retry::{
     frozen_retry_delay, remaining_attempt_budget, AttemptTimeoutBound, Backoff, Jitter, JobPolicy,

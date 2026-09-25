@@ -10,7 +10,7 @@ use registry_messaging_core::{
     SenderProfile, UncertainPolicy,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
-use registry_platform_dispatch::{FailureCode, ProviderReference, SendOutcome};
+use registry_platform_dispatch::{FailureCode, ReceiverReference, SendOutcome};
 use registry_platform_testing::MockHttpUpstream;
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -195,8 +195,8 @@ fn permanent_code(code: &str) -> SendOutcome {
 
 fn accepted(reference: Option<&str>) -> SendOutcome {
     SendOutcome::Accepted {
-        provider_reference: reference
-            .map(|reference| ProviderReference::new(reference).expect("valid reference")),
+        receiver_reference: reference
+            .map(|reference| ReceiverReference::new(reference).expect("valid reference")),
     }
 }
 

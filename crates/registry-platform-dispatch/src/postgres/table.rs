@@ -218,7 +218,7 @@ impl JobTable {
 }
 
 /// The key of one job: a `uuid` naming the product's work item and a
-/// bounded part naming one dispatch of it (a destination, a recipient).
+/// bounded part naming one dispatch of it (a destination, for instance).
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct JobKey {
     id: Uuid,
@@ -341,17 +341,17 @@ mod tests {
 
     #[test]
     fn a_job_table_accepts_only_plain_distinct_names() {
-        let table = JobTable::new("messaging", "message_jobs", "message_id", "recipient")
-            .expect("plain names");
-        assert_eq!(table.qualified(), "messaging.message_jobs");
+        let table =
+            JobTable::new("product", "work_jobs", "work_id", "destination").expect("plain names");
+        assert_eq!(table.qualified(), "product.work_jobs");
         for (schema, name, id, part) in [
-            ("Messaging", "jobs", "id", "part"),
-            ("messaging", "jobs; drop table x", "id", "part"),
-            ("messaging", "jobs", "id", "id"),
-            ("messaging", "jobs", "state", "part"),
-            ("messaging", "jobs", "id", "generation"),
+            ("Product", "jobs", "id", "part"),
+            ("product", "jobs; drop table x", "id", "part"),
+            ("product", "jobs", "id", "id"),
+            ("product", "jobs", "state", "part"),
+            ("product", "jobs", "id", "generation"),
             (
-                "messaging",
+                "product",
                 &"j".repeat(MAX_TABLE_NAME_BYTES + 1),
                 "id",
                 "part",

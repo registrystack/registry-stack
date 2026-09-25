@@ -5,8 +5,8 @@
 
 use std::time::Duration;
 
-/// The longest provider reference a transport may report, in bytes.
-pub const MAX_PROVIDER_REFERENCE_BYTES: usize = 128;
+/// The longest receiver reference a transport may report, in bytes.
+pub const MAX_RECEIVER_REFERENCE_BYTES: usize = 128;
 
 /// The longest permanent-failure code a transport may report, in bytes.
 pub const MAX_FAILURE_CODE_BYTES: usize = 64;
@@ -46,22 +46,22 @@ pub enum ConfigError {
     StateSet,
 }
 
-/// The provider's own reference for an accepted send: one to 128 printable
+/// The receiver's own reference for an accepted send: one to 128 printable
 /// ASCII bytes with no space.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct ProviderReference(String);
+pub struct ReceiverReference(String);
 
-impl ProviderReference {
-    /// Accept a provider reference within its bound.
+impl ReceiverReference {
+    /// Accept a receiver reference within its bound.
     ///
     /// # Errors
     ///
     /// [`ConfigError::OutOfBounds`] when the value is empty, longer than
-    /// [`MAX_PROVIDER_REFERENCE_BYTES`], or holds a byte outside `!` to `~`.
+    /// [`MAX_RECEIVER_REFERENCE_BYTES`], or holds a byte outside `!` to `~`.
     pub fn new(value: impl Into<String>) -> Result<Self, ConfigError> {
         let value = value.into();
         if value.is_empty()
-            || value.len() > MAX_PROVIDER_REFERENCE_BYTES
+            || value.len() > MAX_RECEIVER_REFERENCE_BYTES
             || !value.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
         {
             return Err(ConfigError::OutOfBounds);
@@ -109,10 +109,10 @@ impl FailureCode {
 /// What one send did, as far as the transport can tell.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SendOutcome {
-    /// The receiver accepted the job. A provider that names its copy returns
+    /// The receiver accepted the job. A receiver that names its copy returns
     /// the reference it assigned.
     Accepted {
-        provider_reference: Option<ProviderReference>,
+        receiver_reference: Option<ReceiverReference>,
     },
     /// The send did not happen or was refused in a way a later attempt may
     /// overcome. A receiver that asked for a pause returns it; the core
@@ -140,18 +140,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_provider_reference_is_bounded_printable_ascii() {
-        assert!(ProviderReference::new("SM0123abcd").is_ok());
-        assert!(ProviderReference::new("a".repeat(MAX_PROVIDER_REFERENCE_BYTES)).is_ok());
+    fn a_receiver_reference_is_bounded_printable_ascii() {
+        assert!(ReceiverReference::new("SM0123abcd").is_ok());
+        assert!(ReceiverReference::new("a".repeat(MAX_RECEIVER_REFERENCE_BYTES)).is_ok());
         for refused in [
             String::new(),
-            "a".repeat(MAX_PROVIDER_REFERENCE_BYTES + 1),
+            "a".repeat(MAX_RECEIVER_REFERENCE_BYTES + 1),
             "with space".to_owned(),
             "line\nbreak".to_owned(),
             "é".to_owned(),
         ] {
             assert_eq!(
-                ProviderReference::new(refused),
+                ReceiverReference::new(refused),
                 Err(ConfigError::OutOfBounds)
             );
         }
@@ -160,8 +160,8 @@ mod tests {
     #[test]
     fn a_failure_code_is_a_bounded_lowercase_token() {
         assert_eq!(
-            FailureCode::new("recipient.rejected-2_x").map(|code| code.as_str().to_owned()),
-            Ok("recipient.rejected-2_x".to_owned())
+            FailureCode::new("destination.rejected-2_x").map(|code| code.as_str().to_owned()),
+            Ok("destination.rejected-2_x".to_owned())
         );
         assert!(FailureCode::new("a".repeat(MAX_FAILURE_CODE_BYTES)).is_ok());
         for refused in [

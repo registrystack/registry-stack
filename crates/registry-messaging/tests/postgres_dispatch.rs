@@ -29,7 +29,7 @@ use registry_messaging::dispatch::{
 use registry_messaging::messages::{OperatorAction, SettleOutcome};
 use registry_messaging_core::{Channel, MessageStatus};
 use registry_platform_dispatch::postgres::{DispatchOutcome, DispatchWorker, WorkerConfig};
-use registry_platform_dispatch::{FailureCode, ProviderReference, SendOutcome, Sent};
+use registry_platform_dispatch::{FailureCode, ReceiverReference, SendOutcome, Sent};
 use serde_json::Value;
 use support::{email_submission, sms_submission, Harness, NAME, RECIPIENT};
 use tokio::sync::watch;
@@ -134,7 +134,7 @@ impl MessageTransport for Scripted {
         let script = *self.script.lock().unwrap();
         match script {
             Script::Accepted => SendOutcome::Accepted {
-                provider_reference: Some(ProviderReference::new("provider-ref-1").unwrap()),
+                receiver_reference: Some(ReceiverReference::new("provider-ref-1").unwrap()),
             },
             Script::Transient(retry_after) => SendOutcome::Transient { retry_after },
             Script::Permanent => SendOutcome::Permanent {
@@ -419,7 +419,7 @@ async fn a_stale_fence_cannot_finish_a_requeued_message() {
 
     for sent in [
         SendOutcome::Accepted {
-            provider_reference: None,
+            receiver_reference: None,
         },
         SendOutcome::Permanent {
             code: FailureCode::new("recipient-refused").unwrap(),

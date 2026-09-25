@@ -1025,7 +1025,7 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
 /// The production address policy of a fixed destination, for a transport
 /// that is not HTTP.
 ///
-/// A product that opens its own connection (an SMTP client, for instance)
+/// A product that opens its own connection over another protocol
 /// resolves its configured host once, classifies every answer here, and
 /// connects only to an address this policy admitted. The private-CIDR
 /// validation and the classification are the ones a
@@ -1287,7 +1287,7 @@ pub enum DestinationMethod {
     /// Canonical JSON event POST, valid only for an event destination slot.
     EventPost,
     /// Request whose purpose is a side effect at the destination, such as
-    /// handing one message to a provider for delivery.
+    /// submitting work the destination then carries out.
     ///
     /// Only [`BoundedDestinationRequestTemplate::new_script_send`] compiles
     /// this class, and every read-only constructor refuses it, so a send
@@ -1328,15 +1328,15 @@ impl DestinationMethod {
 pub enum SideEffectingSendMethod {
     /// POST carrying the send in a JSON or form body.
     Post,
-    /// GET carrying the send in the query string, for gateways that accept
-    /// nothing else. The acknowledgement records that the message content
-    /// reaches the provider's access logs.
+    /// GET carrying the send in the query string, for destinations that
+    /// accept nothing else. The acknowledgement records that the send's
+    /// content reaches the destination's access logs.
     Get(QueryStringContentAcknowledgement),
 }
 
 /// Explicit acknowledgement that a side-effecting GET places its content in
-/// the request target, where provider access logs and intermediaries retain
-/// it.
+/// the request target, where the destination's access logs and
+/// intermediaries retain it.
 ///
 /// The private field means the value exists only where a caller named this
 /// consequence:
@@ -1350,7 +1350,7 @@ pub enum SideEffectingSendMethod {
 pub struct QueryStringContentAcknowledgement(());
 
 impl QueryStringContentAcknowledgement {
-    /// Accept that the message content reaches provider access logs.
+    /// Accept that the send's content reaches the destination's access logs.
     #[must_use]
     pub const fn acknowledge_content_in_access_logs() -> Self {
         Self(())
@@ -1850,7 +1850,7 @@ impl BoundedDestinationRequestTemplate<DataDestination> {
     }
 
     /// Compile the maximum request authority of one side-effecting send, such
-    /// as handing a message to a provider.
+    /// as submitting work the destination then carries out.
     ///
     /// The authority is the same as [`Self::new_script`]: a frozen path rule
     /// and header names, script-authored query members, and host-owned Basic,
@@ -1868,7 +1868,7 @@ impl BoundedDestinationRequestTemplate<DataDestination> {
     ///
     /// let template = DataDestinationRequestTemplate::new_script_send(
     ///     DestinationMethod::Get,
-    ///     "/messages",
+    ///     "/submissions",
     ///     &[],
     ///     DestinationAuthorizationTemplate::Forbidden,
     ///     None,

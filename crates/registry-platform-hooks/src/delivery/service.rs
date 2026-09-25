@@ -791,7 +791,7 @@ impl<S: DeliverySeams> DispatchTransport for HookTransport<'_, S> {
             }
         } else if result.outcome == DeliveryAuditOutcome::Delivered {
             SendOutcome::Accepted {
-                provider_reference: None,
+                receiver_reference: None,
             }
         } else {
             SendOutcome::Transient { retry_after: None }

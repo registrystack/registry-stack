@@ -620,8 +620,8 @@ impl DispatchStore for MessageDispatchStore {
             }
             AttemptAudit::Finished { sent, disposition } => {
                 let (reference, failure) = match &sent.outcome {
-                    SendOutcome::Accepted { provider_reference } => (
-                        provider_reference
+                    SendOutcome::Accepted { receiver_reference } => (
+                        receiver_reference
                             .as_ref()
                             .map(|reference| reference.as_str().to_owned()),
                         None,

@@ -275,11 +275,11 @@ mod tests {
     #[test]
     fn extra_columns_are_plain_distinct_and_never_core_columns() {
         let columns = Columns::new()
-            .set("provider_reference", Some("ref".to_owned()))
+            .set("receiver_reference", Some("ref".to_owned()))
             .set("failure_code", None::<String>);
         let (assignments, values) = columns.render(&table(), 6).expect("valid columns");
         assert_eq!(values.len(), 2);
-        assert!(assignments.contains("provider_reference = $6"));
+        assert!(assignments.contains("receiver_reference = $6"));
         assert!(assignments.contains("failure_code = $7"));
         for columns in [
             Columns::new().set("state", 1_i64),

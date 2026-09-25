@@ -28,7 +28,7 @@ use registry_platform_dispatch::postgres::{
 };
 use registry_platform_dispatch::{
     idempotency_key, AttemptTimeoutBound, Backoff, DispatchError, FailureCode, Jitter, JobPolicy,
-    ProviderReference, RetrySchedule, SendOutcome, Sent, UncertainOutcome,
+    ReceiverReference, RetrySchedule, SendOutcome, Sent, UncertainOutcome,
 };
 use tokio::sync::watch;
 use tokio_postgres::{NoTls, Row, Transaction};
@@ -290,7 +290,7 @@ impl DispatchStore for TestStore {
     ) -> Result<Columns, DispatchError> {
         Ok(match &sent.outcome {
             SendOutcome::Accepted {
-                provider_reference: Some(reference),
+                receiver_reference: Some(reference),
             } => Columns::new().set("provider_reference", reference.as_str().to_owned()),
             SendOutcome::Permanent { code } => {
                 Columns::new().set("failure_code", code.as_str().to_owned())
@@ -687,7 +687,7 @@ impl DispatchTransport for ScriptedTransport {
 
 fn accepted() -> SendOutcome {
     SendOutcome::Accepted {
-        provider_reference: None,
+        receiver_reference: None,
     }
 }
 
@@ -723,8 +723,8 @@ async fn the_attempt_is_committed_and_audited_before_egress() {
             &job,
             Sent {
                 outcome: SendOutcome::Accepted {
-                    provider_reference: Some(
-                        ProviderReference::new("SM0123abcd").expect("bounded reference"),
+                    receiver_reference: Some(
+                        ReceiverReference::new("SM0123abcd").expect("bounded reference"),
                     ),
                 },
                 detail: (),

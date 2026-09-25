@@ -49,7 +49,7 @@ use std::time::Duration;
 
 use registry_messaging_core::{CallbackRequest, Channel, Receipt, RenderedParts, SenderProfile};
 use registry_platform_config::SecretResolver;
-use registry_platform_dispatch::{FailureCode, ProviderReference, SendOutcome, Sent};
+use registry_platform_dispatch::{FailureCode, ReceiverReference, SendOutcome, Sent};
 use registry_platform_httputil::destination::json::decode_script_json;
 use registry_platform_httputil::destination::oauth::{
     decode_strict_oauth_token, ParsedBearerToken, StrictOAuthTokenSchema,
@@ -1077,10 +1077,12 @@ fn interpret_response(
         InterpretedOutcome::Accepted if read.retry_after.is_none() && read.code.is_none() => {
             let provider_reference = read
                 .provider_reference
-                .map(ProviderReference::new)
+                .map(ReceiverReference::new)
                 .transpose()
                 .map_err(|_| ScriptFailure::OutputInvalid)?;
-            Ok(SendOutcome::Accepted { provider_reference })
+            Ok(SendOutcome::Accepted {
+                receiver_reference: provider_reference,
+            })
         }
         InterpretedOutcome::Transient
             if read.provider_reference.is_none() && read.code.is_none() =>
@@ -1120,7 +1122,7 @@ fn interpret_response(
 fn default_outcome(status: u16, retry_after: Option<Duration>) -> SendOutcome {
     match status {
         200..=299 => SendOutcome::Accepted {
-            provider_reference: None,
+            receiver_reference: None,
         },
         408 | 429 | 500..=599 => SendOutcome::Transient { retry_after },
         _ => permanent(&format!("http.{status}")),

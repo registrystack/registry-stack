@@ -2,7 +2,7 @@
 
 `registry-platform-dispatch` is the shared Registry Stack implementation of
 at-least-once dispatch: handing a job to something outside the product's own
-transaction (a webhook destination, a message provider) under a fenced
+transaction (a webhook destination, a remote service) under a fenced
 PostgreSQL lease. It carries no product vocabulary. The product owns the job
 table's schema and name, the policy and payload rows the claim reads, the
 audit every transition writes, and the send itself.
@@ -24,7 +24,7 @@ The pure half is always compiled:
   at most `MAX_ATTEMPT_TIMEOUT` (60 seconds). A claimed job whose captured
   timeout falls outside it is refused before it is leased.
 - `SendOutcome` is what a transport reports: `Accepted` with an optional
-  provider reference of at most 128 bytes, `Transient` with an optional pause
+  receiver reference of at most 128 bytes, `Transient` with an optional pause
   hint, `Permanent` with a failure code of at most 64 bytes, or `MaybeSent`
   when the attempt's fate is unknown.
 

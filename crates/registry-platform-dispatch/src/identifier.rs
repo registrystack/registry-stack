@@ -28,7 +28,7 @@ mod tests {
 
     #[test]
     fn only_plain_lowercase_identifiers_pass() {
-        for accepted in ["jobs", "_jobs", "message_jobs_2", "a"] {
+        for accepted in ["jobs", "_jobs", "work_jobs_2", "a"] {
             assert!(is_plain_identifier(accepted, 63), "{accepted}");
         }
         for refused in [
