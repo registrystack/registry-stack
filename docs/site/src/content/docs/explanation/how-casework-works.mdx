@@ -234,7 +234,7 @@ When both expire, Casework deletes accountability and its payload-free replay to
     crates/registry-casework/src/review.rs, erase_expired_reviews_at. */}
 
 The result a producer reads names no person and carries no private reason.
-The identity behind one accountability event is reachable only by a Supervisor with current authority over the task's queue, only while the accountability period lasts, and every such read writes its own audit record in the same transaction as the read.
+The identity behind one accountability event is reachable only by a Supervisor with current authority over the task's queue, only while the accountability period lasts, and every such read returns the identity only after the audit destination accepts the entry recording it.
 Accountability is therefore a deliberate, recorded act rather than a field on a response.
 
 {/* Evidence: crates/registry-casework-core/src/review.rs, ReviewResult and ReviewAccountabilityRecord;

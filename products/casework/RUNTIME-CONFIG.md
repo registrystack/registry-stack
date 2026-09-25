@@ -60,8 +60,9 @@ Principal selection belongs exclusively to each authored
 pseudonymizes the principals and identifiers they name. `audit.hashKeyRef` is
 that key's secret reference. `audit.destination` is `file` (the default) or
 `stdout`. A `file` destination requires the absolute `audit.path` of the active
-file and accepts `audit.rotateBytes` (default 104857600, at least 1048576) and
-`audit.retainDays` (default 90, at most 36500); `stdout` refuses all three. A
+file and accepts `audit.rotateBytes` (default 104857600, at least 1048576, at
+most 4294967295) and `audit.retainDays` (default 90, at most 36500); `stdout`
+refuses all three. A
 `caseworkctl` command that writes audit, such as an applied erasure or
 settlement, writes to a sibling file named for its process role beside
 `audit.path`, `audit.caseworkctl.ndjson` for `audit.ndjson`, or to standard
