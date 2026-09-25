@@ -112,6 +112,17 @@ impl BregBinding {
     ) -> Result<BregAdapter, SourceAdapterError> {
         build_adapter(self, source, project_root, secrets)
     }
+
+    /// Build from source-description bytes captured by the runtime's verified
+    /// package load.
+    pub fn build_adapter_from_description(
+        &self,
+        source: &SourcePolicy,
+        description: &[u8],
+        secrets: &SecretResolver,
+    ) -> Result<BregAdapter, SourceAdapterError> {
+        build_adapter_from_description(self, source, description, secrets)
+    }
 }
 
 /// Validate one authored description and construct its pooled BReg client.
@@ -121,6 +132,17 @@ pub fn build_adapter(
     project_root: &Path,
     secrets: &SecretResolver,
 ) -> Result<BregAdapter, SourceAdapterError> {
+    let description = read_description(project_root, &source.description)?;
+    build_adapter_from_description(binding, source, &description, secrets)
+}
+
+/// Validate captured source-description bytes and construct its pooled BReg client.
+pub fn build_adapter_from_description(
+    binding: &BregBinding,
+    source: &SourcePolicy,
+    description: &[u8],
+    secrets: &SecretResolver,
+) -> Result<BregAdapter, SourceAdapterError> {
     validate_binding(binding)?;
     if source.adapter != "breg"
         || source.requests.is_empty()
@@ -128,8 +150,10 @@ pub fn build_adapter(
     {
         return Err(SourceAdapterError::Invalid);
     }
-    let description_bytes = read_description(project_root, &source.description)?;
-    let (requests, expected_registry_revision) = validate_description(source, &description_bytes)?;
+    if description.is_empty() || description.len() > MAXIMUM_DESCRIPTION_BYTES {
+        return Err(SourceAdapterError::Invalid);
+    }
+    let (requests, expected_registry_revision) = validate_description(source, description)?;
 
     let client_id_secret = resolve_secret(secrets, &binding.client_id_ref)?;
     let client_id = std::str::from_utf8(client_id_secret.expose_secret())
@@ -147,7 +171,7 @@ pub fn build_adapter(
         .as_deref()
         .map(|reference| resolve_secret(secrets, reference))
         .transpose()?;
-    let generation = binding_generation(binding, source, &description_bytes)?;
+    let generation = binding_generation(binding, source, description)?;
 
     let request_timeout = Duration::from_millis(binding.request_timeout_milliseconds);
     let connect_timeout = Duration::from_millis(binding.connect_timeout_milliseconds);
