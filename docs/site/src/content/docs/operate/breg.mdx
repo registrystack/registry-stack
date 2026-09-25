@@ -178,6 +178,96 @@ The maintained runtime validates these ownership boundaries when it prepares spa
     prepare_schema_test_database_with_connections();
     crates/registry-breg/src/postgres/roles.rs. */}
 
+### Set a PostgreSQL baseline
+
+PostgreSQL's defaults let it start on almost any machine; they are not sized for serving. On a
+dedicated database host, begin from these values and adjust them against your own measurements.
+`shared_buffers` and `max_connections` take effect only after a server restart.
+
+| Setting | Starting point | Why |
+| --- | --- | --- |
+| `shared_buffers` | 25% of memory on a host with 1 GB or more; a smaller share below that | PostgreSQL's own page cache. Past 40% it rarely helps, and a larger value usually wants a larger `max_wal_size`. |
+| `effective_cache_size` | `shared_buffers` plus the memory the operating system can spend caching PostgreSQL files | A planner estimate that allocates nothing; a higher value makes index scans more likely. |
+| `work_mem` | The 4 MB default, until measurements show sorts or hashes spilling to temporary files | It applies to each sort or hash operation in each session, so total use can reach many times the value. |
+| `maintenance_work_mem` | Above the 64 MB default when memory allows | `VACUUM` and `CREATE INDEX` use it, and autovacuum may take up to `autovacuum_max_workers` times the value. |
+| `random_page_cost` | Below the 4.0 default, toward `seq_page_cost` (1.0), when the database fits in server memory | Lowering it relative to `seq_page_cost` makes the planner prefer index scans. |
+
+**Budget connections.** Every `breg` replica opens up to `database.pool.maxSize` runtime
+connections. Operator commands such as `bregctl apply`, `bregctl doctor`, and `bregctl data
+import` open their own sessions, and so do monitoring agents and administrators. All of them must
+fit in the connections PostgreSQL leaves for ordinary roles: `max_connections` minus
+`superuser_reserved_connections` minus `reserved_connections`. At startup `breg` logs, and
+`bregctl doctor` reports, the numbers it compared under `postgres.connections.budget`. When one
+replica's pool alone may take more than half of the usable connections, the advisory is the
+`postgres.connections.pool_over_half` warning instead. The check sees one replica; add the others
+yourself.
+
+**Find sessions by name.** Runtime sessions report `breg` as their `application_name` and operator
+commands report `bregctl`. A name in the connection URL is kept, so
+`?application_name=breg-a` tells replicas apart in `pg_stat_activity`:
+
+```sql
+SELECT application_name, state, count(*)
+FROM pg_stat_activity
+WHERE datname = 'registry'
+GROUP BY application_name, state;
+```
+
+Runtime sessions also carry `idle_in_transaction_session_timeout` of 120 seconds as a startup
+option placed after any options in the URL. PostgreSQL ends a runtime session that sits idle
+inside an open transaction for longer, the transaction rolls back, and the pool opens a
+replacement. Operator command and migration sessions carry no such bound, and no session carries
+`idle_session_timeout`.
+
+**Pool in session mode only.** Base Registry Engine holds session-level advisory locks and sets
+session settings, so a pooler in front of it must hand each client one server connection until
+the client disconnects. Transaction pooling is not supported. PgBouncer raises an error for a
+startup parameter it does not track unless `ignore_startup_parameters` lists it, and ignores a
+listed one; with `options` in that list it ignores the unknown parameters inside `options`,
+including the idle bound
+([PgBouncer configuration](https://www.pgbouncer.org/config.html#ignore_startup_parameters)). When
+a pooler drops the startup options, set the bound on the runtime role, where it then also applies
+to operator commands that connect as that role:
+
+```sql
+ALTER ROLE registry_runtime SET idle_in_transaction_session_timeout = '120s';
+```
+
+**Record statement timings.** Add `pg_stat_statements` to `shared_preload_libraries`, restart
+PostgreSQL, and then, as an administrator in the registry database:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+```
+
+Base Registry Engine's catalog checks accept the extension, and the
+`postgres.pg_stat_statements.unavailable` advisory stops. Only superusers and roles with the
+privileges of `pg_read_all_stats` see the statement text of other roles.
+
+**Keep maintenance running.** Leave `autovacuum` and `track_counts` on; with either off, `breg`
+and `doctor` warn, because dead rows accumulate and planner statistics go stale. After a large
+[`bregctl data import`](../breg-data/#import-with-a-checkpoint), run `ANALYZE` in the registry database as an administrator so the planner
+sees the new rows before autovacuum reaches them. Take a backup before every activation, as
+[Activate the successor](../breg-changes/#activate-the-successor) describes.
+
+On a managed service, the extension lists of Amazon RDS for PostgreSQL, Azure Database for
+PostgreSQL flexible server, and Google Cloud SQL for PostgreSQL each include `btree_gist`,
+`pg_stat_statements`, and PostGIS 3.5 or newer for PostgreSQL 17 (checked 2026-09-25). Set the
+parameters in the table, and `shared_preload_libraries`, through the provider's parameter
+settings; `doctor` reads the values the server actually runs with.
+
+{/* Evidence: crates/registry-breg/src/postgres/baseline.rs, advise() and connection_budget(),
+    a_pool_over_half_of_usable_connections_warns_and_half_does_not() and vacuum_settings_that_are_off_warn();
+    crates/registry-breg/src/postgres/config.rs, name_session(), with_idle_in_transaction_session_timeout(),
+    sessions_carry_the_process_name_unless_the_url_names_one();
+    crates/registry-breg/src/startup.rs, SERVER_IDLE_IN_TRANSACTION_TIMEOUT and prepare_database_startup();
+    crates/registry-breg/src/mutation/action.rs, acquire_hook_proposal_lock();
+    crates/registry-breg/src/postgres/interlock.rs;
+    crates/registry-breg/tests/postgres_kernel.rs, runtime_sessions_are_named_and_bounded_across_recycling
+    and idle_in_transaction_bound_rolls_back_and_the_pool_recovers;
+    crates/registry-breg/tests/postgres_startup.rs,
+    prepared_server_sessions_are_named_bounded_and_advised_with_pg_stat_statements. */}
+
 ## Write the runtime configuration
 
 The runtime file binds one package to one database, one token issuer, and one listener, plus an
@@ -621,8 +711,10 @@ package, the database connection and its readiness, the audit key, the cursor ke
 verifier's key material, the event destination bindings, the retained review authority and
 executor bindings, the authentication profile's claim mapping, accepted algorithms, and audience
 against the package this runtime serves, and the field-encryption provider and its stored key. It
-names the first dependency that refuses and stops there; a run that reaches the end lists every
-dependency it checked:
+names the first dependency that refuses and stops there. A run that reaches the end lists every
+dependency it checked, then the PostgreSQL advisories from
+[Set a PostgreSQL baseline](#set-a-postgresql-baseline). Advisories never change the exit status;
+this server runs the default connection settings with `database.pool.maxSize: 8`:
 
 ```text
 10 dependency checks passed.
@@ -636,6 +728,16 @@ dependency it checked:
   reviewBindings       pass
   authentication       pass
   fieldEncryption      pass
+
+PostgreSQL advisories:
+  information  postgres.connections.budget
+    one replica's runtime pool takes at most half of the connections PostgreSQL leaves
+    for ordinary roles
+    poolMaxSize                   8
+    maxConnections                100
+    superuserReservedConnections  3
+    reservedConnections           0
+    usableConnections             97
 ```
 
 ```json
@@ -653,6 +755,20 @@ dependency it checked:
     "reviewBindings",
     "authentication",
     "fieldEncryption"
+  ],
+  "advisories": [
+    {
+      "code": "postgres.connections.budget",
+      "severity": "information",
+      "message": "one replica's runtime pool takes at most half of the connections PostgreSQL leaves for ordinary roles",
+      "observed": {
+        "poolMaxSize": 8,
+        "maxConnections": 100,
+        "superuserReservedConnections": 3,
+        "reservedConnections": 0,
+        "usableConnections": 97
+      }
+    }
   ]
 }
 ```
@@ -704,8 +820,10 @@ runtime file for each activation. Store secrets separately.
 {/* Evidence: crates/registry-bregctl/src/apply_lifecycle.rs;
     crates/registry-breg/src/review_store.rs, read_projection();
     crates/registry-bregctl/src/doctor.rs, startup_diagnostic();
-    crates/registry-bregctl/src/lib.rs, VerifyArgs, verify(), write_doctor_success(), and
-    doctor_success_output_is_stable_in_human_and_machine_formats();
+    crates/registry-bregctl/src/lib.rs, VerifyArgs, verify(), write_doctor_success(),
+    doctor_success_output_is_stable_in_human_and_machine_formats(), and
+    doctor_reports_postgres_advisories_after_the_passing_checks_without_failing();
+    crates/registry-breg/src/postgres/baseline.rs, a_healthy_server_reports_only_the_connection_numbers();
     crates/registry-breg/src/api/mod.rs;
     crates/registry-breg/src/startup.rs. */}
 
@@ -892,10 +1010,20 @@ behind an upstream rate limit.
 | `package` refuses the receipt | The receipt binds sources, baseline, fingerprint, and signature policy. Rerun `test` for the exact candidate. |
 | `apply --initial` reports a binding error | The runtime file must already name the target package's revision and sequence one. |
 | `doctor` reports `startup.oidc.refused` | Check the issuer, discovery reachability or the static JWKS document, the algorithm, and the leeway bound. |
+| `doctor` reports `startup.package.refused` with `the package compiler derivation failed` after an engine upgrade | The upgraded compiler derives a different schema from the active package, for example a new reference index. Build and apply a successor package with the upgraded `bregctl` before starting the upgraded `breg`, as [Change an active registry](../breg-changes/#test-and-package-the-successor) describes. `test` and `package` accept the active package through `--baseline-runtime-config`; `verify` and `diff --runtime-config` refuse it until the successor is active. |
+| `doctor` or startup warns `postgres.connections.pool_over_half` | Lower `database.pool.maxSize` or raise `max_connections` until every replica, operator command, and monitoring session fits; see [Set a PostgreSQL baseline](#set-a-postgresql-baseline). |
+| `doctor` or startup warns `postgres.autovacuum.off` or `postgres.track_counts.off` | Turn the setting back on in the server configuration and reload PostgreSQL, then run `ANALYZE` in the registry database so planner statistics catch up. |
 | The runtime file is refused with `runtime_config.invalid_metrics_listener` | `metricsListener.bind` must be a loopback or private address with a non-zero port, distinct from `listener.bind`. |
 | Every token is refused | Compare the token's header and claims with the token table; a list-valued `aud` or a missing principal claim refuses the token. |
 | An operator command cannot reach PostgreSQL | Check the migration URL secret, the role names, and `SSL_CERT_FILE` for a private authority. |
 | A command refuses a path that exists | Some component of the path is a symbolic link. Name the real directory; on macOS pass `/private/tmp` rather than `/tmp`. |
+
+{/* Evidence: crates/registry-breg/src/package.rs, rederive(), inspect_package(), and load_predecessor_package();
+    crates/registry-bregctl/src/package_inspection.rs, inspect_runtime_package() and
+    inspect_runtime_predecessor_package();
+    crates/registry-bregctl/src/doctor.rs, startup_diagnostic();
+    crates/registry-breg/tests/postgres_reference_indexes.rs,
+    a_successor_adds_reference_indexes_to_a_database_activated_without_them. */}
 
 ## Next
 

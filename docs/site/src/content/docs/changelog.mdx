@@ -18,6 +18,54 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+- BREAKING: Base Registry Engine (BReg) gives every `reference` field a btree
+  index unless a declared index or a unique constraint without `when` already
+  leads with it, and `bregctl check` reports `entity.list.unindexed_filter`
+  and `entity.list.unindexed_sort` for a filterable or sortable list field no
+  index leads with. The findings never fail a check. An upgraded engine
+  refuses an active package whose project has a reference field no index
+  leads with, because its compiler now derives a different schema: `doctor`
+  reports `startup.package.refused` with `the package compiler derivation
+  failed`. Build and apply a successor with the upgraded `bregctl` before
+  starting the upgraded `breg`; the plan classes each new index as compatible
+  additive, and its plain `CREATE INDEX` blocks writes to that table until the
+  migration commits. See [indexes](../reference/breg-configuration/#indexes)
+  and [deploy a registry](../operate/breg/#troubleshooting).
+
+{/* Evidence: crates/registry-breg/src/compiler.rs, compile_entities() and unindexed_list_findings();
+    crates/registry-breg/src/package.rs, rederive() and load_predecessor_package();
+    crates/registry-breg/tests/reference_indexes.rs, every_reference_column_gets_a_btree_index_after_its_foreign_key;
+    crates/registry-breg/tests/reference_indexes.rs, unindexed_list_filters_and_sorts_are_authoring_findings_at_the_declaring_field;
+    crates/registry-breg/tests/postgres_reference_indexes.rs, a_successor_adds_reference_indexes_to_a_database_activated_without_them. */}
+
+- BReg sessions name themselves in `pg_stat_activity`: `breg` for the runtime
+  and `bregctl` for operator commands, unless the connection URL sets
+  `application_name`. Runtime sessions carry
+  `idle_in_transaction_session_timeout` of 120 seconds as a startup option, so
+  PostgreSQL ends a session left idle inside an open transaction and the pool
+  replaces it. Poolers must run in session mode; one that drops the startup
+  options needs the bound set on the runtime role. See
+  [set a PostgreSQL baseline](../operate/breg/#set-a-postgresql-baseline).
+
+{/* Evidence: crates/registry-breg/src/postgres/config.rs, name_session() and with_idle_in_transaction_session_timeout();
+    crates/registry-breg/src/startup.rs, SERVER_IDLE_IN_TRANSACTION_TIMEOUT;
+    crates/registry-breg/tests/postgres_kernel.rs, runtime_sessions_are_named_and_bounded_across_recycling;
+    crates/registry-breg/tests/postgres_kernel.rs, idle_in_transaction_bound_rolls_back_and_the_pool_recovers. */}
+
+- `breg` logs, and `bregctl doctor` reports under a new `advisories` list,
+  value-free PostgreSQL advisories: the connection numbers one replica's pool
+  is compared with, a warning when that pool may take more than half of the
+  usable connections, warnings when `autovacuum` or `track_counts` is off,
+  and a note when `pg_stat_statements` is not installed. Advisories never
+  refuse startup or change `doctor`'s exit status, and need no extra grant.
+  See [deploy a registry](../operate/breg/#activate-and-serve).
+
+{/* Evidence: crates/registry-breg/src/postgres/baseline.rs, advise() and connection_budget();
+    crates/registry-breg/src/startup.rs, OperationalEvent::PostgresBaselineAdvisory;
+    crates/registry-bregctl/src/lib.rs, write_doctor_success();
+    crates/registry-bregctl/src/lib.rs, doctor_reports_postgres_advisories_after_the_passing_checks_without_failing;
+    crates/registry-breg/tests/postgres_startup.rs, prepared_server_sessions_are_named_bounded_and_advised_with_pg_stat_statements. */}
+
 ## v0.34.0 beta-46
 
 - `bregctl apply` reports a migration database it could not reach, or an
