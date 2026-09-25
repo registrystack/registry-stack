@@ -1070,22 +1070,32 @@ async fn activation_preflight_counts_open_work_items_in_a_removed_queue() {
     // The first item is superseded by the second, so only one stays open.
     observe_open_in_generation(&store, "binding-a").await;
     observe_open_in_generation(&store, "binding-b").await;
+    // No adapter binds the item's source here, so it is stranded by source
+    // as well as, once the queue goes, by queue.
+    let source_removed = registry_casework::StrandedWork::SourceRemoved {
+        source: "source-a".to_owned(),
+        reviews: 0,
+        work_items: 1,
+    };
 
     let kept = registry_casework::stranded_pinned_work(&store, &queue_project("default"), &[])
         .await
         .expect("preflight with the queue kept");
-    assert!(kept.is_empty(), "{kept:?}");
+    assert_eq!(kept, vec![source_removed.clone()]);
 
     let removed = registry_casework::stranded_pinned_work(&store, &queue_project("triage"), &[])
         .await
         .expect("preflight with the queue removed");
     assert_eq!(
         removed,
-        vec![registry_casework::StrandedWork::QueueRemoved {
-            queue: "default".to_owned(),
-            reviews: 0,
-            work_items: 1,
-        }]
+        vec![
+            registry_casework::StrandedWork::QueueRemoved {
+                queue: "default".to_owned(),
+                reviews: 0,
+                work_items: 1,
+            },
+            source_removed,
+        ]
     );
 }
 
