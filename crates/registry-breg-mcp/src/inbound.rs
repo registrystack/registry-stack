@@ -366,12 +366,18 @@ async fn admit(limiter: &TokenBucketLimiter, key: &str) -> Result<(), Refusal> {
     match limiter.check(key, 1).await {
         Ok(()) => Ok(()),
         Err(TokenBucketError::Exceeded { retry_after }) => Err(Refusal::RateLimited {
-            retry_after_seconds: retry_after.as_secs().max(1),
+            retry_after_seconds: retry_after_seconds(retry_after),
         }),
         Err(TokenBucketError::Configuration | TokenBucketError::Capacity) => {
             Err(Refusal::Unavailable)
         }
     }
+}
+
+/// The `Retry-After` seconds for a limiter's delay, rounded up so a client
+/// that waits as told is not refused again.
+fn retry_after_seconds(retry_after: Duration) -> u64 {
+    (retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0)).max(1)
 }
 
 /// The one bearer credential a request carries. A header of another scheme,
@@ -946,6 +952,18 @@ mod tests {
             .await
             .expect_err("a loopback key set is refused");
         assert!(matches!(error, OidcError::FetchUrl(_)), "{error:?}");
+    }
+
+    /// A client that waits the advertised `Retry-After` is admitted, so a
+    /// fractional delay rounds up and never advertises less than a second.
+    #[test]
+    fn retry_after_rounds_up_to_whole_seconds() {
+        assert_eq!(retry_after_seconds(Duration::ZERO), 1);
+        assert_eq!(retry_after_seconds(Duration::from_millis(1)), 1);
+        assert_eq!(retry_after_seconds(Duration::from_secs(1)), 1);
+        assert_eq!(retry_after_seconds(Duration::from_millis(1_001)), 2);
+        assert_eq!(retry_after_seconds(Duration::from_millis(2_400)), 3);
+        assert_eq!(retry_after_seconds(Duration::from_secs(7)), 7);
     }
 
     #[test]
