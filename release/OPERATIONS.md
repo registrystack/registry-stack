@@ -138,14 +138,25 @@ version="${VERSION:?set VERSION to the candidate version without a v prefix}"
 for package in $(python3 release/scripts/release_candidate.py image-names \
     --version "${version}"); do
   candidate="${package}-candidate"
-  gh api "/orgs/registrystack/packages/container/${candidate}" \
-    --jq '[.name,.package_type,.visibility]' 2>/dev/null \
-    || echo "[\"${candidate}\",\"absent\"]"
+  if response="$(gh api "/orgs/registrystack/packages/container/${candidate}" 2>&1)"; then
+    echo "${response}" | jq -c '[.name,.package_type,.visibility]'
+  elif [[ "${response}" == *"(HTTP 404)"* ]]; then
+    echo "[\"${candidate}\",\"absent\"]"
+  elif [[ "${response}" == *"(HTTP 401)"* || "${response}" == *"(HTTP 403)"* ]]; then
+    echo "cannot read ${candidate}: token lacks read:packages or org access (${response})" >&2
+    exit 1
+  else
+    echo "cannot check ${candidate}: ${response}" >&2
+    exit 1
+  fi
 done
 ```
 
 Each result must name the requested package and report `container` and
-`private`. If a candidate package is absent, stop and provision it with the
+`private`. A `401` or `403` means the token cannot prove the package's state,
+not that the package is absent; re-authenticate with a token that has
+`read:packages` and org access before continuing. If a candidate package is
+genuinely absent, stop and provision it with the
 classic-PAT bootstrap before dispatch. If it reports `public`, change it to
 private in the organization package settings. The package REST API does not
 provide a visibility change. Remove the candidate bootstrap version only after
