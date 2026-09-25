@@ -55,16 +55,13 @@ void readEvidence
 
 // The unified package bypasses each standalone napi-rs loader, so its product
 // namespaces cannot expose the generated loader diagnostic.
-// @ts-expect-error Loader-only diagnostics are absent from the unified facade.
-discovery.__napiBindingTarget
-// @ts-expect-error Loader-only diagnostics are absent from the unified facade.
-evidence.__napiBindingTarget
-// @ts-expect-error Loader-only diagnostics are absent from the unified facade.
-relay.__napiBindingTarget
-// @ts-expect-error Loader-only diagnostics are absent from the unified facade.
-breg.__napiBindingTarget
-// @ts-expect-error Loader-only diagnostics are absent from the unified facade.
-casework.__napiBindingTarget
+type HasNoLoaderTarget<T> = '__napiBindingTarget' extends keyof T ? false : true
+type Assert<T extends true> = T
+type DiscoveryHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof discovery>>
+type EvidenceHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof evidence>>
+type RelayHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof relay>>
+type BregHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof breg>>
+type CaseworkHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof casework>>
 
 // @ts-expect-error Product query vocabularies remain distinct.
 bregClient.listRecords('people', { pageSize: 25 })
