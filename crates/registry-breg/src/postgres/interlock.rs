@@ -329,9 +329,9 @@ impl DedicatedApplyConnection {
             )
             .await?;
         for statement in statements {
-            if transaction.batch_execute(statement).await.is_err() {
+            if let Err(error) = transaction.batch_execute(statement).await {
                 transaction.rollback().await?;
-                return Err(PostgresKernelError::Connection);
+                return Err(PostgresKernelError::from_statement_error(&error));
             }
         }
         transaction.commit().await?;
@@ -3695,7 +3695,14 @@ mod tests {
                 Duration::from_millis(20),
             )
             .await;
-        assert!(matches!(timed_out, Err(PostgresKernelError::Connection)));
+        assert!(
+            matches!(
+                &timed_out,
+                Err(PostgresKernelError::Statement(failure))
+                    if failure.sqlstate.as_deref() == Some("57014")
+            ),
+            "a statement timeout is a refused statement, as on the package DDL path: {timed_out:?}"
+        );
         assert_eq!(database.state_snapshot().await, initial_state);
         apply
             .resume_failed(&current, target_revision)
