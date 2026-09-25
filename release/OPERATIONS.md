@@ -381,7 +381,7 @@ release/scripts/registry-release prepare \
 
 git add docs/site/src/data/docsets.yaml docs/site/src/data/repo-docs.yaml \
   docs/site/src/data/archive-lock.yaml
-git commit -s -m "Prepare v<version> documentation archive"
+git commit -s -m "docs(release): archive v<version> documentation"
 ```
 
 After validating the committed source, preparation prints its output directory.
