@@ -60,6 +60,10 @@ entities:
       endField: valid-to
     constraints:
       - {kind: temporal-non-overlap, scopeFields: [subject], startField: valid-from, endField: valid-to}
+    indexes:
+      - {id: by-group, fields: [group]}
+      - {id: by-valid-from, fields: [valid-from]}
+      - {id: by-valid-to, fields: [valid-to]}
 accessProfiles:
   - id: registry-operator
     default: true

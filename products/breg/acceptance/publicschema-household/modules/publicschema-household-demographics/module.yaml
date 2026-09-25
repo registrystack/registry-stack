@@ -6,6 +6,8 @@ extendEntities:
     fields:
       - {id: residency-status, type: vocabulary-code, vocabulary: residency-status, required: true, classification: restricted}
       - {id: preferred-language, type: vocabulary-code, vocabulary: preferred-language, required: false, classification: restricted}
+    indexes:
+      - {id: by-residency-status, fields: [residency-status]}
   - entity: household
     derived:
       - id: household-demographics

@@ -163,7 +163,7 @@ modules:
     digest: "sha256:feb8187258832cf7eb0a825f01a51b9ce9e8900559e4f8441483d4cd4af146b3"
   - id: business-establishments-core
     version: 0.1.0
-    digest: "sha256:3cca45c9bab9c39d4efcba5a065d4cb9097bd31194a75c0bd856c9f0ee53a3a8"
+    digest: "sha256:baaed50edd516bd1a8dd22cd67902bf91db63ea4e37586ae932dd8025f40c2f2"
 
 accessProfiles:
   - id: business-operator

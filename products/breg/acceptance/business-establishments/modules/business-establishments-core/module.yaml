@@ -53,6 +53,12 @@ entities:
       - id: by-administrative-area
         fields:
           - administrative-area
+      - id: by-business-type
+        fields:
+          - business-type
+      - id: by-local-registration-number
+        fields:
+          - local-registration-number
     fields:
       - id: business-code
         type: string
@@ -105,6 +111,13 @@ entities:
     mutationMode: mutable
     classification: restricted
     batch: {maximumItems: 100, maximumBytes: 262144}
+    indexes:
+      - id: by-relationship
+        fields:
+          - relationship
+      - id: by-valid-from
+        fields:
+          - valid-from
     fields:
       - id: establishment
         type: reference

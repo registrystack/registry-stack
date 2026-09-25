@@ -124,6 +124,9 @@ entities:
           - asset
         startField: valid-from
         endField: valid-to
+    indexes:
+      - id: placement-valid-from
+        fields: [valid-from]
   - id: inspection-event
     primaryDataset: "asset-site-placement"
     route: inspections

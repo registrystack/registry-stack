@@ -95,6 +95,16 @@ entities:
         fields:
           - jurisdiction-code
           - registration-number
+    indexes:
+      - id: by-registration-number
+        fields:
+          - registration-number
+      - id: by-legal-name
+        fields:
+          - legal-name
+      - id: by-entity-status
+        fields:
+          - entity-status
   - id: filing
     primaryDataset: "business"
     route: filings
@@ -148,6 +158,13 @@ entities:
         fields:
           - source-system
           - source-record-id
+    indexes:
+      - id: by-filing-type
+        fields:
+          - filing-type
+      - id: by-filed-date
+        fields:
+          - filed-date
   - id: officer-appointment
     primaryDataset: "business"
     route: officer-appointments
@@ -213,6 +230,16 @@ entities:
           - officer-code
         startField: effective-from
         endField: effective-to
+    indexes:
+      - id: by-officer-code
+        fields:
+          - officer-code
+      - id: by-officer-role
+        fields:
+          - officer-role
+      - id: by-effective-from
+        fields:
+          - effective-from
 accessProfiles:
   - id: public-register
     default: true

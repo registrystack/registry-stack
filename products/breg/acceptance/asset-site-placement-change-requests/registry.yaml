@@ -81,6 +81,8 @@ entities:
       scopeFields: [asset]
     constraints:
       - {kind: temporal-non-overlap, scopeFields: [asset], startField: valid-from, endField: valid-to}
+    indexes:
+      - {id: placement-valid-from, fields: [valid-from]}
   - id: placement-correction-request
     primaryDataset: "asset-site-placement-change-requests"
     route: placement-correction-requests

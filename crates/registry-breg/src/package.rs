@@ -47,7 +47,7 @@ use crate::migration_plan::{
 use crate::model::{
     CompiledAccessInventory, CompiledActionInventory, CompiledEntity, CompiledQueryInventory,
     CompiledQueryOperation, CompiledQueryTemporalValueKind, CompiledRecipients,
-    CompiledRouteInventory,
+    CompiledRouteInventory, REFERENCE_INDEX_PREFIX,
 };
 use crate::physical_names::PhysicalNameInventory;
 use crate::CompiledRegistry;
@@ -1335,19 +1335,35 @@ fn compare_entities(
             CompiledRegistryChangeClass::DestructiveOrIrreversible,
             changes,
         );
-        compare_map(
-            entity_id,
-            &previous_entity.indexes,
-            &candidate_entity.indexes,
-            CompiledRegistryChangeTargetKind::Index,
-            CompiledRegistryChangeCode::IndexAdded,
-            CompiledRegistryChangeCode::IndexRemoved,
-            CompiledRegistryChangeCode::IndexChanged,
-            CompiledRegistryChangeClass::CompatibleAdditive,
-            CompiledRegistryChangeClass::DestructiveOrIrreversible,
-            CompiledRegistryChangeClass::DestructiveOrIrreversible,
-            changes,
-        );
+        // A compiler-owned reference index leaves when an authored index or
+        // unique constraint takes over its column, or with its column. Its
+        // removal drops no data, so it needs no reviewed SQL.
+        for compiler_owned in [false, true] {
+            let select = |indexes: &BTreeMap<String, Vec<String>>| {
+                indexes
+                    .iter()
+                    .filter(|(id, _)| id.starts_with(REFERENCE_INDEX_PREFIX) == compiler_owned)
+                    .map(|(id, fields)| (id.clone(), fields.clone()))
+                    .collect::<BTreeMap<_, _>>()
+            };
+            compare_map(
+                entity_id,
+                &select(&previous_entity.indexes),
+                &select(&candidate_entity.indexes),
+                CompiledRegistryChangeTargetKind::Index,
+                CompiledRegistryChangeCode::IndexAdded,
+                CompiledRegistryChangeCode::IndexRemoved,
+                CompiledRegistryChangeCode::IndexChanged,
+                CompiledRegistryChangeClass::CompatibleAdditive,
+                if compiler_owned {
+                    CompiledRegistryChangeClass::CompatibleAdditive
+                } else {
+                    CompiledRegistryChangeClass::DestructiveOrIrreversible
+                },
+                CompiledRegistryChangeClass::DestructiveOrIrreversible,
+                changes,
+            );
+        }
         compare_map(
             entity_id,
             &previous_entity.access_profiles,
@@ -2362,6 +2378,22 @@ fn additive_migration_plan(
         for index_id in candidate_entity.indexes.keys() {
             if !previous_entity.indexes.contains_key(index_id) {
                 new_statement_ids.insert(format!("entity.{entity_id}.index.{index_id}"));
+            }
+        }
+        for index_id in previous_entity.indexes.keys() {
+            if index_id.starts_with(REFERENCE_INDEX_PREFIX)
+                && !candidate_entity.indexes.contains_key(index_id)
+            {
+                removed_dependency_statements.push(DdlStatement {
+                    id: format!("entity.{entity_id}.index.{index_id}.drop"),
+                    kind: DdlStatementKind::Index,
+                    sql: format!(
+                        "DROP INDEX IF EXISTS registry_data.{}",
+                        quote_identifier(
+                            &previous.physical_names.entities[entity_id].indexes[index_id]
+                        )
+                    ),
+                });
             }
         }
         // Consent indexes follow the consent record: a changed key or revoke

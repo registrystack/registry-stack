@@ -6995,6 +6995,12 @@ entities:
       - {id: status, type: vocabulary-code, vocabulary: record-status, classification: internal}
     constraints:
       - {id: record-code-unique, kind: unique, fields: [code]}
+    # An index lets a list filtered or sorted by its leading field skip the
+    # rows that do not match. `check` reports a finding for a filterable or
+    # sortable field no index leads with. The unique constraint above already
+    # indexes `code`, and the compiler indexes every reference such as `group`.
+    indexes:
+      - {id: record-status, fields: [status]}
     # A selector profile names an exact-match question a caller may ask by
     # value, rather than a filter over a listing. Every field it names must
     # refuse the empty value, which is why `code` declares `minLength: 1` above.

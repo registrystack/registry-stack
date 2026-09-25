@@ -79,6 +79,10 @@ entities:
     constraints:
       - {kind: unique, fields: [native-id]}
       - {kind: unique, fields: [site-code]}
+    indexes:
+      - {id: by-label, fields: [label]}
+      - {id: by-zone, fields: [zone]}
+      - {id: by-service-kind, fields: [service-kind]}
 accessProfiles:
   - id: service-site-admin
     default: true

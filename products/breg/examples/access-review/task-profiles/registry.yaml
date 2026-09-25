@@ -37,6 +37,9 @@ entities:
       - {id: label, type: string, required: true, maxLength: 100, classification: internal}
       - {id: district, type: string, required: true, maxLength: 32, classification: internal}
       - {id: owner, type: string, required: true, maxLength: 100, classification: internal}
+    indexes:
+      - {id: by-code, fields: [code]}
+      - {id: by-district, fields: [district]}
   - id: reviewed-record
     primaryDataset: access-review
     route: reviewed-records
