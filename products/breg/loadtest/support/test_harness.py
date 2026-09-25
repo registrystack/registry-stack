@@ -38,6 +38,8 @@ class BaseRegistryEngineHarnessTests(unittest.TestCase):
         self.assertNotIn("ramping-arrival-rate", sweep)
         self.assertIn("recovery:", burst)
         self.assertIn("'http_req_failed{scenario:recovery}'", burst)
+        self.assertIn("checks: ['rate>0.99']", burst)
+        self.assertIn("'checks{scenario:recovery}': ['rate==1']", burst)
         self.assertNotIn("token-soak", runner)
         self.assertNotIn("herd", runner)
         self.assertIn("dev token", runner)

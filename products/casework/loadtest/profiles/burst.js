@@ -92,7 +92,9 @@ export const options = {
   thresholds: {
     dropped_iterations: ['count==0'],
     http_req_failed: ['rate<0.01'],
+    checks: ['rate>0.99'],
     'http_req_failed{scenario:recovery}': ['rate==0'],
+    'checks{scenario:recovery}': ['rate==1'],
     'http_req_duration{scenario:recovery}': ['p(99)<500'],
   },
   systemTags: SAFE_SYSTEM_TAGS,
