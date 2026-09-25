@@ -116,8 +116,8 @@ declares persistent. Evidence resolves its own configured destination exactly
 as startup does, canonicalizing the declared root and the deepest existing
 ancestor of the sink before comparing, so a sink configured outside the
 declared root, and an existing symlink inside the root that leads out of it,
-both fail closed. The option proves containment only; the writability and
-chain proofs still have to pass.
+both fail closed. The option proves containment only; the destination writability
+checks still have to pass.
 
 Relay provides the equivalent `relay check --runtime
 /etc/relay/runtime.yaml`, including the same `--require-audit-under` option.
@@ -155,8 +155,7 @@ missing support instead of reporting a generic failure. The preflight never
 drops the assertion to accommodate such an image.
 
 Every native check runs under a bounded deadline. It defaults to 1800 seconds
-because validating a retained audit chain can legitimately take longer than a
-short deployment timeout, and `--native-check-timeout-seconds SECONDS` selects
+to allow runtime dependency checks to complete, and `--native-check-timeout-seconds SECONDS` selects
 any deadline from 30 to 21600 seconds. An expired deadline names the service
 that exceeded it and fails the preflight.
 
