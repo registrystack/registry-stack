@@ -85,6 +85,21 @@ pub struct BregAdapter {
     peer_mismatch: Mutex<Option<PeerVersionMismatch>>,
 }
 
+/// Whether a BReg engine reporting `peer` runs the release `own` names.
+///
+/// A build without the release marker reports its package version followed
+/// by `-dev`, so one trailing `-dev` is set aside on each side and a release
+/// build matches a development build of the same version. Every other part
+/// of the version, a prerelease tag included, must match exactly: `0.34.0`
+/// matches `0.34.0-dev`, and `0.34.0-rc.1` matches only `0.34.0-rc.1` and
+/// `0.34.0-rc.1-dev`.
+fn same_release(peer: &str, own: &str) -> bool {
+    fn version(text: &str) -> &str {
+        text.strip_suffix("-dev").unwrap_or(text)
+    }
+    version(peer) == version(own)
+}
+
 /// A BReg source whose engine release is not this Casework's release.
 ///
 /// Casework and BReg run in lock-step: the adapter reads the engine version
@@ -504,12 +519,24 @@ impl BregAdapter {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         if logged.as_deref() != Some(peer_version) {
-            tracing::info!(
-                source_id = %self.config.source_id,
-                peer_engine_version = peer_version,
-                casework_version = registry_platform_buildinfo::DISPLAY_VERSION,
-                "Casework reads a BReg source on its own release"
-            );
+            let own = registry_platform_buildinfo::DISPLAY_VERSION;
+            if peer_version == own {
+                tracing::info!(
+                    source_id = %self.config.source_id,
+                    peer_engine_version = peer_version,
+                    casework_version = own,
+                    "Casework reads a BReg source on its own release"
+                );
+            } else {
+                tracing::warn!(
+                    source_id = %self.config.source_id,
+                    peer_engine_version = peer_version,
+                    casework_version = own,
+                    "Casework reads a BReg source on its own release, one side built without \
+                     the release marker; a development build is matched by its version only, \
+                     so run release builds of both in production"
+                );
+            }
             *logged = Some(peer_version.to_owned());
         }
     }
@@ -528,7 +555,11 @@ impl BregAdapter {
         // decoded; one that reported no version is refused once it decoded,
         // since an outage or a refusal carries no version to compare.
         let unreported = peer_version.is_none() && contract.is_ok();
-        if unreported || peer_version.as_deref().is_some_and(|peer| peer != own) {
+        if unreported
+            || peer_version
+                .as_deref()
+                .is_some_and(|peer| !same_release(peer, own))
+        {
             let kind = contract
                 .as_ref()
                 .err()
@@ -539,7 +570,7 @@ impl BregAdapter {
         if matches!(client, ReadClient::Caller(_)) {
             self.report_success(client);
         }
-        self.note_peer_version(own);
+        self.note_peer_version(peer_version.as_deref().unwrap_or(own));
         if metadata.registry_revision() != self.config.expected_registry_revision {
             return Err(SourceAdapterError::BindingMoved);
         }
@@ -1456,6 +1487,29 @@ mod tests {
                 generation: "generation-1".into(),
             },
             native: vec![1, 2, 3],
+        }
+    }
+
+    #[test]
+    fn a_development_build_matches_its_release_and_nothing_else() {
+        for (peer, own) in [
+            ("0.34.0", "0.34.0"),
+            ("0.34.0-dev", "0.34.0"),
+            ("0.34.0", "0.34.0-dev"),
+            ("0.34.0-dev", "0.34.0-dev"),
+            ("0.34.0-rc.1", "0.34.0-rc.1-dev"),
+        ] {
+            assert!(super::same_release(peer, own), "{peer} and {own}");
+        }
+        for (peer, own) in [
+            ("0.34.1", "0.34.0"),
+            ("0.34.0-rc.1", "0.34.0"),
+            ("0.34.0-rc.1", "0.34.0-dev"),
+            ("0.34.0-dev-dev", "0.34.0"),
+            ("0.34", "0.34.0"),
+            ("", "0.34.0"),
+        ] {
+            assert!(!super::same_release(peer, own), "{peer} and {own}");
         }
     }
 

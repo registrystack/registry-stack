@@ -1292,6 +1292,59 @@ async fn a_breg_engine_from_another_release_is_refused_naming_both_versions() {
 }
 
 #[tokio::test]
+async fn a_development_build_of_the_same_release_is_accepted_and_a_prerelease_is_not() {
+    // A build without the release marker reports `<version>-dev`; its
+    // counterpart is the same version built as a release, or the reverse.
+    let release = ENGINE.strip_suffix("-dev").unwrap_or(ENGINE);
+    let counterpart = if ENGINE == release {
+        format!("{release}-dev")
+    } else {
+        release.to_owned()
+    };
+
+    let server = MockServer::start().await;
+    let development = adapter(&server.uri());
+    mount_contract(
+        &server,
+        "reader-token",
+        empty_contract(),
+        Some(&counterpart),
+    )
+    .await;
+    let logs = captured_logs(async {
+        let _ = development.discover_active(None, 100).await;
+    })
+    .await;
+    assert_eq!(development.peer_version_mismatch(), None, "{logs}");
+    let entries = log_entries(&logs);
+    let noted = entries
+        .iter()
+        .find(|entry| entry["fields"]["peer_engine_version"] == counterpart.as_str())
+        .unwrap_or_else(|| panic!("the development build is logged: {logs}"));
+    assert_eq!(noted["level"], "WARN", "{logs}");
+    assert_eq!(noted["fields"]["casework_version"], ENGINE, "{logs}");
+
+    let server = MockServer::start().await;
+    let prerelease_adapter = adapter(&server.uri());
+    let prerelease = format!("{release}-rc.1");
+    mount_contract(&server, "reader-token", empty_contract(), Some(&prerelease)).await;
+    assert_eq!(
+        prerelease_adapter
+            .discover_active(None, 100)
+            .await
+            .unwrap_err(),
+        SourceAdapterError::Unavailable
+    );
+    assert_eq!(
+        prerelease_adapter
+            .peer_version_mismatch()
+            .expect("a prerelease of the same version is another release")
+            .peer_version(),
+        Some(prerelease.as_str())
+    );
+}
+
+#[tokio::test]
 async fn a_peer_version_mismatch_explains_a_contract_that_does_not_decode() {
     let server = MockServer::start().await;
     let adapter = adapter(&server.uri());
