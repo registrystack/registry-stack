@@ -206,12 +206,12 @@ invariants:
   - id: sec-statistical-audit-and-wire-binding
     threat: A statistical request reaches SQLite without durable attempt audit, data and structure are conflated, wire formats share an ambiguous audit identity, or bytes leave before terminal audit.
     enforcementPoint: Distinct compiled statistical audit surfaces and wire-format identifiers at the same pre-source and exact-held-byte terminal gates as other Relay data operations.
-    expected: Data and structure are distinct value-free audit surfaces; SDMX-JSON and SDMX-CSV bind distinct wire identities and exact terminal bytes; no key, component constraint, observation, hidden authority value, or response value enters audit.
+    expected: Data and structure are distinct value-free audit surfaces; SDMX-JSON and SDMX-CSV carry distinct wire identities and the terminal entry gates release of the exact held bytes; no key, component constraint, observation, hidden authority value, or response value enters audit.
     evidence: statistical-audit-order-and-wire-tests
     negativeTest: sdmx_attempt_audit_failure_prevents_sqlite_execution
     tests:
       - {path: crates/registry-relay-v2/tests/sdmx_http.rs, name: sdmx_data_and_structure_use_distinct_value_free_audit_surfaces}
-      - {path: crates/registry-relay-v2/tests/sdmx_http.rs, name: sdmx_json_and_csv_terminal_audits_bind_exact_wire_bytes}
+      - {path: crates/registry-relay-v2/tests/sdmx_http.rs, name: sdmx_json_and_csv_terminal_audits_gate_release_of_exact_wire_bytes}
       - {path: crates/registry-relay-v2/tests/sdmx_http.rs, name: sdmx_attempt_audit_failure_prevents_sqlite_execution}
   - id: sec-disclosure-monotonic
     threat: Field selection expands disclosure, changes predicates, or exposes source columns.
@@ -261,11 +261,12 @@ invariants:
   - id: sec-audit-correlation-and-minimization
     threat: An emitted audit event cannot be correlated to the released operation or records protected request, response, source-row, or principal values.
     enforcementPoint: Relay-owned closed audit vocabulary populated from compiled and verified operation context.
-    expected: Emitted attempt and terminal events correlate by trace and request-operation identifiers, agree with the released Registry, resource, operation, contract, disclosure, selected-property, row-boundary, and source-revision context, and contain no response bytes, Record identifiers, raw principals, or fixture canaries.
+    expected: Emitted attempt and terminal events share one envelope correlation equal to the request-operation identifier, correlate by trace identifier, agree with the released Registry, resource, operation, contract, disclosure, selected-property, row-boundary, and source-revision context, and contain no response bytes, Record identifiers, raw principals, or fixture canaries.
     evidence: real-router-recording-audit-proof
     negativeTest: real_router_keeps_related_public_and_protected_resources_isolated
     tests:
       - {path: crates/registry-relay-v2/tests/multi_resource_isolation.rs, name: real_router_keeps_related_public_and_protected_resources_isolated}
+      - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: a_released_read_writes_one_request_and_one_response_entry_sharing_correlation}
   - id: sec-cursor-integrity
     threat: A caller tampers with pagination state or reuses it across revisions, operations, fields, filters, or authority contexts.
     enforcementPoint: Authenticated encryption of the complete cursor payload plus per-page reauthorization.

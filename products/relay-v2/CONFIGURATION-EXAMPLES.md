@@ -322,8 +322,10 @@ authentication:
     tokenTypes: [at+jwt]
     algorithms: [ES256]
 audit:
-  sink: /var/lib/relay/audit/social-assistance.jsonl
-  integrityKeyRef: secret:file/audit-integrity-key
+  destination: file
+  path: /var/lib/relay/audit/social-assistance.jsonl
+  rotateBytes: 67108864
+  retainDays: 90
 limits: {requestTimeoutMilliseconds: 1500, concurrentQueries: 16}
 quotas: {requestsPerMinute: 120, burst: 20}
 ```
@@ -339,6 +341,19 @@ validation. Defining both transports or neither fails startup. Run `relay
 check --runtime <runtime.yaml>` before routing traffic to prove the sealed
 package, source, audit, secret, and issuer key transport without binding the
 listener.
+
+`audit` takes the shape every Registry Stack product shares. `destination` is
+`file` (the default) or `stdout`. A `file` destination needs an absolute
+`path` or one relative to the runtime file; Relay holds a single-writer lock
+beside it, rotates the file at `rotateBytes`, and deletes rotated files older
+than `retainDays`. Both are optional and apply only to `file`. A `stdout`
+destination writes one flushed JSON line per entry for the platform's log
+collector and refuses `path`, `rotateBytes`, and `retainDays`. Each line is one
+envelope, `{schema, eventId, time, phase, correlation, record}`, where `phase`
+is `request` for the attempt written before source access and `response` for
+the refusal or terminal outcome, and `correlation` is the operation id both
+entries share. Relay refuses to read a source until the request entry is
+accepted and releases no response bytes until the response entry is accepted.
 
 What this example must prove:
 
@@ -535,8 +550,8 @@ sources:
   companies: {path: /srv/registries/business-register.sqlite}
 authentication: {issuer: null}
 audit:
-  sink: /var/lib/relay/audit/business-register.jsonl
-  integrityKeyRef: secret:file/audit-integrity-key
+  destination: file
+  path: /var/lib/relay/audit/business-register.jsonl
 limits: {requestTimeoutMilliseconds: 1500, concurrentQueries: 32}
 ```
 
@@ -870,8 +885,7 @@ authentication:
     tokenTypes: [at+jwt]
     algorithms: [ES256]
 audit:
-  sink: /var/lib/relay/audit/civil-events.jsonl
-  integrityKeyRef: secret:file/audit-integrity-key
+  destination: stdout
 limits: {requestTimeoutMilliseconds: 1500, concurrentQueries: 16}
 quotas: {requestsPerMinute: 120, burst: 20}
 ```
@@ -1222,8 +1236,8 @@ statisticalDatasets[].title
 ```text
 apiVersion
 audit
-audit.integrityKeyRef
-audit.sink
+audit.destination
+audit.path
 authentication
 authentication.issuer
 authentication.issuer.algorithms

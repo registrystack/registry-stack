@@ -14,8 +14,8 @@ authentication:
     tokenTypes: [at+jwt]
     algorithms: [EdDSA]
 audit:
-  sink: var/audit.jsonl
-  integrityKeyRef: secret:env/RELAY_TEST_AUDIT_KEY
+  destination: file
+  path: var/audit.jsonl
 cursor: null
 limits:
   requestTimeoutMilliseconds: 1500

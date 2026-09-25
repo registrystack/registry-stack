@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+### BREAKING: write audit through the shared platform audit writer
+
+Relay no longer keeps a keyed hash chain over its audit log. Each audit line is
+now the envelope every Registry Stack product writes:
+
+```json
+{"schema":"registry.relay.audit/v2alpha2","eventId":"...","time":"2026-09-25T10:00:00.000Z","phase":"request","correlation":"<operation id>","record":{"phase":"attempt","operationId":"<operation id>"}}
+```
+
+The `record` is abbreviated above. The attempt written before source access is
+a `request` entry, and the refusal or terminal outcome is a `response` entry.
+Both carry the operation id as `correlation`. The record keeps every field it
+had except `schema`, which moved to the envelope. The package artifact
+`generated/artifacts/audit-event.schema.json` now describes one line, and its
+`$id` is
+`https://id.registrystack.org/schemas/registry-relay/audit-event/v2alpha2`.
+Source access and response release are gated exactly as before, and an
+unavailable destination still returns `503 audit.unavailable`.
+
+Before:
+
+```yaml
+audit:
+  sink: /var/lib/relay/audit/relay.jsonl
+  integrityKeyRef: secret:file/audit-integrity-key
+```
+
+After:
+
+```yaml
+audit:
+  destination: file        # or stdout
+  path: /var/lib/relay/audit/relay.jsonl
+  rotateBytes: 67108864    # optional, file only
+  retainDays: 90           # optional, file only
+```
+
+Migration:
+
+1. Rename `audit.sink` to `audit.path` and delete `audit.integrityKeyRef`; the
+   audit key is no longer read and can be retired. Unknown audit fields fail
+   startup.
+2. Move or archive the existing log before starting the upgraded Relay. Lines
+   written by earlier versions use the old format, so read the two separately.
+3. Update log consumers to read the envelope and the `record` inside it, and to
+   join a request and its outcome by `correlation`.
+4. `relay check --require-audit-under` refuses a `stdout` destination, which
+   has no path to prove.
+5. Reseal packages; the audit event schema artifact changed.
+
 ## v0.26.0 - 2026-09-03
 
 ### BREAKING: adopt Registry Record profile v1

@@ -1136,7 +1136,7 @@ async fn single_operation(
     if result.rows.len() != 1 {
         if service
             .audit
-            .terminal(&audit, AuditOutcome::Unresolved, None)
+            .terminal(&audit, AuditOutcome::Unresolved)
             .await
             .is_err()
         {
@@ -2838,7 +2838,7 @@ async fn release_document(
     {
         if service
             .audit
-            .terminal(audit, AuditOutcome::NotModified, None)
+            .terminal(audit, AuditOutcome::NotModified)
             .await
             .is_err()
         {
@@ -2850,7 +2850,7 @@ async fn release_document(
     }
     if service
         .audit
-        .terminal(audit, AuditOutcome::Released, Some(&bytes))
+        .terminal(audit, AuditOutcome::Released)
         .await
         .is_err()
     {
@@ -2951,7 +2951,7 @@ async fn source_failure(
             (AuditOutcome::SourceFailed, ProblemCode::SourceUnavailable)
         }
     };
-    if audit.terminal(context, outcome, None).await.is_err() {
+    if audit.terminal(context, outcome).await.is_err() {
         return ProblemCode::AuditUnavailable.response(trace);
     }
     code.response(trace)
@@ -2972,7 +2972,7 @@ async fn source_shape_failure(
     trace: &TraceContext,
 ) -> Response<Body> {
     if audit
-        .terminal(context, AuditOutcome::SourceFailed, None)
+        .terminal(context, AuditOutcome::SourceFailed)
         .await
         .is_err()
     {
@@ -2988,7 +2988,7 @@ async fn terminal_problem(
     code: ProblemCode,
     trace: &TraceContext,
 ) -> Response<Body> {
-    if audit.terminal(context, outcome, None).await.is_err() {
+    if audit.terminal(context, outcome).await.is_err() {
         return ProblemCode::AuditUnavailable.response(trace);
     }
     code.response(trace)

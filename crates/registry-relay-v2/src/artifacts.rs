@@ -1918,23 +1918,44 @@ fn absolute(base: &str, path: &str) -> String {
     format!("{}{path}", base.trim_end_matches('/'))
 }
 
-/// Return the fixed value-free audit event JSON Schema published in packages.
+/// Return the fixed JSON Schema for one Relay audit line, published in
+/// packages: the shared platform envelope with Relay's value-free record
+/// nested under `record`.
 #[must_use]
 pub fn audit_event_schema() -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://id.registrystack.org/schemas/registry-relay/audit-event/v2alpha1",
-        "title": "Registry Relay value-free audit event",
+        "$id": "https://id.registrystack.org/schemas/registry-relay/audit-event/v2alpha2",
+        "title": "Registry Relay value-free audit line",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schema", "eventId", "time", "phase", "correlation", "record"],
+        "properties": {
+            "schema": {"const": crate::audit::AUDIT_SCHEMA},
+            "eventId": {"type": "string", "minLength": 1},
+            "time": {"type": "string", "format": "date-time"},
+            "phase": {"enum": ["request", "response"]},
+            "correlation": {"type": "string", "minLength": 1, "maxLength": 256},
+            "record": {"$ref": "#/$defs/record"}
+        },
+        "if": {"properties": {"phase": {"const": "request"}}},
+        "then": {"properties": {"record": {"properties": {"phase": {"const": "attempt"}}}}},
+        "else": {"properties": {"record": {"properties": {"phase": {"enum": ["refusal", "terminal"]}}}}},
+        "$defs": {"record": audit_record_schema()}
+    })
+}
+
+fn audit_record_schema() -> Value {
+    json!({
         "type": "object",
         "additionalProperties": false,
         "required": [
-            "schema", "phase", "operationId", "traceId", "registryIdentifier",
+            "phase", "operationId", "traceId", "registryIdentifier",
             "operationSurface",
             "rowBoundaryKind", "processingDescriptionIdentifiers", "selectedProperties",
             "transformIdentifiers", "contractRevision", "principalKind"
         ],
         "properties": {
-            "schema": {"const": crate::audit::AUDIT_SCHEMA},
             "phase": {"enum": ["attempt", "refusal", "terminal"]},
             "operationId": {"type": "string", "minLength": 1},
             "traceId": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
@@ -2424,7 +2445,7 @@ mod tests {
                 .content,
         )
         .expect("audit schema parses");
-        let wire_formats = audit["properties"]["wireFormat"]["enum"]
+        let wire_formats = audit["$defs"]["record"]["properties"]["wireFormat"]["enum"]
             .as_array()
             .expect("wire-format enum");
         for wire_format in [
