@@ -177,7 +177,19 @@ async fn create_run(
         .await
     {
         Ok(run) => ingestion_response(StatusCode::CREATED, json!({ "run": run })),
-        Err(error) => ingestion_problem(error),
+        // A refusal after the request entry was accepted owes the journal
+        // its response entry, as a refused chunk submission does.
+        Err(error) => {
+            audited_mutation_refusal(
+                mutations,
+                &binding.base,
+                &surface.context,
+                None,
+                ingestion_problem(error),
+                &correlation,
+            )
+            .await
+        }
     }
 }
 
@@ -383,7 +395,19 @@ async fn cancel_run(
         .await
     {
         Ok(run) => ingestion_response(StatusCode::OK, json!({ "run": run })),
-        Err(error) => ingestion_problem(error),
+        // A refusal after the request entry was accepted owes the journal
+        // its response entry, as a refused chunk submission does.
+        Err(error) => {
+            audited_mutation_refusal(
+                mutations,
+                &binding.base,
+                &surface.context,
+                None,
+                ingestion_problem(error),
+                &correlation,
+            )
+            .await
+        }
     }
 }
 
