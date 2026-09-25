@@ -14,7 +14,7 @@
 use std::{
     fs::{self, File, OpenOptions, TryLockError},
     io::{self, ErrorKind, Write},
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
+    os::unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -746,6 +746,19 @@ impl SegmentedFile {
         let created = !path.exists();
         let active = open_append(&path)?;
         validate_active_file(&active)?;
+        let length = active.metadata().map_err(AuditError::Io)?.len();
+        if length > 0 {
+            let mut last = [0];
+            active
+                .read_exact_at(&mut last, length - 1)
+                .map_err(AuditError::Io)?;
+            if last[0] != b'\n' {
+                return Err(AuditError::Io(io::Error::new(
+                    ErrorKind::InvalidData,
+                    "audit file has an incomplete final entry; archive it and restart with a fresh path",
+                )));
+            }
+        }
         active.sync_all().map_err(AuditError::Io)?;
         if created || lock_created {
             sync_directory(&parent)?;
@@ -1014,6 +1027,7 @@ fn open_append(path: &Path) -> Result<File, AuditError> {
     reject_symlink(path)?;
     OpenOptions::new()
         .create(true)
+        .read(true)
         .append(true)
         .mode(0o600)
         .custom_flags(open_flags())
@@ -1307,6 +1321,58 @@ mod tests {
         }
         let mode = fs::metadata(&path).expect("metadata").permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[tokio::test]
+    async fn restart_refuses_an_incomplete_final_entry_without_changing_the_file() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        let writer = AuditWriter::open(AuditDestination::File(destination.clone()))
+            .await
+            .expect("open");
+        writer.append(request("accepted")).await.expect("append");
+        drop(writer);
+        // A failed write or process interruption can leave only part of the
+        // next entry. Restart must not join a later accepted entry to it.
+        OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .and_then(|mut file| file.write_all(b"{\"schema\":"))
+            .expect("partial entry");
+        let before = fs::read(&path).expect("read before restart");
+
+        let error = AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect_err("incomplete final entry must refuse startup");
+        assert!(
+            matches!(error, AuditError::Io(ref error) if error.kind() == ErrorKind::InvalidData)
+        );
+        assert_eq!(fs::read(&path).expect("read after restart"), before);
+    }
+
+    #[tokio::test]
+    async fn restart_appends_after_a_complete_final_entry() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        let writer = AuditWriter::open(AuditDestination::File(destination.clone()))
+            .await
+            .expect("open");
+        writer.append(request("before")).await.expect("append");
+        drop(writer);
+
+        let writer = AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect("reopen complete stream");
+        writer
+            .append(request("after"))
+            .await
+            .expect("append after restart");
+        let entries = lines(&path);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["correlation"], "before");
+        assert_eq!(entries[1]["correlation"], "after");
     }
 
     #[tokio::test]

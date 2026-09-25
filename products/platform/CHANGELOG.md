@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Refuse to reopen an audit file ending in an incomplete JSONL entry, preserving
+  its bytes for operator archival before starting a fresh stream.
 - Keep queued stream appends stopped after an earlier write fails, and finish
   accepted file writes when their request task is canceled. Group commits retain
   every waiting entry and update the pinned file state before accepting later
