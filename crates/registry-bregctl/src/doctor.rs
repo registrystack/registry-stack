@@ -131,6 +131,11 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "database",
             "the database is not ready for the runtime package",
         ),
+        StartupError::InstanceClaimMismatch => (
+            "startup.instance_claim.mismatch",
+            "database",
+            "the database is not the instance the Registry's claim names, as a restored copy is: once the original is retired, run bregctl instance-claim adopt",
+        ),
         StartupError::Audit => (
             "startup.audit.refused",
             "audit",
@@ -254,6 +259,7 @@ mod tests {
             StartupError::PackageRefused(PackageError::Integrity),
             StartupError::DatabaseConnection,
             StartupError::DatabaseUnready,
+            StartupError::InstanceClaimMismatch,
             StartupError::Audit,
             StartupError::Cursor,
             StartupError::Oidc,
@@ -356,6 +362,11 @@ mod tests {
             (
                 StartupError::DatabaseUnready,
                 "startup.database.unready",
+                "database",
+            ),
+            (
+                StartupError::InstanceClaimMismatch,
+                "startup.instance_claim.mismatch",
                 "database",
             ),
             (StartupError::Audit, "startup.audit.refused", "audit"),

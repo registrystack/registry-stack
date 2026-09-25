@@ -85,6 +85,8 @@ pub mod immediate_actions;
 pub mod import_authority;
 #[cfg(feature = "runtime")]
 mod ingestion_store;
+#[cfg(feature = "runtime")]
+pub mod instance_claim;
 pub mod lifecycle;
 pub mod logical_names;
 pub mod manifest_adapter;

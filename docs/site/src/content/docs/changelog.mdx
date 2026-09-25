@@ -407,6 +407,44 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-bregctl/src/import_authority_lifecycle.rs;
     crates/registry-bregctl/src/data_lifecycle.rs, a_run_blocked_by_its_import_authority_names_that_reason. */}
 
+- BREAKING: the Base Registry Engine runtime refuses to serve a database that
+  is not the one its instance claim names. The claim records the PostgreSQL
+  system identifier and database object identifier at the first apply, so a
+  logically restored copy (`pg_dump` and `pg_restore`) or a registry moved by
+  `pg_upgrade` no longer starts: `breg` refuses with the new `StartupError`
+  variant `InstanceClaimMismatch`, `GET /ready` answers `503`, and
+  `bregctl doctor` reports `startup.instance_claim.mismatch`. This keeps a
+  restored copy from serving beside its original as a divergent writer of
+  the same registry. Once the original is stopped for good, the new command
+  `bregctl instance-claim adopt --acknowledge-original-retired` moves the
+  claim to the copy with a raised epoch and, once that commits, appends an
+  audit entry naming the previous and the adopted claim;
+  `bregctl instance-claim status` reports whether the claim matches. A
+  physical copy (base backup, point-in-time recovery, snapshot, or promoted
+  replica) keeps its identity and is not refused. The claim is recorded only
+  into a fresh database, one with no committed revision and no commit head,
+  so an existing registry
+  records none when its next apply installs the new internal table: run
+  `instance-claim adopt` once after that apply, before starting the server.
+  Adopting also supersedes every open import authority, with its own audit
+  record, so a restored backup brings no authority back. On a managed
+  PostgreSQL service that withholds `pg_control_system()`, the claim compares
+  the database object identifier alone. The claim is checked at startup and
+  on readiness, not per request. A Rust `match` over `StartupError` must
+  handle the new variant. See
+  [back up and restore the database](../operate/breg-changes/#back-up-and-restore-the-database).
+
+{/* Evidence: crates/registry-breg/src/instance_claim.rs;
+    crates/registry-breg/src/startup.rs, verify_instance_claim();
+    crates/registry-breg/src/import_authority.rs, supersede_every_open();
+    crates/registry-breg/tests/postgres_startup.rs, a_restored_copy_refuses_to_serve_until_adopted
+    and a_database_that_withholds_its_system_identifier_still_serves_and_refuses_a_copy;
+    crates/registry-breg/tests/postgres_import_authority.rs,
+    installing_the_claim_beside_committed_history_leaves_the_database_to_adopt and
+    adopting_a_restored_copy_supersedes_every_open_authority;
+    crates/registry-bregctl/src/instance_claim_lifecycle.rs;
+    crates/registry-bregctl/tests/instance_claim.rs. */}
+
 ## v0.34.0 beta-46
 
 - `bregctl apply` reports a migration database it could not reach, or an
