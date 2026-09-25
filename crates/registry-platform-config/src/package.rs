@@ -115,8 +115,16 @@ pub fn check_revision(revision: &str) -> Result<(), &'static str> {
     if revision.is_empty() || revision.len() > MAX_REVISION_BYTES {
         return Err("a revision is 1 to 256 bytes");
     }
-    if revision.chars().any(char::is_control) {
-        return Err("a revision is one line without control characters");
+    if revision.chars().any(|character| {
+        character.is_control()
+            || matches!(
+                character,
+                '\u{200e}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+            )
+    }) {
+        return Err(
+            "a revision is one line without control or bidirectional formatting characters",
+        );
     }
     if revision.trim() != revision {
         return Err("a revision has no leading or trailing whitespace");
@@ -456,6 +464,15 @@ impl PackageError {
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Name the package by `label`, such as the field `package.root`, instead
+    /// of its directory, for a product whose refusals never carry a
+    /// configured value.
+    #[must_use]
+    pub fn naming_root_as(mut self, label: &str) -> Self {
+        self.root = PathBuf::from(label);
+        self
     }
 }
 

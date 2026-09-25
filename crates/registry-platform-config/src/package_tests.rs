@@ -164,6 +164,26 @@ fn every_discrepancy_is_reported_together() {
 }
 
 #[test]
+fn a_refusal_can_name_the_field_instead_of_the_directory() {
+    let (directory, _) = packaged(None);
+    write(directory.path(), "policy.yaml", b"name: other\n");
+    let error = verify(directory.path())
+        .expect_err("a changed file")
+        .naming_root_as("package.root");
+    let message = error.to_string();
+    assert!(
+        message.starts_with("the package at package.root does not match its SHA256SUMS"),
+        "{message}"
+    );
+    assert!(message.contains("changed: policy.yaml"), "{message}");
+    assert!(message.contains(FIX), "{message}");
+    assert!(
+        !message.contains(&*directory.path().to_string_lossy()),
+        "{message}"
+    );
+}
+
+#[test]
 fn a_directory_without_a_sum_file_is_refused_with_the_package_command() {
     let directory = populated();
     let error = verify(directory.path()).expect_err("no sum file");
@@ -221,6 +241,9 @@ fn a_revision_must_be_one_printable_line() {
         "trailing ",
         "two\nlines",
         "tab\there",
+        "hidden\u{200e}mark",
+        "override\u{202e}text",
+        "isolate\u{2066}text",
         &"x".repeat(MAX_REVISION_BYTES + 1),
     ] {
         let directory = populated();
@@ -240,6 +263,7 @@ fn a_revision_must_be_one_printable_line() {
     }
     assert!(check_revision(&"x".repeat(MAX_REVISION_BYTES)).is_ok());
     assert!(check_revision("v1.2.3 (git 0123abcd)").is_ok());
+    assert!(check_revision("إصدار-גרסה-1").is_ok());
 }
 
 #[test]
