@@ -1407,6 +1407,185 @@ async fn review_task_grants_bind_holder_revision_subject_and_revocation() {
 }
 
 #[tokio::test]
+async fn retiring_and_reintroducing_a_review_template_cannot_revive_its_grant() {
+    let f = fixture(900).await;
+    let human = token("human", "human-client", "human", "casework:staff");
+    let agent = token("agent", "agent-client", "agent", "casework:grants:assert");
+    let resource = token(
+        "resource",
+        "breg-status",
+        "service",
+        "casework:grants:status",
+    );
+    let item_grants = format!("/v1/work-items/{}/task-grants", f.item);
+    let (status, ordinary_grant) = request(
+        &f,
+        "POST",
+        &item_grants,
+        &human,
+        true,
+        Some(json!({"templateId":"summary","templateVersion":"1"})),
+        Some("ordinary-template-retirement"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ordinary_grant}");
+    let ordinary_grant_id = Uuid::parse_str(ordinary_grant["id"].as_str().unwrap()).unwrap();
+    let grants = format!("/v1/review-tasks/{}/task-grants", f.review_task);
+    let (status, granted) = request(
+        &f,
+        "POST",
+        &grants,
+        &human,
+        true,
+        Some(json!({"templateId":"review-summary","templateVersion":"1"})),
+        Some("review-template-retirement"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{granted}");
+    let grant_id = Uuid::parse_str(granted["id"].as_str().unwrap()).unwrap();
+    let assertion = format!("/v1/task-grants/{grant_id}/assertion");
+    let status_path = format!("/v1/task-grants/{grant_id}/status");
+    let ordinary_assertion = format!("/v1/task-grants/{ordinary_grant_id}/assertion");
+    let database = f.store.client().await.unwrap();
+
+    database
+        .batch_execute(
+            "ALTER TABLE casework_audit_outbox
+             ADD CONSTRAINT reject_template_retirement_audit
+             CHECK (audit_record->>'reason' IS DISTINCT FROM 'template')",
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        f.store.activate_task_templates(&[]).await,
+        Err(StoreError::Postgres(_))
+    ));
+    let row = database
+        .query_one(
+            "SELECT
+               (SELECT count(*)=2 AND bool_and(active) FROM casework_task_templates),
+               (SELECT invalidated_at IS NOT NULL FROM casework_task_grants
+                WHERE grant_id=$1),
+               (SELECT invalidated_at IS NOT NULL FROM casework_review_task_grants
+                WHERE grant_id=$2)",
+            &[&ordinary_grant_id, &grant_id],
+        )
+        .await
+        .unwrap();
+    let templates_active: bool = row.get(0);
+    let ordinary_grant_invalidated: bool = row.get(1);
+    let review_grant_invalidated: bool = row.get(2);
+    assert!(
+        templates_active,
+        "failed activation must roll back both template retirements"
+    );
+    assert!(
+        !ordinary_grant_invalidated && !review_grant_invalidated,
+        "failed activation must roll back both grant invalidations"
+    );
+    assert_eq!(
+        request(&f, "POST", &ordinary_assertion, &agent, false, None, None,)
+            .await
+            .0,
+        StatusCode::OK,
+        "the rolled-back retirement must leave the ordinary grant usable"
+    );
+    assert_eq!(
+        request(&f, "POST", &assertion, &agent, false, None, None)
+            .await
+            .0,
+        StatusCode::OK,
+        "the rolled-back retirement must leave the grant usable"
+    );
+    database
+        .batch_execute(
+            "ALTER TABLE casework_audit_outbox
+             DROP CONSTRAINT reject_template_retirement_audit",
+        )
+        .await
+        .unwrap();
+
+    f.store.activate_task_templates(&[]).await.unwrap();
+    let ordinary_invalidation: (bool, Option<String>) = {
+        let row = database
+            .query_one(
+                "SELECT invalidated_at IS NOT NULL,invalidation_reason
+                 FROM casework_task_grants WHERE grant_id=$1",
+                &[&ordinary_grant_id],
+            )
+            .await
+            .unwrap();
+        (row.get(0), row.get(1))
+    };
+    assert_eq!(ordinary_invalidation, (true, Some("template".into())));
+    let row = database
+        .query_one(
+            "SELECT invalidated_at IS NOT NULL,invalidation_reason
+             FROM casework_review_task_grants WHERE grant_id=$1",
+            &[&grant_id],
+        )
+        .await
+        .unwrap();
+    let invalidation: (bool, Option<String>) = (row.get(0), row.get(1));
+    assert_eq!(invalidation, (true, Some("template".into())));
+
+    f.store
+        .activate_task_templates(&f.project.task_templates)
+        .await
+        .unwrap();
+    assert_eq!(
+        request(&f, "POST", &ordinary_assertion, &agent, false, None, None,)
+            .await
+            .0,
+        StatusCode::FORBIDDEN,
+        "reintroducing the ordinary template must not revive its old grant"
+    );
+    assert_eq!(
+        request(&f, "POST", &assertion, &agent, false, None, None)
+            .await
+            .0,
+        StatusCode::FORBIDDEN,
+        "reintroducing the same immutable template must not revive its old grant"
+    );
+    assert_eq!(
+        request(&f, "GET", &status_path, &resource, false, None, None)
+            .await
+            .1["active"],
+        false
+    );
+    let history_events: i64 = database
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE task_id=$1 AND kind='task_grant_invalidated'
+               AND detail->>'grantId'=$2 AND detail->>'reason'='template'
+               AND actor_ref IS NULL",
+            &[&f.review_task, &grant_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(history_events, 1);
+    let audit_events: i64 = database
+        .query_one(
+            "SELECT count(*) FROM casework_audit_outbox
+             WHERE audit_record->>'grantId'=$1
+               AND audit_record->>'event'='casework.task_grant_invalidated'
+               AND audit_record->>'reason'='template'
+               AND audit_record->>'profileId'='system:task-grants'",
+            &[&grant_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(audit_events, 1);
+
+    f.admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn review_task_grant_approval_reaches_history_and_audit() {
     let f = fixture(900).await;
     let human = token("human", "human-client", "human", "casework:staff");

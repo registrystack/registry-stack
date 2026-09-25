@@ -481,7 +481,7 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
     .expect("request_id is a UUID");
 }
 
-fn startup_errors() -> [StartupError; 16] {
+fn startup_errors() -> [StartupError; 17] {
     [
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
@@ -499,6 +499,10 @@ fn startup_errors() -> [StartupError; 16] {
         StartupError::Oidc,
         StartupError::Authentication,
         StartupError::EventDestinations,
+        StartupError::ReviewAuthorityMissing {
+            authority: "review-authority-private-canary".to_owned(),
+            retained_submissions: 2,
+        },
         StartupError::AttachmentStorage,
         StartupError::FieldEncryption,
         StartupError::FieldEncryptionCustody,
@@ -591,7 +595,9 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::Oidc => "the Registry OIDC key source was refused",
         StartupError::Authentication => "the Registry authentication profile was refused",
         StartupError::EventDestinations => "the Registry event destination bindings were refused",
-        StartupError::ReviewBindings => "the Registry retained review bindings were refused",
+        StartupError::ReviewBindings | StartupError::ReviewAuthorityMissing { .. } => {
+            "the Registry retained review bindings were refused"
+        }
         StartupError::AttachmentStorage => {
             "the Registry attachment storage or verification binding was refused"
         }

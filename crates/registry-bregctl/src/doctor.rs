@@ -63,6 +63,29 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "the persisted field pattern has invalid PostgreSQL ARE syntax; correct the expression and rerun schema-test before packaging; a failed activation requires restoration of the pre-activation backup before changing the pinned target",
         );
     }
+    if let StartupError::ReviewAuthorityMissing {
+        authority,
+        retained_submissions,
+    } = error
+    {
+        let noun = if retained_submissions == 1 {
+            "submission"
+        } else {
+            "submissions"
+        };
+        return diagnostic(
+            "startup.review_authority.missing",
+            &format!("/reviewAuthorities/{authority}"),
+            &format!(
+                "runtime review authority `{authority}` is absent but required by \
+                 {retained_submissions} retained review {noun}; restore the exact authority and \
+                 producer binding, reconcile or complete those requests through the source \
+                 request and review-authority workflows, then remove the binding and rerun \
+                 doctor; \
+                 accepted reviews do not time out"
+            ),
+        );
+    }
     // The runtime configuration carries its own closed-vocabulary cause; name
     // it the way `bregctl verify` already names it instead of collapsing every
     // configuration mistake into one generic refusal.
@@ -83,6 +106,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         StartupError::RuntimeConfig(_) | StartupError::PackageRefused(_) => {
             unreachable!("handled above")
         }
+        StartupError::ReviewAuthorityMissing { .. } => unreachable!("handled above"),
         StartupError::DatabaseConnection => (
             "startup.database.connection_refused",
             "database",
@@ -277,6 +301,30 @@ mod tests {
         }
         assert!(!diagnostic.message.contains("registry_data"));
         assert!(!diagnostic.message.contains("breg_pattern_"));
+    }
+
+    #[test]
+    fn missing_review_authority_names_the_binding_count_and_supported_recovery() {
+        let diagnostic = startup_diagnostic(StartupError::ReviewAuthorityMissing {
+            authority: "casework-retained".to_owned(),
+            retained_submissions: 2,
+        });
+        assert_eq!(diagnostic.code, "startup.review_authority.missing");
+        assert_eq!(diagnostic.path, "/reviewAuthorities/casework-retained");
+        for detail in [
+            "casework-retained",
+            "2 retained review submissions",
+            "exact authority and producer binding",
+            "source request and review-authority workflows",
+            "rerun doctor",
+            "do not time out",
+        ] {
+            assert!(
+                diagnostic.message.contains(detail),
+                "missing diagnostic detail {detail}: {}",
+                diagnostic.message
+            );
+        }
     }
 
     #[test]

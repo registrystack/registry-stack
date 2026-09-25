@@ -155,6 +155,36 @@ reference. Tokens and private keys remain secret references and are not embedded
 in generated configuration or handoffs. The worker renews OAuth access tokens;
 a startup bearer is not a long-running credential strategy.
 
+### Remove a review authority only after its work finishes
+
+Startup and `bregctl doctor` refuse a runtime configuration that omits a review
+authority still required by durable submissions. The doctor diagnostic names
+the first missing logical authority, in stable identifier order, and the number
+of retained submissions that still require it. If more than one authority is
+missing, repair the named binding and rerun doctor to discover the next one.
+
+Restore the exact `reviewAuthorities.<authority>` binding and producer identity,
+then start BReg and reconcile the retained requests through their ordinary
+source request and review-authority workflows. Read each source request through
+a profile granted `review_state` and correlate its retained external review
+request. If the authority has a terminal result, let the worker ingest it and
+then use the source action the request advertises. If the authority still holds
+the review pending and the operator intends to close it, an authorized source
+caller invokes the advertised `cancel_request` action with its current
+`ifMatch`; keep the restored binding until cancellation reconciles and the
+source request reports `cancelled`. A manual approval retains the authority
+until the source request is applied, revised, or cancelled; an automatic
+approval retains it while its application job remains claimable. Remove the
+authority only after every retained submission reaches a source state that no
+longer needs the binding, then rerun doctor. Do not edit the review tables
+directly.
+
+An accepted review has no BReg timeout. Its submission recovery deadline bounds
+submission and cancellation recovery only, so waiting for that deadline does
+not release the authority binding or resolve the request. A legitimate
+long-running review can retain the binding for as long as its review authority
+holds it.
+
 ## Rhai planners compute effects only
 
 `acceptance/person-name-change-rhai` demonstrates a bounded planner. YAML owns

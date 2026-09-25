@@ -40,8 +40,11 @@ use crate::postgres::{
 use crate::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 use crate::webhook::{WebhookDeliveryService, WebhookWorker};
 
-/// Value-free startup refusal. Package paths, database values, and physical
-/// catalog details are intentionally unavailable through Display and Debug.
+/// Bounded startup refusal. Package paths, request identifiers, stored review
+/// values, and physical catalog details are intentionally unavailable through
+/// Display and Debug. A missing review authority may expose its authored
+/// logical id and an aggregate retained-submission count to operator tooling;
+/// production operational logs still render only the closed refusal class.
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
 pub enum StartupError {
     #[error("the Registry runtime configuration was refused")]
@@ -67,6 +70,13 @@ pub enum StartupError {
     EventDestinations,
     #[error("the Registry retained review bindings were refused")]
     ReviewBindings,
+    #[error(
+        "review authority {authority} is required by {retained_submissions} retained submissions"
+    )]
+    ReviewAuthorityMissing {
+        authority: String,
+        retained_submissions: u64,
+    },
     #[error("the Registry attachment storage or verification binding was refused")]
     AttachmentStorage,
     #[error("the Registry field-encryption key state was refused")]
@@ -302,7 +312,9 @@ impl StartupError {
             Self::FieldEncryptionCustody => {
                 "the Registry field-encryption data-key custody was refused"
             }
-            Self::ReviewBindings => "the Registry retained review bindings were refused",
+            Self::ReviewBindings | Self::ReviewAuthorityMissing { .. } => {
+                "the Registry retained review bindings were refused"
+            }
             Self::Listener => "the Registry listener could not be started",
             Self::Shutdown => "the Registry shutdown signal failed",
             Self::Logging => "the Registry operational log level was refused",
@@ -898,7 +910,7 @@ async fn finish_prepared_server(
         review_executors.as_deref(),
     )
     .await
-    .map_err(|_| StartupError::ReviewBindings)?;
+    .map_err(review_binding_startup_error)?;
     // Review retention is source-owned durable state, so housekeeping keeps
     // running after the last authority or executor binding is safely removed.
     let review_worker = Some(crate::review_store::ReviewWorker::new(
@@ -1089,6 +1101,24 @@ fn map_runtime_config_error(error: RuntimeConfigError) -> StartupError {
         RuntimeConfigError::InvalidCursor => StartupError::Cursor,
         RuntimeConfigError::InvalidOidc => StartupError::Oidc,
         other => StartupError::RuntimeConfig(other),
+    }
+}
+
+fn review_binding_startup_error(
+    error: crate::review_store::RetainedReviewBindingError,
+) -> StartupError {
+    match error {
+        crate::review_store::RetainedReviewBindingError::MissingAuthority {
+            authority,
+            retained_submissions,
+        } => StartupError::ReviewAuthorityMissing {
+            authority,
+            retained_submissions,
+        },
+        crate::review_store::RetainedReviewBindingError::Refused
+        | crate::review_store::RetainedReviewBindingError::Unavailable => {
+            StartupError::ReviewBindings
+        }
     }
 }
 

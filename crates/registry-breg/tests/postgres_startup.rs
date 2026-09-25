@@ -72,6 +72,129 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static WASM_RUNTIME_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn runtime_startup_names_a_missing_authority_and_its_retained_submission_count() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
+    let database = TestDatabase::create(4).await;
+    let (migration, migration_task) = database.connect_migration().await;
+
+    let fixture = StartupFixture::new();
+    let signing =
+        generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("fixture signing key generates");
+    let provisional = PackageFixture::build(&fixture.root, fingerprint(1), &signing);
+    let provisional_context = provisional.context(PackageIntent::InitialActivation);
+    let verified_provisional = load_package(&provisional.root, &provisional_context)
+        .expect("provisional package loads enough to install schema");
+    install_compiled_schema(
+        &migration,
+        verified_provisional.registry(),
+        &database.runtime_role,
+    )
+    .await
+    .expect("compiled schema installs");
+    let expected_catalog = ExpectedManagedCatalog::compiled(verified_provisional.registry());
+    let schema_fingerprint =
+        managed_schema_fingerprint(&migration, &database.runtime_role, &expected_catalog)
+            .await
+            .expect("compiled schema fingerprints");
+    drop(provisional);
+
+    let package = PackageFixture::build(&fixture.root, schema_fingerprint, &signing);
+    let context = package.context(PackageIntent::InitialActivation);
+    let verified = load_package(&package.root, &context).expect("final package verifies");
+    initialize_registry_state_for_catalog_test(
+        &migration,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(verified.registry()),
+        RegistryStateTestIdentity {
+            package_id: &verified.manifest().package_id,
+            environment: &verified.manifest().environment,
+            instance_id: &verified.manifest().instance_id,
+            database_id: &verified.manifest().database_id,
+            package_revision: &verified.manifest().package_revision,
+            package_sequence: i64::try_from(verified.manifest().sequence)
+                .expect("fixture sequence fits"),
+        },
+    )
+    .await
+    .expect("Registry state initializes");
+
+    database
+        .admin
+        .batch_execute(&format!(
+            "GRANT USAGE ON SCHEMA registry_internal TO \"{}\";
+             GRANT SELECT ON registry_internal.registry_request_state TO \"{}\";",
+            database.runtime_role.as_str(),
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("runtime review schema access");
+    for request_id in [uuid::Uuid::new_v4(), uuid::Uuid::new_v4()] {
+        database
+            .admin
+            .execute(
+                "INSERT INTO registry_internal.registry_request_state
+                 (request_entity_id,request_id,owner_reference,state,proposal_version,
+                  workflow_revision)
+                 VALUES ('requests',$1,'owner-retained','submitted',1,1)",
+                &[&request_id],
+            )
+            .await
+            .expect("retained request state inserts");
+        database
+            .admin
+            .execute(
+                "INSERT INTO registry_internal.registry_request_proposals
+                 (request_entity_id,request_id,proposal_version,request_record_revision,
+                  contract_fingerprint,effect_digest,snapshot)
+                 VALUES ('requests',$1,1,1,$2,$2,'{}'::jsonb)",
+                &[&request_id, &format!("sha256:{}", "a".repeat(64))],
+            )
+            .await
+            .expect("retained proposal inserts");
+        database
+            .admin
+            .execute(
+                "INSERT INTO registry_internal.registry_request_review_submissions
+                 (request_entity_id,request_id,proposal_version,proposal_digest,job_id,authority,
+                  producer_id,policy_id,idempotency_key,create_request,
+                  expected_submission_digest,on_approved_mode,executor,state,accepted_binding)
+                 VALUES ('requests',$1,1,$2,$3,'casework-retained','producer-retained',
+                         'policy-retained',$4,'{}'::jsonb,$2,'manual',NULL,'accepted','{}'::jsonb)",
+                &[
+                    &request_id,
+                    &format!("sha256:{}", "a".repeat(64)),
+                    &uuid::Uuid::new_v4(),
+                    &format!("submit-{request_id}"),
+                ],
+            )
+            .await
+            .expect("accepted review submission inserts");
+    }
+    drop(migration);
+    migration_task.abort();
+
+    let idp = MockIdp::start().await;
+    let config_path = fixture.write_static_jwks_config(
+        &package,
+        &database.migration_role,
+        &database.runtime_role,
+        &idp,
+        Some("0123456789abcdef0123456789abcdef"),
+    );
+    assert_eq!(
+        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+            .err(),
+        Some(StartupError::ReviewAuthorityMissing {
+            authority: "casework-retained".to_owned(),
+            retained_submissions: 2,
+        })
+    );
+
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_binding() {
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let database = TestDatabase::create(4).await;

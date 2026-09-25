@@ -21,8 +21,9 @@ use registry_breg::review_store::{
     back_off_review_token_failure_for_test, install_review_storage_for_test, poll_one_result,
     receive_completion, reconcile_result, run_one_cancellation, run_one_submission,
     run_review_application_once_for_test, run_review_authority_once_for_test,
-    schedule_cancellation_for_test, verify_retained_bindings, ReviewAuthorityClient,
-    ReviewAuthorityRegistry, ReviewExecutorClient, ReviewExecutorRegistry, ReviewWorker,
+    schedule_cancellation_for_test, verify_retained_bindings, RetainedReviewBindingError,
+    ReviewAuthorityClient, ReviewAuthorityRegistry, ReviewExecutorClient, ReviewExecutorRegistry,
+    ReviewWorker,
 };
 use registry_review_client::{
     submission_digest, BearerToken, ContentDigest, PolicyBinding, ReviewAuth, ReviewClient,
@@ -1856,15 +1857,27 @@ async fn an_expired_automatic_approvals_queued_job_no_longer_retains_its_binding
             });
         } else {
             assert!(
-                matches!(executor_removed, Err(MutationError::PreconditionFailed)),
+                matches!(executor_removed, Err(RetainedReviewBindingError::Refused)),
                 "{name}"
             );
             assert!(
-                matches!(authority_removed, Err(MutationError::PreconditionFailed)),
+                matches!(
+                    authority_removed,
+                    Err(RetainedReviewBindingError::MissingAuthority {
+                        authority,
+                        retained_submissions: 1,
+                    }) if authority == "casework-a"
+                ),
                 "{name}"
             );
             assert!(
-                matches!(both_removed, Err(MutationError::PreconditionFailed)),
+                matches!(
+                    both_removed,
+                    Err(RetainedReviewBindingError::MissingAuthority {
+                        authority,
+                        retained_submissions: 1,
+                    }) if authority == "casework-a"
+                ),
                 "{name}"
             );
         }
@@ -4979,8 +4992,50 @@ async fn retained_review_work_refuses_startup_without_its_authority_binding() {
     let pool = database.runtime_config.build_pool().expect("runtime pool");
     assert!(matches!(
         verify_retained_bindings(&pool, None, None).await,
-        Err(MutationError::PreconditionFailed)
+        Err(RetainedReviewBindingError::MissingAuthority {
+            authority,
+            retained_submissions: 1,
+        }) if authority == "casework-retained"
     ));
+
+    let earlier_authority_request_id = Uuid::new_v4();
+    seed_submission(
+        &database.admin,
+        earlier_authority_request_id,
+        "aaa-retained",
+        "producer-retained",
+        "policy-retained",
+    )
+    .await;
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_request_state
+             VALUES ('requests',$1,1,'submitted')",
+            &[&earlier_authority_request_id],
+        )
+        .await
+        .expect("earlier authority request state");
+    let earlier_mismatched =
+        authority_registry("aaa-retained", "different-producer", "sender", "registry-a");
+    assert!(matches!(
+        verify_retained_bindings(&pool, Some(&earlier_mismatched), None).await,
+        Err(RetainedReviewBindingError::MissingAuthority {
+            authority,
+            retained_submissions: 1,
+        }) if authority == "casework-retained"
+    ));
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET state='failed'
+              WHERE request_entity_id='requests' AND request_id=$1 AND proposal_version=1",
+            &[&earlier_authority_request_id],
+        )
+        .await
+        .expect("release earlier authority binding");
+
     let mismatched = authority_registry(
         "casework-retained",
         "different-producer",
@@ -4989,7 +5044,7 @@ async fn retained_review_work_refuses_startup_without_its_authority_binding() {
     );
     assert!(matches!(
         verify_retained_bindings(&pool, Some(&mismatched), None).await,
-        Err(MutationError::PreconditionFailed)
+        Err(RetainedReviewBindingError::Refused)
     ));
     let authorities = authority_registry(
         "casework-retained",
@@ -5011,6 +5066,13 @@ async fn retained_review_work_refuses_startup_without_its_authority_binding() {
         )
         .await
         .expect("submission accepted");
+    assert!(matches!(
+        verify_retained_bindings(&pool, None, None).await,
+        Err(RetainedReviewBindingError::MissingAuthority {
+            authority,
+            retained_submissions: 1,
+        }) if authority == "casework-retained"
+    ));
     database
         .admin
         .execute(
@@ -5023,17 +5085,62 @@ async fn retained_review_work_refuses_startup_without_its_authority_binding() {
         )
         .await
         .expect("approved result");
+
+    let second_request_id = Uuid::new_v4();
+    seed_submission(
+        &database.admin,
+        second_request_id,
+        "casework-retained",
+        "producer-retained",
+        "policy-retained",
+    )
+    .await;
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_request_state
+             VALUES ('requests',$1,1,'submitted')",
+            &[&second_request_id],
+        )
+        .await
+        .expect("second request state");
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET state='accepted',accepted_binding='{}'::jsonb
+              WHERE request_entity_id='requests' AND request_id=$1 AND proposal_version=1",
+            &[&second_request_id],
+        )
+        .await
+        .expect("second submission accepted");
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_request_review_results
+             (request_entity_id,request_id,proposal_version,authority,result_id,result,status,
+              completed_at,available_until)
+             VALUES ('requests',$1,1,'casework-retained',$2,'{}'::jsonb,'approved',
+                     transaction_timestamp(),transaction_timestamp()+interval '1 day')",
+            &[&second_request_id, &Uuid::new_v4()],
+        )
+        .await
+        .expect("second approved result");
     assert!(matches!(
         verify_retained_bindings(&pool, None, None).await,
-        Err(MutationError::PreconditionFailed)
+        Err(RetainedReviewBindingError::MissingAuthority {
+            authority,
+            retained_submissions: 2,
+        }) if authority == "casework-retained"
     ));
 
+    let applied_request_ids = vec![request_id, second_request_id];
     database
         .admin
         .execute(
             "UPDATE registry_internal.registry_request_state SET state='applied'
-              WHERE request_entity_id='requests' AND request_id=$1",
-            &[&request_id],
+              WHERE request_entity_id='requests' AND request_id=ANY($1)",
+            &[&applied_request_ids],
         )
         .await
         .expect("request applied");
