@@ -67,6 +67,10 @@
   bytes. Add `registry_platform_oidc::parse_static_jwks`, which refuses a
   static key set that is empty, holds a symmetric key, or leaves a key without
   a unique `kid`.
+- Add `REMOVED_OIDC_JWKS_URI`, the removed `authentication.oidc.jwksUri` key
+  with its `jwksSource` replacement, and, behind the `schema` feature,
+  `schema::jwks_document_provider_requirements`, the root `allOf` rule that a
+  static `jwksSource.documentRef` enables the secret provider it names.
 - Add Ed25519 and ES256 private key generation beside ES384, with RFC 7638
   thumbprint tests for RSA, EC, and OKP keys.
 - BREAKING: remove `reject_deprecated_config_fields`; runtimes declare removed

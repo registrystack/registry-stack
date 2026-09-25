@@ -574,3 +574,22 @@ mod files {
             .expect("the ownership rule is opt-in");
     }
 }
+
+#[test]
+fn the_shared_removed_jwks_uri_key_names_jwks_source() {
+    let loader = RuntimeConfigLoader::new(ENVELOPE)
+        .removed_keys(std::slice::from_ref(&REMOVED_OIDC_JWKS_URI));
+    let error = loader
+        .parse_str::<serde_json::Value>(
+            &format!(
+                "{}authentication:\n  oidc:\n    jwksUri: https://issuer.example.test/jwks\n",
+                header()
+            ),
+            env(&[]),
+        )
+        .unwrap_err();
+    assert_eq!(error.kind(), RuntimeConfigErrorKind::RemovedKey);
+    assert_eq!(error.field(), "authentication.oidc.jwksUri");
+    assert!(error.to_string().contains("authentication.oidc.jwksSource"));
+    assert!(!error.to_string().contains("issuer.example.test"));
+}

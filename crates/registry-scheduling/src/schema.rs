@@ -81,56 +81,9 @@ fn install_runtime_constraints(schema: &mut Value) {
     if let Some(root) = schema.as_object_mut() {
         root.insert(
             "allOf".to_owned(),
-            serde_json::json!([
-                secret_provider_requirement("^secret:env/", "environment"),
-                secret_provider_requirement("^secret:file/", "file")
-            ]),
+            registry_platform_config::schema::jwks_document_provider_requirements(),
         );
     }
-}
-
-/// A static JWKS document reference names its provider by its prefix, so a
-/// configuration carrying one must enable that provider.
-fn secret_provider_requirement(reference_pattern: &str, provider: &str) -> Value {
-    serde_json::json!({
-        "if": {
-            "properties": {
-                "authentication": {
-                    "properties": {
-                        "oidc": {
-                            "properties": {
-                                "jwksSource": {
-                                    "properties": {
-                                        "documentRef": {"pattern": reference_pattern}
-                                    },
-                                    "required": ["documentRef"]
-                                }
-                            },
-                            "required": ["jwksSource"]
-                        }
-                    },
-                    "required": ["oidc"]
-                }
-            },
-            "required": ["authentication"]
-        },
-        "then": {
-            "properties": {
-                "secretProviders": {
-                    "properties": {
-                        provider: {
-                            "$ref": format!("#/$defs/{}SecretProviderConfig", match provider {
-                                "environment" => "Environment",
-                                "file" => "File",
-                                _ => unreachable!("closed secret provider schema"),
-                            })
-                        }
-                    },
-                    "required": [provider]
-                }
-            }
-        }
-    })
 }
 
 fn set_definition_property(
