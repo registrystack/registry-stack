@@ -390,6 +390,25 @@ On the hardened revision, all 76 Registry Render tests pass (26 unit, 14
 golden, 19 serve end-to-end, 17 scaffold/CLI), along with locked all-target
 check, clippy with warnings denied, and formatting.
 
+### Shared audit writer (2026-09-25)
+
+Render's audit moved off the keyed hash chain onto the platform audit
+writer that every Registry Stack product shares. The `audit` runtime block
+is now `{destination, path, rotateBytes, retainDays}`; `directory`,
+`integrityKeyRef`, and `maxSegmentBytes` are refused as unknown fields, and
+`serve` holds one secret, the caller API key. Each line is the envelope
+`{schema, eventId, time, phase, correlation, record}` with schema
+`render.registrystack.org/audit/v1`; the record keeps its field set, with
+`outcome` absent on the request entry.
+
+A render previously wrote one event after the worker finished. It now
+writes a `request` entry that must be accepted before the worker starts,
+then a `response` entry that must be accepted before the document leaves.
+`registry-render audit-verify` and its tampered-ledger test are gone: the
+log carries no chain to verify. `check --require-audit-under` proves the
+audit file's location and refuses a `stdout` destination. The 401 and 413
+audit-append failures now log at error level.
+
 ### Scaffold contents (2026-09-17)
 
 The scaffold vendors no third-party Typst package. The generated template

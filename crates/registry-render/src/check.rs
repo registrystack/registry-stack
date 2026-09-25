@@ -7,6 +7,8 @@
 
 use std::path::Path;
 
+use registry_platform_audit::AuditDestination;
+
 use crate::bundle::Bundle;
 use crate::problem::{ProblemKind, RenderProblem};
 
@@ -18,17 +20,22 @@ pub fn run(
 ) -> Result<i32, RenderProblem> {
     if let (Some(runtime_path), Some(root)) = (runtime_path, require_audit_under) {
         let (runtime, _) = crate::runtime::load(runtime_path)?;
-        registry_platform_audit::require_audit_under(&runtime.audit.directory, root).map_err(
-            |err| {
-                RenderProblem::new(
-                    ProblemKind::RuntimeInvalid,
-                    format!("audit directory fails the containment proof: {err}"),
-                )
-            },
-        )?;
+        let AuditDestination::File(file) = runtime.audit.destination()? else {
+            return Err(RenderProblem::new(
+                ProblemKind::RuntimeInvalid,
+                "audit.destination is stdout, which has no path to prove; \
+                 --require-audit-under needs a file destination",
+            ));
+        };
+        registry_platform_audit::require_audit_under(file.path(), root).map_err(|err| {
+            RenderProblem::new(
+                ProblemKind::RuntimeInvalid,
+                format!("audit file fails the containment proof: {err}"),
+            )
+        })?;
         println!(
-            "audit directory {} resolves under {}",
-            runtime.audit.directory.display(),
+            "audit file {} resolves under {}",
+            file.path().display(),
             root.display()
         );
     }

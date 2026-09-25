@@ -110,7 +110,6 @@ mod tests {
             "registry-render compile",
             "registry-render serve",
             "registry-render healthcheck",
-            "registry-render audit-verify",
         ] {
             assert!(!find_command(&catalog.binaries, invocation).usage.is_empty());
         }
