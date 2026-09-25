@@ -6,15 +6,21 @@
   time holds the audit publication lease, a PostgreSQL session advisory lock
   in the two-integer key space (class `1128354629`, the ASCII bytes of
   `CASE`, and the Casework schema's OID), apart from the single-key locks
-  that caller-chosen values hash into, and only that runtime opens the audit file and appends
-  to it; every other runtime serves requests, stays ready, and takes the
-  lease once the publisher stops or its database session ends. A new
-  `casework_audit_publisher_leader` metric reports which runtime publishes,
-  and a failed pass may now name the `lease` or `journal-open` stage. Give
-  every replica the same `audit.path` on a filesystem that honours advisory
-  file locks, or run one replica. While a runtime of an earlier release still
-  runs against the same database, it publishes without the lease; stop every
-  earlier runtime before the first replica of this release starts.
+  that caller-chosen values hash into, and only that runtime opens the audit
+  file and appends to it; every other runtime serves requests, stays ready,
+  and takes the lease once the publisher stops or its database session ends.
+  A new `casework_audit_publisher_leader` metric reports which runtime
+  publishes, and a failed pass may now name the `lease` or `journal-open`
+  stage. A pass that does not finish within 30 seconds fails at `lease`: the
+  runtime closes the audit file and ends its own leased session so the
+  server frees the lease. Database connections now use `connect_timeout=5`,
+  `keepalives_idle=15`, `keepalives_interval=5`, `keepalives_retries=3`, and
+  `tcp_user_timeout=30`, all in seconds, unless the database URL sets them.
+  Give every replica the same `audit.path` on a filesystem that honours
+  advisory file locks, or run one replica. While a runtime of an earlier
+  release still runs against the same database, it publishes without the
+  lease; stop every earlier runtime before the first replica of this release
+  starts.
 - BREAKING: Casework refuses to publish audit records after a restore that
   left the database and the audit file at different points. Migration 0018
   adds `casework_audit_publication_head`, which records the hash of the last

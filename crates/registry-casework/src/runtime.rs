@@ -1505,7 +1505,13 @@ struct AuditPublication {
     path: PathBuf,
     profile: AuditProfile,
     leader: Option<AuditPublicationLeader>,
+    pass_timeout: Duration,
 }
+
+/// How long one publication pass may take before the runtime gives up the
+/// lease. A pass appends and marks at most one batch of records, so a pass
+/// still running after this long is waiting on a stalled database session.
+const AUDIT_PUBLICATION_PASS_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct AuditPublicationLeader {
     publisher: RuntimeAuditPublisher,
@@ -1524,6 +1530,7 @@ impl AuditPublication {
             path,
             profile,
             leader: None,
+            pass_timeout: AUDIT_PUBLICATION_PASS_TIMEOUT,
         }
     }
 
@@ -1599,11 +1606,56 @@ impl AuditPublication {
         let Some(leader) = self.leader.as_mut() else {
             return Ok(());
         };
-        let result = publish_audit_pass(&leader.publisher, &mut leader.state).await;
+        let Ok(result) = tokio::time::timeout(
+            self.pass_timeout,
+            publish_audit_pass(&leader.publisher, &mut leader.state),
+        )
+        .await
+        else {
+            self.abandon_stalled_lease().await;
+            return Err(AuditPublicationFailure::Lease);
+        };
         if result.is_err() {
             self.release_lost_lease();
         }
         result
+    }
+
+    /// Give up a lease whose pass did not finish in time: close the journal,
+    /// drop the leased connection, and end the leased session from another
+    /// pooled session, so the server releases the lease even while the
+    /// stalled statement still waits and another runtime can take it. The
+    /// next pass takes the lease again when it is free. The tail a stalled
+    /// pass may have appended without marking is confirmed by whichever
+    /// runtime opens the journal next.
+    async fn abandon_stalled_lease(&mut self) {
+        let Some(leader) = self.leader.take() else {
+            return;
+        };
+        let backend = leader.publisher.lease.backend();
+        drop(leader);
+        tracing::warn!(
+            timeout_seconds = self.pass_timeout.as_secs(),
+            "a Casework audit publication pass did not finish in time; this runtime closed the \
+             audit journal and gave up the audit publication lease"
+        );
+        match tokio::time::timeout(
+            self.pass_timeout,
+            self.store.end_audit_publication_session(backend),
+        )
+        .await
+        {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => tracing::warn!(
+                error = %error,
+                "Casework could not end its stalled audit publication session; the server \
+                 releases the lease when that session ends"
+            ),
+            Err(_) => tracing::warn!(
+                "Casework could not end its stalled audit publication session in time; the \
+                 server releases the lease when that session ends"
+            ),
+        }
     }
 
     /// Give up the journal once the leased session has ended, so the runtime
@@ -1639,6 +1691,14 @@ impl AuditPublicationForTest {
 
     pub fn is_leader(&self) -> bool {
         self.0.is_leader()
+    }
+
+    /// Bound each publication pass by `timeout` instead of the production
+    /// default.
+    #[must_use]
+    pub fn with_pass_timeout(mut self, timeout: Duration) -> Self {
+        self.0.pass_timeout = timeout;
+        self
     }
 
     /// Take the lease as a starting runtime does, reporting a refusal as the

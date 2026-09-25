@@ -644,6 +644,18 @@ leased session. Every other runtime serves requests, stays ready, reports
 free: when the publisher stops, or when its database session ends. A runtime whose session ended
 closes the audit file on its next pass and logs `Casework lost the audit publication lease`.
 
+A publisher whose pass does not finish within 30 seconds, as when its database session stalls or
+the server stops answering, logs `a Casework audit publication pass did not finish in time`, closes
+the audit file, and ends its own leased session from another connection, so the server releases the
+lease while the stall lasts. That pass fails at the `lease` stage, readiness fails, and the runtime
+takes the lease again once it is free. Every Casework database connection also notices a server
+that stopped answering: unless the database URL sets them, Casework uses `connect_timeout=5`,
+`keepalives_idle=15`, `keepalives_interval=5`, `keepalives_retries=3`, and `tcp_user_timeout=30`,
+all in seconds as Casework reads the URL (unlike libpq, which reads `tcp_user_timeout` in
+milliseconds); the TCP user timeout applies on Linux only. A server that loses the network to a
+publisher keeps the lease until it notices the dead connection itself, which its own
+`tcp_keepalives_idle`, `tcp_keepalives_interval`, and `tcp_keepalives_count` settings bound.
+
 The lease is a session advisory lock in PostgreSQL's two-integer key space: class `1128354629`
 (the ASCII bytes of `CASE`) and the OID of the Casework schema. Casework takes every other advisory
 lock, including those keyed by values callers choose, in the separate single-key space, so no
@@ -664,12 +676,14 @@ and fails readiness until a pass succeeds. The runtime that holds the lease at s
 start on that cause instead.
 
 {/* Evidence: crates/registry-casework/src/runtime.rs, AuditPublication::take_at_startup(),
-    take_lease(), pass(), release_lost_lease(), and reconcile_publication_head();
-    crates/registry-casework/src/store.rs, try_audit_publication_lease() and
-    AuditPublicationLease;
+    take_lease(), pass(), release_lost_lease(), abandon_stalled_lease(), and
+    reconcile_publication_head();
+    crates/registry-casework/src/store.rs, bound_database_connection(),
+    try_audit_publication_lease(), end_audit_publication_session(), and AuditPublicationLease;
     crates/registry-casework/tests/postgres_transactions.rs,
     one_runtime_publishes_the_audit_outbox_while_another_stands_by(),
-    a_single_key_advisory_lock_never_blocks_the_audit_publication_lease(), and
+    a_single_key_advisory_lock_never_blocks_the_audit_publication_lease(),
+    a_stalled_lease_session_gives_up_leadership_and_frees_the_lease(), and
     a_runtime_whose_lease_session_ends_releases_the_shared_journal(). */}
 
 ### Restore from a backup

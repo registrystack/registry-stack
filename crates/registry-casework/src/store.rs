@@ -152,6 +152,34 @@ async fn refuse_to_drop_hosted_work(
     }
 }
 
+/// Bound how long a database connection takes to notice a server that
+/// stopped answering, for every setting the database URL leaves unset.
+///
+/// The audit publication lease lives on one long-held connection, and a
+/// runtime keeps publishing only while that session holds the lease, so a
+/// connection that hangs on a dead server must fail within seconds instead of
+/// the operating system's hours. Keepalive probes find a silent peer on an
+/// idle connection; the TCP user timeout, which Linux honours, fails a
+/// connection whose sent data stays unacknowledged. A URL that sets any of
+/// these, or turns keepalives off, keeps its own choice.
+fn bound_database_connection(postgres: &mut PgConfig) {
+    if postgres.get_connect_timeout().is_none() {
+        postgres.connect_timeout(Duration::from_secs(5));
+    }
+    if postgres.get_keepalives_idle() == PgConfig::new().get_keepalives_idle() {
+        postgres.keepalives_idle(Duration::from_secs(15));
+    }
+    if postgres.get_keepalives_interval().is_none() {
+        postgres.keepalives_interval(Duration::from_secs(5));
+    }
+    if postgres.get_keepalives_retries().is_none() {
+        postgres.keepalives_retries(3);
+    }
+    if postgres.get_tcp_user_timeout().is_none() {
+        postgres.tcp_user_timeout(Duration::from_secs(30));
+    }
+}
+
 /// Serializes operator-run migrations on one session lock. A second migrator
 /// waits here instead of racing the ledger primary key. The key spells the
 /// ASCII bytes of "casework".
@@ -231,6 +259,7 @@ impl PostgresStore {
         if postgres.get_user().is_none() || postgres.get_dbname().is_none() {
             return Err(StoreError::Configuration);
         }
+        bound_database_connection(&mut postgres);
         let manager_config = ManagerConfig {
             recycling_method: RecyclingMethod::Verified,
         };
@@ -3233,12 +3262,39 @@ impl PostgresStore {
             .await?
             .try_get(0)?;
         if acquired.ok_or(StoreError::Invalid)? {
+            let backend: i32 = client
+                .query_one("SELECT pg_backend_pid()", &[])
+                .await?
+                .get(0);
             Ok(Some(AuditPublicationLease {
                 client: deadpool_postgres::Object::take(client),
+                backend,
             }))
         } else {
             Ok(None)
         }
+    }
+}
+
+impl PostgresStore {
+    /// End the leased session `backend` from another pooled session, so the
+    /// server releases the lease even while that session is stalled in a
+    /// statement. Only a session that still holds this schema's lease is
+    /// ended, so a server process number reused by another session is never
+    /// touched. Returns whether a session was ended; the runtime role may end
+    /// its own sessions.
+    pub(crate) async fn end_audit_publication_session(
+        &self,
+        backend: i32,
+    ) -> Result<bool, StoreError> {
+        let client = self.client().await?;
+        Ok(client
+            .query_opt(
+                "SELECT pg_terminate_backend(pid) FROM pg_locks WHERE pid=$1 AND locktype='advisory' AND granted AND objsubid=2 AND classid=$2::int4::oid AND objid=current_schema()::regnamespace::oid AND database=(SELECT oid FROM pg_database WHERE datname=current_database())",
+                &[&backend, &AUDIT_PUBLICATION_LEASE_CLASS],
+            )
+            .await?
+            .is_some_and(|row| row.get::<_, bool>(0)))
     }
 }
 
@@ -3259,9 +3315,17 @@ const AUDIT_PUBLICATION_LEASE_CLASS: i32 = 0x4341_5345;
 /// a record another runtime is now publishing.
 pub(crate) struct AuditPublicationLease {
     client: deadpool_postgres::ClientWrapper,
+    /// The server process of the leased session.
+    backend: i32,
 }
 
 impl AuditPublicationLease {
+    /// The server process of the leased session, which
+    /// [`PostgresStore::end_audit_publication_session`] ends.
+    pub(crate) fn backend(&self) -> i32 {
+        self.backend
+    }
+
     /// Whether the leased session has ended, which releases the lock.
     pub(crate) fn is_lost(&self) -> bool {
         self.client.is_closed()
@@ -3865,6 +3929,49 @@ fn history_from_row(row: Row) -> Result<HistoryEntry, StoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn database_connections_detect_a_dead_server_unless_the_url_says_otherwise() {
+        let mut bounded =
+            PgConfig::from_str("postgresql://casework@db.example/casework").expect("database url");
+        bound_database_connection(&mut bounded);
+        assert_eq!(bounded.get_connect_timeout(), Some(&Duration::from_secs(5)));
+        assert!(bounded.get_keepalives());
+        assert_eq!(bounded.get_keepalives_idle(), Duration::from_secs(15));
+        assert_eq!(
+            bounded.get_keepalives_interval(),
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(bounded.get_keepalives_retries(), Some(3));
+        assert_eq!(
+            bounded.get_tcp_user_timeout(),
+            Some(&Duration::from_secs(30))
+        );
+
+        let mut chosen = PgConfig::from_str(
+            "postgresql://casework@db.example/casework?connect_timeout=3&keepalives_idle=60\
+             &keepalives_interval=7&keepalives_retries=9&tcp_user_timeout=90",
+        )
+        .expect("database url");
+        bound_database_connection(&mut chosen);
+        assert_eq!(chosen.get_connect_timeout(), Some(&Duration::from_secs(3)));
+        assert_eq!(chosen.get_keepalives_idle(), Duration::from_secs(60));
+        assert_eq!(
+            chosen.get_keepalives_interval(),
+            Some(Duration::from_secs(7))
+        );
+        assert_eq!(chosen.get_keepalives_retries(), Some(9));
+        assert_eq!(
+            chosen.get_tcp_user_timeout(),
+            Some(&Duration::from_secs(90))
+        );
+
+        let mut disabled =
+            PgConfig::from_str("postgresql://casework@db.example/casework?keepalives=0")
+                .expect("database url");
+        bound_database_connection(&mut disabled);
+        assert!(!disabled.get_keepalives());
+    }
 
     #[test]
     fn settlement_text_is_bounded_non_empty_and_free_of_control_characters() {

@@ -3319,6 +3319,91 @@ async fn a_single_key_advisory_lock_never_blocks_the_audit_publication_lease() {
         .expect("release the single-key lock");
 }
 
+/// A further connection to the isolated `schema`.
+async fn schema_connection(schema: &str) -> tokio_postgres::Client {
+    let base = env::var("CASEWORK_TEST_DATABASE_URL")
+        .expect("CASEWORK_TEST_DATABASE_URL is required for the real PostgreSQL test");
+    let separator = if base.contains('?') { '&' } else { '?' };
+    let scoped = format!("{base}{separator}options=-csearch_path%3D{schema}");
+    let (client, connection) = tokio_postgres::connect(&scoped, tokio_postgres::NoTls)
+        .await
+        .expect("connect isolated schema");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    client
+}
+
+#[tokio::test]
+async fn a_stalled_lease_session_gives_up_leadership_and_frees_the_lease() {
+    let (store, client, schema) = isolated_schema("audit_publication_stall").await;
+    store.migrate().await.expect("migrate");
+    let root = tempfile::tempdir().expect("deployment root");
+    let journal = owner_only_audit_directory(root.path(), "journal");
+    let mut leader = registry_casework::AuditPublicationForTest::new(
+        store.clone(),
+        journal.clone(),
+        audit_publication_profile(),
+    )
+    .with_pass_timeout(std::time::Duration::from_millis(500));
+    insert_pending_audit(&client, 1).await;
+    leader.pass().await.expect("publish");
+    assert!(leader.is_leader());
+    let lease_backend: i32 = client
+        .query_one(AUDIT_LEASE_HOLDER, &[&schema])
+        .await
+        .expect("the lease is held")
+        .get(0);
+
+    // A session that stops the leased session's next statement from ever
+    // completing, as a stalled server or a connection that stopped answering
+    // does.
+    let blocker = schema_connection(&schema).await;
+    blocker
+        .batch_execute("BEGIN; LOCK TABLE casework_audit_outbox IN ACCESS EXCLUSIVE MODE")
+        .await
+        .expect("block the outbox");
+    let stalled = tokio::time::timeout(std::time::Duration::from_secs(10), leader.pass())
+        .await
+        .expect("a stalled pass gives up instead of waiting forever");
+    assert_eq!(stalled, Err("lease"));
+    assert!(!leader.is_leader(), "leadership is dropped");
+    let mut released = false;
+    for _ in 0..250 {
+        let lease = client
+            .query(AUDIT_LEASE_HOLDER, &[&schema])
+            .await
+            .expect("read the lease holder");
+        let backend = client
+            .query(
+                "SELECT 1 FROM pg_stat_activity WHERE pid = $1",
+                &[&lease_backend],
+            )
+            .await
+            .expect("read the lease backend");
+        if lease.is_empty() && backend.is_empty() {
+            released = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        released,
+        "the stalled lease session is ended while the stall lasts, so another runtime can take \
+         the lease"
+    );
+
+    blocker
+        .batch_execute("ROLLBACK")
+        .await
+        .expect("release the outbox");
+    insert_pending_audit(&client, 1).await;
+    leader.pass().await.expect("the lease is taken again");
+    assert!(leader.is_leader());
+    assert_eq!(store.audit_outbox_pending().await.expect("backlog"), 0);
+    assert_each_event_once(&[&journal], 2);
+}
+
 #[tokio::test]
 async fn a_runtime_whose_lease_session_ends_releases_the_shared_journal() {
     let (store, client, schema) = isolated_schema("audit_publication_handover").await;
