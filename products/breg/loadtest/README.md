@@ -43,6 +43,13 @@ full-scale seed is 500,000 records. The stock development runtime fixes its
 database pool at 4 connections; this harness does not patch private runtime
 configuration behind the lifecycle's ownership boundary.
 
+`seed.py` seeds an environment once. It records `--count` and `--seed` in
+`.run/seed` before the first batch and clears that record only after the id
+pools are written. Batch idempotency keys and records follow those parameters,
+so a seed that stops early resumes when rerun with the same `--count` and
+`--seed`. Other parameters are refused, because they would leave the committed
+records unaccounted for; run `down.sh` and start a fresh environment instead.
+
 `up.sh` refuses any existing `.run` path and does not clear it. `down.sh` first
 validates the launcher's ownership marker, then calls `bregctl dev stop
 --remove` for that exact project. It retains the load evidence and synthetic

@@ -49,6 +49,12 @@ Profiles only read those tasks, so inbox pages stay stable across runs. The
 remaining tasks become the flow pool that decision flows consume in order.
 `--workers N` bounds concurrent create requests (default 8).
 
+`seed.py` seeds an environment once. It marks `.run/seed` in progress before
+the first create request and clears the mark only after the pools are
+recorded. A seed that stops early may leave open requests that no pool
+accounts for, so a later `seed.py` refuses to run; run `down.sh` and start a
+fresh environment.
+
 `up.sh` refuses any existing `.run` path and does not clear it. `down.sh` first
 validates the launcher's ownership marker, then calls `caseworkctl dev stop
 --remove` for that exact project. It retains the load evidence and synthetic

@@ -36,6 +36,7 @@ PRODUCER_CLIENT = "loadtest-producer"
 STAFF_CLIENT = "loadtest-staff"
 MINIMUM_READ_POOL = 100
 LIST_LIMIT = 100
+SEED_IN_PROGRESS = "seed-in-progress.json"
 
 
 class SeedError(RuntimeError):
@@ -243,6 +244,29 @@ def write_private(path: Path, content: str) -> None:
         handle.write(content)
 
 
+def refuse_existing_seed(seed_dir: Path) -> None:
+    if not seed_dir.is_symlink() and (seed_dir / SEED_IN_PROGRESS).is_file():
+        raise SeedError(
+            f"an earlier seed at {seed_dir} did not complete and may have left open review requests "
+            "that no pool accounts for; run down.sh and start a fresh environment"
+        )
+    if seed_dir.exists() or seed_dir.is_symlink():
+        raise SeedError(f"seed evidence already exists at {seed_dir}; start a fresh environment to reseed")
+
+
+def begin_seed(seed_dir: Path, identity: dict[str, Any]) -> None:
+    """Record the seed identity before the first create request.
+
+    An accepted review request stays open even when a later create or the
+    inbox scan fails, and a retry would mint a fresh nonce and leave it behind,
+    skewing inbox pages and database size. The marker stays until the pools are
+    recorded, so a later seed refuses to run over that state.
+    """
+    refuse_existing_seed(seed_dir)
+    seed_dir.mkdir(mode=0o700)
+    write_private(seed_dir / SEED_IN_PROGRESS, json.dumps(identity, indent=2, sort_keys=True) + "\n")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Seed the load-test Casework runtime")
     parser.add_argument("--count", type=int, default=2000, help="open review requests to create")
@@ -270,8 +294,10 @@ def main() -> int:
         print(f"no load-test environment at {env_path}; run up.sh first", file=sys.stderr)
         return 2
     seed_dir = arguments.run_dir / "seed"
-    if seed_dir.exists() or seed_dir.is_symlink():
-        print(f"seed evidence already exists at {seed_dir}; start a fresh environment to reseed", file=sys.stderr)
+    try:
+        refuse_existing_seed(seed_dir)
+    except SeedError as error:
+        print(error, file=sys.stderr)
         return 2
     repository = Path(__file__).resolve().parents[3]
     helper = Path(__file__).resolve().parent / "support/loadenv.py"
@@ -295,6 +321,12 @@ def main() -> int:
     producer = DevTokenSource(helper, Path(caseworkctl), Path(project), PRODUCER_CLIENT)
     staff = DevTokenSource(helper, Path(caseworkctl), Path(project), STAFF_CLIENT)
     nonce = f"{int(time.time())}-{os.getpid()}"
+    os.umask(0o077)
+    try:
+        begin_seed(seed_dir, {"nonce": nonce, "reviewRequests": arguments.count, "readPoolTasks": read_count})
+    except (SeedError, OSError) as error:
+        print(error, file=sys.stderr)
+        return 2
 
     print(f"Seeding {arguments.count} open review requests ({read_count} kept for reads)")
     started = time.monotonic()
@@ -313,8 +345,6 @@ def main() -> int:
         )
         return 1
 
-    os.umask(0o077)
-    seed_dir.mkdir(mode=0o700)
     read_pool = tasks[:read_count]
     flow_pool = tasks[read_count:]
     write_private(seed_dir / "read-tasks.txt", "".join(f"{task} {request}\n" for task, request in read_pool))
@@ -335,6 +365,7 @@ def main() -> int:
         )
         + "\n",
     )
+    (seed_dir / SEED_IN_PROGRESS).unlink()
     print(f"Seeded and recorded task pools under {seed_dir}")
     return 0
 
