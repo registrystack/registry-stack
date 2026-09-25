@@ -248,13 +248,13 @@ Security material. Registry Relay enforces these:
 - The package is verified before anything else opens: at startup Relay re-derives the compiled
   registry and every generated artifact from the sealed authored inputs and requires
   byte-for-byte equality, before it opens a source, an audit sink, an issuer, or a listener.
-  Read `packageRevision` as an integrity digest, not an authenticity proof: the package is not
+  Read the package digest as an integrity digest, not an authenticity proof: the package is not
   signed, and a caller who can rewrite the package can recompute it.
   {/* Evidence: prepare() loads and verifies the package first,
        crates/registry-relay-v2/src/startup.rs:96-104; verify_compiled_derivation and
        verify_artifact_derivation re-run the compiler and artifact generator and compare bytes,
        crates/registry-relay-v2/src/package.rs; the crate's own comment states that
-       "packageRevision is an integrity digest, not an authenticity proof". */}
+       "The package digest is an integrity digest, not an authenticity proof". */}
 - Audit fails closed, with no switch: if the audit sink cannot durably accept the attempt or
   terminal record, the request is refused with a 503 `audit.unavailable` problem rather than
   answered. This is not configurable, and readiness re-checks the sink, so replacing the audit

@@ -38,7 +38,7 @@ evidence](openssf-evidence/).
 | Person-level access is written to an audit log | Built in, and fail-closed with no switch to turn it off |
 | Three disclosure modes, with `redacted` revealing neither value nor answer | Built in (Evidence Gateway) |
 | Governed contract verified before the process serves anything | Built in (Relay re-derives its package and compares bytes at startup) |
-| A signature over the governed Relay package | Not provided; `packageRevision` is an integrity digest, not an authenticity proof |
+| A signature over the governed Relay package | Not provided; the package digest is an integrity digest, not an authenticity proof |
 | Selective-disclosure SD-JWT VC serialization of an assertion | Built in (a second encoding, not a credential lifecycle) |
 | Holder-bound subject binding, proven at presentation by a key-binding JWT | Declared per requirement, verified by the relying party (frozen profile) |
 | Replay prevention for a presented credential | Not provided anywhere; the challenge lifecycle is the relying party's |

@@ -176,7 +176,7 @@ bundle, or the sealed Relay package. It assumes you have already configured your
 - Mount the sealed package at `package.root` read-only. Relay re-runs the compiler and the artifact
   generator over the sealed inputs at startup and compares the results byte for byte, so a modified
   package fails to start rather than serving quietly. That check proves integrity, not
-  authenticity: `packageRevision` is a digest and nothing signs a Relay package, so provenance is
+  authenticity: the package digest is a digest and nothing signs a Relay package, so provenance is
   whatever your build and distribution pipeline can prove, not something the runtime verifies.
 - Decide the source profile deliberately per binding. A `snapshot` source is pinned to the exact
   bytes present at startup; a `live-read-only` source reflects the file as other processes commit
@@ -195,8 +195,8 @@ bundle, or the sealed Relay package. It assumes you have already configured your
   of it, so a review that reads only the runtime file has reviewed almost nothing.
 
 {/* Evidence: verify_compiled_derivation() and verify_artifact_derivation() re-run the compiler and
-     generator and compare bytes, and packageRevision is documented as an integrity digest and not
-     an authenticity proof, crates/registry-relay-v2/src/package.rs:348-350; SourceProfile has
+     generator and compare bytes, and the package digest is documented as an integrity digest and
+     not an authenticity proof, crates/registry-relay-v2/src/package.rs; SourceProfile has
      exactly two variants, crates/registry-relay-v2/src/contract.rs:323-325; SNAPSHOT_SIDECARS,
      symlink refusal, the read-only-filesystem-or-non-writable requirement, same_file() over
      dev/ino/len/mode/mtime/ctime, and the verify_unchanged_until comment about a privileged writer,
@@ -304,8 +304,8 @@ serve, and a startup that fails rather than degrades.
   quotas; a contract that declares a list or a search operation, or that shows more than one
   resource in its resource listing, requires a cursor key. None of these is a warning you can
   accept, and none of them can be waived.
-- Relay: record the `packageRevision` you deployed, the digest of the package file, and the
-  `relayctl` project revision that produced it. That triple plus the runtime file is the only
+- Relay: record the package digest you deployed, pin it as `package.expectedDigest`, and record the
+  `relayctl` project revision that produced it. That record plus the runtime file is the only
   description of what the process is enforcing, and the runtime file alone is not enough because it
   binds paths and limits and nothing about disclosure.
 - Relay: the metadata a deployment exposes about itself is governed, not operational. Service,

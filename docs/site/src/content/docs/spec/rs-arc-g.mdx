@@ -177,7 +177,7 @@ The following ordered flow describes how a request moves through the stack from 
 
 3. **Contract authoring.** An adopter authors a Relay project: the governed contract, the governance review documents that record institutional judgment, and the codelists the contract references. `relayctl` compiles the project, reports diagnostics, and generates artifacts. Under the production profile an unreviewed classification or an unobserved source schema is an error rather than a warning.
 
-4. **Sealing.** `relayctl` builds a sealed package containing the authored contract, the governed closure, the canonical compiled model, the generated artifacts, and a manifest that digests every file. Deployment-local bindings are excluded by construction.
+4. **Sealing.** `relayctl` builds a sealed package containing the authored contract, the governed closure, the canonical compiled model, the generated artifacts, and a `SHA256SUMS` file that digests every file. Deployment-local bindings are excluded by construction.
 
 5. **Serving.** A Relay process verifies the package by re-deriving it, opens its issuer, audit sink, source, and listener only after that verification succeeds, and serves read-only consultation routes. Every attempt is recorded to the audit chain before the source is read, and the request is refused when the audit sink cannot accept the record.
 
@@ -267,7 +267,7 @@ This specification is `verified`: it is distilled from published artifacts a rea
 {/* Evidence: crates/registry-relay-v2/src/startup.rs verifies the sealed package before opening
      issuer, audit, source, or listener resources. */}
 {/* Evidence: crates/registry-relay-v2/src/package.rs re-derives the compiled model and every
-     artifact, and records that the package revision is an integrity digest, not an authenticity
+     artifact, and records that the package digest is an integrity digest, not an authenticity
      proof. */}
 {/* Evidence: crates/registry-relay-v2/src/server.rs defines the fixed route set with no
      administrative or reload route. */}

@@ -28,13 +28,17 @@ invariants:
       - {path: crates/registry-relay-v2/src/contract.rs, name: runtime_rejects_governed_override}
   - id: sec-package-activation-integrity
     threat: A sealed package activates a compiled access or disclosure model that was not derived from its captured contract and governed files.
-    enforcementPoint: Package construction and startup independently reproduce the compiled Registry from the captured contract, observed schemas, and governed closure and require exact equality before activation.
-    expected: Same-identity semantic mismatch, file tampering, or inconsistent artifacts prevent packaging or readiness before source or listener activation.
+    enforcementPoint: Startup verifies the package's SHA256SUMS in the shared package format, re-reads every file against its verified digest, requires the file set to equal what the compiled Registry names, and independently reproduces the compiled Registry and every artifact from the captured contract, observed schemas, and governed closure, requiring exact equality before activation.
+    expected: A changed, missing, or extra file is refused by name with relayctl package and without the directory; a resealed package whose compiled Registry, artifacts, or file set its inputs do not reproduce, a retired relay-package.json, or a mismatched package.expectedDigest prevents readiness before source or listener activation.
     evidence: sealed-package-derivation-tests
-    negativeTest: sealed_package_reproduces_and_tampering_is_refused
+    negativeTest: a_changed_missing_or_extra_file_is_refused_by_name
     tests:
-      - {path: crates/registry-relay-v2/src/package.rs, name: sealed_package_reproduces_and_tampering_is_refused}
+      - {path: crates/registry-relay-v2/src/package.rs, name: a_changed_missing_or_extra_file_is_refused_by_name}
+      - {path: crates/registry-relay-v2/src/package.rs, name: a_resealed_package_must_reproduce_its_compiled_registry_and_artifacts}
+      - {path: crates/registry-relay-v2/src/package.rs, name: a_resealed_package_must_hold_exactly_what_its_registry_names}
+      - {path: crates/registry-relay-v2/src/package.rs, name: a_directory_that_is_not_a_package_is_refused_with_the_command}
       - {path: crates/registry-relay-v2/tests/process_http.rs, name: built_relay_check_honors_a_package_digest_pin}
+      - {path: crates/registry-relay-v2/tests/process_http.rs, name: built_relay_check_refuses_a_changed_package_file_by_name_without_a_pin}
   - id: sec-runtime-secret-provider-boundary
     threat: A deployment secret is read from an undeclared place, such as a file beside the runtime configuration or an environment variable the operator never enabled, or environment substitution rewrites a secret reference.
     enforcementPoint: The shared runtime configuration loader and secret-provider block, checked before any secret is resolved.

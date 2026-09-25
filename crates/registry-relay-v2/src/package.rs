@@ -1,18 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Deterministic sealed package construction from one compiled Registry.
+//! Deterministic Relay packages from one compiled Registry, written and
+//! verified in the shared Registry Stack package format.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path};
 
 use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_config::package::{
+    self as shared, is_envelope_file, PackageLimits, SUM_FILE,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::artifacts::{
-    generate_artifacts, ArtifactAccessBinding, ArtifactSet, GeneratedArtifact,
-    OperationArtifactBindings,
+    generate_artifacts, ArtifactAccessBinding, ArtifactSet, OperationArtifactBindings,
 };
 use crate::compiler::{
     compile_contract_with_governed_files, referenced_governed_files, GovernedFileSet,
@@ -22,25 +25,57 @@ use crate::model::{
     CompileProfile, CompiledClassificationReview, CompiledRegistry, ObservedSourceSchema,
 };
 
-const PACKAGE_VERSION: &str = "relay.registrystack.org/package/v1alpha3";
+/// The command that builds a Relay package, named in every refusal.
+pub const PACKAGE_COMMAND: &str = "relayctl package";
+/// The field a runtime refusal names instead of the configured directory.
+const PACKAGE_ROOT_FIELD: &str = "package.root";
+/// The self-hashing manifest earlier packages carried instead of `SHA256SUMS`.
+const RETIRED_MANIFEST_PATH: &str = "relay-package.json";
+const REGISTRY_PATH: &str = "registry.yaml";
 const COMPILED_REGISTRY_PATH: &str = "compiled/registry.json";
+const GOVERNED_PREFIX: &str = "governed/";
+const GENERATED_PREFIX: &str = "generated/";
 const MAX_AUTHORED_FILES: usize = 256;
 const MAX_AUTHORED_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_PACKAGE_FILES: usize = 1_024;
 const MAX_PACKAGE_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The bounds a Relay package is written and verified under.
+#[must_use]
+pub fn package_limits() -> PackageLimits {
+    PackageLimits {
+        max_files: MAX_PACKAGE_FILES,
+        max_file_bytes: MAX_PACKAGE_BYTES,
+        max_total_bytes: MAX_PACKAGE_BYTES,
+        ..PackageLimits::default()
+    }
+}
+
+/// What `relayctl package` wrote, or would write under `--dry-run`.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PackageSummary {
+    /// The `sha256:` digest of the package's `SHA256SUMS`, the value
+    /// `package.expectedDigest` pins.
+    pub package_digest: String,
+    pub revision: Option<String>,
+    pub dry_run: bool,
+    pub contract_revision: String,
+    pub source_schema_fingerprints: BTreeMap<String, String>,
+    /// Every Relay file of the package; `SHA256SUMS` and `REVISION` are the
+    /// shared format's own.
+    pub files: Vec<PackageFile>,
+    /// The exposure of every generated artifact, as the runtime derives it
+    /// from the compiled Registry. The package does not store it.
+    pub artifacts: Vec<PackageArtifact>,
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct PackageManifest {
-    pub package_version: String,
-    pub package_revision: String,
-    pub contract_revision: String,
-    pub source_schema_fingerprints: BTreeMap<String, String>,
-    pub source_schemas: BTreeMap<String, ObservedSourceSchema>,
-    pub artifacts: Vec<PackageArtifact>,
-    pub operation_artifact_bindings: Vec<OperationArtifactBindings>,
-    pub files: Vec<PackageFile>,
+pub struct PackageFile {
+    pub path: String,
+    pub sha256: String,
+    pub bytes: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -50,23 +85,9 @@ pub struct PackageArtifact {
     pub path: String,
     pub media_type: String,
     pub visibility: Visibility,
-    /// Ownership is retained for operation-bound Record artifacts and every
-    /// statistical structure artifact, including public or operator-only ones.
     pub operation_identifier: Option<String>,
-    /// The closed ownership mechanism paired with `operation_identifier`.
     pub access_binding: Option<ArtifactAccessBinding>,
     pub sha256: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct PackageFile {
-    pub path: String,
-    pub size: u64,
-    pub sha256: String,
-    pub media_type: String,
-    pub visibility: Visibility,
-    pub generated: bool,
 }
 
 #[derive(Debug, Error)]
@@ -75,44 +96,106 @@ pub enum PackageError {
     UnsafeClosure,
     #[error("the project closure exceeds package bounds")]
     ClosureBound,
-    #[error("the package destination is not empty")]
-    DestinationExists,
     #[error("a package file could not be read")]
     Read,
-    #[error("the sealed package could not be written")]
+    #[error("the package could not be written")]
     Write,
     #[error("the package manifest could not be canonicalized")]
     CanonicalJson,
-    #[error("the sealed package failed verification")]
+    #[error("the compiled project could not be packaged")]
     Verification,
+    /// The shared package format refused the directory: a missing
+    /// `SHA256SUMS`, a changed, missing, or extra file, or a bound.
+    #[error("{0}")]
+    Package(#[from] shared::PackageError),
+    #[error(
+        "the package at {PACKAGE_ROOT_FIELD} holds {RETIRED_MANIFEST_PATH}, which Relay no \
+         longer reads; rebuild the package with `{PACKAGE_COMMAND}`, which writes {SUM_FILE}"
+    )]
+    RetiredManifest,
+    #[error(
+        "the package at {PACKAGE_ROOT_FIELD}, or a directory above it, holds a symbolic link or \
+         special file, is not owned by the effective user or root, or is writable by others; \
+         deploy the package built by `{PACKAGE_COMMAND}` read-only"
+    )]
+    UnsafePermissions,
+    #[error(
+        "the package at {PACKAGE_ROOT_FIELD} changed while it was read ({path}); deploy the \
+         whole package built by `{PACKAGE_COMMAND}` and restart"
+    )]
+    ChangedWhileRead { path: String },
+    #[error(
+        "the package at {PACKAGE_ROOT_FIELD} does not hold the files its compiled registry \
+         names{}; rebuild it with `{PACKAGE_COMMAND}`",
+        describe_contents(.missing, .extra)
+    )]
+    Contents {
+        missing: Vec<String>,
+        extra: Vec<String>,
+    },
+    #[error(
+        "the package at {PACKAGE_ROOT_FIELD} holds {path}, which its registry.yaml and governed \
+         files do not reproduce; rebuild it with `{PACKAGE_COMMAND}`"
+    )]
+    Derivation { path: String },
 }
 
+fn describe_contents(missing: &[String], extra: &[String]) -> String {
+    let mut described = String::new();
+    for (label, paths) in [("missing", missing), ("extra", extra)] {
+        if !paths.is_empty() {
+            described.push_str(&format!("; {label}: {}", paths.join(", ")));
+        }
+    }
+    described
+}
+
+/// A package whose every byte matched its `SHA256SUMS` and whose compiled
+/// registry and generated artifacts were reproduced from its sources.
 #[derive(Clone, Debug)]
 pub struct VerifiedPackage {
-    pub manifest: PackageManifest,
+    /// The `sha256:` digest of `SHA256SUMS`.
+    pub digest: String,
+    pub revision: Option<String>,
     pub contract: RegistryContract,
     pub registry: CompiledRegistry,
     pub artifacts: ArtifactSet,
 }
 
-/// Construct a new package directory. Existing destinations are refused so a
-/// failed run can never leave a mixture of package revisions.
+impl VerifiedPackage {
+    /// The source schemas the package was compiled against, by source.
+    #[must_use]
+    pub fn source_schemas(&self) -> BTreeMap<String, ObservedSourceSchema> {
+        self.registry
+            .sources
+            .iter()
+            .filter_map(|source| {
+                source
+                    .observed_schema
+                    .clone()
+                    .map(|schema| (source.id.clone(), schema))
+            })
+            .collect()
+    }
+}
+
+/// Construct a package of one compiled project. With `output_dir`, write it
+/// into that new directory; without, report the digest it would have. An
+/// existing destination is refused so a run can never mix package contents.
 pub fn build_package(
     project_root: &Path,
-    output_dir: &Path,
+    output_dir: Option<&Path>,
+    revision: Option<&str>,
     contract: &RegistryContract,
     compiled: &CompiledRegistry,
     artifacts: &ArtifactSet,
-) -> Result<PackageManifest, PackageError> {
-    if output_dir.exists() {
-        return Err(PackageError::DestinationExists);
-    }
+) -> Result<PackageSummary, PackageError> {
     let authored = capture_governed_closure(
         project_root,
         contract,
         compiled.classification_review.as_ref(),
     )?;
-    let registry_bytes = read_regular(&project_root.join("registry.yaml"))?;
+    let registry_bytes = read_regular(&project_root.join(REGISTRY_PATH))?;
     let packaged_contract = RegistryContract::parse_yaml(
         std::str::from_utf8(&registry_bytes).map_err(|_| PackageError::Verification)?,
     )
@@ -121,150 +204,81 @@ pub fn build_package(
         return Err(PackageError::Verification);
     }
     validate_build_inputs(contract, compiled, artifacts, &authored)?;
-    let mut files = Vec::new();
-    files.push(file_entry(
-        "registry.yaml",
-        &registry_bytes,
-        "application/yaml",
-        Visibility::OperatorOnly,
-        false,
-    ));
-    for (relative, content) in &authored {
-        files.push(file_entry(
-            &format!("governed/{relative}"),
-            content,
-            media_type(relative),
-            Visibility::OperatorOnly,
-            false,
-        ));
+
+    let mut files = BTreeMap::new();
+    files.insert(REGISTRY_PATH.to_owned(), registry_bytes);
+    for (relative, content) in authored {
+        files.insert(format!("{GOVERNED_PREFIX}{relative}"), content);
     }
-    let compiled_bytes = canonicalize_json(
-        &serde_json::to_value(compiled).map_err(|_| PackageError::CanonicalJson)?,
-    )
-    .map_err(|_| PackageError::CanonicalJson)?;
-    files.push(file_entry(
-        COMPILED_REGISTRY_PATH,
-        &compiled_bytes,
-        "application/json",
-        Visibility::OperatorOnly,
-        true,
-    ));
+    files.insert(
+        COMPILED_REGISTRY_PATH.to_owned(),
+        canonical_compiled(compiled)?,
+    );
     for artifact in &artifacts.artifacts {
-        files.push(file_entry(
-            &format!("generated/{}", artifact.path),
-            &artifact.content,
-            &artifact.media_type,
-            artifact.visibility,
-            true,
-        ));
+        files.insert(
+            format!("{GENERATED_PREFIX}{}", artifact.path),
+            artifact.content.clone(),
+        );
     }
-    files.sort_by(|left, right| left.path.cmp(&right.path));
 
-    let packaged_artifacts = artifacts
-        .artifacts
-        .iter()
-        .map(|artifact| PackageArtifact {
-            id: artifact.id.clone(),
-            path: format!("generated/{}", artifact.path),
-            media_type: artifact.media_type.clone(),
-            visibility: artifact.visibility,
-            operation_identifier: artifact.operation_identifier.clone(),
-            access_binding: artifact.access_binding.clone(),
-            sha256: artifact.sha256.clone(),
-        })
-        .collect::<Vec<_>>();
-    let source_schema_fingerprints = compiled
-        .sources
-        .iter()
-        .map(|source| {
+    let limits = package_limits();
+    let (package_digest, revision) = match output_dir {
+        None => (
+            shared::plan_package(project_root, &files, revision, &limits, PACKAGE_COMMAND)?,
+            revision.map(str::to_owned),
+        ),
+        Some(output_dir) => {
+            let written =
+                shared::write_package(output_dir, &files, revision, &limits, PACKAGE_COMMAND)?;
+            harden_package_permissions(output_dir)?;
             (
-                source.id.clone(),
-                source.expected_schema_fingerprint.clone(),
+                written.digest().to_owned(),
+                written.revision().map(str::to_owned),
             )
-        })
-        .collect();
-    let source_schemas = compiled
-        .sources
-        .iter()
-        .map(|source| {
-            source
-                .observed_schema
-                .clone()
-                .map(|schema| (source.id.clone(), schema))
-                .ok_or(PackageError::Verification)
-        })
-        .collect::<Result<BTreeMap<_, _>, _>>()?;
-    let unsigned = UnsignedManifest {
-        package_version: PACKAGE_VERSION,
-        contract_revision: &compiled.contract_revision,
-        source_schema_fingerprints: &source_schema_fingerprints,
-        source_schemas: &source_schemas,
-        artifacts: &packaged_artifacts,
-        operation_artifact_bindings: &artifacts.operation_bindings,
-        files: &files,
+        }
     };
-    let manifest_value = serde_json::to_value(unsigned).map_err(|_| PackageError::CanonicalJson)?;
-    let manifest_bytes =
-        canonicalize_json(&manifest_value).map_err(|_| PackageError::CanonicalJson)?;
-    let package_revision = digest(&manifest_bytes);
-    let manifest = PackageManifest {
-        package_version: PACKAGE_VERSION.into(),
-        package_revision,
+    Ok(PackageSummary {
+        package_digest,
+        revision,
+        dry_run: output_dir.is_none(),
         contract_revision: compiled.contract_revision.clone(),
-        source_schema_fingerprints,
-        source_schemas,
-        artifacts: packaged_artifacts,
-        operation_artifact_bindings: artifacts.operation_bindings.clone(),
-        files,
-    };
-    let final_manifest = canonicalize_json(
-        &serde_json::to_value(&manifest).map_err(|_| PackageError::CanonicalJson)?,
-    )
-    .map_err(|_| PackageError::CanonicalJson)?;
-    validate_package_bounds(&manifest.files, final_manifest.len())?;
-
-    fs::create_dir(output_dir).map_err(|_| PackageError::Write)?;
-    let write_result = (|| {
-        write_new_file(&output_dir.join("registry.yaml"), &registry_bytes)?;
-        for (relative, content) in &authored {
-            write_new_file(&output_dir.join("governed").join(relative), content)?;
-        }
-        write_new_file(&output_dir.join(COMPILED_REGISTRY_PATH), &compiled_bytes)?;
-        for artifact in &artifacts.artifacts {
-            write_generated(output_dir, artifact)?;
-        }
-        write_new_file(&output_dir.join("relay-package.json"), &final_manifest)
-    })();
-    if write_result.is_err() {
-        // Do not remove a partially written directory here. A caller can
-        // inspect it, and a subsequent package attempt will refuse it rather
-        // than silently overwriting evidence.
-        return Err(PackageError::Write);
-    }
-    harden_package_permissions(output_dir)?;
-    Ok(manifest)
+        source_schema_fingerprints: compiled
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.id.clone(),
+                    source.expected_schema_fingerprint.clone(),
+                )
+            })
+            .collect(),
+        files: files
+            .iter()
+            .map(|(path, content)| PackageFile {
+                path: path.clone(),
+                sha256: digest(content),
+                bytes: content.len() as u64,
+            })
+            .collect(),
+        artifacts: artifacts
+            .artifacts
+            .iter()
+            .map(|artifact| PackageArtifact {
+                id: artifact.id.clone(),
+                path: format!("{GENERATED_PREFIX}{}", artifact.path),
+                media_type: artifact.media_type.clone(),
+                visibility: artifact.visibility,
+                operation_identifier: artifact.operation_identifier.clone(),
+                access_binding: artifact.access_binding.clone(),
+                sha256: artifact.sha256.clone(),
+            })
+            .collect(),
+    })
 }
 
-fn validate_package_bounds(
-    files: &[PackageFile],
-    manifest_bytes: usize,
-) -> Result<(), PackageError> {
-    if files.len() > MAX_PACKAGE_FILES {
-        return Err(PackageError::ClosureBound);
-    }
-    let manifest_bytes = u64::try_from(manifest_bytes).map_err(|_| PackageError::ClosureBound)?;
-    if manifest_bytes > MAX_MANIFEST_BYTES {
-        return Err(PackageError::ClosureBound);
-    }
-    let total = files.iter().try_fold(manifest_bytes, |total, file| {
-        total
-            .checked_add(file.size)
-            .ok_or(PackageError::ClosureBound)
-    })?;
-    if total > MAX_PACKAGE_BYTES {
-        return Err(PackageError::ClosureBound);
-    }
-    Ok(())
+fn canonical_compiled(compiled: &CompiledRegistry) -> Result<Vec<u8>, PackageError> {
+    canonicalize_json(&serde_json::to_value(compiled).map_err(|_| PackageError::CanonicalJson)?)
+        .map_err(|_| PackageError::CanonicalJson)
 }
 
 fn validate_build_inputs(
@@ -274,31 +288,50 @@ fn validate_build_inputs(
     governed: &GovernedFileSet,
 ) -> Result<(), PackageError> {
     if artifacts.contract_revision != compiled.contract_revision
-        || compiled.contract_id != contract.metadata.id
-        || compiled.contract_version != contract.metadata.version
-        || compiled.registry_identifier != contract.registry.registry_identifier
+        || !compiled_matches_contract(compiled, contract)
     {
         return Err(PackageError::Verification);
     }
-    let observed = compiled
+    let observed = observed_source_schemas(compiled).ok_or(PackageError::Verification)?;
+    verify_compiled_derivation(contract, compiled, governed, &observed)?;
+    verify_artifact_derivation(compiled, artifacts)?;
+    if !valid_artifact_set(compiled, artifacts) {
+        return Err(PackageError::Verification);
+    }
+    Ok(())
+}
+
+fn compiled_matches_contract(compiled: &CompiledRegistry, contract: &RegistryContract) -> bool {
+    compiled.contract_id == contract.metadata.id
+        && compiled.contract_version == contract.metadata.version
+        && compiled.registry_identifier == contract.registry.registry_identifier
+}
+
+/// The schema each source was compiled against, when every source records
+/// one that names it.
+fn observed_source_schemas(compiled: &CompiledRegistry) -> Option<Vec<ObservedSourceSchema>> {
+    compiled
         .sources
         .iter()
         .map(|source| {
-            source
-                .observed_schema
-                .clone()
-                .ok_or(PackageError::Verification)
+            source.observed_schema.clone().filter(|schema| {
+                schema.source == source.id
+                    && schema.fingerprint == source.expected_schema_fingerprint
+            })
         })
-        .collect::<Result<Vec<_>, _>>()?;
-    verify_compiled_derivation(contract, compiled, governed, &observed)?;
-    verify_artifact_derivation(compiled, artifacts)?;
+        .collect()
+}
+
+/// Every artifact has a unique identifier and safe relative path, and every
+/// ownership and operation binding is exactly the one the Registry declares.
+fn valid_artifact_set(compiled: &CompiledRegistry, artifacts: &ArtifactSet) -> bool {
     let expected_operation_access_profiles = operation_access_profile_pairs(compiled);
     let expected_fixed_operations = fixed_statistical_operations(compiled);
     let mut artifact_ids = BTreeSet::new();
     let mut artifact_paths = BTreeSet::new();
     for artifact in &artifacts.artifacts {
-        validate_relative(&artifact.path)?;
-        if !artifact_ids.insert(artifact.id.as_str())
+        if validate_relative(&artifact.path).is_err()
+            || !artifact_ids.insert(artifact.id.as_str())
             || !artifact_paths.insert(artifact.path.as_str())
             || artifact.sha256 != digest(&artifact.content)
             || !valid_artifact_access_binding(
@@ -309,17 +342,14 @@ fn validate_build_inputs(
                 &expected_fixed_operations,
             )
         {
-            return Err(PackageError::Verification);
+            return false;
         }
     }
-    if !valid_operation_artifact_bindings(
+    valid_operation_artifact_bindings(
         &artifacts.operation_bindings,
         &expected_operation_access_profiles,
         &artifact_paths,
-    ) {
-        return Err(PackageError::Verification);
-    }
-    Ok(())
+    )
 }
 
 fn verify_compiled_derivation(
@@ -345,7 +375,7 @@ fn verify_artifact_derivation(
     compiled: &CompiledRegistry,
     artifacts: &ArtifactSet,
 ) -> Result<(), PackageError> {
-    // `packageRevision` is an integrity digest, not an authenticity proof. A
+    // The package digest is an integrity digest, not an authenticity proof. A
     // caller can recalculate it, so acceptance must reproduce every artifact
     // byte and its release metadata from the already rederived Registry.
     let reproduced = generate_artifacts(compiled).map_err(|_| PackageError::Verification)?;
@@ -355,296 +385,144 @@ fn verify_artifact_derivation(
     Ok(())
 }
 
-/// Load and verify a sealed package before any listener, issuer, audit sink,
-/// or SQLite source is activated.
+/// Load and verify a package before any listener, issuer, audit sink, or
+/// SQLite source is activated.
+///
+/// The shared format proves every byte matches `SHA256SUMS`. Relay then
+/// proves the files are exactly the ones its compiled registry names, and
+/// reproduces the compiled registry from `registry.yaml`, the governed files,
+/// and the recorded source schemas, and every generated artifact from the
+/// compiled registry.
 pub fn load_package(package_path: &Path) -> Result<VerifiedPackage, PackageError> {
-    reject_symlink_path(package_path)?;
-    let package_metadata = fs::symlink_metadata(package_path).map_err(|_| PackageError::Read)?;
-    if !package_metadata.is_dir() || !safe_permissions(&package_metadata) {
-        return Err(PackageError::Verification);
+    match reject_symlink_path(package_path) {
+        // An absent root is refused by the shared format, naming the command.
+        Ok(()) | Err(PackageError::Read) => {}
+        Err(_) => return Err(PackageError::UnsafePermissions),
     }
-    let manifest_path = package_path.join("relay-package.json");
-    let manifest_metadata = fs::symlink_metadata(&manifest_path).map_err(|_| PackageError::Read)?;
-    if !manifest_metadata.is_file()
-        || manifest_metadata.len() > MAX_MANIFEST_BYTES
-        || !safe_permissions(&manifest_metadata)
-    {
-        return Err(PackageError::Verification);
+    if fs::symlink_metadata(package_path.join(RETIRED_MANIFEST_PATH)).is_ok() {
+        return Err(PackageError::RetiredManifest);
     }
-    let manifest_bytes = read_regular(&manifest_path)?;
-    let manifest: PackageManifest =
-        serde_json::from_slice(&manifest_bytes).map_err(|_| PackageError::Verification)?;
-    if manifest.package_version != PACKAGE_VERSION
-        || manifest.files.is_empty()
-        || manifest.files.len() > MAX_PACKAGE_FILES
-    {
-        return Err(PackageError::Verification);
-    }
-    let canonical_manifest = canonicalize_json(
-        &serde_json::to_value(&manifest).map_err(|_| PackageError::CanonicalJson)?,
-    )
-    .map_err(|_| PackageError::CanonicalJson)?;
-    if canonical_manifest != manifest_bytes {
-        return Err(PackageError::Verification);
-    }
-    let unsigned = UnsignedManifest {
-        package_version: PACKAGE_VERSION,
-        contract_revision: &manifest.contract_revision,
-        source_schema_fingerprints: &manifest.source_schema_fingerprints,
-        source_schemas: &manifest.source_schemas,
-        artifacts: &manifest.artifacts,
-        operation_artifact_bindings: &manifest.operation_artifact_bindings,
-        files: &manifest.files,
-    };
-    let unsigned_bytes = canonicalize_json(
-        &serde_json::to_value(unsigned).map_err(|_| PackageError::CanonicalJson)?,
-    )
-    .map_err(|_| PackageError::CanonicalJson)?;
-    if digest(&unsigned_bytes) != manifest.package_revision {
-        return Err(PackageError::Verification);
+    let verified = shared::verify_package(package_path, &package_limits(), PACKAGE_COMMAND)
+        .map_err(|error| error.naming_root_as(PACKAGE_ROOT_FIELD))?;
+
+    // The shared format hashes bytes only; Relay also requires every entry to
+    // be owned by the effective user or root and not writable by others.
+    let present = enumerate_package_files(package_path)?;
+    let listed = verified
+        .files()
+        .chain(std::iter::once(SUM_FILE))
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    if let Some(path) = present.symmetric_difference(&listed).next() {
+        return Err(PackageError::ChangedWhileRead { path: path.clone() });
     }
 
-    let mut listed = BTreeSet::new();
+    // Read each file once more and hold exactly the bytes that were verified.
     let mut loaded = BTreeMap::new();
-    let mut total = manifest_bytes.len() as u64;
-    for entry in &manifest.files {
-        validate_relative(&entry.path)?;
-        if !listed.insert(entry.path.as_str()) {
-            return Err(PackageError::Verification);
+    for path in verified.files().filter(|path| !is_envelope_file(path)) {
+        let content =
+            read_regular(&package_path.join(path)).map_err(|_| PackageError::ChangedWhileRead {
+                path: path.to_owned(),
+            })?;
+        if verified.file_digest(path).as_deref() != Some(digest(&content).as_str()) {
+            return Err(PackageError::ChangedWhileRead {
+                path: path.to_owned(),
+            });
         }
-        reject_relative_symlinks(package_path, Path::new(&entry.path))?;
-        let path = package_path.join(&entry.path);
-        let metadata = fs::symlink_metadata(&path).map_err(|_| PackageError::Read)?;
-        if !metadata.is_file()
-            || metadata.file_type().is_symlink()
-            || !safe_permissions(&metadata)
-            || metadata.len() != entry.size
-        {
-            return Err(PackageError::Verification);
-        }
-        total = total
-            .checked_add(metadata.len())
-            .ok_or(PackageError::ClosureBound)?;
-        if total > MAX_PACKAGE_BYTES {
-            return Err(PackageError::ClosureBound);
-        }
-        let content = read_regular(&path)?;
-        if digest(&content) != entry.sha256 {
-            return Err(PackageError::Verification);
-        }
-        loaded.insert(entry.path.clone(), content);
+        loaded.insert(path.to_owned(), content);
     }
-    let actual = enumerate_package_files(package_path)?;
-    let mut expected = listed
+
+    let required = [REGISTRY_PATH, COMPILED_REGISTRY_PATH];
+    let missing = required
+        .iter()
+        .filter(|path| !loaded.contains_key(**path))
+        .map(|path| (*path).to_owned())
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(PackageError::Contents {
+            missing,
+            extra: Vec::new(),
+        });
+    }
+    let derivation = |path: &str| PackageError::Derivation {
+        path: path.to_owned(),
+    };
+    let contract = std::str::from_utf8(&loaded[REGISTRY_PATH])
+        .ok()
+        .and_then(|text| RegistryContract::parse_yaml(text).ok())
+        .ok_or_else(|| derivation(REGISTRY_PATH))?;
+    let compiled_bytes = &loaded[COMPILED_REGISTRY_PATH];
+    let registry = serde_json::from_slice::<CompiledRegistry>(compiled_bytes)
+        .ok()
+        .filter(|registry| {
+            canonical_compiled(registry).is_ok_and(|bytes| bytes == *compiled_bytes)
+                && compiled_matches_contract(registry, &contract)
+        })
+        .ok_or_else(|| derivation(COMPILED_REGISTRY_PATH))?;
+    let artifacts =
+        generate_artifacts(&registry).map_err(|_| derivation(COMPILED_REGISTRY_PATH))?;
+
+    let expected = required
         .iter()
         .map(|path| (*path).to_owned())
+        .chain(
+            registry
+                .governed_files
+                .iter()
+                .map(|file| format!("{GOVERNED_PREFIX}{}", file.path)),
+        )
+        .chain(
+            artifacts
+                .artifacts
+                .iter()
+                .map(|artifact| format!("{GENERATED_PREFIX}{}", artifact.path)),
+        )
         .collect::<BTreeSet<_>>();
-    expected.insert("relay-package.json".into());
-    if actual != expected {
-        return Err(PackageError::Verification);
-    }
-
-    let registry_entry = manifest
-        .files
-        .iter()
-        .filter(|entry| entry.path == "registry.yaml")
-        .collect::<Vec<_>>();
-    if registry_entry.len() != 1
-        || registry_entry[0].generated
-        || registry_entry[0].visibility != Visibility::OperatorOnly
-    {
-        return Err(PackageError::Verification);
-    }
-    let contract_bytes = loaded
-        .get("registry.yaml")
-        .ok_or(PackageError::Verification)?;
-    let contract_text =
-        std::str::from_utf8(contract_bytes).map_err(|_| PackageError::Verification)?;
-    let contract =
-        RegistryContract::parse_yaml(contract_text).map_err(|_| PackageError::Verification)?;
-    if manifest.source_schemas.keys().collect::<BTreeSet<_>>()
-        != manifest
-            .source_schema_fingerprints
-            .keys()
-            .collect::<BTreeSet<_>>()
-        || manifest.source_schemas.iter().any(|(id, schema)| {
-            schema.source != *id || schema.fingerprint != manifest.source_schema_fingerprints[id]
-        })
-    {
-        return Err(PackageError::Verification);
-    }
-
-    let compiled_entry = manifest
-        .files
-        .iter()
-        .filter(|entry| entry.path == COMPILED_REGISTRY_PATH)
-        .collect::<Vec<_>>();
-    if compiled_entry.len() != 1
-        || !compiled_entry[0].generated
-        || compiled_entry[0].visibility != Visibility::OperatorOnly
-        || compiled_entry[0].media_type != "application/json"
-    {
-        return Err(PackageError::Verification);
-    }
-    let compiled_bytes = loaded
-        .get(COMPILED_REGISTRY_PATH)
-        .ok_or(PackageError::Verification)?;
-    let compiled_value: serde_json::Value =
-        serde_json::from_slice(compiled_bytes).map_err(|_| PackageError::Verification)?;
-    if canonicalize_json(&compiled_value).map_err(|_| PackageError::CanonicalJson)?
-        != *compiled_bytes
-    {
-        return Err(PackageError::Verification);
-    }
-    let registry: CompiledRegistry =
-        serde_json::from_value(compiled_value).map_err(|_| PackageError::Verification)?;
-    let reproduced_compiled = canonicalize_json(
-        &serde_json::to_value(&registry).map_err(|_| PackageError::CanonicalJson)?,
-    )
-    .map_err(|_| PackageError::CanonicalJson)?;
-    if reproduced_compiled != *compiled_bytes {
-        return Err(PackageError::Verification);
-    }
-    if registry.contract_revision != manifest.contract_revision
-        || registry.contract_id != contract.metadata.id
-        || registry.contract_version != contract.metadata.version
-        || registry.registry_identifier != contract.registry.registry_identifier
-        || registry
-            .sources
-            .iter()
-            .map(|source| {
-                (
-                    source.id.clone(),
-                    source.expected_schema_fingerprint.clone(),
-                )
-            })
-            .collect::<BTreeMap<_, _>>()
-            != manifest.source_schema_fingerprints
-    {
-        return Err(PackageError::Verification);
+    let found = loaded.keys().cloned().collect::<BTreeSet<_>>();
+    if expected != found {
+        return Err(PackageError::Contents {
+            missing: expected.difference(&found).cloned().collect(),
+            extra: found.difference(&expected).cloned().collect(),
+        });
     }
 
     let governed = loaded
         .iter()
         .filter_map(|(path, content)| {
-            path.strip_prefix("governed/")
+            path.strip_prefix(GOVERNED_PREFIX)
                 .map(|relative| (relative.to_owned(), content.clone()))
         })
         .collect::<GovernedFileSet>();
-    let observed = manifest
-        .source_schemas
-        .values()
-        .cloned()
-        .collect::<Vec<_>>();
-    verify_compiled_derivation(&contract, &registry, &governed, &observed)?;
+    if let Some(file) = registry.governed_files.iter().find(|file| {
+        governed
+            .get(&file.path)
+            .is_none_or(|content| digest(content) != file.sha256)
+    }) {
+        return Err(derivation(&format!("{GOVERNED_PREFIX}{}", file.path)));
+    }
+    let observed =
+        observed_source_schemas(&registry).ok_or_else(|| derivation(COMPILED_REGISTRY_PATH))?;
+    verify_compiled_derivation(&contract, &registry, &governed, &observed)
+        .map_err(|_| derivation(COMPILED_REGISTRY_PATH))?;
 
-    let governed_paths = registry
-        .governed_files
-        .iter()
-        .map(|file| file.path.as_str())
-        .collect::<BTreeSet<_>>();
-    let loaded_governed_paths = loaded
-        .keys()
-        .filter_map(|path| path.strip_prefix("governed/"))
-        .collect::<BTreeSet<_>>();
-    if governed_paths != loaded_governed_paths
-        || registry.governed_files.iter().any(|file| {
-            loaded
-                .get(&format!("governed/{}", file.path))
-                .is_none_or(|content| digest(content) != file.sha256)
-        })
+    if artifacts.contract_revision != registry.contract_revision
+        || !valid_artifact_set(&registry, &artifacts)
     {
-        return Err(PackageError::Verification);
+        return Err(derivation(COMPILED_REGISTRY_PATH));
     }
-
-    let expected_operation_access_profiles = operation_access_profile_pairs(&registry);
-    let expected_fixed_operations = fixed_statistical_operations(&registry);
-    let mut artifact_ids = BTreeSet::new();
-    let mut artifact_paths = BTreeSet::new();
-    let mut generated_artifacts = Vec::with_capacity(manifest.artifacts.len());
-    for artifact in &manifest.artifacts {
-        let relative_path = artifact
-            .path
-            .strip_prefix("generated/")
-            .ok_or(PackageError::Verification)?;
-        if relative_path.is_empty()
-            || !artifact_ids.insert(artifact.id.as_str())
-            || !artifact_paths.insert(relative_path)
-            || !valid_artifact_access_binding(
-                artifact.visibility,
-                artifact.operation_identifier.as_deref(),
-                artifact.access_binding.as_ref(),
-                &expected_operation_access_profiles,
-                &expected_fixed_operations,
-            )
-        {
-            return Err(PackageError::Verification);
+    for artifact in &artifacts.artifacts {
+        let path = format!("{GENERATED_PREFIX}{}", artifact.path);
+        if loaded[&path] != artifact.content {
+            return Err(derivation(&path));
         }
-        let file_entries = manifest
-            .files
-            .iter()
-            .filter(|entry| entry.path == artifact.path)
-            .collect::<Vec<_>>();
-        if file_entries.len() != 1
-            || !file_entries[0].generated
-            || file_entries[0].media_type != artifact.media_type
-            || file_entries[0].visibility != artifact.visibility
-            || file_entries[0].sha256 != artifact.sha256
-        {
-            return Err(PackageError::Verification);
-        }
-        let content = loaded
-            .get(&artifact.path)
-            .ok_or(PackageError::Verification)?
-            .clone();
-        generated_artifacts.push(GeneratedArtifact {
-            id: artifact.id.clone(),
-            path: relative_path.to_owned(),
-            media_type: artifact.media_type.clone(),
-            visibility: artifact.visibility,
-            operation_identifier: artifact.operation_identifier.clone(),
-            access_binding: artifact.access_binding.clone(),
-            sha256: artifact.sha256.clone(),
-            content,
-        });
     }
-    let loaded_generated_paths = loaded
-        .keys()
-        .filter_map(|path| path.strip_prefix("generated/"))
-        .collect::<BTreeSet<_>>();
-    if artifact_paths != loaded_generated_paths
-        || !valid_operation_artifact_bindings(
-            &manifest.operation_artifact_bindings,
-            &expected_operation_access_profiles,
-            &artifact_paths,
-        )
-    {
-        return Err(PackageError::Verification);
-    }
-    let artifacts = ArtifactSet {
-        contract_revision: registry.contract_revision.clone(),
-        artifacts: generated_artifacts,
-        operation_bindings: manifest.operation_artifact_bindings.clone(),
-    };
-    verify_artifact_derivation(&registry, &artifacts)?;
     Ok(VerifiedPackage {
-        manifest,
+        digest: verified.digest().to_owned(),
+        revision: verified.revision().map(str::to_owned),
         contract,
         registry,
         artifacts,
     })
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct UnsignedManifest<'a> {
-    package_version: &'static str,
-    contract_revision: &'a str,
-    source_schema_fingerprints: &'a BTreeMap<String, String>,
-    source_schemas: &'a BTreeMap<String, ObservedSourceSchema>,
-    artifacts: &'a [PackageArtifact],
-    operation_artifact_bindings: &'a [OperationArtifactBindings],
-    files: &'a [PackageFile],
 }
 
 fn valid_operation_artifact_bindings(
@@ -849,14 +727,14 @@ fn enumerate_package_files(root: &Path) -> Result<BTreeSet<String>, PackageError
     ) -> Result<(), PackageError> {
         let metadata = fs::symlink_metadata(directory).map_err(|_| PackageError::Read)?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() || !safe_permissions(&metadata) {
-            return Err(PackageError::Verification);
+            return Err(PackageError::UnsafePermissions);
         }
         for entry in fs::read_dir(directory).map_err(|_| PackageError::Read)? {
             let entry = entry.map_err(|_| PackageError::Read)?;
             let path = entry.path();
             let metadata = fs::symlink_metadata(&path).map_err(|_| PackageError::Read)?;
             if metadata.file_type().is_symlink() || !safe_permissions(&metadata) {
-                return Err(PackageError::Verification);
+                return Err(PackageError::UnsafePermissions);
             }
             if metadata.is_dir() {
                 visit(root, &path, files)?;
@@ -870,7 +748,7 @@ fn enumerate_package_files(root: &Path) -> Result<BTreeSet<String>, PackageError
                     return Err(PackageError::ClosureBound);
                 }
             } else {
-                return Err(PackageError::Verification);
+                return Err(PackageError::UnsafePermissions);
             }
         }
         Ok(())
@@ -965,156 +843,390 @@ fn harden_package_permissions(_root: &Path) -> Result<(), PackageError> {
     Ok(())
 }
 
-fn write_generated(root: &Path, artifact: &GeneratedArtifact) -> Result<(), PackageError> {
-    validate_relative(&artifact.path)?;
-    write_new_file(
-        &root.join("generated").join(&artifact.path),
-        &artifact.content,
-    )
-}
-
-fn write_new_file(path: &Path, content: &[u8]) -> Result<(), PackageError> {
-    if path.exists() {
-        return Err(PackageError::Write);
-    }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|_| PackageError::Write)?;
-    }
-    fs::write(path, content).map_err(|_| PackageError::Write)
-}
-
-fn file_entry(
-    path: &str,
-    content: &[u8],
-    media_type: &str,
-    visibility: Visibility,
-    generated: bool,
-) -> PackageFile {
-    PackageFile {
-        path: path.into(),
-        size: content.len() as u64,
-        sha256: digest(content),
-        media_type: media_type.into(),
-        visibility,
-        generated,
-    }
-}
-
 fn digest(content: &[u8]) -> String {
     format!("sha256:{}", hex::encode(Sha256::digest(content)))
-}
-
-fn media_type(path: &str) -> &'static str {
-    match Path::new(path)
-        .extension()
-        .and_then(|extension| extension.to_str())
-    {
-        Some("json") | Some("jsonld") => "application/json",
-        Some("ttl") => "text/turtle",
-        _ => "application/yaml",
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn bounded_file(size: u64) -> PackageFile {
-        PackageFile {
-            path: "bounded-fixture".into(),
-            size,
-            sha256: digest(b""),
-            media_type: "application/octet-stream".into(),
-            visibility: Visibility::OperatorOnly,
-            generated: true,
+    struct Fixture {
+        temporary: tempfile::TempDir,
+        project: std::path::PathBuf,
+        contract: RegistryContract,
+        registry: CompiledRegistry,
+        artifacts: ArtifactSet,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let temporary = tempfile::tempdir().expect("temporary project");
+            let project = temporary.path().join("project");
+            fs::create_dir(&project).expect("project directory");
+            fs::write(
+                project.join("registry.yaml"),
+                crate::compiler::tests::valid_contract(),
+            )
+            .expect("registry contract");
+            let governed = crate::compiler::tests::governed_files();
+            for (relative, content) in &governed {
+                let path = project.join(relative);
+                fs::create_dir_all(path.parent().expect("parent")).expect("governed directory");
+                fs::write(path, content).expect("governed file");
+            }
+            let contract = RegistryContract::parse_yaml(crate::compiler::tests::valid_contract())
+                .expect("strict contract");
+            let registry = compile_contract_with_governed_files(
+                &contract,
+                &[crate::compiler::tests::observed_schema()],
+                CompileProfile::Production,
+                &governed,
+            )
+            .expect("compiled Registry");
+            let artifacts = generate_artifacts(&registry).expect("artifacts");
+            Self {
+                temporary,
+                project,
+                contract,
+                registry,
+                artifacts,
+            }
+        }
+
+        /// Build a package named `name` and return its resolved path. macOS
+        /// places temporary directories below `/var`, which is itself a
+        /// symlink, and the loader refuses symlink traversal.
+        fn package(
+            &self,
+            name: &str,
+            revision: Option<&str>,
+        ) -> (std::path::PathBuf, PackageSummary) {
+            let output = self.temporary.path().join(name);
+            let summary = self
+                .build(Some(&output), revision, &self.registry, &self.artifacts)
+                .expect("package builds");
+            (
+                output.canonicalize().expect("resolved package path"),
+                summary,
+            )
+        }
+
+        fn build(
+            &self,
+            output: Option<&Path>,
+            revision: Option<&str>,
+            registry: &CompiledRegistry,
+            artifacts: &ArtifactSet,
+        ) -> Result<PackageSummary, PackageError> {
+            build_package(
+                &self.project,
+                output,
+                revision,
+                &self.contract,
+                registry,
+                artifacts,
+            )
         }
     }
 
-    #[test]
-    fn package_file_count_bound_matches_the_loader() {
-        let files = vec![bounded_file(0); MAX_PACKAGE_FILES];
-        assert!(validate_package_bounds(&files, 1).is_ok());
+    /// Rewrite `SHA256SUMS` over whatever the directory now holds, as a
+    /// forger who can recompute digests would.
+    fn reseal(package_path: &Path) {
+        fs::remove_file(package_path.join(SUM_FILE)).expect("sum file removes");
+        shared::write_sum_file(package_path, None, &package_limits(), PACKAGE_COMMAND)
+            .expect("forged sum file writes");
+    }
 
-        let files = vec![bounded_file(0); MAX_PACKAGE_FILES + 1];
+    fn refusal(package_path: &Path) -> String {
+        load_package(package_path)
+            .expect_err("the package is refused")
+            .to_string()
+    }
+
+    #[test]
+    fn package_limits_bound_files_and_bytes() {
+        let limits = package_limits();
+        assert_eq!(limits.max_files, MAX_PACKAGE_FILES);
+        assert_eq!(limits.max_total_bytes, MAX_PACKAGE_BYTES);
+        let files = (0..=MAX_PACKAGE_FILES)
+            .map(|index| (format!("generated/{index}.json"), Vec::new()))
+            .collect::<BTreeMap<_, _>>();
+        let error = shared::plan_package(Path::new("."), &files, None, &limits, PACKAGE_COMMAND)
+            .expect_err("one file too many");
         assert!(matches!(
-            validate_package_bounds(&files, 1),
-            Err(PackageError::ClosureBound)
+            error.kind(),
+            shared::PackageErrorKind::Bound { .. }
         ));
     }
 
     #[test]
-    fn package_manifest_byte_bound_matches_the_loader() {
-        let files = [bounded_file(0)];
-        assert!(validate_package_bounds(
-            &files,
-            usize::try_from(MAX_MANIFEST_BYTES).expect("manifest cap fits usize")
+    fn a_package_is_the_shared_format_and_reproduces() {
+        let fixture = Fixture::new();
+        let (package_path, summary) = fixture.package("package", None);
+        let sums = fs::read(package_path.join(SUM_FILE)).expect("sum file");
+        assert_eq!(summary.package_digest, digest(&sums));
+        assert!(!summary.dry_run);
+        assert!(!package_path.join(RETIRED_MANIFEST_PATH).exists());
+        assert!(summary
+            .files
+            .iter()
+            .any(|file| file.path == COMPILED_REGISTRY_PATH));
+        assert_eq!(
+            summary
+                .source_schema_fingerprints
+                .keys()
+                .collect::<Vec<_>>(),
+            fixture
+                .registry
+                .sources
+                .iter()
+                .map(|source| &source.id)
+                .collect::<Vec<_>>()
+        );
+
+        let verified = load_package(&package_path).expect("verified package");
+        assert_eq!(verified.digest, summary.package_digest);
+        assert_eq!(verified.revision, None);
+        assert_eq!(verified.registry, fixture.registry);
+        assert_eq!(verified.artifacts, fixture.artifacts);
+        assert_eq!(
+            verified.source_schemas().into_values().collect::<Vec<_>>(),
+            [crate::compiler::tests::observed_schema()]
+        );
+
+        let (_again, again) = fixture.package("again", None);
+        assert_eq!(again.package_digest, summary.package_digest);
+        let planned = fixture
+            .build(None, None, &fixture.registry, &fixture.artifacts)
+            .expect("dry run");
+        assert!(planned.dry_run);
+        assert_eq!(planned.package_digest, summary.package_digest);
+        assert_eq!(planned.files, summary.files);
+
+        let (revised_path, revised) = fixture.package("revised", Some("release 7"));
+        assert_ne!(revised.package_digest, summary.package_digest);
+        assert_eq!(revised.revision.as_deref(), Some("release 7"));
+        assert_eq!(
+            load_package(&revised_path)
+                .expect("revised package")
+                .revision
+                .as_deref(),
+            Some("release 7")
+        );
+
+        let error = fixture
+            .build(
+                Some(&fixture.temporary.path().join("package")),
+                None,
+                &fixture.registry,
+                &fixture.artifacts,
+            )
+            .expect_err("an existing output is refused");
+        assert!(
+            matches!(&error, PackageError::Package(error)
+                if matches!(error.kind(), shared::PackageErrorKind::OutputExists)),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_changed_missing_or_extra_file_is_refused_by_name() {
+        let fixture = Fixture::new();
+        let (package_path, summary) = fixture.package("package", None);
+        let artifact = summary
+            .files
+            .iter()
+            .find(|file| file.path.starts_with(GENERATED_PREFIX))
+            .expect("generated file")
+            .path
+            .clone();
+
+        let original = fs::read(package_path.join(&artifact)).expect("artifact bytes");
+        fs::write(package_path.join(&artifact), b"changed").expect("change a file");
+        let message = refusal(&package_path);
+        assert!(
+            message.contains(&format!("changed: {artifact}")),
+            "{message}"
+        );
+        assert!(message.contains("package.root"), "{message}");
+        assert!(message.contains(PACKAGE_COMMAND), "{message}");
+        assert!(
+            !message.contains(&*package_path.to_string_lossy()),
+            "{message}"
+        );
+        fs::write(package_path.join(&artifact), &original).expect("restore");
+
+        fs::remove_file(package_path.join(REGISTRY_PATH)).expect("remove a file");
+        let message = refusal(&package_path);
+        assert!(message.contains("missing: registry.yaml"), "{message}");
+        assert!(message.contains(PACKAGE_COMMAND), "{message}");
+        fs::write(
+            package_path.join(REGISTRY_PATH),
+            crate::compiler::tests::valid_contract(),
         )
-        .is_ok());
-        assert!(matches!(
-            validate_package_bounds(
-                &files,
-                usize::try_from(MAX_MANIFEST_BYTES + 1).expect("manifest cap plus one fits usize")
-            ),
-            Err(PackageError::ClosureBound)
-        ));
+        .expect("restore");
+
+        fs::write(package_path.join("notes.txt"), b"extra").expect("add a file");
+        let message = refusal(&package_path);
+        assert!(message.contains("extra: notes.txt"), "{message}");
+        assert!(message.contains(PACKAGE_COMMAND), "{message}");
+        fs::remove_file(package_path.join("notes.txt")).expect("remove the extra file");
+
+        load_package(&package_path).expect("the restored package verifies");
     }
 
     #[test]
-    fn package_total_byte_bound_matches_the_loader() {
-        let at_cap = [bounded_file(MAX_PACKAGE_BYTES - 1)];
-        assert!(validate_package_bounds(&at_cap, 1).is_ok());
+    fn a_directory_that_is_not_a_package_is_refused_with_the_command() {
+        let fixture = Fixture::new();
+        let project = fixture.project.canonicalize().expect("resolved project");
+        let message = refusal(&project);
+        assert!(message.contains("has no SHA256SUMS"), "{message}");
+        assert!(message.contains(PACKAGE_COMMAND), "{message}");
 
-        let above_cap = [bounded_file(MAX_PACKAGE_BYTES)];
-        assert!(matches!(
-            validate_package_bounds(&above_cap, 1),
-            Err(PackageError::ClosureBound)
-        ));
+        let (package_path, _) = fixture.package("package", None);
+        fs::write(package_path.join(RETIRED_MANIFEST_PATH), b"{}").expect("retired manifest");
+        let message = refusal(&package_path);
+        assert!(message.contains(RETIRED_MANIFEST_PATH), "{message}");
+        assert!(message.contains(PACKAGE_COMMAND), "{message}");
     }
 
-    fn reseal_manifest(package_path: &Path, manifest: &mut PackageManifest) {
-        let unsigned = UnsignedManifest {
-            package_version: PACKAGE_VERSION,
-            contract_revision: &manifest.contract_revision,
-            source_schema_fingerprints: &manifest.source_schema_fingerprints,
-            source_schemas: &manifest.source_schemas,
-            artifacts: &manifest.artifacts,
-            operation_artifact_bindings: &manifest.operation_artifact_bindings,
-            files: &manifest.files,
+    #[test]
+    fn a_resealed_package_must_hold_exactly_what_its_registry_names() {
+        let fixture = Fixture::new();
+
+        let (package_path, _) = fixture.package("extra", None);
+        fs::write(package_path.join("governed/unreferenced.yaml"), b"x: 1\n")
+            .expect("unreferenced governed file");
+        reseal(&package_path);
+        let message = refusal(&package_path);
+        assert!(
+            message.contains("extra: governed/unreferenced.yaml"),
+            "{message}"
+        );
+
+        let (package_path, summary) = fixture.package("missing", None);
+        let artifact = summary
+            .files
+            .iter()
+            .find(|file| file.path.starts_with(GENERATED_PREFIX))
+            .expect("generated file")
+            .path
+            .clone();
+        fs::remove_file(package_path.join(&artifact)).expect("remove an artifact");
+        reseal(&package_path);
+        let message = refusal(&package_path);
+        assert!(
+            message.contains(&format!("missing: {artifact}")),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_resealed_package_must_reproduce_its_compiled_registry_and_artifacts() {
+        let fixture = Fixture::new();
+
+        let (package_path, _) = fixture.package("forged-compiled-registry", None);
+        let compiled_path = package_path.join(COMPILED_REGISTRY_PATH);
+        let mut forged: CompiledRegistry =
+            serde_json::from_slice(&fs::read(&compiled_path).expect("compiled Registry bytes"))
+                .expect("compiled Registry parses");
+        forged.registry_name = "Forged Registry semantics".into();
+        fs::write(
+            &compiled_path,
+            canonical_compiled(&forged).expect("forged bytes"),
+        )
+        .expect("forged Registry writes");
+        reseal(&package_path);
+        let message = refusal(&package_path);
+        assert!(
+            message.contains(&format!("holds {COMPILED_REGISTRY_PATH}")),
+            "{message}"
+        );
+        assert!(message.contains(PACKAGE_COMMAND), "{message}");
+
+        let (package_path, _) = fixture.package("non-canonical-registry", None);
+        let compiled_path = package_path.join(COMPILED_REGISTRY_PATH);
+        let mut bytes = fs::read(&compiled_path).expect("compiled Registry bytes");
+        bytes.push(b'\n');
+        fs::write(&compiled_path, bytes).expect("non-canonical Registry writes");
+        reseal(&package_path);
+        assert!(refusal(&package_path).contains(COMPILED_REGISTRY_PATH));
+
+        let (package_path, summary) = fixture.package("forged-artifact", None);
+        let artifact = summary
+            .files
+            .iter()
+            .find(|file| file.path.starts_with(GENERATED_PREFIX))
+            .expect("generated file")
+            .path
+            .clone();
+        let mut content = fs::read(package_path.join(&artifact)).expect("artifact bytes");
+        content.extend_from_slice(b"tampered");
+        fs::write(package_path.join(&artifact), content).expect("forged artifact writes");
+        reseal(&package_path);
+        let message = refusal(&package_path);
+        assert!(message.contains(&format!("holds {artifact}")), "{message}");
+
+        let (package_path, _) = fixture.package("forged-governed", None);
+        let governed = fixture
+            .registry
+            .governed_files
+            .first()
+            .expect("governed file");
+        let governed_path = format!("{GOVERNED_PREFIX}{}", governed.path);
+        let mut content = fs::read(package_path.join(&governed_path)).expect("governed bytes");
+        content.extend_from_slice(b"\n# tampered\n");
+        fs::write(package_path.join(&governed_path), content).expect("forged governed writes");
+        reseal(&package_path);
+        let message = refusal(&package_path);
+        assert!(
+            message.contains(&format!("holds {governed_path}")),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn inconsistent_build_inputs_are_refused() {
+        let fixture = Fixture::new();
+        let artifacts = &fixture.artifacts;
+        let registry = &fixture.registry;
+        let refused = |registry: &CompiledRegistry, artifacts: &ArtifactSet| {
+            matches!(
+                fixture.build(None, None, registry, artifacts),
+                Err(PackageError::Verification)
+            )
         };
-        let unsigned_bytes = canonicalize_json(
-            &serde_json::to_value(unsigned).expect("unsigned manifest serializes"),
-        )
-        .expect("unsigned manifest canonicalizes");
-        manifest.package_revision = digest(&unsigned_bytes);
-        let manifest_bytes =
-            canonicalize_json(&serde_json::to_value(manifest).expect("sealed manifest serializes"))
-                .expect("sealed manifest canonicalizes");
-        fs::write(package_path.join("relay-package.json"), manifest_bytes)
-            .expect("forged manifest writes");
-    }
 
-    fn assert_resealed_package_rejected(
-        root: &Path,
-        project: &Path,
-        name: &str,
-        contract: &RegistryContract,
-        registry: &CompiledRegistry,
-        artifacts: &ArtifactSet,
-        mutate: impl FnOnce(&Path, &mut PackageManifest),
-    ) {
-        let package_path = root.join(name);
-        let mut manifest = build_package(project, &package_path, contract, registry, artifacts)
-            .expect("forgery fixture");
-        mutate(&package_path, &mut manifest);
-        reseal_manifest(&package_path, &mut manifest);
-        assert!(matches!(
-            load_package(
-                &package_path
-                    .canonicalize()
-                    .expect("forged package resolves")
-            ),
-            Err(PackageError::Verification)
-        ));
+        let mut mismatched = artifacts.clone();
+        mismatched.contract_revision = "sha256:mismatched".into();
+        assert!(refused(registry, &mismatched));
+
+        let mut tampered = artifacts.clone();
+        let artifact = tampered.artifacts.first_mut().expect("generated artifact");
+        artifact.content.extend_from_slice(b"tampered");
+        artifact.sha256 = digest(&artifact.content);
+        assert!(refused(registry, &tampered));
+
+        let mut tampered = artifacts.clone();
+        let artifact = tampered.artifacts.first_mut().expect("generated artifact");
+        artifact.visibility = match artifact.visibility {
+            Visibility::OperatorOnly => Visibility::Public,
+            Visibility::Public | Visibility::OperationBound => Visibility::OperatorOnly,
+        };
+        assert!(refused(registry, &tampered));
+
+        let mut tampered = artifacts.clone();
+        let binding = tampered
+            .operation_bindings
+            .first_mut()
+            .expect("operation artifact binding");
+        binding.context_path = binding.vocabulary_path.clone();
+        assert!(refused(registry, &tampered));
+
+        let mut mismatched_registry = registry.clone();
+        mismatched_registry.registry_name = "Different Registry semantics".into();
+        assert!(refused(&mismatched_registry, artifacts));
     }
 
     #[test]
@@ -1201,20 +1313,27 @@ mod tests {
             fs::write(path, content).expect("governed file");
         }
         let package_path = temporary.path().join("package");
-        let manifest = build_package(&project, &package_path, &contract, &registry, &artifacts)
-            .expect("multi-profile package builds");
+        build_package(
+            &project,
+            Some(&package_path),
+            None,
+            &contract,
+            &registry,
+            &artifacts,
+        )
+        .expect("multi-profile package builds");
         let verified = load_package(
             &package_path
                 .canonicalize()
                 .expect("multi-profile package resolves"),
         )
         .expect("multi-profile package loads");
-        assert_eq!(verified.manifest, manifest);
+        assert_eq!(verified.artifacts, artifacts);
         assert_eq!(verified.artifacts.operation_bindings.len(), 3);
     }
 
     #[test]
-    fn statistical_structure_artifacts_are_exactly_bound_in_v1alpha3_package() {
+    fn statistical_structure_artifacts_are_exactly_bound_in_a_package() {
         let yaml = crate::compiler::tests::statistical_contract()
             .replace(
                 "    access: public\n    query:",
@@ -1247,9 +1366,15 @@ mod tests {
         }
 
         let package_path = temporary.path().join("package");
-        let manifest = build_package(&project, &package_path, &contract, &registry, &artifacts)
-            .expect("statistical package builds");
-        assert_eq!(manifest.package_version, PACKAGE_VERSION);
+        build_package(
+            &project,
+            Some(&package_path),
+            None,
+            &contract,
+            &registry,
+            &artifacts,
+        )
+        .expect("statistical package builds");
         let operation_identifier = registry.statistical_datasets[0].operation_identifier();
         let record_bindings = BTreeSet::new();
         let fixed_operations = fixed_statistical_operations(&registry);
@@ -1266,7 +1391,7 @@ mod tests {
             "labour-rates-sdmx-dataflow-structure",
             "labour-rates-sdmx-datastructure-structure",
         ] {
-            let packaged = manifest
+            let packaged = artifacts
                 .artifacts
                 .iter()
                 .find(|artifact| artifact.id == id)
@@ -1280,26 +1405,12 @@ mod tests {
                 packaged.access_binding,
                 Some(ArtifactAccessBinding::FixedOperation)
             );
-            let generated = artifacts
-                .artifacts
-                .iter()
-                .find(|artifact| artifact.id == id)
-                .expect("generated structure artifact");
             assert_eq!(
-                fs::read(package_path.join(&packaged.path)).expect("packaged structure bytes"),
-                generated.content
+                fs::read(package_path.join(GENERATED_PREFIX).join(&packaged.path))
+                    .expect("packaged structure bytes"),
+                packaged.content
             );
         }
-        let manifest_value = serde_json::to_value(&manifest).expect("manifest serializes");
-        assert!(manifest_value["artifacts"]
-            .as_array()
-            .expect("package artifacts")
-            .iter()
-            .filter(|artifact| {
-                artifact["id"] == "labour-rates-sdmx-dataflow-structure"
-                    || artifact["id"] == "labour-rates-sdmx-datastructure-structure"
-            })
-            .all(|artifact| artifact.get("accessProfileIdentifier").is_none()));
 
         let verified = load_package(
             &package_path
@@ -1307,7 +1418,6 @@ mod tests {
                 .expect("statistical package resolves"),
         )
         .expect("statistical package loads");
-        assert_eq!(verified.manifest, manifest);
         assert_eq!(verified.artifacts, artifacts);
     }
 
@@ -1404,255 +1514,5 @@ mod tests {
             reject_symlink_path(&package),
             Err(PackageError::UnsafeClosure)
         ));
-    }
-
-    #[test]
-    fn sealed_package_reproduces_and_tampering_is_refused() {
-        let temporary = tempfile::tempdir().expect("temporary project");
-        let project = temporary.path().join("project");
-        fs::create_dir(&project).expect("project directory");
-        fs::write(
-            project.join("registry.yaml"),
-            crate::compiler::tests::valid_contract(),
-        )
-        .expect("registry contract");
-        let governed = crate::compiler::tests::governed_files();
-        for (relative, content) in &governed {
-            let path = project.join(relative);
-            fs::create_dir_all(path.parent().expect("parent")).expect("governed directory");
-            fs::write(path, content).expect("governed file");
-        }
-        let contract = RegistryContract::parse_yaml(crate::compiler::tests::valid_contract())
-            .expect("strict contract");
-        let registry = compile_contract_with_governed_files(
-            &contract,
-            &[crate::compiler::tests::observed_schema()],
-            CompileProfile::Production,
-            &governed,
-        )
-        .expect("compiled Registry");
-        let artifacts = generate_artifacts(&registry).expect("artifacts");
-        let mut mismatched_artifacts = artifacts.clone();
-        mismatched_artifacts.contract_revision = "sha256:mismatched".into();
-        assert!(matches!(
-            build_package(
-                &project,
-                &temporary.path().join("rejected-package"),
-                &contract,
-                &registry,
-                &mismatched_artifacts,
-            ),
-            Err(PackageError::Verification)
-        ));
-        let mut tampered_artifact_bytes = artifacts.clone();
-        let tampered_artifact = tampered_artifact_bytes
-            .artifacts
-            .first_mut()
-            .expect("generated artifact");
-        tampered_artifact.content.extend_from_slice(b"tampered");
-        tampered_artifact.sha256 = digest(&tampered_artifact.content);
-        assert!(matches!(
-            build_package(
-                &project,
-                &temporary.path().join("rejected-artifact-bytes"),
-                &contract,
-                &registry,
-                &tampered_artifact_bytes,
-            ),
-            Err(PackageError::Verification)
-        ));
-        let mut tampered_artifact_visibility = artifacts.clone();
-        let tampered_artifact = tampered_artifact_visibility
-            .artifacts
-            .first_mut()
-            .expect("generated artifact");
-        tampered_artifact.visibility = match tampered_artifact.visibility {
-            Visibility::OperatorOnly => Visibility::Public,
-            Visibility::Public | Visibility::OperationBound => Visibility::OperatorOnly,
-        };
-        assert!(matches!(
-            build_package(
-                &project,
-                &temporary.path().join("rejected-artifact-visibility"),
-                &contract,
-                &registry,
-                &tampered_artifact_visibility,
-            ),
-            Err(PackageError::Verification)
-        ));
-        let mut tampered_artifact_binding = artifacts.clone();
-        let binding = tampered_artifact_binding
-            .operation_bindings
-            .first_mut()
-            .expect("operation artifact binding");
-        binding.context_path = binding.vocabulary_path.clone();
-        assert!(matches!(
-            build_package(
-                &project,
-                &temporary.path().join("rejected-artifact-binding"),
-                &contract,
-                &registry,
-                &tampered_artifact_binding,
-            ),
-            Err(PackageError::Verification)
-        ));
-        let mut mismatched_registry = registry.clone();
-        mismatched_registry.registry_name = "Different Registry semantics".into();
-        assert!(matches!(
-            build_package(
-                &project,
-                &temporary.path().join("rejected-compiled-registry"),
-                &contract,
-                &mismatched_registry,
-                &artifacts,
-            ),
-            Err(PackageError::Verification)
-        ));
-        let output = temporary.path().join("package");
-        let manifest = build_package(&project, &output, &contract, &registry, &artifacts)
-            .expect("sealed package");
-        // macOS places temporary directories below `/var`, which is itself a
-        // symlink. The production loader correctly refuses paths containing
-        // symlink traversal, so exercise it with the resolved package path.
-        let resolved_output = output.canonicalize().expect("resolved package path");
-        let verified = load_package(&resolved_output).expect("verified package");
-        assert_eq!(verified.manifest, manifest);
-        assert_eq!(verified.registry, registry);
-        assert_eq!(verified.artifacts, artifacts);
-        assert!(manifest
-            .files
-            .iter()
-            .any(|file| file.path == COMPILED_REGISTRY_PATH));
-        assert_eq!(
-            manifest.operation_artifact_bindings,
-            artifacts.operation_bindings
-        );
-        let serialized_manifest = serde_json::to_value(&manifest).expect("manifest serializes");
-        assert!(serialized_manifest["artifacts"]
-            .as_array()
-            .expect("artifact array")
-            .iter()
-            .filter(|artifact| artifact["operationIdentifier"].is_string())
-            .all(|artifact| artifact.get("accessBinding").is_some()
-                && artifact.get("accessProfileIdentifier").is_none()
-                && artifact.get("representationIdentifier").is_none()));
-
-        assert_resealed_package_rejected(
-            temporary.path(),
-            &project,
-            "forged-compiled-registry",
-            &contract,
-            &registry,
-            &artifacts,
-            |package_path, manifest| {
-                let compiled_path = package_path.join(COMPILED_REGISTRY_PATH);
-                let mut forged: CompiledRegistry = serde_json::from_slice(
-                    &fs::read(&compiled_path).expect("compiled Registry bytes"),
-                )
-                .expect("compiled Registry parses");
-                forged.registry_name = "Forged Registry semantics".into();
-                let forged_bytes = canonicalize_json(
-                    &serde_json::to_value(forged).expect("forged Registry serializes"),
-                )
-                .expect("forged Registry canonicalizes");
-                fs::write(&compiled_path, &forged_bytes).expect("forged Registry writes");
-                let file = manifest
-                    .files
-                    .iter_mut()
-                    .find(|file| file.path == COMPILED_REGISTRY_PATH)
-                    .expect("compiled Registry package file");
-                file.size = forged_bytes.len() as u64;
-                file.sha256 = digest(&forged_bytes);
-            },
-        );
-        assert_resealed_package_rejected(
-            temporary.path(),
-            &project,
-            "forged-artifact-content",
-            &contract,
-            &registry,
-            &artifacts,
-            |package_path, manifest| {
-                let artifact = manifest.artifacts.first_mut().expect("generated artifact");
-                let file_path = artifact.path.clone();
-                let mut content = fs::read(package_path.join(&file_path)).expect("artifact bytes");
-                content.extend_from_slice(b"tampered");
-                fs::write(package_path.join(&file_path), &content).expect("forged artifact bytes");
-                let content_digest = digest(&content);
-                artifact.sha256 = content_digest.clone();
-                let file = manifest
-                    .files
-                    .iter_mut()
-                    .find(|file| file.path == file_path)
-                    .expect("generated package file");
-                file.size = content.len() as u64;
-                file.sha256 = content_digest;
-            },
-        );
-        assert_resealed_package_rejected(
-            temporary.path(),
-            &project,
-            "forged-artifact-visibility",
-            &contract,
-            &registry,
-            &artifacts,
-            |_package_path, manifest| {
-                let artifact = manifest.artifacts.first_mut().expect("generated artifact");
-                let file_path = artifact.path.clone();
-                let visibility = match artifact.visibility {
-                    Visibility::OperatorOnly => Visibility::Public,
-                    Visibility::Public | Visibility::OperationBound => Visibility::OperatorOnly,
-                };
-                artifact.visibility = visibility;
-                manifest
-                    .files
-                    .iter_mut()
-                    .find(|file| file.path == file_path)
-                    .expect("generated package file")
-                    .visibility = visibility;
-            },
-        );
-        assert_resealed_package_rejected(
-            temporary.path(),
-            &project,
-            "forged-swapped-binding",
-            &contract,
-            &registry,
-            &artifacts,
-            |_package_path, manifest| {
-                let binding = manifest
-                    .operation_artifact_bindings
-                    .first_mut()
-                    .expect("operation artifact binding");
-                let vocabulary_path = binding.vocabulary_path.clone();
-                binding.vocabulary_path = binding.context_path.clone();
-                binding.context_path = vocabulary_path;
-            },
-        );
-        assert_resealed_package_rejected(
-            temporary.path(),
-            &project,
-            "forged-repeated-binding",
-            &contract,
-            &registry,
-            &artifacts,
-            |_package_path, manifest| {
-                let binding = manifest
-                    .operation_artifact_bindings
-                    .first_mut()
-                    .expect("operation artifact binding");
-                binding.context_path = binding.vocabulary_path.clone();
-            },
-        );
-
-        let compiled_path = output.join(COMPILED_REGISTRY_PATH);
-        let compiled_bytes = fs::read(&compiled_path).expect("compiled Registry bytes");
-        fs::write(&compiled_path, b"{}").expect("tamper compiled Registry");
-        assert!(load_package(&resolved_output).is_err());
-        fs::write(&compiled_path, compiled_bytes).expect("restore compiled Registry");
-
-        let artifact = &manifest.artifacts[0];
-        fs::write(output.join(&artifact.path), b"tampered").expect("tamper fixture");
-        assert!(load_package(&resolved_output).is_err());
     }
 }

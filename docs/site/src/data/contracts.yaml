@@ -17,16 +17,16 @@
   name: Relay Sealed Package Format
   owner: registry-relay
   status: current-source
-  surface: "Versioned sealed directory `relay.registrystack.org/package/v1alpha3`: the `relay-package.json` manifest with its governed-file digests, media types, and artifact visibility, alongside the compiled registry, the governed inputs, and the generated artifacts a Relay process verifies before it activates."
+  surface: "Sealed directory in the shared Registry Stack package format: a `SHA256SUMS` file listing the digest of every other file, alongside the authored registry, the governed inputs, the compiled registry, and the generated artifacts a Relay process verifies and re-derives before it activates."
   source_of_truth:
-    label: Relay V2 package manifest
+    label: Relay V2 package
     url: https://github.com/registrystack/registry-stack/blob/2573f77d0fb59cbdae10c3b554c1b2328eeb32be/crates/registry-relay-v2/src/package.rs
   consumer_note: >-
     `relayctl package` produces the directory and Relay verifies it before it
-    opens the database, audit file, token issuer, or listener. Its
-    `packageRevision` is an integrity digest over canonical JSON, not an
-    authenticity proof: packages are unsigned, so the operator's own transport
-    and storage are what bind a package to its author.
+    opens the database, audit file, token issuer, or listener. Its package
+    digest, the `sha256:` digest of `SHA256SUMS`, is an integrity digest, not
+    an authenticity proof: packages are unsigned, so the operator's own
+    transport and storage are what bind a package to its author.
 
 - id: registry-manifest.metadata-yaml
   name: Metadata Manifest

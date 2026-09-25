@@ -120,8 +120,8 @@ wf "Record the review" markdown 1 classification-review-rationale.md
 wf "Record the review" yaml 2 legal-basis.yaml
 wf "Record the review" yaml 3 record-lifecycle.yaml
 wf "Record the review" sh 1 check-production-passed.sh
-wf "Seal the package" sh 1 package.sh
-wf "Seal the package" text 1 package-expected.txt
+wf "Package the project" sh 1 package.sh
+wf "Package the project" text 1 package-expected.txt
 wf "Serve it" yaml 1 runtime-expected.yaml
 wf "Serve it" sh 1 serve.sh
 wf "Ask the register a question" sh 1 ready.sh
@@ -292,13 +292,13 @@ fi
 printf '==> relayctl package\n'
 package_output="$(bash "$FENCES/package.sh")"
 printf '%s\n' "$package_output"
-if [[ "$package_output" != *"Sealed a deployment package."* ]]; then
-	printf 'tutorial behaviour drift: relayctl package did not seal a package\n' >&2
+if [[ "$package_output" != *"Wrote a deployment package."* ]]; then
+	printf 'tutorial behaviour drift: relayctl package did not write a package\n' >&2
 	exit 1
 fi
 expected_source_fingerprint="$(awk '/registry  sha256:/ { print $2 }' "$FENCES/package-expected.txt")"
 if [[ "$package_output" != *"$expected_source_fingerprint"* ]]; then
-	printf 'tutorial behaviour drift: the sealed package does not record the documented source fingerprint %s\n' \
+	printf 'tutorial behaviour drift: the package does not record the documented source fingerprint %s\n' \
 		"$expected_source_fingerprint" >&2
 	exit 1
 fi

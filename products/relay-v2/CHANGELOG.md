@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### BREAKING: sealed packages use the shared package format
+
+`relayctl package` writes the shared Registry Stack package format: a
+`SHA256SUMS` file, one `sha256sum` line per file sorted by path, in place of
+the `relay-package.json` manifest and its `relay.registrystack.org/package/v1alpha3`
+version. The package digest, the `sha256:` digest of `SHA256SUMS`, replaces
+`packageRevision`, and `package.expectedDigest` pins it. `--revision TEXT`
+records one free-text line in a `REVISION` file the digest covers, and
+`--dry-run` reports the digest without writing. The JSON report's
+`details.manifest` is replaced by `details.package`, which states the package
+digest, the contract revision, the source schema fingerprints, every file with
+its digest and size, and the derived exposure of every generated artifact.
+
+At startup `relay` refuses a changed, missing, or extra package file by name,
+and refuses a `package.root` that still holds `relay-package.json`, naming
+`relayctl package` and never the directory. The package no longer stores
+artifact visibility, media types, or operation bindings; the runtime derives
+them from the compiled Registry, as it already did to check them. A failed
+`relayctl package` write now removes the directory it created.
+
+Migration: rebuild every package with `relayctl package`, and replace a
+pinned `package.expectedDigest` with the package digest the new report states.
+
 ### BREAKING: read runtime.yaml through the shared configuration loader
 
 `relay` reads its deployment binding through the shared Registry Stack runtime
@@ -51,7 +74,7 @@ Migration:
    RelayRuntimeConfig`.
 2. Move `server.bind` to `listener.bind`, and `packagePath` to `package.root`
    as an absolute path. Optionally pin the package with
-   `package.expectedDigest`, its `sha256:` package revision; any other package
+   `package.expectedDigest`, its `sha256:` package digest; any other package
    at that path is refused.
 3. Declare `secretProviders`. A `secret:file/` reference now resolves under
    `secretProviders.file.root` instead of the runtime file's directory; move

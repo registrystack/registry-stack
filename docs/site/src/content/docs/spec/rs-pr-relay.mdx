@@ -72,13 +72,13 @@ Relay returns unsigned responses. Portable, signed, minimum-disclosure assertion
 
 ## 2. Sealed deployment model
 
-A Relay service serves exactly one sealed package. The package is the governed trust root: it carries the authored contract, the compiled Registry derived from it, and every generated artifact, each bound to a SHA-256 digest over its canonical bytes.
+A Relay service serves exactly one sealed package. The package is the governed trust root: it carries the authored contract, the compiled Registry derived from it, and every generated artifact, each bound to a SHA-256 digest listed in the package's `SHA256SUMS`.
 
 REQ-PR-RELAY-101: A Relay process MUST verify its sealed package before it opens an identity issuer connection, an audit sink, a SQLite source, or a listener. A package that fails verification MUST prevent the process from serving rather than degrade it.
 
 REQ-PR-RELAY-102: Package verification MUST re-derive the compiled Registry from the authored contract and the packaged source schema observations, and MUST re-derive every generated artifact from that compiled Registry, comparing both byte for byte against the packaged bytes. A mismatch MUST fail verification.
 
-REQ-PR-RELAY-103: The package revision MUST be a SHA-256 digest over the canonical JSON of the package manifest. It is an integrity digest, not an authenticity proof: any party can recompute it. Relay packages are unsigned, and a deployment MUST NOT treat a matching package revision as evidence of who produced the package.
+REQ-PR-RELAY-103: The package digest MUST be the SHA-256 digest of the package's `SHA256SUMS`, which lists the digest of every other package file. Verification MUST refuse a changed, missing, or extra file and name it, and MUST refuse a package whose digest differs from a configured `package.expectedDigest`. The digest is an integrity digest, not an authenticity proof: any party can recompute it. Relay packages are unsigned, and a deployment MUST NOT treat a matching package digest as evidence of who produced the package.
 
 REQ-PR-RELAY-104: Governed contract input and deployment binding MUST be separate closed documents. The contract is `kind: RegistryContract` at `apiVersion: relay.registrystack.org/v2alpha1`, the binding is `kind: RelayRuntimeConfig` at `apiVersion: registry.registrystack.org/relay-runtime/v1alpha1`, and both MUST reject unknown fields at every nested structure rather than ignore them. A governed field MUST NOT be accepted from the deployment binding.
 
@@ -208,7 +208,7 @@ REQ-PR-RELAY-142: Relay MUST apply a per-operation quota where the deployment co
 These constraints are stated so a reader does not infer a capability from the route list that the reviewed implementation does not provide.
 
 - No writes and no provisioning: Relay reads governed SQLite views and nothing else (REQ-PR-RELAY-106, REQ-PR-RELAY-135).
-- No signatures: Relay responses are unsigned, and the package revision proves integrity, not authorship (REQ-PR-RELAY-103, REQ-PR-RELAY-123).
+- No signatures: Relay responses are unsigned, and the package digest proves integrity, not authorship (REQ-PR-RELAY-103, REQ-PR-RELAY-123).
 - No general geospatial API: the Point profile covers exact CRS84 points and one inclusive bounding-box predicate (REQ-PR-RELAY-128, REQ-PR-RELAY-129).
 - No SDMX registry: the statistical surface is a four-resource read profile over pre-aggregated datasets (REQ-PR-RELAY-131, REQ-PR-RELAY-133).
 - No record linkage: the lookup route matches declared values exactly and returns no similarity score (REQ-PR-RELAY-108).
@@ -243,7 +243,7 @@ This specification is `verified`: every requirement describes shipped behavior a
     (Sections 3, 5, 6, 7, and 11). */}
 {/* Evidence: crates/registry-relay-v2/src/startup.rs verifies the sealed package before it opens an
     issuer, an audit sink, a source, or a listener, and package.rs re-derives the compiled Registry
-    and every generated artifact and records the package revision as an integrity digest rather than
+    and every generated artifact and records the package digest as an integrity digest rather than
     an authenticity proof (Section 2). contract.rs carries the two closed documents, RegistryContract
     and RelayRuntime (REQ-PR-RELAY-104). */}
 {/* Evidence: crates/registry-relay-v2/src/server.rs assembles the fixed router with router() and

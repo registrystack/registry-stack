@@ -82,7 +82,7 @@ Operators who prefer to place `relay` themselves take the
 
 Before the first activation, record:
 
-- The package directory, its `packageRevision`, and the contract revision it seals
+- The package directory, its package digest, and the contract revision it seals
 - The SQLite source path and the source profile the package already chose
 - The token issuer identity, discovery URL, audience, and accepted algorithms,
   or the decision that the deployment is fully anonymous
@@ -98,7 +98,8 @@ package never travels with the database.
 
 ## The package proves integrity, not authenticity
 
-`packageRevision` is a SHA-256 digest over the canonicalized package manifest.
+The package digest is the SHA-256 digest of the package's `SHA256SUMS`, which
+lists the digest of every other file, and `package.expectedDigest` pins it.
 It detects a modified or truncated package. It is not a signature, and Registry
 Relay does not sign packages or responses.
 Authenticity is whatever the institution's transfer, storage, and access

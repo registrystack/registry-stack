@@ -66,8 +66,9 @@ limits: {requestTimeoutMilliseconds: 1500, concurrentQueries: 32}
 quotas: {requestsPerMinute: 120, burst: 20}
 ```
 
-`package.root` is an absolute path. Add `package.expectedDigest` with the package's
-`sha256:` revision to refuse any other package at that path. A `secret:file/` reference resolves
+`package.root` is an absolute path. Add `package.expectedDigest` with the package digest
+`relayctl package` reported, the `sha256:` digest of the package's `SHA256SUMS`, to refuse any
+other package at that path. A `secret:file/` reference resolves
 under `secretProviders.file.root`, never beside the runtime file; a `secret:env/` reference needs
 `secretProviders.environment: {}`. Other values may use `${VAR}` or `${VAR:-default}`
 substitution, but a field ending in `Ref` and every value under `secretProviders` refuse it. A removed key such as `server`,
@@ -105,7 +106,8 @@ expiry. Treat cursors as opaque continuation tokens even though they contain no 
 order, or bbox values.
 
 `relay serve --runtime-config <file>` opens only the sealed package at `package.root`.
-It rejects unsafe paths, a package inventory mismatch, source-schema drift, missing mandatory audit
+It rejects unsafe paths, a changed, missing, or extra package file (naming the file and
+`relayctl package`), source-schema drift, missing mandatory audit
 inputs, and incompatible runtime bindings before listening.
 There is no deployment switch that disables fail-closed audit behavior.
 
