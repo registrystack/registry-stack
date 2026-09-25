@@ -484,6 +484,14 @@ python3 -m unittest release/scripts/test_check_release_source_model.py
 
 Docs site (from `docs/site/`): `npm test` and `npm run check`.
 
+## Review guidelines
+
+The "Check commit sign-offs" CI job is authoritative for DCO. A bot's own
+`Signed-off-by` trailer (for example `Signed-off-by: dependabot[bot] <...>`)
+satisfies it. Do not open a missing-sign-off finding; check the job's result
+instead of re-deriving it from the diff. If a finding cites a commit, cite one
+that still resolves in the pull request, not a rewritten or squashed SHA.
+
 ## Rules that bite
 
 - Every commit needs a DCO sign-off: `git commit -s`.
