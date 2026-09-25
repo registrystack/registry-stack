@@ -77,6 +77,17 @@
   `products/platform/generated/`. The blocks also serialize back to the form
   they were read from, so a runtime that renders its configuration keeps the
   same key names.
+- Add `registry_platform_config::package`, the one package format every
+  runtime serves. A package directory holds `SHA256SUMS`, one `sha256sum`
+  line per file sorted by path, and an optional one-line `REVISION` that is
+  listed and hashed like any other file. The package digest is the `sha256:`
+  label of the `SHA256SUMS` bytes. `write_package` and `write_sum_file` write
+  a package, `plan_package` reports its digest without writing, and
+  `verify_package` recomputes every digest and refuses a changed, missing, or
+  extra file by name, a symbolic link, a special file, or a package over its
+  `PackageLimits`. `PackageConfig::verify_package` also compares the digest
+  with `package.expectedDigest` when it is set, with the same expected and
+  found message in every runtime.
 - Add the runtime configuration conformance gate,
   `products/platform/scripts/check-config-conformance.py`, run in root CI. It
   fails when a runtime's generated schema re-declares a shared block, when a

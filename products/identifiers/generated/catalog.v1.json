@@ -2903,11 +2903,11 @@
       "description": "Relay V2 authoring JSON Schema.",
       "source": {
         "path": "crates/registry-relayctl/schemas/authoring/runtime.schema.json",
-        "sha256": "2e192681951aa9f6f333ef05e58e8760ecc3e9b87adcb4929eb55e9019b0c236"
+        "sha256": "e789f3f61af4d7527e0a309ee7512a40f984096abe031a205398c14d5f2c452c"
       },
       "artifact": {
         "path": "crates/registry-relayctl/schemas/authoring/runtime.schema.json",
-        "sha256": "2e192681951aa9f6f333ef05e58e8760ecc3e9b87adcb4929eb55e9019b0c236",
+        "sha256": "e789f3f61af4d7527e0a309ee7512a40f984096abe031a205398c14d5f2c452c",
         "mediaType": "application/schema+json"
       }
     },
@@ -2925,7 +2925,7 @@
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "2a8b41728829a7ac337b4ab93f2b042f8212f178c068297ccdb59321ac3b9cc7",
+        "sha256": "b51c462eba370acb45ef5f20a09aead5cab3d0d98d42f55947ab7352eed77ccf",
         "mediaType": "application/schema+json"
       }
     },
