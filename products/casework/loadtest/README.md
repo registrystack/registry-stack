@@ -106,9 +106,9 @@ five-minute development tokens remain usable.
 `--duration=X`); other non-sensitive arguments pass through to k6. Arguments
 that would change the offered load without the manifest recording it are
 refused: `-d`, `-i`/`--iterations`, `-u`/`--vus`, `-s`/`--stage`, `--rps`,
-`--execution-segment*`, and `-e`/`--env`, in every form, plus the `K6_VUS`,
-`K6_ITERATIONS`, `K6_DURATION`, `K6_STAGES`, and `K6_RPS` environment
-variables; set profile parameters through the environment variables below.
+`--execution-segment*`, `-e`/`--env`, and `-c`/`--config`, in every form, plus
+the `K6_VUS`, `K6_ITERATIONS`, `K6_DURATION`, `K6_STAGES`, `K6_RPS`, and
+`K6_CONFIG` environment variables; set profile parameters through the environment variables below.
 HTTP debug and system-tag overrides are refused because they can expose
 credentials, cursors, URLs, or record identifiers.
 `--no-thresholds` and `K6_NO_THRESHOLDS` are refused too, because a run

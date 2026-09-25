@@ -526,6 +526,8 @@ class EvidenceHarnessTests(unittest.TestCase):
                 (["-s", "10s:5"], {}, "-s is disabled", load_changed),
                 (["--stage=10s:5"], {}, "--stage=10s:5 is disabled", load_changed),
                 (["--execution-segment", "0:1/2"], {}, "--execution-segment is disabled", load_changed),
+                (["--config", "k6.json"], {}, "--config is disabled", load_changed),
+                (["-ck6.json"], {}, "-ck6.json is disabled", load_changed),
                 (["--execution-segment-sequence=0,1/2,1"], {}, "--execution-segment-sequence=0,1/2,1 is disabled", load_changed),
                 (["--rps=10"], {}, "--rps=10 is disabled", load_changed),
                 (["-e", "OPS=500"], {}, "-e is disabled", load_changed),
@@ -537,6 +539,7 @@ class EvidenceHarnessTests(unittest.TestCase):
                 ([], {"K6_DURATION": "1h"}, "K6_DURATION", load_changed),
                 ([], {"K6_STAGES": "10s:5"}, "K6_STAGES", load_changed),
                 ([], {"K6_RPS": "10"}, "K6_RPS", load_changed),
+                ([], {"K6_CONFIG": "k6.json"}, "K6_CONFIG", load_changed),
             ):
                 with self.subTest(arguments=arguments, variables=variables):
                     result = subprocess.run(
