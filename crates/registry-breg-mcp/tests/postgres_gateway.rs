@@ -254,6 +254,79 @@ async fn a_citizen_starts_again_after_cancelling_and_a_retry_reuses_the_draft() 
     fixture.finish().await;
 }
 
+/// An update whose answer was lost, retried with the same arguments, is
+/// answered as applied rather than stale, and applies nothing twice. A
+/// different edit from the same stale revision is still refused and never
+/// lands over the change that moved the application on.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_retried_update_is_applied_once_and_a_concurrent_edit_stays_stale() {
+    let (listener, resource) = gateway_listener().await;
+    let fixture = RealRegistry::start(&resource, None).await;
+    fixture.seed_citizen("B-1", CITIZEN_B).await;
+    let running = RunningGateway::start(listener, &fixture, gateway::REVIEW_BASE_URL).await;
+    let client = gateway::connect(&running.resource, &fixture.chat_host_token(CITIZEN_B)).await;
+
+    let started = gateway::call(
+        &client,
+        "start_application",
+        json!({"newAddressLine": "2 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-200"}),
+    )
+    .await;
+    assert_eq!(started.is_error, Some(false), "{started:?}");
+    let application = gateway::structured(&started)["application"].clone();
+    let update = |locality: &str| {
+        gateway::call(
+            &client,
+            "update_application",
+            json!({"applicationId": application["applicationId"],
+                "expectedRevision": application["revision"],
+                "patch": [{"op": "replace", "path": "/newLocality", "value": locality}]}),
+        )
+    };
+    let locality = |result: &rmcp::model::CallToolResult| {
+        gateway::structured(result)["registryData"]["fields"]
+            .as_array()
+            .and_then(|fields| {
+                fields
+                    .iter()
+                    .find(|field| field["name"] == "newLocality")
+                    .map(|field| field["value"].clone())
+            })
+            .expect("the locality is reported")
+    };
+
+    let first = update("Old Town").await;
+    assert_eq!(first.is_error, Some(false), "{first:?}");
+    let applied = gateway::structured(&first)["application"]["revision"].clone();
+    assert_ne!(applied, application["revision"]);
+
+    // The chat host never saw the first answer and sends the same call.
+    let retried = update("Old Town").await;
+    assert_eq!(retried.is_error, Some(false), "{retried:?}");
+    assert_eq!(
+        gateway::structured(&retried)["application"]["revision"],
+        applied
+    );
+    assert_eq!(locality(&retried), "Old Town");
+
+    // Another edit from the revision the first update moved past is stale.
+    let concurrent = update("New Town").await;
+    assert_eq!(gateway::error_code(&concurrent), "stale-application");
+    let status = gateway::call(
+        &client,
+        "get_application_status",
+        json!({"applicationId": application["applicationId"]}),
+    )
+    .await;
+    assert_eq!(
+        gateway::structured(&status)["application"]["revision"],
+        applied
+    );
+    assert_eq!(locality(&status), "Old Town");
+    client.cancel().await.expect("client closes");
+    fixture.finish().await;
+}
+
 /// The whole citizen journey across the three services on one registry,
 /// with the gateway and the review page served in process. The scripted
 /// local run drives the same journey against their binaries.

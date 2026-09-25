@@ -84,7 +84,13 @@ rejected, or applied gets a new draft. A start that would walk past more than 32
 closed identical applications is refused with `not-permitted`. Once request
 retention erases a closed application, the chain meets a key the registry will
 never replay and the start answers `idempotency-conflict`; the citizen can start
-again with any different value. Registry problems map to a fixed set of tool error
+again with any different value. An update's key names the revision the caller
+expected, not the one the gateway read, so an identical update retried after it
+applied returns the application as it now stands: the gateway resends the patch
+under a precondition no revision meets, and the registry, which looks a key up
+before it evaluates the precondition, answers the key it holds as an
+idempotency conflict. Any other update from an earlier revision fails that
+precondition, writes nothing, and answers `stale-application`. Registry problems map to a fixed set of tool error
 codes, each with fixed text: `invalid-arguments`, `record-not-resolved`,
 `not-found`, `application-not-editable`, `stale-application`,
 `idempotency-conflict`, `not-permitted`, `authorization-failed`,

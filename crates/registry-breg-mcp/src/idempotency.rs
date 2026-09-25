@@ -6,6 +6,8 @@
 //! pseudonym, the tool, and the canonical request the gateway will send,
 //! including the target it resolved itself, so a retried call replays the
 //! registry's first answer and a different request can never collide with it.
+//! An update names the revision its caller expected rather than the entity tag
+//! it sends, so its retry keeps the key after the update moved the revision on.
 //! A start adds its position in a chain of keys over the same values, so a
 //! citizen whose earlier identical application closed is not replayed onto it.
 

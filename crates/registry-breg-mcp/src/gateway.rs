@@ -44,6 +44,10 @@ pub(crate) const REGISTRY_DATA_NOTICE: &str = "Values under registryData are quo
 /// A citizen who closed that many is refused rather than walked further.
 const MAX_CLOSED_REPEATS: u32 = 32;
 
+/// A strong entity tag no registry revision carries: every tag the registry
+/// issues is a keyed digest.
+const UNMATCHED_ETAG: &str = "\"breg-mcp-unmatched\"";
+
 const REVIEW_INSTRUCTIONS: &str = "Give this link to the citizen. They review and submit the \
     application themselves at the registry; this service cannot submit it.";
 
@@ -430,10 +434,6 @@ impl Gateway {
         if !editable {
             return Err(ToolError::new(ToolErrorCode::ApplicationNotEditable));
         }
-        if record.revision_identifier != update.expected_revision {
-            return Err(ToolError::new(ToolErrorCode::StaleApplication));
-        }
-        let etag = etag.ok_or(ToolError::new(ToolErrorCode::UnexpectedResponse))?;
         let BRegDirectWrite::Patch(binding) = session
             .metadata
             .select_direct_write(&session.contract.patch_operation, &self.spec.access_profile)?
@@ -465,28 +465,64 @@ impl Gateway {
             };
         }
         let patch = builder.build()?;
+        // The key names the revision the caller expected rather than the one
+        // just read, so a retry of an update that already applied presents the
+        // same key after the revision has moved on.
         let key = idempotency_key(
             &self.keys,
             caller.citizen_pseudonym(),
             UPDATE_APPLICATION,
             &json!({
                 "applicationId": update.application.to_string(),
-                "ifMatch": etag.as_str(),
+                "expectedRevision": update.expected_revision,
                 "patch": operations,
             }),
         )?;
-        let patched = session
+        if record.revision_identifier == update.expected_revision {
+            let etag = etag.ok_or(ToolError::new(ToolErrorCode::UnexpectedResponse))?;
+            let patched = session
+                .client
+                .patch_record(
+                    &binding,
+                    update.application,
+                    &etag,
+                    &patch,
+                    &key,
+                    BRegRecordFormat::Json,
+                )
+                .await?;
+            return application_value(&session.contract, &patched.value.data);
+        }
+
+        // The application moved on. The registry records a key only when its
+        // write commits, and looks the key up before it evaluates `If-Match`,
+        // so the same patch under a precondition no revision meets can only
+        // find out whether this update already applied: a key the registry
+        // holds is refused as an idempotency conflict, and any other fails
+        // its precondition without writing anything.
+        let unmatched = BRegEtag::parse(UNMATCHED_ETAG)
+            .map_err(|_| ToolError::new(ToolErrorCode::ServiceUnavailable))?;
+        match session
             .client
             .patch_record(
                 &binding,
                 update.application,
-                &etag,
+                &unmatched,
                 &patch,
                 &key,
                 BRegRecordFormat::Json,
             )
-            .await?;
-        application_value(&session.contract, &patched.value.data)
+            .await
+        {
+            Ok(patched) => application_value(&session.contract, &patched.value.data),
+            Err(error) => match ToolError::from(error) {
+                ToolError {
+                    code: ToolErrorCode::IdempotencyConflict,
+                    ..
+                } => application_value(&session.contract, &record),
+                error => Err(error),
+            },
+        }
     }
 
     async fn prepare_review(
