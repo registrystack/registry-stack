@@ -93,7 +93,13 @@ fetches the key set from a fixed HTTPS address instead of the one discovery
 names. `kind: static` with `documentRef` reads a pinned key set, which does no
 rotation of its own: rolling a key means replacing the referenced document and
 restarting Casework. The removed `jwksUri` key is refused with a diagnostic
-naming `jwksSource` `kind: uri` as its replacement. `scopeClaim` defaults
+naming `jwksSource` `kind: uri` as its replacement. `allowedClients` lists the
+client identifiers whose tokens the runtime admits, matched against the token's
+`azp` claim or, when it has none, its `client_id` claim. Under
+`operator-controlled-upstream` the list must name at least one client, because an
+empty list admits every client the issuer verifies; development loopback keeps
+an empty list as a local convenience. A configured `taskAuthority` requires a
+non-empty list in either mode. `scopeClaim` defaults
 to `registry_scopes` for compatibility with existing deployments. Stock ThunderID
 emits `scope`, so the maintained example and `caseworkctl init` set that explicit
 override. `humanIdentity` defaults to claim

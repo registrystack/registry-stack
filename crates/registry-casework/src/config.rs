@@ -735,6 +735,16 @@ impl RuntimeConfig {
             .oidc
             .clients
             .check("authentication.oidc")?;
+        // An empty client list admits every client the issuer verifies, so a
+        // deployment that simply forgot the field would accept a token minted
+        // for an unrelated application in the same realm. Development loopback
+        // keeps that convenience; a deployment behind an operator-controlled
+        // terminator must name the clients it admits.
+        if self.listener.tls_termination == TlsTermination::OperatorControlledUpstream
+            && self.authentication.oidc.clients.allowed_clients.is_empty()
+        {
+            return Err(RuntimeConfigError::AllowedClientsRequired);
+        }
         if self.authentication.oidc.scope_claim.is_empty()
             || self.authentication.oidc.human_identity.claim.is_empty()
             || self.authentication.oidc.human_identity.value.is_empty()
@@ -1213,9 +1223,11 @@ reviewProducers:
         serde_norway::to_string(&operator_value(package, tls)).unwrap()
     }
 
+    /// A production fixture names the one client it admits, as a production
+    /// deployment must; a loopback fixture leaves the list empty.
     fn operator_value(package: &Path, tls: &str) -> serde_json::Value {
         let root = package.parent().expect("package parent");
-        serde_json::json!({
+        let mut document = serde_json::json!({
             "apiVersion": RUNTIME_CONFIG_API_VERSION,
             "kind": RUNTIME_CONFIG_KIND,
             "package": {"root": package},
@@ -1239,7 +1251,12 @@ reviewProducers:
                 "webhookSecretRef": "secret:file/webhook",
                 "eventSource": "urn:registrystack:registry:professional:instance:pilot"
             }}
-        })
+        });
+        if tls == "operator-controlled-upstream" {
+            document["authentication"]["oidc"]["allowedClients"] =
+                serde_json::json!(["casework-console"]);
+        }
+        document
     }
 
     /// The commented alternative in the operator example must be loadable
@@ -1523,6 +1540,50 @@ reviewProducers:
             "{error}"
         );
         assert!(!error.to_string().contains("RECOVERY_DAYS"), "{error}");
+    }
+
+    #[test]
+    fn production_names_its_allowed_clients_while_loopback_may_leave_them_empty() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+
+        let mut document = operator_value(&package, "operator-controlled-upstream");
+        document["authentication"]["oidc"]["allowedClients"] = serde_json::json!([]);
+        let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
+        assert!(
+            matches!(error, RuntimeConfigError::AllowedClientsRequired),
+            "{error}"
+        );
+        assert_eq!(error.path(), "authentication.oidc.allowedClients");
+        assert!(
+            error.to_string().contains("operator-controlled-upstream"),
+            "{error}"
+        );
+
+        document["authentication"]["oidc"]["allowedClients"] =
+            serde_json::json!(["casework-console"]);
+        let config = RuntimeConfig::load(write_operator(root.path(), &document))
+            .expect("a named client list is accepted");
+        assert_eq!(
+            config.authentication.oidc.clients.allowed_clients,
+            ["casework-console"]
+        );
+        assert!(config.task_authority.is_none());
+
+        let config = RuntimeConfig::load(write_operator(
+            root.path(),
+            &operator_value(&package, "development-loopback"),
+        ))
+        .expect("development loopback keeps an empty client list");
+        assert!(config
+            .authentication
+            .oidc
+            .clients
+            .allowed_clients
+            .is_empty());
+        assert!(config.task_authority.is_none());
     }
 
     #[test]
@@ -2489,6 +2550,10 @@ pub enum RuntimeConfigError {
     #[error("authentication.oidc is invalid or conflicts with accessProfiles[].principalClaim")]
     InvalidOidc,
     #[error(
+        "authentication.oidc.allowedClients must name every client the deployment admits under operator-controlled-upstream; an empty list admits every client the issuer verifies"
+    )]
+    AllowedClientsRequired,
+    #[error(
         "database.runtimeUrlRef and database.migrationUrlRef must be non-empty secret references"
     )]
     InvalidDatabaseReference,
@@ -2524,6 +2589,7 @@ impl RuntimeConfigError {
             Self::InvalidReviewCompletionAuth { path } => path,
             Self::InvalidSourceBinding { path, .. } => path,
             Self::InvalidOidc | Self::Oidc => "authentication.oidc",
+            Self::AllowedClientsRequired => "authentication.oidc.allowedClients",
             Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",
             Self::InvalidListener => "listener",
             Self::InvalidMetricsListener => "metricsListener",
