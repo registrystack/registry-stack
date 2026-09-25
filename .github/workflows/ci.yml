@@ -59,6 +59,7 @@ jobs:
       platform_assurance: ${{ steps.filter.outputs.platform_assurance }}
       platform_coverage: ${{ steps.filter.outputs.platform_coverage }}
       platform_hygiene: ${{ steps.filter.outputs.platform_hygiene }}
+      config_conformance: ${{ steps.filter.outputs.config_conformance }}
       discovery_contracts: ${{ steps.filter.outputs.discovery_contracts }}
       relay_v2_contracts: ${{ steps.filter.outputs.relay_v2_contracts }}
       relay_client_contracts: ${{ steps.filter.outputs.relay_client_contracts }}
@@ -1104,6 +1105,34 @@ jobs:
       - name: Check Registry Record profile artifacts
         run: products/registry-record/scripts/check.sh
 
+  config-conformance:
+    name: Runtime configuration conformance
+    needs:
+      - changes
+      - rust-policy
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.config_conformance == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Test runtime configuration conformance gate
+        run: python3 -m unittest products/platform/scripts/test_check_config_conformance.py
+
+      - name: Check runtime configuration conformance
+        run: products/platform/scripts/check-config-conformance.py --check-generated
+
   rust-result:
     name: Rust workspace
     if: always()
@@ -1122,6 +1151,7 @@ jobs:
       - casework-postgres
       - scheduling-postgres
       - scheduling-contracts
+      - config-conformance
     runs-on: ubuntu-slim
     timeout-minutes: 5
     env:
@@ -2155,6 +2185,7 @@ jobs:
       - casework-postgres
       - scheduling-postgres
       - scheduling-contracts
+      - config-conformance
       - release-tool
       - release-source-proof
       - evidence-tutorials

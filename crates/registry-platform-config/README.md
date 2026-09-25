@@ -74,3 +74,11 @@ canonical JSON Schema of these blocks to
 cargo run -p registry-platform-config --features schema \
   --example shared-blocks-schema -- --output products/platform/generated
 ```
+
+`products/platform/scripts/check-config-conformance.py` holds each runtime that
+reads `runtime.yaml` through `RuntimeConfigLoader` to this surface: its
+generated runtime schema embeds the shared blocks it uses unchanged, it no
+longer calls `expand_config_env_vars`, and named tests prove a `*Ref` field and
+an authored project file both refuse `${VAR}`. `--check-generated` also
+regenerates the canonical schema and fails when the committed copy differs. A
+product that adopts the loader adds a row to the gate.

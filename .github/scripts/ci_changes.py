@@ -106,6 +106,25 @@ CASEWORK_PACKAGES = frozenset(SHARDS["casework"])
 SCHEDULING_PACKAGES = frozenset(SHARDS["scheduling"])
 STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
 
+# The runtime configuration conformance gate reads the sources of the runtimes
+# it holds rows for, their generated runtime schemas, and the canonical shared
+# configuration blocks schema. A product that joins the gate joins this set.
+CONFIG_CONFORMANCE_PACKAGES = frozenset(
+    {
+        "registry-platform-config",
+        "registry-discovery",
+        "registry-relay-v2",
+        "registry-relayctl",
+        "registry-render",
+        "registry-scheduling",
+    }
+)
+CONFIG_CONFORMANCE_INPUTS = (
+    "products/platform/generated/*",
+    "products/platform/scripts/*config-conformance*",
+    "products/scheduling/generated/runtime/*",
+)
+
 # These are the cross-product semantic commitments implemented independently by
 # Base Registry Engine and Relay V2. A change must replay both real product routers,
 # while profile-only tooling and ordinary positive/negative fixtures remain on
@@ -1002,6 +1021,11 @@ def classify(
         or path in {"clippy.toml", "deny.toml", "rustfmt.toml"}
         for path in paths
     )
+    config_conformance = (
+        complete
+        or any(matches(path, *CONFIG_CONFORMANCE_INPUTS) for path in paths)
+        or bool(affected & CONFIG_CONFORMANCE_PACKAGES)
+    )
     release_tool = (
         complete
         or "release_tool" in security_workflow_gates
@@ -1175,6 +1199,7 @@ def classify(
         "platform_assurance": platform_assurance,
         "platform_coverage": platform_coverage,
         "platform_hygiene": platform_hygiene,
+        "config_conformance": config_conformance,
         "discovery_contracts": complete
         or bool(affected & DISCOVERY_PACKAGES)
         or any(matches(path, *DISCOVERY_PROVIDER_INPUTS) for path in paths)

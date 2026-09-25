@@ -67,7 +67,9 @@ workspace package ran.
 
 Use `products/platform/scripts/check-hygiene-alignment.sh` for shared
 lint/format templates and `cargo deny check` for dependency or advisory policy
-changes. Coverage and fuzz definitions live in CI and
+changes. Run `products/platform/scripts/check-config-conformance.py
+--check-generated` after changing a shared runtime configuration block or a
+runtime that reads `runtime.yaml` through `RuntimeConfigLoader`. Coverage and fuzz definitions live in CI and
 [fuzz/README.md](fuzz/README.md). Run the affected gate locally when changing it
 or when CI cannot supply the required proof; routine edits do not require a
 new full-workspace assurance exercise.

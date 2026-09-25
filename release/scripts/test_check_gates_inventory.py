@@ -1415,6 +1415,16 @@ class GateInventoryTest(unittest.TestCase):
             ),
         )
 
+    def test_missing_config_conformance_gate_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "run: products/platform/scripts/check-config-conformance.py --check-generated",
+            "run: products/platform/scripts/check-config-conformance.py",
+        )
+        self.assertIn(
+            "Runtime configuration conformance gate",
+            self.module.missing_gates(text),
+        )
+
     def test_missing_platform_fuzz_runner_is_reported(self) -> None:
         text = self.workflow.replace(
             "run: products/platform/scripts/run-fuzz-smoke.sh",

@@ -71,6 +71,12 @@
   `products/platform/generated/`. The blocks also serialize back to the form
   they were read from, so a runtime that renders its configuration keeps the
   same key names.
+- Add the runtime configuration conformance gate,
+  `products/platform/scripts/check-config-conformance.py`, run in root CI. It
+  fails when a runtime's generated schema re-declares a shared block, when a
+  runtime still expands its configuration outside the shared loader, when the
+  tests proving `*Ref` fields and authored files refuse `${VAR}` go missing, or
+  when the committed canonical schema differs from its generator.
 - Add Ed25519 and ES256 private key generation beside ES384, with RFC 7638
   thumbprint tests for RSA, EC, and OKP keys.
 - BREAKING: remove `reject_deprecated_config_fields`; runtimes declare removed
