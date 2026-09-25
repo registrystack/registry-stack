@@ -118,6 +118,17 @@ for this session only; nothing about the session is a production posture.
 `products/messaging/scripts/test-dev.sh` is the automated run of the same
 path.
 
+`.messaging/dev/session.json` is the session's record. It is written when the
+session starts, as each container starts, and when the session is ready, and
+holds `owner`, the value of the `org.registrystack.messagingctl.dev-owner`
+label on every container the session started; `state`, `starting` or `ready`;
+`containers`, the containers started so far; and `detail`, empty while
+starting and the ready report once ready. Mailpit publishes on a port Docker
+picks, so `detail.mailpit` is where a script reads the Mailpit address;
+`detail.api`, `detail.metrics`, and `detail.mockGateway` name the other
+endpoints. The next start in the project reads `owner` to remove the
+containers an interrupted session left.
+
 To run the runtime yourself instead, start from the starter. The starter
 under `examples/starter/` is a runtime configuration and a package with an email and an SMS sender profile, an email template in English and
 French, an SMS template, a sender access profile, and an operator access
@@ -173,7 +184,7 @@ never hand-edited.
 | `GET /health` | none | `200` with an empty body while the process serves |
 | `GET /ready` | none | `200` when the database carries every expected migration and its package ledger names the served package active, `503 service.unavailable` otherwise |
 | `POST /v1/messages` | bearer, an access profile listing the sender profile and template, and an `Idempotency-Key` header | `202` with the message receipt; the same key and request answer the stored receipt again; `429 rate-limit.exceeded` past the caller's rate and `429 quota.exceeded` past the profile's daily limit, both with `Retry-After` |
-| `GET /v1/messages/{message_id}` | bearer, the submitting principal (the same issuer and subject) or an operator | `200` with the status derived from the dispatch state and the delivery report, both of those, the masked recipient, and the attempts; `404 message.not-visible` for any other message |
+| `GET /v1/messages/{message_id}` | bearer, the submitting principal (the same issuer and subject) or an operator | `200` with the status derived from the dispatch state and the delivery report, both of those, the recipient's channel with the value `redacted`, and the attempts; `404 message.not-visible` for any other message |
 | `POST /v1/messages/{message_id}/cancel` | bearer, the submitting principal (the same issuer and subject) or an operator | `200` with the cancelled status; `409 message.dispatch-started` once dispatch started, `409 message.terminal` once it is final |
 | `POST /v1/templates/{template_id}/versions/{version}/preview` | bearer, a sender profile listing the template | `200` with the rendered parts and the SMS segment count; persists nothing |
 | `POST /v1/provider-callbacks/{provider_id}` and `POST /v1/provider-callbacks/{provider_id}/{token}` | the provider's configured callback verifier, no bearer | `204` once the receipt is read; `403 callback.unverified` for any callback that does not verify, `422 callback.unreadable` for one the receipt script cannot read |
