@@ -9,7 +9,7 @@ interval="${2:-1}"
 case "$action" in
   snapshot|sample|analyze) ;;
   *)
-    printf '%s\n' 'usage: products/breg/loadtest/dbstats.sh snapshot|sample [interval-seconds]|analyze' >&2
+    printf '%s\n' 'usage: products/casework/loadtest/dbstats.sh snapshot|sample [interval-seconds]|analyze' >&2
     exit 2
     ;;
 esac
@@ -29,15 +29,19 @@ import sys
 from pathlib import Path
 
 environment = json.load(open(sys.argv[1], encoding="utf-8"))
-root=Path(sys.argv[1]).resolve().parent
-if (root/'.launcher-owned').read_text().strip()!='registry-stack-breg-loadtest-v2': raise SystemExit(2)
-project=(root/'project').resolve()
-if Path(environment['project']).resolve()!=project: raise SystemExit(2)
-state=json.load(open(project/'.breg/dev/state.json', encoding='utf-8'))
-container=environment["database"]["container"]
-if container!=state.get('containerId') or len(container)!=64 or any(c not in '0123456789abcdefABCDEF' for c in container): raise SystemExit(2)
-if environment["database"]["database"]!='breg_dev': raise SystemExit(2)
-print(container, 'breg_dev')
+root = Path(sys.argv[1]).resolve().parent
+if (root / ".launcher-owned").read_text().strip() != "registry-stack-casework-loadtest-v1":
+    raise SystemExit(2)
+project = (root / "project").resolve()
+if Path(environment["project"]).resolve() != project:
+    raise SystemExit(2)
+state = json.load(open(project / ".casework/dev/state.json", encoding="utf-8"))
+container = environment["database"]["container"]
+if container != state.get("containerId") or len(container) != 64 or any(c not in "0123456789abcdefABCDEF" for c in container):
+    raise SystemExit(2)
+if environment["database"]["database"] != "casework_dev":
+    raise SystemExit(2)
+print(container, "casework_dev")
 PY
 )
 
@@ -50,6 +54,9 @@ if [[ "$action" == analyze ]]; then
   exit 0
 fi
 
+# Casework appends review accountability to casework_review_history inside
+# each mutating transaction, and publishes audit through casework_audit_outbox.
+# Both count as the audit path for the auditLockWaiters sample.
 if [[ "$action" == snapshot ]]; then
   psql_exec -At <<'SQL'
 WITH table_sizes AS (
@@ -58,7 +65,7 @@ WITH table_sizes AS (
          n_live_tup AS "liveRows",
          n_dead_tup AS "deadRows"
   FROM pg_stat_user_tables
-  WHERE strpos(relname, 'registry_audit') = 1 OR strpos(relname, 'breg_e_') = 1
+  WHERE strpos(relname, 'casework_review_') = 1 OR relname = 'casework_audit_outbox'
   ORDER BY pg_total_relation_size(relid) DESC
   LIMIT 20
 ), current_waits AS (
@@ -67,12 +74,21 @@ WITH table_sizes AS (
   WHERE datname = current_database() AND pid <> pg_backend_pid() AND wait_event IS NOT NULL
   GROUP BY wait_event_type, wait_event
   ORDER BY waiters DESC
+), task_states AS (
+  SELECT state, count(*) AS tasks
+  FROM casework_review_tasks
+  GROUP BY state
+  ORDER BY state
 )
 SELECT json_build_object(
   'timestamp', clock_timestamp(),
   'currentWaits', COALESCE((SELECT json_agg(current_waits) FROM current_waits), '[]'::json),
   'tableSizes', COALESCE((SELECT json_agg(table_sizes) FROM table_sizes), '[]'::json),
-  'auditRows', (SELECT count(*) FROM registry_internal.registry_audit)
+  'reviewRequests', (SELECT count(*) FROM casework_review_requests),
+  'reviewTaskStates', COALESCE((SELECT json_agg(task_states) FROM task_states), '[]'::json),
+  'reviewHistoryRows', (SELECT count(*) FROM casework_review_history),
+  'auditOutboxRows', (SELECT count(*) FROM casework_audit_outbox),
+  'backends', (SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid())
 )::jsonb::text;
 SQL
   exit 0
@@ -84,7 +100,8 @@ WITH activity AS (
   SELECT wait_event_type,
          wait_event,
          state,
-         strpos(lower(query), 'registry_audit') > 0 AS audit_query,
+         (strpos(lower(query), 'casework_review_history') > 0
+           OR strpos(lower(query), 'casework_audit_outbox') > 0) AS audit_query,
          cardinality(pg_blocking_pids(pid)) > 0 AS blocked
   FROM pg_stat_activity
   WHERE datname = current_database() AND pid <> pg_backend_pid()
@@ -100,6 +117,8 @@ SELECT json_build_object(
   'auditLockWaiters', (SELECT count(*) FROM activity WHERE state = 'active' AND audit_query AND wait_event_type = 'Lock'),
   'lockWaiters', (SELECT count(*) FROM activity WHERE state = 'active' AND wait_event_type = 'Lock'),
   'blockedBackends', (SELECT count(*) FROM activity WHERE state = 'active' AND blocked),
+  'activeBackends', (SELECT count(*) FROM activity WHERE state = 'active'),
+  'backends', (SELECT count(*) FROM activity),
   'waitEvents', COALESCE((SELECT json_agg(waits) FROM waits), '[]'::json)
 )::jsonb::text;
 SQL

@@ -8,192 +8,24 @@ import subprocess
 import tempfile
 import threading
 import unittest
-import unittest.mock as mock
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
-MODULE_PATH = Path(__file__).with_name("evidence.py")
-SPEC = importlib.util.spec_from_file_location("loadtest_evidence", MODULE_PATH)
+MODULE_PATH = Path(__file__).with_name("loadenv.py")
+REPOSITORY = MODULE_PATH.parents[4]
+SPEC = importlib.util.spec_from_file_location("loadtest_evidence", REPOSITORY / "scripts/loadtest/evidence.py")
 assert SPEC and SPEC.loader
 evidence = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(evidence)
-LOADENV_SPEC = importlib.util.spec_from_file_location("loadtest_environment", MODULE_PATH.with_name("loadenv.py"))
+LOADENV_SPEC = importlib.util.spec_from_file_location("loadtest_environment", MODULE_PATH)
 assert LOADENV_SPEC and LOADENV_SPEC.loader
 loadenv = importlib.util.module_from_spec(LOADENV_SPEC)
 LOADENV_SPEC.loader.exec_module(loadenv)
 
 
-class EvidenceTests(unittest.TestCase):
-    def test_command_output_accepts_a_successful_command_with_no_output(self) -> None:
-        self.assertEqual(evidence._command_output(["python3", "-c", "pass"]), "")
-
-    def test_manifest_keeps_only_whitelisted_non_secret_context(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            environment = root / "env.json"
-            seed = root / "seed.json"
-            out = root / "manifest.json"
-            environment.write_text(
-                json.dumps(
-                    {
-                        "pool_max": 32,
-                        "breg_url": "http://secret-host",
-                        "private_setting": "/secret/path",
-                    }
-                ),
-                encoding="utf-8",
-            )
-            seed.write_text(
-                json.dumps({"seed": 7, "establishments": 100, "first_record_id": "do-not-copy"}),
-                encoding="utf-8",
-            )
-            arguments = argparse.Namespace(
-                environment=environment,
-                seed_summary=seed,
-                out=out,
-                repository=root,
-                profile="steady",
-                parameter=["offeredOps=50", "duration=10m"],
-            )
-            with (
-                mock.patch.object(
-                    evidence,
-                    "_git_metadata",
-                    return_value={"revision": "a" * 40, "dirty": False},
-                ),
-                mock.patch.object(evidence, "_command_output", return_value="test-version"),
-            ):
-                evidence.create_manifest(arguments)
-            manifest = json.loads(out.read_text(encoding="utf-8"))
-            rendered = out.read_text(encoding="utf-8")
-            self.assertEqual(manifest["seed"], {"establishments": 100, "seed": 7})
-            self.assertEqual(manifest["configuration"]["parameters"]["offeredOps"], "50")
-            self.assertNotIn("secret-host", rendered)
-            self.assertNotIn("do-not-copy", rendered)
-
-    def test_safety_check_rejects_secret_record_id_and_unsafe_sample_tag(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            secret = root / "secret"
-            seed_pool = root / "seed.txt"
-            samples = root / "samples.json"
-            secret.write_text("super-secret-value", encoding="utf-8")
-            seed_pool.write_text("record-123 LT-E-1\n", encoding="utf-8")
-            (root / "artifact.txt").write_text("super-secret-value record-123", encoding="utf-8")
-            samples.write_text(
-                json.dumps(
-                    {
-                        "type": "Point",
-                        "metric": "http_req_duration",
-                        "data": {"value": 1, "tags": {"name": "get", "url": "http://example.invalid"}},
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            arguments = argparse.Namespace(
-                artifact_dir=root,
-                samples=samples,
-                secret_file=[secret],
-                seed_pool=[seed_pool],
-                out=root / "safety.json",
-            )
-            with self.assertRaises(evidence.EvidenceError):
-                evidence.assert_safe(arguments)
-            report = json.loads(arguments.out.read_text(encoding="utf-8"))
-            self.assertFalse(report["safe"])
-            self.assertTrue(any("unsafe tags" in item for item in report["violations"]))
-
-    def test_summary_reports_operations_http_rate_latency_and_wait_peaks(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            manifest = root / "manifest.json"
-            k6_summary = root / "summary.json"
-            samples = root / "samples.json"
-            db_after = root / "db-after.json"
-            db_waits = root / "db-waits.jsonl"
-            safety = root / "safety.json"
-            out = root / "result.json"
-            manifest.write_text(
-                json.dumps(
-                    {
-                        "profile": "steady",
-                        "status": "passed",
-                        "configuration": {"parameters": {"offeredOps": "2"}},
-                    }
-                ),
-                encoding="utf-8",
-            )
-            k6_summary.write_text(
-                json.dumps(
-                    {
-                        "state": {"testRunDurationMs": 2000},
-                        "metrics": {
-                            "iterations": {"values": {"count": 4}},
-                            "http_reqs": {"values": {"count": 6}},
-                            "dropped_iterations": {"values": {"count": 0}},
-                            "http_req_failed": {
-                                "values": {"rate": 0},
-                                "thresholds": {"rate==0": {"ok": True}},
-                            },
-                            "http_req_duration": {"values": {"med": 20, "p(95)": 30, "p(99)": 40, "max": 50}},
-                        },
-                    }
-                ),
-                encoding="utf-8",
-            )
-            sample_items = [
-                {
-                    "type": "Point",
-                    "metric": "http_req_duration",
-                    "data": {
-                        "value": value,
-                        "tags": {"name": "get", "scenario": "steady", "status": "200"},
-                    },
-                }
-                for value in (10, 20, 30, 40)
-            ] + [
-                {
-                    "type": "Point",
-                    "metric": "http_reqs",
-                    "data": {
-                        "value": 1,
-                        "tags": {"name": "get", "scenario": "steady", "status": status},
-                    },
-                }
-                for status in ("200", "200", "504")
-            ]
-            samples.write_text("".join(json.dumps(item) + "\n" for item in sample_items), encoding="utf-8")
-            db_after.write_text(json.dumps({"auditRows": 10}), encoding="utf-8")
-            db_waits.write_text(
-                json.dumps({"auditLockWaiters": 2, "lockWaiters": 3, "blockedBackends": 1}) + "\n",
-                encoding="utf-8",
-            )
-            safety.write_text(json.dumps({"safe": True}), encoding="utf-8")
-            evidence.summarize(
-                argparse.Namespace(
-                    manifest=manifest,
-                    k6_summary=k6_summary,
-                    samples=samples,
-                    db_after=db_after,
-                    db_waits=db_waits,
-                    safety=safety,
-                    k6_exit_code=0,
-                    out=out,
-                )
-            )
-            result = json.loads(out.read_text(encoding="utf-8"))
-            self.assertEqual(result["achieved"]["operationsPerSecond"], 2)
-            self.assertEqual(result["achieved"]["httpRequestsPerSecond"], 3)
-            self.assertEqual(result["achieved"]["timeouts504"], 1)
-            self.assertEqual(result["latency"]["byOperation"]["get"]["p95Ms"], 38.5)
-            self.assertEqual(result["phases"]["steady"]["httpRequests"], 3)
-            self.assertEqual(result["phases"]["steady"]["timeouts504"], 1)
-            self.assertEqual(result["database"]["waits"]["auditLockWaitersPeak"], 2)
-            self.assertTrue(result["pass"])
-
+class BaseRegistryEngineHarnessTests(unittest.TestCase):
     def test_profiles_pin_held_sweep_and_burst_recovery(self) -> None:
         loadtest = MODULE_PATH.parent.parent
         workload = (loadtest / "lib/workload.js").read_text(encoding="utf-8")
@@ -301,8 +133,7 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(requests[1], {"accessProfile": ["business-operator"], "$skiptoken": ["cursor-value"]})
 
     def test_load_environment_prepares_one_dev_client_and_preserves_existing_output(self) -> None:
-        repository = MODULE_PATH.parents[4]
-        fixture = repository / "products/breg/acceptance/business-establishments"
+        fixture = REPOSITORY / "products/breg/acceptance/business-establishments"
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory) / "project"
             loadenv.local_project(fixture, project)
@@ -338,25 +169,54 @@ class EvidenceTests(unittest.TestCase):
             with self.assertRaises(loadenv.LoadtestError):
                 loadenv.fresh_header(fake, project, "loadtest-driver")
 
+    def test_describe_accepts_only_the_recorded_build_of_this_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory).resolve()
+            root = repository / "products/breg/loadtest/.run"
+            (root / "project").mkdir(parents=True)
+            (root / ".launcher-owned").write_text("registry-stack-breg-loadtest-v2\n", encoding="ascii")
+            bregctl = repository / "target/release/bregctl"
+            bregctl.parent.mkdir(parents=True)
+            bregctl.write_text("", encoding="utf-8")
+            library = repository / "fips"
+            library.mkdir()
+            environment = {
+                "breg_url": "http://127.0.0.1:1234",
+                "bregctl": str(bregctl),
+                "build_profile": "release",
+                "project": str(root / "project"),
+                "runtime_library_path": str(library),
+            }
+            (root / "env.json").write_text(json.dumps(environment), encoding="utf-8")
+            self.assertEqual(
+                loadenv.describe(root, repository),
+                ("http://127.0.0.1:1234", str(bregctl), str(root / "project"), str(library)),
+            )
+            environment["build_profile"] = "debug"
+            (root / "env.json").write_text(json.dumps(environment), encoding="utf-8")
+            with self.assertRaises(loadenv.LoadtestError):
+                loadenv.describe(root, repository)
+
     def test_shell_entrypoints_parse(self) -> None:
         loadtest = MODULE_PATH.parent.parent
-        subprocess.run(
-            [
-                "bash",
-                "-n",
-                str(loadtest / "up.sh"),
-                str(loadtest / "down.sh"),
-                str(loadtest / "run.sh"),
-                str(loadtest / "dbstats.sh"),
-            ],
-            check=True,
-        )
+        # bash -n checks only its first file operand, so check each script alone.
+        for script in ("up.sh", "down.sh", "run.sh", "dbstats.sh"):
+            subprocess.run(["bash", "-n", str(loadtest / script)], check=True)
         up = (loadtest / "up.sh").read_text(encoding="utf-8")
         down = (loadtest / "down.sh").read_text(encoding="utf-8")
         self.assertIn("trap cleanup_failed_start EXIT", up)
+        self.assertIn("registry_cargo_build", up)
+        self.assertIn("--runtime-library-path", up)
         self.assertIn("bregctl\" --format json dev start", up)
         self.assertIn("dev stop --remove", down)
         self.assertNotIn("rm -rf", up + down)
+
+    def test_database_samples_are_one_json_object_per_line(self) -> None:
+        # psql prints json_agg arrays across several lines; jsonb text output is
+        # always one line, which the JSON Lines wait sampler depends on.
+        dbstats = (MODULE_PATH.parent.parent / "dbstats.sh").read_text(encoding="utf-8")
+        self.assertNotIn(")::text;", dbstats)
+        self.assertEqual(dbstats.count(")::jsonb::text;"), 2)
 
 
 if __name__ == "__main__":

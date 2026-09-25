@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Safe evidence capture and mechanical summaries for Base Registry Engine load tests."""
+"""Safe evidence capture and mechanical summaries for Registry Stack load tests.
+
+Product harnesses under ``products/<product>/loadtest`` own their lifecycle and
+workload; this module owns the product-neutral run manifest, the evidence
+safety scan, and the result summaries they all write.
+"""
 
 from __future__ import annotations
 
@@ -21,6 +26,7 @@ ALLOWED_PARAMETERS = {
     "baselineDuration",
     "baselineOps",
     "duration",
+    "flowOps",
     "followCursor",
     "offeredOps",
     "peakDuration",
@@ -32,14 +38,7 @@ ALLOWED_PARAMETERS = {
     "warmupDuration",
     "warmupOps",
 }
-SAFE_SEED_FIELDS = {
-    "seed",
-    "establishments",
-    "businesses",
-    "assignments",
-    "establishment_id_count",
-    "business_id_count",
-}
+BUILD_PROFILES = {"debug", "release"}
 SAFE_SAMPLE_TAGS = {"status", "method", "name", "scenario", "expected_response"}
 JWT_PATTERN = re.compile(rb"[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}")
 SQL_TEXT_PATTERN = re.compile(
@@ -104,20 +103,37 @@ def _parameters(values: Iterable[str]) -> dict[str, str]:
     return result
 
 
+def _seed_counts(path: Path | None) -> dict[str, int]:
+    """Keep only integer seed facts; strings could carry record identifiers."""
+    if path is None:
+        return {}
+    seed = _json_object(path)
+    return {
+        key: value
+        for key, value in sorted(seed.items())
+        if isinstance(value, int) and not isinstance(value, bool) and re.fullmatch(r"[A-Za-z_]+", key)
+    }
+
+
 def create_manifest(arguments: argparse.Namespace) -> None:
     environment = _json_object(arguments.environment)
-    seed = _json_object(arguments.seed_summary)
+    configuration: dict[str, Any] = {"parameters": _parameters(arguments.parameter)}
+    if "pool_max" in environment:
+        configuration["poolMax"] = int(environment["pool_max"])
+    build_profile = environment.get("build_profile")
+    if build_profile is not None:
+        if build_profile not in BUILD_PROFILES:
+            raise EvidenceError("environment records an unknown build profile")
+        configuration["buildProfile"] = build_profile
     manifest = {
         "schemaVersion": 1,
+        "product": arguments.product,
         "profile": arguments.profile,
         "status": "running",
         "startedAt": _utc_now(),
         "git": _git_metadata(arguments.repository),
-        "configuration": {
-            "poolMax": int(environment["pool_max"]),
-            "parameters": _parameters(arguments.parameter),
-        },
-        "seed": {key: seed[key] for key in sorted(SAFE_SEED_FIELDS) if key in seed},
+        "configuration": configuration,
+        "seed": _seed_counts(arguments.seed_summary),
         "host": {
             "system": platform.system(),
             "release": platform.release(),
@@ -186,18 +202,29 @@ def _latency_summary(values: list[float]) -> dict[str, Any]:
     }
 
 
+def _sample_seconds(value: Any) -> float | None:
+    """Parse a k6 sample time; fractions beyond microseconds are dropped."""
+    if not isinstance(value, str):
+        return None
+    trimmed = re.sub(r"(\.\d{6})\d+", r"\1", value).replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(trimmed).timestamp()
+    except ValueError:
+        return None
+
+
 def _sample_summary(path: Path) -> dict[str, Any]:
     latencies: dict[str, list[float]] = defaultdict(list)
     phase_latencies: dict[str, list[float]] = defaultdict(list)
     phase_counts: dict[str, dict[str, int]] = defaultdict(
         lambda: {"operations": 0, "httpRequests": 0, "droppedOperations": 0, "failedRequests": 0, "timeouts504": 0}
     )
+    phase_windows: dict[str, list[float]] = {}
     statuses: dict[str, int] = defaultdict(int)
     allowed_tag_violation: str | None = None
     if not path.exists():
         return {
             "operations": {},
-            "phases": {},
             "phaseResults": {},
             "statuses": {},
             "tagViolation": "samples file missing",
@@ -232,26 +259,41 @@ def _sample_summary(path: Path) -> dict[str, Any]:
                     phase_counts[phase]["timeouts504"] += count
             elif metric == "iterations":
                 phase_counts[phase]["operations"] += int(float(data.get("value", 0)))
+                seconds = _sample_seconds(data.get("time"))
+                if seconds is not None:
+                    window = phase_windows.setdefault(phase, [seconds, seconds])
+                    window[0] = min(window[0], seconds)
+                    window[1] = max(window[1], seconds)
             elif metric == "dropped_iterations":
                 phase_counts[phase]["droppedOperations"] += int(float(data.get("value", 0)))
             elif metric == "http_req_failed":
                 phase_counts[phase]["failedRequests"] += int(float(data.get("value", 0)))
     phases = {}
     for name in sorted(set(phase_latencies) | set(phase_counts)):
-        phases[name] = {**phase_counts[name], "latency": _latency_summary(phase_latencies[name])}
+        # The window runs from the first to the last completed operation, so a
+        # phase with a single operation has no measurable rate.
+        first, last = phase_windows.get(name, (0.0, 0.0))
+        window_seconds = round(last - first, 3)
+        phases[name] = {
+            **phase_counts[name],
+            "windowSeconds": window_seconds,
+            "operationsPerSecond": (
+                round(phase_counts[name]["operations"] / window_seconds, 3) if window_seconds > 0 else None
+            ),
+            "latency": _latency_summary(phase_latencies[name]),
+        }
     return {
         "operations": {name: _latency_summary(values) for name, values in sorted(latencies.items())},
-        "phases": {name: _latency_summary(values) for name, values in sorted(phase_latencies.items())},
         "phaseResults": phases,
         "statuses": dict(sorted(statuses.items())),
         "tagViolation": allowed_tag_violation,
     }
 
 
-def _db_wait_summary(path: Path) -> dict[str, Any]:
+def _db_wait_summary(path: Path | None) -> dict[str, Any]:
     peaks = {"auditLockWaiters": 0, "lockWaiters": 0, "blockedBackends": 0}
     samples = 0
-    if not path.exists():
+    if path is None or not path.exists():
         return {"samples": 0, **{f"{name}Peak": None for name in peaks}}
     with path.open(encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
@@ -285,15 +327,15 @@ def summarize(arguments: argparse.Namespace) -> None:
             if isinstance(detail, dict)
         }
     threshold_pass = all(all(expressions.values()) for expressions in thresholds.values())
-    db_after = _json_object(arguments.db_after) if arguments.db_after.exists() else None
+    db_after = _json_object(arguments.db_after) if arguments.db_after and arguments.db_after.exists() else None
     safety = _json_object(arguments.safety) if arguments.safety.exists() else {"safe": False}
     result = {
         "schemaVersion": 1,
+        "product": manifest.get("product"),
         "profile": manifest["profile"],
         "manifest": arguments.manifest.name,
         "durationSeconds": round(duration_seconds, 3) if duration_seconds is not None else None,
         "offered": manifest["configuration"]["parameters"],
-        "execution": summary.get("options", {}).get("scenarios"),
         "achieved": {
             "operations": iterations,
             "operationsPerSecond": round(iterations / duration_seconds, 3) if duration_seconds else None,
@@ -311,11 +353,14 @@ def summarize(arguments: argparse.Namespace) -> None:
                 "maxMs": _metric_values(summary, "http_req_duration").get("max"),
             },
             "byOperation": sample_details["operations"],
-            "byPhase": sample_details["phases"],
         },
         "httpStatuses": sample_details["statuses"],
         "phases": sample_details["phaseResults"],
-        "database": {"snapshot": db_after, "waits": _db_wait_summary(arguments.db_waits)},
+        "database": (
+            {"snapshot": db_after, "waits": _db_wait_summary(arguments.db_waits)}
+            if arguments.db_after or arguments.db_waits
+            else None
+        ),
         "thresholds": thresholds,
         "pass": (
             arguments.k6_exit_code == 0
@@ -400,7 +445,8 @@ def parser() -> argparse.ArgumentParser:
     manifest.add_argument("--out", type=Path, required=True)
     manifest.add_argument("--repository", type=Path, required=True)
     manifest.add_argument("--environment", type=Path, required=True)
-    manifest.add_argument("--seed-summary", type=Path, required=True)
+    manifest.add_argument("--seed-summary", type=Path)
+    manifest.add_argument("--product", choices=("breg", "evidence", "casework"), required=True)
     manifest.add_argument("--profile", required=True)
     manifest.add_argument("--parameter", action="append", default=[])
 
@@ -414,8 +460,8 @@ def parser() -> argparse.ArgumentParser:
     summary.add_argument("--manifest", type=Path, required=True)
     summary.add_argument("--k6-summary", type=Path, required=True)
     summary.add_argument("--samples", type=Path, required=True)
-    summary.add_argument("--db-after", type=Path, required=True)
-    summary.add_argument("--db-waits", type=Path, required=True)
+    summary.add_argument("--db-after", type=Path)
+    summary.add_argument("--db-waits", type=Path)
     summary.add_argument("--safety", type=Path, required=True)
     summary.add_argument("--k6-exit-code", type=int, required=True)
     summary.add_argument("--out", type=Path, required=True)

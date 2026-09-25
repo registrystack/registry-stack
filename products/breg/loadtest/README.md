@@ -18,6 +18,14 @@ the remaining journey and workload.
 - `cargo`, `docker`, `python3`
 - `k6` (`brew install k6`)
 
+`up.sh` builds `breg` and `bregctl` with the release profile, because latency
+and capacity from an unoptimized build are not representative. `up.sh --debug`
+builds the development profile instead, for iterating on the harness itself;
+every run manifest records which profile was measured. On macOS the build goes
+through `scripts/cargo-runtime-library-path.sh`, and the resolved AWS-LC FIPS
+library directory is recorded in `.run/env.json` so later commands can execute
+the same binaries directly.
+
 ## Quick start
 
 ```bash
@@ -95,18 +103,21 @@ PEAK_OPS=300 products/breg/loadtest/run.sh --profile burst
 
 ## Evidence
 
+The manifest, safety scan, and summaries are written by the product-neutral
+`scripts/loadtest/evidence.py`, shared with the Evidence and Casework harnesses.
 Each measured run gets an owner-only directory under `.run/results/` with:
 
 - `manifest.json`: Git revision and dirty state, non-secret host/tool versions,
-  fixed development pool size, seed counts, exact profile parameters, and
-  timestamps;
+  build profile, fixed development pool size, seed counts, exact profile
+  parameters, and timestamps;
 - `k6-summary.json` and `k6-samples.json`: threshold data and raw metric
   samples with the system tag set restricted to status, method, operation name,
   scenario, and expected-response status;
 - `db-before.json`, `db-waits.jsonl`, and `db-after.json`: continuous wait
   counts, table sizes, and audit-chain length from the development database;
-- `result.json`: throughput, errors, drops, 504s, p50/p95/p99 by operation and
-  phase, DB wait peaks, and the SLO verdict;
+- `result.json`: throughput, errors, drops, 504s, p50/p95/p99 by operation,
+  per-phase counts, achieved rate, and latency, DB wait peaks, and the SLO
+  verdict;
 - `safety.json`: evidence scan proving the current authorization header,
   seeded record-id canaries, compact JWTs, unsafe k6 tags, SQL text, and
   response bodies were not persisted.
@@ -134,9 +145,12 @@ products/breg/loadtest/dbstats.sh analyze
 
 ## Interpreting results
 
-- The audit chain is a strong bottleneck hypothesis because audited requests
-  serialize updates to a singleton chain head, but the harness should prove it
-  per run using audit lock waits.
+- Every request, reads included, appends an `attempt` and a `terminal` record
+  to the audit chain. Each append updates the singleton chain head and holds
+  its row lock until that transaction's commit is durable, so commit latency
+  bounds throughput for the whole registry. Audit lock waits in `result.json`
+  show when a run reached that bound. Measure the host's sync cost with
+  `docker exec <container> pg_test_fsync -s 1` before comparing hosts.
 - 504 `request.timeout` responses are saturation, not successful throughput.
 - Capacity is the highest held rate that meets its full thresholds, not a rate
   merely touched during a ramp.
@@ -148,16 +162,19 @@ products/breg/loadtest/dbstats.sh analyze
 ## Verification
 
 ```bash
-python3 -m unittest products/breg/loadtest/support/test_evidence.py -v
-bash -n products/breg/loadtest/{up,down,run,dbstats}.sh
+python3 -m unittest scripts/loadtest/test_evidence.py products/breg/loadtest/support/test_harness.py -v
+for script in products/breg/loadtest/{up,down,run,dbstats}.sh; do bash -n "$script"; done
+shellcheck -x products/breg/loadtest/*.sh
 for profile in products/breg/loadtest/profiles/*.js; do
   k6 inspect -e \
-    ESTABLISHMENT_IDS_FILE=products/breg/loadtest/.run/seed/establishment-ids.txt \
-    -e AUTHORIZATION_HEADER_FILE=products/breg/loadtest/.run/project/.breg/dev/secrets/loadtest-driver.header \
+    ESTABLISHMENT_IDS_FILE="$PWD/products/breg/loadtest/.run/seed/establishment-ids.txt" \
+    -e AUTHORIZATION_HEADER_FILE="$PWD/products/breg/loadtest/.run/project/.breg/dev/secrets/loadtest-driver.header" \
     "$profile" >/dev/null
 done
 ```
 
 The inspect loop uses the synthetic seed pool and fresh header from a running
 environment because workload profiles load both during k6 initialization. The
+paths are absolute because k6 resolves relative `open()` paths against the
+script that calls it. The
 live `cursor-smoke` is the end-to-end proof that continuation actually occurs.

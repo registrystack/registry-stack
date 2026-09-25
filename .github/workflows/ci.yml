@@ -114,6 +114,14 @@ jobs:
           scripts/test_cargo_runtime_library_path.py
           scripts/test_cargo_runtime_script_contracts.py
 
+      - name: Test load-test harness tooling
+        run: >-
+          python3 -m unittest
+          scripts/loadtest/test_evidence.py
+          products/breg/loadtest/support/test_harness.py
+          products/evidence/loadtest/support/test_harness.py
+          products/casework/loadtest/support/test_harness.py
+
       - name: Test nightly coverage planning
         run: python3 .github/scripts/test_nightly_rust_coverage.py
 

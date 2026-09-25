@@ -8,10 +8,20 @@ support="$loadtest_dir/support/loadenv.py"
 run_dir="$loadtest_dir/.run"
 fixture="$product_dir/acceptance/business-establishments"
 
-if [[ $# -ne 0 ]]; then
-  printf '%s\n' 'usage: products/breg/loadtest/up.sh' >&2
+usage() {
+  printf '%s\n' 'usage: products/breg/loadtest/up.sh [--debug]' >&2
   exit 2
-fi
+}
+
+# Capacity figures from an unoptimized build are not representative, so the
+# runtime is built with the release profile unless --debug asks for a faster
+# build to iterate on the harness itself.
+build_profile=release
+case "$#:${1-}" in
+  0:) ;;
+  1:--debug) build_profile=debug ;;
+  *) usage ;;
+esac
 for command in cargo docker python3; do
   command -v "$command" >/dev/null 2>&1 || {
     printf '%s\n' "$command is required for the Base Registry Engine load-test environment." >&2
@@ -32,12 +42,17 @@ export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_PROFILE_TEST_DEBUG=0
 export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
 
-printf '%s\n' '== Building Base Registry Engine and bregctl'
-cargo build --manifest-path "$repository_root/Cargo.toml" --locked \
+# shellcheck source-path=SCRIPTDIR source=../../../scripts/cargo-runtime-library-path.sh
+. "$repository_root/scripts/cargo-runtime-library-path.sh"
+cargo_profile_arguments=()
+if [[ "$build_profile" == release ]]; then cargo_profile_arguments=(--release); fi
+printf '%s\n' "== Building Base Registry Engine and bregctl ($build_profile profile)"
+registry_cargo_build "$repository_root" --manifest-path "$repository_root/Cargo.toml" --locked \
+  "${cargo_profile_arguments[@]}" \
   -p registry-breg --features registry-breg/runtime \
   -p registry-bregctl --bins >/dev/null
-breg="$repository_root/target/debug/breg"
-bregctl="$repository_root/target/debug/bregctl"
+breg="$repository_root/target/$build_profile/breg"
+bregctl="$repository_root/target/$build_profile/bregctl"
 
 cleanup_failed_start() {
   local status=$?
@@ -66,12 +81,15 @@ printf '%s\n' '== Starting the stock retained BReg development lifecycle'
 python3 "$support" environment \
   --root "$run_dir" \
   --dev-report "$run_dir/dev-report.json" \
-  --bregctl "$bregctl"
+  --bregctl "$bregctl" \
+  --build-profile "$build_profile" \
+  --runtime-library-path "${REGISTRY_CARGO_RUNTIME_LIBRARY_PATH-}"
 
 printf '\n%s\n' 'Base Registry Engine load-test environment is ready.'
 printf '  Base Registry Engine:  http://127.0.0.1:%s\n' "$breg_port"
 printf '  Identity provider:     stock ThunderID 1.0.1 through bregctl dev\n'
 printf '  Database:              owned bregctl dev PostgreSQL on 127.0.0.1:%s\n' "$database_port"
+printf '  BReg build profile:    %s\n' "$build_profile"
 printf '  BReg pool max size:    4 (the stock development lifecycle default)\n'
 printf '  Environment:           %s\n' "$run_dir/env.json"
 printf '  Seed next:             products/breg/loadtest/seed.py --count 100000\n'

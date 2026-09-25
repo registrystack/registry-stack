@@ -1,0 +1,37 @@
+openapi: 3.1.0
+info:
+  title: Load-test synthetic registry
+  version: 1.0.0
+servers:
+  - url: http://127.0.0.1:MOCK_PORT
+paths:
+  /people/{person_id}:
+    get:
+      operationId: getPerson
+      parameters:
+        - name: person_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A synthetic person record
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [person_id, name, date_of_birth]
+                properties:
+                  person_id:
+                    type: string
+                    minLength: 1
+                    maxLength: 64
+                  name:
+                    type: string
+                    minLength: 1
+                    maxLength: 100
+                  date_of_birth:
+                    type: string
+                    format: date

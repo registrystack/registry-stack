@@ -1,8 +1,8 @@
 // One held read-only rate. run.sh executes this profile once per RATES entry
 // so every rate has isolated DB statistics and an independently useful result.
 
-import { SAFE_SYSTEM_TAGS, SUMMARY_TREND_STATS, positiveNumber } from '../lib/config.js';
-import { writeSummary } from '../lib/summary.js';
+import { SAFE_SYSTEM_TAGS, SUMMARY_TREND_STATS, positiveNumber } from '../../../../scripts/loadtest/k6/config.js';
+import { writeSummary } from '../../../../scripts/loadtest/k6/summary.js';
 import { Workload, READ_MIX } from '../lib/workload.js';
 
 const ops = positiveNumber('OPS', __ENV.OPS, 50);
