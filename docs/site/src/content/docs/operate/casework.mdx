@@ -296,8 +296,9 @@ before they become the anchor for verification.
 :::
 
 {/* Evidence: crates/registry-casework/src/config.rs, RuntimeConfig, TlsTermination,
-    ListenerNetworkExposure, OidcConfig, HumanIdentityConfig, OidcJwksSource, valid_listener(),
-    and parse_static_jwks();
+    ListenerNetworkExposure, OidcConfig, HumanIdentityConfig, JwksSource, parse_static_jwks(),
+    and AllowedClientsRequired;
+    crates/registry-platform-config/src/blocks.rs, PrivateListenerConfig and is_valid();
     crates/registry-casework-breg/src/config.rs, BregBinding, binding_generation(),
     generation_ignores_credentials_transport_and_presentation_settings(),
     DEFAULT_REQUEST_TIMEOUT_MILLISECONDS, and MAXIMUM_TIMEOUT_MILLISECONDS;
