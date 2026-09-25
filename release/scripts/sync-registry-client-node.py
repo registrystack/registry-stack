@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -32,6 +33,23 @@ It is installed automatically as an optional dependency of that package at the
 same version. Do not depend on it directly. See
 https://github.com/registrystack/registry-stack for details.
 """
+
+LOADER_ONLY_DECLARATION = re.compile(
+    rb"\n/\*\*(?:\n \*[^\n]*)+\n \*/\n"
+    rb"export declare const __napiBindingTarget:[^\n]+\n"
+)
+
+
+def unified_index_declaration(source: Path) -> bytes:
+    declaration = source.read_bytes()
+    if b"export declare const __napiBindingTarget:" not in declaration:
+        return declaration
+    declaration, replacements = LOADER_ONLY_DECLARATION.subn(b"", declaration)
+    if replacements != 1:
+        raise ValueError(
+            f"could not remove the generated loader-only declaration from {source}"
+        )
+    return declaration
 
 
 def expected_files() -> dict[Path, bytes]:
@@ -63,7 +81,9 @@ def expected_files() -> dict[Path, bytes]:
         destination = TARGET / product
         files[destination / "client.js"] = (source / "client.js").read_bytes()
         files[destination / "client.d.ts"] = (source / "client.d.ts").read_bytes()
-        files[destination / "index.d.ts"] = (source / "index.d.ts").read_bytes()
+        files[destination / "index.d.ts"] = unified_index_declaration(
+            source / "index.d.ts"
+        )
         files[destination / "index.js"] = (
             "'use strict';\n\n"
             f"module.exports = require('../native').load('{product}');\n"

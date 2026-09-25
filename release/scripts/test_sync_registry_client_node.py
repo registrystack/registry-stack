@@ -15,6 +15,7 @@ PLATFORM_TRIPLES = {
     "linux-arm64-gnu": "aarch64-unknown-linux-gnu",
     "linux-x64-gnu": "x86_64-unknown-linux-gnu",
 }
+PRODUCTS = ("discovery", "evidence", "relay", "breg", "casework")
 
 
 def load_module():
@@ -60,6 +61,28 @@ class SyncRegistryClientNodeReadmeTest(unittest.TestCase):
         # The root README is authored by hand, not generated; only the three
         # platform packages get one written for them.
         self.assertNotIn(TARGET / "README.md", self.files)
+
+
+class SyncRegistryClientNodeDeclarationTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.module = load_module()
+        self.files = self.module.expected_files()
+
+    def test_standalone_clients_keep_the_generated_loader_diagnostic(self) -> None:
+        for product in PRODUCTS:
+            with self.subTest(product=product):
+                declaration = (
+                    ROOT / "crates" / f"registry-{product}-client-node" / "index.d.ts"
+                ).read_bytes()
+                self.assertIn(b"export declare const __napiBindingTarget:", declaration)
+
+    def test_unified_facades_omit_the_loader_only_diagnostic(self) -> None:
+        for product in PRODUCTS:
+            with self.subTest(product=product):
+                declaration = self.files[TARGET / product / "index.d.ts"]
+                self.assertNotIn(
+                    b"export declare const __napiBindingTarget:", declaration
+                )
 
 
 CASEWORK_PYTHON_LICENCE = "crates/registry-casework-client-py/LICENSE"
