@@ -71,7 +71,8 @@
   `scheduling.yaml`, or in a records or fixture document the authoring tooling
   reads, is refused with the path of the field that holds it.
 - Accept `${VAR}`, `${VAR:-default}`, and `${VAR:?message}` in string values of
-  `runtime.yaml`, never in a `*Ref` field or beneath one.
+  `runtime.yaml`, never in a `*Ref` field or beneath one, nor under
+  `secretProviders`.
 - Add the optional `package.expectedDigest` pin, compared with the verified
   package's policy digest at startup.
 

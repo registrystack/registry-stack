@@ -109,7 +109,8 @@ reference resolves under `secretProviders.file.root`, and a `secret:env/NAME` re
 `secretProviders.environment: {}` is declared; a reference to an undeclared provider refuses
 startup. String values may take a deployment value from the environment with `${VAR}`,
 `${VAR:-default}`, or `${VAR:?message}`, except in a `*Ref` field, which must be written as a
-literal secret reference. `package.expectedDigest`, when set, is compared with
+literal secret reference, and under `secretProviders`, which must be written as it is meant.
+`package.expectedDigest`, when set, is compared with
 `sha256:` followed by the bundle hash `GET /health` reports.
 `audit.destination` is `file` by default; set it to `stdout`, without `path`, `rotateBytes`, or
 `retainDays`, to hand the entries to your log collector instead.

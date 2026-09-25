@@ -33,15 +33,21 @@ values of `runtime.yaml`:
 
 - `${VAR}` requires `VAR` to be set and non-empty;
 - `${VAR:-default}` uses `default` when `VAR` is unset or empty;
-- `${VAR:?message}` refuses with `message` when `VAR` is unset or empty.
+- `${VAR:?message}` refuses when `VAR` is unset or empty. The refusal names
+  `VAR` and withholds `message`, because the message is configured text.
 
 Keys and comments are never substituted, a substituted value stays a string,
 and substitution runs once, so a value that itself looks like an expression is
-kept as written. An expression inside a field whose name ends in `Ref` or
-`Refs`, or anywhere beneath one, is refused: a secret reference names a
-provider, and the provider reads the value. Authored package files are not
+kept as written. There is no escape syntax: a literal `${` reaches the
+configuration as the value of a variable. An expression inside a field whose
+name ends in `Ref` or `Refs`, or anywhere beneath one, is refused: a secret
+reference names a provider, and the provider reads the value. An expression
+anywhere under `secretProviders` is refused too, because a provider setting
+chooses which secret a reference resolves to. Authored package files are not
 substituted; `reject_environment_expressions_in_authored_yaml` refuses an
-authored document that carries an expression.
+authored document that carries an expression, and refuses text it cannot read
+as YAML rather than letting it pass unchecked. Its refusals carry the
+`authored_config.environment_expression` and `authored_config.syntax` codes.
 
 The effective digest of a loaded file is the `sha256:` label of the canonical
 JSON of the substituted document, so a comment or formatting change does not
@@ -59,8 +65,8 @@ runtimes that do not read their configuration through the loader yet.
   and a reference to an undeclared provider is refused.
 - `DatabaseConfig`: `runtimeUrlRef`, `migrationUrlRef`, and an optional
   `trustedRootCertificateRef`.
-- `JwksSource`: `kind: discovery` (the default), `kind: uri` with `uri`, or
-  `kind: static` with `documentRef`.
+- `JwksSource`: `kind: discovery` (the default) with no other member,
+  `kind: uri` with `uri`, or `kind: static` with `documentRef`.
 - `PackageConfig`: an absolute `root` and an optional `expectedDigest` pin.
 - `ListenerConfig` and `PrivateListenerConfig`: `bind` as `host:port` with an
   IP address host, and for private listeners the declared TLS termination and
