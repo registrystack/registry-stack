@@ -152,9 +152,12 @@ by a commit, and when a live row has no retained journal head that reproduces it
 the audit record carry counts and positions, not values.
 
 The transaction has no live-row limit. It reads each entity's live rows, their journal heads, and
-the retained heads in the same record-identifier range in pages of 1,000 records, so its memory
-and each statement stay the same size as the registry grows, and it proves each entity holds
-exactly one retained journal head per live row.
+the retained heads in the same record-identifier range in pages of 1,000 records, and it proves
+each entity holds exactly one retained journal head per live row. Memory stays flat as the
+registry grows, and each statement is bounded by one page of records and their retained
+revisions, which is not a fixed cost: a page of records that carry thousands of revisions each
+reads far more than an average page, and the last statement for each entity counts every
+retained head past its last live row.
 
 The run is a read outage for the whole registry. To read rows under forced row security, the
 migration role lifts that force on every entity table before the first page, and lifting it takes
@@ -171,7 +174,9 @@ maintenance window:
 - Set `operationalTimeouts.migrationLockMilliseconds` long enough to wait out in-flight requests
   at the start. Set `operationalTimeouts.migrationStatementMilliseconds` long enough for one scan
   of the whole revision journal: before the entity tables are locked, one statement proves every
-  retained journal head is indexed by a commit. Every later statement reads one page.
+  retained journal head is indexed by a commit. Every later statement reads one page, so the same
+  timeout must also cover the page whose records hold the most retained revisions; the rehearsal
+  shows whether it does.
 
 `history.rebaseline.live_rows.unverified` reports one live row that its journal head does not
 reproduce, and names neither the entity nor the record, because operator refusals here carry no
@@ -400,7 +405,7 @@ retention record to the journal, so the chain states what left it.
 | Symptom | Next move |
 | --- | --- |
 | A saved snapshot returns `503 source.unavailable` | Retained history no longer covers it, after an erasure or an incompatible successor. Take a fresh reference. |
-| A fresh snapshot reference is refused after an erasure | Coverage ends before the erased commit. Run `history rebaseline` to cover the current state again; earlier references stay unavailable. Writes wait while it runs. |
+| A fresh snapshot reference is refused after an erasure | Coverage ends before the erased commit. Run `history rebaseline` to cover the current state again; earlier references stay unavailable. Reads and writes of every entity wait while it runs; see [the outage note](#restore-snapshot-coverage-after-an-erasure). |
 | `history rebaseline` reports `history.rebaseline.live_rows.unverified` | A live row and its journal head disagree, and the refusal names no record. Read the revisions of the records you suspect, or compare live rows with their journal heads under the migration role. |
 | `history erase` reports `history.erase.acknowledgement.required` | The command was run without `--acknowledge-irreversible`. Confirm the record and the revision boundary, then run it again with the flag. Nothing was read or erased. |
 | `history.erase.request_file.refused` or `history.rebaseline.request_file.refused` | The request file must be an absolute path to an owner-only regular file, not a symbolic link, holding the documented fields and nothing else. |

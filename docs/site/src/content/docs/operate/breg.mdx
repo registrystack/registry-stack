@@ -954,7 +954,11 @@ rather than reinterpreted, and a request file that is not owner-only is refused 
 connection is opened. For every record still holding pre-flip plaintext, the lifecycle erases its
 retained history through the same path
 [`history erase`](../breg-retention/#erase-retained-history) uses and restores snapshot coverage
-with one rebaseline, then writes one audit record that carries counts, not values.
+with one rebaseline, then writes one audit record that carries counts, not values. That rebaseline
+blocks reads and writes of every entity until it commits, so run the lifecycle in the maintenance
+window the
+[rebaseline outage guidance](../breg-retention/#restore-snapshot-coverage-after-an-erasure)
+describes.
 
 `bregctl field-encryption keygen --output <absolute-file>` writes one fresh base64 data key for
 the local file provider with owner-only permissions, never prints it, and refuses to overwrite an

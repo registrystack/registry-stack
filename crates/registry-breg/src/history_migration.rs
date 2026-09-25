@@ -103,7 +103,24 @@ struct CapturedEntityRow {
     record_revision: i64,
     record_lifecycle: String,
     active_package_revision: String,
+    /// `created_at` and `updated_at` as text in the capturing session, so two
+    /// captures in one transaction compare exactly.
+    created_at: String,
+    updated_at: String,
     data: Map<String, Value>,
+}
+
+impl CapturedEntityRow {
+    /// Whether `after` carries the same record metadata as this row. Only the
+    /// journal writes record metadata, so a reviewed step that changed any of
+    /// it is refused.
+    fn keeps_record_metadata_of(&self, after: &CapturedEntityRow) -> bool {
+        self.record_revision == after.record_revision
+            && self.record_lifecycle == after.record_lifecycle
+            && self.active_package_revision == after.active_package_revision
+            && self.created_at == after.created_at
+            && self.updated_at == after.updated_at
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -283,10 +300,7 @@ async fn journal_captured_changes(
         let after = post_rows
             .get(record_id)
             .ok_or(HistoryMigrationError::UnexpectedRowShape)?;
-        if before.record_revision != after.record_revision
-            || before.record_lifecycle != after.record_lifecycle
-            || before.active_package_revision != after.active_package_revision
-        {
+        if !before.keeps_record_metadata_of(after) {
             return Err(HistoryMigrationError::UnexpectedRowShape);
         }
         if before.data == after.data {
@@ -444,7 +458,10 @@ const LIVE_ROW_VERIFICATION_PAGE_ROWS: i64 = 1_000;
 /// Every statement reads one page: at most [`LIVE_ROW_VERIFICATION_PAGE_ROWS`]
 /// live rows, their journal heads, and the retained heads whose record
 /// identifiers fall in the page's key range, so the number of live rows is not
-/// bounded here and no statement scans an entity's whole history. Nothing is
+/// bounded here. A statement's cost is bounded by its page's records and their
+/// retained revisions, not by a fixed size: records with many revisions make a
+/// larger page, and the final count per entity covers every head past its last
+/// live row. Nothing is
 /// collected for a commit: a caller that must index the live rows as members
 /// uses [`verify_live_rows_match_journal_heads`], which the commit-member budget
 /// bounds.
@@ -901,7 +918,7 @@ pub(crate) fn check_reviewed_history_step(
 
 /// Statements a reviewed update may not contain, and the record metadata only
 /// the journal may write, each matched as a whole word.
-const REFUSED_REVIEWED_UPDATE_WORDS: [&str; 12] = [
+const REFUSED_REVIEWED_UPDATE_WORDS: [&str; 13] = [
     "insert",
     "delete",
     "truncate",
@@ -914,6 +931,7 @@ const REFUSED_REVIEWED_UPDATE_WORDS: [&str; 12] = [
     "active_package_revision",
     "created_at",
     "updated_at",
+    "uescape",
 ];
 
 fn validate_reviewed_update_sql(sql: &str) -> Result<()> {
@@ -936,6 +954,15 @@ fn validate_reviewed_chunk_sql(sql: &str) -> Result<()> {
 /// statement and pins its shape, and the journal refuses a step that changes
 /// record metadata.
 fn reviewed_update_words(sql: &str) -> Result<Vec<String>> {
+    // A Unicode-escape identifier or string (`U&"..."`, `U&'...'`) spells a
+    // name this scan cannot read, so it is refused anywhere in the text.
+    if sql
+        .as_bytes()
+        .windows(3)
+        .any(|window| matches!(window, [b'u' | b'U', b'&', b'"' | b'\'']))
+    {
+        return Err(HistoryMigrationError::UnsupportedSqlShape);
+    }
     // A statement the scan cannot delimit with certainty is read as written,
     // so a leading comment then refuses it and every word inside its literals
     // counts.
@@ -985,7 +1012,11 @@ fn mask_comments_and_literals(sql: &str) -> Option<String> {
         let next = characters.get(index + 1).copied();
         match character {
             '-' if next == Some('-') => {
-                while characters.get(index).is_some_and(|&c| c != '\n') {
+                // PostgreSQL ends a line comment at either newline character.
+                while characters
+                    .get(index)
+                    .is_some_and(|&c| c != '\n' && c != '\r')
+                {
                     index += 1;
                 }
                 masked.push(' ');
@@ -1162,7 +1193,7 @@ fn decode_captured_rows(
             || record_revision <= 0
             || !matches!(record_lifecycle.as_str(), "active" | "tombstoned")
             || active_package_revision.is_empty()
-            || row.len() != entity.fields.len() + 4
+            || row.len() != entity.fields.len() + CAPTURED_METADATA_COLUMNS
         {
             return Err(HistoryMigrationError::UnexpectedRowShape);
         }
@@ -1183,6 +1214,12 @@ fn decode_captured_rows(
             };
             data.insert(field.id.clone(), value);
         }
+        let timestamp = |index: usize| {
+            row.try_get::<_, String>(entity.fields.len() + index)
+                .map_err(|_| HistoryMigrationError::RevisionUnavailable)
+        };
+        let created_at = timestamp(4)?;
+        let updated_at = timestamp(5)?;
         if captured
             .insert(
                 record_uuid,
@@ -1190,6 +1227,8 @@ fn decode_captured_rows(
                     record_revision,
                     record_lifecycle,
                     active_package_revision,
+                    created_at,
+                    updated_at,
                     data,
                 },
             )
@@ -1201,6 +1240,10 @@ fn decode_captured_rows(
     Ok(captured)
 }
 
+/// The record metadata columns [`history_returning_projection`] reads beside
+/// the declared fields: four before them, `created_at` and `updated_at` after.
+const CAPTURED_METADATA_COLUMNS: usize = 6;
+
 fn history_returning_projection(entity: &CompiledEntity) -> String {
     let mut expressions = vec![
         "record_id::text".to_owned(),
@@ -1209,6 +1252,8 @@ fn history_returning_projection(entity: &CompiledEntity) -> String {
         "active_package_revision".to_owned(),
     ];
     expressions.extend(entity.fields.values().map(field_json_projection));
+    expressions.push("created_at::text".to_owned());
+    expressions.push("updated_at::text".to_owned());
     expressions.join(", ")
 }
 
@@ -1503,10 +1548,62 @@ mod tests {
     }
 
     #[test]
+    fn a_reviewed_step_that_changes_any_record_metadata_is_detected() {
+        let before = CapturedEntityRow {
+            record_revision: 3,
+            record_lifecycle: "active".to_owned(),
+            active_package_revision: "package-1".to_owned(),
+            created_at: "2026-01-01 00:00:00+00".to_owned(),
+            updated_at: "2026-02-01 00:00:00+00".to_owned(),
+            data: Map::new(),
+        };
+        let mut data_only = before.clone();
+        data_only
+            .data
+            .insert("status".to_owned(), Value::String("active".to_owned()));
+        assert!(
+            before.keeps_record_metadata_of(&data_only),
+            "a change to declared fields alone keeps the record metadata"
+        );
+        type MetadataChange = (&'static str, fn(&mut CapturedEntityRow));
+        let changes: [MetadataChange; 5] = [
+            ("record_revision", |row| row.record_revision += 1),
+            ("record_lifecycle", |row| {
+                row.record_lifecycle = "tombstoned".to_owned();
+            }),
+            ("active_package_revision", |row| {
+                row.active_package_revision = "package-2".to_owned();
+            }),
+            ("created_at", |row| {
+                row.created_at = "2026-03-01 00:00:00+00".to_owned();
+            }),
+            ("updated_at", |row| {
+                row.updated_at = "2026-03-01 00:00:00+00".to_owned();
+            }),
+        ];
+        for (column, change) in changes {
+            let mut after = before.clone();
+            change(&mut after);
+            assert!(
+                !before.keeps_record_metadata_of(&after),
+                "a changed {column} is detected"
+            );
+        }
+    }
+
+    #[test]
     fn chunked_backfill_refuses_the_statement_shapes_the_journal_cannot_hold() {
         for sql in [
-            // Record metadata, however it is spelled.
+            // Record metadata, named plainly, quoted, in capitals, behind a
+            // comment PostgreSQL ends at a carriage return, or through a
+            // Unicode escape.
             "UPDATE registry_data.households SET created_at = now() \
+             WHERE record_id = ANY($1::pg_catalog.uuid[])",
+            "UPDATE registry_data.households SET status = 'a' --\r, record_revision = 9\n \
+             WHERE record_id = ANY($1::pg_catalog.uuid[])",
+            "UPDATE registry_data.households SET U&\"created\\005Fat\" = now() \
+             WHERE record_id = ANY($1::pg_catalog.uuid[])",
+            "UPDATE registry_data.households SET u&\"created!005Fat\" UESCAPE '!' = now() \
              WHERE record_id = ANY($1::pg_catalog.uuid[])",
             "UPDATE registry_data.households AS h SET status = h.updated_at::text \
              WHERE record_id = ANY($1::pg_catalog.uuid[])",
