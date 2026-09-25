@@ -42,7 +42,7 @@ pub enum Command {
         /// Evidence resolves its own configured destination exactly as startup
         /// resolves it and refuses when the result is not at or below the root,
         /// which is what stops a container from mounting durable storage at the
-        /// conventional prefix while writing the chain somewhere ephemeral.
+        /// conventional prefix while writing audit entries somewhere ephemeral.
         #[arg(
             long,
             value_name = "ABSOLUTE_DIRECTORY",
