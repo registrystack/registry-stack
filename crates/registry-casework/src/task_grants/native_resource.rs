@@ -200,7 +200,9 @@ pub(super) fn app_with_clients(
 ) -> Router {
     let pool = db.runtime_config.build_pool().unwrap();
     let lock = RegistryLockKey::derive(PACKAGE).unwrap();
-    let audit = AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into()).unwrap();
+    let (audit, _) = registry_breg::audit::test_support::capturing(
+        AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into()).unwrap(),
+    );
     let cursors = Arc::new(
         CursorCodec::new(Zeroizing::new(vec![0x49; 32]), Duration::from_secs(300)).unwrap(),
     );

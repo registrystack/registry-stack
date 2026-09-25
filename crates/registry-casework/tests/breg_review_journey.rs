@@ -525,8 +525,10 @@ fn breg_service(
 ) -> Arc<HttpService> {
     let pool = database.runtime_config.build_pool().expect("BReg pool");
     let lock = RegistryLockKey::derive(REGISTRY_ID).expect("BReg lock");
-    let audit = AuditProfile::production_from_secret_bytes(vec![0x51; 32].into())
-        .expect("BReg audit profile");
+    let (audit, _) = registry_breg::audit::test_support::capturing(
+        AuditProfile::production_from_secret_bytes(vec![0x51; 32].into())
+            .expect("BReg audit profile"),
+    );
     let cursors = Arc::new(
         CursorCodec::new(Zeroizing::new(vec![0x52; 32]), Duration::from_secs(300))
             .expect("BReg cursors"),
@@ -650,7 +652,7 @@ fn runtime_config(root: &std::path::Path, casework: &Url) -> Value {
         "database":{"runtimeUrlRef":"secret:file/database","migrationUrlRef":"secret:file/migration","pool":{"maxSize":4,"waitTimeoutMilliseconds":1000,"createTimeoutMilliseconds":1000,"recycleTimeoutMilliseconds":1000},"roles":{"migration":"registry_migration","runtime":"registry_runtime"}},
         "package":{"root":root,"trustAnchorPath":root.join("anchor"),"compilerSourceRevision":"test-source","activeRevision":PACKAGE_REVISION,"activeSequence":1},
         "authentication":{"oidc":{"issuer":"https://issuer.example","audience":BREG_AUDIENCE,"allowedAlgorithm":"EdDSA","accessTokenType":"JWT","scopeClaim":"scope","scopeSeparator":" ","allowedClients":["registry-client"],"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":60000,"jwksCache":{"cacheTtlSeconds":600,"negativeCacheTtlSeconds":60,"refreshCooldownSeconds":30,"maxDocumentBytes":65536,"requestTimeoutMilliseconds":5000,"outageToleranceSeconds":900}},"authorityClaims":{"principal":"registry_principal"}},
-        "audit":{"hashKeyRef":"secret:file/audit"},
+        "audit":{"hashKeyRef":"secret:file/audit","path":root.join("audit.jsonl")},
         "cursor":{"secretRef":"secret:file/cursor","maxAgeSeconds":300},
         "eventDestinations":{},
         "reviewAuthorities":{"casework-a":{"endpoint":casework.as_str(),"profile":"producer","tokenRef":"secret:file/review-token","producerId":"registry-producer","recoveryDays":7}},

@@ -347,8 +347,8 @@ entries:
       - {file: crates/registry-platform-crypto/src/lib.rs, name: public_jwk_thumbprint_uses_required_members_only}
   - id: sec-audit-key-epoch
     tests:
-      - {file: crates/registry-platform-audit/src/lib.rs, name: audit_profile_chain_and_identifier_keys_are_domain_separated}
-      - {file: crates/registry-platform-audit/src/lib.rs, name: byte_backed_profiles_reject_weak_master_secrets_without_echo}
+      - {file: crates/registry-platform-audit/src/lib.rs, name: production_identifier_hashes_match_known_answers}
+      - {file: crates/registry-platform-audit/src/lib.rs, name: byte_backed_profile_rejects_a_weak_master_secret_without_echo}
       - {file: crates/registry-evidence/src/audit.rs, name: pseudonyms_are_byte_identical_for_one_secret_and_key_version}
       - {file: crates/registry-evidence/src/audit.rs, name: pseudonyms_keep_key_epochs_distinguishable}
       - {file: crates/registry-evidence/src/audit.rs, name: an_unusable_key_version_opens_no_destination}
