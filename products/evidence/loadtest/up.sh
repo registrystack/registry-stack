@@ -27,7 +27,11 @@ if [[ ! "$load_clients" =~ ^[0-9]+$ ]] || ((load_clients < 1 || load_clients > 2
   printf '%s\n' 'LOAD_CLIENTS must be an integer between 1 and 256.' >&2
   exit 2
 fi
-for command in cargo docker python3; do
+required_commands=(cargo docker python3)
+# The launcher proves it owns the source mock by its working directory, which
+# only Linux exposes under /proc; elsewhere lsof reads it.
+if [[ "$(uname -s)" != Linux ]]; then required_commands+=(lsof); fi
+for command in "${required_commands[@]}"; do
   command -v "$command" >/dev/null 2>&1 || {
     printf '%s\n' "$command is required for the Evidence load-test environment." >&2
     exit 2

@@ -13,6 +13,8 @@ process. Load evidence and the synthetic subject pool live under
 ## Prerequisites
 
 - `cargo`, `docker`, `python3`
+- `lsof` on hosts other than Linux (macOS ships it), to confirm the source
+  mock's working directory
 - `k6` (`brew install k6`)
 
 `up.sh` builds `evidence` and `evidencectl` with the release profile, because

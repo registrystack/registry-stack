@@ -421,6 +421,29 @@ class EvidenceHarnessTests(unittest.TestCase):
                 child.wait()
             self.assertEqual(loadenv._process_cwd(child.pid), "")
 
+    def test_process_cwd_reads_proc_on_linux_without_lsof(self) -> None:
+        with (
+            unittest.mock.patch.object(loadenv.sys, "platform", "linux"),
+            unittest.mock.patch.object(loadenv.os, "readlink", return_value="/tmp/project") as readlink,
+            unittest.mock.patch.object(loadenv.subprocess, "run") as run,
+        ):
+            self.assertEqual(loadenv._process_cwd(4242), "/tmp/project")
+        readlink.assert_called_once_with("/proc/4242/cwd")
+        run.assert_not_called()
+        with (
+            unittest.mock.patch.object(loadenv.sys, "platform", "linux"),
+            unittest.mock.patch.object(loadenv.os, "readlink", side_effect=FileNotFoundError()),
+        ):
+            self.assertEqual(loadenv._process_cwd(4242), "")
+
+    def test_process_cwd_names_lsof_when_it_is_missing_elsewhere(self) -> None:
+        with (
+            unittest.mock.patch.object(loadenv.sys, "platform", "darwin"),
+            unittest.mock.patch.object(loadenv.subprocess, "run", side_effect=FileNotFoundError(2, "missing", "lsof")),
+        ):
+            with self.assertRaisesRegex(loadenv.LoadtestError, "lsof is required"):
+                loadenv._process_cwd(4242)
+
     def test_environment_records_only_non_secret_facts_and_integer_pool_summary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = Path(directory).resolve()
