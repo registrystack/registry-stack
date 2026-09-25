@@ -78,13 +78,19 @@ Every mapping in the runtime document and the package is closed, and an
 unknown key is refused with its path. Credentials are named only by
 `secret:env/NAME` or `secret:file/name` references in members ending in
 `Ref`, under a provider the document explicitly enables. `${VAR}`
-substitution happens after parsing and is refused in any `Ref` member
-(MESSAGING-DEC-05). Refusal messages name the member and never repeat the
-refused value, the substituted text, or a default. `Debug` output of the
-database and metrics settings is redacted.
+expansion is the shared `registry-platform-config` loader, run over the
+document text before parsing: a value filling a whole member is quoted as one
+string and a value embedded in longer text is refused when it could change
+the document's shape. Before expansion, the document as written is read once
+and an expression anywhere in or below a `Ref` member is refused, aliases
+included (MESSAGING-DEC-05). Refusal messages name the member, or the
+document root for an expansion failure, and never repeat the refused value,
+the substituted text, or a default. `Debug` output of the database and
+metrics settings is redacted.
 
-Tests: the `config.rs` and `environment.rs` unit tests, and the checkpoint's
-`messagingctl check` refusal cases.
+Tests: the `config.rs` unit tests, the `registry-platform-config`
+expansion and protected-member tests, and the checkpoint's `messagingctl
+check` refusal cases.
 
 ## Package integrity and the ledger
 

@@ -6,10 +6,13 @@
 # resolve. Messaging reads the authored package at package.root/messaging.yaml
 # and refuses to start when that file is missing or does not pass its checks.
 #
-# Every string member may carry ${VAR}, ${VAR:-default}, or ${VAR:?message};
-# the value is substituted after the YAML is parsed, so it is always text. A
-# member whose name ends in Ref names a secret and refuses an environment
-# expression: use a secret:env/NAME or secret:file/name reference instead.
+# Environment expressions are expanded over this text before the YAML is
+# parsed, comments included: a dollar sign and braces around VAR,
+# VAR:-default, or VAR:?message (RUNTIME-CONFIG.md spells them out). A value
+# filling a whole member is quoted as one string; one embedded in a longer
+# value is refused if it could change the document's shape. A member whose
+# name ends in Ref names a secret and refuses an environment expression: use
+# a secret:env/NAME or secret:file/name reference instead.
 # Unknown keys are refused, with the path of the first one found.
 apiVersion: registry.registrystack.org/messaging-runtime/v1alpha1
 kind: MessagingRuntimeConfig

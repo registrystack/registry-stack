@@ -62,16 +62,21 @@ decisions:
   - id: MESSAGING-DEC-05
     subject: Environment expressions are refused in credential references
     decision: >-
-      The runtime configuration substitutes ${VAR} expressions in ordinary
-      string members after parsing, and refuses one in any member that holds a
-      secret reference.
+      The runtime configuration expands ${VAR} expressions with the shared
+      registry-platform-config loader, over the document text before parsing,
+      as the other Registry Stack runtimes do. Before expanding, it reads the
+      document as written and refuses an expression in or below any member
+      whose name ends in Ref, since those members hold secret references.
     reasoning: >-
-      A secret reference already names where the secret lives. Substituting
+      A secret reference already names where the secret lives. Expanding
       into it would let an environment variable redirect the runtime to a
-      different secret, and would put the reference outside review.
+      different secret, and would put the reference outside review. The
+      shared loader keeps an expanded value from changing the document's
+      shape, so one expansion grammar holds across the stack.
     evidence:
       - {path: crates/registry-messaging/src/config.rs, name: an_environment_expression_in_a_credential_field_is_refused}
-      - {path: crates/registry-messaging/src/environment.rs, name: an_expression_in_a_credential_member_is_refused}
+      - {path: crates/registry-messaging/src/config.rs, name: an_environment_expression_reaching_a_credential_field_through_an_alias_is_refused}
+      - {path: crates/registry-platform-config/src/lib.rs, name: config_env_expression_is_refused_in_a_protected_member_and_below_it}
   - id: MESSAGING-DEC-06
     subject: The package ledger names the package the runtime serves, and a change applies on restart
     decision: >-

@@ -9,8 +9,9 @@
   route, and `/metrics` on a separate private listener. The contract is
   pre-1.0 and may change in a later minor release. The database schema is
   one migration, version 1.
-- Refuse unknown configuration keys with their path, and refuse an
-  environment expression in any member that names a secret.
+- Refuse unknown configuration keys with their path. Expand `${VAR}`
+  expressions with the shared Registry Stack loader, over the document text
+  before parsing, and refuse one in any member that names a secret.
 - Add `messagingctl check`, which loads a runtime configuration and its
   package offline exactly as `serve` would.
 - Add package providers, sender profiles, and versioned templates: bounded,

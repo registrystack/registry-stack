@@ -28,13 +28,25 @@ commented document.
 
 ## Environment expressions
 
-A string value may carry `${VAR}`, `${VAR:-default}`, or `${VAR:?message}`.
-Substitution happens after the YAML is parsed, one string at a time, so a
-substituted value is always text and can never add a key, a list entry, or a
-document. An expression is refused in every member whose name ends in `Ref`:
-those members name a secret, and a secret is named by a `secret:` reference
-the resolver reads, never by text an environment variable spliced in. A
-refusal names the member and never repeats the value or the default text.
+The document may carry `${VAR}`, `${VAR:-default}`, or `${VAR:?message}`.
+Expansion is the shared loader every Registry Stack runtime uses
+(`registry-platform-config`): it runs over the document text before the YAML
+is parsed, so an expression in a comment is expanded too and must resolve.
+`${VAR}` needs `VAR` set to a non-empty value, `${VAR:-default}` uses the
+default when `VAR` is unset or empty, and `${VAR:?message}` refuses the
+document with the message. A value that fills a whole member is written as
+one quoted string, so it can never add a key, a list entry, or a document. A
+value embedded in longer text is refused when it holds a line break, a quote,
+a flow or block indicator, `: `, ` #`, or a leading YAML indicator, because
+it could change the document's shape.
+
+An expression is refused in every member whose name ends in `Ref`, and in
+everything below one, before anything is expanded: those members name a
+secret, and a secret is named by a `secret:` reference the resolver reads,
+never by text an environment variable spliced in. That refusal names the
+member. A refusal from expansion itself is reported at the document root `/`
+and names the variable, or carries the `:?` message; neither ever repeats a
+variable's value or a default's text.
 
 ## Keys
 

@@ -193,7 +193,7 @@ fn a_project_path_that_reads_as_an_expression_is_refused() {
     let project = temporary.path().join("${HOME}");
     fs::create_dir(&project).unwrap();
     let Err(failure) = project_directory(&project) else {
-        panic!("the runtime configuration would substitute the path");
+        panic!("the runtime configuration would expand the path");
     };
     assert_eq!(failure.exit, REFUSAL_EXIT);
 }

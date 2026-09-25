@@ -14,7 +14,8 @@ use registry_messaging_core::{
     PACKAGE_FILE,
 };
 use registry_platform_config::{
-    SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,
+    expand_config_env_vars_with, reject_config_env_expressions_in, SecretError, SecretProvider,
+    SecretReference, SecretResolver, MAX_SECRET_BYTES,
 };
 use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
@@ -23,10 +24,14 @@ use registry_platform_oidc::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::environment::{substitute, SubstitutionError};
 use crate::http_provider::HttpProviderSettings;
 use crate::package::{load_package, LoadedPackage, PackageLoadError};
 use crate::smtp::SmtpProviderSettings;
+
+/// The suffix naming a credential member. Every secret reference in the
+/// runtime document is spelled this way, and none may carry an environment
+/// expression.
+const CREDENTIAL_MEMBER_SUFFIX: &str = "Ref";
 
 /// Explain one refused secret reference without disclosing what it protects.
 ///
@@ -432,19 +437,53 @@ impl RuntimeConfig {
         Ok(config)
     }
 
-    /// Parse the operator document without checking it. Environment
-    /// expressions are substituted in string values after the YAML is parsed,
-    /// so a substituted value can never change the document's shape.
+    /// Parse the operator document without checking it.
+    ///
+    /// Environment expressions are expanded over the document text by
+    /// `registry-platform-config` before the YAML is parsed, so an expanded
+    /// value is quoted as one string where it fills a whole value and refused
+    /// where it could change the document's shape. Before that, the document
+    /// as written is read once to refuse an expression in any member whose
+    /// name ends in `Ref`: a credential is named by a `secret:` reference the
+    /// resolver reads, never by text an environment variable spliced in.
     fn parse_with_environment(
         bytes: &[u8],
         lookup: &impl Fn(&str) -> Option<String>,
     ) -> Result<Self, RuntimeConfigError> {
-        let mut document: serde_norway::Value =
+        let written: serde_json::Value =
             serde_norway::from_slice(bytes).map_err(|error| RuntimeConfigError::Parse {
                 path: "/".to_owned(),
                 cause: redact_refused_values(&error.to_string()),
             })?;
-        substitute(&mut document, lookup).map_err(RuntimeConfigError::Environment)?;
+        reject_config_env_expressions_in(&written, |name| name.ends_with(CREDENTIAL_MEMBER_SUFFIX))
+            .map_err(|refused| RuntimeConfigError::Environment {
+                path: refused.path().to_owned(),
+                reason: "an environment expression is not accepted in a credential member; name \
+                     the secret with a secret:env/NAME or secret:file/name reference instead"
+                    .to_owned(),
+            })?;
+        // `from_slice` above has already refused a document that is not UTF-8.
+        let text = std::str::from_utf8(bytes).map_err(|_| RuntimeConfigError::Parse {
+            path: "/".to_owned(),
+            cause: "the document is not UTF-8".to_owned(),
+        })?;
+        let expanded = expand_config_env_vars_with(text, lookup).map_err(|error| {
+            RuntimeConfigError::Environment {
+                path: "/".to_owned(),
+                reason: error.to_string(),
+            }
+        })?;
+        if expanded.len() as u64 > MAXIMUM_DOCUMENT_BYTES {
+            return Err(RuntimeConfigError::Environment {
+                path: "/".to_owned(),
+                reason: "the expanded document exceeds one mebibyte".to_owned(),
+            });
+        }
+        let document: serde_norway::Value =
+            serde_norway::from_str(&expanded).map_err(|error| RuntimeConfigError::Parse {
+                path: "/".to_owned(),
+                cause: redact_refused_values(&error.to_string()),
+            })?;
         serde_path_to_error::deserialize(document).map_err(|error| {
             let (path, cause) = refused_yaml(error);
             RuntimeConfigError::Parse { path, cause }
@@ -947,8 +986,8 @@ pub enum RuntimeConfigError {
     Read(#[source] std::io::Error),
     #[error("the Messaging runtime configuration is not valid at {path}: {cause}")]
     Parse { path: String, cause: String },
-    #[error("the environment expression at {} is refused: {}", .0.path, .0.reason)]
-    Environment(SubstitutionError),
+    #[error("the environment expression at {path} is refused: {reason}")]
+    Environment { path: String, reason: String },
     #[error("unsupported Messaging runtime apiVersion; expected {MESSAGING_RUNTIME_API_VERSION}")]
     InvalidApiVersion,
     #[error("unsupported Messaging runtime kind; expected {MESSAGING_RUNTIME_KIND}")]
@@ -1021,7 +1060,7 @@ impl RuntimeConfigError {
             Self::RelativeOperatedPath(path) => path,
             Self::RelativeRuntimePath | Self::Read(_) => "/",
             Self::Parse { path, .. } => path,
-            Self::Environment(error) => &error.path,
+            Self::Environment { path, .. } => path,
             Self::InvalidExpectedDigest | Self::PackageDigestMismatch { .. } => {
                 "package.expectedDigest"
             }
@@ -1164,19 +1203,63 @@ pub(crate) mod tests {
         value["database"]["runtimeUrlRef"] = json!("${DATABASE_URL}");
         let error = load(value).unwrap_err();
         assert!(
-            matches!(error, RuntimeConfigError::Environment(_)),
+            matches!(error, RuntimeConfigError::Environment { .. }),
             "{error}"
         );
         assert_eq!(error.path(), "database.runtimeUrlRef");
+        assert!(error.to_string().contains("credential member"), "{error}");
 
         let mut value = base();
         value["audit"]["hashKeyRef"] = json!("secret:env/${KEY_NAME:-AUDIT}");
         let error = load(value).unwrap_err();
         assert_eq!(error.path(), "audit.hashKeyRef");
+
+        let mut value = base();
+        value["authentication"]["oidc"]["jwksSource"] =
+            json!({"kind": "static", "documentRef": "${JWKS}"});
+        let error = load(value).unwrap_err();
+        assert_eq!(error.path(), "authentication.oidc.jwksSource.documentRef");
     }
 
     #[test]
-    fn an_environment_expression_elsewhere_is_substituted_after_parsing() {
+    fn an_environment_expression_reaching_a_credential_field_through_an_alias_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let path = write_project(root.path(), &runtime_value(root.path()), &package_value());
+        let text = std::fs::read_to_string(&path).unwrap().replace(
+            "runtimeUrlRef: secret:env/MESSAGING_RUNTIME_URL",
+            "runtimeUrlRef: *spliced",
+        );
+        let text = format!("x-spliced: &spliced ${{DATABASE_URL}}\n{text}");
+        std::fs::write(&path, text).unwrap();
+        let error = RuntimeConfig::load_with_environment(&path, &|_| {
+            Some("postgres://user:hunter2@db".to_owned())
+        })
+        .unwrap_err();
+        assert_eq!(error.path(), "database.runtimeUrlRef", "{error}");
+    }
+
+    #[test]
+    fn a_refused_expression_never_repeats_the_value_or_the_default() {
+        let mut value = base();
+        value["database"]["runtimeUrlRef"] = json!("${X:-postgres://user:hunter2@db}");
+        let error = load(value).unwrap_err();
+        assert!(!error.to_string().contains("hunter2"), "{error}");
+        assert!(!format!("{error:?}").contains("hunter2"));
+
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = runtime_value(root.path());
+        runtime["authentication"]["oidc"]["issuer"] = json!("https://${HOST}/");
+        let path = write_project(root.path(), &runtime, &package_value());
+        let error = RuntimeConfig::load_with_environment(&path, &|_| {
+            Some("hunter2.example\nkind: Other".to_owned())
+        })
+        .unwrap_err();
+        assert!(!error.to_string().contains("hunter2"), "{error}");
+        assert!(!format!("{error:?}").contains("hunter2"));
+    }
+
+    #[test]
+    fn an_environment_expression_elsewhere_is_expanded() {
         let root = tempfile::tempdir().unwrap();
         let mut runtime = runtime_value(root.path());
         runtime["listener"]["bind"] = json!("${MESSAGING_BIND}");
@@ -1189,8 +1272,66 @@ pub(crate) mod tests {
         assert_eq!(config.listener.bind, "127.0.0.1:9107".parse().unwrap());
         assert_eq!(config.authentication.oidc.issuer, "https://fallback.test");
 
+        // Expansion runs over the document text, so an unset variable is
+        // refused at the document root rather than at its member.
         let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
-        assert_eq!(error.path(), "listener.bind");
+        assert!(
+            matches!(error, RuntimeConfigError::Environment { .. }),
+            "{error}"
+        );
+        assert_eq!(error.path(), "/");
+        assert!(error.to_string().contains("MESSAGING_BIND"), "{error}");
+    }
+
+    #[test]
+    fn an_expanded_value_can_never_change_the_document_shape() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = runtime_value(root.path());
+        runtime["kind"] = json!("${SNEAKY}");
+        let path = write_project(root.path(), &runtime, &package_value());
+        let error = RuntimeConfig::load_with_environment(&path, &|_| {
+            Some(format!("x\nkind: {MESSAGING_RUNTIME_KIND}"))
+        })
+        .unwrap_err();
+        assert!(matches!(error, RuntimeConfigError::InvalidKind), "{error}");
+
+        let mut runtime = runtime_value(root.path());
+        runtime["authentication"]["oidc"]["issuer"] = json!("https://${HOST}/");
+        let path = write_project(root.path(), &runtime, &package_value());
+        for value in [
+            "a.example\nkind: Other",
+            "a.example, b.example",
+            "a.example # c",
+        ] {
+            let error = RuntimeConfig::load_with_environment(&path, &|_| Some(value.to_owned()))
+                .unwrap_err();
+            assert!(
+                matches!(error, RuntimeConfigError::Environment { .. }),
+                "{error}"
+            );
+            assert_eq!(error.path(), "/");
+            assert!(error.to_string().contains("HOST"), "{error}");
+        }
+    }
+
+    #[test]
+    fn the_starter_runtime_example_parses_as_written() {
+        let example = crate::package::tests::starter_root().join("runtime.example.yaml");
+        let bytes = std::fs::read(example).unwrap();
+        RuntimeConfig::parse_with_environment(&bytes, &no_environment).unwrap();
+    }
+
+    #[test]
+    fn a_malformed_environment_expression_is_refused() {
+        for issuer in ["${ISSUER", "${1BAD}", "${}"] {
+            let mut value = base();
+            value["authentication"]["oidc"]["issuer"] = json!(issuer);
+            let error = load(value).unwrap_err();
+            assert!(
+                matches!(error, RuntimeConfigError::Environment { .. }),
+                "{issuer}: {error}"
+            );
+        }
     }
 
     #[test]

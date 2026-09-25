@@ -174,8 +174,8 @@ fn project_directory(project: &Path) -> DevResult<PathBuf> {
             project.display()
         ))
     })?;
-    // Every string of the generated runtime configuration is substituted
-    // from the environment, so a path that reads as an expression would not
+    // The generated runtime configuration is expanded from the environment
+    // before it is parsed, so a path that reads as an expression would not
     // name this project.
     if project.to_string_lossy().contains("${") {
         return Err(refused(

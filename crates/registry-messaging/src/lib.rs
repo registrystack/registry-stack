@@ -9,7 +9,6 @@ pub mod auth;
 pub mod callbacks;
 pub mod config;
 pub mod dispatch;
-pub mod environment;
 pub mod http;
 pub mod http_provider;
 pub mod limits;
