@@ -571,9 +571,10 @@ pub async fn erase_field_encryption_history_with_connection(
 }
 
 /// Run the erase-history lifecycle over an already opened migration
-/// connection: enumerate the pending targets, erase each record's retained
-/// history through the established erasure path, rebaseline coverage once,
-/// then append the rebaseline and lifecycle entries after that commit. Each per-record erasure and the
+/// connection: accept the lifecycle's request entry once a recorded flip makes
+/// this a lifecycle run, enumerate the pending targets, erase each record's
+/// retained history through the established erasure path, rebaseline coverage
+/// once, then append the rebaseline and lifecycle entries after that commit. Each per-record erasure and the
 /// rebaseline take the Registry advisory transaction lock in turn, so the
 /// lifecycle never runs concurrent with an apply that holds the session lock.
 pub async fn erase_field_encryption_history(
@@ -750,6 +751,14 @@ async fn scrub_plaintext_request_snapshots(
             .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
         return Ok((0, 0, false, lifecycle_reference));
     }
+    // A recorded erase-and-rebaseline flip makes this a lifecycle run: its
+    // request entry must be accepted before any request snapshot, record
+    // history, or coverage state is read for erasure or changed.
+    append_maintenance_entries(
+        request.audit,
+        vec![lifecycle_request_entry(request, &lifecycle_reference)?],
+    )
+    .await?;
     let (terminal_exists, correlated_progress_exists) =
         lifecycle_progress_state(&transaction, &lifecycle_reference).await?;
     let unresolved_provenance: bool = transaction
@@ -1359,24 +1368,7 @@ fn erase_history_entry(
     lifecycle_reference: &str,
     outcome: &FieldEncryptionHistoryErasureOutcome,
 ) -> Result<AuditEntry, FieldEncryptionHistoryErasureError> {
-    if !profile_is_keyed(request.audit.profile()) {
-        return Err(FieldEncryptionHistoryErasureError::InvalidInput);
-    }
-    let key_hasher = request.audit.profile().key_hasher();
-    let operator_reference = key_hasher
-        .audit_reference_hash(
-            "breg-field-encryption-operator-v1",
-            &request.expected.package_revision,
-            request.operator_reference,
-        )
-        .map_err(|_| FieldEncryptionHistoryErasureError::InvalidInput)?;
-    let reason_reference = key_hasher
-        .audit_reference_hash(
-            "breg-field-encryption-reason-v1",
-            &request.expected.package_revision,
-            request.reason,
-        )
-        .map_err(|_| FieldEncryptionHistoryErasureError::InvalidInput)?;
+    let (operator_reference, reason_reference) = lifecycle_operator_references(request)?;
     Ok(AuditEntry::response(
         FIELD_ENCRYPTION_AUDIT_SCHEMA,
         lifecycle_reference,
@@ -1402,6 +1394,55 @@ fn erase_history_entry(
             "coveragePolicy": "per_record_erasure_then_single_rebaseline",
         }),
     ))
+}
+
+/// Build the lifecycle's request entry, accepted before its first scrub. It
+/// names only the references the terminal entry also names, and shares its
+/// correlation, the lifecycle reference.
+fn lifecycle_request_entry(
+    request: &FieldEncryptionHistoryErasureRequest<'_>,
+    lifecycle_reference: &str,
+) -> Result<AuditEntry, FieldEncryptionHistoryErasureError> {
+    let (operator_reference, reason_reference) = lifecycle_operator_references(request)?;
+    Ok(AuditEntry::request(
+        FIELD_ENCRYPTION_AUDIT_SCHEMA,
+        lifecycle_reference,
+        json!({
+            "phase": "attempt",
+            "outcome": "started",
+            "operationId": AUDIT_OPERATION_ID,
+            "packageRevision": request.expected.package_revision,
+            "lifecycleReference": lifecycle_reference,
+            "operatorReference": operator_reference,
+            "reasonReference": reason_reference,
+            "historyChoice": "erase-and-rebaseline",
+        }),
+    ))
+}
+
+/// The keyed operator and reason references every lifecycle entry carries.
+fn lifecycle_operator_references(
+    request: &FieldEncryptionHistoryErasureRequest<'_>,
+) -> Result<(String, String), FieldEncryptionHistoryErasureError> {
+    if !profile_is_keyed(request.audit.profile()) {
+        return Err(FieldEncryptionHistoryErasureError::InvalidInput);
+    }
+    let key_hasher = request.audit.profile().key_hasher();
+    let operator_reference = key_hasher
+        .audit_reference_hash(
+            "breg-field-encryption-operator-v1",
+            &request.expected.package_revision,
+            request.operator_reference,
+        )
+        .map_err(|_| FieldEncryptionHistoryErasureError::InvalidInput)?;
+    let reason_reference = key_hasher
+        .audit_reference_hash(
+            "breg-field-encryption-reason-v1",
+            &request.expected.package_revision,
+            request.reason,
+        )
+        .map_err(|_| FieldEncryptionHistoryErasureError::InvalidInput)?;
+    Ok((operator_reference, reason_reference))
 }
 
 fn validate_request(
