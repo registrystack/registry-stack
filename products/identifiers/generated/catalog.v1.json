@@ -2799,7 +2799,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "f75317190ca7be1c5354612a08b213495e6fd41ddf5db565e01106760da318b2",
+        "sha256": "e2685f6353fbaabd63ea5e04211e8ad4af463801661145e66e65f719c104b51a",
         "mediaType": "application/schema+json"
       }
     },
@@ -2813,11 +2813,11 @@
       "description": "Registry Casework runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-casework/src/schema.rs",
-        "sha256": "d0f25762e9c7259afcc4f1b21259f3bce94f82958fd3c56d8c33f02fe4c37a3f"
+        "sha256": "c06c07f08d40e8dd6d935edb440557717bf7cab93cbfa6b60ae2199420d43e51"
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "8dbf377a18ec92abef929c991509e72ee33657b652f4b34222fcc46839e391c7",
+        "sha256": "bd86f3652228a2dfd3b9c30b78ab87faa8e7965447418c0e9332e9e80ee42f8d",
         "mediaType": "application/schema+json"
       }
     },
@@ -2903,11 +2903,11 @@
       "description": "Relay V2 authoring JSON Schema.",
       "source": {
         "path": "crates/registry-relayctl/schemas/authoring/runtime.schema.json",
-        "sha256": "08e6bacc0adb91489e6d85b6366c9d43536d6b8d36ded8175d491c1ac9503c6b"
+        "sha256": "2e192681951aa9f6f333ef05e58e8760ecc3e9b87adcb4929eb55e9019b0c236"
       },
       "artifact": {
         "path": "crates/registry-relayctl/schemas/authoring/runtime.schema.json",
-        "sha256": "08e6bacc0adb91489e6d85b6366c9d43536d6b8d36ded8175d491c1ac9503c6b",
+        "sha256": "2e192681951aa9f6f333ef05e58e8760ecc3e9b87adcb4929eb55e9019b0c236",
         "mediaType": "application/schema+json"
       }
     },
@@ -2921,11 +2921,11 @@
       "description": "Registry Scheduling runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-scheduling/src/schema.rs",
-        "sha256": "1cbcdc86074891a5ef5c9237b43e492967b1cc23eb917438a953905613327bc6"
+        "sha256": "868c84dec7bd0d5cbef44ac42e29a35a0fbc313dd92f5e12ff76e339a04a5dc0"
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "3df3a8ea822cc2db0b82c15815490620a5e5b6b7882f0306588c7829828eb120",
+        "sha256": "2a8b41728829a7ac337b4ab93f2b042f8212f178c068297ccdb59321ac3b9cc7",
         "mediaType": "application/schema+json"
       }
     },
