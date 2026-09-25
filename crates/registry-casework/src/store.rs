@@ -3399,7 +3399,7 @@ impl PostgresStore {
     }
 
     /// In-flight reviews grouped by pinned policy, subject source and type,
-    /// and active stage, plus open work items per queue. The inventory holds
+    /// and active stage, plus open work items per queue and per source. The inventory holds
     /// counts and pinned policy only, never subject data.
     pub(crate) async fn pinned_work_inventory(
         &self,
@@ -3434,6 +3434,19 @@ impl PostgresStore {
         {
             let items: i64 = row.try_get(1)?;
             inventory.work_items.insert(
+                row.try_get(0)?,
+                u64::try_from(items).map_err(|_| StoreError::Corrupt)?,
+            );
+        }
+        for row in client
+            .query(
+                "SELECT source_id,count(*) FROM casework_items WHERE erased_at IS NULL AND state NOT IN ('completed','superseded','cancelled') GROUP BY source_id",
+                &[],
+            )
+            .await?
+        {
+            let items: i64 = row.try_get(1)?;
+            inventory.work_items_by_source.insert(
                 row.try_get(0)?,
                 u64::try_from(items).map_err(|_| StoreError::Corrupt)?,
             );

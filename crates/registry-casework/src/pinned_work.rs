@@ -44,9 +44,14 @@ pub enum StrandedWork {
         version: String,
         reviews: u64,
     },
-    /// In-flight source-context reviews name a source the package no longer
-    /// declares, so their context can no longer be read.
-    SourceRemoved { source: String, reviews: u64 },
+    /// In-flight source-context reviews or open work items name a source the
+    /// runtime no longer binds, so their context can no longer be read and no
+    /// action on them can reach the source.
+    SourceRemoved {
+        source: String,
+        reviews: u64,
+        work_items: u64,
+    },
     /// A source read now discloses a field the pinned display schema does not
     /// declare, so the pinned schema refuses every reviewer's context.
     ContextFieldNotDisplayed {
@@ -94,9 +99,14 @@ impl StrandedWork {
                 "{} pin review kind {review_kind} version {version}, which the package declares with different content; give the changed kind a new version",
                 count(*reviews, "in-flight review"),
             ),
-            Self::SourceRemoved { source, reviews } => format!(
-                "{} read their context from source {source}, which the package no longer declares",
+            Self::SourceRemoved {
+                source,
+                reviews,
+                work_items,
+            } => format!(
+                "{} and {} depend on source {source}, which the package no longer declares",
                 count(*reviews, "in-flight review"),
+                count(*work_items, "open work item"),
             ),
             Self::ContextFieldNotDisplayed {
                 source,
@@ -199,6 +209,8 @@ pub(crate) struct PinnedWorkInventory {
     pub(crate) reviews: Vec<PinnedReviewGroup>,
     /// Open work items per queue.
     pub(crate) work_items: BTreeMap<String, u64>,
+    /// Open work items per source.
+    pub(crate) work_items_by_source: BTreeMap<String, u64>,
 }
 
 /// Compare `project` and the fields its source adapters disclose with the
@@ -352,11 +364,24 @@ pub(crate) fn compare_pinned_work(
                 },
             ),
     );
-    conflicts.extend(
-        removed_sources
-            .into_iter()
-            .map(|(source, reviews)| StrandedWork::SourceRemoved { source, reviews }),
-    );
+    let bound = |source: &str| adapters.iter().any(|adapter| adapter.source_id() == source);
+    let stranded_sources = removed_sources
+        .keys()
+        .chain(inventory.work_items_by_source.keys())
+        .filter(|source| !bound(source.as_str()))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    for source in stranded_sources {
+        conflicts.push(StrandedWork::SourceRemoved {
+            reviews: removed_sources.get(&source).copied().unwrap_or_default(),
+            work_items: inventory
+                .work_items_by_source
+                .get(&source)
+                .copied()
+                .unwrap_or_default(),
+            source,
+        });
+    }
     conflicts.extend(context_fields.into_iter().map(|(key, reviews)| {
         let ContextKey {
             source,
@@ -589,6 +614,7 @@ mod tests {
         let inventory = PinnedWorkInventory {
             reviews: vec![group(&pinned, 0, 3)],
             work_items: BTreeMap::from([("intake".to_owned(), 2)]),
+            work_items_by_source: BTreeMap::new(),
         };
         assert!(compare_pinned_work(&project(pinned), &[], &inventory).is_empty());
     }
@@ -601,6 +627,7 @@ mod tests {
             // second: only the first two still need the intake queue.
             reviews: vec![group(&pinned, 0, 2), group(&pinned, 1, 1)],
             work_items: BTreeMap::from([("intake".to_owned(), 4), ("retired".to_owned(), 1)]),
+            work_items_by_source: BTreeMap::new(),
         };
         let mut renamed = pinned.clone();
         renamed.version = "2".to_owned();
@@ -638,6 +665,7 @@ mod tests {
         let inventory = PinnedWorkInventory {
             reviews: vec![group(&pinned, 0, 1), group(&pinned, 1, 2)],
             work_items: BTreeMap::new(),
+            work_items_by_source: BTreeMap::new(),
         };
         let mut renamed = pinned.clone();
         renamed.stages[1].deciding_profiles = vec!["licence-officer".to_owned()];
@@ -666,6 +694,7 @@ mod tests {
         let inventory = PinnedWorkInventory {
             reviews: vec![group(&pinned, 0, 5)],
             work_items: BTreeMap::new(),
+            work_items_by_source: BTreeMap::new(),
         };
         let candidate = project(pinned);
 
@@ -706,7 +735,54 @@ mod tests {
             vec![StrandedWork::SourceRemoved {
                 source: "registry".to_owned(),
                 reviews: 5,
+                work_items: 0,
             }]
+        );
+    }
+
+    #[test]
+    fn open_work_items_from_a_source_the_runtime_no_longer_binds_are_named() {
+        let pinned = kind(ReviewContextStrategy::Source);
+        let inventory = PinnedWorkInventory {
+            reviews: vec![group(&pinned, 0, 1)],
+            work_items: BTreeMap::from([("intake".to_owned(), 3)]),
+            work_items_by_source: BTreeMap::from([
+                ("registry".to_owned(), 2),
+                ("retired-registry".to_owned(), 1),
+            ]),
+        };
+        let candidate = project(pinned);
+
+        let bound = Disclosing(Some(vec!["summary".to_owned()]));
+        let conflicts = compare_pinned_work(&candidate, &[&bound], &inventory);
+        assert_eq!(
+            conflicts,
+            vec![StrandedWork::SourceRemoved {
+                source: "retired-registry".to_owned(),
+                reviews: 0,
+                work_items: 1,
+            }]
+        );
+        assert_eq!(
+            describe_stranded_work(&conflicts),
+            "0 in-flight reviews and 1 open work item depend on source retired-registry, which \
+             the package no longer declares"
+        );
+
+        assert_eq!(
+            compare_pinned_work(&candidate, &[], &inventory),
+            vec![
+                StrandedWork::SourceRemoved {
+                    source: "registry".to_owned(),
+                    reviews: 1,
+                    work_items: 2,
+                },
+                StrandedWork::SourceRemoved {
+                    source: "retired-registry".to_owned(),
+                    reviews: 0,
+                    work_items: 1,
+                },
+            ]
         );
     }
 
