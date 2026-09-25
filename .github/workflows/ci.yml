@@ -725,6 +725,18 @@ jobs:
           CASEWORKCTL_BIN: ${{ github.workspace }}/target/debug/caseworkctl
           BREGCTL_BIN: ${{ github.workspace }}/target/debug/bregctl
         run: products/casework/scripts/check-checkpoint.sh
+      - name: Verify the rewritten Evidence deployment loads through the Evidence loader
+        # The fixture machinery lives behind postgres-test, but this test needs
+        # neither a database nor an issuer. An inexact name filter that selects
+        # nothing still exits 0, so the step names the test exactly and fails
+        # unless it reports one pass.
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p registry-casework --features postgres-test --lib \
+            -- --exact task_grants::native_exchange_tests::the_rewritten_evidence_deployment_loads_through_the_evidence_loader \
+            | tee "${RUNNER_TEMP}/casework-evidence-fixture.log"
+          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/casework-evidence-fixture.log" || { echo "::error::expected exactly one passing test for the_rewritten_evidence_deployment_loads_through_the_evidence_loader"; exit 1; }
       - name: Verify claims, reconciliation, and durable attempts
         env:
           CASEWORK_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework
