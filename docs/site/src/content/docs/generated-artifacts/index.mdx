@@ -37,33 +37,12 @@ always the product of exactly one run.
 
 | Path | What it carries |
 | --- | --- |
-| `openapi.full.yaml` | Every compiled operation, including operator-only ones |
-| `openapi.public.json` | The description Relay serves to unauthenticated callers |
-| `artifacts/` | Capability inventories, JSON Schema, SHACL shapes, JSON-LD vocabularies and contexts, classification and processing descriptions, the audit event schema, and SDMX structures |
-| `reports/identification-report.json` | Which source columns the identification pack flagged, and why |
-| `reports/classification-inventory.json` | The effective classification of every published property |
-| `reports/access-profile-report.json` | What each access profile lets a caller reach |
-| `reports/contextual-review-findings.json` | Combinations a reviewer should look at before approving |
-| `governance/classification-review-starter.yaml` | A starting point for the review record the production profile requires |
-
-Every one of these is derived from the contract and the observed source
-structure.
-None of them carries a source row value.
-
-## The sealed package
-
-`relayctl package` writes one new directory and refuses a destination that
-already exists.
-It recompiles the project under the production profile first, so a revision that
-would fail `relayctl check --production` cannot be sealed.
-
-| Path | What it carries |
-| --- | --- |
-| `relay-package.json` | The manifest: package version, `packageRevision`, contract revision, source schema fingerprints and observed schemas, the artifact list with its operation bindings, and one entry per file |
+| `SHA256SUMS` | The digest of every other file, one line per file, sorted by path |
+| `REVISION` | The optional operator label given with `--revision`; absent without it |
 | `registry.yaml` | The contract exactly as authored |
 | `governed/` | Every governance file the contract references, plus the classification review rationale and its accepted identification report |
 | `compiled/registry.json` | The canonical compiled Registry |
-| `generated/` | The artifact set, keyed to the manifest entries |
+| `generated/` | The artifact set |
 
 The package's `generated/` directory holds the artifact set only.
 The review reports and the review starter stay in the authoring project: they
@@ -72,32 +51,38 @@ are inputs to approval, not deployment material.
 A package carries no database, no `runtime.yaml`, no secret, and no fixture.
 The operator supplies those at the deployment.
 Packaging refuses oversized input instead of truncating it: at most 256
-referenced governance files totalling 16 MiB, 1024 package files totalling
-64 MiB, and a 4 MiB manifest.
+referenced governance files totalling 16 MiB, and 1024 package files totalling
+64 MiB.
 
-## What packageRevision proves
+## What the package digest proves
 
-`packageRevision` is a SHA-256 digest over the canonicalized manifest.
+The package digest is the SHA-256 digest of `SHA256SUMS`, so it covers every
+file's bytes and the exact file set.
+`relayctl package` reports it, `relayctl package --dry-run` reports it without
+writing, and `package.expectedDigest` in `runtime.yaml` pins it.
 It detects a modified, truncated, or reassembled package.
 It is not a signature, and anyone who alters a package can recompute it, so
 authenticity stays a property of how the institution transfers, stores, and
 restricts the directory.
 
 Acceptance does not stop at the digest.
-Loading a package re-reads every listed file, compares each size and SHA-256,
-recompiles the Registry from the governed files under the production profile,
-regenerates the whole artifact set, and requires byte-for-byte equality before
-the service opens a listener.
+Loading a package refuses a changed, missing, or extra file by name, re-reads
+every file against its listed digest, recompiles the Registry from the governed
+files under the production profile, regenerates the whole artifact set, and
+requires byte-for-byte equality before the service opens a listener.
 
-{/* Evidence: crates/registry-relay-v2/src/package.rs verify_artifact_derivation():
-    "`packageRevision` is an integrity digest, not an authenticity proof."
-    load_package() rechecks every file entry, then reproduces the compiled
+{/* Evidence: crates/registry-relay-v2/src/package.rs load_package():
+    verifies SHA256SUMS through registry_platform_config::package, re-reads
+    every file against its verified digest, then reproduces the compiled
     Registry and every artifact byte. */}
 
-## Visibility travels with each file
+## Visibility is derived, not stored
 
-Every manifest entry records whether the file is `public`, `operation-bound`, or
-`operator-only`, and whether it was generated or authored.
+Relay derives whether each artifact is `public`, `operation-bound`, or
+`operator-only` from the compiled Registry at startup; the package stores no
+visibility of its own.
+`relayctl package` reports the derived exposure of every artifact so a reviewer
+can compare it across revisions.
 The split is plain in the two OpenAPI documents: `openapi.public.json` is what
 Relay returns from `/openapi.json`, while `openapi.full.yaml` describes every
 compiled operation, including the ones no anonymous caller can reach.

@@ -58,8 +58,11 @@ pub enum StartupError {
     /// runtime file's path.
     #[error("the runtime configuration is refused: {0}")]
     RuntimeRefused(String),
-    #[error("the sealed package could not be verified")]
-    PackageInvalid,
+    /// The package at `package.root` was refused. The message names the
+    /// field, the package files involved, and `relayctl package`, never the
+    /// configured directory.
+    #[error("the package is refused: {0}")]
+    PackageRefused(String),
     #[error("a runtime source could not be verified")]
     SourceInvalid,
     #[error("the configured issuer is not ready")]
@@ -135,10 +138,11 @@ async fn prepare_loaded(loaded: LoadedRuntime) -> Result<PreparedRelay, StartupE
 
     // The package is the governed trust root. Verify it before opening issuer,
     // audit, source, or listener resources.
-    let package = load_package(&paths.package).map_err(|_| StartupError::PackageInvalid)?;
+    let package = load_package(&paths.package)
+        .map_err(|error| StartupError::PackageRefused(error.to_string()))?;
     runtime
         .package
-        .verify_digest(&package.manifest.package_revision)
+        .verify_digest(&package.digest)
         .map_err(|error| StartupError::RuntimeRefused(error.to_string()))?;
     validate_runtime_contract(&runtime, &package.contract)?;
 
@@ -482,7 +486,7 @@ fn require_packaged_source_schemas(
         .iter()
         .map(|schema| (schema.source.clone(), schema.clone()))
         .collect::<BTreeMap<_, _>>();
-    if observed != package.manifest.source_schemas {
+    if observed != package.source_schemas() {
         return Err(StartupError::SourceInvalid);
     }
     Ok(())
@@ -970,10 +974,12 @@ mod tests {
         )
         .expect("write runtime");
 
-        assert_eq!(
-            prepare(&path).await.err(),
-            Some(StartupError::PackageInvalid)
-        );
+        let Some(StartupError::PackageRefused(message)) = prepare(&path).await.err() else {
+            panic!("an absent package is refused");
+        };
+        assert!(message.contains("package.root"), "{message}");
+        assert!(message.contains("relayctl package"), "{message}");
+        assert!(!message.contains(&*root.to_string_lossy()), "{message}");
         let listener = TcpListener::bind(address)
             .await
             .expect("startup did not bind before readiness");

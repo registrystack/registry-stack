@@ -270,35 +270,48 @@ def validate_openapi(package: Path, artifacts: list[dict[str, Any]]) -> None:
         raise GateFailure("public OpenAPI capability paths do not match public discovery")
 
 
-def validate_exposure_and_identity(package: Path, generated: Path) -> dict[str, Any]:
-    manifest = json.loads((package / "relay-package.json").read_text(encoding="utf-8"))
-    if manifest.get("packageVersion") != "relay.registrystack.org/package/v1alpha3":
-        raise GateFailure("sealed package has an unsupported manifest")
-    artifacts = manifest.get("artifacts")
-    operation_bindings = manifest.get("operationArtifactBindings")
-    files = manifest.get("files")
-    if (
-        not isinstance(artifacts, list)
-        or not isinstance(operation_bindings, list)
-        or not isinstance(files, list)
-    ):
-        raise GateFailure("sealed package inventory is incomplete")
+def package_sums(package: Path) -> dict[str, str]:
+    sums = (package / "SHA256SUMS").read_text(encoding="utf-8")
+    if not sums.endswith("\n"):
+        raise GateFailure("package SHA256SUMS does not end with a line feed")
+    listed: dict[str, str] = {}
+    for line in sums[:-1].split("\n"):
+        digest, separator, path = line.partition("  ")
+        if not separator or len(digest) != 64 or path in listed:
+            raise GateFailure("package SHA256SUMS is malformed")
+        listed[path] = f"sha256:{digest}"
+    if list(listed) != sorted(listed):
+        raise GateFailure("package SHA256SUMS is not sorted")
+    return listed
+
+
+def validate_exposure_and_identity(
+    package: Path, generated: Path, summary: dict[str, Any]
+) -> dict[str, Any]:
+    if summary.get("packageDigest") != file_sha256(package / "SHA256SUMS"):
+        raise GateFailure("package digest is not the digest of its SHA256SUMS")
+    on_disk = {
+        path.relative_to(package).as_posix()
+        for path in package.rglob("*")
+        if path.is_file()
+    }
+    listed = package_sums(package)
+    if on_disk != set(listed) | {"SHA256SUMS"}:
+        raise GateFailure("package files and SHA256SUMS disagree")
+    for path, digest in listed.items():
+        if file_sha256(package / path) != digest:
+            raise GateFailure("package file bytes do not match SHA256SUMS")
+    artifacts = summary.get("artifacts")
+    files = summary.get("files")
+    if not isinstance(artifacts, list) or not isinstance(files, list):
+        raise GateFailure("package report inventory is incomplete")
     file_inventory = {entry["path"]: entry for entry in files}
     if len(file_inventory) != len(files):
-        raise GateFailure("sealed package contains duplicate file inventory paths")
-    compiled = file_inventory.get("compiled/registry.json")
-    if (
-        not compiled
-        or not compiled.get("generated")
-        or compiled.get("visibility") != "operator-only"
-    ):
-        raise GateFailure("sealed package omits its operator-only compiled Registry")
-    for entry in files:
-        path = package / entry["path"]
-        if not path.is_file() or file_sha256(path) != entry.get("sha256"):
-            raise GateFailure("sealed package file bytes do not match their inventory")
-        if not entry.get("generated") and entry.get("visibility") != "operator-only":
-            raise GateFailure("an authored governed file is not operator-only")
+        raise GateFailure("package report contains duplicate file inventory paths")
+    if {path: entry["sha256"] for path, entry in file_inventory.items()} != listed:
+        raise GateFailure("package report and SHA256SUMS disagree")
+    if "compiled/registry.json" not in file_inventory:
+        raise GateFailure("package omits its compiled Registry")
     artifact_ids: set[str] = set()
     for artifact in artifacts:
         identifier = artifact.get("id")
@@ -306,10 +319,8 @@ def validate_exposure_and_identity(package: Path, generated: Path) -> dict[str, 
         if identifier in artifact_ids or path not in file_inventory:
             raise GateFailure("generated artifact inventory is not one-to-one")
         artifact_ids.add(identifier)
-        file_entry = file_inventory[path]
-        for key in ("mediaType", "visibility", "sha256"):
-            if artifact.get(key) != file_entry.get(key):
-                raise GateFailure("artifact exposure inventory disagrees with file inventory")
+        if artifact.get("sha256") != file_inventory[path]["sha256"]:
+            raise GateFailure("artifact exposure inventory disagrees with file inventory")
         visibility = artifact.get("visibility")
         operation = artifact.get("operationIdentifier")
         access_binding = artifact.get("accessBinding")
@@ -344,16 +355,20 @@ def validate_exposure_and_identity(package: Path, generated: Path) -> dict[str, 
     if by_id.get("openapi-public", {}).get("visibility") != "public":
         raise GateFailure("public OpenAPI is not explicitly public")
     validate_openapi(package, artifacts)
-    return manifest
+    return summary
 
 
-def baseline(manifest: dict[str, Any]) -> dict[str, Any]:
+def baseline(summary: dict[str, Any]) -> dict[str, Any]:
     return {
-        "packageRevision": manifest["packageRevision"],
-        "contractRevision": manifest["contractRevision"],
-        "sourceSchemaFingerprints": manifest["sourceSchemaFingerprints"],
-        "artifacts": manifest["artifacts"],
-        "governedFiles": [entry for entry in manifest["files"] if not entry["generated"]],
+        "packageDigest": summary["packageDigest"],
+        "contractRevision": summary["contractRevision"],
+        "sourceSchemaFingerprints": summary["sourceSchemaFingerprints"],
+        "artifacts": summary["artifacts"],
+        "governedFiles": [
+            entry
+            for entry in summary["files"]
+            if not entry["path"].startswith(("compiled/", "generated/"))
+        ],
     }
 
 
@@ -492,9 +507,9 @@ def run_workflow(relayctl: Path, project_name: str, root: Path) -> tuple[list[di
     exercise_nontrivial_diff(accepted, project_name, project, previous, root)
     package_report = accepted(["package", str(project), "--output", str(root / "package")])
 
-    manifest = validate_exposure_and_identity(root / "package", root / "generated")
-    if package_report["details"]["manifest"] != manifest:
-        raise GateFailure(f"{project_name}: package report bytes and sealed manifest differ")
+    summary = validate_exposure_and_identity(
+        root / "package", root / "generated", package_report["details"]["package"]
+    )
 
     drift = root / "schema-drift"
     shutil.copytree(project, drift)
@@ -517,7 +532,7 @@ def run_workflow(relayctl: Path, project_name: str, root: Path) -> tuple[list[di
     key_paths = check["details"].get("configuration_key_paths")
     if not isinstance(key_paths, dict):
         raise GateFailure(f"{project_name}: shared check report omitted configuration key paths")
-    return reports + [refusal], outputs, {"manifest": manifest, "keyPaths": key_paths}
+    return reports + [refusal], outputs, {"package": summary, "keyPaths": key_paths}
 
 
 def documented_key_paths(text: str, marker: str) -> set[str]:
@@ -573,7 +588,7 @@ def main() -> int:
                     raise GateFailure(f"{project_name}: {error}") from error
                 canaries = protected_canaries(PRODUCT_ROOT / "acceptance" / project_name)
                 assert_value_free(outputs, canaries, project_name)
-                snapshots[project_name] = baseline(result["manifest"])
+                snapshots[project_name] = baseline(result["package"])
                 for kind in key_paths:
                     key_paths[kind].update(result["keyPaths"][kind])
 

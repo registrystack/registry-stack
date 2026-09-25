@@ -528,7 +528,7 @@ These are the risks the design does *not* close:
   bucket. Treat them as an availability control, not an enumeration defense.
   {/* Evidence: QuotaLimiter is an in-memory per-operation token bucket,
        crates/registry-relay-v2/src/server.rs. */}
-- A Relay package is not authenticated: `packageRevision` is a SHA-256 integrity digest that any
+- A Relay package is not authenticated: its package digest is a SHA-256 integrity digest that any
   holder of the package can recompute. Startup detects drift and tampering by re-deriving every
   artifact, but it cannot tell a legitimate package from a well-formed forgery. Package
   provenance is an operator duty: the delivery path, the filesystem ownership checks, and the

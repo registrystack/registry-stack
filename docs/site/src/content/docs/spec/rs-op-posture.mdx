@@ -253,13 +253,12 @@ verification passes.
 
 REQ-OP-POSTURE-115: The runtime MUST verify the sealed package before it opens an issuer, audit,
 source, or listener resource.
-Verification MUST re-derive the package rather than trust its manifest: it MUST recompute the digest
-of every listed file, recompute the manifest's `packageRevision` over the canonical JSON of the
-manifest's own unsigned content, re-canonicalize the compiled registry and compare it byte for byte
-with the packaged bytes, and re-derive the compiled contract from the packaged `registry.yaml`,
-governed files, and recorded source schemas.
-The package directory's file set MUST equal the manifest's file list exactly, so an added or removed
-file fails verification.
+Verification MUST re-derive the package rather than trust its `SHA256SUMS`: it MUST recompute the
+digest of every listed file, re-canonicalize the compiled registry and compare it byte for byte with
+the packaged bytes, re-derive the compiled contract from the packaged `registry.yaml`, governed
+files, and recorded source schemas, and regenerate every artifact byte for byte.
+The package directory's file set MUST equal the `SHA256SUMS` list exactly, and the listed file set
+MUST equal what the compiled contract names, so an added or removed file fails verification.
 A package containing a symlink, a non-regular file, or an unsafe permission bit MUST be refused.
 
 REQ-OP-POSTURE-116: After package verification, the runtime MUST observe each configured source and

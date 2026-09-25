@@ -12,7 +12,7 @@ pub(crate) use registry_relay_v2::{
     diff::{ChangeImpact, ChangeImpactReport},
     fixtures::FixturePlanReport,
     model::{Diagnostic, DiagnosticSeverity},
-    package::PackageManifest,
+    package::PackageSummary,
     tooling::{InspectedObject, ToolingDetails, ToolingReport, ToolingStatus},
 };
 
@@ -54,6 +54,7 @@ pub(crate) fn execute(command: Command) -> Result<ToolingReport, ToolingError> {
         Command::Package(args) => tooling::package_project(&PackageOptions {
             project_root: args.project,
             output_dir: args.output,
+            revision: args.revision,
         }),
         Command::Tooling(_) => {
             unreachable!("tooling commands are handled before the product facade")

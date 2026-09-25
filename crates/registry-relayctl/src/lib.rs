@@ -173,9 +173,22 @@ struct PackageArgs {
     #[arg(value_name = "PROJECT")]
     project: std::path::PathBuf,
 
-    /// New sealed package directory.
-    #[arg(long, required = true, value_name = "DIRECTORY")]
-    output: std::path::PathBuf,
+    /// New package directory; it must not exist yet.
+    #[arg(
+        long,
+        value_name = "DIRECTORY",
+        required_unless_present = "dry_run",
+        conflicts_with = "dry_run"
+    )]
+    output: Option<std::path::PathBuf>,
+
+    /// Report the package digest and files without writing anything.
+    #[arg(long)]
+    dry_run: bool,
+
+    /// One printable line recorded in the package as REVISION.
+    #[arg(long, value_name = "TEXT")]
+    revision: Option<String>,
 }
 
 /// Parse process arguments, run one shared-library operation, and return the
@@ -444,6 +457,18 @@ mod tests {
             error.kind(),
             clap::error::ErrorKind::MissingRequiredArgument
         );
+        Cli::try_parse_from(["relayctl", "package", "project", "--dry-run"])
+            .expect("a dry run needs no destination");
+        let error = Cli::try_parse_from([
+            "relayctl",
+            "package",
+            "project",
+            "--dry-run",
+            "--output",
+            "package",
+        ])
+        .expect_err("a dry run writes nothing");
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]
@@ -663,7 +688,7 @@ mod tests {
             "  ],\n",
             "  \"details\": {\n",
             "    \"kind\": \"package\",\n",
-            "    \"manifest\": null\n",
+            "    \"package\": null\n",
             "  }\n",
             "}"
         ),

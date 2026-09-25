@@ -40,7 +40,7 @@ subcommands.
 | `relayctl generate <PROJECT>` | Authoring project directory | Writes the deterministic artifact set and five authoring reports, each with its SHA-256 digest | Seal a package or write into a destination that already has entries |
 | `relayctl test <PROJECT>` | Project fixture inputs | Runs the project's offline fixture cases through the shared kernel | Start a listener, contact a network source, or start `relay` |
 | `relayctl diff <PREVIOUS> <CURRENT>` | Two project directories | Classifies meaning, disclosure, and security changes between the reviewed project and the candidate | Add or remove change classes, or decide whether the change is acceptable |
-| `relayctl package <PROJECT> --output <DIRECTORY>` | Project that compiles under the production profile | Builds a sealed package directory carrying `relay-package.json` | Sign the package, deploy it, or write into a destination that already exists |
+| `relayctl package <PROJECT> --output <DIRECTORY>` | Project that compiles under the production profile; `--revision` records an optional operator label, `--dry-run` replaces `--output` | Builds a sealed package directory whose `SHA256SUMS` lists every file, and reports the package digest `package.expectedDigest` pins; `--dry-run` reports the same digest without writing | Sign the package, deploy it, or write into a destination that already exists |
 | `relayctl tooling editor [PROJECT]` | Authoring project directory, defaulting to the current directory | Writes the project-local schema mappings VS Code and Zed read, and reports all six managed files | Install an extension, change editor settings outside the project, or read any database |
 | `relayctl tooling language-server` | No arguments; speaks the Language Server Protocol over standard input and output | Reports Relay V2 authoring diagnostics from the entry documents and exact governed closure held for the workspace | Open a socket, observe SQLite, read source values, or adopt an unrelated file merely because a recursive watcher reports it |
 
@@ -221,8 +221,9 @@ release:
 - `inspect` offers no row or value sampling surface. Its help states that it inspects structure
   without reading row values, and the test refuses the options `--sample`, `--rows`, `--values`, and
   `--limit`.
-- A usage error discloses no project content. `relayctl package <project>` without `--output` exits
-  `2` with empty standard output and an error that names `--output` and nothing about the project.
+- A usage error discloses no project content. `relayctl package <project>` without `--output` or
+  `--dry-run` exits `2` with empty standard output and an error that names `--output` and nothing
+  about the project.
 - All seven flat workflow commands and both tooling subcommands print help successfully with an
   empty standard error, so the adopter workflow is exposed by one binary.
 

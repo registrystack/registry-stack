@@ -142,7 +142,8 @@ only production packaging path. It creates a deterministic sealed directory
 with:
 
 ```text
-relay-package.json
+SHA256SUMS
+REVISION            (only with --revision)
 registry.yaml
 governed/...
 compiled/registry.json
@@ -160,19 +161,21 @@ identifiers only for operations with a public access profile. It emits one
 distinct binding identity per exact semantic-class and operation-family pair,
 so independent resources cannot become a false combined capability.
 
-`relay-package.json` is canonical JSON with package version
-`relay.registrystack.org/package/v1alpha3`, containing
-`packageRevision`, `contractRevision`, the expected SQLite schema fingerprint,
-the generated-artifact inventory and operation bindings, and for every relative
-regular file its path, size, SHA-256 digest, media type, visibility, and
-generated/authored status. `compiled/registry.json` is the canonical compiled
-runtime plan produced by the shared compiler.
+The directory is in the shared Registry Stack package format:
+`SHA256SUMS` lists the SHA-256 digest of every other file, and the package
+digest is the `sha256:` digest of `SHA256SUMS`. `package.expectedDigest` pins
+that digest, and `relayctl package --dry-run` reports it without writing.
+`compiled/registry.json` is the canonical compiled runtime plan produced by the
+shared compiler, and it carries the expected SQLite schema fingerprint and
+observed schema of every source. The package stores no artifact inventory,
+visibility, media type, or operation binding: the runtime derives all of them
+from the compiled Registry, and the package report states them for review.
 Every operation-bound generated artifact has an explicit `accessBinding`:
 `{kind: access-profile, identifier: ...}` for a Record access profile or
-`{kind: fixed-operation}` for a statistical structure. `PackageArtifact`
-contains no `accessProfileIdentifier`; the separate
-`operationArtifactBindings` entries retain that field for their existing
-Record-operation binding contract.
+`{kind: fixed-operation}` for a statistical structure. A reported artifact
+contains no `accessProfileIdentifier`.
+A directory that still carries the retired `relay-package.json` manifest is
+refused with a message naming `relayctl package`.
 References cannot escape the directory and symlinks are rejected. The runtime
 file, sealed package tree, and their ancestry must be owned by root or the
 Relay service user and must not be writable by another account; only a
@@ -189,11 +192,12 @@ authoring project or loose contract file.
 The complete governed file closure is captured into memory with file count,
 size, path, symlink, and permission bounds before parsing. Canonical typed
 inputs produce `contractRevision`. Compilation and artifact generation are
-atomic packaging operations. Startup verifies canonical compiled bytes, source
-schema bindings, governed-file and artifact digests, and operation-artifact
-bindings. It recompiles the captured inputs solely to require exact equality
-with the packaged runtime plan, then activates the packaged artifacts without
-regenerating them. There is no hot reload, partial activation, overlay,
+atomic packaging operations. Startup verifies `SHA256SUMS` and refuses a
+changed, missing, or extra file by name, re-reads every file it uses against its
+verified digest, requires the file set to equal what the compiled Registry
+names, and checks canonical compiled bytes and source schema bindings. It
+recompiles the captured inputs and regenerates the artifacts solely to require
+exact equality with the packaged runtime plan and artifact bytes. There is no hot reload, partial activation, overlay,
 fallback, or remote vocabulary fetch.
 
 Registry Manifest projection is deferred portability tooling. Source columns,
