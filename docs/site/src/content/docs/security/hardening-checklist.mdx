@@ -59,6 +59,13 @@ bundle, or the sealed Relay package. It assumes you have already configured your
   files below that root, each owned by the service identity at mode `0600`, and checks owner, mode,
   no-follow, link count, and open-file identity. Keep the secret root itself operator-only. Strict
   deployments receive only a Transit Unix socket for signing.
+- Evidence Gateway: prefer the file provider with a secret root dedicated to this deployment. Enable
+  `secretProviders.environment: {}` only when the platform injects secrets as environment variables,
+  and then run the process in a dedicated, curated environment holding only the secrets this
+  deployment needs. Enabling the provider lets a reference in the reviewed bundle, a source
+  credential included, name any variable in the process environment, so review the bundle's
+  `secret:env/<NAME>` references as you review its other secret references. A bundle cannot enable
+  a provider itself; only `runtime.yaml` does.
 - Evidence Gateway: give the audit hash key and the subject-binding key independently generated raw key
   material of at least 32 bytes each. The file provider does not base64-decode them, so write raw
   bytes rather than an encoded string.
