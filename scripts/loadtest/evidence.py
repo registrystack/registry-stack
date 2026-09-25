@@ -291,7 +291,7 @@ def _sample_summary(path: Path) -> dict[str, Any]:
 
 
 def _db_wait_summary(path: Path | None) -> dict[str, Any]:
-    peaks = {"auditLockWaiters": 0, "lockWaiters": 0, "blockedBackends": 0}
+    peaks = {"lockWaiters": 0, "blockedBackends": 0}
     samples = 0
     if path is None or not path.exists():
         return {"samples": 0, **{f"{name}Peak": None for name in peaks}}
@@ -302,8 +302,18 @@ def _db_wait_summary(path: Path | None) -> dict[str, Any]:
             except json.JSONDecodeError as error:
                 raise EvidenceError(f"invalid DB wait sample at line {line_number}: {error}") from error
             samples += 1
+            if not isinstance(item, dict):
+                raise EvidenceError(f"DB wait sample is not an object at line {line_number}")
+            for name in ("lockWaiters", "blockedBackends"):
+                if name not in item:
+                    raise EvidenceError(f"DB wait sample lacks {name} at line {line_number}")
+            if "reviewHistoryLockWaiters" in item:
+                peaks.setdefault("reviewHistoryLockWaiters", 0)
             for name in peaks:
-                peaks[name] = max(peaks[name], int(item.get(name, 0)))
+                value = item.get(name)
+                if type(value) is not int or value < 0:
+                    raise EvidenceError(f"invalid DB wait metric {name} at line {line_number}")
+                peaks[name] = max(peaks[name], value)
     # A run shorter than the first sample observed nothing, which is not zero contention.
     return {"samples": samples, **{f"{name}Peak": value if samples else None for name, value in peaks.items()}}
 
