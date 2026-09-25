@@ -5,13 +5,13 @@ import { promisify } from 'node:util';
 
 const run = promisify(execFile);
 const valePackageDir = join('node_modules', '@vvago', 'vale');
-const valeBin = join(valePackageDir, 'bin', process.platform === 'win32' ? 'vale.exe' : 'vale');
+const valeBin = join(valePackageDir, 'native', process.platform === 'win32' ? 'vale.exe' : 'vale');
 
 async function ensureVale() {
   try {
     await access(valeBin);
   } catch {
-    await run(process.execPath, [join(valePackageDir, 'index.js')], { stdio: 'inherit' });
+    await run(process.execPath, [join(valePackageDir, 'dist', 'index.cjs')], { stdio: 'inherit' });
   }
 }
 
