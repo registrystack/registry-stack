@@ -21,11 +21,10 @@
 //! to bytes, serving the callback route, and applying a verified receipt to
 //! a stored message are the runtime's.
 
-use aws_lc_rs::hmac;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
+use registry_platform_crypto::mac::{constant_time_eq, verify_hmac_sha1, verify_hmac_sha256};
 use serde::{Deserialize, Serialize};
-use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 /// The longest header name a verifier configuration accepts.
@@ -275,8 +274,7 @@ fn verify_hmac_sha1_url_form(
         signed.push_str(key);
         signed.push_str(value);
     }
-    let key = hmac::Key::new(hmac::HMAC_SHA1_FOR_LEGACY_USE_ONLY, secret);
-    hmac::verify(&key, signed.as_bytes(), &tag)
+    verify_hmac_sha1(secret, signed.as_bytes(), &tag)
         .map_err(|_| CallbackVerificationRefusal::SignatureMismatch)
 }
 
@@ -295,8 +293,7 @@ fn verify_hmac_sha256_body(
             .map_err(|_| hex::FromHexError::InvalidStringLength),
     }
     .map_err(|_| CallbackVerificationRefusal::MalformedSignature)?;
-    let key = hmac::Key::new(hmac::HMAC_SHA256, secret);
-    hmac::verify(&key, request.body, &tag)
+    verify_hmac_sha256(secret, request.body, &tag)
         .map_err(|_| CallbackVerificationRefusal::SignatureMismatch)
 }
 
@@ -307,7 +304,7 @@ fn verify_path_token(
     let provided = request
         .path_token
         .ok_or(CallbackVerificationRefusal::MissingPathToken)?;
-    if bool::from(token.ct_eq(provided.as_bytes())) {
+    if constant_time_eq(token, provided.as_bytes()) {
         Ok(())
     } else {
         Err(CallbackVerificationRefusal::TokenMismatch)
@@ -453,11 +450,10 @@ mod tests {
     }
 
     fn signed_body_tag(encoding: CallbackBodyEncoding, body: &[u8]) -> String {
-        let key = hmac::Key::new(hmac::HMAC_SHA256, body_secret());
-        let tag = hmac::sign(&key, body);
+        let tag = registry_platform_crypto::mac::hmac_sha256(body_secret(), body);
         match encoding {
-            CallbackBodyEncoding::Hex => hex::encode(tag.as_ref()),
-            CallbackBodyEncoding::Base64 => BASE64_STANDARD.encode(tag.as_ref()),
+            CallbackBodyEncoding::Hex => hex::encode(tag),
+            CallbackBodyEncoding::Base64 => BASE64_STANDARD.encode(tag),
         }
     }
 

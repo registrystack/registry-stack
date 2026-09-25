@@ -36,6 +36,7 @@ rcgen.workspace = true
 registry-messaging.workspace = true
 registry-messaging-core.workspace = true
 registry-platform-buildinfo.workspace = true
+registry-platform-crypto.workspace = true
 reqwest.workspace = true
 rustix.workspace = true
 serde.workspace = true

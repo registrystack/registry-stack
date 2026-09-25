@@ -17,13 +17,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use aws_lc_rs::hmac;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
+use registry_platform_crypto::mac::{constant_time_eq, hmac_sha256};
 use serde_json::json;
 use zeroize::Zeroizing;
 
@@ -93,10 +93,7 @@ fn authorized(headers: &HeaderMap, token: &str) -> bool {
     let expected = format!("Bearer {token}");
     headers
         .get(axum::http::header::AUTHORIZATION)
-        .is_some_and(|value| {
-            aws_lc_rs::constant_time::verify_slices_are_equal(value.as_bytes(), expected.as_bytes())
-                .is_ok()
-        })
+        .is_some_and(|value| constant_time_eq(value.as_bytes(), expected.as_bytes()))
 }
 
 async fn send(
@@ -143,7 +140,7 @@ async fn send(
 
 /// The signature the runtime's `hmac-sha256-body` verifier checks.
 pub(super) fn signature(key: &[u8], body: &[u8]) -> String {
-    hex::encode(hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, key), body).as_ref())
+    hex::encode(hmac_sha256(key, body))
 }
 
 /// Post one signed delivery report, retrying while the runtime cannot take

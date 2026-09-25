@@ -529,9 +529,9 @@ algorithm: `hmac-sha1-url-form` (HMAC-SHA1 over the configured external
 `url`, the request's query, and the form parameters sorted by name, base64 in
 a configured header), `hmac-sha256-body` (HMAC-SHA256 over the raw body, hex
 or base64 in a configured header), or `path-token` (a secret token as the
-last path segment). `none` is not a kind. Tags are compared in constant time
-by `aws-lc-rs`. The secret or token is a `secret:` reference resolved once at
-startup.
+last path segment). `none` is not a kind. Tags and tokens are compared in
+constant time by the `registry-platform-crypto` MAC helpers. The secret or
+token is a `secret:` reference resolved once at startup.
 
 An unknown provider, a provider without a verifier, a missing or wrong
 signature or token, a token segment on a provider whose verifier is not
