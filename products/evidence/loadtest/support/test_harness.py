@@ -10,9 +10,9 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest import mock
 
 
 MODULE_PATH = Path(__file__).with_name("loadenv.py")
@@ -233,7 +233,7 @@ class EvidenceHarnessTests(unittest.TestCase):
         # A stub that never refuses must fail the absent-subject check.
         with EvidenceStub() as stub, tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(AssertionError):
-                with mock.patch.object(loadenv, "absent_id", loadenv.subject_id):
+                with unittest.mock.patch.object(loadenv, "absent_id", loadenv.subject_id):
                     self._run_profile("smoke", stub.origin, Path(directory))
 
     def test_local_project_adds_a_bounded_synthetic_source_and_refuses_reuse(self) -> None:
@@ -391,23 +391,23 @@ class EvidenceHarnessTests(unittest.TestCase):
                 expected, f"{evidencectl} source mock serve --config mocks/source.yaml --http-addr 127.0.0.1:4711"
             )
             with (
-                mock.patch.object(loadenv, "_process_command", return_value=expected),
-                mock.patch.object(loadenv, "_process_cwd", return_value=project),
+                unittest.mock.patch.object(loadenv, "_process_command", return_value=expected),
+                unittest.mock.patch.object(loadenv, "_process_cwd", return_value=project),
             ):
                 self.assertEqual(loadenv.owned_mock_pid(root), 4242)
             with (
-                mock.patch.object(loadenv, "_process_command", return_value=expected),
-                mock.patch.object(loadenv, "_process_cwd", return_value="/tmp/another-project"),
+                unittest.mock.patch.object(loadenv, "_process_command", return_value=expected),
+                unittest.mock.patch.object(loadenv, "_process_cwd", return_value="/tmp/another-project"),
             ):
                 self.assertIsNone(loadenv.owned_mock_pid(root))
             with (
-                mock.patch.object(loadenv, "_process_command", return_value="/usr/bin/unrelated"),
-                mock.patch.object(loadenv, "_process_cwd", return_value=project),
+                unittest.mock.patch.object(loadenv, "_process_command", return_value="/usr/bin/unrelated"),
+                unittest.mock.patch.object(loadenv, "_process_cwd", return_value=project),
             ):
                 self.assertIsNone(loadenv.owned_mock_pid(root))
             with (
-                mock.patch.object(loadenv, "_process_command", return_value=""),
-                mock.patch.object(loadenv, "_process_cwd", return_value=""),
+                unittest.mock.patch.object(loadenv, "_process_command", return_value=""),
+                unittest.mock.patch.object(loadenv, "_process_cwd", return_value=""),
             ):
                 self.assertIsNone(loadenv.owned_mock_pid(root))
 
@@ -444,8 +444,8 @@ class EvidenceHarnessTests(unittest.TestCase):
             )
             expected = loadenv.mock_command(evidencectl, 4711)
             with (
-                mock.patch.object(loadenv, "_process_command", return_value=expected),
-                mock.patch.object(loadenv, "_process_cwd", return_value=str(project.resolve())),
+                unittest.mock.patch.object(loadenv, "_process_command", return_value=expected),
+                unittest.mock.patch.object(loadenv, "_process_cwd", return_value=str(project.resolve())),
             ):
                 loadenv.write_environment(root, report, evidencectl, "release", "", 4242, 4711, 3)
             environment = json.loads((root / "env.json").read_text(encoding="utf-8"))
@@ -456,7 +456,7 @@ class EvidenceHarnessTests(unittest.TestCase):
             self.assertEqual(summary["loadClients"], 3)
             self.assertEqual(summary["requestsPerPrincipalPerMinute"], 60)
             self.assertEqual(evidence._seed_counts(root / "pool/pool-summary.json"), summary)
-            with mock.patch.object(loadenv, "_process_command", return_value="/usr/bin/unrelated"):
+            with unittest.mock.patch.object(loadenv, "_process_command", return_value="/usr/bin/unrelated"):
                 (root / "env.json").unlink()
                 with self.assertRaises(loadenv.LoadtestError):
                     loadenv.write_environment(root, report, evidencectl, "release", "", 4242, 4711, 3)

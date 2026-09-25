@@ -196,7 +196,7 @@ def local_project(tracked: Path, project: Path, pool: Path) -> None:
         born = date_of_birth(index)
         minors += int(index % MINOR_EVERY == 0)
         body = {"person_id": identifier, "name": f"Load Subject {index:04d}", "date_of_birth": born}
-        _write_new(mocks / "cases" / f"{identifier}.json", json.dumps(body, sort_keys=True) + "\n", 0o644)
+        _write_new(mocks / "cases" / f"{identifier}.json", json.dumps(body, sort_keys=True) + "\n")
     pool.mkdir(mode=0o700)
     _write_new(pool / "subjects.txt", "".join(f"{subject_id(i)}\n" for i in range(1, SUBJECTS + 1)))
     _write_new(pool / "absent.txt", "".join(f"{absent_id(i)}\n" for i in range(1, ABSENT_SUBJECTS + 1)))

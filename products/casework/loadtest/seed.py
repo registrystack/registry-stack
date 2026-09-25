@@ -118,14 +118,15 @@ class Client:
                 connection.request(method, path, body=body, headers=headers)
                 response = connection.getresponse()
                 payload = response.read()
-                break
             except (http.client.HTTPException, OSError) as error:
                 connection.close()
                 self._local.connection = None
                 if attempt == 1:
                     raise SeedError(f"{label} failed before a response: {type(error).__name__}") from error
-        document = json.loads(payload) if payload else None
-        return response.status, document
+                continue
+            document = json.loads(payload) if payload else None
+            return response.status, document
+        raise SeedError(f"{label} failed before a response")
 
 
 def subject_digest(nonce: str, index: int) -> str:
