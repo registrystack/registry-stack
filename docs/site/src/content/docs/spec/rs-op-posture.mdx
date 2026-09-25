@@ -33,7 +33,7 @@ Defined terms are used per [RS-TERMS](../rs-terms/).
 Relay exposes no administrative surface, no posture document, and no metrics endpoint. Everything
 an operator can observe over HTTP is stated in Section 2, and it is deliberately small: two probes
 that answer with a fixed status word and nothing else. The observable detail a previous Relay
-returned in a posture document now lives in the audit chain and in the process log, both of which
+returned in a posture document now lives in the audit log and in the process log, both of which
 are read from the deployment host rather than fetched over the service port.
 
 ## Version history
@@ -47,6 +47,7 @@ are read from the deployment host rather than fetched over the service port.
 | 0.1.4 | 2026-07-24 | draft | Separated portable waiver-schema checks from contextual semantic validation before the 1.0 schema freeze. |
 | 0.1.5 | 2026-08-03 | draft | Recorded that Registry Notary is retired and that no supported deployment produces a `registry-notary` document, while the frozen v1 shape and the consumer validation path for one are unchanged. Stated that Evidence Gateway and Registry Mint expose no posture endpoint. |
 | 1.0.0 | 2026-08-11 | draft | Rewritten for the Relay V2 runtime that replaced the V1 gateway. REQ-OP-POSTURE-001 through REQ-OP-POSTURE-011 are retired in full and MUST NOT be reused: they defined the `registry.ops.posture.v1` document returned from `GET /admin/v1/posture`, its component pairing, its sensitivity tiers, its deployment-waiver metadata, and Relay per-resource refresh health. The current runtime has no administrative surface, emits no posture document, and performs no source refresh, so none of those requirements has a successor. The operational contract that does exist is numbered from REQ-OP-POSTURE-101 so that no retired identifier carries a second meaning. |
+| 1.0.1 | 2026-09-25 | draft | Restated audit readiness in REQ-OP-POSTURE-105 as a live probe of the shared audit writer and its destination, with no chain head, and described Relay's audit entries without a hash chain. |
 
 ## 1. Scope and surface
 
@@ -130,8 +131,9 @@ Readiness is a conjunction of three independent observations, evaluated concurre
 
 REQ-OP-POSTURE-105: A deployment is ready exactly when audit readiness, source readiness, and
 issuer readiness all hold.
-Audit readiness MUST require both a resolvable hash-chain head and a live probe of the concrete
-sink, so that a replaced, removed, or unwritable audit destination makes the deployment unready.
+Audit readiness MUST require a live probe of the audit writer and its concrete destination, so
+that a replaced, removed, or unwritable audit file, or a writer stopped by an earlier failed
+append, makes the deployment unready.
 Source readiness MUST re-verify every configured source within the runtime's request timeout: a
 snapshot source MUST be confirmed unchanged, and every source's observed schema fingerprint MUST
 still equal the fingerprint the sealed package recorded.
@@ -158,7 +160,7 @@ does not hold.
 
 ## 4. Audit as a serving precondition
 
-Relay writes a hash-chained, value-free audit record for every consultation it attempts, refuses,
+Relay writes a value-free audit entry for every consultation it attempts, refuses,
 or completes. That record is a precondition of the response, not a trace left behind it.
 
 REQ-OP-POSTURE-108: When an audit append fails at any phase, including the attempt record written
@@ -304,8 +306,8 @@ runtime and exercised by its tests.
   probe inventory and compose audit, source, and issuer readiness (Sections 2 and 3).
 - The `health` and `ready` handlers in `crates/registry-relay-v2/src/api.rs` return the fixed status
   bodies with `no-store`, and return `service.not_ready` without naming a dependency (Section 2).
-- `crates/registry-relay-v2/src/audit.rs` defines audit readiness as a chain head plus a live sink
-  probe, and the audit-failure branches in `api.rs` return `audit.unavailable` at every phase
+- `crates/registry-relay-v2/src/audit.rs` defines audit readiness as a live probe of the shared
+  audit writer, and the audit-failure branches in `api.rs` return `audit.unavailable` at every phase
   (Sections 3 and 4).
 - `verify_readiness_sources` in `crates/registry-relay-v2/src/sqlite_runtime.rs` re-verifies
   snapshot immutability and schema fingerprints under the request timeout, and its readiness gate

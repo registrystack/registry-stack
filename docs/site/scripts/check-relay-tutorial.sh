@@ -400,7 +400,8 @@ unset RELAY_PID
 audit_line="$(bash "$FENCES/audit.sh")"
 printf '%s\n' "$audit_line"
 for expected in \
-	'"prev_hash":null' \
+	'"schema":"registry.relay.audit/v2alpha2"' \
+	'"phase":"request"' \
 	'"phase":"attempt"' \
 	'"selectedProperties":["legalName","legalForm"]'; do
 	if [[ "$audit_line" != *"$expected"* ]]; then
@@ -408,7 +409,7 @@ for expected in \
 		exit 1
 	fi
 done
-# The whole point of the audit chain in this tutorial: it records what was
+# The whole point of the audit log in this tutorial: it records what was
 # released, never the values themselves.
 if [[ "$audit_line" == *"Aurora Freight Cooperative"* ]]; then
 	printf 'tutorial behaviour drift: the audit line recorded a released field value\n' >&2

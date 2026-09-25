@@ -17,7 +17,7 @@ This page lists Registry Stack's supported fixed environment-variable interfaces
 adopter tooling, and installers. It also records how Relayctl keeps fixture scratch state independent
 of host temporary-directory configuration.
 
-The stack's other kind of environment variable is operator-named. Secret material such as an audit integrity key is not read from a fixed variable name: a configuration field carries a reference that names the variable, and the operator chooses the name. Relay and Base Registry Engine are the products that work that way, and the reference grammar is closed rather than free-form. Evidence Gateway reads no secret from the environment under either kind of name, as its section records.
+The stack's other kind of environment variable is operator-named. Secret material such as a cursor integrity key is not read from a fixed variable name: a configuration field carries a reference that names the variable, and the operator chooses the name. Relay and Base Registry Engine are the products that work that way, and the reference grammar is closed rather than free-form. Evidence Gateway reads no secret from the environment under either kind of name, as its section records.
 
 ## Configuration expansion
 
@@ -37,7 +37,7 @@ The `relay` binary reads these variables.
 
 ### Secret references in `runtime.yaml`
 
-Relay resolves secrets through two providers, environment and file, rooted at the directory holding the runtime file. Two fields take a reference: `audit.integrityKeyRef`, which is required, and `cursor.integrityKeyRef`, which applies when the deployment enables cursors.
+Relay resolves secrets through two providers, environment and file, rooted at the directory holding the runtime file. One field takes a reference: `cursor.integrityKeyRef`, which applies when the deployment enables cursors.
 
 | Grammar | Resolves to | Accepted name |
 | --- | --- | --- |

@@ -99,9 +99,9 @@ bundle, or the sealed Relay package. It assumes you have already configured your
   Relay refuses to start at all on a non-Unix target, because the runtime file's own path-trust
   check fails closed where Unix ownership and sticky-directory semantics are unavailable, so do not
   treat a non-Unix host as a degraded-but-working option.
-- Relay: `audit.integrityKeyRef` and, where a cursor is required, `cursor.integrityKeyRef` are
-  separate secret references. Give each independently generated random material and hold each under
-  your own custody and retention controls.
+- Relay: where a cursor is required, `cursor.integrityKeyRef` is its own secret reference. Give it
+  independently generated random material and hold it under your own custody and retention
+  controls.
 - Relay: pick the single OIDC signing algorithm the deployment actually uses.
   `authentication.issuer.algorithms` must contain exactly one of `EdDSA`, `ES256`, or `RS256`, and
   `tokenTypes` must be exactly `["at+jwt"]`. There is no allowlist to prune and no `HS*` or `none`
@@ -194,46 +194,42 @@ bundle, or the sealed Relay package. It assumes you have already configured your
      dev/ino/len/mode/mtime/ctime, and the verify_unchanged_until comment about a privileged writer,
      crates/registry-platform-sqlite/src/capture.rs:11, :34-36, :42-45, :285-296. */}
 
-## Audit sink and retention
+## Audit destination and retention
 
-- Evidence Gateway: put `auditStorage.path` on storage whose append durability, permissions, capacity,
-  backup, restore, and retention you own. Audit is fail-closed by contract: one access-attempt
-  event must be durably accepted before every actual source stage and the
-  disclosure-release event before the response is released, so an unwritable sink stops the
-  service returning success rather than degrading quietly.
-- Evidence Gateway: run exactly one process per audit path. The sink takes an exclusive advisory lock on
-  `<auditStorage.path>.lock` at startup, and a second process pointed at the same path fails to
-  start. The supported shape is one replica per audit path, active/passive, recovered with a
-  readiness probe and restart-on-failure rather than with a second concurrent writer.
-- Evidence Gateway: treat `auditStorage.maximumFileBytes` as a per-segment rotation threshold, not a
-  ceiling on the chain. Rotation happens online with no operator action, nothing in the runtime
-  deletes or compacts a sealed segment, and total disk consumption is therefore unbounded until
-  your retention process acts.
-- Evidence Gateway: run `evidence verify-audit` over the whole audit directory during backup, restore, and
-  incident procedures, and on whatever cadence your retention policy requires. Startup verifies
-  only the active segment, so this pass is what proves sealed history was not tampered with.
-- Relay: `audit.sink` is a path on storage whose append durability, permissions, capacity, backup,
-  restore, and retention you own. It is a plain path, not a choice between transports, so there is
-  no `stdout` mode to fall back to and nothing to configure away.
-- Relay: audit is fail-closed and there is no write-policy setting. A request whose audit record
-  cannot be written returns `503 audit.unavailable` instead of an answer (REQ-SEC-G-009). Do not
-  plan capacity on the assumption that a full or unwritable disk degrades to best-effort logging;
-  it stops the service answering.
-- Relay: readiness re-verifies the audit sink rather than trusting the check made at startup, so
-  replacing the audit file under a running process revokes readiness. Treat a sudden readiness loss
-  with a healthy source as an audit-path problem first.
-- Relay: give `audit.integrityKeyRef` deployment-specific random material and retain it for as long
-  as the chain it keys must remain verifiable. Rotating it makes new records incomparable to old
-  ones.
-- If you rotate an audit hash secret in any service, retain the old secret under your audit
-  retention controls for any period during which older records must remain comparable to new ones,
-  or accept that new records will not match old audit handles.
-- Hash-chained envelopes detect ordering gaps and accidental corruption inside the retained set,
-  but they do not prove that every historical audit record remains present. Use off-host audit
-  shipping when completeness matters.
-- Relay: there is no off-host audit shipping feature, no acknowledgement cursor, and no readiness
-  gate that proves remote receipt. If your controls require audit to leave the host, ship the sink
-  file with your own tooling and own the completeness argument yourself.
+- Evidence Gateway and Relay write audit through one shared writer, configured by the runtime
+  file's `audit` block: `destination` is `file` (the default) or `stdout`, and a file destination
+  takes `path`, `rotateBytes` (100 MiB by default), and `retainDays` (90 by default). Put `path` on
+  storage whose append durability, permissions, capacity, and backup you own, in a directory owned
+  by the service user and not writable by group or others.
+- Audit is fail-closed by contract, with no write-policy setting. Evidence Gateway durably accepts
+  an access-attempt entry before every source stage and the disclosure-release entry before the
+  response is released; Relay writes its attempt entry before SQLite access and its terminal entry
+  before returning, and answers `503 audit.unavailable` otherwise (REQ-SEC-G-009). Do not plan
+  capacity on the assumption that a full or unwritable disk degrades to best-effort logging; it
+  stops the service answering.
+- Run exactly one process per audit path. The writer takes an exclusive lock on `<path>.lock` for
+  its whole life, and a second process pointed at the same path fails to start. Give each replica
+  its own path, or use `stdout` and let the platform's log collector gather every stream.
+- After any failed write the writer refuses every later entry until the process restarts, and
+  readiness re-checks the active file, so renaming, truncating, or replacing it under a running
+  process revokes readiness. Treat a sudden readiness loss with a healthy source as an audit-path
+  problem first.
+- A file destination renames the active file to `<path>.<sequence>` when it would pass
+  `rotateBytes`, and deletes sealed files older than `retainDays` when it opens and each time it
+  rotates. Ship each sealed file before retention deletes it.
+- The log carries no hash chain or signature, so the host that writes it can rewrite it
+  undetected. Tamper evidence and completeness come only from shipping sealed files, or the
+  `stdout` stream, to append-only storage that the service account cannot change: object storage
+  with an object lock, a write-once archive, or a log pipeline with operator-independent
+  retention. Neither service has a shipping feature, acknowledgement cursor, or readiness gate that
+  proves remote receipt, so own that argument with your own tooling.
+- Before the first start on the shared writer, archive every earlier chained audit file and
+  segment to append-only storage and point `path` at a fresh file in a directory that holds no old
+  segments; retention deletes old `<path>.<sequence>` segments along with its own.
+- Evidence Gateway: every pseudonym carries the bundle's `audit.hashKeyVersion`. Rotate the audit
+  master only through a bundle revision that raises that version, and retain the old master under
+  your audit retention controls for as long as older pseudonyms must remain recomputable. Relay
+  entries carry no keyed field and need no audit key.
 - Relay: `runtime.yaml`'s `cursor` block is pagination-cursor integrity, not audit shipping. It
   carries its own `integrityKeyRef` and a `maximumAgeSeconds` between 1 and 86400, and any contract
   that declares a list or a search operation, or that shows more than one resource in its resource
@@ -339,16 +335,17 @@ serve, and a startup that fails rather than degrades.
   endpoint, no reload signal, and no way to narrow a compiled operation at runtime, so the only
   levers during an incident are stopping the process and deploying a corrected package. Plan for
   that: the mean time to withdraw a disclosure is your deployment pipeline's, not the runtime's.
-- Preserve the audit trail for post-incident review. For Evidence Gateway, take the whole audit directory
-  including sealed segments and run `evidence verify-audit` over it before and after moving it;
-  for Relay, hash-chained, fail-closed audit records are the record a deployment reconstructs a
-  request timeline from (REQ-SEC-G-008, REQ-SEC-G-009).
+- Preserve the audit trail for post-incident review. Take the copies already shipped to
+  append-only storage, and copy the whole local audit directory, including sealed files, before
+  retention can delete them. For both Evidence Gateway and Relay, fail-closed audit entries joined
+  by `correlation` are the record a deployment reconstructs a request timeline from
+  (REQ-SEC-G-008, REQ-SEC-G-009).
 - Expect a `403` from Evidence Gateway to tell you nothing. Every authorization refusal collapses to one
   generic `evidence.denied` problem, deliberately, so it is not an oracle for which check failed.
   Debug it from trusted local state in this order: the bearer principal is in the deployed
   bundle's audience; a grant matches the requested requirement, purpose, and subject roles; the
   grant carries the claimed authority; and, only for an unsigned or credential-format request,
-  both the bundle and that grant permit that format. The keyed audit chain records the refusal
+  both the bundle and that grant permit that format. The audit log records the refusal
   phase.
 
 ## Verify
@@ -388,11 +385,11 @@ serve, and a startup that fails rather than degrades.
 | Relay refuses to start and names the runtime file | The runtime file violates the closed profile: an unknown field, a bad bind address, a limit outside its bound, a secret reference that is not one of the two grammars, or an issuer that fails the exact OIDC profile | Fix the named field; there is no permissive mode and no partial start |
 | Relay refuses to start on a contract it served before | The contract now has protected access with no configured issuer, a lookup with no quotas, or a list with no cursor key | Add the missing runtime block; none of the three is waivable |
 | Relay refuses to start and names the source | The snapshot sits on writable storage, is a symlink, or has a `-wal` or `-journal` sidecar beside it | Place the file on a read-only filesystem or make it non-writable, resolve the symlink, and remove the sidecar by checkpointing the database before you stage it |
-| Relay returns `503 audit.unavailable` and then fails readiness | The audit sink is unwritable, or the file it was bound to was replaced | Restore writable durable storage at `audit.sink` and restart; the failed requests returned no data |
+| Relay returns `503 audit.unavailable` and then fails readiness | The audit file is unwritable, or the file the writer was bound to was replaced | Restore writable durable storage at `audit.path` and restart; the failed requests returned no data |
 | Evidence Gateway refuses to start on a non-immutable input | The bundle directory, `runtime.yaml`, a captured artifact, or a named CA bundle file is writable by the service process, or the secret root is reachable by group or other | Re-freeze the project (`chmod -R a-w bundle && chmod 444 runtime.yaml`), tighten the secret root to `0700`, and restart |
 | Evidence Gateway refuses to start on an invalid bound source extract | The source extract the runtime file names is writable; a distinct refusal from the non-immutable-input row above | Make the extract file non-writable and restart |
-| A second Evidence Gateway process fails at startup with a sink-locked error | Two processes point at the same `auditStorage.path` | Run one writer per audit path; use active/passive with restart-on-failure rather than a second replica |
-| Evidence Gateway returns `403 evidence.denied` for a request you expected to work | Any one of the audience, grant, authority, or response-format checks failed; the response never says which | Work through the ordered checks in [Incident response](#incident-response) against local configuration, then read the refusal phase from the audit chain |
+| A second Evidence Gateway process fails at startup with a sink-locked error | Two processes point at the same `audit.path` | Run one writer per audit path; use active/passive with restart-on-failure rather than a second replica |
+| Evidence Gateway returns `403 evidence.denied` for a request you expected to work | Any one of the audience, grant, authority, or response-format checks failed; the response never says which | Work through the ordered checks in [Incident response](#incident-response) against local configuration, then read the refusal phase from the audit log |
 
 ## Next
 

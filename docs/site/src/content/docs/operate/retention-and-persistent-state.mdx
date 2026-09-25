@@ -28,9 +28,9 @@ or prove that a local rotating file kept every historical audit event.
 
 Two consequences follow from that boundary:
 
-- Treat local audit files as tamper-evidence for the retained records, not as a completeness
-  guarantee for all records ever written.
-  Use off-host shipping when completeness matters.
+- Treat local audit files as neither tamper-evident nor complete: they are not chained, and
+  retention deletes sealed files by age.
+  Ship them to append-only storage when integrity or completeness matters.
 - Treat keyed pseudonyms as a linkability control, not as erasure.
   Destroying or rotating the HMAC secret prevents recomputing old pseudonyms from raw values,
   but it does not delete audit records, cache entries, or source data.
@@ -39,12 +39,12 @@ Two consequences follow from that boundary:
 
 | Store | What it can contain | Expiry or rotation | Operator control |
 |---|---|---|---|
-| Relay audit sink | Chained attempt, terminal, and refusal envelopes binding the registry, resource, operation, access profile, disclosure profile, selected-field identifiers, contract revision, and source revision. It excludes tokens, selectors, raw principals, source values, response values, and raw identifiers. | Relay uses the same segmented, hash-chained JSONL sink Evidence Gateway uses. The active segment seals at a fixed `64 MiB` threshold and reopens under the next ascending sequence; Relay does not expose a configurable segment size or a retained-file count, and it never deletes a sealed segment itself. | Configure `audit.sink` and `audit.integrityKeyRef` in `runtime.yaml`. Archive sealed segments off host oldest sequence first; the shipping mechanics are identical to [Ship Evidence Gateway audit records off host](#ship-evidence-gateway-audit-records-off-host), since both sinks share the same segment-naming and hash-chain scheme. |
-| Evidence Gateway audit chain | A keyed, hash-chained JSONL log of the access-attempt event before every source read and the disclosure-release event before every response. Audit carries reviewed identifiers and decision categories, never raw selector values, source values, credentials, tokens, or raw subject identifiers. | `auditStorage.maximumFileBytes` is a per-segment rotation threshold, not a total ceiling. When an append would exceed it, the runtime seals the active segment as `<auditStorage.path>.<sequence>` and opens a new active segment online, with no operator action. Nothing in the runtime deletes or compacts a sealed segment; total retention is entirely operator-owned. | Set `auditStorage.path`, `auditStorage.maximumFileBytes`, and the hash secret in `runtime.yaml`. Archive sealed segments to cold storage oldest sequence first, never touch the active segment while the service runs, and run `evidence verify-audit` on the cadence the deployment's audit policy requires. |
+| Relay audit file | Attempt `request` entries and refusal or terminal `response` entries binding the registry, resource, operation, access profile, disclosure profile, selected-field identifiers, contract revision, and source revision. It excludes tokens, selectors, raw principals, source values, response values, and raw identifiers. | Relay writes through the shared audit writer Evidence Gateway uses. The active file rotates to `<audit.path>.<sequence>` when an append would pass `audit.rotateBytes` (100 MiB by default), and sealed files last modified more than `audit.retainDays` ago (90 by default) are deleted when the writer opens or rotates. A `stdout` destination leaves rotation and retention to the log collector. | Configure `audit.destination`, `audit.path`, and optionally `audit.rotateBytes` and `audit.retainDays` in `runtime.yaml`. Ship sealed files off host before retention deletes them; the mechanics are identical to [Ship Evidence Gateway audit records off host](#ship-evidence-gateway-audit-records-off-host), since both products share the same writer and file naming. |
+| Evidence Gateway audit file | A JSONL log of the access-attempt entry before every source read and the release, denial, or failure entry before every response. Audit carries reviewed identifiers and decision categories, never raw selector values, source values, credentials, tokens, or raw subject identifiers. | `audit.rotateBytes` (100 MiB by default) is a per-file rotation threshold, not a total ceiling. When an append would pass it, the runtime renames the active file to `<audit.path>.<sequence>` and opens a new active file online, with no operator action. Sealed files last modified more than `audit.retainDays` ago (90 by default) are deleted when the writer opens or rotates; the active file is never deleted. | Set `audit.destination`, `audit.path`, and optionally `audit.rotateBytes` and `audit.retainDays` in `runtime.yaml`; the pseudonym key is the bundle's `audit.hashKeyRef`. Ship sealed files to append-only storage before retention deletes them, and never touch the active file while the service runs. |
 | Base Registry Engine PostgreSQL database | The registry's own database. `registry_data` holds the current row of every record, `registry_internal` holds the retained revisions, the hash-chained audit journal and its head row, the webhook outbox, the change-request proposal and target snapshots, and the cached idempotency results, and `registry_source`, `registry_derived`, and `registry_context` hold views and functions the compiler generates. Records, their revisions, and proposal snapshots carry whatever the project's entities declare, personal data included. | Only a retained webhook payload expires on a schedule: `eventDelivery.payloadRetentionDays` in `runtime.yaml` defaults to `7` days and is capped at `30`, and the runtime clears a payload on the first successful delivery or once its expiry has passed. Revisions, audit records, and proposal snapshots are kept until an operator command removes them. | Back up the database; Base Registry Engine writes no local copy of it. `bregctl history erase`, `request-retention erase`, and `audit prune` are the only commands that remove retained bytes, and `audit export` is the only portable copy of the journal. [Retain, erase, and audit](../breg-retention/) states what each one destroys and what it leaves. |
 | Operator-owned config, source, and secret paths | Relay's `runtime.yaml`, the sealed package at `packagePath`, and the bound SQLite source path; Evidence Gateway's governed bundle and runtime document; Base Registry Engine's signed package root, runtime file, project sources, module locks, generated files, test receipt, signature documents, and the `bregctl data` checkpoint, sidecar, and export output files on the operator host; secret references for all three. Source files and a `bregctl data export` output can contain personal data. | Registry Stack does not expire these files, except through the specific audit and cache mechanics listed for each store. | Mount source data read-only where possible; back up config, packages, and secrets through your platform controls. |
 
-Relay V2 keeps no other durable, product-owned state beyond the audit sink and the operator-owned
+Relay V2 keeps no other durable, product-owned state beyond the audit file and the operator-owned
 paths in [Durable state and externally retained records](#durable-state-and-externally-retained-records):
 no shipper-acknowledgement cursor file, no server-side ingest cache, no configuration-signing or
 anti-rollback state, and no separate consultation database. Relay V1 had all four; the
@@ -65,81 +65,60 @@ SQLite file with no credential of its own to cache a token for.
 
 ## Audit retention
 
-Relay writes chained JSONL audit records through the same segmented sink Evidence Gateway uses, sealing full segments at a fixed `64 MiB` and never deleting a sealed segment
-itself.
+Relay writes JSONL audit entries through the same shared writer Evidence Gateway uses, rotating the
+active file at `audit.rotateBytes` and deleting sealed files older than `audit.retainDays`.
 
-The chain detects edits, insertions, reordering, and deletion after the first retained record
-within the retained set. It does not prove that older rotated-away records, or earlier retained
-records, still exist. Off-host durability is entirely the operator's responsibility: Relay V2 has
-no deployment-posture report, no `evidence_grade` startup mode, and no `doctor` command, so it
-never surfaces a finding about local-only retention risk the way Relay V1 did. There is also no
-shipper-acknowledgement cursor to check a shipper's progress against, and no `relay verify-audit`
-or `relayctl` command that replays the chain: unlike Evidence Gateway's `evidence verify-audit`, Relay V2 has no offline chain-integrity command. Verify
-continuity by inspecting the sealed segment sequence directly, and treat a running deployment's
-`/ready` result as evidence the sink was writable at that moment, not as proof of complete off-host
-retention.
+Entries are not chained, so the local file detects neither edits nor deletion. It does not prove
+that older rotated-away records, or earlier retained records, still exist. Off-host durability and
+tamper evidence are entirely the operator's responsibility: Relay V2 has no deployment-posture
+report, no `evidence_grade` startup mode, and no `doctor` command, so it never surfaces a finding
+about local-only retention risk the way Relay V1 did. There is also no shipper-acknowledgement
+cursor to check a shipper's progress against. Treat a running deployment's `/ready` result as
+evidence the audit writer was healthy at that moment, not as proof of complete off-host retention.
 
-Never truncate, rewrite, or reserialize audit files as part of cleanup. Back them up as files, keep
-old integrity keys for the audit retention period, and rotate `audit.integrityKeyRef` only as an
-intentional key-lifecycle event.
+Never truncate, rewrite, or reserialize the active audit file as part of cleanup: the writer
+treats any external change to it as a fault and stops, and audited requests fail closed until a
+restart. Copy sealed files to append-only storage before `audit.retainDays` deletes them.
 
 ## Evidence Gateway retention
 
 Evidence Gateway has no application database and persists no selector, source, evidence, or response
-data. Its durable state is its governed signer configuration and public keys plus the audit chain
+data. Its durable state is its governed signer configuration and public keys plus the audit file
 described in
 [Durable state and externally retained records](#durable-state-and-externally-retained-records).
 The external Transit service retains the production private key.
 An external durable audit service may own its own storage, but Evidence Gateway itself does not maintain
 one.
 
-Run `evidence verify-audit` against the runtime document's configured audit path to check chain
-integrity across every segment. It replays every segment across every seam and reports `segments`,
-`records`, `sealed-sequence`, `head`, and `active-segment`; a gap in the sealed sequence is
-reported as a distinct missing-segment result rather than treated as silent history loss. Archive
-sealed segments to cold storage oldest sequence first and never rename or otherwise touch the
-active segment while the service runs: the runtime recognizes a segment by its
-`<auditStorage.path>.<sequence>` name, and a rename outside that namespace produces a silent fork
-on the next restart rather than a rotation.
+The runtime recognizes a sealed file by its `<audit.path>.<sequence>` name, with an eight-digit
+sequence, and never deletes the active file. Retention deletes only sealed files whose last
+modification is older than `audit.retainDays`, so the local directory holds a rolling window,
+not the whole history. [Read and ship the Evidence Gateway audit log](../evidence-audit/) describes
+the entry format and the `stdout` destination.
 
 ### Ship Evidence Gateway audit records off host
 
-An external receiver is a mirror of the local chain, not a replacement for it.
-Evidence Gateway recovers its chain head from local segments at startup and holds that head in
-process memory, so a write-only remote sink cannot supply the previous hash a restart needs.
-Ship copies and keep the local audit path as the system of record.
+The local audit file is not tamper-evident, and retention deletes it by age, so the append-only
+store you ship to is the audit record of the deployment. A shipper reads the same directory the
+runtime writes, so three rules keep it safe:
 
-A shipper reads the same directory the runtime writes, so two rules keep it from corrupting the
-chain it is copying.
+- Copy sealed files, and ship each one before `audit.retainDays` deletes it. The runtime never
+  depends on a sealed file after sealing it, so removing one after it is archived is safe.
+- Key archived copies on more than the file name, for example the host and the first entry's
+  `time`. Sequence numbers restart at `00000001` once retention has deleted every sealed file and the
+  process restarts, so two different files can carry the same name over a deployment's life.
+- Never point a shipper at the active file in a way that renames, truncates, or rewrites it, and
+  never touch `<audit.path>.lock`. Any external replacement or modification of the active file makes
+  readiness and later appends fail closed.
 
-- Copy sealed segments, never move them, and leave the newest sealed segment in place.
-  When the runtime opens the audit path it derives the next sequence number from the newest sealed
-  segment still on disk.
-  A restart after a shipper deleted that segment normally fails closed, because the active segment's
-  first record names a predecessor the remaining sealed tail no longer matches.
-  Nothing catches it when the active segment is empty at that restart, the state every rotation
-  leaves behind until the next record arrives: startup accepts the older sealed tail, and a later
-  rotation seals a fresh segment under the sequence number the shipped-away segment already used.
-  Local verification stays clean, since the sealed numbering is still dense, and cold storage ends up
-  holding two files named `<auditStorage.path>.00000001` that hold different records and claim the
-  same predecessor.
-- Never point a shipper at the active segment or at `<auditStorage.path>.lock`.
-  Any external replacement or modification of either makes readiness and later appends fail closed.
-
-Archive the oldest sealed segments first, and verify before removing anything:
+Archive the oldest sealed files first, for example:
 
 ```sh
-evidence verify-audit --runtime /etc/registry-evidence/runtime.yaml
-cp /var/lib/registry-evidence/audit/evidence.jsonl.00000001 "$ARCHIVE/"
-rm /var/lib/registry-evidence/audit/evidence.jsonl.00000001
+cp /var/lib/registry-evidence/audit/evidence.jsonl.00000001 "$ARCHIVE/<host>-<first-entry-time>.jsonl"
 ```
 
-The `evidence_audit_segments` and `evidence_audit_bytes` gauges described in
-[Metrics reference](../../products/registry-evidence/operator-contract/#metrics-reference) are the archival
-signal. Both are recomputed by walking the audit directory, so they fall when an operator archives
-sealed segments and rise again as the chain grows. Audit bytes that grow without bound are a
-shipper that stopped, which is the condition worth alerting on. Neither gauge observes the
-receiver: they report what is still on local disk, never what external storage accepted.
+Alert on the shipper, not on the local directory: its size stays bounded by retention even when a
+shipper has stopped, and local files that retention deletes before shipping are lost.
 
 ## Base Registry Engine retention
 
