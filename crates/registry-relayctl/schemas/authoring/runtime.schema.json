@@ -335,6 +335,7 @@
   "description": "Deployment-local bindings. No governed field is accepted here.",
   "properties": {
     "apiVersion": {
+      "const": "registry.registrystack.org/relay-runtime/v1alpha1",
       "type": "string"
     },
     "audit": {
@@ -356,6 +357,7 @@
       "default": null
     },
     "kind": {
+      "const": "RelayRuntimeConfig",
       "type": "string"
     },
     "limits": {

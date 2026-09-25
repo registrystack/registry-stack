@@ -85,4 +85,18 @@ mod tests {
             assert_eq!(value["additionalProperties"], false);
         }
     }
+
+    #[test]
+    fn the_runtime_schema_pins_the_envelope() {
+        let documents = documents().unwrap();
+        let runtime: Value = serde_json::from_str(&documents[RUNTIME_SCHEMA_FILE]).unwrap();
+        assert_eq!(
+            runtime["properties"]["apiVersion"]["const"],
+            crate::contract::RELAY_RUNTIME_API_VERSION
+        );
+        assert_eq!(
+            runtime["properties"]["kind"]["const"],
+            crate::contract::RELAY_RUNTIME_KIND
+        );
+    }
 }
