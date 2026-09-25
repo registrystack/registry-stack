@@ -286,8 +286,6 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg/tests/postgres_review_executor.rs, a_live_review_is_polled_before_one_its_authority_does_not_know and a_webhook_completion_makes_its_review_due_and_first_in_the_poll_queue;
     crates/registry-breg/tests/postgres_change_requests.rs, an_operator_resubmits_or_closes_a_review_its_authority_lost. */}
 
-- **Breaking:** Registry Discovery reads `runtime.yaml` through the shared
-
 - BREAKING: Evidence Gateway reads `runtime.yaml` through the shared
   runtime configuration loader and declares its access-token issuer and
   audit key through the shared blocks. The runtime file now opens with
@@ -351,7 +349,6 @@ relevant product pages on this site rather than duplicating release notes.
     release/docker/Dockerfile.relay. */}
 
 - BREAKING: Registry Discovery reads `runtime.yaml` through the shared
-
   runtime configuration loader. The file now opens with
   `apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1` and
   `kind: DiscoveryRuntimeConfig` instead of `schemaVersion`, and
