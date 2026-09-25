@@ -122,6 +122,12 @@ entries:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: an_allowed_commitment_writes_its_request_before_and_its_response_after}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_refused_request_entry_opens_no_capacity_transaction}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_refused_response_entry_answers_unavailable_with_the_commitment_committed}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_replayed_receipt_is_released_only_after_its_response_entry_is_accepted}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_replayed_refusal_is_recorded_as_the_refusal_it_replays}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_racing_replay_is_not_released_when_its_response_entry_is_refused}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_concurrent_identical_request_replays_the_winning_receipt}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: concurrent_identical_admissible_requests_replay_one_winning_success}
+      - {path: crates/registry-scheduling/src/service.rs, name: a_replayed_receipt_records_the_decision_it_carries}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: migration_refuses_to_drop_unpublished_audit_and_drops_a_drained_outbox}
       - {path: crates/registry-schedulingctl/tests/records_apply_postgres.rs, name: records_apply_replaces_facts_wholesale_and_audits_each_write}
   - id: SCHEDULING-SEC-15

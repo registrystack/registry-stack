@@ -2649,39 +2649,48 @@ async fn a_concurrent_writer_of_one_idempotency_key_is_refused_not_failed() {
     assert!(slot_offered(&fx, OFFERING, 90, 260, second).await);
 }
 
-#[tokio::test]
-async fn a_concurrent_identical_request_replays_the_winning_receipt() {
-    let fx = fixture().await;
-    let slot = first_slot(&fx, OFFERING, 90, 260).await;
-    let body = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+/// Book once, then race an identical request under a second key against an
+/// uncommitted copy of the winner's receipt. The slot is already taken, so
+/// the contender's capacity check refuses it and its refused-attempt insert
+/// meets the winner's key: the recovery branch replays that receipt. With
+/// `refuse_response`, the destination accepts only the contender's request
+/// entry. Returns the winner, the contender's answer, and the entries the
+/// contender appended.
+async fn race_an_exhausted_identical_request(
+    fx: &Fixture,
+    seed_key: &str,
+    key: &str,
+    refuse_response: bool,
+) -> (Value, (StatusCode, Value), Vec<Value>) {
+    let slot = first_slot(fx, OFFERING, 90, 260).await;
+    let body = json!({"hold": null, "admission": admission(fx, OFFERING, slot)});
     let (status, appointment) = fx
-        .post(
-            "/v1/appointments",
-            &fx.agent,
-            "race-same-seed",
-            body.clone(),
-        )
+        .post("/v1/appointments", &fx.agent, seed_key, body.clone())
         .await;
     assert_eq!(status, StatusCode::CREATED, "{appointment}");
 
     fx.admin
-        .batch_execute(
+        .batch_execute(&format!(
             "BEGIN; \
              INSERT INTO scheduling_attempts(attempt_id, actor_issuer, actor_subject, scope, \
              idempotency_key, request_hash, state, status_code, receipt, expires_at) \
-             SELECT gen_random_uuid(), actor_issuer, actor_subject, scope, 'race-same', \
+             SELECT gen_random_uuid(), actor_issuer, actor_subject, scope, '{key}', \
              request_hash, state, status_code, receipt, expires_at \
-             FROM scheduling_attempts WHERE idempotency_key = 'race-same-seed'",
-        )
+             FROM scheduling_attempts WHERE idempotency_key = '{seed_key}'"
+        ))
         .await
         .expect("hold the winning receipt from another writer");
 
+    let before = fx.capture.entries().len();
+    if refuse_response {
+        fx.capture.refuse_after(before + 1);
+    }
     let contender = tokio::spawn(send(
         fx.http.clone(),
         "POST".to_owned(),
         "/v1/appointments".to_owned(),
         fx.agent.clone(),
-        Some("race-same".to_owned()),
+        Some(key.to_owned()),
         Some(body),
     ));
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -2689,9 +2698,44 @@ async fn a_concurrent_identical_request_replays_the_winning_receipt() {
         .batch_execute("COMMIT")
         .await
         .expect("release the winning receipt");
-    let (status, replayed) = contender.await.expect("the contending request answers");
+    let answer = contender.await.expect("the contending request answers");
+    let appended = fx.capture.entries().split_off(before);
+    (appointment, answer, appended)
+}
+
+/// SCHEDULING-SEC-14: the racing replay is audited like any other. The
+/// contender's request entry is answered by exactly one response entry,
+/// which records the winning success it releases as allowed.
+#[tokio::test]
+async fn a_concurrent_identical_request_replays_the_winning_receipt() {
+    let fx = fixture().await;
+    let (appointment, (status, replayed), appended) =
+        race_an_exhausted_identical_request(&fx, "race-same-seed", "race-same", false).await;
     assert_eq!(status, StatusCode::CREATED, "{replayed}");
     assert_eq!(replayed["appointmentId"], appointment["appointmentId"]);
+    let response = one_request_and_one_response(&appended);
+    assert_eq!(response["operation"], "appointment.create");
+    assert_eq!(response["outcome"], "allowed");
+    assert_eq!(response["reason"], "authorization.allowed");
+}
+
+/// SCHEDULING-SEC-14: the racing replay holds the winner's receipt, which
+/// may be a success. It is not released when the destination refuses its
+/// response entry: the caller is told the service is unavailable.
+#[tokio::test]
+async fn a_racing_replay_is_not_released_when_its_response_entry_is_refused() {
+    let fx = fixture().await;
+    let (appointment, (status, problem), appended) =
+        race_an_exhausted_identical_request(&fx, "race-refused-seed", "race-refused", true).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+    assert_eq!(problem["code"], "service.unavailable");
+    let appointment_id = appointment["appointmentId"].as_str().unwrap();
+    assert!(
+        !problem.to_string().contains(appointment_id),
+        "the retained receipt is not released"
+    );
+    assert_eq!(appended.len(), 1, "{appended:?}");
+    assert_eq!(appended[0]["phase"], "request");
 }
 
 /// A success-side idempotency race differs from the exhausted-capacity race
@@ -2729,6 +2773,7 @@ async fn concurrent_identical_admissible_requests_replay_one_winning_success() {
         .await
         .expect("hold the winning success from another writer");
 
+    let before = fx.capture.entries().len();
     let contender = tokio::spawn(send(
         fx.http.clone(),
         "POST".to_owned(),
@@ -2753,6 +2798,9 @@ async fn concurrent_identical_admissible_requests_replay_one_winning_success() {
         replayed.1["appointmentId"], winner["appointmentId"],
         "the contender receives the winning receipt"
     );
+    let response = one_request_and_one_response(&fx.capture.entries().split_off(before));
+    assert_eq!(response["outcome"], "allowed");
+    assert_eq!(response["reason"], "authorization.allowed");
 
     let claims = fx
         .admin
@@ -3565,6 +3613,120 @@ async fn a_refused_response_entry_answers_unavailable_with_the_commitment_commit
     let entries = fx.capture.entries();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0]["phase"], "request");
+}
+
+/// The entries of one audited request, appended in order: its request entry
+/// and exactly one response entry answering it. Returns the response record.
+fn one_request_and_one_response(appended: &[Value]) -> Value {
+    assert_eq!(
+        appended.len(),
+        2,
+        "one request and one response: {appended:?}"
+    );
+    let (request, response) = (&appended[0], &appended[1]);
+    assert_eq!(request["phase"], "request");
+    assert_eq!(response["phase"], "response");
+    assert_eq!(request["correlation"], response["correlation"]);
+    assert_eq!(response["record"]["eventId"], response["correlation"]);
+    assert_eq!(
+        request["record"]["operation"],
+        response["record"]["operation"]
+    );
+    response["record"].clone()
+}
+
+/// SCHEDULING-SEC-14: a replayed receipt is a disclosure like the first
+/// answer. Each replay writes its own request entry and one allowed response
+/// entry, and when the destination accepts the request entry but refuses the
+/// response, the retained receipt is not released: the caller is told the
+/// service is unavailable and nothing further is committed.
+#[tokio::test]
+async fn a_replayed_receipt_is_released_only_after_its_response_entry_is_accepted() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    let body = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+    let (status, appointment) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "audited-replay",
+            body.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{appointment}");
+    let appointment_id = appointment["appointmentId"].as_str().unwrap().to_owned();
+
+    let before = fx.capture.entries().len();
+    let (status, replayed) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "audited-replay",
+            body.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{replayed}");
+    assert_eq!(replayed["appointmentId"], appointment_id);
+    let response = one_request_and_one_response(&fx.capture.entries().split_off(before));
+    assert_eq!(response["operation"], "appointment.create");
+    assert_eq!(response["outcome"], "allowed");
+    assert_eq!(response["reason"], "authorization.allowed");
+
+    let before = fx.capture.entries().len();
+    fx.capture.refuse_after(before + 1);
+    let (status, problem) = fx
+        .post("/v1/appointments", &fx.agent, "audited-replay", body)
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+    assert_eq!(problem["code"], "service.unavailable");
+    assert!(
+        !problem.to_string().contains(&appointment_id),
+        "the retained receipt is not released"
+    );
+    let appended = fx.capture.entries().split_off(before);
+    assert_eq!(appended.len(), 1, "{appended:?}");
+    assert_eq!(appended[0]["phase"], "request");
+    assert_eq!(
+        claims_and_receipts(&fx).await,
+        (1, 1),
+        "a replay commits nothing"
+    );
+}
+
+/// SCHEDULING-SEC-14: a replayed refusal is recorded as the refusal it
+/// replays, never as an allowed commitment, and it too is released only
+/// after its response entry is accepted.
+#[tokio::test]
+async fn a_replayed_refusal_is_recorded_as_the_refusal_it_replays() {
+    let fx = fixture().await;
+    let (near_id, near_revision) = booked(&fx, 90, 200, "audited-refusal-booking").await;
+    let uri = format!("/v1/appointments/{near_id}/cancel");
+    let body = json!({"observedRevision": near_revision, "reason": "caller cancelled"});
+    let (status, refused) = fx
+        .post(&uri, &fx.agent, "audited-refusal", body.clone())
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(refused["code"], "cancellation.cutoff-passed");
+
+    let before = fx.capture.entries().len();
+    let (status, replayed) = fx
+        .post(&uri, &fx.agent, "audited-refusal", body.clone())
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(replayed["code"], "cancellation.cutoff-passed");
+    let response = one_request_and_one_response(&fx.capture.entries().split_off(before));
+    assert_eq!(response["operation"], "appointment.cancel");
+    assert_eq!(response["outcome"], "denied");
+    assert_eq!(response["reason"], "authorization.profile");
+
+    let before = fx.capture.entries().len();
+    fx.capture.refuse_after(before + 1);
+    let (status, problem) = fx.post(&uri, &fx.agent, "audited-refusal", body).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+    assert_eq!(problem["code"], "service.unavailable");
+    let appended = fx.capture.entries().split_off(before);
+    assert_eq!(appended.len(), 1, "{appended:?}");
+    assert_eq!(appended[0]["phase"], "request");
 }
 
 /// The most octets the claim ledger stores for a caller-chosen duplicate key.

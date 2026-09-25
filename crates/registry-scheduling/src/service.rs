@@ -1239,16 +1239,18 @@ impl SchedulingService {
         Ok(correlation)
     }
 
-    /// Append the allowed `response` entry of a committed commitment. The
-    /// capacity transaction has committed, so a refusal here answers the
-    /// caller `service.unavailable` while the commitment stays in place; a
-    /// retry under the same idempotency key replays its receipt.
-    async fn audit_allowed(
+    /// Append the `response` entry that gates an answer: the allowed entry
+    /// of a committed commitment, or the entry of a replayed receipt. A
+    /// refusal here answers the caller `service.unavailable` and releases
+    /// nothing. A committed commitment stays in place, and a retry under the
+    /// same idempotency key replays its receipt, gated the same way.
+    async fn audit_response(
         &self,
         correlation: Uuid,
         caller: &Caller,
         grant: &GrantClaims,
         operation: &str,
+        (outcome, reason): (AuthorizationOutcome, &str),
     ) -> Result<(), ServiceError> {
         let record = audit_record(
             &self.hasher,
@@ -1256,8 +1258,8 @@ impl SchedulingService {
             caller,
             grant,
             operation,
-            AuthorizationOutcome::Allowed,
-            "authorization.allowed",
+            outcome,
+            reason,
         )?;
         let record = with_event_id(correlation, record).ok_or_else(|| {
             ServiceError::internal("the commitment audit record carries another identity")
@@ -1268,10 +1270,36 @@ impl SchedulingService {
             .map_err(|failure| {
                 tracing::error!(
                     %failure,
-                    "the committed commitment's response audit entry was refused"
+                    "the commitment's response audit entry was refused"
                 );
                 ServiceError::Problem(ProblemCode::ServiceUnavailable)
             })
+    }
+
+    /// Release a stored receipt only once its `response` entry is accepted.
+    /// The entry records the decision the receipt carries, so a replayed
+    /// refusal is recorded as the refusal it replays, not as allowed.
+    async fn audited_replay<T>(
+        &self,
+        correlation: Uuid,
+        caller: &Caller,
+        grant: &GrantClaims,
+        operation: &str,
+        status_code: u16,
+        receipt: Value,
+    ) -> Result<CommitmentAnswer<T>, ServiceError> {
+        self.audit_response(
+            correlation,
+            caller,
+            grant,
+            operation,
+            replayed_decision(status_code, &receipt),
+        )
+        .await?;
+        Ok(CommitmentAnswer::Replay {
+            status_code,
+            receipt,
+        })
     }
 
     /// The offering a committed claim names.
@@ -1359,8 +1387,10 @@ impl SchedulingService {
 
     /// Translate one store outcome: minted, replayed, or refused. A minted
     /// commitment is answered only once its allowed `response` entry is
-    /// accepted. A refusal writes its receipt under the caller's idempotency
-    /// key so a replay of that key answers the same, and writes its denied
+    /// accepted, and a replayed receipt, including one a concurrent identical
+    /// request won, only once the `response` entry recording its decision
+    /// is. A refusal writes its receipt under the caller's idempotency key so
+    /// a replay of that key answers the same, and writes its denied
     /// `response` entry when the refusal was an authorization decision. Both
     /// entries carry the `correlation` of the commitment's `request` entry.
     #[allow(clippy::too_many_arguments)]
@@ -1385,13 +1415,19 @@ impl SchedulingService {
             Ok(CommitOutcome::Replay {
                 status_code,
                 receipt,
-            }) => Ok(CommitmentAnswer::Replay {
-                status_code,
-                receipt,
-            }),
+            }) => {
+                self.audited_replay(correlation, caller, grant, operation, status_code, receipt)
+                    .await
+            }
             Ok(minted) => {
-                self.audit_allowed(correlation, caller, grant, operation)
-                    .await?;
+                self.audit_response(
+                    correlation,
+                    caller,
+                    grant,
+                    operation,
+                    (AuthorizationOutcome::Allowed, "authorization.allowed"),
+                )
+                .await?;
                 Ok(CommitmentAnswer::Minted(T::from_minted(minted)))
             }
             Err(error) => {
@@ -1442,11 +1478,21 @@ impl SchedulingService {
                                 )
                                 .await
                             {
+                                // A concurrent identical request won the
+                                // key. Its receipt, which may be a success,
+                                // is this request's answer, gated like any
+                                // other replay.
                                 Ok(Some((status_code, receipt))) => {
-                                    return Ok(CommitmentAnswer::Replay {
-                                        status_code,
-                                        receipt,
-                                    });
+                                    return self
+                                        .audited_replay(
+                                            correlation,
+                                            caller,
+                                            grant,
+                                            operation,
+                                            status_code,
+                                            receipt,
+                                        )
+                                        .await;
                                 }
                                 Ok(None) => {}
                                 Err(
@@ -2074,6 +2120,24 @@ fn problem_of(error: &CommitError) -> ProblemCode {
     }
 }
 
+/// The decision a stored receipt carries, as its replay's `response` entry
+/// records it. A success receipt was allowed. A refusal receipt was written
+/// only for a decision the ledger took, so it keeps the reason its first
+/// answer recorded: a lapsed grant is `authorization.refused`, every other
+/// ledger refusal `authorization.profile`.
+fn replayed_decision(status_code: u16, receipt: &Value) -> (AuthorizationOutcome, &'static str) {
+    if status_code < 400 {
+        return (AuthorizationOutcome::Allowed, "authorization.allowed");
+    }
+    let unauthorized =
+        receipt["problem"]["code"].as_str() == Some(ProblemCode::OperationNotAuthorized.code());
+    if unauthorized {
+        (AuthorizationOutcome::Denied, "authorization.refused")
+    } else {
+        (AuthorizationOutcome::Denied, "authorization.profile")
+    }
+}
+
 /// The stored body a replayed refusal answers with: the pinned problem
 /// without a trace id, so the edge stamps the answering request's own trace.
 fn problem_receipt(problem: ProblemCode) -> Value {
@@ -2565,6 +2629,32 @@ mod tests {
             registry_scheduling_core::AdmissionRefusal::CapacityExhausted.detailed_code(),
             registry_scheduling_core::AdmissionRefusal::CapacityExhausted.public_code()
         );
+    }
+
+    #[test]
+    fn a_replayed_receipt_records_the_decision_it_carries() {
+        assert_eq!(
+            replayed_decision(201, &json!({"claim": {}})),
+            (AuthorizationOutcome::Allowed, "authorization.allowed")
+        );
+        assert_eq!(
+            replayed_decision(204, &Value::Null),
+            (AuthorizationOutcome::Allowed, "authorization.allowed")
+        );
+        assert_eq!(
+            replayed_decision(403, &problem_receipt(ProblemCode::OperationNotAuthorized)),
+            (AuthorizationOutcome::Denied, "authorization.refused")
+        );
+        for refusal in [
+            ProblemCode::CapacityExhausted,
+            ProblemCode::RevisionMismatch,
+            ProblemCode::CancellationCutoffPassed,
+        ] {
+            assert_eq!(
+                replayed_decision(refusal.http_status(), &problem_receipt(refusal)),
+                (AuthorizationOutcome::Denied, "authorization.profile")
+            );
+        }
     }
 
     #[test]

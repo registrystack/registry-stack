@@ -177,6 +177,11 @@ standard output, that fails closed at the request boundary.
   refused response entry for a committed commitment answers
   `service.unavailable` with the commitment in place, rather than hand the
   caller an unaudited answer.
+- A replayed receipt, including one a concurrent identical request won, is
+  answered only after its own `response` entry is accepted. The entry
+  records the decision the receipt carries, so a replayed refusal is
+  recorded as denied. A refused entry answers `service.unavailable` and the
+  receipt is not released.
 - A permission refused before the transaction is one `response` entry.
 - Hook delivery accepts each attempt's request entry before egress, inside
   the delivery claim's transaction, so a refused entry rolls the claim back
