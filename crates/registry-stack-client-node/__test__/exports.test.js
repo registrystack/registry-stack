@@ -19,6 +19,13 @@ test('the public package exposes one namespace per product', () => {
   }
 });
 
+test('product namespaces do not expose standalone loader diagnostics', () => {
+  for (const product of PRODUCTS) {
+    const source = fs.readFileSync(path.join(__dirname, '..', product, 'client.js'), 'utf8');
+    assert.doesNotMatch(source, /__napiBindingTarget/);
+  }
+});
+
 test('platform dependencies are bound only when the release package is packed', () => {
   const manifest = require('../package.json');
   assert.equal(manifest.optionalDependencies, undefined);

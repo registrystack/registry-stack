@@ -53,6 +53,19 @@ async function readEvidence(): Promise<Buffer | string> {
 }
 void readEvidence
 
+// The unified package bypasses each standalone napi-rs loader, so its product
+// namespaces cannot expose the generated loader diagnostic.
+// @ts-expect-error Loader-only diagnostics are absent from the unified facade.
+discovery.__napiBindingTarget
+// @ts-expect-error Loader-only diagnostics are absent from the unified facade.
+evidence.__napiBindingTarget
+// @ts-expect-error Loader-only diagnostics are absent from the unified facade.
+relay.__napiBindingTarget
+// @ts-expect-error Loader-only diagnostics are absent from the unified facade.
+breg.__napiBindingTarget
+// @ts-expect-error Loader-only diagnostics are absent from the unified facade.
+casework.__napiBindingTarget
+
 // @ts-expect-error Product query vocabularies remain distinct.
 bregClient.listRecords('people', { pageSize: 25 })
 // @ts-expect-error Product query vocabularies remain distinct.
