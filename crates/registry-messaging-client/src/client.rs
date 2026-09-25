@@ -96,7 +96,8 @@ impl MessagingClient {
     /// The caller chooses the key and retries with it: the client never
     /// invents one and never retries. A key that is empty, longer than
     /// `MAXIMUM_IDEMPOTENCY_KEY_BYTES`, or carries a byte outside visible
-    /// ASCII is refused before a request is sent.
+    /// ASCII is refused before a request is sent. A templated submission's
+    /// identifier and version must also follow the package naming grammar.
     pub async fn submit(
         &self,
         token: &BearerToken,
@@ -107,6 +108,18 @@ impl MessagingClient {
             return Err(MessagingClientError::invalid_request(
                 "the idempotency key is not 1 to 128 visible ASCII characters",
             ));
+        }
+        if let Some(template) = &request.template {
+            if !valid_identifier(&template.id) {
+                return Err(MessagingClientError::invalid_request(
+                    "the template identifier is not a package identifier",
+                ));
+            }
+            if !valid_template_version(&template.version) {
+                return Err(MessagingClientError::invalid_request(
+                    "the template version is not a package version label",
+                ));
+            }
         }
         let body = serde_json::to_vec(request).map_err(|_| {
             MessagingClientError::invalid_request("the submission could not be encoded")

@@ -313,6 +313,32 @@ async fn an_idempotency_key_outside_the_header_grammar_is_refused_before_any_req
 }
 
 #[tokio::test]
+async fn a_submission_template_name_outside_the_package_grammar_is_refused_before_any_request() {
+    let fixture = Fixture::new(
+        StatusCode::ACCEPTED,
+        Some("application/json"),
+        &message_receipt(),
+    );
+    let (client, server) = serve("", &fixture).await;
+    for (template_id, version) in [("../ready", "1"), ("appointment-reminder", "1/preview")] {
+        let mut request = submission();
+        request.template = Some(TemplateReference {
+            id: template_id.to_owned(),
+            version: version.to_owned(),
+        });
+        assert!(
+            matches!(
+                client.submit(&token(), IDEMPOTENCY_KEY, &request).await,
+                Err(MessagingClientError::InvalidRequest { .. })
+            ),
+            "{template_id} {version}"
+        );
+    }
+    assert!(fixture.seen.lock().expect("observations").is_empty());
+    server.abort();
+}
+
+#[tokio::test]
 async fn a_reused_idempotency_key_is_the_typed_key_reused_problem() {
     let (client, server) = serve("", &Fixture::problem(ProblemCode::IdempotencyKeyReused)).await;
     match client
