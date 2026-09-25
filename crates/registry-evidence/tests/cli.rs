@@ -5,7 +5,7 @@ use std::{
     fs,
     io::{Read as _, Write as _},
     net::{TcpListener, TcpStream},
-    os::unix::fs::PermissionsExt as _,
+    os::unix::fs::{MetadataExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     sync::{
@@ -280,9 +280,9 @@ fn dependency_check_refuses_an_audit_sink_symlinked_out_of_the_required_root() {
     deployment.stage_acceptance_secrets();
     deployment.point_authentication_to(key_server.origin());
     let escape = ephemeral.path().join("audit.jsonl");
-    fs::write(&escape, "").expect("stage ephemeral audit chain");
+    fs::write(&escape, "").expect("stage ephemeral audit file");
     std::os::unix::fs::symlink(&escape, deployment.path("audit.jsonl"))
-        .expect("stage escaping audit sink");
+        .expect("stage escaping audit file");
 
     let output = deployment.check_with_audit_under(deployment.root.path());
 
@@ -293,6 +293,45 @@ fn dependency_check_refuses_an_audit_sink_symlinked_out_of_the_required_root() {
     assert_eq!(
         String::from_utf8(output.stderr).expect("diagnostic is UTF-8"),
         "evidence: audit destination check failed: the configured audit destination resolves outside the declared audit root\n"
+    );
+}
+
+/// A `stdout` destination is a complete deployment: the dependency proof opens
+/// it like any other destination.
+#[test]
+fn dependency_check_accepts_a_stdout_audit_destination() {
+    let key_server = JwksServer::start();
+    let deployment = Deployment::stage("all-definitions");
+    deployment.stage_acceptance_secrets();
+    deployment.point_authentication_to(key_server.origin());
+    deployment.write_audit_to_stdout();
+
+    assert_success(
+        &deployment.check_with_runtime_dependencies(),
+        "Evidence deployment ",
+        " passed check (4 requirements)\n",
+    );
+    assert!(!deployment.path("audit.jsonl").exists());
+}
+
+/// Containment is a statement about a file. A `stdout` destination has none,
+/// so the flag is refused rather than silently satisfied.
+#[test]
+fn dependency_check_refuses_a_required_audit_root_for_a_stdout_destination() {
+    let deployment = Deployment::stage("all-definitions");
+    deployment.stage_acceptance_secrets();
+    deployment.write_audit_to_stdout();
+
+    let output = deployment.check_with_audit_under(deployment.root.path());
+
+    assert!(
+        !output.status.success(),
+        "a stdout destination satisfied an audit root requirement"
+    );
+    assert!(output.stdout.is_empty(), "a refused check wrote output");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("diagnostic is UTF-8"),
+        "evidence: --require-audit-under needs a file audit destination; this runtime writes audit to stdout\n"
     );
 }
 
@@ -337,14 +376,16 @@ fn dependency_check_fails_closed_when_the_jwks_endpoint_is_unavailable() {
 }
 
 #[tokio::test]
-async fn dependency_check_fails_when_an_audit_writer_already_holds_the_sink() {
+async fn dependency_check_fails_when_an_audit_writer_already_holds_the_destination() {
     use registry_evidence::audit::EvidenceAuditLog;
+    use registry_platform_audit::{AuditDestination, FileDestination};
 
     let deployment = Deployment::stage("all-definitions");
     deployment.stage_acceptance_secrets();
+    let destination = FileDestination::new(deployment.path("audit.jsonl"))
+        .expect("the audit destination is valid");
     let writer = EvidenceAuditLog::initialize(
-        deployment.path("audit.jsonl"),
-        1_073_741_824,
+        AuditDestination::File(destination),
         b"audit-hash-secret-32-bytes-minimum-value".to_vec(),
         1,
     )
@@ -363,7 +404,7 @@ async fn dependency_check_fails_when_an_audit_writer_already_holds_the_sink() {
     );
     assert_eq!(
         std::str::from_utf8(&output.stderr).expect("diagnostic is UTF-8"),
-        "evidence: runtime audit initialization failed: another writer already holds the audit sink lock\n"
+        "evidence: runtime audit initialization failed: another writer already holds the audit destination lock\n"
     );
     drop(writer);
 }
@@ -1101,7 +1142,7 @@ fn a_failing_fixture_run_is_unchanged_when_no_trace_is_asked_for() {
 #[test]
 fn the_fixture_trace_is_offline_only_and_no_other_subcommand_accepts_it() {
     let deployment = Deployment::stage("adult-status");
-    for command in ["serve", "check", "verify-audit"] {
+    for command in ["serve", "check", "local-audit-last-operation"] {
         let output = invoke(&deployment.path("runtime.yaml"), &[command, "--explain"]);
         assert!(
             !output.status.success(),
@@ -1857,7 +1898,7 @@ fn check_rejects_secret_material_the_server_would_refuse_at_startup() {
         SecretFailureCase {
             label: "audit hash key below the minimum length",
             break_secrets: |deployment| deployment.write_secret("audit-hash-key", "short"),
-            expected: "evidence: runtime audit initialization failed: the audit hash secret is \
+            expected: "evidence: runtime audit initialization failed: the audit hash key is \
                        unusable\n",
         },
         SecretFailureCase {
@@ -1902,17 +1943,17 @@ struct AuditFaultCase {
 
 /// The audit boundary refuses to start for unrelated reasons, and from outside
 /// the process they are indistinguishable: a mode an operator fixes with
-/// `chmod`, a chain that no longer verifies, and a second writer already
-/// holding the sink lock are three different questions with three different
-/// answers. Each names itself, and none of them names the audit path, which
-/// the operator already has in the runtime file.
+/// `chmod`, a destination setting outside the platform bounds, and a second
+/// writer already holding the destination lock are different questions with
+/// different answers. Each names itself, and none of them names the audit
+/// path, which the operator already has in the runtime file.
 #[test]
 fn serve_names_why_the_audit_boundary_refused_to_initialize() {
     let cases = [
         AuditFaultCase {
             label: "an audit file readable beyond its owner",
             break_audit: |deployment| {
-                deployment.stage_audit_chain("");
+                deployment.stage_audit_file("");
                 set_mode(&deployment.path("audit.jsonl"), 0o644);
                 None
             },
@@ -1920,30 +1961,21 @@ fn serve_names_why_the_audit_boundary_refused_to_initialize() {
                        not owner-only, or its directory is unavailable or not owner-controlled\n",
         },
         AuditFaultCase {
-            label: "an audit chain that does not verify",
-            break_audit: |deployment| {
-                deployment.stage_audit_chain("{\"not\":\"an audit record\"}\n");
-                None
-            },
-            expected: "evidence: runtime audit initialization failed: the existing audit chain \
-                       did not verify\n",
-        },
-        AuditFaultCase {
-            label: "a second writer holding the audit sink lock",
+            label: "a second writer holding the audit destination lock",
             break_audit: |deployment| {
                 let path = deployment.path("audit.jsonl.lock");
-                fs::write(&path, "").expect("stage audit sink lock");
+                fs::write(&path, "").expect("stage audit destination lock");
                 fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
                     .expect("set owner-only audit lock mode");
                 let held = fs::OpenOptions::new()
                     .write(true)
                     .open(&path)
-                    .expect("open audit sink lock");
-                held.try_lock().expect("hold the audit sink lock");
+                    .expect("open audit destination lock");
+                held.try_lock().expect("hold the audit destination lock");
                 Some(held)
             },
             expected: "evidence: runtime audit initialization failed: another writer already \
-                       holds the audit sink lock\n",
+                       holds the audit destination lock\n",
         },
     ];
 
@@ -1969,52 +2001,46 @@ fn serve_names_why_the_audit_boundary_refused_to_initialize() {
     }
 }
 
-/// The documented audit rotation procedure, executed against the real binary.
-///
-/// The procedure is: stop the service with SIGTERM, archive the audit file by
-/// rename, start the service again on the same path, and confirm readiness on
-/// the new chain. This proves the stop and start-new-chain steps of the
-/// operator procedure and the SIGTERM handling that makes the stop step
-/// possible at all.
+/// A restart is a SIGTERM stop and a start on the same path, executed against
+/// the real binary. The writer reopens the existing active file and appends:
+/// it neither verifies nor rewrites what an earlier process wrote, because
+/// integrity after the fact belongs to the append-only store audit is shipped
+/// to. This also proves the SIGTERM handling that makes the stop possible.
 #[test]
-fn serve_stops_on_sigterm_and_restarts_on_an_archived_audit_chain() {
+fn serve_stops_on_sigterm_and_restarts_on_the_same_audit_file() {
     let port = free_port();
     let deployment = Deployment::stage_on_port("all-definitions", port);
     deployment.stage_acceptance_secrets();
+    let earlier = "{\"written\":\"by an earlier process\"}\n";
+    deployment.stage_audit_file(earlier);
     deployment.seal();
+    let path = deployment.path("audit.jsonl");
 
     let mut service = deployment.serve();
     wait_until_ready(port);
-    let first = deployment.path("audit.jsonl");
-    assert!(first.is_file(), "the service did not open an audit chain");
     stop(&mut service);
-
-    // Archive by rename: the audit file must stay a singly linked owner-only
-    // regular file, so a copy-and-truncate rotation is not the procedure.
-    let archive = deployment.path("audit-archived.jsonl");
-    fs::rename(&first, &archive).expect("archive the audit chain");
-    assert!(!first.exists(), "the archived chain was left in place");
+    let inode = fs::metadata(&path)
+        .expect("the service kept its audit file")
+        .ino();
 
     let mut restarted = deployment.serve();
     wait_until_ready(port);
-    assert!(first.is_file(), "the restart did not start a new chain");
     stop(&mut restarted);
-
-    assert!(archive.is_file(), "the archived chain was disturbed");
-
-    // Rollback is the same stop, rename, start sequence in reverse: the new
-    // chain is set aside and the archived chain resumes at the original path.
-    let superseded = deployment.path("audit-superseded.jsonl");
-    fs::rename(&first, &superseded).expect("set the new chain aside");
-    fs::rename(&archive, &first).expect("restore the archived chain");
-    let mut rolled_back = deployment.serve();
-    wait_until_ready(port);
-    stop(&mut rolled_back);
-    assert!(
-        superseded.is_file(),
-        "the superseded chain was disturbed during rollback"
-    );
     deployment.unseal();
+
+    assert_eq!(
+        fs::metadata(&path)
+            .expect("the restart kept the audit file")
+            .ino(),
+        inode,
+        "a restart reopens the same active file"
+    );
+    assert!(
+        fs::read_to_string(&path)
+            .expect("the audit file reads")
+            .starts_with(earlier),
+        "a restart never rewrites earlier content"
+    );
 }
 
 /// The staged verification key identifier, echoed by the protected header.
@@ -2943,11 +2969,12 @@ fn free_port() -> u16 {
         .port()
 }
 
-/// Poll `/ready` until the service reports a healthy audit chain.
+/// Poll `/ready` until the service reports a healthy audit writer.
 ///
-/// Readiness covers the subject-binding key, the signer, the audit chain head,
-/// and every source credential, so a ready service proves the whole startup
-/// path completed rather than only that a socket is open.
+/// Readiness covers the subject-binding key, the signer, the audit writer's
+/// hold on its active file, and every source credential, so a ready service
+/// proves the whole startup path completed rather than only that a socket is
+/// open.
 fn wait_until_ready(port: u16) {
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut last = String::new();
@@ -3039,9 +3066,8 @@ secretProviders:
 signer:
   kind: local-jwk
   privateKeyRef: secret:file/signing-key
-auditStorage:
+audit:
   path: {audit}
-  maximumFileBytes: 1073741824
 outboundTls:
   systemRoots: true
   trustProfiles: {{}}
@@ -3131,13 +3157,22 @@ outboundTls:
         );
     }
 
-    /// Place an audit chain the service will find on start, owner-only as the
-    /// sink requires. A case that is about a mode widens it afterwards.
-    fn stage_audit_chain(&self, contents: &str) {
+    /// Place an audit file the service will find on start, owner-only as the
+    /// writer requires. A case that is about a mode widens it afterwards.
+    fn stage_audit_file(&self, contents: &str) {
         let path = self.path("audit.jsonl");
-        fs::write(&path, contents).expect("stage audit chain");
+        fs::write(&path, contents).expect("stage audit file");
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-            .expect("set owner-only audit chain mode");
+            .expect("set owner-only audit file mode");
+    }
+
+    /// Point the runtime's audit at `stdout` instead of the staged file.
+    fn write_audit_to_stdout(&self) {
+        self.replace(
+            "runtime.yaml",
+            &format!("audit:\n  path: {}\n", self.path("audit.jsonl").display()),
+            "audit:\n  destination: stdout\n",
+        );
     }
 
     /// Overwrite the staged signing key with a different valid P-256 key.
@@ -3188,7 +3223,7 @@ outboundTls:
     }
 
     /// Run the dependency proof and additionally require the configured audit
-    /// sink to resolve inside `root`, the path an operator declares persistent.
+    /// file to resolve inside `root`, the path an operator declares persistent.
     fn check_with_audit_under(&self, root: &Path) -> Output {
         self.seal();
         let output = invoke(

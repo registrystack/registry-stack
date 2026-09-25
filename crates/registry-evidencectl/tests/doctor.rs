@@ -102,7 +102,7 @@ fn doctor_names_every_artifact_whose_mode_the_runtime_refuses() {
         "secrets/audit-hmac-key",
         "audit/evidence.jsonl",
     ];
-    fs::write(project.join("audit/evidence.jsonl"), "").expect("stage an audit chain");
+    fs::write(project.join("audit/evidence.jsonl"), "").expect("stage an audit file");
     for path in refused {
         set_mode(&project.join(path), 0o755);
     }
@@ -121,6 +121,64 @@ fn doctor_names_every_artifact_whose_mode_the_runtime_refuses() {
             "doctor did not report {path}:\n{stdout}"
         );
     }
+}
+
+#[test]
+fn doctor_reports_an_audit_directory_the_audit_writer_refuses() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    provision(&project);
+    provision_bearer_token(&project);
+    set_mode(&project.join("audit"), 0o777);
+
+    freeze(&project);
+    let output = doctor(&project, &[]);
+    unfreeze(&project);
+    set_mode(&project.join("audit"), 0o700);
+
+    let stdout = stdout_of(&output);
+    assert!(
+        !output.status.success(),
+        "doctor passed a world-writable audit directory:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("audit/evidence.jsonl"),
+        "doctor did not name the audit destination:\n{stdout}"
+    );
+}
+
+#[test]
+fn doctor_passes_a_stdout_audit_destination_without_inspecting_a_file() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    provision(&project);
+    provision_bearer_token(&project);
+    fs::write(
+        project.join("runtime.yaml"),
+        runtime_document(LOCAL_SIGNER).replace(
+            "audit:\n  path: audit/evidence.jsonl\n",
+            "audit:\n  destination: stdout\n",
+        ),
+    )
+    .expect("runtime fixture");
+    // A world-writable directory that no destination names is not a finding.
+    set_mode(&project.join("audit"), 0o777);
+
+    freeze(&project);
+    let output = doctor(&project, &[]);
+    unfreeze(&project);
+    set_mode(&project.join("audit"), 0o700);
+
+    let stdout = stdout_of(&output);
+    assert!(
+        output.status.success(),
+        "doctor failed a stdout audit destination:\n{stdout}{}",
+        stderr_of(&output)
+    );
+    assert!(
+        stdout.contains("stdout"),
+        "doctor did not say the audit destination is stdout:\n{stdout}"
+    );
 }
 
 #[test]
@@ -538,7 +596,7 @@ const LOCAL_SIGNER: &str =
 const TRANSIT_SIGNER: &str = "signer:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  timeoutMilliseconds: 2000\n";
 
 fn runtime_document(signer: &str) -> String {
-    format!("bundleDirectory: bundle\nsecretProviders:\n  file:\n    root: secrets\n{signer}auditStorage:\n  path: audit/evidence.jsonl\n")
+    format!("bundleDirectory: bundle\nsecretProviders:\n  file:\n    root: secrets\n{signer}audit:\n  path: audit/evidence.jsonl\n")
 }
 
 fn rewrite_runtime(project: &Path, signer: &str) {

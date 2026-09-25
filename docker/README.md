@@ -75,8 +75,8 @@ provider `root`, audit `path`, and any `trustProfiles.*.caBundleFile` are
 validated absolute paths, interpreted inside the container: every one of
 them must resolve to a mount. Point the audit destination under
 `/var/lib/registry-evidence`, which is writable by the nonroot user, and
-give it a named volume; the audit chain is append-only state that must
-outlive the container.
+give it a named volume; the audit file is durable state that must outlive
+the container.
 
 The default Evidence listener accepts only loopback, RFC 1918 private IPv4,
 or IPv6 unique-local addresses. A container deployment may instead declare

@@ -19,10 +19,8 @@ authentication:
   maximumTokenLifetimeSeconds: 300
   revokedKeyIds: []
 audit:
-  format: keyed-jsonl
-  hashSecretRef: secret:file/audit-hmac-key
+  hashKeyRef: secret:file/audit-hmac-key
   hashKeyVersion: 1
-  failClosed: true
 subjectBinding:
   secretRef: secret:file/subject-binding-hmac-key
   keyVersion: 1

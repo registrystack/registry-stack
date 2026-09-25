@@ -21,7 +21,7 @@ use std::{
     collections::BTreeMap,
     ops::Deref,
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -39,11 +39,7 @@ use axum::{
 use registry_platform_httpsec::{TraceContext, TraceId};
 use ulid::Ulid;
 
-use crate::{
-    audit::{AuditStorageUsage, EvidenceAuditLog},
-    problem::ProblemCode,
-    rate_limit::EvidenceRateLimiter,
-};
+use crate::{problem::ProblemCode, rate_limit::EvidenceRateLimiter};
 
 /// Public correlation header returned on every response.
 ///
@@ -255,18 +251,6 @@ pub(crate) struct Metrics {
     /// each render. `None` for registries that are never served on the
     /// metrics listener (for example, an unrelated middleware test).
     rate_limiter: Option<Arc<EvidenceRateLimiter>>,
-    /// Current segment count and total on-disk bytes of the audit chain, for
-    /// the `evidence_audit_segments` and `evidence_audit_bytes` gauges.
-    /// Rotation never deletes a sealed segment, so nothing in the runtime
-    /// bounds this growth; these gauges are how an operator sees the footprint
-    /// they own. Republished on every scrape from
-    /// [`crate::audit::EvidenceAuditLog::storage_usage`], so they stay two
-    /// unlabeled series regardless of traffic. See security invariant V1-I33.
-    audit_segments: AtomicUsize,
-    audit_bytes: AtomicU64,
-    /// The chain the metrics scrape handler samples immediately before each
-    /// render. `None` for the same reason as `rate_limiter`.
-    audit: Option<Arc<EvidenceAuditLog>>,
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -288,13 +272,9 @@ impl Metrics {
     /// A registry that serves the metrics listener: it samples `rate_limiter`
     /// on every scrape to publish the `evidence_rate_limiter_tracked_keys`
     /// gauge.
-    pub(crate) fn new(
-        rate_limiter: Arc<EvidenceRateLimiter>,
-        audit: Arc<EvidenceAuditLog>,
-    ) -> Self {
+    pub(crate) fn new(rate_limiter: Arc<EvidenceRateLimiter>) -> Self {
         Self {
             rate_limiter: Some(rate_limiter),
-            audit: Some(audit),
             ..Self::default()
         }
     }
@@ -339,15 +319,6 @@ impl Metrics {
     pub(crate) fn record_rate_limiter_tracked_keys(&self, count: usize) {
         self.rate_limiter_tracked_keys
             .store(count, Ordering::Relaxed);
-    }
-
-    /// Publish the audit chain's current footprint for the next render.
-    ///
-    /// Read live from the chain immediately before calling this, for the same
-    /// reason as the rate-limiter gauge.
-    pub(crate) fn record_audit_storage_usage(&self, usage: AuditStorageUsage) {
-        self.audit_segments.store(usage.segments, Ordering::Relaxed);
-        self.audit_bytes.store(usage.bytes, Ordering::Relaxed);
     }
 
     /// Render the Prometheus text exposition of the current registry.
@@ -403,22 +374,6 @@ impl Metrics {
             "evidence_rate_limiter_tracked_keys {}\n",
             self.rate_limiter_tracked_keys.load(Ordering::Relaxed)
         ));
-        body.push_str(
-            "# HELP evidence_audit_segments Audit chain segments on disk, sealed and active.\n",
-        );
-        body.push_str("# TYPE evidence_audit_segments gauge\n");
-        body.push_str(&format!(
-            "evidence_audit_segments {}\n",
-            self.audit_segments.load(Ordering::Relaxed)
-        ));
-        body.push_str(
-            "# HELP evidence_audit_bytes Bytes occupied by the audit chain across every segment.\n",
-        );
-        body.push_str("# TYPE evidence_audit_bytes gauge\n");
-        body.push_str(&format!(
-            "evidence_audit_bytes {}\n",
-            self.audit_bytes.load(Ordering::Relaxed)
-        ));
         body
     }
 }
@@ -451,19 +406,6 @@ async fn render_metrics(State(metrics): State<Arc<Metrics>>) -> Response {
     if let Some(rate_limiter) = &metrics.rate_limiter {
         metrics.record_rate_limiter_tracked_keys(rate_limiter.tracked_key_count().await);
     }
-    if let Some(audit) = &metrics.audit {
-        // A failed read leaves the previous values standing rather than
-        // publishing a zero that would read as an empty chain. It is logged so
-        // the staleness is visible instead of silent; the sampled path is
-        // operator material and carries no request content.
-        match audit.storage_usage().await {
-            Ok(usage) => metrics.record_audit_storage_usage(usage),
-            Err(error) => tracing::warn!(
-                %error,
-                "audit storage usage could not be sampled for the capacity gauges"
-            ),
-        }
-    }
     let mut response = (StatusCode::OK, metrics.render()).into_response();
     response
         .headers_mut()
@@ -478,10 +420,6 @@ async fn metrics_route_absent() -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audit::{
-        AuditAuthority, AuditDecision, AuditPhase, AuditSubject, AuthorityKind, EvidenceAuditEvent,
-        ResponseProtection,
-    };
 
     #[test]
     fn series_labels_stay_bounded_by_the_closed_route_and_method_sets() {
@@ -632,8 +570,7 @@ mod tests {
             "three distinct tracked keys precede the scrape"
         );
 
-        let (_directory, audit) = scrape_audit_log().await;
-        let metrics = Arc::new(Metrics::new(Arc::clone(&limiter), audit));
+        let metrics = Arc::new(Metrics::new(Arc::clone(&limiter)));
         let server = axum_test::TestServer::new(metrics_app(metrics));
 
         let response = server.get("/metrics").await;
@@ -642,6 +579,10 @@ mod tests {
         assert!(body.contains(&format!(
             "\nevidence_rate_limiter_tracked_keys {expected}\n"
         )));
+        assert!(
+            !body.contains("evidence_audit_"),
+            "the audit destination publishes no capacity gauge"
+        );
 
         // A key tracked after the registry was built is still visible on the
         // next scrape, proving the value is sampled live rather than cached
@@ -654,108 +595,6 @@ mod tests {
         response.assert_status_ok();
         let body = response.text();
         assert!(body.contains("\nevidence_rate_limiter_tracked_keys 4\n"));
-    }
-
-    /// A representative record, so the footprint the gauges report reflects a
-    /// real audit line rather than an artificially short one.
-    fn scrape_audit_event(log: &EvidenceAuditLog) -> EvidenceAuditEvent {
-        EvidenceAuditEvent::new(
-            crate::config::AssuranceProfile::EvidenceGrade,
-            "01K1EXAMPLE0000000000000000".to_string(),
-            AuditPhase::AccessAttempt,
-            "urn:example:requirement:v1".to_string(),
-            format!("sha256:{}", "0".repeat(64)),
-            "casework".to_string(),
-            log.pseudonym("requester-v1", "urn:example:trust", b"principal-canary")
-                .expect("pseudonym builds"),
-            AuditAuthority {
-                kind: AuthorityKind::Statutory,
-                grant_pseudonym: None,
-                approver_pseudonym: None,
-            },
-            vec![AuditSubject {
-                role: "subject".to_string(),
-                selector_profile: "person-v1".to_string(),
-                selector_bundle_pseudonym: Some(
-                    log.pseudonym("subject-v1", "casework", b"selector-canary")
-                        .expect("pseudonym builds"),
-                ),
-            }],
-            ResponseProtection::Signed,
-            AuditDecision::Authorized,
-            5,
-        )
-    }
-
-    /// A durable chain over a temporary directory, for tests that need the
-    /// metrics registry's live audit sampling. The `TempDir` is returned
-    /// because dropping it removes the segments out from under the sink.
-    async fn scrape_audit_log() -> (tempfile::TempDir, Arc<EvidenceAuditLog>) {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("audit.jsonl");
-        let log = EvidenceAuditLog::initialize(
-            &path,
-            4096,
-            b"0123456789abcdef0123456789abcdef".to_vec(),
-            1,
-        )
-        .await
-        .expect("audit initializes");
-        (directory, Arc::new(log))
-    }
-
-    #[tokio::test]
-    async fn metrics_endpoint_samples_the_live_audit_chain_at_scrape_time() {
-        use crate::rate_limit::{EvidenceRateLimiter, RateLimitConfig};
-
-        let limiter = Arc::new(
-            EvidenceRateLimiter::new(RateLimitConfig {
-                requests_per_principal_per_minute: 10,
-                burst_per_principal: 10,
-                failed_selector_attempts_per_principal_authority_per_minute: 10,
-            })
-            .expect("limiter builds"),
-        );
-        let (_directory, audit) = scrape_audit_log().await;
-        let metrics = Arc::new(Metrics::new(limiter, Arc::clone(&audit)));
-        let server = axum_test::TestServer::new(metrics_app(metrics));
-
-        let response = server.get("/metrics").await;
-        response.assert_status_ok();
-        let body = response.text();
-        assert!(
-            body.contains("\nevidence_audit_segments 1\n"),
-            "an untouched chain reports its active segment"
-        );
-        assert!(
-            body.contains("\nevidence_audit_bytes 0\n"),
-            "an untouched chain occupies no bytes"
-        );
-        assert!(
-            !body.contains("evidence_audit_segments{") && !body.contains("evidence_audit_bytes{"),
-            "the capacity gauges stay unlabeled under V1-I33"
-        );
-
-        // Append past the rotation threshold, so the next scrape has to show
-        // both a new segment and a larger footprint. This is what proves the
-        // gauges are sampled live rather than cached from construction.
-        for _ in 0..24 {
-            audit
-                .append(scrape_audit_event(&audit))
-                .await
-                .expect("event appends");
-        }
-        let usage = audit.storage_usage().await.expect("usage reads");
-        assert!(
-            usage.segments > 1,
-            "the appended volume must roll the chain"
-        );
-
-        let response = server.get("/metrics").await;
-        response.assert_status_ok();
-        let body = response.text();
-        assert!(body.contains(&format!("\nevidence_audit_segments {}\n", usage.segments)));
-        assert!(body.contains(&format!("\nevidence_audit_bytes {}\n", usage.bytes)));
     }
 
     #[test]

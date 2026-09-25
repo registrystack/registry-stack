@@ -116,7 +116,7 @@ struct TargetRuntime {
     metrics_listener: Option<Value>,
     secret_providers: Value,
     signer: Value,
-    audit_storage: Value,
+    audit: Value,
     outbound_tls: Value,
     #[serde(default)]
     source_extracts: Option<Value>,
@@ -350,7 +350,7 @@ pub(crate) fn create_local_target(
             "requestTimeoutMilliseconds": 10000, "shutdownGraceMilliseconds": 30000,
         },
         "signer": {"kind": "local-jwk", "privateKeyRef": "secret:file/signing-p256-private-jwk"},
-        "auditStorage": {"maximumFileBytes": 1073741824_u64},
+        "audit": {"destination": "file"},
         "outboundTls": {"systemRoots": true, "trustProfiles": {}},
     });
     fill_local_paths(&project, &governance, &mut runtime)?;
@@ -416,10 +416,7 @@ fn fill_local_paths(project: &Path, governance: &Value, runtime: &mut Value) -> 
     for (components, path) in [
         (vec!["bundleDirectory"], local.join("bundle")),
         (vec!["secretProviders", "file", "root"], secrets),
-        (
-            vec!["auditStorage", "path"],
-            local.join("audit/evidence.jsonl"),
-        ),
+        (vec!["audit", "path"], local.join("audit/evidence.jsonl")),
     ] {
         let mut node = &mut *runtime;
         for component in &components[..components.len() - 1] {
@@ -492,7 +489,7 @@ fn validate_settings_documents(governance: &Value, runtime: &Value) -> Result<()
         "listener",
         "secretProviders",
         "signer",
-        "auditStorage",
+        "audit",
         "outboundTls",
     ] {
         require_nonempty_mapping(runtime, section, "target settings runtime")?;
@@ -931,7 +928,7 @@ governance:
   authentication:
     kind: oidc-access-token
   audit:
-    format: keyed-jsonl
+    hashKeyVersion: 1
   subjectBinding:
     secretRef: secret:file/subject-binding-hmac-key
   rateLimits:
@@ -951,7 +948,7 @@ runtime:
       root: /tmp/evidence/secrets
   signer:
     kind: transit
-  auditStorage:
+  audit:
     path: /tmp/evidence/audit.jsonl
   outboundTls:
     systemRoots: true
@@ -979,7 +976,7 @@ runtime:
             project.join("secrets").to_string_lossy().as_ref()
         );
         assert_eq!(
-            runtime["auditStorage"]["path"],
+            runtime["audit"]["path"],
             project
                 .join(".evidence/dev/audit/evidence.jsonl")
                 .to_string_lossy()
@@ -988,7 +985,7 @@ runtime:
         runtime["bundleDirectory"] = Value::String("/srv/reviewed/bundle".to_owned());
         runtime["secretProviders"]["file"]["root"] =
             Value::String("/srv/reviewed/secrets".to_owned());
-        runtime["auditStorage"]["path"] = Value::String("/srv/reviewed/audit.jsonl".to_owned());
+        runtime["audit"]["path"] = Value::String("/srv/reviewed/audit.jsonl".to_owned());
         let authored = runtime.clone();
         fill_local_paths(&project, &local, &mut runtime).unwrap();
         assert_eq!(runtime, authored);
@@ -1404,7 +1401,7 @@ governance:
   authentication:
     kind: oidc-access-token
   audit:
-    format: keyed-jsonl
+    hashKeyVersion: 1
   subjectBinding:
     secretRef: secret:file/subject-binding-hmac-key
   rateLimits:
@@ -1455,7 +1452,7 @@ governance:
   authentication:
     kind: oidc-access-token
   audit:
-    format: keyed-jsonl
+    hashKeyVersion: 1
   subjectBinding:
     secretRef: secret:file/subject-binding-hmac-key
   rateLimits:
@@ -1611,7 +1608,7 @@ governance:
   authentication:
     kind: oidc-access-token
   audit:
-    format: keyed-jsonl
+    hashKeyVersion: 1
   subjectBinding:
     secretRef: secret:file/subject-binding-hmac-key
   rateLimits:

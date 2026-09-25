@@ -7,10 +7,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::{IpAddr, Ipv6Addr};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
 use schemars::JsonSchema;
 use serde::de::{self, MapAccess, Visitor};
 use serde::ser::SerializeMap;
@@ -534,7 +535,7 @@ impl EvidenceConfig {
         self.authentication.validate(self.assurance_profile)?;
         self.audit.validate()?;
         self.subject_binding.validate()?;
-        if self.audit.hash_secret_ref == self.subject_binding.secret_ref {
+        if self.audit.hash_key_ref == self.subject_binding.secret_ref {
             return invalid("audit and subject-binding secret references must be distinct");
         }
         self.rate_limits.validate()?;
@@ -1253,7 +1254,8 @@ pub struct RuntimeConfig {
     /// Process-local binding to the signer that controls the governed active
     /// public key. This cannot change the governed key set or algorithm.
     pub signer: RuntimeSignerConfig,
-    pub audit_storage: AuditStorageConfig,
+    /// Where this process writes its audit entries.
+    pub audit: RuntimeAuditConfig,
     pub outbound_tls: OutboundTlsConfig,
     /// Process-local files bound to the logical extract names the bundle's
     /// statement sources read. Absent binds none, which is what every runtime
@@ -1293,7 +1295,7 @@ impl RuntimeConfig {
         }
         self.secret_providers.validate()?;
         self.signer.validate()?;
-        self.audit_storage.validate()?;
+        self.audit.validate()?;
         self.outbound_tls.validate()?;
         validate_named_map(&self.source_extracts, 0, 64, SourceExtractBinding::validate)?;
         declared_acquisition_capabilities(
@@ -1405,22 +1407,57 @@ impl FileSecretProvider {
     }
 }
 
+/// The process-local audit destination: an append-only JSON Lines file this
+/// process alone writes, or standard output for a collector that owns
+/// durability.
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AuditStorageConfig {
-    pub path: String,
-    pub maximum_file_bytes: u64,
+pub struct RuntimeAuditConfig {
+    #[serde(default)]
+    pub destination: AuditDestinationKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotate_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retain_days: Option<u32>,
 }
 
-impl AuditStorageConfig {
+impl RuntimeAuditConfig {
     fn validate(&self) -> Result<(), ConfigError> {
-        validate_absolute_path(&self.path)?;
-        validate_range(
-            self.maximum_file_bytes,
-            1_048_576,
-            1_099_511_627_776,
-            "audit maximumFileBytes",
+        if let Some(path) = &self.path {
+            validate_absolute_path(path)?;
+        }
+        self.destination().map(|_| ())
+    }
+
+    /// The destination the writer opens, with the platform defaults applied
+    /// and file-only settings refused for `stdout`.
+    pub fn destination(&self) -> Result<AuditDestination, ConfigError> {
+        AuditDestination::from_settings(
+            self.destination,
+            self.path.as_deref().map(PathBuf::from),
+            self.rotate_bytes,
+            self.retain_days,
         )
+        .map_err(|error| {
+            ConfigError::Invalid(match error {
+                AuditDestinationError::MissingPath => {
+                    "audit path is required when audit destination is file"
+                }
+                AuditDestinationError::RelativePath => "audit path must be absolute",
+                AuditDestinationError::FileOnlyField { .. } => {
+                    "audit path, rotateBytes, and retainDays apply only when audit destination is file"
+                }
+                AuditDestinationError::RotateBytesOutOfRange { .. } => {
+                    "audit rotateBytes is outside the platform bounds"
+                }
+                AuditDestinationError::RetainDaysOutOfRange { .. } => {
+                    "audit retainDays is outside the platform bounds"
+                }
+                _ => "audit destination is invalid",
+            })
+        })
     }
 }
 
@@ -1986,25 +2023,17 @@ fn valid_file_secret_name(name: &str) -> bool {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuditConfig {
-    pub format: AuditFormat,
-    pub hash_secret_ref: SecretRef,
+    pub hash_key_ref: SecretRef,
     pub hash_key_version: u32,
-    pub fail_closed: bool,
 }
 
 impl AuditConfig {
     fn validate(&self) -> Result<(), ConfigError> {
-        if self.hash_key_version == 0 || !self.fail_closed {
-            return invalid("audit must be versioned and fail closed");
+        if self.hash_key_version == 0 {
+            return invalid("audit hash key must be versioned");
         }
         Ok(())
     }
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum AuditFormat {
-    KeyedJsonl,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
@@ -8064,8 +8093,8 @@ mod tests {
         assert_ne!(unexpected, valid, "fixture mutation must remain effective");
         assert!(EvidenceConfig::parse_yaml(unexpected.as_bytes()).is_err());
         let literal_secret = valid.replacen(
-            "hashSecretRef: secret:file/audit-hash-key",
-            "hashSecretRef: literal-audit-key",
+            "hashKeyRef: secret:file/audit-hash-key",
+            "hashKeyRef: literal-audit-key",
             1,
         );
         assert_ne!(
@@ -8876,9 +8905,8 @@ signer:
   keyName: evidence-signing
   keyVersion: 7
   timeoutMilliseconds: 2000
-auditStorage:
+audit:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
-  maximumFileBytes: 1073741824
 outboundTls:
   systemRoots: true
   trustProfiles:
@@ -8940,7 +8968,6 @@ outboundTls:
             "service",
             "issuer",
             "authentication",
-            "audit",
             "subjectBinding",
             "rateLimits",
             "signing",
@@ -8970,6 +8997,150 @@ outboundTls:
                 "runtime schema accepted governed bundle key {governed_key}"
             );
         }
+        // The runtime `audit` block names only the destination. The keyed
+        // reference key and its version stay governed in the bundle.
+        for governed_audit_key in ["hashKeyRef: secret:file/audit", "hashKeyVersion: 2"] {
+            let candidate = String::from_utf8(valid.to_vec())
+                .expect("runtime fixture is UTF-8")
+                .replace(
+                    "audit:\n  path:",
+                    &format!("audit:\n  {governed_audit_key}\n  path:"),
+                );
+            assert_ne!(
+                candidate.as_bytes(),
+                valid,
+                "fixture mutation must remain effective"
+            );
+            assert!(
+                RuntimeConfig::parse_yaml(candidate.as_bytes()).is_err(),
+                "runtime audit accepted governed key {governed_audit_key}"
+            );
+            assert!(
+                !validator.is_valid(&bundle_contract_instance(candidate.as_bytes())),
+                "runtime schema accepted governed audit key {governed_audit_key}"
+            );
+        }
+    }
+
+    /// The runtime `audit` block is validated by the platform destination
+    /// rules: a file needs an absolute path, file-only settings are refused
+    /// for `stdout`, and rotation and retention stay inside the platform
+    /// bounds. The Rust contract and the frozen runtime schema agree on each.
+    #[test]
+    fn runtime_audit_destination_follows_the_platform_rules() {
+        let base = String::from_utf8(
+            include_bytes!("../../../products/evidence/reference/request-adapter/deployment-projects/dhis2-tracker-evidence/runtime.yaml")
+                .to_vec(),
+        )
+        .expect("reference runtime is UTF-8");
+        let mut kept = Vec::new();
+        let mut in_audit = false;
+        for line in base.lines() {
+            if line == "audit:" {
+                in_audit = true;
+                continue;
+            }
+            if in_audit && line.starts_with("  ") {
+                continue;
+            }
+            in_audit = false;
+            kept.push(line);
+        }
+        assert!(
+            kept.len() < base.lines().count(),
+            "reference runtime has an audit block"
+        );
+        let without_audit = kept.join("\n") + "\n";
+        let with_audit = |block: &str| format!("{without_audit}{block}");
+        let validator = runtime_contract_validator();
+
+        let file = with_audit("audit:\n  destination: file\n  path: /var/lib/evidence/audit.jsonl\n  rotateBytes: 1048576\n  retainDays: 30\n");
+        let parsed = RuntimeConfig::parse_yaml(file.as_bytes()).expect("file destination parses");
+        assert!(matches!(
+            parsed.audit.destination().expect("destination builds"),
+            AuditDestination::File(_)
+        ));
+        assert!(validator.is_valid(&bundle_contract_instance(file.as_bytes())));
+
+        let defaulted = with_audit("audit:\n  path: /var/lib/evidence/audit.jsonl\n");
+        let parsed =
+            RuntimeConfig::parse_yaml(defaulted.as_bytes()).expect("defaulted destination parses");
+        assert_eq!(parsed.audit.destination, AuditDestinationKind::File);
+        assert!(validator.is_valid(&bundle_contract_instance(defaulted.as_bytes())));
+
+        let stdout = with_audit("audit:\n  destination: stdout\n");
+        let parsed = RuntimeConfig::parse_yaml(stdout.as_bytes()).expect("stdout parses");
+        assert!(matches!(
+            parsed.audit.destination().expect("destination builds"),
+            AuditDestination::Stdout
+        ));
+        assert!(validator.is_valid(&bundle_contract_instance(stdout.as_bytes())));
+
+        for (name, block) in [
+            ("file-without-path", "audit:\n  destination: file\n"),
+            ("relative-path", "audit:\n  path: audit.jsonl\n"),
+            (
+                "stdout-with-path",
+                "audit:\n  destination: stdout\n  path: /var/lib/evidence/audit.jsonl\n",
+            ),
+            (
+                "stdout-with-rotation",
+                "audit:\n  destination: stdout\n  rotateBytes: 1048576\n",
+            ),
+            (
+                "stdout-with-retention",
+                "audit:\n  destination: stdout\n  retainDays: 30\n",
+            ),
+            (
+                "rotation-below-minimum",
+                "audit:\n  path: /var/lib/evidence/audit.jsonl\n  rotateBytes: 1024\n",
+            ),
+            (
+                "retention-zero",
+                "audit:\n  path: /var/lib/evidence/audit.jsonl\n  retainDays: 0\n",
+            ),
+            ("unknown-destination", "audit:\n  destination: syslog\n"),
+            (
+                "legacy-maximum-file-bytes",
+                "audit:\n  path: /var/lib/evidence/audit.jsonl\n  maximumFileBytes: 1073741824\n",
+            ),
+        ] {
+            let candidate = with_audit(block);
+            assert!(
+                RuntimeConfig::parse_yaml(candidate.as_bytes()).is_err(),
+                "runtime accepted audit block {name}"
+            );
+        }
+        for (name, block) in [
+            ("file-without-path", "audit:\n  destination: file\n"),
+            (
+                "stdout-with-path",
+                "audit:\n  destination: stdout\n  path: /var/lib/evidence/audit.jsonl\n",
+            ),
+            (
+                "rotation-below-minimum",
+                "audit:\n  path: /var/lib/evidence/audit.jsonl\n  rotateBytes: 1024\n",
+            ),
+            (
+                "retention-zero",
+                "audit:\n  path: /var/lib/evidence/audit.jsonl\n  retainDays: 0\n",
+            ),
+            ("unknown-destination", "audit:\n  destination: syslog\n"),
+            (
+                "legacy-maximum-file-bytes",
+                "audit:\n  path: /var/lib/evidence/audit.jsonl\n  maximumFileBytes: 1073741824\n",
+            ),
+        ] {
+            assert!(
+                !validator.is_valid(&bundle_contract_instance(with_audit(block).as_bytes())),
+                "runtime schema accepted audit block {name}"
+            );
+        }
+        let legacy = with_audit("auditStorage:\n  path: /var/lib/evidence/audit.jsonl\n  maximumFileBytes: 1073741824\n");
+        assert!(
+            RuntimeConfig::parse_yaml(legacy.as_bytes()).is_err(),
+            "runtime accepted the retired auditStorage block"
+        );
     }
 
     /// The metrics listener is opt-in operator surface. It must be absent
@@ -8999,9 +9170,8 @@ signer:
   keyName: evidence-signing
   keyVersion: 7
   timeoutMilliseconds: 2000
-auditStorage:
+audit:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
-  maximumFileBytes: 1073741824
 outboundTls:
   systemRoots: true
   trustProfiles: {}
@@ -9105,9 +9275,8 @@ signer:
   keyName: evidence-signing
   keyVersion: 7
   timeoutMilliseconds: 2000
-auditStorage:
+audit:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
-  maximumFileBytes: 1073741824
 outboundTls:
   systemRoots: true
   trustProfiles: {}
@@ -9441,9 +9610,8 @@ signer:
   keyName: evidence-signing
   keyVersion: 7
   timeoutMilliseconds: 2000
-auditStorage:
+audit:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
-  maximumFileBytes: 1073741824
 outboundTls:
   systemRoots: true
   trustProfiles: {}

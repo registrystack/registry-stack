@@ -236,15 +236,6 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
     );
     stop_gracefully(&mut service, "Evidence");
     stop_forcefully(&mut https);
-    assert_success(
-        Command::new(evidence)
-            .arg("--runtime")
-            .arg(fixture.candidate.join("runtime.yaml"))
-            .arg("verify-audit")
-            .output()
-            .expect("audit verifier starts"),
-        "complete audit-chain verification",
-    );
 }
 
 #[test]
@@ -1622,7 +1613,7 @@ authentication:
   evidenceAudienceClaim: evidence_audience
   maximumTokenLifetimeSeconds: 300
   revokedKeyIds: []
-audit: {{format: keyed-jsonl, hashSecretRef: 'secret:file/audit-hmac-key', hashKeyVersion: 1, failClosed: true}}
+audit: {{hashKeyRef: 'secret:file/audit-hmac-key', hashKeyVersion: 1}}
 subjectBinding: {{secretRef: 'secret:file/subject-binding-hmac-key', keyVersion: 1}}
 rateLimits: {{requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}}
 signing:
@@ -1652,7 +1643,7 @@ authorityProfiles:
         fs::write(
             &self.target_runtime,
             format!(
-                "version: 1\nbundleDirectory: {bundle}\nlistener:\n  bindHost: 127.0.0.1\n  port: {port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 5000\nsecretProviders:\n  file:\n    root: {secrets}\nsigner:\n  kind: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  timeoutMilliseconds: 2000\nauditStorage:\n  path: {audit}\n  maximumFileBytes: 1048576\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
+                "version: 1\nbundleDirectory: {bundle}\nlistener:\n  bindHost: 127.0.0.1\n  port: {port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 5000\nsecretProviders:\n  file:\n    root: {secrets}\nsigner:\n  kind: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  timeoutMilliseconds: 2000\naudit:\n  path: {audit}\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
                 bundle = self.candidate.join("bundle").display(),
                 port = self.evidence_port,
                 secrets = self.secrets.display(),
@@ -1792,7 +1783,7 @@ authorityProfiles:
         fs::write(
             &runtime,
             format!(
-                "version: 1\nbundleDirectory: {bundle}\nlistener:\n  bindHost: 127.0.0.1\n  port: {port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 131072\n  maximumConcurrentRequests: 32\n  requestTimeoutMilliseconds: 15000\n  shutdownGraceMilliseconds: 10000\nsecretProviders:\n  file:\n    root: {secrets}\nsigner:\n  kind: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  timeoutMilliseconds: 2000\nauditStorage:\n  path: {audit}\n  maximumFileBytes: 2097152\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
+                "version: 1\nbundleDirectory: {bundle}\nlistener:\n  bindHost: 127.0.0.1\n  port: {port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 131072\n  maximumConcurrentRequests: 32\n  requestTimeoutMilliseconds: 15000\n  shutdownGraceMilliseconds: 10000\nsecretProviders:\n  file:\n    root: {secrets}\nsigner:\n  kind: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  timeoutMilliseconds: 2000\naudit:\n  path: {audit}\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
                 // This absolute host path stands for the unchanged read-only
                 // candidate/bundle mount in the container execution context.
                 bundle = self.candidate.join("bundle").display(),
@@ -2420,6 +2411,12 @@ fn assert_audit_contract(audit: &str, revision: &str, signing_key_id: &str, cred
         2,
         "one request must write exactly two events"
     );
+    assert_eq!(records[0]["schema"], "registry.evidence.audit/v2");
+    assert_eq!(records[0]["phase"], "request");
+    assert_eq!(records[1]["schema"], "registry.evidence.audit/v2");
+    assert_eq!(records[1]["phase"], "response");
+    assert_eq!(records[0]["correlation"], records[0]["record"]["operation"]);
+    assert_eq!(records[1]["correlation"], records[1]["record"]["operation"]);
     assert_eq!(records[0]["record"]["phase"], "access-attempt");
     assert_eq!(records[0]["record"]["decision"], "authorized");
     assert_eq!(records[1]["record"]["phase"], "disclosure-release");

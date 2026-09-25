@@ -9,7 +9,7 @@ required:
   - listener
   - secretProviders
   - signer
-  - auditStorage
+  - audit
   - outboundTls
 properties:
   version:
@@ -241,32 +241,60 @@ properties:
             type: integer
             minimum: 1
             maximum: 30000
-  auditStorage:
+  audit:
     description: >-
-      Groups the physical destination and size bound for the audit log this process writes;
-      the log format, pseudonymization key, and fail-closed policy are governed by the bundle's
-      `audit` section, not by this one.
+      Chooses where this process writes its audit entries through the shared platform audit
+      writer; the pseudonymization key and its version are governed by the bundle's `audit`
+      section, not by this one. Every audit gate is fail closed on either destination.
     type: object
     additionalProperties: false
-    required:
-      - path
-      - maximumFileBytes
     properties:
+      destination:
+        description: >-
+          `file`, the default, appends each entry durably to `path` under a single-writer lock
+          and rotates and prunes sealed files; `stdout` writes each entry as one line on
+          standard output for a collector that owns durability, rotation, and retention.
+        enum:
+          - file
+          - stdout
       path:
         description: >-
-          Absolute path to the append-only keyed-JSONL audit file on durable, operator-owned
-          storage; this physical destination is process-local and is not chosen by the bundle's
-          governed audit policy.
+          Absolute path to the active append-only JSON Lines audit file on durable,
+          operator-owned storage; required for the `file` destination and refused for
+          `stdout`. This physical destination is process-local and is not chosen by the
+          bundle.
         $ref: '#/$defs/absolute-path'
-      maximumFileBytes:
+      rotateBytes:
         description: >-
-          Caps how large the active audit segment file may grow before the runtime seals it
-          and starts a new one; a single audit record whose own size exceeds this bound can
-          never be written, and the request that would have produced it fails rather than
-          being audited incompletely.
+          Size at which the active file is sealed and a fresh one opened; defaults to
+          104857600 (100 MiB). File destination only.
         type: integer
         minimum: 1048576
-        maximum: 1099511627776
+      retainDays:
+        description: >-
+          Age in days after which a sealed file is deleted when the writer opens or rotates;
+          defaults to 90. The active file is never deleted. File destination only.
+        type: integer
+        minimum: 1
+        maximum: 36500
+    if:
+      required:
+        - destination
+      properties:
+        destination:
+          const: stdout
+    then:
+      not:
+        anyOf:
+          - required:
+              - path
+          - required:
+              - rotateBytes
+          - required:
+              - retainDays
+    else:
+      required:
+        - path
   outboundTls:
     description: >-
       Groups outbound TLS trust for calls to configured sources; it can add private certificate
@@ -376,7 +404,7 @@ ownership:
     - optional operator metrics listener binding
     - file-secret root
     - signer binding to a local private JWK or workload-local Transit proxy
-    - audit path and rotation bound
+    - audit destination, path, rotation size, and retention
     - logical private-CA file bindings
     - logical source-extract file bindings
     - >-
@@ -408,4 +436,4 @@ platform:
   reason: >-
     Version 1 requires Unix owner, mode, no-follow, link-count, and file-identity guarantees
     for the runtime file, the bundle directory and its artifacts, named CA bundle files, the
-    secret root, source extracts, individual secrets, and audit storage.
+    secret root, source extracts, individual secrets, and the audit file destination.

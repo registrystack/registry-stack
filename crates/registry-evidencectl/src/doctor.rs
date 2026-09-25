@@ -2,7 +2,7 @@
 //!
 //! Evidence refuses, at startup, any deployment artifact whose permissions or
 //! ownership are wrong: a bundle it could write to, a secret readable past its
-//! owner, an audit chain another user could edit. Each refusal is correct and
+//! owner, an audit file another user could edit. Each refusal is correct and
 //! each names one artifact, so an operator who has just run `chmod -R` over a
 //! project discovers them one restart at a time.
 //!
@@ -37,6 +37,7 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
+use registry_platform_audit::{AuditDestination, FileDestination};
 use serde::{Deserialize, Serialize};
 use serde_norway::Value as YamlValue;
 
@@ -371,35 +372,54 @@ fn check_signer(project: &Path, runtime: &YamlValue, runtime_path: &Path) -> Che
     run.finish()
 }
 
-/// The audit chain and its lock companion, when they exist. Absence is not a
-/// finding: the service creates both on first write.
+/// The audit file destination, held to the same rule the audit writer applies
+/// when it opens, and its lock companion when it exists. Absence is not a
+/// finding: the service creates both on first write. A `stdout` destination
+/// leaves nothing on this host to inspect.
 fn check_audit(project: &Path, runtime: &YamlValue, runtime_path: &Path) -> Check {
     let mut run = CheckRun::new("audit", project);
-    let Some(path) = runtime
-        .get("auditStorage")
-        .and_then(|storage| storage.get("path"))
-        .and_then(YamlValue::as_str)
-    else {
+    let Some(audit) = runtime.get("audit") else {
+        return run.finish();
+    };
+    if audit.get("destination").and_then(YamlValue::as_str) == Some("stdout") {
+        run.note(
+            "stdout destination: the collector reading the service's standard output owns \
+             durability, rotation, and retention"
+                .to_owned(),
+        );
+        return run.finish();
+    }
+    let Some(path) = audit.get("path").and_then(YamlValue::as_str) else {
         return run.finish();
     };
     let path = resolve_against(runtime_path, project, Path::new(path));
-    let lock = lock_companion(&path);
-    for candidate in [path, lock] {
-        if !candidate.exists() {
-            continue;
+    match FileDestination::new(&path) {
+        Ok(destination) => {
+            run.read_declaration();
+            if let Err(error) = AuditDestination::File(destination).check_writable() {
+                run.refuse(
+                    &path,
+                    format!("is a destination the audit writer refuses: {error}"),
+                );
+            }
         }
-        let Some(metadata) = run.stat(&candidate) else {
-            continue;
-        };
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            run.refuse(&candidate, "is not a regular file".to_owned());
-            continue;
-        }
-        if metadata.permissions().mode() & 0o077 != 0 {
-            run.refuse(&candidate, group_or_other(&metadata, 0o600));
-        }
-        require_sole_owner(&mut run, &candidate, &metadata);
+        Err(error) => run.refuse(&path, format!("is not an audit file destination: {error}")),
     }
+    let lock = lock_companion(&path);
+    if !lock.exists() {
+        return run.finish();
+    }
+    let Some(metadata) = run.stat(&lock) else {
+        return run.finish();
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        run.refuse(&lock, "is not a regular file".to_owned());
+        return run.finish();
+    }
+    if metadata.permissions().mode() & 0o077 != 0 {
+        run.refuse(&lock, group_or_other(&metadata, 0o600));
+    }
+    require_sole_owner(&mut run, &lock, &metadata);
     run.finish()
 }
 

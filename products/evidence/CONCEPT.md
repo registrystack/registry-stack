@@ -1616,13 +1616,14 @@ which is a deliberate accountability property and the residual risk section 15.8
 states rather than hides. It remains scoped, keyed, and versioned, so it is not
 a globally stable subject pseudonym.
 
-The audit chain key and identifier-pseudonym key are HKDF-separated subkeys of
-the audit master. The subject-binding master is a distinct reference and must
-also resolve to distinct bytes. Audit-master rotation starts a new epoch: stop
-and drain, verify and record the old head and both configuration revisions,
-archive the old runtime, master, segments, and head, then increment
-`hashKeyVersion`, select a fresh audit path, and restart only after the complete
-check. A new master is never appended to an existing chain.
+The identifier-pseudonym key is derived from the audit master through HKDF.
+The subject-binding master is a distinct reference and must also resolve to
+distinct bytes. Every pseudonym carries `hashKeyVersion` in its prefix, so
+audit-master rotation is a governed bundle revision that names the new master
+and increments `hashKeyVersion`; entries under both versions stay
+distinguishable in one audit log. Entries are not chained, so the runtime
+cannot detect a master replaced without a version change, and the operator's
+rotation procedure owns that step.
 
 Three audit gates are fail-closed:
 
@@ -2075,12 +2076,13 @@ against a source that was never contacted would itself be an audit-integrity
 defect.
 
 The budget deliberately bounds the source exchanges and the transitions between
-stages, and never crosses a durable audit append. The audit chain hashes a
-record before the write it belongs to completes, so cancelling a task inside
-that write drops already-hashed lines and leaves a chain that no longer matches
-its own tail, while the process keeps serving. A refusal is recoverable and a
-silently broken chain is not, so the budget yields to the audit trail rather
-than the reverse. Per-source timeouts stay independently enforced; whichever
+stages, and never crosses a durable audit append. Cancelling a task inside
+that append would leave the request unable to know whether its entry became
+durable: an access attempt could be on disk for a source the request then
+reports it never read, or a release could be refused after its entry was
+written. A refusal is recoverable and an audit trail that disagrees with what
+the process did is not, so the budget yields to the audit trail rather than
+the reverse. Per-source timeouts stay independently enforced; whichever
 bound fires first wins, and the two are reported as distinct categories.
 
 #### Accepted limitations
@@ -2396,7 +2398,7 @@ mandatory default and includes:
   production build, without a new runtime configuration schema or evaluator;
 - a target-host handoff in which operators independently provision secrets,
   run `doctor`, fixture evaluation, startup, retained-response verification,
-  and audit-chain verification;
+  and confirmation that the audit entries were written;
 - independently configured OIDC authentication with an explicit issuer,
   resource, scope and claim contract;
 - a documented Docker Compose adapter that mounts the candidate bundle
@@ -2760,19 +2762,12 @@ semantics:
     which mounted path, so that publication reliably stays inside the maximum
     age its requirement declares?
 
-Item 7 chooses where a deployment puts durable storage, not which sink to
-build. The chain head is recovered from local segments at startup and held in
-process memory, so a write-only external receiver can only mirror a local
-system of record, never replace it. A shipped copy is verified with the same
-keyed HMAC that wrote it, which makes the verifying key the forging key: an
-off-host reader who does not hold the audit master cannot check the chain, and
-one who does could reconstruct it. Signed checkpoints over the chain head would
-close that gap, and the trigger for designing them is a deployment that names an
-external auditor who must establish continuity without trusting the operator,
-under a key custody boundary distinct from the service signing key. Absent that
-party, checkpoints add a second custody boundary and a record shape the closed
-audit schema does not admit, while proving nothing the operator cannot already
-prove.
+Item 7 chooses where a deployment ships audit, not which writer to build.
+Evidence writes through the shared platform audit writer to a durable local
+file or to standard output, and entries are not chained. Tamper evidence is the
+property of the append-only store the operator ships entries to, so the choice
+of that store, and of who may change its retention, is the deployment's audit
+integrity decision.
 
 ## 23. Working references
 
