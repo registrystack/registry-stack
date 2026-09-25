@@ -30,8 +30,8 @@ are they.
 ### Threat
 
 A Scheduling deployment answers over HTTP to callers holding bearer
-tokens, commits capacity inside PostgreSQL transactions, and writes an
-audit journal. The threats this surface answers:
+tokens, commits capacity inside PostgreSQL transactions, and writes
+audit entries. The threats this surface answers:
 
 1. **A caller without a complete task grant books capacity.** The edge
    authenticates the bearer token against a pinned JWKS, requires the
@@ -53,13 +53,15 @@ audit journal. The threats this surface answers:
    listener must bind a private address or an explicitly declared
    container network; anything else refuses to start.
 4. **A commitment leaves no accountable trace.** Every ledger-decided
-   commitment and refusal writes an audit row with a pseudonymized
-   principal, and the audit rows chain by hash. A permission mismatch
-   refused at the service, before the transaction opens, writes one too,
-   so probing grant scope against the edge is visible in the journal; the
-   answer itself stays the same closed refusal, naming neither the failing
-   bound nor whether a grant was carried. The two changes that made that
-   true are recorded below under "The audit journal".
+   commitment and refusal writes a request entry before its transaction
+   and a response entry with a pseudonymized principal after it, and a
+   commitment is never answered without both. A permission mismatch
+   refused at the service, before the transaction opens, writes a response
+   entry too, so probing grant scope against the edge is visible in the
+   audit; the answer itself stays the same closed refusal, naming neither
+   the failing bound nor whether a grant was carried. The changes that made
+   that true are recorded below under "The audit journal" and "The audit
+   writer".
 5. **A refusal discloses supply or another caller's booking.** Admission
    refusals project through a public code; the member-level cause stays
    behind the separately authorized explain path.
@@ -77,9 +79,10 @@ audit journal. The threats this surface answers:
 - Retention defaults (attempt receipt days, cursor minutes) are
   placeholders: a jurisdiction must approve real retention periods before
   production use. Retention sweeps idempotency attempt receipts and
-  cursors only; appointments, history, outbox rows, and audit rows are
-  never swept in this milestone (SCHEDULING-DEF-06, recorded in
-  `RUNTIME-CONFIG.md`).
+  cursors only; appointments, history, and outbox rows are never swept in
+  this milestone (SCHEDULING-DEF-06, recorded in `RUNTIME-CONFIG.md`).
+  Rotated audit files are removed after `audit.retainDays`, 90 days by
+  default, which is equally a placeholder.
 - Reminder intents with no configured destination stay local and readable
   in place; nothing is delivered by default.
 
@@ -144,9 +147,62 @@ commits, so two concurrent transactions can publish in the opposite order
 from their sequence numbers; the chain attests to publication order, and
 no claim is made about insertion-sequence order between transactions that
 committed in the other order.
-*Tests:* `the_audit_journal_is_read_in_the_order_it_was_written` and
-`the_audit_chain_continues_across_a_restart`,
-`crates/registry-scheduling/tests/postgres_commitments.rs`.
+The outbox, the publisher, and the chain were later removed by the change
+recorded under "The audit writer", which retired this threat with them:
+the runtime now appends each entry itself, in the order the writer accepts
+it, and no query reorders the audit afterwards.
+
+## The audit writer
+
+The change `feat(scheduling)!: write audit through the platform audit
+writer` replaced the PostgreSQL audit outbox, its background publisher, and
+the keyed hash chain with the shared `registry-platform-audit` writer. It
+changes audit integrity and the order of audit against protected writes,
+so it is security-sensitive in the sense AGENTS.md names.
+
+**Threat:** a commitment commits and is answered while its accountability
+record exists only as a database row a publisher has not reached, or never
+reaches, so the answer outlives its audit. A chain over that journal
+attested only to publication order, and a deployment could not tell a
+stalled publisher from a quiet one.
+
+**Default:** audit is one single-writer destination, a rotated file or
+standard output, that fails closed at the request boundary.
+
+- A commitment's `request` entry is accepted before the capacity
+  transaction opens. A refused request entry opens no transaction and
+  answers `service.unavailable`.
+- Its `response` entry, carrying the decision under the request's
+  correlation, is written after the transaction commits or rolls back. A
+  refused response entry for a committed commitment answers
+  `service.unavailable` with the commitment in place, rather than hand the
+  caller an unaudited answer.
+- A permission refused before the transaction is one `response` entry.
+- Hook delivery accepts each attempt's request entry before egress, inside
+  the delivery claim's transaction, so a refused entry rolls the claim back
+  and nothing is sent.
+- `/readyz` follows the writer, so a stopped destination drains traffic.
+- `schedulingctl records apply` writes to a sibling file for its role,
+  never into the runtime's file, and refuses to replace records when that
+  file cannot be opened.
+- Schema version 8 drops the outbox and refuses while it holds a record
+  its publisher had not reached, so an upgrade cannot silently lose one.
+
+Entries are no longer chained. Tamper evidence for the audit file is the
+destination's and the operator's collection pipeline's, not the runtime's.
+
+**Tests:**
+`an_allowed_commitment_writes_its_request_before_and_its_response_after`,
+`a_refused_request_entry_opens_no_capacity_transaction`,
+`a_refused_response_entry_answers_unavailable_with_the_commitment_committed`,
+`refusals_decided_inside_the_capacity_transaction_write_their_audit_rows`,
+`a_permission_refused_before_the_transaction_writes_its_audit_row`,
+`hook_delivery_audit_failure_prevents_egress`, and
+`migration_refuses_to_drop_unpublished_audit_and_drops_a_drained_outbox`
+(`crates/registry-scheduling/tests/postgres_commitments.rs`);
+`records_apply_replaces_facts_wholesale_and_audits_each_write` and
+`records_apply_rejects_a_different_deployment_identity_without_writing`
+(`crates/registry-schedulingctl/tests/records_apply_postgres.rs`).
 
 ## The runtime edge hardening
 

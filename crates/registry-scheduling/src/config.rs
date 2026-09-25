@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
 use jsonwebtoken::Algorithm;
+use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
 use registry_platform_config::{
     SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,
 };
@@ -82,7 +83,7 @@ pub const SCHEDULING_PACKAGE_MANIFEST_KIND: &str = "SchedulingPolicyPackageManif
 /// The default number of days a stored idempotency receipt is replayable
 /// before the retention sweep erases it. The default is a floor, not a
 /// recommendation: a jurisdiction's retention schedule approves the deployed
-/// value, and the deployed value is what the audit journal records.
+/// value, and the deployed value is what the audit entries record.
 pub const DEFAULT_ATTEMPT_RECEIPT_DAYS: u16 = 7;
 
 /// The operator runtime configuration document.
@@ -282,8 +283,37 @@ pub enum OidcJwksSource {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuditConfig {
-    pub path: PathBuf,
     pub hash_key_ref: String,
+    /// Where audit entries go: a rotated `file` (the default) or `stdout`.
+    #[serde(default)]
+    pub destination: AuditDestinationKind,
+    /// The active audit file. Required for, and only allowed with, `file`.
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+    /// Rotate the active file once it reaches this many bytes (default 100 MiB).
+    #[serde(default)]
+    pub rotate_bytes: Option<u64>,
+    /// Delete rotated files older than this many days (default 90).
+    #[serde(default)]
+    pub retain_days: Option<u32>,
+}
+
+impl AuditConfig {
+    /// The destination this configuration names, with the shared defaults.
+    pub fn destination(&self) -> Result<AuditDestination, RuntimeConfigError> {
+        AuditDestination::from_settings(
+            self.destination,
+            self.path.clone(),
+            self.rotate_bytes,
+            self.retain_days,
+        )
+        .map_err(|error| match error {
+            AuditDestinationError::RelativePath => {
+                RuntimeConfigError::RelativeOperatedPath("audit.path")
+            }
+            error => RuntimeConfigError::InvalidAuditDestination(error),
+        })
+    }
 }
 
 /// Where due reminder and lifecycle-hook intents are dispatched. An absent
@@ -536,9 +566,7 @@ impl RuntimeConfig {
                 "secretProviders.file.root",
             ));
         }
-        if !self.audit.path.is_absolute() {
-            return Err(RuntimeConfigError::RelativeOperatedPath("audit.path"));
-        }
+        self.audit.destination()?;
         if self.secret_providers.file.is_none() && self.secret_providers.environment.is_none() {
             return Err(RuntimeConfigError::InvalidSecretProviders);
         }
@@ -989,6 +1017,8 @@ pub enum RuntimeConfigError {
     InvalidDatabaseReference,
     #[error("audit.hashKeyRef must be a non-empty secret reference")]
     InvalidAuditReference,
+    #[error("{0}")]
+    InvalidAuditDestination(#[source] AuditDestinationError),
     #[error("retention.attemptReceiptDays must be at least one day")]
     InvalidRetention,
     #[error("destinations.reminders.url is not a valid destination URL")]
@@ -1021,6 +1051,21 @@ impl RuntimeConfigError {
             Self::InvalidListener => "listener",
             Self::InvalidDatabaseReference | Self::PlaintextDatabase => "database",
             Self::InvalidAuditReference => "audit.hashKeyRef",
+            Self::InvalidAuditDestination(error) => match error {
+                AuditDestinationError::MissingPath | AuditDestinationError::RelativePath => {
+                    "audit.path"
+                }
+                AuditDestinationError::FileOnlyField { field: "path" } => "audit.path",
+                AuditDestinationError::FileOnlyField {
+                    field: "rotateBytes",
+                }
+                | AuditDestinationError::RotateBytesOutOfRange { .. } => "audit.rotateBytes",
+                AuditDestinationError::FileOnlyField {
+                    field: "retainDays",
+                }
+                | AuditDestinationError::RetainDaysOutOfRange { .. } => "audit.retainDays",
+                _ => "audit",
+            },
             Self::InvalidRetention => "retention",
             Self::InvalidDestination => "destinations.reminders.url",
             Self::InvalidHookDestination | Self::HookDestinationInventoryMismatch => {
@@ -1132,6 +1177,68 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
         assert!(config.destinations.hooks.is_empty());
         let policy = config.load_policy().expect("policy loads");
         assert_eq!(policy.scheduling.id, "standalone-exact-time");
+    }
+
+    #[test]
+    fn the_audit_block_takes_a_file_or_stdout_destination() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        write_policy(&package);
+        let audit_file = root.path().join("audit.ndjson");
+        let load = |audit: serde_json::Value| {
+            let mut document = operator_value(&package, "development-loopback");
+            document["audit"] = audit;
+            RuntimeConfig::load(write_operator(root.path(), document))
+        };
+
+        let config = load(serde_json::json!({
+            "path": audit_file,
+            "hashKeyRef": "secret:file/audit",
+        }))
+        .expect("a file destination is the default");
+        assert!(matches!(
+            config.audit.destination(),
+            Ok(AuditDestination::File(_))
+        ));
+        let config = load(serde_json::json!({
+            "destination": "stdout",
+            "hashKeyRef": "secret:file/audit",
+        }))
+        .expect("a stdout destination takes no path");
+        assert!(matches!(
+            config.audit.destination(),
+            Ok(AuditDestination::Stdout)
+        ));
+
+        for (audit, path) in [
+            (
+                serde_json::json!({"destination": "stdout", "path": audit_file}),
+                "audit.path",
+            ),
+            (
+                serde_json::json!({"destination": "stdout", "rotateBytes": 1_048_576}),
+                "audit.rotateBytes",
+            ),
+            (
+                serde_json::json!({"destination": "stdout", "retainDays": 30}),
+                "audit.retainDays",
+            ),
+            (serde_json::json!({"destination": "file"}), "audit.path"),
+            (serde_json::json!({"path": "audit.ndjson"}), "audit.path"),
+            (
+                serde_json::json!({"path": audit_file, "rotateBytes": 1024}),
+                "audit.rotateBytes",
+            ),
+            (
+                serde_json::json!({"path": audit_file, "retainDays": 36_501}),
+                "audit.retainDays",
+            ),
+        ] {
+            let mut audit = audit;
+            audit["hashKeyRef"] = serde_json::json!("secret:file/audit");
+            let error = load(audit.clone()).expect_err("the audit block is refused");
+            assert_eq!(error.path(), path, "{audit}: {error}");
+        }
     }
 
     #[test]

@@ -175,9 +175,10 @@ triggers, and fields outside that table. It captures one canonical event and
 its delivery row in the same transaction as the appointment change, then an
 after-commit worker POSTs it to the deployment-bound destination. Delivery is
 at least once, HMAC-SHA256 signed, retried within fixed product ceilings, and
-audited without payload values. A receiver response is observation only:
-Scheduling deterministically refuses every proposal and never turns it into a
-booking, reschedule, or cancellation.
+audited without payload values: each attempt's audit entry is accepted before
+the request leaves, or the delivery stays pending and nothing is sent. A
+receiver response is observation only: Scheduling deterministically refuses
+every proposal and never turns it into a booking, reschedule, or cancellation.
 
 The hook id becomes the event `type`. The source is
 `urn:registrystack:scheduling:<scheduling-id>`, the subject record reference is

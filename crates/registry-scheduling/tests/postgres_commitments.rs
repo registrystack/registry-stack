@@ -18,22 +18,18 @@ use axum::Router;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Timelike, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
-use registry_platform_audit::{
-    AuditEnvelope, AuditHashSecret, AuditKeyHasher, AuditProfile, JsonlFileSink,
-};
+use registry_platform_audit::{AuditHashSecret, AuditKeyHasher};
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_hooks::delivery::DeliveryOutcome;
 use registry_platform_hooks::{EnvelopeLimits, HookEnvelope, HookHandlerSource};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
+use registry_scheduling::audit::{AuditCapture, SchedulingAudit, SCHEDULING_AUDIT_SCHEMA};
 use registry_scheduling::auth::SchedulingAuthenticator;
 use registry_scheduling::config::{DatabaseConfig, OidcConfig, OidcJwksSource};
 use registry_scheduling::config::{HookDestinationConfig, ReminderDestinationConfig};
 use registry_scheduling::hooks::{ActivatedHooks, HookRuntimeIdentity};
 use registry_scheduling::http::{router, HttpState};
-use registry_scheduling::runtime::{
-    dispatch_due_intents, publish_audit_pass, reminder_transport, AuditPublicationState,
-    AuditPublisher,
-};
+use registry_scheduling::runtime::{dispatch_due_intents, reminder_transport};
 use registry_scheduling::service::SchedulingService;
 use registry_scheduling::store::{
     CommitError, CommitOutcome, Commitment, PostgresStore, StoreError, SupplyContext,
@@ -171,6 +167,10 @@ struct Fixture {
     reader: String,
     /// The booking agent: reads and explain scopes plus the full task grant.
     agent: String,
+    /// The audit destination the service and hook delivery write to, and
+    /// what it accepted.
+    audit: SchedulingAudit,
+    capture: AuditCapture,
 }
 
 /// Drive one request through the router. The free function takes the router
@@ -380,6 +380,7 @@ async fn fixture_publishing_with_hook_url(
         Duration::from_secs(7 * 24 * 60 * 60),
     )
     .expect("activate the scheduling test hooks");
+    let (audit, capture) = SchedulingAudit::capture();
     let service = Arc::new(
         SchedulingService::new(
             store.clone(),
@@ -388,6 +389,7 @@ async fn fixture_publishing_with_hook_url(
             revision,
             digest,
             AuditKeyHasher::Keyed(keying),
+            audit.clone(),
             7,
         )
         .with_hooks(hooks.clone()),
@@ -407,6 +409,8 @@ async fn fixture_publishing_with_hook_url(
         revision: u64::try_from(revision).expect("a bounded policy revision"),
         reader: reader_token(),
         agent: agent_token(),
+        audit,
+        capture,
     }
 }
 
@@ -996,7 +1000,9 @@ async fn hook_delivery_sends_the_canonical_event_audits_egress_and_refuses_propo
     assert_eq!(captured.len(), 1);
     let (_, _, _, _, envelope, payload) = &captured[0];
 
-    let delivery = fx.hooks.delivery_service(fx.store.clone());
+    let delivery = fx
+        .hooks
+        .delivery_service(fx.store.clone(), fx.audit.clone());
     delivery
         .verify_retained_bindings()
         .await
@@ -1019,20 +1025,14 @@ async fn hook_delivery_sends_the_canonical_event_audits_egress_and_refuses_propo
     }
     assert!(request_seen, "the hook request reached the receiver");
 
-    // The receiver is still delaying its answer. The attempt audit therefore
-    // had to commit before egress, while no terminal audit can exist yet.
-    let pre_answer_audit = fx
-        .admin
-        .query(
-            "SELECT audit_record FROM scheduling_audit_outbox
-              WHERE audit_record->>'event' = 'scheduling.hook-delivery'
-              ORDER BY recorded_seq",
-            &[],
-        )
-        .await
-        .expect("read the pre-egress hook audit");
+    // The receiver is still delaying its answer. The attempt's request entry
+    // therefore had to be accepted before egress, while no terminal response
+    // entry can exist yet.
+    let pre_answer_audit = hook_delivery_entries(&fx);
     assert_eq!(pre_answer_audit.len(), 1);
-    let attempted = pre_answer_audit[0].get::<_, Value>(0);
+    assert_eq!(pre_answer_audit[0]["phase"], "request");
+    assert_eq!(pre_answer_audit[0]["schema"], SCHEDULING_AUDIT_SCHEMA);
+    let attempted = &pre_answer_audit[0]["record"];
     assert_eq!(attempted["phase"], "attempt");
     assert_eq!(attempted["outcome"], "attempt_started");
     assert_eq!(attempted["disposition"], "leased");
@@ -1103,18 +1103,14 @@ async fn hook_delivery_sends_the_canonical_event_audits_egress_and_refuses_propo
         Some("Scheduling appointment observer hooks cannot propose changes")
     );
 
-    let audit = fx
-        .admin
-        .query(
-            "SELECT audit_record FROM scheduling_audit_outbox
-              WHERE audit_record->>'event' = 'scheduling.hook-delivery'
-              ORDER BY recorded_seq",
-            &[],
-        )
-        .await
-        .expect("read the settled hook audit");
+    let audit = hook_delivery_entries(&fx);
     assert_eq!(audit.len(), 2);
-    let terminal = audit[1].get::<_, Value>(0);
+    assert_eq!(audit[1]["phase"], "response");
+    assert_eq!(
+        audit[1]["correlation"], audit[0]["correlation"],
+        "an attempt's terminal entry answers its request entry"
+    );
+    let terminal = &audit[1]["record"];
     assert_eq!(terminal["phase"], "terminal");
     assert_eq!(terminal["outcome"], "delivered");
     assert_eq!(terminal["disposition"], "delivered");
@@ -1140,21 +1136,27 @@ async fn hook_delivery_sends_the_canonical_event_audits_egress_and_refuses_propo
     );
 }
 
+/// Every hook delivery entry the audit destination accepted, in write order.
+fn hook_delivery_entries(fx: &Fixture) -> Vec<Value> {
+    fx.capture
+        .entries()
+        .into_iter()
+        .filter(|entry| entry["record"]["event"] == "scheduling.hook-delivery")
+        .collect()
+}
+
 #[tokio::test]
 async fn hook_delivery_audit_failure_prevents_egress() {
     let destination = MockServer::start().await;
     let fx = hook_fixture_at(&format!("{}/scheduling-hooks", destination.uri())).await;
     let _ = booked(&fx, 300, 440, "hook-audit-failure").await;
-    fx.admin
-        .batch_execute(
-            "ALTER TABLE scheduling_audit_outbox
-             ADD CONSTRAINT test_refuse_hook_delivery_audit
-             CHECK ((audit_record->>'event') IS DISTINCT FROM 'scheduling.hook-delivery')",
-        )
-        .await
-        .expect("install the delivery audit failure seam");
+    // The audit destination refuses the next line: the attempt's request
+    // entry is the first one delivery writes.
+    fx.capture.refuse_after(fx.capture.entries().len());
 
-    let delivery = fx.hooks.delivery_service(fx.store.clone());
+    let delivery = fx
+        .hooks
+        .delivery_service(fx.store.clone(), fx.audit.clone());
     assert!(delivery.deliver_once().await.is_err());
     assert!(
         destination
@@ -1163,6 +1165,10 @@ async fn hook_delivery_audit_failure_prevents_egress() {
             .expect("read hook requests")
             .is_empty(),
         "a failed pre-egress audit prevents the send"
+    );
+    assert!(
+        hook_delivery_entries(&fx).is_empty(),
+        "the refused attempt entry is not on record"
     );
     let state = fx
         .admin
@@ -1208,7 +1214,7 @@ async fn changed_retained_hook_destination_binding_is_refused() {
 
     assert!(
         changed
-            .delivery_service(fx.store.clone())
+            .delivery_service(fx.store.clone(), fx.audit.clone())
             .verify_retained_bindings()
             .await
             .is_err(),
@@ -1589,6 +1595,7 @@ async fn a_duplicate_active_key_survives_an_opening_shift_on_the_same_pool() {
         revision,
         replacement_digest,
         AuditKeyHasher::Keyed(keying),
+        fx.audit.clone(),
         7,
     ));
     fx.http = router(HttpState {
@@ -2163,8 +2170,6 @@ async fn a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry()
             request_hash: "sha256:expiry-race-confirm",
             attempt_expires_at: confirmation_started_at + TimeDelta::days(7),
             grant_exp_unix: None,
-            audit_event: Uuid::new_v4(),
-            audit_record: operator_audit(),
             hooks: None,
         };
         started_tx
@@ -2213,8 +2218,6 @@ async fn a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry()
                 request_hash: "sha256:expiry-race-booking",
                 attempt_expires_at: after_expiry + TimeDelta::days(7),
                 grant_exp_unix: None,
-                audit_event: Uuid::new_v4(),
-                audit_record: operator_audit(),
                 hooks: None,
             },
         )
@@ -2950,15 +2953,6 @@ fn records_without(retired: &[&str]) -> SchedulingFacts {
     }
 }
 
-fn operator_audit() -> Value {
-    json!({
-        "actorKind": "operator",
-        "operation": "records.apply",
-        "outcome": "allowed",
-        "reason": "authorization.allowed",
-    })
-}
-
 #[tokio::test]
 async fn a_records_swap_refuses_to_strand_a_resource_an_active_claim_occupies() {
     let fx = fixture().await;
@@ -2975,12 +2969,7 @@ async fn a_records_swap_refuses_to_strand_a_resource_an_active_claim_occupies() 
 
     let refusal = fx
         .store
-        .replace_facts(
-            SCHEDULING_ID,
-            &records_without(&["station-1"]),
-            Uuid::new_v4(),
-            operator_audit(),
-        )
+        .replace_facts(SCHEDULING_ID, &records_without(&["station-1"]))
         .await
         .expect_err("a swap that strands a live booking is refused");
     assert!(
@@ -3005,12 +2994,7 @@ async fn a_records_swap_refuses_to_strand_a_resource_an_active_claim_occupies() 
 
     // Retiring an idle station is exactly what the command is for.
     fx.store
-        .replace_facts(
-            SCHEDULING_ID,
-            &records_without(&["station-2"]),
-            Uuid::new_v4(),
-            operator_audit(),
-        )
+        .replace_facts(SCHEDULING_ID, &records_without(&["station-2"]))
         .await
         .expect("retiring an unoccupied resource commits");
     let (standing, _) = fx.store.facts().await.expect("the records are readable");
@@ -3040,7 +3024,7 @@ async fn a_records_swap_refuses_to_move_an_occupied_resource_between_pools() {
     moved.pools[1].members.push(station);
     let refusal = fx
         .store
-        .replace_facts(SCHEDULING_ID, &moved, Uuid::new_v4(), operator_audit())
+        .replace_facts(SCHEDULING_ID, &moved)
         .await
         .expect_err("an occupied resource cannot move to another pool");
     assert!(refusal.to_string().contains("station-1"), "{refusal}");
@@ -3074,12 +3058,7 @@ async fn a_records_swap_waits_for_the_capacity_transaction_holding_the_pool() {
     let store = fx.store.clone();
     let swap = tokio::spawn(async move {
         store
-            .replace_facts(
-                SCHEDULING_ID,
-                &records_without(&[]),
-                Uuid::new_v4(),
-                operator_audit(),
-            )
+            .replace_facts(SCHEDULING_ID, &records_without(&[]))
             .await
     });
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -3247,14 +3226,12 @@ fn agent_token_outside_its_bounds() -> String {
     token(claims)
 }
 
-/// The pending journal keyed by the reason each record carries.
-async fn audit_by_reason(fx: &Fixture) -> std::collections::BTreeMap<String, Value> {
-    fx.store
-        .pending_audit(100)
-        .await
-        .expect("the pending audit journal")
+/// The accepted response records keyed by the reason each one carries.
+fn audit_by_reason(fx: &Fixture) -> std::collections::BTreeMap<String, Value> {
+    fx.capture
+        .records("response")
         .into_iter()
-        .map(|(_, record)| {
+        .map(|record| {
             let reason = record["reason"]
                 .as_str()
                 .expect("an audit record names its reason")
@@ -3294,15 +3271,27 @@ async fn a_permission_refused_before_the_transaction_writes_its_audit_row() {
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(problem["code"], "operation.not-authorized");
 
-    let journal = audit_by_reason(&fx).await;
+    let journal = audit_by_reason(&fx);
     assert_eq!(
         journal.keys().cloned().collect::<Vec<_>>(),
         vec![
             "authorization.no-grant".to_owned(),
             "authorization.refused".to_owned()
         ],
-        "a permission refused before the transaction leaves no journal trail"
+        "a permission refused before the transaction leaves an audit trail"
     );
+    // A refusal decided before any protected read or write is one response
+    // entry: no request entry precedes it, and no transaction opened.
+    assert!(
+        fx.capture.records("request").is_empty(),
+        "a refusal before the transaction writes no request entry"
+    );
+    for entry in fx.capture.entries() {
+        assert_eq!(
+            entry["record"]["eventId"], entry["correlation"],
+            "a refusal's event id is its correlation"
+        );
+    }
 
     let bounds_refusal = &journal["authorization.refused"];
     assert_eq!(bounds_refusal["outcome"], "denied");
@@ -3324,10 +3313,10 @@ async fn a_permission_refused_before_the_transaction_writes_its_audit_row() {
         grantless_refusal["purpose"].is_null(),
         "a refusal carrying no grant records no purpose"
     );
-    // The journal carries pseudonyms and the operation, never the caller's
+    // The entries carry pseudonyms and the operation, never the caller's
     // raw identity and never the bound that failed.
-    for record in journal.values() {
-        let rendered = record.to_string();
+    for entry in fx.capture.entries() {
+        let rendered = entry.to_string();
         for raw in ["principal-elsewhere", "principal-read", "north-counter"] {
             assert!(
                 !rendered.contains(raw),
@@ -3337,15 +3326,12 @@ async fn a_permission_refused_before_the_transaction_writes_its_audit_row() {
     }
 }
 
-/// Every denied record in the pending journal as an (operation, reason) pair,
-/// in the order the journal wrote them.
-async fn denied_audit_entries(fx: &Fixture) -> Vec<(String, String)> {
-    fx.store
-        .pending_audit(100)
-        .await
-        .expect("the pending audit journal")
+/// Every denied response record as an (operation, reason) pair, in the
+/// order the audit destination accepted them.
+fn denied_audit_entries(fx: &Fixture) -> Vec<(String, String)> {
+    fx.capture
+        .records("response")
         .into_iter()
-        .map(|(_, record)| record)
         .filter(|record| record["outcome"] == "denied")
         .map(|record| {
             let field = |name: &str| {
@@ -3363,8 +3349,9 @@ async fn denied_audit_entries(fx: &Fixture) -> Vec<(String, String)> {
 /// transaction is as attributable as one it allows. A stale observed revision
 /// and a cancellation past its cutoff are each a decision about a named
 /// appointment under a grant the service already matched, so each leaves a
-/// denied record behind. Without them the journal shows the booking and not
-/// the refusals that followed it.
+/// denied response entry behind, written after the transaction rolled back
+/// and answering the request entry written before it opened. Without them
+/// the audit shows the booking and not the refusals that followed it.
 #[tokio::test]
 async fn refusals_decided_inside_the_capacity_transaction_write_their_audit_rows() {
     let fx = fixture().await;
@@ -3418,7 +3405,7 @@ async fn refusals_decided_inside_the_capacity_transaction_write_their_audit_rows
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(problem["code"], "cancellation.cutoff-passed");
 
-    let denied = denied_audit_entries(&fx).await;
+    let denied = denied_audit_entries(&fx);
     assert_eq!(
         denied,
         vec![
@@ -3434,18 +3421,150 @@ async fn refusals_decided_inside_the_capacity_transaction_write_their_audit_rows
         "a refusal the capacity transaction decides is attributable afterwards"
     );
 
-    // The record attributes the decision without repeating the caller.
-    for (_, record) in fx
-        .store
-        .pending_audit(100)
-        .await
-        .expect("the pending audit journal")
+    // Each denied response answers the request entry of its own attempt.
+    let requests: Vec<Value> = fx
+        .capture
+        .entries()
+        .into_iter()
+        .filter(|entry| entry["phase"] == "request")
+        .collect();
+    for response in fx
+        .capture
+        .entries()
+        .into_iter()
+        .filter(|entry| entry["phase"] == "response")
     {
+        let request = requests
+            .iter()
+            .find(|request| request["correlation"] == response["correlation"])
+            .unwrap_or_else(|| panic!("{response} answers no request entry"));
+        assert_eq!(
+            request["record"]["operation"],
+            response["record"]["operation"]
+        );
+        assert_eq!(response["record"]["eventId"], response["correlation"]);
+    }
+
+    // The record attributes the decision without repeating the caller.
+    for entry in fx.capture.entries() {
         assert!(
-            !record.to_string().contains("principal-agent"),
-            "the audit record repeats the caller's raw identity"
+            !entry.to_string().contains("principal-agent"),
+            "the audit entry repeats the caller's raw identity"
         );
     }
+}
+
+/// How many claims and attempt receipts the deployment holds, in one
+/// reading.
+async fn claims_and_receipts(fx: &Fixture) -> (i64, i64) {
+    let row = fx
+        .admin
+        .query_one(
+            "SELECT (SELECT count(*) FROM scheduling_claims), \
+                    (SELECT count(*) FROM scheduling_attempts)",
+            &[],
+        )
+        .await
+        .expect("count claims and receipts");
+    (row.get(0), row.get(1))
+}
+
+/// SCHEDULING-SEC-14: an allowed commitment writes its `request` entry
+/// before the capacity transaction and its `response` entry after commit,
+/// and both carry one correlation, which the response also names as its
+/// event id. The request carries every field the decision is taken over and
+/// not the decision.
+#[tokio::test]
+async fn an_allowed_commitment_writes_its_request_before_and_its_response_after() {
+    let fx = fixture().await;
+    let (appointment_id, _) = booked(&fx, 90, 200, "audited-allowed").await;
+
+    let entries = fx.capture.entries();
+    assert_eq!(entries.len(), 2, "{entries:?}");
+    let (request, response) = (&entries[0], &entries[1]);
+    assert_eq!(request["phase"], "request");
+    assert_eq!(response["phase"], "response");
+    for entry in &entries {
+        assert_eq!(entry["schema"], SCHEDULING_AUDIT_SCHEMA);
+    }
+    assert_eq!(request["correlation"], response["correlation"]);
+    assert_eq!(response["record"]["eventId"], response["correlation"]);
+    assert_eq!(request["record"]["operation"], "appointment.create");
+    assert_eq!(request["record"]["actorKind"], "agent");
+    assert!(request["record"]["grantPseudonym"].is_string());
+    assert!(request["record"]["outcome"].is_null());
+    assert!(request["record"]["reason"].is_null());
+    assert_eq!(response["record"]["outcome"], "allowed");
+    assert_eq!(response["record"]["reason"], "authorization.allowed");
+    for entry in &entries {
+        let rendered = entry.to_string();
+        for raw in ["principal-agent", appointment_id.as_str(), "north-counter"] {
+            assert!(
+                !rendered.contains(raw),
+                "the audit entry repeats {raw} in the clear"
+            );
+        }
+    }
+}
+
+/// SCHEDULING-SEC-14: a commitment whose request entry the destination
+/// refuses never opens its capacity transaction. No claim is taken, no
+/// receipt is stored, and the caller is told the service is unavailable.
+#[tokio::test]
+async fn a_refused_request_entry_opens_no_capacity_transaction() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    fx.capture.refuse_after(0);
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "audit-refused-request",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+    assert_eq!(problem["code"], "service.unavailable");
+    assert_eq!(claims_and_receipts(&fx).await, (0, 0));
+    assert!(fx.capture.entries().is_empty());
+    assert!(
+        !fx.audit.ready().await,
+        "a refused line stops the destination"
+    );
+    let (status, _) = fx.get("/readyz", &fx.reader).await;
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "readiness follows the audit destination"
+    );
+}
+
+/// SCHEDULING-SEC-14: the response entry is written after commit. When the
+/// destination refuses it, the commitment stays committed and the caller is
+/// told the service is unavailable rather than handed an unaudited answer.
+#[tokio::test]
+async fn a_refused_response_entry_answers_unavailable_with_the_commitment_committed() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    fx.capture.refuse_after(1);
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "audit-refused-response",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+    assert_eq!(problem["code"], "service.unavailable");
+    assert_eq!(
+        claims_and_receipts(&fx).await,
+        (1, 1),
+        "the commitment committed before its response entry was written"
+    );
+    let entries = fx.capture.entries();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["phase"], "request");
 }
 
 /// The most octets the claim ledger stores for a caller-chosen duplicate key.
@@ -3882,7 +4001,6 @@ async fn committed_row_counts(fx: &Fixture) -> Vec<(&'static str, i64)> {
         "scheduling_claims",
         "scheduling_history",
         "scheduling_outbox",
-        "scheduling_audit_outbox",
     ] {
         let count: i64 = fx
             .admin
@@ -3898,8 +4016,8 @@ async fn committed_row_counts(fx: &Fixture) -> Vec<(&'static str, i64)> {
 /// What the retention sweep erases, and just as much what it does not. The
 /// deployment advertises one retention period, for idempotency receipts, and
 /// the sweep enforces that one plus the fifteen minutes the listing contract
-/// gives a cursor. Appointments, their history, the delivery outbox and the
-/// audit journal have no retention period in this milestone and the sweep
+/// gives a cursor. Appointments, their history, and the delivery outbox have
+/// no retention period in this milestone and the sweep
 /// passes over them, by decision rather than omission; this test is what
 /// stops the single configured knob from quietly growing into a promise to
 /// erase committed scheduling data.
@@ -4015,199 +4133,6 @@ async fn the_retention_sweep_erases_its_two_tables_and_leaves_the_rest_standing(
             .await
             .expect("the receipt retention pass runs"),
         0
-    );
-}
-
-/// The environment variable the publication tests key their audit chain from,
-/// and the master secret they put in it: a test constant like the token
-/// signing secret above, never a deployment value. The platform profile
-/// refuses anything shorter than 32 bytes.
-const AUDIT_SECRET_ENV: &str = "SCHEDULING_TEST_AUDIT_CHAIN_SECRET";
-const AUDIT_SECRET: &str = "scheduling-test-audit-chain-secret";
-
-/// Every envelope the journal retains, in the order it was written.
-fn retained(path: &std::path::Path) -> Vec<AuditEnvelope> {
-    std::fs::read_to_string(path)
-        .unwrap_or_default()
-        .lines()
-        .map(|line| serde_json::from_str(line).expect("a retained audit envelope"))
-        .collect()
-}
-
-/// One whole deployment life over the same journal: bootstrap the retained
-/// chain under the deployment key, recover the append/mark gap from its tail,
-/// drain what the store holds, and put the journal down again. Returns how
-/// many envelopes the journal retains afterwards.
-///
-/// The sink is a single-writer sink, so dropping it at the end is what makes
-/// the next call a restart rather than a second writer forking the chain.
-async fn publish_one_life(fx: &Fixture, path: &std::path::Path) -> usize {
-    let profile = AuditProfile::production_from_env(AUDIT_SECRET_ENV).expect("the audit profile");
-    let sink = Arc::new(JsonlFileSink::new_single_writer(path).expect("the audit journal sink"));
-    let chain = Arc::new(
-        profile
-            .bootstrap_or_start_empty(sink.as_ref())
-            .await
-            .expect("bootstrap the retained chain under the deployment key"),
-    );
-    let mut state = AuditPublicationState::from_verified_tail(
-        sink.last_envelope()
-            .await
-            .expect("read the retained tail")
-            .as_ref(),
-    );
-    let publisher = AuditPublisher {
-        store: fx.store.clone(),
-        chain,
-        sink,
-    };
-    publish_audit_pass(&publisher, &mut state)
-        .await
-        .expect("the publication pass runs");
-    drop(publisher);
-    retained(path).len()
-}
-
-/// The audit journal is published in the order it was written. The publisher
-/// appends what the store hands it to a hash chain, so the order it reads in
-/// is the order the chain goes on to attest to. An event id is a random UUID
-/// and sorts in no order at all; these rows are written under identifiers
-/// that sort against the order they were written, so a reader ordering by
-/// identifier hands them back reversed.
-#[tokio::test]
-async fn the_audit_journal_is_read_in_the_order_it_was_written() {
-    let fx = fixture().await;
-    let written: Vec<Uuid> = (0..6)
-        .map(|position| {
-            Uuid::parse_str(&format!("{:08x}-0000-4000-8000-000000000000", 5 - position))
-                .expect("a well-formed test event identifier")
-        })
-        .collect();
-    for (position, event_id) in written.iter().enumerate() {
-        fx.store
-            .record_refusal_audit(*event_id, json!({"marker": position}))
-            .await
-            .expect("record one refusal in the journal");
-    }
-
-    let pending = fx
-        .store
-        .pending_audit(100)
-        .await
-        .expect("read the pending journal");
-    let ours: Vec<Uuid> = pending
-        .iter()
-        .map(|(event_id, _)| *event_id)
-        .filter(|event_id| written.contains(event_id))
-        .collect();
-    assert_eq!(
-        ours, written,
-        "the journal reads back in the order it was written"
-    );
-}
-
-/// DB-12: the keyed audit chain survives the process that built it. A
-/// deployment stops and starts again over the same retained journal, and the
-/// first record of the second life links to the last record of the first: the
-/// chain is one unbroken sequence from genesis, with exactly one record that
-/// has no predecessor. A restart that forgot the retained chain would start
-/// again at genesis and leave the earlier records unattested.
-#[tokio::test]
-async fn the_audit_chain_continues_across_a_restart() {
-    std::env::set_var(AUDIT_SECRET_ENV, AUDIT_SECRET);
-    let fx = fixture().await;
-    let journal = tempfile::tempdir().expect("a temporary audit journal");
-    let path = journal.path().join("audit.jsonl");
-
-    booked(&fx, 90, 200, "chain-first").await;
-    let first_life = publish_one_life(&fx, &path).await;
-    assert!(first_life > 0, "the commitment wrote records to publish");
-    assert!(
-        fx.store
-            .pending_audit(100)
-            .await
-            .expect("read the pending journal")
-            .is_empty(),
-        "a completed pass leaves nothing pending"
-    );
-
-    // The process stops. A second life over the same journal commits more and
-    // publishes it.
-    booked(&fx, 300, 440, "chain-second").await;
-    let second_life = publish_one_life(&fx, &path).await;
-    assert!(
-        second_life > first_life,
-        "the second life appended its own records"
-    );
-
-    let envelopes = retained(&path);
-    assert_eq!(envelopes.len(), second_life);
-    assert!(
-        envelopes[0].prev_hash.is_none(),
-        "the journal reaches genesis exactly once"
-    );
-    for pair in envelopes.windows(2) {
-        assert_eq!(
-            pair[1].prev_hash,
-            Some(pair[0].record_hash),
-            "every envelope links to the one before it"
-        );
-    }
-    assert_eq!(
-        envelopes[first_life].prev_hash,
-        Some(envelopes[first_life - 1].record_hash),
-        "the second life continues the chain the first life left"
-    );
-
-    // Every record is retained exactly once, and carries the identity the
-    // store knows it by.
-    let identities: Vec<&str> = envelopes
-        .iter()
-        .filter_map(|envelope| envelope.record["eventId"].as_str())
-        .collect();
-    assert_eq!(
-        identities.len(),
-        envelopes.len(),
-        "every retained envelope carries its event id"
-    );
-    assert_eq!(
-        identities
-            .iter()
-            .copied()
-            .collect::<std::collections::BTreeSet<&str>>()
-            .len(),
-        identities.len(),
-        "no record is retained twice"
-    );
-
-    // A crash between the append and the mark: the tail is retained but the
-    // store still lists it pending. The next life re-marks it from the
-    // retained tail rather than appending it a second time.
-    let tail = Uuid::parse_str(
-        envelopes.last().expect("a retained tail").record["eventId"]
-            .as_str()
-            .expect("the tail carries its event id"),
-    )
-    .expect("a parseable event identifier");
-    fx.admin
-        .execute(
-            "UPDATE scheduling_audit_outbox SET published_at=NULL WHERE event_id=$1",
-            &[&tail],
-        )
-        .await
-        .expect("reopen the append and mark gap");
-    let reconciled = publish_one_life(&fx, &path).await;
-    assert_eq!(
-        reconciled, second_life,
-        "the record retained before the crash is not appended again"
-    );
-    assert!(
-        fx.store
-            .pending_audit(100)
-            .await
-            .expect("read the pending journal")
-            .is_empty(),
-        "it is marked published instead"
     );
 }
 
@@ -4476,7 +4401,7 @@ async fn fixture_with_window_records(facts: SchedulingFacts) -> Fixture {
     )
     .await;
     fx.store
-        .replace_facts(SCHEDULING_ID, &facts, Uuid::new_v4(), operator_audit())
+        .replace_facts(SCHEDULING_ID, &facts)
         .await
         .expect("publish the window records");
     fx
@@ -4538,7 +4463,7 @@ async fn records_replacement_refuses_to_move_a_window_with_standing_commitments(
     moved.windows[0].end += TimeDelta::days(1);
     let refusal = fx
         .store
-        .replace_facts(SCHEDULING_ID, &moved, Uuid::new_v4(), operator_audit())
+        .replace_facts(SCHEDULING_ID, &moved)
         .await
         .expect_err("a moved window cannot strand a standing appointment");
     assert!(refusal.to_string().contains(WINDOW_ID), "{refusal}");
@@ -4570,7 +4495,7 @@ async fn records_replacement_refuses_a_window_staffed_by_an_exact_time_pool() {
     });
     let refusal = fx
         .store
-        .replace_facts(SCHEDULING_ID, &shared, Uuid::new_v4(), operator_audit())
+        .replace_facts(SCHEDULING_ID, &shared)
         .await
         .expect_err("a window may not be staffed by a pool an exact-time offering sells");
     assert!(
@@ -4614,7 +4539,7 @@ async fn a_supply_identifier_may_not_anchor_both_a_pool_and_a_window() {
     colliding.windows[0].id = "north-counter".to_owned();
     let refusal = fx
         .store
-        .replace_facts(SCHEDULING_ID, &colliding, Uuid::new_v4(), operator_audit())
+        .replace_facts(SCHEDULING_ID, &colliding)
         .await
         .expect_err("a window may not take a pool's supply identifier");
     assert!(
@@ -4720,7 +4645,7 @@ async fn policy_publication_refuses_an_exact_time_offering_on_a_deployed_windows
         because: "test".to_owned(),
     });
     fx.store
-        .replace_facts(SCHEDULING_ID, &staffed, Uuid::new_v4(), operator_audit())
+        .replace_facts(SCHEDULING_ID, &staffed)
         .await
         .expect("a window staffed by a pool no exact-time offering sells");
 
@@ -4766,12 +4691,6 @@ async fn changed_window_records_must_advance_the_revision_even_after_removal() {
         .expect("second precision");
     let fx = fixture_with_window(start).await;
     let (initial, facts_revision) = fx.store.facts().await.expect("the initial records");
-    let audit_rows = fx
-        .store
-        .pending_audit(100)
-        .await
-        .expect("the initial audit rows")
-        .len();
 
     let mut changed = records_with_window(start);
     changed.windows[0].end += TimeDelta::minutes(30);
@@ -4779,7 +4698,7 @@ async fn changed_window_records_must_advance_the_revision_even_after_removal() {
         changed.windows[0].revision = proposed_revision;
         let refusal = fx
             .store
-            .replace_facts(SCHEDULING_ID, &changed, Uuid::new_v4(), operator_audit())
+            .replace_facts(SCHEDULING_ID, &changed)
             .await
             .expect_err("changed terms must advance their public revision");
         assert!(matches!(
@@ -4798,37 +4717,17 @@ async fn changed_window_records_must_advance_the_revision_even_after_removal() {
         .expect("the refused records roll back");
     assert_eq!(after_refusals, initial);
     assert_eq!(after_refusal_revision, facts_revision);
-    assert_eq!(
-        fx.store
-            .pending_audit(100)
-            .await
-            .expect("the audit rows after refusal")
-            .len(),
-        audit_rows,
-        "a refused replacement writes no allowed audit row"
-    );
 
     changed.windows[0].revision = WINDOW_REVISION + 1;
     fx.store
-        .replace_facts(SCHEDULING_ID, &changed, Uuid::new_v4(), operator_audit())
+        .replace_facts(SCHEDULING_ID, &changed)
         .await
         .expect("an advanced revision accepts changed terms");
     fx.store
-        .replace_facts(
-            SCHEDULING_ID,
-            &records_without(&[]),
-            Uuid::new_v4(),
-            operator_audit(),
-        )
+        .replace_facts(SCHEDULING_ID, &records_without(&[]))
         .await
         .expect("the idle window may be removed");
     let (_, removed_revision) = fx.store.facts().await.expect("the removed records");
-    let removed_audit_rows = fx
-        .store
-        .pending_audit(100)
-        .await
-        .expect("the audit rows after removal")
-        .len();
 
     let mut republished = changed.clone();
     republished.windows[0].end += TimeDelta::minutes(30);
@@ -4836,12 +4735,7 @@ async fn changed_window_records_must_advance_the_revision_even_after_removal() {
         republished.windows[0].revision = proposed_revision;
         let refusal = fx
             .store
-            .replace_facts(
-                SCHEDULING_ID,
-                &republished,
-                Uuid::new_v4(),
-                operator_audit(),
-            )
+            .replace_facts(SCHEDULING_ID, &republished)
             .await
             .expect_err("removal does not erase the revision high-water mark");
         assert!(matches!(
@@ -4860,32 +4754,14 @@ async fn changed_window_records_must_advance_the_revision_even_after_removal() {
         .expect("the refused republication rolls back");
     assert!(still_removed.windows.is_empty());
     assert_eq!(after_republish_refusal, removed_revision);
-    assert_eq!(
-        fx.store
-            .pending_audit(100)
-            .await
-            .expect("the audit rows after republication refusal")
-            .len(),
-        removed_audit_rows
-    );
 
     republished.windows[0].revision = WINDOW_REVISION + 2;
     fx.store
-        .replace_facts(
-            SCHEDULING_ID,
-            &republished,
-            Uuid::new_v4(),
-            operator_audit(),
-        )
+        .replace_facts(SCHEDULING_ID, &republished)
         .await
         .expect("an advanced revision may republish the identifier");
     fx.store
-        .replace_facts(
-            SCHEDULING_ID,
-            &republished,
-            Uuid::new_v4(),
-            operator_audit(),
-        )
+        .replace_facts(SCHEDULING_ID, &republished)
         .await
         .expect("an exact unchanged reapply remains accepted");
 }
@@ -4991,7 +4867,7 @@ async fn a_location_closure_hides_and_refuses_an_arrival_window() {
         authority: None,
     });
     fx.store
-        .replace_facts(SCHEDULING_ID, &facts, Uuid::new_v4(), operator_audit())
+        .replace_facts(SCHEDULING_ID, &facts)
         .await
         .expect("apply the location closure");
 
@@ -5069,6 +4945,7 @@ async fn republished(fx: &Fixture, policy: SchedulingPolicy, pool_ids: &[String]
             revision,
             digest,
             AuditKeyHasher::Keyed(keying),
+            fx.audit.clone(),
             7,
         )
         .with_hooks(fx.hooks.clone()),
@@ -5759,7 +5636,7 @@ async fn every_mutation_rechecks_expiry_after_its_writes() {
             _ => unreachable!(),
         };
         // Compare all transactional business effects, not just the status.
-        // A refusal may add its own refused receipt and denied audit event.
+        // A refusal may add its own refused receipt.
         let state = "SELECT jsonb_build_array( \
             (SELECT jsonb_agg(to_jsonb(c) ORDER BY claim_id) FROM scheduling_claims c), \
             (SELECT jsonb_agg(to_jsonb(h) ORDER BY event_id) FROM scheduling_history h), \
@@ -5915,7 +5792,7 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
     // it, so the swap commits.
     let swapped = records_without(&["station-1"]);
     fx.store
-        .replace_facts(SCHEDULING_ID, &swapped, Uuid::new_v4(), operator_audit())
+        .replace_facts(SCHEDULING_ID, &swapped)
         .await
         .expect("the records swap commits");
     let supply = SupplyContext::ExactTime {
@@ -5952,8 +5829,6 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
         request_hash: "sha256:stale-facts",
         attempt_expires_at: Utc::now() + TimeDelta::days(7),
         grant_exp_unix: None,
-        audit_event: Uuid::new_v4(),
-        audit_record: operator_audit(),
         hooks: None,
     };
     let outcome = fx
@@ -6375,4 +6250,68 @@ async fn a_reschedule_suppresses_the_obsolete_reminder_and_mints_its_replacement
             .expect("the liveness read runs"),
         "a reminder naming an obsolete revision is not sent"
     );
+}
+
+/// Schema version 8 drops the audit outbox the earlier release published
+/// from, and refuses while that outbox still holds a record its publisher
+/// had not reached: dropping it would lose an accountability record nothing
+/// else holds.
+#[tokio::test]
+async fn migration_refuses_to_drop_unpublished_audit_and_drops_a_drained_outbox() {
+    let fx = fixture().await;
+    // The schema head of the release that published audit from an outbox,
+    // holding one record its publisher has not reached.
+    fx.admin
+        .batch_execute(
+            "CREATE TABLE scheduling_audit_outbox (event_id uuid PRIMARY KEY, \
+                 audit_record jsonb NOT NULL, published_at timestamptz); \
+             INSERT INTO scheduling_audit_outbox(event_id, audit_record) \
+                 VALUES('00000000-0000-4000-8000-0000000000c1', '{}'); \
+             DELETE FROM scheduling_schema_migrations WHERE version=8;",
+        )
+        .await
+        .expect("simulate the schema before migration 8");
+
+    let refusal = fx
+        .store
+        .migrate()
+        .await
+        .expect_err("migration must not drop unpublished audit records");
+    assert!(
+        matches!(
+            refusal,
+            StoreError::UnpublishedAuditWouldBeDropped {
+                version: 8,
+                rows: 1
+            }
+        ),
+        "{refusal:?}"
+    );
+    let outbox_rows: i64 = fx
+        .admin
+        .query_one("SELECT count(*) FROM scheduling_audit_outbox", &[])
+        .await
+        .expect("the outbox survives the refusal")
+        .get(0);
+    assert_eq!(outbox_rows, 1);
+
+    fx.admin
+        .batch_execute("UPDATE scheduling_audit_outbox SET published_at=now()")
+        .await
+        .expect("the earlier release publishes the record");
+    fx.store
+        .migrate()
+        .await
+        .expect("a drained outbox is dropped");
+    let dropped: bool = fx
+        .admin
+        .query_one("SELECT to_regclass('scheduling_audit_outbox') IS NULL", &[])
+        .await
+        .expect("inspect the audit outbox")
+        .get(0);
+    assert!(dropped, "the database holds no audit state");
+    fx.store
+        .ready()
+        .await
+        .expect("the schema is at this release");
 }

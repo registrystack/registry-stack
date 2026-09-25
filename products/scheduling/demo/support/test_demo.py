@@ -169,7 +169,7 @@ class RuntimeConfigTest(unittest.TestCase):
             config,
         )
 
-    def test_the_audit_path_names_the_journal_file(self):
+    def test_the_audit_path_names_the_audit_file(self):
         config = demo.runtime_config(
             Path("/run/project"), Path("/run/secrets"), Path("/run/audit/audit.jsonl"), 8105, None
         )

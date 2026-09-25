@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Service assembly and the supervised background loops: `scheduling serve`
-//! builds the store connection, the authenticator, the audit chain, and the
-//! scheduling service, then runs the HTTP listener beside five workers: hold
-//! expiry, reminder-intent dispatch, hook delivery, retention sweeps, and
-//! audit publication.
+//! builds the store connection, the authenticator, the audit writer, and the
+//! scheduling service, then runs the HTTP listener beside four workers: hold
+//! expiry, reminder-intent dispatch, hook delivery, and retention sweeps.
 //! A worker that dies stops the process rather than letting the runtime keep
 //! selling capacity its clocks no longer guard.
 //!
@@ -27,7 +26,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use clap::{Arg, Command};
-use registry_platform_audit::{AuditEnvelope, AuditProfile, ChainState, JsonlFileSink};
+use registry_platform_audit::{AuditError, AuditProfile, AuditWriter};
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_config::{ProtectedSecret, SecretProvider, SecretResolver};
 use registry_platform_httputil::destination::{
@@ -35,14 +34,13 @@ use registry_platform_httputil::destination::{
     DestinationAuthorizationValue, DestinationBodyTemplate, DestinationMethod, DestinationProfile,
     FixedDestinationPolicy,
 };
-use serde_json::Value;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{Interval, MissedTickBehavior};
 use url::Url;
-use uuid::Uuid;
 
+use crate::audit::SchedulingAudit;
 use crate::auth::SchedulingAuthenticator;
 use crate::config::{ReminderDestinationConfig, RuntimeConfig, RuntimeConfigError};
 use crate::hooks::{ActivatedHooks, HookActivationError, HookRuntimeIdentity};
@@ -54,9 +52,6 @@ use crate::store::{OutboxRow, PostgresStore, StoreError, REMINDER_SEND_TIMEOUT};
 /// not configuration: they are internal mechanics of one deployment, not an
 /// operator-tunable contract.
 const WORKER_INTERVAL: Duration = Duration::from_secs(2);
-/// How often the audit publication loop wakes; publication is the loop whose
-/// lag directly bounds the accountability record's durability.
-const AUDIT_PUBLICATION_INTERVAL: Duration = Duration::from_secs(1);
 /// Retention sweeps run every thirtieth maintenance tick.
 const RETENTION_TICKS: u8 = 30;
 /// How many holds one expiry pass may retire, and how many intents one
@@ -200,6 +195,11 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         hook_payload_retention,
     )?;
 
+    // The audit destination is keyed and opened before the policy revision
+    // can move, so a mis-provisioned deployment never advances state it
+    // cannot hold to account.
+    let (audit_hasher, audit) = open_audit(&config, &secrets, None).await?;
+
     // Before publishing a changed policy, prove that every retained event can
     // still use the exact destination binding captured for it. A deployment
     // may retain extra explicit bindings while old deliveries drain.
@@ -217,7 +217,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             hook_payload_retention,
         )?;
         retained_hooks
-            .delivery_service(store.clone())
+            .delivery_service(store.clone(), audit.clone())
             .verify_retained_bindings()
             .await
             .map_err(|_| RuntimeError::HookDelivery)?;
@@ -229,36 +229,6 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         verifier,
         keys,
     ));
-
-    // The journal is keyed and verified before the policy revision can move,
-    // so a mis-provisioned deployment never advances state it cannot hold to
-    // account.
-    let audit_secret = resolve_audit_secret(&secrets, &config.audit.hash_key_ref)?;
-    // One master secret, two independently HKDF-derived sub-keys: the chain
-    // integrity key and the identifier-hash key never share key material
-    // (AUDIT-03), so one leaked sub-key reveals neither its sibling nor the
-    // master.
-    let audit_profile =
-        AuditProfile::production_from_secret_bytes(audit_secret.expose_secret().to_vec().into())
-            .map_err(|_| RuntimeError::Audit)?;
-    let audit_sink = Arc::new(
-        JsonlFileSink::new_single_writer(&config.audit.path).map_err(|_| RuntimeError::Audit)?,
-    );
-    let audit_chain = Arc::new(
-        audit_profile
-            .bootstrap_or_start_empty(audit_sink.as_ref())
-            .await
-            .map_err(|_| RuntimeError::Audit)?,
-    );
-    // The keyed bootstrap above authenticates the retained chain before its
-    // tail identity is used to reconcile a possible append/mark crash gap.
-    let mut audit_publication_state = AuditPublicationState::from_verified_tail(
-        audit_sink
-            .last_envelope()
-            .await
-            .map_err(|_| RuntimeError::Audit)?
-            .as_ref(),
-    );
 
     let reminders = match &config.destinations.reminders {
         Some(destination) => {
@@ -281,7 +251,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             HookActivationError::InvalidIdentity,
         ));
     }
-    let hook_delivery = hooks.delivery_service(store.clone());
+    let hook_delivery = hooks.delivery_service(store.clone(), audit.clone());
     hook_delivery
         .verify_retained_bindings()
         .await
@@ -294,7 +264,8 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             scheduling_id.clone(),
             policy_revision,
             policy_digest,
-            audit_profile.key_hasher(),
+            audit_hasher,
+            audit,
             config.retention.attempt_receipt_days,
         )
         .with_hooks(hooks),
@@ -368,13 +339,13 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     // sweep erases two things: idempotency attempt receipts, after the
     // configured `retention.attemptReceiptDays`, and listing cursors, after
     // the fifteen minutes the listing contract gives them. Appointments,
-    // their history, the delivery outbox and the audit journal are never
-    // swept, by decision and not by omission: committed scheduling data has
+    // their history, and the delivery outbox are never swept, by decision
+    // and not by omission: committed scheduling data has
     // no retention period in this milestone, and one knob must not read as a
     // promise to sweep it. A future period for those is new configuration and
     // new passes here, not a wider reading of this one.
     let retention_store = store.clone();
-    workers.push(supervise("retention", worker_stopped.clone(), async move {
+    workers.push(supervise("retention", worker_stopped, async move {
         let mut interval = worker_timer();
         let mut ticks = 0_u8;
         loop {
@@ -392,24 +363,6 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
                     error = %error,
                     "Scheduling attempt receipt retention pass did not complete"
                 );
-            }
-        }
-    }));
-
-    let audit_publisher = AuditPublisher {
-        store: store.clone(),
-        chain: audit_chain,
-        sink: audit_sink,
-    };
-    workers.push(supervise("audit publication", worker_stopped, async move {
-        let mut interval = tokio::time::interval(AUDIT_PUBLICATION_INTERVAL);
-        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        loop {
-            interval.tick().await;
-            if let Err(stage) =
-                publish_audit_pass(&audit_publisher, &mut audit_publication_state).await
-            {
-                tracing::warn!(stage, "Scheduling audit publication pass did not complete");
             }
         }
     }));
@@ -435,10 +388,12 @@ pub enum RuntimeError {
     Config(#[from] RuntimeConfigError),
     #[error("the Scheduling secret configuration is invalid")]
     SecretConfiguration,
-    #[error("the Scheduling audit journal could not be opened or extended")]
+    #[error("the Scheduling audit key could not be derived")]
     Audit,
     #[error("{0}")]
     AuditSecret(String),
+    #[error("the Scheduling audit destination is unavailable: {0}")]
+    AuditDestination(String),
     /// A database step of provisioning or startup failed. The step is named
     /// because a bare store error says the database refused and not which
     /// act it refused, and the acts have different remedies: an unreachable
@@ -532,8 +487,51 @@ fn worker_timer() -> Interval {
     interval
 }
 
-/// Resolve the audit journal's keying secret, naming the reference on refusal.
-/// The journal is keyed before the listener binds, so this refusal is the
+/// Derive the identifier-hash key and open the audit destination: the
+/// runtime's own, or the sibling `process` names beside it for a companion
+/// command, which never shares the runtime's single-writer file.
+pub async fn open_audit(
+    config: &RuntimeConfig,
+    secrets: &SecretResolver,
+    process: Option<&str>,
+) -> Result<(registry_platform_audit::AuditKeyHasher, SchedulingAudit), RuntimeError> {
+    let audit_secret = resolve_audit_secret(secrets, &config.audit.hash_key_ref)?;
+    let audit_profile =
+        AuditProfile::production_from_secret_bytes(audit_secret.expose_secret().to_vec().into())
+            .map_err(|_| RuntimeError::Audit)?;
+    let mut destination = config
+        .audit
+        .destination()
+        .map_err(|error| RuntimeError::AuditDestination(error.to_string()))?;
+    if let Some(process) = process {
+        destination = destination
+            .for_process(process)
+            .map_err(|error| RuntimeError::AuditDestination(error.to_string()))?;
+    }
+    let writer = AuditWriter::open(destination).await.map_err(|error| {
+        RuntimeError::AuditDestination(describe_audit_destination_failure(&error))
+    })?;
+    Ok((audit_profile.key_hasher(), SchedulingAudit::new(writer)))
+}
+
+/// Name the rule an audit destination refusal broke, without a record or a
+/// path the operator did not configure.
+fn describe_audit_destination_failure(error: &AuditError) -> String {
+    match error {
+        AuditError::SinkLocked { .. } => "another process holds the single-writer lock beside \
+             audit.path; stop it before starting this one"
+            .to_owned(),
+        AuditError::Io(io) if io.kind() == std::io::ErrorKind::PermissionDenied => format!(
+            "{io}; the audit directory must belong to the runtime user and not be group- or \
+             world-writable, and audit.path must belong to that user with mode 0600"
+        ),
+        AuditError::Io(io) => format!("the audit file could not be opened ({})", io.kind()),
+        _ => "the audit file could not be opened".to_owned(),
+    }
+}
+
+/// Resolve the audit key, naming the reference on refusal.
+/// The audit destination is keyed before the listener binds, so this refusal is the
 /// first line an operator sees on a mis-provisioned deployment. It carries a
 /// valid configured reference and the rule that broke, never the key bytes.
 fn resolve_audit_secret(
@@ -903,103 +901,12 @@ fn report_lost_outcome(row: &OutboxRow) {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Audit publication
-// ---------------------------------------------------------------------------
-
-/// What one publication pass writes through: the journal it drains, the keyed
-/// chain it extends, and the sink that retains the envelopes.
-///
-/// Public so the database suite can run a pass against a real deployment,
-/// stop, and start again the way a restart does. Continuity across that
-/// boundary is the property the chain exists to carry, and it cannot be
-/// observed from inside one process that never puts the chain down.
-pub struct AuditPublisher {
-    pub store: PostgresStore,
-    pub chain: Arc<ChainState>,
-    pub sink: Arc<JsonlFileSink>,
-}
-
-/// The one record whose append may have landed without its mark, carried
-/// across passes and across a restart.
-#[derive(Default)]
-pub struct AuditPublicationState {
-    unconfirmed: Option<Uuid>,
-}
-
-impl AuditPublicationState {
-    /// Recover the append/mark gap from the retained tail. The caller
-    /// authenticates the chain first: this reads identity only.
-    #[must_use]
-    pub fn from_verified_tail(tail: Option<&AuditEnvelope>) -> Self {
-        let unconfirmed = tail
-            .and_then(|envelope| envelope.record.as_object())
-            .and_then(|record| record.get("eventId"))
-            .and_then(Value::as_str)
-            .and_then(|event_id| Uuid::parse_str(event_id).ok());
-        Self { unconfirmed }
-    }
-}
-
-/// Publish every pending audit record: append it to the keyed chain, then mark
-/// it published. The one record whose append may have landed before its mark
-/// is remembered and re-marked first on the next pass, so a crash between the
-/// two writes never duplicates an envelope.
-pub async fn publish_audit_pass(
-    publisher: &AuditPublisher,
-    state: &mut AuditPublicationState,
-) -> Result<(), &'static str> {
-    if let Some(event_id) = state.unconfirmed {
-        publisher
-            .store
-            .mark_audit_published(event_id)
-            .await
-            .map_err(|_| "published-mark")?;
-        state.unconfirmed = None;
-    }
-    let records = publisher
-        .store
-        .pending_audit(100)
-        .await
-        .map_err(|_| "pending-read")?;
-    for (event_id, record) in records {
-        let record = audit_record_with_event_id(event_id, record).ok_or("record-identity")?;
-        publisher
-            .chain
-            .append(publisher.sink.as_ref(), record)
-            .await
-            .map_err(|_| "sink-append")?;
-        state.unconfirmed = Some(event_id);
-        publisher
-            .store
-            .mark_audit_published(event_id)
-            .await
-            .map_err(|_| "published-mark")?;
-        state.unconfirmed = None;
-    }
-    Ok(())
-}
-
-/// Stamp the pending record with its audit identity. The records the service
-/// writes are already pseudonymized; publication adds only the event id, and
-/// refuses a record that already carries a different one.
-fn audit_record_with_event_id(event_id: Uuid, mut record: Value) -> Option<Value> {
-    let fields = record.as_object_mut()?;
-    let event_id = event_id.to_string();
-    match fields.get("eventId") {
-        Some(Value::String(existing)) if existing == &event_id => {}
-        Some(_) => return None,
-        None => {
-            fields.insert("eventId".to_owned(), Value::String(event_id));
-        }
-    }
-    Some(record)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::TimeZone as _;
+    use serde_json::Value;
+    use uuid::Uuid;
 
     fn intent(purpose: &str) -> OutboxRow {
         let due = Utc.with_ymd_and_hms(2026, 10, 5, 8, 0, 0).unwrap();
@@ -1141,20 +1048,5 @@ mod tests {
             hooks: Vec::new(),
         };
         assert_eq!(offering_pool_ids(&policy), vec!["north".to_owned()]);
-    }
-
-    #[test]
-    fn a_pending_audit_record_is_stamped_with_its_identity_exactly_once() {
-        let event_id = Uuid::new_v4();
-        let record =
-            audit_record_with_event_id(event_id, serde_json::json!({"event": "x"})).unwrap();
-        assert_eq!(record["eventId"], event_id.to_string());
-        // An agreeing stamp is accepted; a disagreeing one is refused.
-        assert!(audit_record_with_event_id(event_id, record.clone()).is_some());
-        assert!(audit_record_with_event_id(
-            Uuid::new_v4(),
-            serde_json::json!({"eventId": "another"})
-        )
-        .is_none());
     }
 }
