@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # Messaging's runtime, its client and that client's Node.js and Python
-# bindings, its generated configuration and OpenAPI document, and its routes
+# bindings, the shared platform primitives it dispatches and calls providers
+# through, its generated configuration and OpenAPI document, and its routes
 # stay free of any provider vendor name. A vendor package is
 # example adopter material under products/messaging/examples/providers/,
 # proven against MockHttpUpstream: it never becomes a Rust type, a config
@@ -40,6 +41,14 @@ swept_binding_roots=(
   "$repository_root/crates/registry-messaging-client-py"
 )
 
+# The shared platform primitives Messaging queues work and reaches providers
+# through. A vendor name there would reach Messaging, and every other product
+# that links them, without appearing in a Messaging crate at all.
+swept_platform_roots=(
+  "$repository_root/crates/registry-platform-dispatch"
+  "$repository_root/crates/registry-platform-httputil"
+)
+
 published_roots=(
   "$repository_root/products/messaging/generated"
 )
@@ -49,7 +58,8 @@ fail() {
   exit 1
 }
 
-for named_root in "${swept_crate_roots[@]}" "${swept_binding_roots[@]}" "${published_roots[@]}"; do
+for named_root in "${swept_crate_roots[@]}" "${swept_binding_roots[@]}" \
+  "${swept_platform_roots[@]}" "${published_roots[@]}"; do
   [[ -d "$named_root" ]] ||
     fail "This gate sweeps $named_root, which no longer exists: update the list it appears in."
 done
@@ -75,6 +85,15 @@ done < <(
 
 if [[ "${#binding_sources[@]}" -eq 0 ]]; then
   fail 'The vendor-neutrality sweep found no Messaging client binding source to search.'
+fi
+
+platform_sources=()
+while IFS= read -r platform_file; do
+  platform_sources+=("$platform_file")
+done < <(find "${swept_platform_roots[@]}" -type f -name '*.rs' | sort)
+
+if [[ "${#platform_sources[@]}" -eq 0 ]]; then
+  fail 'The vendor-neutrality sweep found no shared platform Rust to search.'
 fi
 
 published_files=()
@@ -119,6 +138,10 @@ sweep \
 sweep \
   'Messaging client binding source contains a provider vendor name. Vendor packages belong only under products/messaging/examples/providers/.' \
   "${binding_sources[@]}"
+
+sweep \
+  'A shared platform primitive Messaging dispatches through contains a provider vendor name.' \
+  "${platform_sources[@]}"
 
 sweep \
   'Messaging generated configuration or OpenAPI contains a provider vendor name.' \

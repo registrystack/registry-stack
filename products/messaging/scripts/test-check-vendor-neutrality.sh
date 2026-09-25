@@ -31,6 +31,11 @@ swept_bindings=(
   registry-messaging-client-py
 )
 
+swept_platform_crates=(
+  registry-platform-dispatch
+  registry-platform-httputil
+)
+
 build_pristine_tree() {
   local root="$sandbox_root/pristine"
   rm -rf "$root"
@@ -55,6 +60,17 @@ build_pristine_tree() {
   mkdir -p "$root/crates/registry-messaging-client-py/python/registry_messaging_client"
   printf '"""Send one message through the configured provider."""\n' \
     >"$root/crates/registry-messaging-client-py/python/registry_messaging_client/__init__.py"
+  printf 'def submit() -> None: ...\n' \
+    >"$root/crates/registry-messaging-client-py/python/registry_messaging_client/__init__.pyi"
+  printf "'use strict';\nmodule.exports = { submit() {} };\n" \
+    >"$root/crates/registry-messaging-client-node/client.js"
+
+  local platform
+  for platform in "${swept_platform_crates[@]}"; do
+    mkdir -p "$root/crates/$platform/src"
+    printf '/// Claims one queued job.\npub fn claim() -> bool {\n    true\n}\n' \
+      >"$root/crates/$platform/src/lib.rs"
+  done
 
   printf '{"openapi": "3.1.0", "info": {"title": "Registry Messaging", "version": "1"}}\n' \
     >"$root/products/messaging/generated/registry-messaging.openapi.json"
@@ -145,6 +161,36 @@ plant_vendor_name_in_a_python_facade() {
     >>"$1/crates/registry-messaging-client-py/python/registry_messaging_client/__init__.py"
 }
 
+plant_vendor_name_in_node_binding_javascript() {
+  printf 'const PROVIDER = "Plivo";\n' >>"$1/crates/registry-messaging-client-node/client.js"
+}
+
+plant_vendor_name_in_a_python_typing_stub() {
+  printf '# Mirrors an Infobip delivery report.\ndef note() -> None: ...\n' \
+    >>"$1/crates/registry-messaging-client-py/python/registry_messaging_client/__init__.pyi"
+}
+
+plant_vendor_name_in_the_dispatch_primitive() {
+  printf '/// Retries a Twilio send.\npub fn retry() {}\n' \
+    >>"$1/crates/registry-platform-dispatch/src/lib.rs"
+}
+
+plant_vendor_name_in_the_http_primitive() {
+  printf 'pub const HOST: &str = "api.sendgrid.com";\n' \
+    >>"$1/crates/registry-platform-httputil/src/lib.rs"
+}
+
+remove_a_named_platform_root() {
+  rm -rf "$1/crates/registry-platform-dispatch"
+}
+
+empty_every_platform_source() {
+  local platform
+  for platform in "${swept_platform_crates[@]}"; do
+    rm -f "$1/crates/$platform/src/lib.rs"
+  done
+}
+
 plant_vendor_name_in_installed_dependencies() {
   mkdir -p "$1/crates/registry-messaging-client-node/node_modules/example"
   printf 'module.exports = "twilio";\n' \
@@ -196,6 +242,18 @@ run_case 'a vendor name in a Node binding declaration fails' \
   fail plant_vendor_name_in_a_node_declaration
 run_case 'a vendor name in a Python binding facade fails' \
   fail plant_vendor_name_in_a_python_facade
+run_case 'a vendor name in Node binding JavaScript fails' \
+  fail plant_vendor_name_in_node_binding_javascript
+run_case 'a vendor name in a Python binding typing stub fails' \
+  fail plant_vendor_name_in_a_python_typing_stub
+run_case 'a vendor name in the shared dispatch primitive fails' \
+  fail plant_vendor_name_in_the_dispatch_primitive
+run_case 'a vendor name in the shared HTTP primitive fails' \
+  fail plant_vendor_name_in_the_http_primitive
+run_case 'a named platform root that no longer exists fails' \
+  fail remove_a_named_platform_root
+run_case 'a tree with no platform Rust left to search fails' \
+  fail empty_every_platform_source
 run_case 'a vendor name in installed binding dependencies passes' \
   pass plant_vendor_name_in_installed_dependencies
 run_case 'a named binding root that no longer exists fails' \
