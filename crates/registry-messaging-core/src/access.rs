@@ -24,6 +24,8 @@ use crate::visibility::CallerIdentity;
 
 /// The closed actor-kind vocabulary, spelled exactly as the Registry Stack
 /// contextual-claim profile spells it.
+// Not `registry_platform_oidc::ActorKind`: that crate links reqwest and tokio,
+// which this I/O-free core and the client built on it must not carry.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ActorKind {
