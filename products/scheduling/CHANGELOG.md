@@ -17,8 +17,10 @@
     transaction commits or rolls back. A refused request entry opens no
     transaction and answers `service.unavailable`; a refused response entry
     for a committed commitment answers `service.unavailable` with the
-    commitment in place. A permission refused before the transaction is one
-    response entry.
+    commitment in place. A replayed receipt is answered only after its own
+    response entry, recording the decision the receipt carries, is accepted;
+    a refused one answers `service.unavailable` without the receipt. A
+    permission refused before the transaction is one response entry.
   - Hook delivery writes an attempt's request entry before egress and its
     terminal response entry with the same correlation; a refused entry leaves
     the delivery pending and sends nothing.
