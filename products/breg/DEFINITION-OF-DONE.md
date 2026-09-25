@@ -71,6 +71,14 @@ read operation, decision ordering and expiry, recipient matching, probe
 isolation, and successor migrations; the compiler refusals are proven in
 `crates/registry-breg/tests/consent_access.rs`.
 
+Ingestion run transitions and operator maintenance write their audit request
+entry before their first protected read or write: invariants `BREG-SEC-102`
+through `BREG-SEC-108` cover run creation, run cancellation and the blocked
+and replayed chunk transitions, standalone history erasure, history
+rebaseline, request-detail erasure, migration reconciliation, and the
+field-encryption erase-history lifecycle. Each negative test refuses the audit
+writer before the request entry and proves the operation changed nothing.
+
 The HTTP record contract is also explicit: caller-filtered and generated
 OpenAPI artifacts assign every record-related route to the shared single or
 collection Registry Record profile, or to a named BReg-specific shape.
