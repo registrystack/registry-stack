@@ -582,7 +582,8 @@ async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_databas
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn prepared_server_sessions_are_named_bounded_and_advised_with_pg_stat_statements() {
+async fn prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays_unavailable_until_preloaded(
+) {
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let database = TestDatabase::create(4).await;
     let (migration, migration_task) = database.connect_migration().await;
@@ -664,6 +665,12 @@ async fn prepared_server_sessions_are_named_bounded_and_advised_with_pg_stat_sta
         .map(|advisory| advisory.code())
         .collect::<Vec<_>>();
     assert!(codes.contains(&"postgres.pg_stat_statements.unavailable"));
+    let pg_stat_statements = prepared
+        .postgres_advisories()
+        .iter()
+        .find(|advisory| advisory.code() == "postgres.pg_stat_statements.unavailable")
+        .expect("pg_stat_statements is not installed yet");
+    assert!(pg_stat_statements.message().contains("not installed"));
     let connections = prepared
         .postgres_advisories()
         .iter()
@@ -674,6 +681,10 @@ async fn prepared_server_sessions_are_named_bounded_and_advised_with_pg_stat_sta
     assert!(connections.observed()[1].1 > 0);
     drop(prepared);
 
+    // This test server never sets shared_preload_libraries, so creating the
+    // extension alone must not silence the advisory: PostgreSQL 17 lets
+    // CREATE EXTENSION succeed either way, but its view then refuses every
+    // query until a restart actually preloads the module.
     database
         .admin
         .batch_execute("CREATE EXTENSION pg_stat_statements")
@@ -682,12 +693,16 @@ async fn prepared_server_sessions_are_named_bounded_and_advised_with_pg_stat_sta
     let prepared =
         prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
             .await
-            .expect("catalog verification and startup accept pg_stat_statements");
+            .expect("catalog verification and startup accept pg_stat_statements without preload");
     assert_ready(&prepared, StatusCode::OK).await;
-    assert!(prepared
+    let pg_stat_statements = prepared
         .postgres_advisories()
         .iter()
-        .all(|advisory| !advisory.code().starts_with("postgres.pg_stat_statements.")));
+        .find(|advisory| advisory.code() == "postgres.pg_stat_statements.unavailable")
+        .expect("pg_stat_statements is installed but this server never preloaded it");
+    assert!(pg_stat_statements
+        .message()
+        .contains("shared_preload_libraries"));
     drop(prepared);
     idp.stop().await;
     database.cleanup().await;

@@ -13247,6 +13247,7 @@ mod tests {
             autovacuum: Some("on".to_owned()),
             track_counts: Some("off".to_owned()),
             pg_stat_statements_installed: Some(false),
+            pg_stat_statements_loaded: Some(false),
         };
         let advisories = registry_breg::postgres::advise(&settings, 9);
 

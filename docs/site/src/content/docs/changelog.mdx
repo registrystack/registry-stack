@@ -56,15 +56,16 @@ relevant product pages on this site rather than duplicating release notes.
   value-free PostgreSQL advisories: the connection numbers one replica's pool
   is compared with, a warning when that pool may take more than half of the
   usable connections, warnings when `autovacuum` or `track_counts` is off,
-  and a note when `pg_stat_statements` is not installed. Advisories never
-  refuse startup or change `doctor`'s exit status, and need no extra grant.
+  and a note when `pg_stat_statements` is not installed or not loaded through
+  `shared_preload_libraries`. Advisories never refuse startup or change
+  `doctor`'s exit status, and need no extra grant.
   See [deploy a registry](../operate/breg/#activate-and-serve).
 
 {/* Evidence: crates/registry-breg/src/postgres/baseline.rs, advise() and connection_budget();
     crates/registry-breg/src/startup.rs, OperationalEvent::PostgresBaselineAdvisory;
     crates/registry-bregctl/src/lib.rs, write_doctor_success();
     crates/registry-bregctl/src/lib.rs, doctor_reports_postgres_advisories_after_the_passing_checks_without_failing;
-    crates/registry-breg/tests/postgres_startup.rs, prepared_server_sessions_are_named_bounded_and_advised_with_pg_stat_statements. */}
+    crates/registry-breg/tests/postgres_startup.rs, prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays_unavailable_until_preloaded. */}
 
 ## v0.34.0 beta-46
 
