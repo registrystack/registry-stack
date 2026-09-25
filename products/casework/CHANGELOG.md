@@ -77,8 +77,8 @@
   in-flight work pinned under an earlier package, and names each conflict with
   its counts: a queue or access profile that pinned reviews or open work items
   still need, a pinned review kind version declared with different content, a
-  removed source for source-context reviews, or a source read the pinned
-  display schema would refuse. Let that work finish, or set the new
+  removed source that source-context reviews or open work items still need,
+  or a source read the pinned display schema would refuse. Let that work finish, or set the new
   `package.acknowledgeStrandedWork` to the exact package digest the refusal
   names. `caseworkctl doctor` runs the same comparison as its `pinnedWork`
   check and reports the conflicts under `pinnedWork`, so it previews the
