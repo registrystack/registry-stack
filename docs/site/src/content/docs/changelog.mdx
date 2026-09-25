@@ -54,6 +54,21 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg/tests/postgres_kernel.rs, runtime_sessions_are_named_and_bounded_across_recycling;
     crates/registry-breg/tests/postgres_kernel.rs, idle_in_transaction_bound_rolls_back_and_the_pool_recovers. */}
 
+- BReg runtime sessions carry `jit=off` as a startup option placed before any
+  options in the connection URL. Row-level security made the planner's cost
+  estimate for a short filtered collection page cross the JIT thresholds, and
+  compiling that plan took several times longer than running it. An operator
+  who wants JIT back adds `-c jit=on` to the URL `options`. Poolers must run in
+  session mode; one that drops the startup options needs `jit = off` set on the
+  runtime role. See
+  [set a PostgreSQL baseline](../operate/breg/#set-a-postgresql-baseline).
+
+{/* Evidence: crates/registry-breg/src/postgres/config.rs, with_jit_disabled() and
+    jit_is_disabled_before_operator_options_so_an_operator_can_enable_it;
+    crates/registry-breg/src/startup.rs, prepare_database_startup();
+    crates/registry-breg/tests/postgres_startup.rs,
+    prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays_unavailable_until_preloaded. */}
+
 - `breg` logs, and `bregctl doctor` reports under a new `advisories` list,
   value-free PostgreSQL advisories: the connection numbers one replica's pool
   is compared with, a warning when that pool may take more than half of the

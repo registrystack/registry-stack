@@ -219,18 +219,25 @@ inside an open transaction for longer, the transaction rolls back, and the pool 
 replacement. Operator command and migration sessions carry no such bound, and no session carries
 `idle_session_timeout`.
 
+Runtime sessions also carry `jit=off` as a startup option placed before any options in the URL,
+because row-level security inflates the planner's cost estimate for short collection pages past
+the JIT thresholds and compiling such a plan costs more than running it. To turn JIT back on,
+add `-c jit=on` to the URL `options`; operator command and migration sessions keep the server
+default.
+
 **Pool in session mode only.** Base Registry Engine holds session-level advisory locks and sets
 session settings, so a pooler in front of it must hand each client one server connection until
 the client disconnects. Transaction pooling is not supported. PgBouncer raises an error for a
 startup parameter it does not track unless `ignore_startup_parameters` lists it, and ignores a
 listed one; with `options` in that list it ignores the unknown parameters inside `options`,
-including the idle bound
+including the idle bound and `jit=off`
 ([PgBouncer configuration](https://www.pgbouncer.org/config.html#ignore_startup_parameters)). When
-a pooler drops the startup options, set the bound on the runtime role, where it then also applies
+a pooler drops the startup options, set both on the runtime role, where they then also apply
 to operator commands that connect as that role:
 
 ```sql
 ALTER ROLE registry_runtime SET idle_in_transaction_session_timeout = '120s';
+ALTER ROLE registry_runtime SET jit = off;
 ```
 
 **Record statement timings.** Add `pg_stat_statements` to `shared_preload_libraries`, restart
@@ -264,6 +271,7 @@ settings; `doctor` reads the values the server actually runs with.
 {/* Evidence: crates/registry-breg/src/postgres/baseline.rs, advise() and connection_budget(),
     a_pool_over_half_of_usable_connections_warns_and_half_does_not() and vacuum_settings_that_are_off_warn();
     crates/registry-breg/src/postgres/config.rs, name_session(), with_idle_in_transaction_session_timeout(),
+    with_jit_disabled(), jit_is_disabled_before_operator_options_so_an_operator_can_enable_it(),
     sessions_carry_the_process_name_unless_the_url_names_one();
     crates/registry-breg/src/startup.rs, SERVER_IDLE_IN_TRANSACTION_TIMEOUT and prepare_database_startup();
     crates/registry-breg/src/mutation/action.rs, acquire_hook_proposal_lock();
