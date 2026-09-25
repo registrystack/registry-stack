@@ -673,8 +673,17 @@ impl RuntimeConfig {
         }
         self.validate_secret_references()?;
         let policy_path = self.policy_path();
+        // The bounded expression refusal comes before the typed project read,
+        // which would otherwise report a typed field holding `${...}` as a
+        // type error quoting it. A document the shared reader cannot parse is
+        // left to the project read, which reports its own diagnostic first.
+        if let Err(error) = reject_authored_environment_expressions(&policy_path) {
+            if matches!(error, RuntimeConfigError::Load(_)) {
+                CaseworkProject::load(&policy_path).map_err(RuntimeConfigError::Project)?;
+            }
+            return Err(error);
+        }
         let project = CaseworkProject::load(&policy_path).map_err(RuntimeConfigError::Project)?;
-        reject_authored_environment_expressions(&policy_path)?;
         let package_digest = verify_policy_package(&policy_path, &project)
             .map_err(RuntimeConfigError::PolicyPackage)?;
         if self.listener.tls_termination == TlsTermination::OperatorControlledUpstream
@@ -934,21 +943,15 @@ impl RuntimeConfig {
         &self,
         secrets: &SecretResolver,
     ) -> Result<(TokenVerifierConfig, std::sync::Arc<JwksFetcher>), RuntimeConfigError> {
-        let discovery_config = OidcDiscoveryConfig {
-            issuer: self.authentication.oidc.provider.issuer.clone(),
-            jwks_uri_override: self
-                .authentication
-                .oidc
-                .provider
-                .jwks_source
-                .uri()
-                .map(str::to_owned),
-            discovery_timeout: Duration::from_secs(5),
-            max_doc_bytes: 1024 * 1024,
-        };
         let fetcher = match &self.authentication.oidc.provider.jwks_source {
             JwksSource::Uri { uri } => JwksFetcher::new(uri.clone(), JwksFetcherConfig::defaults()),
             JwksSource::Discovery {} => {
+                let discovery_config = OidcDiscoveryConfig {
+                    issuer: self.authentication.oidc.provider.issuer.clone(),
+                    jwks_uri_override: None,
+                    discovery_timeout: Duration::from_secs(5),
+                    max_doc_bytes: 1024 * 1024,
+                };
                 let discovery = fetch_discovery(&discovery_config)
                     .await
                     .map_err(|_| RuntimeConfigError::Oidc)?;
@@ -1493,6 +1496,33 @@ reviewProducers:
         );
         assert_eq!(error.path(), "package.root/casework.yaml");
         assert!(error.to_string().contains("runtime.yaml only"), "{error}");
+    }
+
+    /// A typed field holding an expression would otherwise fail the typed
+    /// project read first, with a type error that quotes the expression.
+    #[test]
+    fn an_environment_expression_in_a_non_string_field_is_the_authored_refusal() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        let project = SOURCE_CONTEXT_REVIEW_PROJECT
+            .replace("recoveryDays: 7", "recoveryDays: ${RECOVERY_DAYS}");
+        assert_ne!(project, SOURCE_CONTEXT_REVIEW_PROJECT);
+        write_package_with_project(&package, &project);
+        let operator = write_operator(
+            root.path(),
+            &operator_value(&package, "development-loopback"),
+        );
+        let error = RuntimeConfig::load(&operator).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                RuntimeConfigError::PolicyEnvironmentExpression { field }
+                    if field == "reviewProducers.0.recoveryDays"
+            ),
+            "{error}"
+        );
+        assert!(!error.to_string().contains("RECOVERY_DAYS"), "{error}");
     }
 
     #[test]
