@@ -239,6 +239,24 @@ impl ConnectionConfig {
         Ok(self)
     }
 
+    /// Turn off PostgreSQL JIT compilation for the session.
+    ///
+    /// Row-level security policies make the planner's cost estimate for a
+    /// short, filtered collection page exceed the JIT thresholds, and
+    /// compiling that plan costs far more than executing it. The setting
+    /// travels as a connection-start option placed before any options the
+    /// connection URL carries, so an operator who wants JIT can still ask for
+    /// it with `-c jit=on`.
+    pub fn with_jit_disabled(mut self) -> Self {
+        let disabled = "-c jit=off";
+        let options = match self.postgres.get_options() {
+            Some(existing) if !existing.trim().is_empty() => format!("{disabled} {existing}"),
+            _ => disabled.to_owned(),
+        };
+        self.postgres.options(&options);
+        self
+    }
+
     pub(crate) fn postgres(&self) -> Config {
         self.postgres.clone()
     }
@@ -499,6 +517,29 @@ mod tests {
             bare.postgres().get_options(),
             Some("-c idle_in_transaction_session_timeout=1500")
         );
+    }
+
+    #[test]
+    fn jit_is_disabled_before_operator_options_so_an_operator_can_enable_it() {
+        let config = ConnectionConfig::require_tls(
+            "postgresql://registry_runtime@registry.example/registry?options=-c%20jit%3Don",
+            valid_bounds(),
+        )
+        .expect("configuration parses")
+        .with_jit_disabled()
+        .with_idle_in_transaction_session_timeout(Duration::from_secs(120))
+        .expect("the bound is valid");
+        assert_eq!(
+            config.postgres().get_options(),
+            Some("-c jit=off -c jit=on -c idle_in_transaction_session_timeout=120000")
+        );
+        let bare = ConnectionConfig::require_tls(
+            "postgresql://registry_runtime@registry.example/registry",
+            valid_bounds(),
+        )
+        .expect("configuration parses")
+        .with_jit_disabled();
+        assert_eq!(bare.postgres().get_options(), Some("-c jit=off"));
     }
 
     #[test]

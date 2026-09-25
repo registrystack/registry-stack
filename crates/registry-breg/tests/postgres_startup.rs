@@ -648,7 +648,8 @@ async fn prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays
         .query_one(
             "SELECT current_setting('application_name'),
                     setting,
-                    source
+                    source,
+                    current_setting('jit')
              FROM pg_catalog.pg_settings
              WHERE name = 'idle_in_transaction_session_timeout'",
             &[],
@@ -658,6 +659,11 @@ async fn prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays
     assert_eq!(row.get::<_, String>(0), "breg");
     assert_eq!(row.get::<_, String>(1), "120000");
     assert_eq!(row.get::<_, String>(2), "client");
+    assert_eq!(
+        row.get::<_, String>(3),
+        "off",
+        "runtime sessions never JIT-compile a row-level-security plan"
+    );
     drop(client);
     let codes = prepared
         .postgres_advisories()

@@ -770,6 +770,7 @@ async fn prepare_database_startup(
 ) -> Result<(RuntimePool, VerifiedStartup, Vec<BaselineAdvisory>)> {
     let pool = connection
         .clone()
+        .with_jit_disabled()
         .with_idle_in_transaction_session_timeout(SERVER_IDLE_IN_TRANSACTION_TIMEOUT)
         .map_err(|_| StartupError::DatabaseConnection)?
         .build_pool()
