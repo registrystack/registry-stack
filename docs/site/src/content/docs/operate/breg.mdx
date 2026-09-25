@@ -718,8 +718,10 @@ executor bindings, the authentication profile's claim mapping, accepted algorith
 against the package this runtime serves, and the field-encryption provider and its stored key. It
 names the first dependency that refuses and stops there. A run that reaches the end lists every
 dependency it checked, then the PostgreSQL advisories from
-[Set a PostgreSQL baseline](#set-a-postgresql-baseline). Advisories never change the exit status;
-this server runs the default connection settings with `database.pool.maxSize: 8`:
+[Set a PostgreSQL baseline](#set-a-postgresql-baseline). Advisories never change the exit status.
+This run is against a local `bregctl dev` session, whose runtime file sets
+`database.pool.maxSize: 4` and whose PostgreSQL keeps its default connection settings and has no
+`pg_stat_statements` extension, so it also reports the statement-timings advisory:
 
 ```text
 10 dependency checks passed.
@@ -738,11 +740,14 @@ PostgreSQL advisories:
   information  postgres.connections.budget
     one replica's runtime pool takes at most half of the connections PostgreSQL leaves
     for ordinary roles
-    poolMaxSize                   8
+    poolMaxSize                   4
     maxConnections                100
     superuserReservedConnections  3
     reservedConnections           0
     usableConnections             97
+  information  postgres.pg_stat_statements.unavailable
+    pg_stat_statements is not installed in this database, so per-statement timings are
+    unavailable when diagnosing load
 ```
 
 ```json
@@ -767,12 +772,18 @@ PostgreSQL advisories:
       "severity": "information",
       "message": "one replica's runtime pool takes at most half of the connections PostgreSQL leaves for ordinary roles",
       "observed": {
-        "poolMaxSize": 8,
+        "poolMaxSize": 4,
         "maxConnections": 100,
         "superuserReservedConnections": 3,
         "reservedConnections": 0,
         "usableConnections": 97
       }
+    },
+    {
+      "code": "postgres.pg_stat_statements.unavailable",
+      "severity": "information",
+      "message": "pg_stat_statements is not installed in this database, so per-statement timings are unavailable when diagnosing load",
+      "observed": {}
     }
   ]
 }
@@ -830,7 +841,10 @@ runtime file for each activation. Store secrets separately.
     doctor_reports_postgres_advisories_after_the_passing_checks_without_failing();
     crates/registry-breg/src/postgres/baseline.rs, a_healthy_server_reports_only_the_connection_numbers();
     crates/registry-breg/src/api/mod.rs;
-    crates/registry-breg/src/startup.rs. */}
+    crates/registry-breg/src/startup.rs.
+    The doctor output above was captured on 2026-09-25 from a local bregctl dev session
+    (products/breg/DEV.md), running `bregctl doctor` in both formats against the session's
+    runtime file with SSL_CERT_FILE naming the session's PostgreSQL CA. */}
 
 ## Turn encryption on over existing plaintext
 
