@@ -867,7 +867,10 @@ and the report says so: `startsAtArchivedHead` is `true`, `firstSequence` names 
 file, and `startPrevHash` is the head it continues. A chain retained from its beginning reports
 `startsAtArchivedHead: false` and a `null` `startPrevHash`. A chain the key does not verify, a missing or
 altered record, or a head the chain never held is refused with code `casework.audit.refused` and
-exit status 1, naming the path at fault.
+exit status 1, naming the path at fault. While a runtime writes to the active file, `--from-head`
+reads only the numbered files; a head they do not hold is refused as not verified rather than as
+missing, because it may lie in the active file. Retry once that file is sealed, or with Casework
+stopped.
 
 `caseworkctl audit export --runtime-config <file> --output <path>` writes the verified retained
 records, byte for byte as JSONL, to a new owner-only file. It refuses a destination that already

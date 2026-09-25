@@ -47,7 +47,9 @@
 - `caseworkctl audit verify` checks the retained audit chain against
   `audit.hashKeyRef` and reports the last record's `headHash`; with
   `--from-head` it refuses a chain that no longer holds a head recorded
-  earlier. `caseworkctl audit export --output` writes the verified retained
+  earlier. While a runtime writes to the active file, a head the sealed
+  files do not hold is refused as not verified, with a retry step, rather
+  than as missing. `caseworkctl audit export --output` writes the verified retained
   records to a new owner-only JSONL file and never replaces an existing one.
   Both refuse with `casework.audit.refused`. The `auditChain` object in their
   reports and in `doctor` gains `headHash`, `firstSequence`,

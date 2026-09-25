@@ -847,7 +847,9 @@ impl AuditHead {
 /// does not verify under the key is refused with the same description the
 /// runtime gives at startup. With `from_head`, the chain must also hold that
 /// head: as a verified record, or as the archived head its first retained
-/// record continues.
+/// record continues. A head the sealed files do not hold while a running
+/// writer keeps the active file from being read is reported as unverified,
+/// not missing.
 pub fn verify_audit_journal(
     path: &Path,
     secrets: &SecretResolver,
@@ -869,6 +871,11 @@ pub fn verify_audit_journal(
     if let Some(head) = from_head {
         let continues = verification.start_prev_hash == Some(hash_hex(&head.0));
         if !found && !continues {
+            // A running writer keeps the active file from being read, and a
+            // head recorded while Casework was stopped may lie in it.
+            if !verification.active_segment_verified && path.is_file() {
+                return Err(RuntimeError::AuditHeadUnverified);
+            }
             return Err(RuntimeError::AuditHeadMissing);
         }
     }
@@ -3058,6 +3065,85 @@ mod tests {
         assert_eq!(verified.first_sequence, Some(2));
     }
 
+    #[tokio::test]
+    async fn a_head_in_the_active_file_a_writer_holds_is_not_reported_missing() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (_root, audit) = audit_directory_with_mode(0o700);
+        let path = audit.join("casework.jsonl");
+        let secret_root = tempfile::tempdir().expect("temporary secret root");
+        let secret = secret_root.path().join("casework-audit-key");
+        std::fs::write(&secret, b"casework-audit-active-secret-32-bytes").expect("write secret");
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600))
+            .expect("restrict audit secret");
+        let secrets =
+            SecretResolver::new([SecretProvider::File], secret_root.path()).expect("resolver");
+        let profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+            b"casework-audit-active-secret-32-bytes".to_vec(),
+        ))
+        .expect("audit profile");
+        let sink = DurableSegmentedJsonlSink::open(&path, 600).expect("writer lock");
+        let chain = profile
+            .bootstrap_or_start_empty(&sink)
+            .await
+            .expect("keyed bootstrap");
+        for index in 0..5 {
+            chain
+                .append(
+                    &sink,
+                    serde_json::json!({
+                        "eventId": Uuid::new_v4().to_string(),
+                        "event": "casework.synthetic",
+                        "index": index,
+                    }),
+                )
+                .await
+                .expect("append");
+        }
+        let active = std::fs::read_to_string(&path).expect("read the active file");
+        let active_head = AuditHead::parse(
+            serde_json::from_str::<Value>(active.lines().last().expect("an active record"))
+                .expect("envelope")["record_hash"]
+                .as_str()
+                .expect("record hash"),
+        )
+        .expect("head");
+
+        // A running writer holds the active file, so its records are not read.
+        let unverified = verify_audit_journal(
+            &path,
+            &secrets,
+            "secret:file/casework-audit-key",
+            Some(active_head),
+        )
+        .expect_err("a head the walk could not reach is not confirmed");
+        assert!(
+            matches!(unverified, RuntimeError::AuditHeadUnverified),
+            "{unverified}"
+        );
+
+        drop(chain);
+        drop(sink);
+        let verified = verify_audit_journal(
+            &path,
+            &secrets,
+            "secret:file/casework-audit-key",
+            Some(active_head),
+        )
+        .expect("with the writer stopped the active file holds the head");
+        assert!(verified.active_segment_verified);
+        let unknown = AuditHead::parse(&"ab".repeat(32)).expect("well-formed head");
+        assert!(matches!(
+            verify_audit_journal(
+                &path,
+                &secrets,
+                "secret:file/casework-audit-key",
+                Some(unknown),
+            ),
+            Err(RuntimeError::AuditHeadMissing)
+        ));
+    }
+
     fn upgrade_audit_profile() -> AuditProfile {
         AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
             b"casework-audit-upgrade-secret-32-bytes".to_vec(),
@@ -3561,6 +3647,11 @@ pub enum RuntimeError {
          the journal was replaced or truncated after that head was recorded"
     )]
     AuditHeadMissing,
+    #[error(
+        "the sealed audit files do not hold the given head, and the active audit file, which \
+         may hold it, was not read because a Casework runtime is writing to it"
+    )]
+    AuditHeadUnverified,
     #[error("the Casework audit journal and database disagree: {0}")]
     AuditJournalDiverged(String),
     #[error(

@@ -51,6 +51,8 @@ const AUDIT_OUTPUT_ACTION: &str = "Choose an absolute --output path in an existi
 const AUDIT_HEAD_ACTION: &str = "Pass the headHash an earlier audit verify or export reported \
      for this journal, or restore audit.path and the segments beside it from the backup that \
      holds that head, then retry.";
+const AUDIT_HEAD_ACTIVE_ACTION: &str = "Retry after the running Casework runtime seals the \
+     active audit file, or stop every Casework runtime that writes to audit.path, then retry.";
 const AUDIT_RUNNING_ACTION: &str = "Stop every Casework runtime that uses this database and \
      audit.path, then retry.";
 const AUDIT_CHAIN_PATH: &str = "runtime.yaml:/audit/path";
@@ -175,6 +177,9 @@ fn chain_failure(error: RuntimeError) -> anyhow::Error {
         ),
         RuntimeError::AuditHeadMissing => {
             refusal(error.to_string(), AUDIT_HEAD_PATH, AUDIT_HEAD_ACTION)
+        }
+        RuntimeError::AuditHeadUnverified => {
+            refusal(error.to_string(), AUDIT_HEAD_PATH, AUDIT_HEAD_ACTIVE_ACTION)
         }
         error => refusal(error.to_string(), AUDIT_CHAIN_PATH, AUDIT_CHAIN_ACTION),
     }
@@ -310,6 +315,16 @@ fn output_exists() -> anyhow::Error {
 mod tests {
     use super::*;
     use std::io::Write as _;
+
+    #[test]
+    fn a_head_the_running_writer_hides_asks_for_a_retry_not_a_restore() {
+        let refused = chain_failure(RuntimeError::AuditHeadUnverified);
+        let refusal = refused
+            .downcast_ref::<AuditRefusal>()
+            .expect("an unverified head is a refusal");
+        assert_eq!(refusal.path, AUDIT_HEAD_PATH);
+        assert_eq!(refusal.action, AUDIT_HEAD_ACTIVE_ACTION);
+    }
 
     #[test]
     fn a_destination_that_appears_after_staging_is_never_replaced() {
