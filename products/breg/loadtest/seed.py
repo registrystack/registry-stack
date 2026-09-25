@@ -51,6 +51,7 @@ NAME_NOUNS = [
 ]
 BATCH_ITEMS = 100
 HEADER_REFRESH_SECONDS = 210
+SEED_IN_PROGRESS = "seed-in-progress.json"
 
 
 class SeedError(RuntimeError):
@@ -255,6 +256,30 @@ def seed_entity(
     return ids
 
 
+def begin_seed(seed_dir: Path, identity: dict[str, Any]) -> None:
+    """Record the seed parameters before the first batch request.
+
+    Idempotency keys follow the route and chunk index, and the records follow
+    --seed and --count, so a retry with the recorded parameters replays every
+    committed batch and resumes. A retry with other parameters would leave the
+    committed records behind, skewing reads and database size, so the marker
+    refuses it until the id pools are recorded.
+    """
+    marker = seed_dir / SEED_IN_PROGRESS
+    if not seed_dir.is_symlink() and marker.is_file():
+        recorded = json.loads(marker.read_text(encoding="utf-8"))
+        if recorded != identity:
+            raise SeedError(
+                f"an earlier seed at {seed_dir} did not complete with {json.dumps(recorded, sort_keys=True)}; "
+                "rerun seed.py with those parameters to resume it, or run down.sh and start a fresh environment"
+            )
+        return
+    if seed_dir.exists() or seed_dir.is_symlink():
+        raise SeedError(f"seed evidence already exists at {seed_dir}; start a fresh environment to reseed")
+    seed_dir.mkdir(mode=0o700)
+    marker.write_text(json.dumps(identity, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Seed the load-test Registry")
     parser.add_argument("--count", type=int, default=100_000, help="establishments to seed")
@@ -292,7 +317,11 @@ def main() -> int:
     environment = {"breg_url": breg_url}
     tokens = DevTokenSource(helper, Path(bregctl), Path(project), "loadtest-driver")
     seed_dir = arguments.run_dir / "seed"
-    seed_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        begin_seed(seed_dir, {"establishments": arguments.count, "seed": arguments.seed})
+    except (SeedError, OSError, ValueError) as error:
+        print(error, file=sys.stderr)
+        return 2
     seed_summary = seed_dir / "seed-summary.json"
     seed_summary.unlink(missing_ok=True)
     rng = random.Random(arguments.seed)
@@ -353,6 +382,7 @@ def main() -> int:
         + "\n",
         encoding="utf-8",
     )
+    (seed_dir / SEED_IN_PROGRESS).unlink()
     print(f"Seeded and recorded id pools under {seed_dir}")
     return 0
 

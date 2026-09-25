@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
+import io
 import json
+import os
 import shutil
 import subprocess
 import tempfile
 import threading
 import unittest
+import unittest.mock
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -24,6 +28,10 @@ LOADENV_SPEC = importlib.util.spec_from_file_location("casework_loadtest_environ
 assert LOADENV_SPEC and LOADENV_SPEC.loader
 loadenv = importlib.util.module_from_spec(LOADENV_SPEC)
 LOADENV_SPEC.loader.exec_module(loadenv)
+SEED_SPEC = importlib.util.spec_from_file_location("casework_loadtest_seed", LOADTEST / "seed.py")
+assert SEED_SPEC and SEED_SPEC.loader
+seed = importlib.util.module_from_spec(SEED_SPEC)
+SEED_SPEC.loader.exec_module(seed)
 
 EXAMPLE = REPOSITORY / "products/casework/examples/standalone-decision"
 HEADER = "Authorization: Bearer header.payload.signature\n"
@@ -383,6 +391,40 @@ class RegistryCaseworkHarnessTests(unittest.TestCase):
             (root / "env.json").write_text(json.dumps(environment), encoding="utf-8")
             with self.assertRaises(loadenv.LoadtestError):
                 loadenv.describe(root, repository)
+
+    def test_seed_refuses_to_run_over_a_partial_seed(self) -> None:
+        self.addCleanup(os.umask, os.umask(0o077))
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / ".run"
+            run_dir.mkdir()
+            (run_dir / "env.json").write_text("{}", encoding="utf-8")
+            described = subprocess.CompletedProcess(
+                [], 0, stdout="http://127.0.0.1:4321 /opt/caseworkctl /opt/project\n", stderr=""
+            )
+            arguments = ["seed.py", "--count", "200", "--run-dir", str(run_dir)]
+            stderr = io.StringIO()
+            with (
+                unittest.mock.patch.object(seed.sys, "argv", arguments),
+                unittest.mock.patch.object(seed.subprocess, "run", return_value=described),
+                unittest.mock.patch.object(
+                    seed, "create_requests", side_effect=seed.SeedError("create worker failed")
+                ) as create,
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(stderr),
+            ):
+                self.assertEqual(seed.main(), 1)
+                marker = json.loads((run_dir / "seed" / seed.SEED_IN_PROGRESS).read_text(encoding="utf-8"))
+                self.assertEqual(marker["reviewRequests"], 200)
+                self.assertEqual(create.call_args.args[-1], marker["nonce"])
+                self.assertEqual(seed.main(), 2)
+            self.assertEqual(create.call_count, 1)
+            self.assertIn("did not complete", stderr.getvalue())
+            self.assertIn("run down.sh and start a fresh environment", stderr.getvalue())
+            with self.assertRaisesRegex(seed.SeedError, "did not complete"):
+                seed.begin_seed(run_dir / "seed", {"nonce": "another"})
+            (run_dir / "seed" / seed.SEED_IN_PROGRESS).unlink()
+            with self.assertRaisesRegex(seed.SeedError, "already exists"):
+                seed.begin_seed(run_dir / "seed", {"nonce": "another"})
 
     def test_shell_entrypoints_parse(self) -> None:
         for script in ("up.sh", "down.sh", "run.sh", "dbstats.sh"):

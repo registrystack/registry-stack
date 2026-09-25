@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
+import io
 import json
 import shutil
 import subprocess
 import tempfile
 import threading
 import unittest
+import unittest.mock
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -23,6 +26,10 @@ LOADENV_SPEC = importlib.util.spec_from_file_location("loadtest_environment", MO
 assert LOADENV_SPEC and LOADENV_SPEC.loader
 loadenv = importlib.util.module_from_spec(LOADENV_SPEC)
 LOADENV_SPEC.loader.exec_module(loadenv)
+SEED_SPEC = importlib.util.spec_from_file_location("breg_loadtest_seed", MODULE_PATH.parent.parent / "seed.py")
+assert SEED_SPEC and SEED_SPEC.loader
+seed = importlib.util.module_from_spec(SEED_SPEC)
+SEED_SPEC.loader.exec_module(seed)
 
 
 class BaseRegistryEngineHarnessTests(unittest.TestCase):
@@ -198,6 +205,46 @@ class BaseRegistryEngineHarnessTests(unittest.TestCase):
             (root / "env.json").write_text(json.dumps(environment), encoding="utf-8")
             with self.assertRaises(loadenv.LoadtestError):
                 loadenv.describe(root, repository)
+
+    def test_seed_resumes_a_partial_seed_only_with_its_recorded_parameters(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / ".run"
+            run_dir.mkdir()
+            (run_dir / "env.json").write_text("{}", encoding="utf-8")
+            described = subprocess.CompletedProcess([], 0, stdout="http://127.0.0.1:4321 /opt/bregctl /opt/project\n", stderr="")
+            attempts: list[str] = []
+
+            def seed_entity(_url, _route, records, _tokens, _workers, label):  # type: ignore[no-untyped-def]
+                attempts.append(label)
+                if label == "establishments" and attempts.count(label) == 1:
+                    raise seed.SeedError("batch to establishments failed with 503")
+                return [f"{label}-{index}" for index in range(len(records))]
+
+            def run(*parameters: str) -> tuple[int, str]:
+                stderr = io.StringIO()
+                with (
+                    unittest.mock.patch.object(seed.sys, "argv", ["seed.py", *parameters, "--run-dir", str(run_dir)]),
+                    unittest.mock.patch.object(seed.subprocess, "run", return_value=described),
+                    unittest.mock.patch.object(seed, "seed_entity", side_effect=seed_entity),
+                    contextlib.redirect_stdout(io.StringIO()),
+                    contextlib.redirect_stderr(stderr),
+                ):
+                    return seed.main(), stderr.getvalue()
+
+            marker = run_dir / "seed" / seed.SEED_IN_PROGRESS
+            self.assertEqual(run("--count", "20", "--seed", "7")[0], 1)
+            self.assertEqual(json.loads(marker.read_text(encoding="utf-8")), {"establishments": 20, "seed": 7})
+            status, message = run("--count", "40", "--seed", "7")
+            self.assertEqual(status, 2)
+            self.assertIn("did not complete", message)
+            self.assertIn("run down.sh and start a fresh environment", message)
+            self.assertEqual(attempts, ["businesses", "establishments"])
+            self.assertEqual(run("--count", "20", "--seed", "7")[0], 0)
+            self.assertFalse(marker.exists())
+            self.assertTrue((run_dir / "seed/seed-summary.json").is_file())
+            status, message = run("--count", "20", "--seed", "7")
+            self.assertEqual(status, 2)
+            self.assertIn("already exists", message)
 
     def test_shell_entrypoints_parse(self) -> None:
         loadtest = MODULE_PATH.parent.parent
