@@ -149,7 +149,7 @@ EXPOSE 8080
 ENV RELAY_HEALTHCHECK_URL=http://127.0.0.1:8080/health
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/usr/local/bin/relay", "healthcheck"]
 ENTRYPOINT ["/usr/local/bin/relay"]
-CMD ["serve", "--runtime", "/etc/relay/runtime.yaml"]
+CMD ["serve", "--runtime-config", "/etc/relay/runtime.yaml"]
 """
 # Each entry pins the runtime instructions that bind one HTTP-probed service to
 # its configuration. Discovery reads no environment variable, so it declares no
@@ -608,7 +608,7 @@ def check_repository(root: Path = ROOT) -> list[str]:
         )
         require(
             runtime_stage(text),
-            'CMD ["serve", "--runtime", "/etc/relay/runtime.yaml"]',
+            'CMD ["serve", "--runtime-config", "/etc/relay/runtime.yaml"]',
             relative,
             "absolute Relay V2 runtime configuration binding",
             failures,

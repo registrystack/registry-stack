@@ -4,7 +4,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::future::IntoFuture;
-use std::io::Read as _;
 use std::net::SocketAddr;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -15,7 +14,7 @@ use jsonwebtoken::Algorithm;
 use registry_platform_audit::{
     require_audit_under, AuditDestination, AuditWriter, PersistentRootFault,
 };
-use registry_platform_config::{SecretProvider, SecretResolver};
+use registry_platform_config::SecretResolver;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
     fetch_discovery_at_with_policy, fetch_discovery_with_policy, JwksFetcher, JwksFetcherConfig,
@@ -29,8 +28,7 @@ use crate::audit::RelayAudit;
 use crate::auth::RelayAuthenticator;
 use crate::contract::{
     contract_has_protected_access, runtime_cursor_configuration_is_valid, IssuerAlgorithm,
-    IssuerKeyTransport, IssuerProfile, IssuerRuntime, RegistryContract, RelayRuntime,
-    MAXIMUM_RUNTIME_BYTES,
+    IssuerKeyTransport, IssuerProfile, OidcRuntime, RegistryContract, RelayRuntime, RuntimeRefusal,
 };
 use crate::cursor::CursorKey;
 use crate::package::{load_package, VerifiedPackage};
@@ -49,12 +47,17 @@ const HEALTHCHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const MAXIMUM_HEALTH_BODY_BYTES: usize = 128;
 const HEALTH_BODY: &[u8] = br#"{"status":"ok"}"#;
 
-#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum StartupError {
     #[error("the runtime configuration could not be loaded")]
     RuntimeLoad,
     #[error("the runtime configuration is invalid")]
     RuntimeInvalid,
+    /// The shared runtime-configuration loader or a shared block refused the
+    /// file. The message names the field and never a configured value or the
+    /// runtime file's path.
+    #[error("the runtime configuration is refused: {0}")]
+    RuntimeRefused(String),
     #[error("the sealed package could not be verified")]
     PackageInvalid,
     #[error("a runtime source could not be verified")]
@@ -133,6 +136,10 @@ async fn prepare_loaded(loaded: LoadedRuntime) -> Result<PreparedRelay, StartupE
     // The package is the governed trust root. Verify it before opening issuer,
     // audit, source, or listener resources.
     let package = load_package(&paths.package).map_err(|_| StartupError::PackageInvalid)?;
+    runtime
+        .package
+        .verify_digest(Some(&package.manifest.package_revision))
+        .map_err(|error| StartupError::RuntimeRefused(error.to_string()))?;
     validate_runtime_contract(&runtime, &package.contract)?;
 
     let observed = observe_sources(&runtime_root, &package.contract, &runtime)
@@ -156,9 +163,13 @@ async fn prepare_loaded(loaded: LoadedRuntime) -> Result<PreparedRelay, StartupE
         .map_err(|_| StartupError::SourceInvalid)?,
     );
 
-    let authenticator = build_authenticator(runtime.authentication.issuer.as_ref()).await?;
+    let authenticator = build_authenticator(runtime.authentication.oidc.as_ref()).await?;
+    let secrets = runtime
+        .secret_providers
+        .resolver()
+        .map_err(|_| StartupError::RuntimeInvalid)?;
     let audit = build_audit(paths.audit).await?;
-    let (cursor_key, cursor_maximum_age) = build_cursor(&runtime_root, &runtime)?;
+    let (cursor_key, cursor_maximum_age) = build_cursor(&secrets, &runtime)?;
     let quota = runtime.quotas.as_ref().map(|quota| QuotaConfig {
         requests_per_minute: quota.requests_per_minute,
         burst: quota.burst,
@@ -179,11 +190,7 @@ async fn prepare_loaded(loaded: LoadedRuntime) -> Result<PreparedRelay, StartupE
     if !service.is_ready().await {
         return Err(StartupError::NotReady);
     }
-    let bind = runtime
-        .server
-        .bind
-        .parse()
-        .map_err(|_| StartupError::RuntimeInvalid)?;
+    let bind = runtime.listener.bind.socket_addr();
     let shutdown_grace = runtime
         .shutdown
         .as_ref()
@@ -340,134 +347,23 @@ pub async fn healthcheck(raw_url: &str) -> Result<(), StartupError> {
     Ok(())
 }
 
+/// Read the runtime once through the shared loader: an absolute, lexically
+/// normal path with no symbolic-link component, a trusted owner and mode on
+/// the file and every ancestor, and a bounded size. The directory holding the
+/// file is the root that relative source and audit bindings resolve against.
 fn load_runtime(path: &Path) -> Result<(PathBuf, RelayRuntime), StartupError> {
-    let path_metadata = validate_runtime_path(path)?;
-    let mut file = fs::File::open(path).map_err(|_| StartupError::RuntimeLoad)?;
-    let opened_metadata = file.metadata().map_err(|_| StartupError::RuntimeLoad)?;
-    if !opened_metadata.is_file()
-        || opened_metadata.len() == 0
-        || opened_metadata.len() > MAXIMUM_RUNTIME_BYTES
-        || !same_file(&path_metadata, &opened_metadata)
-        || !safe_runtime_permissions(&opened_metadata)
-    {
-        return Err(StartupError::RuntimeInvalid);
-    }
-    let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
-    file.by_ref()
-        .take(MAXIMUM_RUNTIME_BYTES.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|_| StartupError::RuntimeLoad)?;
-    let final_metadata = validate_runtime_path(path)?;
-    if bytes.len() as u64 > MAXIMUM_RUNTIME_BYTES || !same_file(&final_metadata, &opened_metadata) {
-        return Err(StartupError::RuntimeInvalid);
-    }
-    let yaml = std::str::from_utf8(&bytes).map_err(|_| StartupError::RuntimeInvalid)?;
-    let runtime = RelayRuntime::parse_yaml(yaml).map_err(|_| StartupError::RuntimeInvalid)?;
-    let parent = path
+    let runtime: RelayRuntime = RelayRuntime::loader()
+        .load(path)
+        .map_err(|error| StartupError::RuntimeRefused(RuntimeRefusal::from(error).to_string()))?
+        .config;
+    runtime
+        .check()
+        .map_err(|error| StartupError::RuntimeRefused(error.to_string()))?;
+    let root = path
         .parent()
-        .filter(|value| !value.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let root = parent
-        .canonicalize()
-        .map_err(|_| StartupError::RuntimeLoad)?;
+        .ok_or(StartupError::RuntimeLoad)?
+        .to_path_buf();
     Ok((root, runtime))
-}
-
-#[cfg(unix)]
-fn validate_runtime_path(path: &Path) -> Result<fs::Metadata, StartupError> {
-    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
-    let absolute = if path.is_absolute() {
-        path.to_owned()
-    } else {
-        std::env::current_dir()
-            .map_err(|_| StartupError::RuntimeLoad)?
-            .join(path)
-    };
-    let effective_user = rustix::process::geteuid().as_raw();
-    let component_count = absolute.components().count();
-    let mut current = PathBuf::new();
-    let mut final_metadata = None;
-    for (index, component) in absolute.components().enumerate() {
-        current.push(component.as_os_str());
-        let metadata = fs::symlink_metadata(&current).map_err(|_| StartupError::RuntimeLoad)?;
-        let final_component = index + 1 == component_count;
-        if metadata.file_type().is_symlink()
-            || if final_component {
-                !metadata.is_file()
-                    || !trusted_unix_owner_and_mode(
-                        metadata.uid(),
-                        metadata.permissions().mode(),
-                        effective_user,
-                        false,
-                    )
-            } else {
-                !metadata.is_dir()
-                    || !trusted_unix_owner_and_mode(
-                        metadata.uid(),
-                        metadata.permissions().mode(),
-                        effective_user,
-                        true,
-                    )
-            }
-        {
-            return Err(StartupError::RuntimeInvalid);
-        }
-        if final_component {
-            final_metadata = Some(metadata);
-        }
-    }
-    final_metadata.ok_or(StartupError::RuntimeInvalid)
-}
-
-#[cfg(unix)]
-fn trusted_unix_owner_and_mode(
-    owner: u32,
-    mode: u32,
-    effective_user: u32,
-    allow_root_sticky: bool,
-) -> bool {
-    let trusted_owner = owner == 0 || owner == effective_user;
-    let not_writable_by_others = mode & 0o022 == 0;
-    let protected_shared_ancestor = allow_root_sticky && owner == 0 && mode & 0o1000 != 0;
-    trusted_owner && (not_writable_by_others || protected_shared_ancestor)
-}
-
-#[cfg(not(unix))]
-fn validate_runtime_path(_path: &Path) -> Result<fs::Metadata, StartupError> {
-    // This trust contract depends on Unix ownership and sticky-directory
-    // semantics. Platforms without an equivalent implementation fail closed.
-    Err(StartupError::RuntimeInvalid)
-}
-
-#[cfg(unix)]
-fn same_file(path_metadata: &fs::Metadata, opened_metadata: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-
-    path_metadata.dev() == opened_metadata.dev() && path_metadata.ino() == opened_metadata.ino()
-}
-
-#[cfg(unix)]
-fn safe_runtime_permissions(metadata: &fs::Metadata) -> bool {
-    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
-    trusted_unix_owner_and_mode(
-        metadata.uid(),
-        metadata.permissions().mode(),
-        rustix::process::geteuid().as_raw(),
-        false,
-    )
-}
-
-#[cfg(not(unix))]
-fn same_file(path_metadata: &fs::Metadata, opened_metadata: &fs::Metadata) -> bool {
-    path_metadata.len() == opened_metadata.len()
-        && path_metadata.modified().ok() == opened_metadata.modified().ok()
-}
-
-#[cfg(not(unix))]
-fn safe_runtime_permissions(_metadata: &fs::Metadata) -> bool {
-    false
 }
 
 struct RuntimePaths {
@@ -478,7 +374,7 @@ struct RuntimePaths {
 
 impl RuntimePaths {
     fn resolve(root: &Path, runtime: &RelayRuntime) -> Result<Self, StartupError> {
-        let package = resolve_binding(root, &runtime.package_path)?;
+        let package = runtime.package.root.clone();
         reject_existing_symlink_components(&package)?;
         let mut sources = BTreeMap::new();
         for (identifier, source) in runtime.sources.iter() {
@@ -565,7 +461,7 @@ fn validate_runtime_contract(
     if !runtime_cursor_configuration_is_valid(contract, runtime) {
         return Err(StartupError::CursorInvalid);
     }
-    if contract_has_protected_access(contract) && runtime.authentication.issuer.is_none() {
+    if contract_has_protected_access(contract) && runtime.authentication.oidc.is_none() {
         return Err(StartupError::IssuerUnavailable);
     }
     let has_lookup = contract
@@ -593,7 +489,7 @@ fn require_packaged_source_schemas(
 }
 
 async fn build_authenticator(
-    issuer: Option<&IssuerRuntime>,
+    issuer: Option<&OidcRuntime>,
 ) -> Result<Option<RelayAuthenticator>, StartupError> {
     let Some(issuer) = issuer else {
         return Ok(None);
@@ -605,7 +501,7 @@ async fn build_authenticator(
 }
 
 async fn build_authenticator_with_profile(
-    issuer: &IssuerRuntime,
+    issuer: &OidcRuntime,
     profile: IssuerProfile,
     fetch_url_policy: &FetchUrlPolicy,
 ) -> Result<RelayAuthenticator, StartupError> {
@@ -676,7 +572,7 @@ async fn build_authenticator_with_profile(
 /// issuer without weakening the production HTTPS and SSRF policy.
 #[cfg(feature = "tooling")]
 pub async fn build_authenticator_for_supervised_local_development(
-    issuer: &IssuerRuntime,
+    issuer: &OidcRuntime,
 ) -> Result<RelayAuthenticator, StartupError> {
     let profile = issuer
         .supervised_local_profile()
@@ -684,7 +580,7 @@ pub async fn build_authenticator_for_supervised_local_development(
     build_authenticator_with_profile(issuer, profile, &FetchUrlPolicy::dev()).await
 }
 
-fn verifier_issuer_profile(issuer: &IssuerRuntime) -> Result<IssuerProfile, StartupError> {
+fn verifier_issuer_profile(issuer: &OidcRuntime) -> Result<IssuerProfile, StartupError> {
     issuer.profile().ok_or(StartupError::RuntimeInvalid)
 }
 
@@ -703,13 +599,13 @@ async fn build_audit(destination: AuditDestination) -> Result<RelayAudit, Startu
 }
 
 fn build_cursor(
-    runtime_root: &Path,
+    secrets: &SecretResolver,
     runtime: &RelayRuntime,
 ) -> Result<(Option<Arc<CursorKey>>, Duration), StartupError> {
     let Some(cursor) = &runtime.cursor else {
         return Ok((None, DEFAULT_CURSOR_MAXIMUM_AGE));
     };
-    let secret = resolve_secret(runtime_root, &cursor.integrity_key_ref)?;
+    let secret = resolve_secret(secrets, &cursor.integrity_key_ref)?;
     let key =
         CursorKey::new(secret.expose_secret().to_vec()).map_err(|_| StartupError::CursorInvalid)?;
     Ok((
@@ -718,16 +614,14 @@ fn build_cursor(
     ))
 }
 
+/// Resolve one reference through exactly the providers `secretProviders`
+/// declares; a `secret:file/` reference resolves under
+/// `secretProviders.file.root`.
 fn resolve_secret(
-    runtime_root: &Path,
+    secrets: &SecretResolver,
     reference: &str,
 ) -> Result<registry_platform_config::ProtectedSecret, StartupError> {
-    let resolver = SecretResolver::new(
-        [SecretProvider::Environment, SecretProvider::File],
-        runtime_root,
-    )
-    .map_err(|_| StartupError::RuntimeInvalid)?;
-    resolver
+    secrets
         .resolve(reference)
         .map_err(|_| StartupError::SecretUnavailable)
 }
@@ -785,34 +679,86 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_config::DEFAULT_MAX_RUNTIME_CONFIG_BYTES;
     use std::io::Write as _;
     use tokio::io::AsyncWriteExt as _;
 
+    fn runtime_text(bind: &str, package_root: &str, source: &str, audit: &str) -> String {
+        format!(
+            "apiVersion: registry.registrystack.org/relay-runtime/v1alpha1\nkind: RelayRuntimeConfig\nlistener: {{bind: '{bind}'}}\npackage: {{root: {package_root}}}\nsecretProviders: {{environment: {{}}}}\nsources: {{{source}: {{path: fixture.sqlite}}}}\naudit: {audit}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 1}}\n"
+        )
+    }
+
+    fn closed_runtime(source: &str) -> RelayRuntime {
+        RelayRuntime::parse_yaml(&runtime_text(
+            "127.0.0.1:18081",
+            "/srv/relay/package",
+            source,
+            "{path: var/audit.jsonl}",
+        ))
+        .expect("closed runtime")
+    }
+
+    fn resolver(providers: &str) -> SecretResolver {
+        serde_norway::from_str::<registry_platform_config::SecretProvidersConfig>(providers)
+            .expect("secret providers parse")
+            .resolver()
+            .expect("secret resolver")
+    }
+
     #[test]
-    fn environment_and_owner_only_file_secrets_use_the_closed_resolver() {
+    fn secrets_resolve_only_through_the_declared_providers() {
         const VARIABLE: &str = "RELAY_V2_SECRET_RESOLVER_TEST";
         std::env::set_var(VARIABLE, "synthetic-test-key-material-32-bytes-long");
         let temporary = tempfile::tempdir().expect("temporary root");
+        let root = temporary.path().canonicalize().expect("canonical root");
+        let secrets_root = root.join("secrets");
+        fs::create_dir(&secrets_root).expect("secrets root");
+        let both = resolver(&format!(
+            "environment: {{}}\nfile: {{root: {}}}",
+            secrets_root.display()
+        ));
         assert_eq!(
-            resolve_secret(temporary.path(), &format!("secret:env/{VARIABLE}"))
+            resolve_secret(&both, &format!("secret:env/{VARIABLE}"))
                 .expect("environment secret")
                 .expose_secret(),
             b"synthetic-test-key-material-32-bytes-long"
         );
 
-        let path = temporary.path().join("cursor-integrity-key");
+        // A file reference resolves under secretProviders.file.root, never
+        // beside the runtime configuration.
+        let beside_runtime = root.join("cursor-integrity-key");
+        fs::write(
+            &beside_runtime,
+            b"synthetic-other-key-material-32-bytes-long",
+        )
+        .expect("decoy writes");
+        let path = secrets_root.join("cursor-integrity-key");
         fs::write(&path, b"synthetic-file-key-material-32-bytes-long").expect("secret writes");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
-                .expect("secret becomes owner-only");
+            for file in [&path, &beside_runtime] {
+                fs::set_permissions(file, fs::Permissions::from_mode(0o600))
+                    .expect("secret becomes owner-only");
+            }
         }
         assert_eq!(
-            resolve_secret(temporary.path(), "secret:file/cursor-integrity-key")
+            resolve_secret(&both, "secret:file/cursor-integrity-key")
                 .expect("file secret")
                 .expose_secret(),
             b"synthetic-file-key-material-32-bytes-long"
+        );
+
+        let environment_only = resolver("environment: {}");
+        assert_eq!(
+            resolve_secret(&environment_only, "secret:file/cursor-integrity-key").err(),
+            Some(StartupError::SecretUnavailable)
+        );
+        let file_only = resolver(&format!("file: {{root: {}}}", secrets_root.display()));
+        assert_eq!(
+            resolve_secret(&file_only, &format!("secret:env/{VARIABLE}")).err(),
+            Some(StartupError::SecretUnavailable)
         );
 
         #[cfg(unix)]
@@ -820,7 +766,7 @@ mod tests {
             use std::os::unix::fs::PermissionsExt as _;
             fs::set_permissions(&path, fs::Permissions::from_mode(0o640))
                 .expect("secret becomes unsafe");
-            assert!(resolve_secret(temporary.path(), "secret:file/cursor-integrity-key").is_err());
+            assert!(resolve_secret(&both, "secret:file/cursor-integrity-key").is_err());
         }
     }
 
@@ -845,26 +791,31 @@ mod tests {
 
     #[test]
     fn issuer_discovery_is_one_exact_https_profile() {
-        let issuer = |discovery_url: &str| {
-            serde_norway::from_str::<IssuerRuntime>(&format!(
-                "id: issuer\ndiscoveryUrl: {discovery_url}\naudience: registry\ntokenTypes: [at+jwt]\nalgorithms: [EdDSA]\n"
+        let issuer = |issuer: &str| {
+            serde_norway::from_str::<OidcRuntime>(&format!(
+                "issuer: '{issuer}'\naudience: registry\ntokenTypes: [at+jwt]\nalgorithms: [EdDSA]\n"
             ))
             .expect("issuer shape parses")
         };
-        let valid = "https://identity.example.invalid/.well-known/openid-configuration";
-        let profile = verifier_issuer_profile(&issuer(valid)).expect("issuer profile validates");
+        let profile = verifier_issuer_profile(&issuer("https://identity.example.invalid"))
+            .expect("issuer profile validates");
         assert_eq!(
             profile.issuer_identifier,
             "https://identity.example.invalid"
         );
         assert_eq!(profile.algorithm, IssuerAlgorithm::EdDsa);
+        assert_eq!(
+            profile.key_transport,
+            IssuerKeyTransport::Discovery(
+                "https://identity.example.invalid/.well-known/openid-configuration".to_owned()
+            )
+        );
 
         for invalid in [
-            "https://operator:credential@identity.example.invalid/.well-known/openid-configuration",
-            "https://identity.example.invalid/.well-known/openid-configuration?tenant=x",
-            "https://identity.example.invalid/.well-known/openid-configuration#fragment",
-            "https://identity.example.invalid/.well-known/oauth-authorization-server",
-            "https:///.well-known/openid-configuration",
+            "https://operator:credential@identity.example.invalid",
+            "https://identity.example.invalid/?tenant=x",
+            "https://identity.example.invalid/#fragment",
+            "http://identity.example.invalid",
         ] {
             assert!(matches!(
                 verifier_issuer_profile(&issuer(invalid)),
@@ -874,7 +825,7 @@ mod tests {
 
         #[cfg(feature = "tooling")]
         {
-            let loopback = issuer("http://127.0.0.1:18080/.well-known/openid-configuration");
+            let loopback = issuer("http://127.0.0.1:18080");
             assert!(matches!(
                 verifier_issuer_profile(&loopback),
                 Err(StartupError::RuntimeInvalid)
@@ -884,9 +835,9 @@ mod tests {
                 .expect("tooling accepts one canonical loopback issuer");
             assert_eq!(profile.issuer_identifier, "http://127.0.0.1:18080");
             for invalid in [
-                "http://localhost:18080/.well-known/openid-configuration",
-                "http://127.0.0.1/.well-known/openid-configuration",
-                "http://10.0.0.1:18080/.well-known/openid-configuration",
+                "http://localhost:18080",
+                "http://127.0.0.1",
+                "http://10.0.0.1:18080",
             ] {
                 assert!(issuer(invalid).supervised_local_profile().is_none());
             }
@@ -908,49 +859,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn runtime_trust_rejects_foreign_owners_and_limits_the_sticky_exception() {
-        let effective_user = 1000;
-        assert!(trusted_unix_owner_and_mode(
-            effective_user,
-            0o100600,
-            effective_user,
-            false
-        ));
-        assert!(trusted_unix_owner_and_mode(
-            0,
-            0o100644,
-            effective_user,
-            false
-        ));
-        assert!(!trusted_unix_owner_and_mode(
-            effective_user + 1,
-            0o100600,
-            effective_user,
-            false
-        ));
-        assert!(trusted_unix_owner_and_mode(
-            0,
-            0o041777,
-            effective_user,
-            true
-        ));
-        assert!(!trusted_unix_owner_and_mode(
-            0,
-            0o041777,
-            effective_user,
-            false
-        ));
-        assert!(!trusted_unix_owner_and_mode(
-            effective_user,
-            0o041777,
-            effective_user,
-            true
-        ));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_runtime_below_a_writable_ancestor_is_rejected() {
+    fn a_runtime_below_a_writable_ancestor_is_refused_without_naming_the_path() {
         use std::os::unix::fs::PermissionsExt as _;
 
         let temporary = tempfile::tempdir().expect("temporary root");
@@ -960,12 +869,29 @@ mod tests {
         fs::set_permissions(&writable, fs::Permissions::from_mode(0o777))
             .expect("ancestor becomes unsafe");
         let runtime = writable.join("runtime.yaml");
-        fs::write(&runtime, b"runtime").expect("runtime fixture");
+        fs::write(
+            &runtime,
+            runtime_text(
+                "127.0.0.1:0",
+                "/srv/relay/package",
+                "db",
+                "{path: var/audit.jsonl}",
+            ),
+        )
+        .expect("runtime fixture");
 
-        assert_eq!(
-            validate_runtime_path(&runtime).err(),
-            Some(StartupError::RuntimeInvalid)
-        );
+        let Err(StartupError::RuntimeRefused(message)) = load_runtime(&runtime) else {
+            panic!("a runtime below a writable ancestor must be refused");
+        };
+        assert!(!message.contains(&*root.to_string_lossy()), "{message}");
+    }
+
+    #[test]
+    fn a_relative_runtime_path_is_refused() {
+        assert!(matches!(
+            load_runtime(Path::new("runtime.yaml")),
+            Err(StartupError::RuntimeRefused(_))
+        ));
     }
 
     #[tokio::test]
@@ -1028,15 +954,18 @@ mod tests {
         drop(reservation);
 
         let temporary = tempfile::tempdir().expect("temporary root");
-        let path = temporary
+        let root = temporary
             .path()
             .canonicalize()
-            .expect("canonical temporary root")
-            .join("runtime.yaml");
+            .expect("canonical temporary root");
+        let path = root.join("runtime.yaml");
         fs::write(
             &path,
-            format!(
-                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '{address}'}}\npackagePath: missing-package\nsources: {{db: {{path: source.sqlite}}}}\nauthentication: {{issuer: null}}\naudit: {{path: var/audit.jsonl}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 1}}\n"
+            runtime_text(
+                &address.to_string(),
+                &root.join("missing-package").display().to_string(),
+                "db",
+                "{path: var/audit.jsonl}",
             ),
         )
         .expect("write runtime");
@@ -1102,10 +1031,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
         let protected = contract(
             "{read: {defaultAccessProfile: default, accessProfiles: {default: {access: {scope: registry:record:read}, disclosureProfile: default}}}}",
         );
-        let protected_runtime = RelayRuntime::parse_yaml(
-            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18081'}\npackagePath: package\nsources: {records: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {path: var/audit.jsonl}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
-        )
-        .expect("closed runtime");
+        let protected_runtime = closed_runtime("records");
         assert_eq!(
             validate_runtime_contract(&protected_runtime, &protected),
             Err(StartupError::IssuerUnavailable)
@@ -1130,10 +1056,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
         protected_statistics.statistical_datasets[0].access =
             serde_norway::from_str("{scope: registry:statistics:read}")
                 .expect("protected statistical access");
-        let protected_statistics_runtime = RelayRuntime::parse_yaml(
-            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18084'}\npackagePath: package\nsources: {db: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {path: var/audit.jsonl}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
-        )
-        .expect("closed runtime");
+        let protected_statistics_runtime = closed_runtime("db");
         assert_eq!(
             validate_runtime_contract(&protected_statistics_runtime, &protected_statistics),
             Err(StartupError::IssuerUnavailable)
@@ -1142,10 +1065,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
         let list = contract(
             "{list: {defaultAccessProfile: default, accessProfiles: {default: {access: public, disclosureProfile: default}}, filters: [], allowUnfiltered: true, orderBy: [id], pagination: {defaultPageSize: 10, maximumPageSize: 20}}}",
         );
-        let list_runtime = RelayRuntime::parse_yaml(
-            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18082'}\npackagePath: package\nsources: {records: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {path: var/audit.jsonl}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
-        )
-        .expect("closed runtime");
+        let list_runtime = closed_runtime("records");
         assert_eq!(
             validate_runtime_contract(&list_runtime, &list),
             Err(StartupError::CursorInvalid)
@@ -1154,10 +1074,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
         let lookup = contract(
             "{lookups: [{id: by-label, requestBody: {maximumBytes: 128, selectors: {label: {sourceColumn: label, type: string, minimumBytes: 1, maximumBytes: 32}}}, defaultAccessProfile: default, accessProfiles: {default: {access: public, disclosureProfile: default}}}]}",
         );
-        let mut lookup_runtime = RelayRuntime::parse_yaml(
-            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18083'}\npackagePath: package\nsources: {records: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {path: var/audit.jsonl}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
-        )
-        .expect("closed runtime");
+        let mut lookup_runtime = closed_runtime("records");
         assert_eq!(
             validate_runtime_contract(&lookup_runtime, &lookup),
             Err(StartupError::RuntimeInvalid)
@@ -1176,10 +1093,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
         let mut second_resource = contract.resources[0].clone();
         second_resource.id = "second-record".into();
         contract.resources.push(second_resource);
-        let mut runtime = RelayRuntime::parse_yaml(
-            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18084'}\npackagePath: package\nsources: {db: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {path: var/audit.jsonl}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
-        )
-        .expect("closed runtime");
+        let mut runtime = closed_runtime("db");
 
         assert_eq!(
             validate_runtime_contract(&runtime, &contract),
@@ -1196,9 +1110,9 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
             )
             .expect("protected read operation"),
         );
-        runtime.authentication.issuer = Some(
+        runtime.authentication.oidc = Some(
             serde_norway::from_str(
-                "id: issuer\ndiscoveryUrl: https://issuer.example.invalid/.well-known/openid-configuration\naudience: registry\ntokenTypes: [at+jwt]\nalgorithms: [EdDSA]\n",
+                "issuer: https://issuer.example.invalid\naudience: registry\ntokenTypes: [at+jwt]\nalgorithms: [EdDSA]\n",
             )
             .expect("issuer runtime"),
         );
@@ -1222,9 +1136,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
         let path = root.join("runtime.yaml");
         fs::write(
             &path,
-            format!(
-                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:0'}}\npackagePath: package\nsources: {{db: {{path: source.sqlite}}}}\nauthentication: {{issuer: null}}\naudit: {audit}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 1}}\n"
-            ),
+            runtime_text("127.0.0.1:0", "/srv/relay/package", "db", audit),
         )
         .expect("write runtime");
         path
@@ -1386,13 +1298,33 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
     #[test]
     fn a_runtime_file_is_bounded_and_strict() {
         let temporary = tempfile::tempdir().expect("temporary root");
-        let path = temporary.path().join("runtime.yaml");
+        let root = temporary.path().canonicalize().expect("canonical root");
+        let path = root.join("runtime.yaml");
         let mut file = fs::File::create(&path).expect("runtime file");
         writeln!(
             file,
-            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:0'}}\npackagePath: package\nsources: {{db: {{path: source.sqlite}}}}\nauthentication: {{issuer: null}}\naudit: {{path: var/audit.jsonl}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 1}}\nunknown: true"
+            "{}unknown: true",
+            runtime_text(
+                "127.0.0.1:0",
+                "/srv/relay/package",
+                "db",
+                "{path: var/audit.jsonl}"
+            )
         )
         .expect("write runtime");
-        assert_eq!(load_runtime(&path), Err(StartupError::RuntimeInvalid));
+        assert!(matches!(
+            load_runtime(&path),
+            Err(StartupError::RuntimeRefused(_))
+        ));
+
+        fs::write(
+            &path,
+            vec![b' '; DEFAULT_MAX_RUNTIME_CONFIG_BYTES as usize + 1],
+        )
+        .expect("oversized");
+        assert!(matches!(
+            load_runtime(&path),
+            Err(StartupError::RuntimeRefused(_))
+        ));
     }
 }

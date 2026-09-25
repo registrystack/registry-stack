@@ -292,6 +292,29 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg/tests/postgres_change_requests.rs, an_operator_resubmits_or_closes_a_review_its_authority_lost. */}
 
 - **Breaking:** Registry Discovery reads `runtime.yaml` through the shared
+
+- BREAKING: Registry Relay reads `runtime.yaml` through the shared
+  runtime configuration loader. The file now opens with
+  `apiVersion: registry.registrystack.org/relay-runtime/v1alpha1` and
+  `kind: RelayRuntimeConfig`; `server.bind` is `listener.bind`,
+  `packagePath` is an absolute `package.root` with an optional
+  `package.expectedDigest` pin, and `authentication.issuer` is `authentication.oidc`
+  with `issuer` and a `jwksSource` of `kind: discovery` or `kind: uri`. A
+  `secret:file/` reference resolves under the declared
+  `secretProviders.file.root` instead of beside the runtime file, and
+  `secret:env/` needs `secretProviders.environment`. `relay check` and
+  `relay serve` take the required absolute `--runtime-config FILE`; the
+  `--runtime` flag, the `RELAY_RUNTIME` variable, and the default path are
+  gone. A removed key is refused with the name of its replacement. See
+  [operate Registry Relay](../operate/relay/#bind-deployment-inputs-without-editing-the-package).
+
+{/* Evidence: crates/registry-relay-v2/src/contract.rs, RELAY_REMOVED_RUNTIME_KEYS and
+    removed_runtime_keys_are_refused_with_their_replacement;
+    crates/registry-relay-v2/src/cli.rs, the_runtime_configuration_is_named_explicitly_on_every_command;
+    release/docker/Dockerfile.relay. */}
+
+- BREAKING: Registry Discovery reads `runtime.yaml` through the shared
+
   runtime configuration loader. The file now opens with
   `apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1` and
   `kind: DiscoveryRuntimeConfig` instead of `schemaVersion`, and
@@ -305,7 +328,7 @@ relevant product pages on this site rather than duplicating release notes.
     removed_runtime_keys_name_their_replacements;
     release/docker/Dockerfile.discovery. */}
 
-- **Breaking:** Registry Render reads `runtime.yaml` through the shared
+- BREAKING: Registry Render reads `runtime.yaml` through the shared
   runtime configuration loader. The file now opens with
   `apiVersion: registry.registrystack.org/render-runtime/v1alpha1` and
   `kind: RenderRuntimeConfig`; `server.bind` is `listener.bind` and is
@@ -322,6 +345,20 @@ relevant product pages on this site rather than duplicating release notes.
 {/* Evidence: crates/registry-render/src/runtime.rs, RENDER_REMOVED_KEYS and load();
     crates/registry-render/src/cli.rs, Command::Serve;
     crates/registry-render/src/runtime.rs, removed_keys_name_their_replacements. */}
+
+- BREAKING: Registry Scheduling reads `runtime.yaml` through the shared
+  runtime configuration loader. `authentication.oidc.jwksUri` is removed
+  and refused with the name of its replacement, a `jwksSource` of
+  `kind: uri`; `listener.bind` is required and no longer defaults to a
+  loopback port; the file and every configured path are refused when they
+  pass through a symbolic link; and an environment expression such as
+  `${VAR}` in the authored `scheduling.yaml`, records, or fixtures is
+  refused with the field that holds it. `runtime.yaml` string values
+  accept `${VAR}` outside `*Ref` fields, and an optional
+  `package.expectedDigest` pins the policy the runtime starts on.
+
+{/* Evidence: crates/registry-scheduling/src/config.rs, SCHEDULING_REMOVED_KEYS and
+    a_removed_jwks_uri_names_its_replacement; products/scheduling/RUNTIME-CONFIG.md. */}
 
 ## v0.34.0 beta-46
 

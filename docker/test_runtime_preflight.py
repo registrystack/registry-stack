@@ -729,7 +729,7 @@ class RuntimePreflightTest(unittest.TestCase):
             native_returncode=2,
             native_stderr=(
                 "error: unexpected argument '--require-audit-under' found\n"
-                "\nUsage: relay check --runtime <RUNTIME>\n"
+                "\nUsage: relay check --runtime-config <FILE>\n"
             ),
             argv=[
                 "--compose-file",

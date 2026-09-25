@@ -35,5 +35,7 @@ pub mod transform;
 
 pub use cli::command;
 pub use compiler::{classification_inventory_digest, compile, CompileError};
-pub use contract::{RegistryContract, RelayRuntime};
+pub use contract::{
+    RegistryContract, RelayRuntime, RuntimeRefusal, RELAY_RUNTIME_API_VERSION, RELAY_RUNTIME_KIND,
+};
 pub use model::{CompileProfile, CompiledRegistry, ObservedSourceSchema};

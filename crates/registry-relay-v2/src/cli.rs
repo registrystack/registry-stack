@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use clap::{CommandFactory, Parser, Subcommand};
 
 const DEFAULT_HEALTHCHECK_URL: &str = "http://127.0.0.1:8080/health";
-const DEFAULT_RUNTIME_PATH: &str = "/etc/relay/runtime.yaml";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -24,9 +23,10 @@ pub enum Command {
     /// Validate the sealed package and every deployment dependency without
     /// taking the listener socket.
     Check {
-        /// Strict deployment binding for the sealed package and local resources.
-        #[arg(long, env = "RELAY_RUNTIME", default_value = DEFAULT_RUNTIME_PATH)]
-        runtime: PathBuf,
+        /// Absolute path of the runtime configuration that binds the sealed
+        /// package to local resources.
+        #[arg(long = "runtime-config", value_name = "FILE")]
+        runtime_config: PathBuf,
         /// Also prove the configured audit file resolves inside this absolute
         /// directory, which the deployment declares persistent.
         ///
@@ -41,9 +41,10 @@ pub enum Command {
     },
     /// Verify and activate one sealed Registry package, then serve it.
     Serve {
-        /// Strict deployment binding for the sealed package and local resources.
-        #[arg(long, env = "RELAY_RUNTIME")]
-        runtime: PathBuf,
+        /// Absolute path of the runtime configuration that binds the sealed
+        /// package to local resources.
+        #[arg(long = "runtime-config", value_name = "FILE")]
+        runtime_config: PathBuf,
     },
     /// Probe an unauthenticated Relay liveness endpoint.
     Healthcheck {
@@ -92,6 +93,8 @@ mod tests {
         let parsed = Cli::try_parse_from([
             "relay",
             "check",
+            "--runtime-config",
+            "/etc/relay/runtime.yaml",
             "--require-audit-under",
             "/var/lib/relay/audit",
         ])
@@ -109,7 +112,13 @@ mod tests {
         );
 
         // The claim is an addition to the existing check, never a replacement.
-        let plain = Cli::try_parse_from(["relay", "check"]).expect("check parses without it");
+        let plain = Cli::try_parse_from([
+            "relay",
+            "check",
+            "--runtime-config",
+            "/etc/relay/runtime.yaml",
+        ])
+        .expect("check parses without it");
         assert!(matches!(
             plain.command,
             Command::Check {
@@ -120,19 +129,28 @@ mod tests {
     }
 
     #[test]
-    fn check_uses_the_official_container_runtime_path_by_default() {
-        let command = command();
-        let check = command
-            .find_subcommand("check")
-            .expect("check subcommand exists");
-        let runtime = check
-            .get_arguments()
-            .find(|argument| argument.get_id() == "runtime")
-            .expect("check runtime argument exists");
-        assert_eq!(runtime.get_env(), Some(OsStr::new("RELAY_RUNTIME")));
-        assert_eq!(
-            runtime.get_default_values(),
-            [OsStr::new(DEFAULT_RUNTIME_PATH)]
-        );
+    fn the_runtime_configuration_is_named_explicitly_on_every_command() {
+        for subcommand in ["check", "serve"] {
+            let command = command();
+            let found = command
+                .find_subcommand(subcommand)
+                .expect("subcommand exists");
+            let runtime = found
+                .get_arguments()
+                .find(|argument| argument.get_id() == "runtime_config")
+                .expect("runtime configuration argument exists");
+            assert_eq!(runtime.get_long(), Some("runtime-config"));
+            assert_eq!(runtime.get_env(), None, "{subcommand}");
+            assert!(runtime.get_default_values().is_empty(), "{subcommand}");
+            assert!(runtime.is_required_set(), "{subcommand}");
+            assert!(Cli::try_parse_from(["relay", subcommand]).is_err());
+            assert!(Cli::try_parse_from([
+                "relay",
+                subcommand,
+                "--runtime",
+                "/etc/relay/runtime.yaml"
+            ])
+            .is_err());
+        }
     }
 }

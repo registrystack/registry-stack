@@ -426,7 +426,7 @@ class ReleaseImagePolicyTests(unittest.TestCase):
             dockerfile = root / "release/docker/Dockerfile.relay"
             dockerfile.write_text(
                 dockerfile.read_text(encoding="utf-8").replace(
-                    'CMD ["serve", "--runtime", "/etc/relay/runtime.yaml"]',
+                    'CMD ["serve", "--runtime-config", "/etc/relay/runtime.yaml"]',
                     'CMD ["serve"]',
                 ),
                 encoding="utf-8",

@@ -110,11 +110,12 @@ needs no separate CLI catalog because the codes are fixed by the frozen public c
 ### Source access and startup refusal
 
 Relay V2 verifies its package, source, and runtime bindings before it starts listening. `relay
-serve --runtime <file>` refuses an unsafe path (a symbolic link, or a component with the wrong
-owner or mode), a package whose re-derived bytes do not match what is installed at `packagePath`,
+serve --runtime-config <file>` refuses an unsafe path (a symbolic link, or a component with the wrong
+owner or mode), a package whose re-derived bytes do not match what is installed at `package.root`,
 a source whose SQLite schema fingerprint has drifted from what the package pinned, a missing
 mandatory audit input, or a runtime binding incompatible with the package, such as a protected
-access profile paired with `authentication.issuer: null`. Correct the mismatched package, source,
+access profile with no `authentication.oidc` block. A removed or unknown runtime key is refused
+with the field name and, for a removed key, its replacement. Correct the mismatched package, source,
 or runtime file and restart.
 
 {/* TODO[evidence]: confirm whether relay serve reports a stable, documented code per

@@ -76,7 +76,8 @@ served by that deployment at `GET /openapi.json`. See
 Two Relay surfaces belong in this table instead of an OpenAPI artifact:
 
 - The Registry contract grammar, `relay.registrystack.org/v2alpha1`, covering `registry.yaml`
-  (`kind: RegistryContract`) and `runtime.yaml` (`kind: RelayRuntime`). Both are closed shapes: an
+  (`kind: RegistryContract`) and `runtime.yaml` (`apiVersion:
+  registry.registrystack.org/relay-runtime/v1alpha1`, `kind: RelayRuntimeConfig`). Both are closed shapes: an
   unrecognized key is a parse failure rather than an ignored field. Compatibility for recognized
   keys follows the release policy.
 - The sealed package format, `relay.registrystack.org/package/v1alpha3`, whose manifest is

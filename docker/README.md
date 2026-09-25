@@ -119,7 +119,7 @@ declared root, and an existing symlink inside the root that leads out of it,
 both fail closed. The option proves containment only; the destination writability
 checks still have to pass.
 
-Relay provides the equivalent `relay check --runtime
+Relay provides the equivalent `relay check --runtime-config
 /etc/relay/runtime.yaml`, including the same `--require-audit-under` option.
 For a Compose deployment containing Evidence, Relay, or both, use
 `docker/runtime-preflight.py` to verify the common container posture first and

@@ -54,6 +54,88 @@ Migration:
    has no path to prove.
 5. Reseal packages; the audit event schema artifact changed.
 
+### BREAKING: read runtime.yaml through the shared configuration loader
+
+`relay` reads its deployment binding through the shared Registry Stack runtime
+configuration loader, with the shared listener, package, secret-provider, and
+OIDC blocks. There is no compatibility reader: every removed key is refused
+with a diagnostic naming the field and its replacement, never its value.
+
+Before:
+
+```yaml
+apiVersion: relay.registrystack.org/v2alpha1
+kind: RelayRuntime
+server: {bind: "127.0.0.1:8080"}
+packagePath: package
+authentication:
+  issuer:
+    id: institutional-issuer
+    discoveryUrl: https://identity.example.invalid/.well-known/openid-configuration
+    audience: relay-registry
+    tokenTypes: [at+jwt]
+    algorithms: [ES256]
+audit: {path: var/audit.jsonl}
+```
+
+After:
+
+```yaml
+apiVersion: registry.registrystack.org/relay-runtime/v1alpha1
+kind: RelayRuntimeConfig
+listener: {bind: "127.0.0.1:8080"}
+package: {root: /srv/relay/package}
+secretProviders:
+  file: {root: /run/secrets/relay}
+authentication:
+  oidc:
+    issuer: https://identity.example.invalid
+    audience: relay-registry
+    tokenTypes: [at+jwt]
+    algorithms: [ES256]
+audit: {path: var/audit.jsonl}
+```
+
+Migration:
+
+1. Replace the envelope with `apiVersion:
+   registry.registrystack.org/relay-runtime/v1alpha1` and `kind:
+   RelayRuntimeConfig`.
+2. Move `server.bind` to `listener.bind`, and `packagePath` to `package.root`
+   as an absolute path. Optionally pin the package with
+   `package.expectedDigest`, its `sha256:` package revision; any other package
+   at that path is refused.
+3. Declare `secretProviders`. A `secret:file/` reference now resolves under
+   `secretProviders.file.root` instead of the runtime file's directory; move
+   the secret files there. A `secret:env/` reference needs
+   `secretProviders.environment: {}`.
+4. Keep the `audit` block in the shared destination shape described above;
+   `audit.sink` and `audit.integrityKeyRef` are refused with a diagnostic
+   naming `audit.path`. `cursor.integrityKeyRef` is unchanged.
+5. Replace `authentication.issuer` with `authentication.oidc`. `issuer` is the
+   exact token `iss` value; `id`, `trustedIssuer`, `discoveryUrl`, and
+   `jwksUrl` are gone. The key source is `jwksSource`: the default `kind:
+   discovery` reads the issuer's own `/.well-known/openid-configuration`, and
+   `kind: uri` with `uri` binds one exact JWKS endpoint, which may sit on
+   another host. A discovery document served from a different origin than the
+   issuer is no longer configurable; use `kind: uri` with the JWKS URL it
+   named. `kind: static` is refused. Omit `authentication.oidc` when every
+   access rule is public.
+6. `relay check` and `relay serve` take the required absolute
+   `--runtime-config <FILE>`. The `--runtime` flag, the `RELAY_RUNTIME`
+   environment variable, and the `/etc/relay/runtime.yaml` default for `relay
+   check` are gone. The container image passes `--runtime-config
+   /etc/relay/runtime.yaml` in its default command.
+
+Values other than secret references may use `${VAR}` and `${VAR:-default}`
+substitution; a field whose name ends in `Ref` refuses it. The runtime file
+must be absolute, free of symbolic links, at most 1 MiB, and owned by root or
+the service identity with no group- or world-writable ancestor other than a
+root-owned sticky directory. `relayctl` and the editor check the runtime with
+an empty environment, so a substitution without a default is reported there.
+`relayctl init` writes a starter whose `package.root` reads
+`RELAY_PACKAGE_ROOT` and defaults to `/srv/relay/package`.
+
 ## v0.26.0 - 2026-09-03
 
 ### BREAKING: adopt Registry Record profile v1

@@ -18,7 +18,7 @@ workspace = true
 
 [features]
 default = []
-schema = ["dep:schemars", "registry-platform-audit/schema"]
+schema = ["dep:schemars", "registry-platform-audit/schema", "registry-platform-config/schema"]
 tooling = ["dep:tempfile", "registry-platform-sqlite/fixture"]
 
 [dependencies]

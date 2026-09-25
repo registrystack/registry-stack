@@ -81,7 +81,7 @@ REQ-PR-RELAY-102: Package verification MUST re-derive the compiled Registry from
 
 REQ-PR-RELAY-103: The package revision MUST be a SHA-256 digest over the canonical JSON of the package manifest. It is an integrity digest, not an authenticity proof: any party can recompute it. Relay packages are unsigned, and a deployment MUST NOT treat a matching package revision as evidence of who produced the package.
 
-REQ-PR-RELAY-104: Governed contract input and deployment binding MUST be separate closed documents. The contract is `kind: RegistryContract`, the binding is `kind: RelayRuntime`, both at `apiVersion: relay.registrystack.org/v2alpha1`, and both MUST reject unknown fields at every nested structure rather than ignore them. A governed field MUST NOT be accepted from the deployment binding.
+REQ-PR-RELAY-104: Governed contract input and deployment binding MUST be separate closed documents. The contract is `kind: RegistryContract` at `apiVersion: relay.registrystack.org/v2alpha1`, the binding is `kind: RelayRuntimeConfig` at `apiVersion: registry.registrystack.org/relay-runtime/v1alpha1`, and both MUST reject unknown fields at every nested structure rather than ignore them. A governed field MUST NOT be accepted from the deployment binding.
 
 REQ-PR-RELAY-105: Every source MUST be a SQLite database read through the shared bounded read-only boundary, opened read-only, and MUST declare exactly one source profile, either `snapshot` or `live-read-only`. Each resource MUST bind to one named view in one declared source. Table names, SQL text, and hidden source columns MUST NOT appear on the public surface.
 
