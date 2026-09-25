@@ -21,7 +21,9 @@ The stack's other kind of environment variable is operator-named. Secret materia
 
 ## Configuration expansion
 
-Relay and Evidence Gateway expand no environment reference inside their configuration documents. Each parses its documents as written: Relay in `RelayRuntime::parse_yaml` and `RegistryContract::parse_yaml` (`crates/registry-relay-v2/src/contract.rs`), and Evidence Gateway in `RuntimeConfig::parse_yaml` (`crates/registry-evidence/src/config.rs`). Base Registry Engine is the exception: `breg` expands `${NAME}` expressions in its runtime file at load, as [its section](#base-registry-engine) records.
+Evidence Gateway expands no environment reference inside its configuration documents; it parses them as written in `RuntimeConfig::parse_yaml` (`crates/registry-evidence/src/config.rs`). Relay substitutes `${VAR}` and `${VAR:-default}` in string values of its runtime file after parsing, in `RelayRuntime::parse_yaml` (`crates/registry-relay-v2/src/contract.rs`), and refuses any `${...}` expression in the authored `registry.yaml` in `RegistryContract::parse_yaml`, so the reviewed contract is the one that runs. Base Registry Engine expands `${NAME}` expressions in its runtime file at load, as [its section](#base-registry-engine) records.
+
+There is no escape for a literal `${` in a runtime file that substitutes. Put the literal text in a variable and reference that variable: a substituted value is not expanded again.
 
 ## Relay
 
@@ -36,7 +38,7 @@ The `relay` binary reads these variables.
 
 ### Secret references in `runtime.yaml`
 
-Relay reads no variable for the runtime path: `relay check` and `relay serve` take it as the required absolute `--runtime-config <FILE>` flag. Relay resolves secrets through the providers `runtime.yaml` declares under `secretProviders`: `environment: {}` enables `secret:env/` references and `file: {root: <absolute directory>}` enables `secret:file/` references. Two fields take a reference: `audit.hashKeyRef`, which is required, and `cursor.integrityKeyRef`, which applies when the deployment enables cursors. Other runtime values may use `${VAR}` or `${VAR:-default}` substitution; a field ending in `Ref` refuses it.
+Relay reads no variable for the runtime path: `relay check` and `relay serve` take it as the required absolute `--runtime-config <FILE>` flag. Relay resolves secrets through the providers `runtime.yaml` declares under `secretProviders`: `environment: {}` enables `secret:env/` references and `file: {root: <absolute directory>}` enables `secret:file/` references. Two fields take a reference: `audit.hashKeyRef`, which is required, and `cursor.integrityKeyRef`, which applies when the deployment enables cursors. Other runtime values may use `${VAR}` or `${VAR:-default}` substitution; a field ending in `Ref` and every value under `secretProviders` refuse it, so the environment cannot choose which secret is read or where it comes from.
 
 | Grammar | Resolves to | Accepted name |
 | --- | --- | --- |
