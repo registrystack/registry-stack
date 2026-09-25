@@ -1068,7 +1068,7 @@ class GateInventoryTest(unittest.TestCase):
                 "Messaging product checkpoint wrapper",
             ),
             (
-                "cargo test --locked --profile ci -p registry-messaging --features postgres-test --test postgres_migrate",
+                "cargo test --locked -p registry-messaging --features postgres-test --test postgres_migrate",
                 "Messaging runtime PostgreSQL suite",
             ),
             (

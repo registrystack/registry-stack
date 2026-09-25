@@ -422,7 +422,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Messaging runtime PostgreSQL suite",
-        "cargo test --locked --profile ci -p registry-messaging --features postgres-test --test postgres_migrate",
+        "cargo test --locked -p registry-messaging --features postgres-test --test postgres_migrate",
     ),
     (
         "Release Linux Node client path filter",
