@@ -1370,7 +1370,9 @@ impl From<ConfigBlockError> for RuntimeRefusal {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RelayRuntime {
+    #[cfg_attr(feature = "schema", schemars(extend("const" = RELAY_RUNTIME_API_VERSION)))]
     pub api_version: String,
+    #[cfg_attr(feature = "schema", schemars(extend("const" = RELAY_RUNTIME_KIND)))]
     pub kind: String,
     pub listener: ListenerConfig,
     pub package: PackageConfig,
