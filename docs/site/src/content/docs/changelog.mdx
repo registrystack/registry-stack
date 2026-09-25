@@ -263,6 +263,22 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg/tests/migration_plan.rs, reviewed_chunked_backfill_refuses_a_chunk_size_beyond_the_commit_budget;
     crates/registry-breg/tests/postgres_migration.rs, reviewed_migration_history(). */}
 
+- Base Registry Engine (BReg) reports an accepted review whose result lookup
+  answers an empty `404` as `recovery.code: result-unknown-to-authority`
+  instead of leaving the code empty. The result poller serves a review that has a pending webhook
+  completion first and one its authority no longer knows last, and a pending
+  completion makes its review due at once. The new
+  `bregctl review-recovery resubmit` submits the exact retained review
+  request again under its original idempotency key, and
+  `bregctl review-recovery close` stops waiting on a review the authority will
+  never answer, reporting `operator-closed`. See
+  [operate Base Registry Engine](../operate/breg/#resubmit-or-close-a-review-the-authority-lost).
+
+{/* Evidence: crates/registry-breg/src/review_store.rs, poll_one_result and receive_completion;
+    crates/registry-breg/src/review_recovery.rs;
+    crates/registry-breg/tests/postgres_review_executor.rs, a_live_review_is_polled_before_one_its_authority_does_not_know and a_webhook_completion_makes_its_review_due_and_first_in_the_poll_queue;
+    crates/registry-breg/tests/postgres_change_requests.rs, an_operator_resubmits_or_closes_a_review_its_authority_lost. */}
+
 ## v0.34.0 beta-46
 
 - `bregctl apply` reports a migration database it could not reach, or an

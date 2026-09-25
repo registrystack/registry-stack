@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-08"
+last_reviewed: "2026-09-25"
 doc_type: how-to
 persona:
   - operator
@@ -827,21 +827,58 @@ the database directly.
 | --- | --- |
 | `remote-uncertain`, `cancellation-uncertain`, `result-lookup-uncertain`, `source-precondition-changed` | Wait through `application.nextAttemptAt` where present and re-read the request. The durable worker retries automatically. A later pending answer or a reconciled result clears `result-lookup-uncertain`. |
 | `token-unavailable` | Restore the configured review-authority credential provider, then let the durable worker retry. |
-| `submission-recovery-expired` | Reconcile the Casework request by the recorded idempotency and digest bindings before starting a new proposal. |
+| `submission-recovery-expired` | Reconcile the Casework request by the recorded idempotency and digest bindings. If the authority never received it, `bregctl review-recovery resubmit` submits the same retained request again; otherwise start a new proposal. |
 | `remote-refused` | Correct the producer, policy, or submitted contract reported by the review authority before submitting a new proposal. |
 | `cancellation-recovery-expired`, `cancellation-attempts-exhausted` | Reconcile the exact Casework request and cancellation idempotency key. If cancellation did not complete, correct the binding before starting a fresh proposal. |
 | `result-expired` | Start a new review; the authority no longer promises the result payload. |
-| `result-poll-attempts-exhausted` | The result lookup failed, or answered an empty `404`, until the attempt budget ran out; a review the authority keeps answering as pending is never failed. Reconcile the accepted Casework request by its retained binding. If the authority still holds a result, repair the result endpoint and start a new proposal; the retained binding identifies the review to close. |
+| `result-unknown-to-authority` | The authority answered the result lookup with an empty `404`: it no longer holds the accepted review, typically because the review environment was restored from an older backup or replaced. The engine keeps polling, after every review the authority still knows, until the attempt budget runs out. Once the authority is back in its intended state, run `bregctl review-recovery resubmit` to submit the same retained request again, or `bregctl review-recovery close` to stop waiting. |
+| `result-poll-attempts-exhausted` | The result lookup failed, or answered an empty `404`, until the attempt budget ran out; a review the authority keeps answering as pending is never failed. Reconcile the accepted Casework request by its retained binding. If the authority lost the review, `bregctl review-recovery resubmit` submits the same retained request again. If the authority still holds a result, repair the result endpoint and start a new proposal; the retained binding identifies the review to close. |
+| `operator-closed` | An operator closed the review with `bregctl review-recovery close`. Start a new proposal, or run `bregctl review-recovery resubmit` if the authority can take the same request again. |
 | `executor-unconfigured` | Restore the named executor in runtime configuration, then use the advertised authorized manual apply action for the same approved proposal. |
 | `executor-denied` | Restore the executor's current application grant, then use the advertised authorized manual apply action for the same approved proposal. |
 | `source-action-unavailable` | Restore the compiled source apply action and its access profile, then use the advertised authorized manual apply action for the same approved proposal. |
 | `source-response-invalid` | Repair the source deployment so its read and apply responses match the compiled contract, then use the advertised authorized manual apply action. |
 | `application-attempts-exhausted` | Inspect the source and executor logs using the request and application ids, then apply manually or create a new proposal. |
 
+### Resubmit or close a review the authority lost
+
+A review environment restored from an older backup, or replaced by a fresh one, no longer holds
+the reviews the engine submitted to it. Two commands recover one exact request proposal version. Both
+need the migration authority of the runtime file, take the registry lock, and append one audit
+record that names the request only by its keyed record reference.
+
+```bash
+bregctl --format json review-recovery resubmit \
+  --runtime-config /etc/registry/breg/runtime.yaml \
+  --request-entity correction-request \
+  --request-id 00000000-0000-4000-8000-000000000001 \
+  --proposal-version 1
+```
+
+`resubmit` accepts an accepted review coded `result-unknown-to-authority`, or a failed one coded
+`result-poll-attempts-exhausted`, `submission-recovery-expired`, or `operator-closed`. It releases
+the recorded authority binding, resets the attempt counters, restarts the recovery deadline with
+the configured window, and queues the retained request for submission under its original
+idempotency key. An authority that still holds the request answers with the same binding; one that
+lost it creates the review again. A result the old binding delivers later is recorded as
+unmatched.
+
+`close` accepts an accepted review without a result. It marks the submission failed with
+`operator-closed` and keeps the binding for reconciliation. It does not contact the authority, so
+cancel the review there as well if it still exists.
+
+Both refuse a withdrawn proposal, a review whose result is already recorded, and any other state
+with `review_recovery.submission.ineligible`, whose message names the reason, state, and code.
+`resubmit` also refuses once request retention erased the review request (`request-erased`), or
+when the request no longer awaits review for that proposal version (`proposal-not-submitted`).
+
 Retain the project sources, module locks, generated files, test receipt, signature documents, and
 runtime file for each activation. Store secrets separately.
 
 {/* Evidence: crates/registry-bregctl/src/apply_lifecycle.rs;
+    crates/registry-breg/src/review_recovery.rs, ReviewRecoveryOperatorService;
+    crates/registry-breg/tests/postgres_change_requests.rs, an_operator_resubmits_or_closes_a_review_its_authority_lost;
+    crates/registry-bregctl/src/review_recovery.rs;
     crates/registry-breg/src/review_store.rs, read_projection();
     crates/registry-bregctl/src/doctor.rs, startup_diagnostic();
     crates/registry-bregctl/src/lib.rs, VerifyArgs, verify(), write_doctor_success(),

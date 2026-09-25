@@ -663,7 +663,25 @@ impl RequestRetentionOperatorService {
         Ok(())
     }
 
-    fn request_plan(&self, request_entity_id: &str) -> Result<()> {
+    /// Opens a migration-role connection for one operator invocation.
+    pub(crate) async fn migration_client(&self) -> Result<deadpool_postgres::Client> {
+        self.migration_connection
+            .build_pool()
+            .map_err(|_| RequestRetentionError::Unavailable)?
+            .get()
+            .await
+            .map_err(|_| RequestRetentionError::Unavailable)
+    }
+
+    pub(crate) fn audit_profile(&self) -> &AuditProfile {
+        &self.audit_profile
+    }
+
+    pub(crate) fn package_revision(&self) -> &str {
+        &self.expected.package_revision
+    }
+
+    pub(crate) fn request_plan(&self, request_entity_id: &str) -> Result<()> {
         self.registry
             .entities()
             .get(request_entity_id)
@@ -672,7 +690,7 @@ impl RequestRetentionOperatorService {
             .ok_or(RequestRetentionError::Unavailable)
     }
 
-    async fn begin_verified_transaction<'a>(
+    pub(crate) async fn begin_verified_transaction<'a>(
         &self,
         client: &'a mut deadpool_postgres::Client,
     ) -> Result<tokio_postgres::Transaction<'a>> {

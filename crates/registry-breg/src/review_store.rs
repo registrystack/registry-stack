@@ -2036,6 +2036,20 @@ pub async fn receive_completion(
     if persisted != 1 {
         return Err(MutationError::PreconditionFailed);
     }
+    if state == "pending" {
+        // The authority announced a result BReg does not hold yet, so the
+        // review's lookup is due now instead of after its backoff.
+        transaction
+            .execute(
+                "UPDATE registry_internal.registry_request_review_submissions
+                    SET next_result_poll_at=LEAST(next_result_poll_at,transaction_timestamp())
+                  WHERE authority=$1 AND accepted_binding->>'requestId'=$2
+                    AND state='accepted'",
+                &[&authority, &completion.request_id.to_string()],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+    }
     Ok(())
 }
 
@@ -2167,7 +2181,11 @@ pub async fn poll_one_result(
     lease_seconds: i64,
 ) -> Result<bool, MutationError> {
     // The lookup is claimed with a lease before the outbound exchange so two
-    // instances cannot both act on one submission's result at once.
+    // instances cannot both act on one submission's result at once. Among due
+    // reviews, one a webhook completion already announced goes first, and one
+    // the authority last answered as unknown goes last, so reviews an
+    // authority lost (a restored or replaced review environment) cannot hold
+    // back live ones. Every due review is still reached in turn.
     let Some(row) = client
         .query_opt(
             "UPDATE registry_internal.registry_request_review_submissions s
@@ -2184,7 +2202,15 @@ pub async fn poll_one_result(
                             WHERE r.request_entity_id=c.request_entity_id
                               AND r.request_id=c.request_id
                               AND r.proposal_version=c.proposal_version)
-                     ORDER BY c.updated_at FOR UPDATE SKIP LOCKED LIMIT 1)
+                     ORDER BY EXISTS (
+                                  SELECT 1
+                                    FROM registry_internal.registry_request_review_completions k
+                                   WHERE k.authority=c.authority AND k.state='pending'
+                                     AND k.review_request_id::text=c.accepted_binding->>'requestId')
+                                  DESC,
+                              c.last_error_code IS NOT DISTINCT FROM 'result-unknown-to-authority',
+                              c.updated_at
+                     FOR UPDATE SKIP LOCKED LIMIT 1)
               RETURNING s.request_entity_id,s.request_id,s.proposal_version,
                         s.authority,s.accepted_binding,s.lease_until",
             &[&authority_id, &lease_seconds],
@@ -2269,13 +2295,15 @@ pub async fn poll_one_result(
             // one, so it spends the give-up budget like a failed lookup. The
             // lease fence keeps a worker that lost its claim (expired lease,
             // reclaimed row) from republishing a backoff over the new
-            // holder's schedule. The lookup itself answered, so it clears the
-            // lookup error a previous failure or credential outage recorded.
+            // holder's schedule. The lookup itself answered, so its own code
+            // replaces the lookup error a previous failure or credential
+            // outage recorded: the authority reached BReg and does not know
+            // the review, which a slow reviewer never produces.
             client
                 .execute(
                     "UPDATE registry_internal.registry_request_review_submissions
                         SET result_poll_attempts=LEAST(result_poll_attempts+1,1000),
-                            last_error_code=NULL,
+                            last_error_code='result-unknown-to-authority',
                             next_result_poll_at=transaction_timestamp()+
                               (LEAST(60,5*LEAST(result_poll_attempts+1,1000)) * interval '1 second'),
                             updated_at=transaction_timestamp()
