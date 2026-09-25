@@ -16,6 +16,7 @@
 //! and shared `registry-platform-*` primitives, and nothing here may grow a
 //! second product's protocol types.
 
+pub mod audit;
 pub mod auth;
 pub mod config;
 pub mod cursors;

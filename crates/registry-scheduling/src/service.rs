@@ -9,9 +9,11 @@
 //! re-checks the grant's expiry inside the transaction. Disclosure: every
 //! refusal projects to its public problem code here, and only the separately
 //! authorized explain path sees the detailed one. Attributability: the
-//! commitment's audit record is built here with pseudonymized principal,
-//! client, grant, and approver references, and refused commitments record
-//! their receipt so a replayed idempotency key answers as it first did.
+//! commitment's audit entries are built and written here with pseudonymized
+//! principal, client, grant, and approver references, the `request` entry
+//! before the capacity transaction opens and the `response` entry once it has
+//! committed or rolled back, and refused commitments record their receipt so
+//! a replayed idempotency key answers as it first did.
 
 use chrono::{DateTime, TimeDelta, Utc};
 use registry_platform_audit::{AuditKeyHasher, AuthorizationAuditEvent, AuthorizationOutcome};
@@ -34,6 +36,7 @@ use sha2::{Digest as _, Sha256};
 use std::borrow::Cow;
 use uuid::Uuid;
 
+use crate::audit::{request_record, with_event_id, SchedulingAudit};
 use crate::cursors::{
     bind_stored, cursor_expiry, decode_cursor, encode_cursor, CursorError, ListingPosition,
     StoredCursor,
@@ -155,6 +158,7 @@ pub struct SchedulingService {
     policy_revision: u64,
     policy_digest: String,
     hasher: AuditKeyHasher,
+    audit: SchedulingAudit,
     attempt_receipt_days: i64,
     hooks: Option<ActivatedHooks>,
 }
@@ -168,6 +172,7 @@ impl SchedulingService {
         policy_revision: i64,
         policy_digest: String,
         hasher: AuditKeyHasher,
+        audit: SchedulingAudit,
         attempt_receipt_days: u16,
     ) -> Self {
         Self {
@@ -177,6 +182,7 @@ impl SchedulingService {
             policy_revision: u64::try_from(policy_revision).unwrap_or(u64::MAX),
             policy_digest,
             hasher,
+            audit,
             attempt_receipt_days: i64::from(attempt_receipt_days),
             hooks: None,
         }
@@ -190,6 +196,18 @@ impl SchedulingService {
 
     fn revision(&self) -> u64 {
         self.policy_revision
+    }
+
+    /// Whether the audit destination every commitment writes to still accepts
+    /// entries. A stopped writer refuses every commitment, so this answers
+    /// unavailable rather than let readiness report a process that cannot
+    /// commit.
+    pub async fn audit_ready(&self) -> Result<(), ServiceError> {
+        if self.audit.ready().await {
+            Ok(())
+        } else {
+            Err(ServiceError::Problem(ProblemCode::ServiceUnavailable))
+        }
     }
 
     /// Which deployment and which policy this service answers with.
@@ -574,10 +592,12 @@ impl SchedulingService {
             &grant,
             idempotency_key,
             &request_hash,
-            HOLD_CREATE_ACTION,
             now,
             facts_revision,
         )?;
+        let correlation = self
+            .audit_request(caller, &grant, HOLD_CREATE_ACTION)
+            .await?;
         let outcome = self
             .store
             .create_hold(
@@ -592,6 +612,7 @@ impl SchedulingService {
         let answer = self
             .commitment_outcome(
                 outcome,
+                correlation,
                 caller,
                 &grant,
                 &actor,
@@ -636,19 +657,15 @@ impl SchedulingService {
         let release_key = hold_id.to_string();
         // A release evaluates no supply, so no records revision guards it:
         // closing a hold cannot name a resource.
-        let commitment = self.commitment(
-            caller,
-            &actor,
-            &grant,
-            &release_key,
-            &request_hash,
-            HOLD_RELEASE_ACTION,
-            now,
-            0,
-        )?;
+        let commitment =
+            self.commitment(caller, &actor, &grant, &release_key, &request_hash, now, 0)?;
+        let correlation = self
+            .audit_request(caller, &grant, HOLD_RELEASE_ACTION)
+            .await?;
         let outcome = self.store.release_hold(hold_id, commitment).await;
         self.commitment_outcome(
             outcome,
+            correlation,
             caller,
             &grant,
             &actor,
@@ -724,16 +741,19 @@ impl SchedulingService {
             &grant,
             idempotency_key,
             &request_hash,
-            APPOINTMENT_CREATE_ACTION,
             now,
             facts_revision,
         )?;
+        let correlation = self
+            .audit_request(caller, &grant, APPOINTMENT_CREATE_ACTION)
+            .await?;
         let outcome = self
             .store
             .confirm_hold(hold_id, offering, &supply.context(), commitment)
             .await;
         self.commitment_outcome(
             outcome,
+            correlation,
             caller,
             &grant,
             &actor,
@@ -767,16 +787,19 @@ impl SchedulingService {
             &grant,
             idempotency_key,
             &request_hash,
-            APPOINTMENT_CREATE_ACTION,
             now,
             facts_revision,
         )?;
+        let correlation = self
+            .audit_request(caller, &grant, APPOINTMENT_CREATE_ACTION)
+            .await?;
         let outcome = self
             .store
             .create_appointment(offering, &supply.context(), request, commitment)
             .await;
         self.commitment_outcome(
             outcome,
+            correlation,
             caller,
             &grant,
             &actor,
@@ -844,10 +867,12 @@ impl SchedulingService {
             &grant,
             idempotency_key,
             &request_hash,
-            APPOINTMENT_RESCHEDULE_ACTION,
             now,
             facts_revision,
         )?;
+        let correlation = self
+            .audit_request(caller, &grant, APPOINTMENT_RESCHEDULE_ACTION)
+            .await?;
         let outcome = self
             .store
             .reschedule_appointment(
@@ -862,6 +887,7 @@ impl SchedulingService {
         let answer = self
             .commitment_outcome(
                 outcome,
+                correlation,
                 caller,
                 &grant,
                 &actor,
@@ -907,10 +933,12 @@ impl SchedulingService {
             &grant,
             idempotency_key,
             &request_hash,
-            APPOINTMENT_CANCEL_ACTION,
             now,
             0,
         )?;
+        let correlation = self
+            .audit_request(caller, &grant, APPOINTMENT_CANCEL_ACTION)
+            .await?;
         let outcome = self
             .store
             .cancel_appointment(
@@ -925,6 +953,7 @@ impl SchedulingService {
         let answer = self
             .commitment_outcome(
                 outcome,
+                correlation,
                 caller,
                 &grant,
                 &actor,
@@ -1107,8 +1136,9 @@ impl SchedulingService {
     /// Both refusals are audited. A refusal decided here never opens the
     /// capacity transaction, so nothing further in the request would record
     /// that it happened, and a caller probing which services and locations its
-    /// grant reaches would leave the journal empty. What the journal gains is
-    /// the attribution: the answer stays the same closed code, naming neither
+    /// grant reaches would leave no audit entry. Each refusal is one `response`
+    /// entry with a correlation of its own. What the audit gains is the
+    /// attribution: the answer stays the same closed code, naming neither
     /// the bound that failed nor whether a grant was carried at all.
     async fn require_permission(
         &self,
@@ -1117,12 +1147,10 @@ impl SchedulingService {
         action: &str,
     ) -> Result<GrantClaims, ServiceError> {
         let Some(grant) = &caller.grant else {
-            self.record_refusal(grantless_refusal_record(
-                &self.hasher,
-                &self.scheduling_id,
-                caller,
-                action,
-            ))
+            self.record_refusal(
+                Uuid::new_v4(),
+                grantless_refusal_record(&self.hasher, &self.scheduling_id, caller, action),
+            )
             .await;
             return Err(ServiceError::Problem(ProblemCode::OperationNotAuthorized));
         };
@@ -1142,39 +1170,108 @@ impl SchedulingService {
         if allowed {
             Ok(grant.clone())
         } else {
-            self.record_refusal(audit_record(
-                &self.hasher,
-                &self.scheduling_id,
-                caller,
-                grant,
-                action,
-                AuthorizationOutcome::Denied,
-                "authorization.refused",
-            ))
+            self.record_refusal(
+                Uuid::new_v4(),
+                audit_record(
+                    &self.hasher,
+                    &self.scheduling_id,
+                    caller,
+                    grant,
+                    action,
+                    AuthorizationOutcome::Denied,
+                    "authorization.refused",
+                ),
+            )
             .await;
             Err(ServiceError::Problem(ProblemCode::OperationNotAuthorized))
         }
     }
 
-    /// Write one authorization refusal to the journal. A journal that cannot
-    /// be written must not change the caller's answer: the decision is already
-    /// made and the caller is refused either way, so the failure is logged
-    /// loudly and the refusal stands.
-    async fn record_refusal(&self, record: Result<Value, ServiceError>) {
-        match record {
-            Ok(record) => {
-                if let Err(failure) = self
-                    .store
-                    .record_refusal_audit(Uuid::new_v4(), record)
-                    .await
-                {
-                    tracing::error!(%failure, "the refusal audit row could not be recorded");
+    /// Write one authorization refusal as the `response` entry of
+    /// `correlation`, whose identity it also carries as `eventId`. A
+    /// destination that refuses it must not change the caller's answer: the
+    /// decision is already made and the caller is refused either way, so the
+    /// failure is logged loudly and the refusal stands.
+    async fn record_refusal(&self, correlation: Uuid, record: Result<Value, ServiceError>) {
+        match record.map(|record| with_event_id(correlation, record)) {
+            Ok(Some(record)) => {
+                if let Err(failure) = self.audit.response(correlation, record).await {
+                    tracing::error!(%failure, "the refusal audit entry could not be recorded");
                 }
             }
+            Ok(None) => {
+                tracing::error!("the refusal audit entry carries another identity");
+            }
             Err(refused) => {
-                tracing::error!(error = %refused, "the refusal audit row could not be built");
+                tracing::error!(error = %refused, "the refusal audit entry could not be built");
             }
         }
+    }
+
+    /// Append the `request` entry of one commitment and return the
+    /// correlation its `response` entry will carry. It names the caller, the
+    /// grant, and the operation the capacity transaction will decide, and no
+    /// outcome. A destination that refuses it refuses the commitment: the
+    /// capacity transaction does not open.
+    async fn audit_request(
+        &self,
+        caller: &Caller,
+        grant: &GrantClaims,
+        operation: &str,
+    ) -> Result<Uuid, ServiceError> {
+        let record = audit_record(
+            &self.hasher,
+            &self.scheduling_id,
+            caller,
+            grant,
+            operation,
+            AuthorizationOutcome::Allowed,
+            "authorization.allowed",
+        )?;
+        let correlation = Uuid::new_v4();
+        self.audit
+            .request(correlation, request_record(record))
+            .await
+            .map_err(|failure| {
+                tracing::error!(%failure, "the commitment request audit entry was refused");
+                ServiceError::Problem(ProblemCode::ServiceUnavailable)
+            })?;
+        Ok(correlation)
+    }
+
+    /// Append the allowed `response` entry of a committed commitment. The
+    /// capacity transaction has committed, so a refusal here answers the
+    /// caller `service.unavailable` while the commitment stays in place; a
+    /// retry under the same idempotency key replays its receipt.
+    async fn audit_allowed(
+        &self,
+        correlation: Uuid,
+        caller: &Caller,
+        grant: &GrantClaims,
+        operation: &str,
+    ) -> Result<(), ServiceError> {
+        let record = audit_record(
+            &self.hasher,
+            &self.scheduling_id,
+            caller,
+            grant,
+            operation,
+            AuthorizationOutcome::Allowed,
+            "authorization.allowed",
+        )?;
+        let record = with_event_id(correlation, record).ok_or_else(|| {
+            ServiceError::internal("the commitment audit record carries another identity")
+        })?;
+        self.audit
+            .response(correlation, record)
+            .await
+            .map_err(|failure| {
+                tracing::error!(
+                    %failure,
+                    "the committed commitment's response audit entry was refused"
+                );
+                ServiceError::Problem(ProblemCode::ServiceUnavailable)
+            })
     }
 
     /// The offering a committed claim names.
@@ -1237,7 +1334,6 @@ impl SchedulingService {
         grant: &GrantClaims,
         idempotency_key: &'a str,
         request_hash: &'a str,
-        operation: &str,
         now: DateTime<Utc>,
         facts_revision: i64,
     ) -> Result<Commitment<'a>, ServiceError> {
@@ -1246,15 +1342,6 @@ impl SchedulingService {
             .ok_or_else(|| {
                 ServiceError::internal("the attempt retention horizon is not representable")
             })?;
-        let audit_record = audit_record(
-            &self.hasher,
-            &self.scheduling_id,
-            caller,
-            grant,
-            operation,
-            AuthorizationOutcome::Allowed,
-            "authorization.allowed",
-        )?;
         Ok(Commitment {
             now,
             policy_revision: i64::try_from(self.policy_revision).unwrap_or(i64::MAX),
@@ -1266,20 +1353,21 @@ impl SchedulingService {
             request_hash,
             attempt_expires_at,
             grant_exp_unix: Some(grant.exp()),
-            audit_event: Uuid::new_v4(),
-            audit_record,
             hooks: self.hooks.as_ref(),
         })
     }
 
-    /// Translate one store outcome: minted, replayed, or refused. A refusal
-    /// writes its receipt under the caller's idempotency key so a replay of
-    /// that key answers the same, and writes its audit row when the refusal
-    /// was an authorization decision.
+    /// Translate one store outcome: minted, replayed, or refused. A minted
+    /// commitment is answered only once its allowed `response` entry is
+    /// accepted. A refusal writes its receipt under the caller's idempotency
+    /// key so a replay of that key answers the same, and writes its denied
+    /// `response` entry when the refusal was an authorization decision. Both
+    /// entries carry the `correlation` of the commitment's `request` entry.
     #[allow(clippy::too_many_arguments)]
     async fn commitment_outcome<T>(
         &self,
         outcome: Result<CommitOutcome, CommitError>,
+        correlation: Uuid,
         caller: &Caller,
         grant: &GrantClaims,
         actor: &str,
@@ -1301,14 +1389,18 @@ impl SchedulingService {
                 status_code,
                 receipt,
             }),
-            Ok(minted) => Ok(CommitmentAnswer::Minted(T::from_minted(minted))),
+            Ok(minted) => {
+                self.audit_allowed(correlation, caller, grant, operation)
+                    .await?;
+                Ok(CommitmentAnswer::Minted(T::from_minted(minted)))
+            }
             Err(error) => {
                 if matches!(
                     error,
                     CommitError::Store(_) | CommitError::Query(_) | CommitError::Hooks(_)
                 ) {
-                    // Nothing was decided: no receipt, no audit row, and the
-                    // caller sees no detail.
+                    // Nothing was decided: no receipt, no response entry, and
+                    // the caller sees no detail.
                     tracing::error!(%error, "the Scheduling store failed mid-commitment");
                     return Err(ServiceError::Problem(ProblemCode::ServiceUnavailable));
                 }
@@ -1335,7 +1427,6 @@ impl SchedulingService {
                         grant,
                         idempotency_key,
                         request_hash,
-                        operation,
                         now,
                         facts_revision,
                     );
@@ -1396,15 +1487,18 @@ impl SchedulingService {
                     | CommitError::CutoffPassed => Some("authorization.profile"),
                 };
                 if let Some(reason) = audited {
-                    self.record_refusal(audit_record(
-                        &self.hasher,
-                        &self.scheduling_id,
-                        caller,
-                        grant,
-                        operation,
-                        AuthorizationOutcome::Denied,
-                        reason,
-                    ))
+                    self.record_refusal(
+                        correlation,
+                        audit_record(
+                            &self.hasher,
+                            &self.scheduling_id,
+                            caller,
+                            grant,
+                            operation,
+                            AuthorizationOutcome::Denied,
+                            reason,
+                        ),
+                    )
                     .await;
                 }
                 Err(ServiceError::Problem(problem))
@@ -2019,7 +2113,7 @@ fn hex(bytes: &[u8]) -> String {
 /// The shape still demands a client. Without a grant the deployment verified
 /// no client identity, so the field carries the credential's issuer under the
 /// issuer reference class, and the absent grant pseudonym is what tells a
-/// reader of the journal which of the two it is looking at.
+/// reader of the audit entries which of the two it is looking at.
 fn grantless_refusal_record(
     hasher: &AuditKeyHasher,
     scope: &str,
