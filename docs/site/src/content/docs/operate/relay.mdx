@@ -69,7 +69,7 @@ quotas: {requestsPerMinute: 120, burst: 20}
 `sha256:` revision to refuse any other package at that path. A `secret:file/` reference resolves
 under `secretProviders.file.root`, never beside the runtime file; a `secret:env/` reference needs
 `secretProviders.environment: {}`. Other values may use `${VAR}` or `${VAR:-default}`
-substitution, but a field ending in `Ref` refuses it. A removed key such as `server`,
+substitution, but a field ending in `Ref` and every value under `secretProviders` refuse it. A removed key such as `server`,
 `packagePath`, `audit.sink`, or `authentication.issuer` is refused with the name of its
 replacement, and `audit.integrityKeyRef` with a diagnostic saying to remove it.
 
