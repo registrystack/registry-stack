@@ -1164,6 +1164,11 @@ enum AuditJournalRelation {
     /// The journal holds more than one record after the head, as it does when
     /// the database is restored from a backup older than the journal.
     DatabaseBehind { records_ahead: u64 },
+    /// The database recorded no head and still lists as pending records the
+    /// retained journal holds before its tail, as it does when a database
+    /// restored from a backup older than the journal is upgraded to the
+    /// release that records a head.
+    HeadlessDatabaseBehind { records_ahead: u64 },
     /// The journal does not hold the head, as it does when the journal is
     /// restored from an earlier backup, replaced, or started afresh, or
     /// belongs to another replica or database.
@@ -1174,7 +1179,7 @@ impl AuditJournalRelation {
     const fn as_str(&self) -> &'static str {
         match self {
             Self::Consistent => "consistent",
-            Self::DatabaseBehind { .. } => "database-behind",
+            Self::DatabaseBehind { .. } | Self::HeadlessDatabaseBehind { .. } => "database-behind",
             Self::JournalBehind => "journal-behind",
         }
     }
@@ -1216,6 +1221,36 @@ fn audit_journal_relation(
         (true, 0 | 1) => AuditJournalRelation::Consistent,
         (true, _) => AuditJournalRelation::DatabaseBehind { records_ahead },
         (false, _) => AuditJournalRelation::JournalBehind,
+    })
+}
+
+/// Place a journal against a database that has recorded no publication head.
+///
+/// Without a head, the only evidence of what the database already published
+/// is its outbox. A record the retained journal holds that the database
+/// still lists as pending was published before, unless it is the tail: the
+/// record a publisher appended and had not yet confirmed when it stopped,
+/// which the first publication pass confirms. Any other such record means the
+/// database is behind the journal, and adopting the tail would append it a
+/// second time. This reads every retained record once, at the first start
+/// after the upgrade that introduces the head.
+async fn headless_audit_journal_relation(
+    lease: &crate::store::AuditPublicationLease,
+    path: &Path,
+) -> Result<AuditJournalRelation, RuntimeError> {
+    let tail_event = newest_segmented_audit_envelope(path)?
+        .as_ref()
+        .and_then(audit_envelope_event_id);
+    let mut event_ids = retained_audit_event_ids(path)?;
+    event_ids.retain(|event_id| Some(*event_id) != tail_event);
+    let mut records_ahead = 0;
+    for event_ids in event_ids.chunks(AUDIT_ACKNOWLEDGEMENT_MARK_BATCH) {
+        records_ahead += lease.pending_among(event_ids).await?;
+    }
+    Ok(if records_ahead == 0 {
+        AuditJournalRelation::Consistent
+    } else {
+        AuditJournalRelation::HeadlessDatabaseBehind { records_ahead }
     })
 }
 
@@ -1273,20 +1308,38 @@ const AUDIT_RESTORE_STEP: &str = "or stop every Casework runtime and run `casewo
 /// Compare the journal this runtime opened with the publication head its
 /// database recorded, and refuse to publish when a restore has left them at
 /// different points. A database that has recorded no head yet, as after the
-/// upgrade that introduces it, adopts the journal's tail.
+/// upgrade that introduces it, adopts the journal's tail unless it still
+/// lists as pending a record the journal holds before that tail.
 async fn reconcile_publication_head(
     lease: &crate::store::AuditPublicationLease,
     path: &Path,
 ) -> Result<(), RuntimeError> {
-    let Some(head) = lease.head().await? else {
-        if let Some(tail) = newest_segmented_audit_envelope(path)? {
-            lease.set_head(&hash_hex(&tail.record_hash)).await?;
+    let relation = match lease.head().await? {
+        Some(head) => {
+            let head = AuditHead::parse(&head).ok_or(RuntimeError::Audit)?;
+            audit_journal_relation(path, &head.0)?
         }
-        return Ok(());
+        None => {
+            let relation = headless_audit_journal_relation(lease, path).await?;
+            if relation == AuditJournalRelation::Consistent {
+                if let Some(tail) = newest_segmented_audit_envelope(path)? {
+                    lease.set_head(&hash_hex(&tail.record_hash)).await?;
+                }
+                return Ok(());
+            }
+            relation
+        }
     };
-    let head = AuditHead::parse(&head).ok_or(RuntimeError::Audit)?;
-    match audit_journal_relation(path, &head.0)? {
+    match relation {
         AuditJournalRelation::Consistent => Ok(()),
+        AuditJournalRelation::HeadlessDatabaseBehind { records_ahead } => {
+            Err(RuntimeError::AuditJournalDiverged(format!(
+                "the audit file already holds {records_ahead} records this database lists as \
+                 not yet published and it has recorded no publication head, as it does when \
+                 the database is restored from a backup older than the audit file; restore the \
+                 database backup that matches the audit file, {AUDIT_RESTORE_STEP}"
+            )))
+        }
         AuditJournalRelation::DatabaseBehind { records_ahead, .. } => {
             Err(RuntimeError::AuditJournalDiverged(format!(
                 "the audit file holds {records_ahead} records after the last one this database \
@@ -1313,7 +1366,9 @@ pub struct AuditRestoreAcknowledgement {
     /// Whether an acknowledgement record was appended to the journal. A
     /// consistent journal and database are left as they are.
     pub acknowledged: bool,
-    /// Records the journal holds after the database's publication head.
+    /// Records the journal holds after the database's publication head or,
+    /// for a database that recorded no head, the records the journal holds
+    /// before its tail that the database still listed as pending.
     pub records_ahead: u64,
     /// Records the retained journal already holds that the database still
     /// listed as pending, now marked published so they are not appended twice.
@@ -1365,7 +1420,7 @@ async fn acknowledge_audit_restore_in(
         newest_segmented_audit_envelope(path)?.map(|tail| hash_hex(&tail.record_hash));
     let database_head = lease.head().await?;
     let relation = match database_head.as_deref() {
-        None => AuditJournalRelation::Consistent,
+        None => headless_audit_journal_relation(&lease, path).await?,
         Some(head) => {
             let head = AuditHead::parse(head).ok_or(RuntimeError::Audit)?;
             audit_journal_relation(path, &head.0)?
@@ -1384,7 +1439,8 @@ async fn acknowledge_audit_restore_in(
                 acknowledgement_hash: None,
             })
         }
-        AuditJournalRelation::DatabaseBehind { records_ahead } => records_ahead,
+        AuditJournalRelation::DatabaseBehind { records_ahead }
+        | AuditJournalRelation::HeadlessDatabaseBehind { records_ahead } => records_ahead,
         AuditJournalRelation::JournalBehind => 0,
     };
     // A record the retained journal already carries is never appended again,

@@ -3064,11 +3064,25 @@ async fn a_database_without_a_publication_head_adopts_the_audit_file_tail() {
     first.stop();
     wait_for_free_audit_lease(&client, &schema).await;
 
-    // A database upgraded from a release that kept no publication head.
+    // A database upgraded from a release that kept no publication head, whose
+    // last run stopped after appending its last record and before marking
+    // it published.
     client
         .execute("DELETE FROM casework_audit_publication_head", &[])
         .await
         .expect("remove the publication head");
+    let tail_event: uuid::Uuid = journal_event_ids(&journal)
+        .last()
+        .expect("a journal record")
+        .parse()
+        .expect("event id");
+    client
+        .execute(
+            "UPDATE casework_audit_outbox SET published_at = NULL WHERE event_id = $1",
+            &[&tail_event],
+        )
+        .await
+        .expect("leave the tail record unconfirmed");
     let acknowledgement = registry_casework::AuditPublicationForTest::acknowledge_restore(
         &store,
         &journal,
@@ -3093,7 +3107,81 @@ async fn a_database_without_a_publication_head_adopts_the_audit_file_tail() {
         audit_publication_head(&client).await,
         Some(journal_tail_hash(&journal))
     );
+    assert_eq!(store.audit_outbox_pending().await.expect("backlog"), 0);
     assert_each_event_once(&[&journal], 2);
+}
+
+#[tokio::test]
+async fn a_database_without_a_publication_head_never_republishes_journaled_records() {
+    let (store, client, schema) = isolated_schema("audit_restore_first_head_behind").await;
+    store.migrate().await.expect("migrate");
+    let root = tempfile::tempdir().expect("deployment root");
+    let journal = owner_only_audit_directory(root.path(), "journal");
+    let mut first = registry_casework::AuditPublicationForTest::new(
+        store.clone(),
+        journal.clone(),
+        audit_publication_profile(),
+    );
+    insert_pending_audit(&client, 3).await;
+    first.pass().await.expect("publish three records");
+    first.stop();
+    wait_for_free_audit_lease(&client, &schema).await;
+
+    // A database upgraded from a release that kept no publication head and
+    // restored from a backup taken before the journal's last three records.
+    client
+        .execute("DELETE FROM casework_audit_publication_head", &[])
+        .await
+        .expect("remove the publication head");
+    client
+        .execute("UPDATE casework_audit_outbox SET published_at = NULL", &[])
+        .await
+        .expect("restore the pending records");
+
+    let mut restarted = registry_casework::AuditPublicationForTest::new(
+        store.clone(),
+        journal.clone(),
+        audit_publication_profile(),
+    );
+    let refusal = restarted
+        .start()
+        .await
+        .expect_err("startup refuses records the audit file already holds");
+    assert!(
+        refusal.contains("the audit file already holds 2 records")
+            && refusal.contains("caseworkctl audit acknowledge-restore"),
+        "{refusal}"
+    );
+    assert!(!restarted.is_leader());
+    assert_eq!(audit_publication_head(&client).await, None);
+    assert_each_event_once(&[&journal], 3);
+    wait_for_free_audit_lease(&client, &schema).await;
+
+    let acknowledgement = registry_casework::AuditPublicationForTest::acknowledge_restore(
+        &store,
+        &journal,
+        &audit_publication_profile(),
+    )
+    .await
+    .expect("acknowledge the restore");
+    assert_eq!(acknowledgement.relation, "database-behind");
+    assert!(acknowledgement.acknowledged);
+    assert_eq!(acknowledgement.records_ahead, 2);
+    assert_eq!(acknowledgement.marked_published, 3);
+    assert_eq!(acknowledgement.database_head, None);
+    assert_eq!(
+        acknowledgement.acknowledgement_hash,
+        audit_publication_head(&client).await
+    );
+    assert_eq!(store.audit_outbox_pending().await.expect("backlog"), 0);
+    wait_for_free_audit_lease(&client, &schema).await;
+
+    restarted.pass().await.expect("publication continues");
+    assert!(restarted.is_leader());
+    insert_pending_audit(&client, 1).await;
+    restarted.pass().await.expect("publish after the restore");
+    assert_eq!(store.audit_outbox_pending().await.expect("backlog"), 0);
+    assert_each_event_once(&[&journal], 5);
 }
 
 #[tokio::test]

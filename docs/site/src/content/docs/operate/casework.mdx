@@ -682,8 +682,14 @@ file and refuses to continue from a file that disagrees:
   `the audit file does not hold the last record this database recorded as published`. Publishing
   from here would leave the records the database already published out of this file's chain.
 
-Both start with `the Casework audit journal and database disagree`. The runtime that holds the lease
-at startup refuses to start, and a standby that takes the lease over fails its pass at
+The first runtime of the release that introduced the publication head finds a database that has
+recorded none. It reads every retained audit record once and adopts the audit file's last record
+as the head, unless the database still lists as pending a record the audit file holds before that
+last one. That database is behind the audit file too, and the refusal says `the audit file already
+holds <n> records this database lists as not yet published`.
+
+All three start with `the Casework audit journal and database disagree`. The runtime that holds the
+lease at startup refuses to start, and a standby that takes the lease over fails its pass at
 `journal-open` and stays not ready. The one record a publisher appended just before it stopped,
 without marking it published, is not a disagreement.
 
@@ -698,10 +704,11 @@ It uses the runtime database credential, takes the audit publication lease and t
 writer lock, and refuses with code `casework.audit.refused` while a runtime holds either. It marks
 every record the audit file already holds that the database lists as pending as published, so none
 is appended twice. It then appends one `casework.audit.restore-acknowledged` record naming the
-relation it found, the number of records the audit file held after the database's head, and both
-heads, and makes that record the new head. Its report carries the same fields. A database and
-audit file that already agree are reported as `consistent` and left untouched, so running it
-twice is harmless. Start Casework again afterwards.
+relation it found, the number of records the audit file held after the database's head (or, for a
+database that recorded no head, the records before the audit file's last one that the database
+still listed as pending), and both heads, and makes that record the new head. Its report carries
+the same fields. A database and audit file that already agree are reported as `consistent` and left
+untouched, so running it twice is harmless. Start Casework again afterwards.
 
 An acknowledged restore resumes publication; it does not recover what the restore lost. Work done
 after the database backup is gone from the database while the audit file still records it, and
@@ -714,13 +721,15 @@ to check with their callers and the source.
     crates/registry-casework/src/store.rs, AuditPublicationLease::mark_published(), head(),
     set_head(), and mark_journal_records_published();
     crates/registry-casework/src/runtime.rs, audit_journal_relation(),
-    reconcile_publication_head(), retained_audit_event_ids(), and acknowledge_audit_restore();
+    headless_audit_journal_relation(), reconcile_publication_head(), retained_audit_event_ids(),
+    and acknowledge_audit_restore();
     crates/registry-caseworkctl/src/audit.rs, acknowledge_restore();
     crates/registry-casework/tests/postgres_transactions.rs,
     a_database_restored_behind_its_audit_file_is_refused_until_acknowledged(),
     an_audit_file_restored_behind_its_database_is_refused_until_acknowledged(),
-    acknowledging_a_restore_never_appends_a_record_the_audit_file_holds(), and
-    a_database_without_a_publication_head_adopts_the_audit_file_tail(). */}
+    acknowledging_a_restore_never_appends_a_record_the_audit_file_holds(),
+    a_database_without_a_publication_head_adopts_the_audit_file_tail(), and
+    a_database_without_a_publication_head_never_republishes_journaled_records(). */}
 
 ## Establish directory authority
 

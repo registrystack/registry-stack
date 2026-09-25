@@ -25,7 +25,10 @@
   afresh). It refuses to start, or as a standby fails its takeover pass at
   `journal-open`. Replicas with separate audit files are refused the same way;
   give every replica the same `audit.path`. The first runtime of this release
-  adopts the audit file's last record as the head. The new
+  adopts the audit file's last record as the head, reading every retained
+  record once to do so, and refuses with `the audit file already holds <n>
+  records this database lists as not yet published` when the database still
+  lists as pending a record the audit file holds before its last one. The new
   `caseworkctl audit acknowledge-restore --runtime-config` resumes
   publication once every runtime is stopped: it marks the records the audit
   file already holds as published, appends a

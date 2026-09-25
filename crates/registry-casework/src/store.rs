@@ -3313,6 +3313,19 @@ impl AuditPublicationLease {
         Ok(())
     }
 
+    /// How many records among `event_ids` are still pending.
+    pub(crate) async fn pending_among(&self, event_ids: &[Uuid]) -> Result<u64, StoreError> {
+        let count: i64 = self
+            .client
+            .query_one(
+                "SELECT count(*) FROM casework_audit_outbox WHERE published_at IS NULL AND event_id=ANY($1)",
+                &[&event_ids],
+            )
+            .await?
+            .get(0);
+        u64::try_from(count).map_err(|_| StoreError::Invalid)
+    }
+
     /// Mark every still-pending record among `event_ids` published, returning
     /// how many were pending.
     pub(crate) async fn mark_journal_records_published(
