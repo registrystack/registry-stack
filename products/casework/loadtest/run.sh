@@ -125,14 +125,25 @@ unset FLOW_TASKS_FILE FLOW_OFFSET
 umask 077
 mkdir -p "$run_dir/results" "$run_dir/canaries"
 db_pid=""
+sampler_status=0
 last_run_status=0
 flow_canaries=""
 
+# A sampler still running is stopped here and exits with 143 (TERM). One that
+# already exited stopped sampling early, and its status fails the run. The
+# function itself always succeeds, so it stays safe as the exit trap.
 stop_samplers() {
   if [[ -n "$db_pid" ]]; then
-    kill "$db_pid" 2>/dev/null || true
-    wait "$db_pid" 2>/dev/null || true
+    local code=0
+    if kill -0 "$db_pid" 2>/dev/null; then
+      kill "$db_pid" 2>/dev/null || true
+      wait "$db_pid" 2>/dev/null || code=$?
+      if [[ "$code" -eq 143 ]]; then code=0; fi
+    else
+      wait "$db_pid" 2>/dev/null || code=$?
+    fi
     db_pid=""
+    sampler_status="$code"
   fi
 }
 trap stop_samplers EXIT INT TERM
@@ -204,6 +215,10 @@ run_one() {
   k6 run --out "json=$result_dir/k6-samples.json" "${pass_through[@]}" "$profile_script" || k6_status=$?
   local status="$k6_status"
   stop_samplers
+  if [[ "$sampler_status" -ne 0 ]]; then
+    printf '%s\n' "The database wait sampler failed with status $sampler_status; its samples are incomplete." >&2
+    status=1
+  fi
   "$dbstats" snapshot >"$result_dir/db-after.json"
 
   local pool_arguments=(--seed-pool "$seed_dir/read-tasks.txt" --seed-pool "$seed_dir/flow-tasks.txt")
@@ -223,6 +238,7 @@ run_one() {
       --samples "$result_dir/k6-samples.json" \
       --db-after "$result_dir/db-after.json" \
       --db-waits "$result_dir/db-waits.jsonl" \
+      --db-sampler-exit-code "$sampler_status" \
       --safety "$result_dir/safety.json" \
       --k6-exit-code "$k6_status" \
       --out "$result_dir/result.json" || status=1

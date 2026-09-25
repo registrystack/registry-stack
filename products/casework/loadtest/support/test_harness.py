@@ -426,6 +426,51 @@ class RegistryCaseworkHarnessTests(unittest.TestCase):
             with self.assertRaisesRegex(seed.SeedError, "already exists"):
                 seed.begin_seed(run_dir / "seed", {"nonce": "another"})
 
+    def test_sampler_stop_fails_the_run_only_when_the_sampler_exited_early(self) -> None:
+        runner = (LOADTEST / "run.sh").read_text(encoding="utf-8")
+        start = runner.index("stop_samplers() {")
+        function = runner[start : runner.index("\n}\n", start) + 3]
+        # Each live sampler reports that it started, because a TERM that lands
+        # between fork and exec meets the parent's trap and is lost.
+        stops = """
+bash -c 'touch "$1"; exec sleep 30' _ "$READY/running" &
+db_pid=$!
+until [[ -e "$READY/running" ]]; do sleep 0.01; done
+stop_samplers
+printf 'running %s\\n' "$sampler_status"
+(exit 3) &
+db_pid=$!
+for _ in $(seq 1 100); do kill -0 "$db_pid" 2>/dev/null || break; sleep 0.05; done
+stop_samplers
+printf 'exited %s\\n' "$sampler_status"
+"""
+        # The trap leaves a live sampler behind at exit; if the trap did not stop
+        # it, the sampler would hold the output pipes open past the timeout.
+        trapped = """
+trap stop_samplers EXIT INT TERM
+bash -c 'touch "$1"; exec sleep 30' _ "$READY/trapped" &
+db_pid=$!
+until [[ -e "$READY/trapped" ]]; do sleep 0.01; done
+exit 7
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            results = [
+                subprocess.run(
+                    ["bash", "-c", f"set -euo pipefail\ndb_pid=\"\"\nsampler_status=0\n{function}{body}"],
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                    check=False,
+                    env={**os.environ, "READY": directory},
+                )
+                for body in (stops, trapped)
+            ]
+        self.assertEqual([result.returncode for result in results], [0, 7], [result.stderr for result in results])
+        self.assertEqual(results[0].stdout.splitlines(), ["running 0", "exited 3"])
+        self.assertEqual([result.stderr for result in results], ["", ""])
+        self.assertIn("The database wait sampler failed with status $sampler_status", runner)
+        self.assertIn('--db-sampler-exit-code "$sampler_status"', runner)
+
     def test_shell_entrypoints_parse(self) -> None:
         for script in ("up.sh", "down.sh", "run.sh", "dbstats.sh"):
             subprocess.run(["bash", "-n", str(LOADTEST / script)], check=True)

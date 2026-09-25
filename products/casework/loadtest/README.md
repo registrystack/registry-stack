@@ -139,7 +139,8 @@ Evidence harnesses. Each measured run gets an owner-only directory under
   scenario, and expected-response status;
 - `db-before.json`, `db-waits.jsonl`, and `db-after.json`: continuous wait
   counts, review table sizes, task states, and review history length from the
-  development database;
+  development database. A run whose wait sampler exits early or records no
+  sample fails its verdict;
 - `result.json`: throughput, errors, drops, 504s, p50/p95/p99 by operation and
   phase, DB wait peaks, and the SLO verdict;
 - `safety.json`: evidence scan proving both current authorization headers,

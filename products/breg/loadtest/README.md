@@ -121,7 +121,8 @@ Each measured run gets an owner-only directory under `.run/results/` with:
   samples with the system tag set restricted to status, method, operation name,
   scenario, and expected-response status;
 - `db-before.json`, `db-waits.jsonl`, and `db-after.json`: continuous wait
-  counts, table sizes, and audit-chain length from the development database;
+  counts, table sizes, and audit-chain length from the development database.
+  A run whose wait sampler exits early or records no sample fails its verdict;
 - `result.json`: throughput, errors, drops, 504s, p50/p95/p99 by operation,
   per-phase counts, achieved rate, and latency, DB wait peaks, and the SLO
   verdict;
