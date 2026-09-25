@@ -1344,6 +1344,62 @@ reviewProducers:
         );
     }
 
+    /// The runtime's static JWKS arm hands the resolved document to the
+    /// shared parser and refuses a key set it cannot trust before any
+    /// verifier exists: a symmetric key, an unnamed key, two keys sharing a
+    /// name, or no key at all.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn static_jwks_requires_unique_named_asymmetric_keys() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let secrets_root = root.path().join("secrets");
+        std::fs::create_dir(&secrets_root).unwrap();
+        let mut document = operator_value(&package, "development-loopback");
+        document["authentication"]["oidc"]["jwksSource"] =
+            serde_json::json!({"kind": "static", "documentRef": "secret:file/jwks.json"});
+        let config = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap();
+        let secrets = config.secret_providers.resolver().unwrap();
+        let jwks = secrets_root.join("jwks.json");
+
+        let write_jwks = |bytes: &[u8]| {
+            std::fs::write(&jwks, bytes).unwrap();
+            std::fs::set_permissions(&jwks, std::fs::Permissions::from_mode(0o600)).unwrap();
+        };
+
+        write_jwks(br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#);
+        config
+            .oidc_verifier(&secrets)
+            .await
+            .expect("one named asymmetric key is accepted");
+
+        for (case, invalid) in [
+            ("symmetric", br#"{"keys":[{"kty":"oct","kid":"one","k":"AA"}]}"#.as_slice()),
+            ("unnamed", br#"{"keys":[{"kty":"RSA","n":"AQAB","e":"AQAB"}]}"#),
+            (
+                "duplicate name",
+                br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"},{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#,
+            ),
+            ("empty", br#"{"keys":[]}"#),
+        ] {
+            write_jwks(invalid);
+            let error = config
+                .oidc_verifier(&secrets)
+                .await
+                .map(|_| ())
+                .expect_err(case);
+            assert!(
+                matches!(error, RuntimeConfigError::Oidc),
+                "{case}: {error}"
+            );
+            assert_eq!(error.path(), "authentication.oidc", "{case}");
+        }
+    }
+
     #[test]
     fn the_runtime_configuration_is_read_through_the_shared_loader() {
         let error = RuntimeConfig::load("runtime.yaml").unwrap_err();
