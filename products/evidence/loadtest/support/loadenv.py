@@ -232,13 +232,23 @@ def _process_command(pid: int) -> str:
 
 
 def _process_cwd(pid: int) -> str:
-    result = subprocess.run(
-        ["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
+    # Linux exposes the working directory directly; other hosts, macOS among
+    # them, have no /proc and need lsof.
+    if sys.platform.startswith("linux"):
+        try:
+            return os.readlink(f"/proc/{pid}/cwd")
+        except OSError:
+            return ""
+    try:
+        result = subprocess.run(
+            ["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except FileNotFoundError as error:
+        raise LoadtestError("lsof is required to verify the source mock's working directory on this host") from error
     if result.returncode != 0:
         return ""
     names = [line[1:] for line in result.stdout.splitlines() if line.startswith("n")]
