@@ -72,6 +72,56 @@ impl SecretReference {
     }
 }
 
+impl PartialOrd for SecretReference {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SecretReference {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.reference.cmp(&other.reference)
+    }
+}
+
+impl std::hash::Hash for SecretReference {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.reference.hash(state);
+    }
+}
+
+impl serde::Serialize for SecretReference {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.reference)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SecretReference {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+        Self::parse(value).map_err(|_| {
+            serde::de::Error::custom(
+                "expected an exact secret:env/NAME or secret:file/name reference",
+            )
+        })
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for SecretReference {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "SecretReference".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+            "type": "string",
+            "pattern": crate::blocks::SECRET_REFERENCE_PATTERN
+        })
+    }
+}
+
 impl fmt::Debug for SecretReference {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
