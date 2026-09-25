@@ -11,6 +11,7 @@ from pathlib import Path
 
 DATABASE_SUITES = {
     "registry-messaging": {
+        "postgres_callbacks",
         "postgres_dispatch",
         "postgres_messages",
         "postgres_migrate",

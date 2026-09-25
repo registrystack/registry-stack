@@ -938,10 +938,22 @@ jobs:
         env:
           MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
         run: cargo test --locked --profile ci -p registry-messaging --features postgres-test --test postgres_dispatch
+      - name: Verify provider callbacks and delivery reports
+        env:
+          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
+        run: cargo test --locked --profile ci -p registry-messaging --features postgres-test --test postgres_callbacks
+      - name: Verify retention erasure
+        env:
+          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
+        run: cargo test --locked --profile ci -p registry-messaging --features postgres-test --test postgres_retention
       - name: Verify messagingctl messages commands
         env:
           MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
         run: cargo test --locked --profile ci -p registry-messagingctl --features postgres-test --tests
+      - name: Send one email and one SMS through messagingctl dev
+        env:
+          MESSAGINGCTL_BIN: ${{ github.workspace }}/target/ci/messagingctl
+        run: products/messaging/scripts/test-dev.sh
 
   messaging-smtp:
     name: Messaging SMTP provider
