@@ -608,6 +608,7 @@ export type BRegIngestionAttemptOutcome =
   | 'invalidItem'
   | 'refused'
   | 'bindingChanged'
+  | 'importAuthorityClosed'
   | 'chunkMismatch'
   | 'runNotOpen'
   | 'unavailable'

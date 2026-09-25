@@ -1511,8 +1511,8 @@ fn ingestion_run_schema() -> Value {
                                 "type": "string",
                                 "enum": [
                                     "committed", "replayed", "invalidItem", "refused",
-                                    "bindingChanged", "chunkMismatch", "runNotOpen",
-                                    "unavailable"
+                                    "bindingChanged", "importAuthorityClosed",
+                                    "chunkMismatch", "runNotOpen", "unavailable"
                                 ]
                             },
                             "chunkIndex": {"type": ["integer", "null"], "minimum": 0}
