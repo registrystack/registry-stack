@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Casework database connections now use `connect_timeout=5`,
+  `keepalives_idle=15`, `keepalives_interval=5`, `keepalives_retries=3`, and
+  `tcp_user_timeout=30`, all in seconds, unless the database URL sets them,
+  so a connection to a server that stopped answering fails within seconds
+  instead of the operating system's hours.
+
 - Answer every audited request entry. An operation whose change is not
   known to have committed (a refusal, a failure, a canceled request, or a
   commit whose acknowledgment was lost and whose outcome could not be read
