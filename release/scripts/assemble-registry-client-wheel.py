@@ -129,18 +129,18 @@ def main() -> int:
         messaging_included = client_registry.includes_messaging(
             args.version, include_messaging=args.include_messaging
         )
+        if not casework_included:
+            parser.error(
+                "this checkout contains the Casework Python facade; versions before "
+                "0.30.0 require the explicit --include-casework local-candidate option"
+            )
+        if not messaging_included:
+            parser.error(
+                "this checkout contains the Messaging Python facade; versions before "
+                "0.35.0 require the explicit --include-messaging local-candidate option"
+            )
     except client_registry.ClientRegistryError as exc:
         parser.error(str(exc))
-    if not casework_included:
-        parser.error(
-            "this checkout contains the Casework Python facade; versions before "
-            "0.30.0 require the explicit --include-casework local-candidate option"
-        )
-    if not messaging_included:
-        parser.error(
-            "this checkout contains the Messaging Python facade; versions before "
-            "0.35.0 require the explicit --include-messaging local-candidate option"
-        )
 
     configured_version = None
     try:

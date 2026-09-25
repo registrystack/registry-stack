@@ -222,6 +222,13 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
             self.assertTrue(legacy_paths)
             self.assertTrue(unified_paths.isdisjoint(legacy_paths), product)
 
+    def test_rejects_a_malformed_version_without_a_traceback(self) -> None:
+        result = self.run_assembler(version="not-a-version")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unsupported client version", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertFalse((self.directory / "dist").exists())
+
     def test_rejects_an_input_for_another_version(self) -> None:
         result = self.run_assembler(version="99.0.0")
         self.assertNotEqual(result.returncode, 0)
