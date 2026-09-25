@@ -316,6 +316,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     const messagingRedirectsResult = messagingRedirects(context.hasMessaging, context.currentDocsetRedirect);
     for (const route of [
       '/start/messaging/',
+      '/tutorials/first-messaging/',
       '/configure/messaging/',
       '/operate/messaging/',
       '/reference/apis/registry-messaging/',

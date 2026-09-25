@@ -252,9 +252,24 @@ older is refused with `410 idempotency.expired`. A submission whose `expiresAt` 
 payload period is refused. These values are defaults, not a jurisdictional recommendation, and the
 audit journal's start record carries the values in force.
 
-{/* Evidence: products/messaging/RUNTIME-CONFIG.md, Keys. */}
+`payloadDays` and `recordDays` count from the moment a message reached a terminal state
+(delivered, failed, expired, or cancelled), not from acceptance, so a message waiting in a retry
+keeps its payload:
 
-{/* messaging-s6b: document the retention sweep (payloadDays, recordDays, submissionReceiptDays erasure) and messagingctl retention erase-expired once they land. */}
+| Period ends | What is erased |
+| --- | --- |
+| `payloadDays` after the terminal state | The rendered parts and the recipient contact. The message record stays |
+| `recordDays` after the terminal state | The message record, with its attempts, receipts, and idempotency key. The key can be used again |
+| `submissionReceiptDays` after acceptance | The stored submission receipt. A repeat of its key is refused with `idempotency.expired` |
+
+A message that is queued, sending, or held in an unknown outcome is never erased, whatever its age.
+The runtime sweeps once at start and then hourly with the runtime credential, and journals
+`messaging.retention.erased` with the counts whenever a sweep erased something.
+[Erase expired data on demand](#erase-expired-data-on-demand) runs the same sweep from the
+operator host.
+
+{/* Evidence: products/messaging/RUNTIME-CONFIG.md, Keys; crates/registry-messaging/src/retention.rs,
+    RETENTION_ERASED_EVENT, SWEEP_INTERVAL, and erase_expired(). */}
 
 ### Create the secret files
 
@@ -372,9 +387,10 @@ and any other value exits 2. Once both listeners are bound, it logs:
 {"timestamp":"…","level":"INFO","fields":{"message":"serving Registry Messaging","listener":"127.0.0.1:8107","metrics_listener":true}}
 ```
 
-`GET /health` answers `200` with an empty body while the process serves, and `GET /ready` answers
-`200` once the database carries every expected migration, `503 service.unavailable` otherwise.
-Neither takes a token, and both carry `Cache-Control: no-store`.
+`GET /health` answers `200` with an empty body while the process serves. `GET /ready` answers `200`
+while the database carries every expected migration and its package ledger names the package this
+process serves active, and `503 service.unavailable` otherwise. Neither takes a token, and both
+carry `Cache-Control: no-store`.
 
 {/* Evidence: crates/registry-messaging/src/main.rs; crates/registry-messaging/src/runtime.rs;
     crates/registry-messaging/src/store.rs, MIGRATION_LOCK_KEY;
@@ -403,7 +419,12 @@ messaging: the Messaging package on disk (sha256:41afc8ee…) is not the package
 Each accepted message keeps the rendering and dispatch policy it had when it was accepted, so a
 package change affects only messages submitted after the restart.
 
+A runtime still serving the old package answers `GET /ready` with `503` from the moment the new
+digest is recorded, and logs a warning naming the restart. A load balancer that checks `/ready`
+stops routing to it until it restarts onto the new package.
+
 {/* Evidence: products/messaging/RUNTIME-CONFIG.md, The package ledger and The package;
+    crates/registry-messaging/src/http.rs, Readiness and is_ready();
     crates/registry-messaging/src/runtime.rs; output observed with messaging 0.33.0-dev on
     2026-09-25, digests shortened. */}
 
@@ -517,6 +538,57 @@ missed message for this recipient before choosing.
 {/* Evidence: crates/registry-messaging/src/dispatch.rs; crates/registry-messaging/src/messages.rs,
     SettleOutcome; products/messaging/RUNTIME-CONFIG.md, The package. */}
 
+## Erase expired data on demand
+
+`messagingctl retention erase-expired` runs the retention sweep from the operator host with the
+migration credential, counting every period back from `--before`. Without `--apply` it only reports
+what is due:
+
+```sh
+messagingctl retention erase-expired --runtime-config /etc/registry-messaging/runtime.yaml \
+  --before 2026-09-25T00:00:00Z
+```
+
+```text
+before: 2026-09-25T00:00:00.000Z
+payloads due: 0
+records due: 0
+submission receipts due: 0
+run again with --apply to erase
+```
+
+:::caution[Erasing cannot be undone]
+`--apply` deletes rendered parts, recipient contacts, and message records for good. Run the preview
+with the same `--before` first and read its counts.
+:::
+
+```sh
+messagingctl retention erase-expired --runtime-config /etc/registry-messaging/runtime.yaml \
+  --before 2026-09-25T00:00:00Z --apply
+```
+
+```text
+before: 2026-09-25T00:00:00.000Z
+payloads erased: 0
+records erased: 0
+submission receipts erased: 0
+```
+
+The command erases by the same rules as the runtime's own sweep, and one advisory lock keeps the two
+from running at once. Every applied run is journaled as `messaging.retention.erased` with the
+operator tool as its actor, including a run that erased nothing. A cutoff later than the current
+time is refused before the runtime file is read, and again against the database's clock:
+
+```text
+messagingctl: the cutoff is in the future; retention erases only what has already expired (--before)
+```
+
+{/* Evidence: crates/registry-messagingctl/src/lib.rs, EraseExpiredArgs and render_retention();
+    crates/registry-messaging/src/runtime.rs, erase_expired_as_operator();
+    crates/registry-messaging/src/retention.rs, RetentionActor and FutureCutoff;
+    products/messaging/RUNTIME-CONFIG.md, Keys; outputs observed with messagingctl 0.33.0-dev on
+    2026-09-25. */}
+
 ## Read the audit journal
 
 The runtime appends every audited act to one JSONL journal at `audit.path`, each line an envelope
@@ -551,17 +623,43 @@ listener answers the same path `404 request.not-found`.
 
 | Series | Labels | Counts |
 | --- | --- | --- |
-| `messaging_http_requests_total` | `route`, `method`, `status` | Answered HTTP requests |
-| `messaging_authentication_refusals_total` | `reason` | Bearer credentials refused before a caller was resolved |
-| `messaging_provider_callbacks_total` | `outcome` | Provider callbacks: `unverified`, `unreadable`, `ignored`, `applied`, `unchanged`, `unmatched`, `ambiguous`, or `unavailable` |
+| `messaging_http_requests_total` | `route`, `method`, `status` | Answered HTTP requests, by route template and status class |
+| `messaging_authentication_refusals_total` | `reason`: `refused`, `claims`, `profile`, `unavailable` | Bearer credentials refused before a caller was resolved |
+| `messaging_provider_attempts_total` | `outcome`: `accepted`, `transient`, `permanent`, `maybe-sent` | Provider attempts, by the class the attempt history records |
+| `messaging_provider_callbacks_total` | `outcome`: `unverified`, `unreadable`, `ignored`, `applied`, `unchanged`, `unmatched`, `ambiguous`, `unavailable` | Provider callbacks, by what became of them |
+| `messaging_limit_refusals_total` | `limit`: `rate`, `daily`, `pacing` | Submissions an access profile's rate or daily limit refused, and attempts whose provider send slot did not open in time |
+| `messaging_retention_runs_total` | `outcome`: `erased`, `idle`, `failed` | Retention sweeps this process ran |
+| `messaging_dispatch_jobs` | `state`: `pending`, `leased`, `unknown` | Gauge read from the database at each scrape: messages waiting to send, being sent, or held for an operator |
 
-A rising `unverified` count usually means a callback secret or URL differs between the provider and
-the runtime file.
+Counters are per process and start at zero at each start. The queue depth is `pending` plus
+`leased`; a rising `unknown` is messages waiting for you to
+[settle an unknown outcome](#settle-an-unknown-outcome). When the database cannot answer, that scrape
+has no `messaging_dispatch_jobs` samples and the runtime logs a warning, so the series goes stale
+rather than reporting an empty queue. A `messagingctl retention erase-expired` run is a separate
+process: the journal records it, these counters do not.
 
-{/* Evidence: crates/registry-messaging/src/metrics.rs; products/messaging/RUNTIME-CONFIG.md,
-    Provider callbacks. */}
+A rising `unverified` callback count usually means a callback secret or URL differs between the
+provider and the runtime file.
 
-{/* messaging-s6b: replace this table with the final metrics names, including dispatch and quota series, once they land. */}
+{/* Evidence: crates/registry-messaging/src/metrics.rs, AttemptOutcome, LimitKind, RetentionRun,
+    and CallbackOutcome; products/messaging/RUNTIME-CONFIG.md, Keys and Provider callbacks. */}
+
+## Capacity
+
+No throughput figure is part of the contract. What bounds dispatch is the provider: each runtime
+process sends through eight worker lanes, each claiming, sending, and recording one message at a
+time, so a provider that takes 200 ms to answer caps one process at 40 sends per second. A
+provider's `ratePerSecond` and `concurrencyLimit` lower that further.
+
+The product's own measurement, with the `messagingctl dev` mock gateway answering every SMS after
+200 ms and PostgreSQL in a container on the same Apple M5 Max running macOS, reached a steady 21.3 to
+26.3 SMS per second on one process over three runs. It holds for that machine only. Run
+`products/messaging/scripts/measure-throughput.sh` from a Registry Stack checkout on a host like
+the one you will deploy before you size anything.
+
+{/* Evidence: products/messaging/README.md, Throughput;
+    crates/registry-messaging/src/runtime.rs, WORKER_CONCURRENCY;
+    crates/registry-messaging/src/limits.rs, ProviderPacer. */}
 
 ## Troubleshooting
 

@@ -21,6 +21,10 @@ operator records before a runtime serves it.
 The package holds no endpoint, credential, or database address. Those belong to the operator's
 runtime file, which [Deploy Registry Messaging](../../operate/messaging/) covers.
 
+To watch the starter package send before you change it, run
+[Send your first message](../../tutorials/first-messaging/) first: it delivers one SMS and one email
+on your machine with `messagingctl dev`.
+
 {/* Evidence: products/messaging/RUNTIME-CONFIG.md, The package;
     crates/registry-messaging/src/package.rs. */}
 
@@ -50,8 +54,6 @@ on a refusal, 2 on a usage error, and 3 when a file, secret, or database could n
     scripts/cargo-runtime-library-path.sh, registry_cargo_build; CONTRIBUTING.md. */}
 
 {/* messaging-release: once v0.35.0 publishes, name the released messagingctl linux-amd64 release binary before the source build. */}
-
-{/* messaging-s6b: once messagingctl dev exists, point readers at the local tutorial before this page. */}
 
 ## Start from the starter
 
@@ -212,7 +214,20 @@ has a reason to send text no reviewer saw: a template is the reviewed wording.
 {/* Evidence: crates/registry-messaging-core/src/access.rs, AccessProfile, AccessRole, and
     authorize_submission(); products/messaging/RUNTIME-CONFIG.md, The package. */}
 
-{/* messaging-s6b: state how requestsPerMinute, burst, and dailyLimit are enforced (429 rate-limit.exceeded, 429 quota.exceeded) once enforcement lands. */}
+`requestsPerMinute` and `burst` bound how fast each caller of the profile submits. Every
+`POST /v1/messages` that passes the role check is charged to a bucket kept per caller, by token
+issuer and subject, and a submission past the burst is refused `429 rate-limit.exceeded` with a
+`Retry-After` header. The bucket lives in the runtime process, so each replica enforces its own and
+a restart refills it.
+
+`dailyLimit` bounds the messages the whole profile accepted in the last 24 hours. It is counted from
+the accepted messages when a submission is accepted, so it holds across replicas and restarts. A
+submission past it is refused `429 quota.exceeded`, with `Retry-After` set to when the oldest
+counted message leaves the window. A replayed submission is charged to the rate but not to the
+daily limit.
+
+{/* Evidence: products/messaging/RUNTIME-CONFIG.md, The package; crates/registry-messaging/src/limits.rs,
+    CallerLimits and LimitRefusal; crates/registry-messaging/src/http.rs. */}
 
 ## Write a template version
 
@@ -298,7 +313,12 @@ capabilities:
 | `request.headers`, `responseHeaders` | The only header names the prepare script may set and the interpret script may read |
 | `capabilities.receipts` | `none`, `callback`, or `reconcile`. Only `callback` gives messages a delivery report |
 | `capabilities.concurrencyLimit` | 1 to 64. The operator's connection may lower it, never raise it |
-| `capabilities.ratePerSecond` | Optional, 1 to 1000 |
+| `capabilities.ratePerSecond` | Optional, 1 to 1000. Paces how often this runtime process starts a send |
+
+With `ratePerSecond` set, at most one send to the provider starts every `1 / ratePerSecond` seconds
+in each runtime process. An attempt waits for its slot for up to ten seconds on top of the send's
+own time budget; an attempt whose slot does not open in time sends nothing and is retried under its
+dispatch policy.
 
 `provider.yaml` is closed and at most 64 KiB, and each script is at most 64 KiB and must compile
 with exactly its entry point when the package loads. A file the provider does not name, a hidden
@@ -326,6 +346,7 @@ The Registry Stack repository carries two more example provider directories unde
 {/* Evidence: crates/registry-messaging/src/http_provider/mod.rs, module documentation and
     message_view(); crates/registry-messaging/src/http_provider/script.rs, PreparedRequest,
     Interpretation, and ScriptReceipt; products/messaging/RUNTIME-CONFIG.md, HTTP providers;
+    crates/registry-messaging/src/limits.rs, ProviderPacer and PACING_ALLOWANCE;
     products/messaging/examples/providers/. */}
 
 ## Check and preview the package

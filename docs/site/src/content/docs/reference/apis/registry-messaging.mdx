@@ -78,7 +78,35 @@ message.not-visible`, the same answer a message that does not exist receives.
 {/* Evidence: crates/registry-messaging-core/src/visibility.rs;
     products/messaging/generated/registry-messaging.openapi.json, getMessage. */}
 
-{/* messaging-s6b: document per-profile rate limits and the daily quota (429 rate-limit.exceeded, 429 quota.exceeded) once enforcement lands. */}
+## Limits
+
+Each access profile limits its callers' submissions. `requestsPerMinute` and `burst` set a request
+rate kept per caller, by token issuer and subject, and `dailyLimit` caps the messages the whole
+profile accepts in any 24 hours. A submission past either one is refused with `429` and a
+`Retry-After` header in seconds:
+
+| Code | Refused when | `Retry-After` |
+| --- | --- | --- |
+| `rate-limit.exceeded` | The caller spent its burst | When the caller's rate admits a submission again |
+| `quota.exceeded` | The profile accepted `dailyLimit` messages in the last 24 hours | When the oldest counted message leaves the 24-hour window |
+
+The rate is charged after the role check and before the body is read. A replayed submission is
+charged to the rate but not to the daily limit. Each runtime process keeps its own rate, so a
+restart refills it; the daily limit is counted in the database and holds across restarts and
+replicas. A runtime that cannot decide a limit refuses with `503 service.unavailable`. With a
+`burst` of 10, the eleventh rapid submission from one caller was answered `429` with:
+
+```text
+content-type: application/problem+json
+retry-after: 1
+
+{"type":"https://id.registrystack.org/problems/registry-messaging/rate-limit/exceeded","title":"Request rate exceeded","status":429,"detail":"Your Messaging access profile's request rate is exceeded. Try again after the time in Retry-After.","code":"rate-limit.exceeded","traceId":"…"}
+```
+
+{/* Evidence: products/messaging/RUNTIME-CONFIG.md, The package; crates/registry-messaging/src/limits.rs,
+    CallerLimits and LimitRefusal; crates/registry-messaging-core/src/problem.rs, QuotaExceeded and
+    RateLimitExceeded; response observed with messaging 0.33.0-dev on 2026-09-25, headers trimmed and the
+    trace identifier elided. */}
 
 ## Submission
 
@@ -174,7 +202,7 @@ HTTP status listed beside it. `request.not-found` answers a path the contract do
 | Route | Authentication | Purpose |
 | --- | --- | --- |
 | `GET /health` | None | `200` while the process serves |
-| `GET /ready` | None | `200` when the database carries every expected migration, `503 service.unavailable` otherwise |
+| `GET /ready` | None | `200` when the database carries every expected migration and its package ledger names the package this process serves active, `503 service.unavailable` otherwise |
 | `POST /v1/messages` | Bearer, sender | Submit one message |
 | `GET /v1/messages/{message_id}` | Bearer, the submitting principal or an operator | Read one message's status and attempts |
 | `POST /v1/messages/{message_id}/cancel` | Bearer, the submitting principal or an operator | Cancel a queued message |

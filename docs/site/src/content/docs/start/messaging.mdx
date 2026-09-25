@@ -69,11 +69,37 @@ surface any other authorized caller uses.
 {/* Evidence: products/messaging/README.md;
     products/messaging/scripts/check_dependency_direction.py. */}
 
-{/* messaging-s6b: name per-profile rate limits, the daily quota, and the retention sweep once they land. */}
+## Limits and retention
 
-{/* messaging-s6b: link the Messaging tutorial (one email through Mailpit, one SMS through the mock provider) once messagingctl dev exists. */}
+Each access profile bounds its callers. A request rate with a burst applies to each caller of the
+profile, and an optional daily limit caps the messages the whole profile accepts in 24 hours. A
+submission past either is refused with `429` and a time to retry, so a caller stuck in a loop
+cannot send without bound. An operator may also pace how often the runtime starts a send to
+each provider.
+
+Messaging keeps what it holds only as long as the operator's retention says. The rendered content
+and the recipient contact go first, then the message record with its attempts and receipts. Both
+periods count from the moment a message reached a final state, so a message still waiting to send
+keeps its content. The runtime erases what has expired once at start and then every hour, and an
+operator can run the same erasure on demand.
+
+{/* Evidence: products/messaging/RUNTIME-CONFIG.md, Keys and The package;
+    crates/registry-messaging/src/limits.rs; crates/registry-messaging/src/retention.rs,
+    SWEEP_INTERVAL and erase_expired(). */}
+
+## Try it locally
+
+`messagingctl dev` runs the starter package on your machine, with a local mail catcher for email
+and a mock SMS gateway that reports delivery.
+[Send your first message](../../tutorials/first-messaging/) takes it from there: send one SMS until
+it is delivered and one email into the mail catcher, and read both back.
+
+{/* Evidence: crates/registry-messagingctl/src/dev/mod.rs, StartArgs;
+    products/messaging/README.md, Running locally. */}
 
 ## Next
+
+- [Send your first message](../../tutorials/first-messaging/) to run the starter package locally.
 
 - [Author a Messaging package](../../configure/messaging/) to declare providers, sender profiles,
   templates, and who may call.

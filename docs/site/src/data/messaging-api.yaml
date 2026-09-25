@@ -15,6 +15,8 @@
     - ['`message.terminal`', '409', 'The message has reached a final state, so it can no longer be cancelled.']
     - ['`operation.not-authorized`', '403', 'Your Messaging access profile does not allow this operation.']
     - ['`profile.not-authorized`', '403', 'No Messaging access profile authorizes this caller for this request.']
+    - ['`quota.exceeded`', '429', 'Your Messaging access profile has accepted its daily limit of messages. Try again after the time in Retry-After.']
+    - ['`rate-limit.exceeded`', '429', 'Your Messaging access profile''s request rate is exceeded. Try again after the time in Retry-After.']
     - ['`request.body-too-large`', '413', 'The request body exceeds the accepted size.']
     - ['`request.invalid`', '400', 'The request could not be read as a Messaging request.']
     - ['`request.method-not-allowed`', '405', 'The route exists but not for this method.']

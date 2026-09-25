@@ -171,6 +171,7 @@ const messagingOpenApiSchema = {
 };
 const messagingRoutes = [
   '/start/messaging/',
+  '/tutorials/first-messaging/',
   '/configure/messaging/',
   '/operate/messaging/',
   '/reference/apis/registry-messaging/',
@@ -624,6 +625,7 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'start/messaging' },
+            { label: 'Send your first message', slug: 'tutorials/first-messaging' },
             { label: 'Author a package', slug: 'configure/messaging' },
             { label: 'Deploy Messaging', slug: 'operate/messaging' },
             { label: 'API contract', slug: 'reference/apis/registry-messaging' },
@@ -634,6 +636,7 @@ export default defineConfig({
               1 + Number(hasCasework) + Number(hasScheduling),
               2 + Number(hasCasework) + Number(hasScheduling),
             ),
+            { label: 'Client API reference', slug: 'reference/client-api' },
           ],
         }] : []),
         {
