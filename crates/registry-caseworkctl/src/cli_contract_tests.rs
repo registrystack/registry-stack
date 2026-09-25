@@ -84,7 +84,7 @@ fn generated_schemas_are_current() {
 
 #[test]
 fn every_public_json_report_matches_its_schema() {
-    let root = tempfile::tempdir().expect("temporary contract fixture root");
+    let root = crate::canonical_tempdir();
     let project = root.path().join("standalone");
     let missing = root.path().join("missing");
     let missing_export = missing.join("export.jsonl");
@@ -324,7 +324,7 @@ fn db_migrate_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
     let secret = format!("CASEWORKCTL_TEST_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
     std::env::set_var(&secret, &scoped);
 
-    let root = tempfile::tempdir().expect("temporary project root");
+    let root = crate::canonical_tempdir();
     let project = root.path().join("standalone");
     let (exit, _) = invoke(vec![
         OsString::from("init"),
@@ -400,7 +400,7 @@ const AUDIT_FIXTURE_KEY: &[u8] = b"caseworkctl-audit-fixture-secret-32-bytes";
 fn audit_fixture(records: usize) -> (tempfile::TempDir, PathBuf, PathBuf) {
     use std::os::unix::fs::PermissionsExt as _;
 
-    let root = tempfile::tempdir().expect("temporary audit fixture root");
+    let root = crate::canonical_tempdir();
     let secrets = root.path().join("secrets");
     let audit = root.path().join("audit");
     for directory in [&secrets, &audit] {

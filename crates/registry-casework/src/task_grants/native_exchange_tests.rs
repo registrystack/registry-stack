@@ -189,14 +189,25 @@ struct EvidenceDeployment {
     base_url: String,
     _runtime: Arc<EvidenceRuntime>,
     server: tokio::task::JoinHandle<std::io::Result<()>>,
-    bundle_root: PathBuf,
-    runtime_path: PathBuf,
+    _prepared: PreparedEvidence,
     _source: MockServer,
 }
 
 impl Drop for EvidenceDeployment {
     fn drop(&mut self) {
         self.server.abort();
+    }
+}
+
+/// A sealed Evidence bundle and its runtime file, unsealed again on drop so
+/// the temporary root can be removed.
+struct PreparedEvidence {
+    bundle_root: PathBuf,
+    runtime_path: PathBuf,
+}
+
+impl Drop for PreparedEvidence {
+    fn drop(&mut self) {
         let _ = fs::set_permissions(&self.runtime_path, fs::Permissions::from_mode(0o644));
         unseal(&self.bundle_root);
     }
@@ -216,6 +227,51 @@ async fn start_evidence(root: &Path, issuer: &Issuer) -> EvidenceDeployment {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener);
+    let prepared = prepare_evidence(root, &source.uri(), &issuer.url(), port);
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize(&prepared.runtime_path)
+            .await
+            .unwrap(),
+    );
+    let served = Arc::clone(&runtime);
+    let server =
+        tokio::spawn(
+            async move { evidence_server::serve(served, std::future::pending::<()>()).await },
+        );
+    let base_url = format!("http://127.0.0.1:{port}");
+    let probe = reqwest::Client::builder().no_proxy().build().unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if probe
+                .get(format!("{base_url}/ready"))
+                .send()
+                .await
+                .is_ok_and(|response| response.status().is_success())
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    EvidenceDeployment {
+        base_url,
+        _runtime: runtime,
+        server,
+        _prepared: prepared,
+        _source: source,
+    }
+}
+
+/// Copy the adult-status acceptance bundle, point it at the local source and
+/// issuer, write its runtime file and secrets, and seal the bundle.
+fn prepare_evidence(
+    root: &Path,
+    source_origin: &str,
+    issuer_origin: &str,
+    port: u16,
+) -> PreparedEvidence {
     let evidence_root = root.join("evidence-deployment");
     let bundle_root = evidence_root.join("bundle");
     let secret_root = evidence_root.join("secrets");
@@ -231,9 +287,9 @@ async fn start_evidence(root: &Path, issuer: &Issuer) -> EvidenceDeployment {
     );
     rewrite_evidence_fixture(
         &bundle_root,
-        &source.uri(),
-        &issuer.url(),
-        &format!("{}/oauth2/jwks", issuer.url()),
+        source_origin,
+        issuer_origin,
+        &format!("{issuer_origin}/oauth2/jwks"),
         &format!("http://127.0.0.1:{port}"),
     );
     write_secret(
@@ -251,11 +307,12 @@ async fn start_evidence(root: &Path, issuer: &Issuer) -> EvidenceDeployment {
     fs::write(
         &runtime_path,
         format!(
-            r#"version: 1
-bundleDirectory: {bundle}
+            r#"apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+kind: EvidenceRuntimeConfig
+package:
+  root: {bundle}
 listener:
-  bindHost: 127.0.0.1
-  port: {port}
+  bind: 127.0.0.1:{port}
   tlsTermination: operator-controlled-upstream
   trustProxyIdentityHeaders: false
   maximumRequestBytes: 65536
@@ -283,37 +340,31 @@ outboundTls:
     .unwrap();
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444)).unwrap();
     seal(&bundle_root);
-    let runtime = Arc::new(EvidenceRuntime::initialize(&runtime_path).await.unwrap());
-    let served = Arc::clone(&runtime);
-    let server =
-        tokio::spawn(
-            async move { evidence_server::serve(served, std::future::pending::<()>()).await },
-        );
-    let base_url = format!("http://127.0.0.1:{port}");
-    let probe = reqwest::Client::builder().no_proxy().build().unwrap();
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        loop {
-            if probe
-                .get(format!("{base_url}/ready"))
-                .send()
-                .await
-                .is_ok_and(|response| response.status().is_success())
-            {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .unwrap();
-    EvidenceDeployment {
-        base_url,
-        _runtime: runtime,
-        server,
+    PreparedEvidence {
         bundle_root,
         runtime_path,
-        _source: source,
     }
+}
+
+// The cross-product journey above needs Docker and two databases; this proves
+// without either that the rewritten Evidence fixture and runtime file still
+// load through Evidence's own deployment loader.
+#[test]
+fn the_rewritten_evidence_deployment_loads_through_the_evidence_loader() {
+    let root = canonical_tempdir();
+    let prepared = prepare_evidence(
+        root.path(),
+        "http://127.0.0.1:9",
+        "http://127.0.0.1:10",
+        8080,
+    );
+    registry_evidence::bundle::DeploymentInputs::load(&prepared.runtime_path).unwrap();
+}
+
+/// The runtime configuration loaders refuse a path through a symbolic link,
+/// and the system temporary root is one on some hosts.
+fn canonical_tempdir() -> tempfile::TempDir {
+    tempfile::tempdir_in(fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap()
 }
 
 fn rewrite_evidence_fixture(
@@ -340,17 +391,17 @@ fn rewrite_evidence_fixture(
             &format!("issuer: {issuer_origin}"),
         ),
         (
-            "audiences: [evidence-fixture]",
-            &format!("audiences: [{EVIDENCE_RESOURCE}]"),
+            "audience: evidence-fixture",
+            &format!("audience: {EVIDENCE_RESOURCE}"),
         ),
         (
-            "jwksUri: https://identity.invalid/.well-known/jwks.json",
-            &format!("jwksUri: {issuer_jwks_uri}"),
+            "uri: https://identity.invalid/.well-known/jwks.json",
+            &format!("uri: {issuer_jwks_uri}"),
         ),
         ("algorithms: [ES256]", "algorithms: [RS256]"),
         (
-            "  principalClaim: sub\n  requesterTagsClaim: evidence_tags",
-            "  principalClaim: sub\n  allowedClients: [evidence-task-agent]\n  requesterTagsClaim: evidence_tags",
+            "    principalClaim: sub\n    requesterTagsClaim: evidence_tags",
+            "    principalClaim: sub\n    allowedClients: [evidence-task-agent]\n    requesterTagsClaim: evidence_tags",
         ),
         (
             "  statutory-caseworker-v1:\n    kind: statutory",
@@ -838,7 +889,7 @@ async fn request(
 #[ignore = "requires Docker, disposable CASEWORK_ASSIGNMENT_TEST_DATABASE_URL and BREG_TEST_DATABASE_URL, and absolute SCHEDULING_AUTH_PROBE_BIN"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid() {
-    let root = tempfile::tempdir().unwrap();
+    let root = canonical_tempdir();
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let casework_port = listener.local_addr().unwrap().port();
     let (human_key, agent_key, evidence_agent_key, status_key, seed_key) = (

@@ -181,7 +181,9 @@ async fn create_review(url: &str, token: &str, body: Value) -> (StatusCode, Valu
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker, built casework/caseworkctl and disposable BREG_TEST_DATABASE_URL"]
 async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
-    let workspace = tempfile::tempdir().unwrap();
+    // The runtime configuration loader refuses a path through a symbolic
+    // link, and the system temporary root is one on some hosts.
+    let workspace = tempfile::tempdir_in(fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
     let held = (0..4)
         .map(|_| std::net::TcpListener::bind("127.0.0.1:0").unwrap())
         .collect::<Vec<_>>();

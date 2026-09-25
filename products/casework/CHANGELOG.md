@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- BREAKING: Casework reads `runtime.yaml` through the shared Registry Stack
+  runtime configuration loader and declares its secret providers, database,
+  listener bind, OpenID Connect issuer and clients, and audit key through the
+  shared blocks. The runtime file may not pass through a symbolic link and is
+  at most 1 MiB. `${VAR}`, `${VAR:-default}`, and `${VAR:?message}` are
+  substituted in string values after parsing, so a substituted value is
+  always text; an expression in a field ending in `Ref` or under
+  `secretProviders` is refused, and one in `casework.yaml` is refused by the
+  runtime and by `caseworkctl check` with the path of the field that holds it.
+- BREAKING: `listener.bind` is required; the `127.0.0.1:8100` default is
+  removed.
+- BREAKING: `authentication.oidc.issuer` must be an absolute `https` URL
+  without credentials or fragment, or IPv4-loopback `http` under
+  `development-loopback`, and `authentication.oidc.audience` is at most 512
+  characters.
+- BREAKING: `authentication.oidc.jwksUri` is removed. Declare
+  `jwksSource` with `kind: uri` and the same `https` URL as `uri`; that
+  source fetches the key set from the fixed address without reading the
+  discovery document. The removed key is refused with the replacement named,
+  and `caseworkctl` reports it at `runtime.yaml:/authentication/oidc/jwksUri`.
+- BREAKING: `audit.hashKeyRef` must be an exact secret reference when the
+  document is read. A refused `authentication.oidc.assertionIssuers` map is
+  reported at that field; its bounds are unchanged.
+- `package.expectedPolicyDigest` keeps its meaning and form under the shared
+  loader.
 - The metrics listener no longer lets the scrape rate set the database load.
   Scrapes within five seconds of a database reading reuse it, concurrent
   scrapes wait for the one reading in flight, and a reading that takes longer

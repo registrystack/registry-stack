@@ -5,14 +5,14 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
+use registry_platform_config::blocks::SECRET_PROVIDER_PATTERN;
+
 use crate::{RuntimeConfig, RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND};
 
 pub const RUNTIME_CONFIG_SCHEMA_FILE: &str = "runtime.schema.json";
 pub const RUNTIME_CONFIG_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/casework/runtime/runtime.v1alpha1.schema.json";
 const POLICY_DIGEST_SCHEMA_PATTERN: &str = "^sha256:[0-9a-f]{64}$";
-const SECRET_REFERENCE_SCHEMA_PATTERN: &str =
-    "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$";
 
 pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
     let mut derived = serde_json::to_value(schemars::schema_for!(RuntimeConfig))?;
@@ -40,12 +40,13 @@ pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
     Ok([(RUNTIME_CONFIG_SCHEMA_FILE, rendered)].into())
 }
 
+/// State in the schema the bounds `RuntimeConfig::check` and
+/// `validate_secret_references` enforce at load beyond the shared blocks,
+/// which carry their own: operated paths are absolute, every Casework secret
+/// field is a secret reference, and a static JWKS document names an enabled
+/// provider.
 fn install_runtime_constraints(schema: &mut Value) {
-    for (definition, property) in [
-        ("RuntimePackageConfig", "root"),
-        ("FileSecretProviderConfig", "root"),
-        ("AuditConfig", "path"),
-    ] {
+    for (definition, property) in [("RuntimePackageConfig", "root"), ("AuditConfig", "path")] {
         set_definition_property(
             schema,
             definition,
@@ -55,10 +56,6 @@ fn install_runtime_constraints(schema: &mut Value) {
         );
     }
     for (definition, property) in [
-        ("DatabaseConfig", "runtimeUrlRef"),
-        ("DatabaseConfig", "migrationUrlRef"),
-        ("DatabaseConfig", "trustedRootCertificateRef"),
-        ("AuditConfig", "hashKeyRef"),
         ("TaskAuthorityConfig", "signingKeyRef"),
         ("BregBinding", "clientIdRef"),
         ("BregBinding", "clientAssertionKeyRef"),
@@ -72,7 +69,7 @@ fn install_runtime_constraints(schema: &mut Value) {
             definition,
             property,
             "pattern",
-            Value::String("^secret:(?:env|file)/".to_owned()),
+            Value::String(SECRET_PROVIDER_PATTERN.to_owned()),
         );
     }
     set_definition_property(
@@ -82,20 +79,7 @@ fn install_runtime_constraints(schema: &mut Value) {
         "pattern",
         Value::String(POLICY_DIGEST_SCHEMA_PATTERN.to_owned()),
     );
-    set_jwks_document_reference_constraints(schema);
-    if let Some(providers) = schema
-        .get_mut("$defs")
-        .and_then(|definitions| definitions.get_mut("SecretProvidersConfig"))
-        .and_then(Value::as_object_mut)
-    {
-        providers.insert(
-            "anyOf".to_owned(),
-            serde_json::json!([
-                {"required": ["file"], "properties": {"file": {"$ref": "#/$defs/FileSecretProviderConfig"}}},
-                {"required": ["environment"], "properties": {"environment": {"$ref": "#/$defs/EnvironmentSecretProviderConfig"}}}
-            ]),
-        );
-    }
+    set_jwks_document_provider_requirement(schema);
     if let Some(sources) = schema
         .get_mut("properties")
         .and_then(|properties| properties.get_mut("sources"))
@@ -106,7 +90,6 @@ fn install_runtime_constraints(schema: &mut Value) {
             serde_json::json!({"minLength": 1}),
         );
     }
-    set_assertion_issuer_constraints(schema);
     set_review_completion_auth_constraints(schema);
 }
 
@@ -143,112 +126,15 @@ fn set_review_completion_auth_constraints(schema: &mut Value) {
     );
 }
 
-/// State the bounds `RuntimeConfig::validate_assertion_issuers` applies, so a
-/// document the published schema accepts is one the runtime starts on rather
-/// than one it refuses after the operator has already written it.
-fn set_assertion_issuer_constraints(schema: &mut Value) {
-    let Some(member) = schema
-        .pointer_mut("/$defs/OidcConfig/properties/assertionIssuers")
-        .and_then(Value::as_object_mut)
-    else {
-        return;
-    };
-    member.insert(
-        "maxProperties".to_owned(),
-        Value::from(crate::config::MAXIMUM_ASSERTION_ISSUER_CLIENTS),
-    );
-    member.insert(
-        "propertyNames".to_owned(),
-        serde_json::json!({
-            "type": "string",
-            "minLength": 1,
-            "maxLength": crate::config::MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES,
-        }),
-    );
-    member.insert(
-        "additionalProperties".to_owned(),
-        serde_json::json!({
-            "type": "array",
-            "maxItems": crate::config::MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT,
-            "uniqueItems": true,
-            "items": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": crate::config::MAXIMUM_ASSERTION_ISSUER_BYTES,
-            },
-        }),
-    );
-}
-
-fn set_jwks_document_reference_constraints(schema: &mut Value) {
-    if let Some(variants) = schema
-        .pointer_mut("/$defs/OidcJwksSource/oneOf")
-        .and_then(Value::as_array_mut)
-    {
-        for variant in variants {
-            if let Some(document_reference) = variant
-                .pointer_mut("/properties/documentRef")
-                .and_then(Value::as_object_mut)
-            {
-                document_reference.insert(
-                    "pattern".to_owned(),
-                    Value::String(SECRET_REFERENCE_SCHEMA_PATTERN.to_owned()),
-                );
-            }
-        }
-    }
-
+/// A static JWKS document reference names its provider by its prefix, so a
+/// configuration carrying one must enable that provider.
+fn set_jwks_document_provider_requirement(schema: &mut Value) {
     if let Some(root) = schema.as_object_mut() {
         root.insert(
             "allOf".to_owned(),
-            serde_json::json!([
-                secret_provider_requirement("^secret:env/", "environment"),
-                secret_provider_requirement("^secret:file/", "file")
-            ]),
+            registry_platform_config::schema::jwks_document_provider_requirements(),
         );
     }
-}
-
-fn secret_provider_requirement(reference_pattern: &str, provider: &str) -> Value {
-    serde_json::json!({
-        "if": {
-            "properties": {
-                "authentication": {
-                    "properties": {
-                        "oidc": {
-                            "properties": {
-                                "jwksSource": {
-                                    "properties": {
-                                        "documentRef": {"pattern": reference_pattern}
-                                    },
-                                    "required": ["documentRef"]
-                                }
-                            },
-                            "required": ["jwksSource"]
-                        }
-                    },
-                    "required": ["oidc"]
-                }
-            },
-            "required": ["authentication"]
-        },
-        "then": {
-            "properties": {
-                "secretProviders": {
-                    "properties": {
-                        provider: {
-                            "$ref": format!("#/$defs/{}SecretProviderConfig", match provider {
-                                "environment" => "Environment",
-                                "file" => "File",
-                                _ => unreachable!("closed secret provider schema"),
-                            })
-                        }
-                    },
-                    "required": [provider]
-                }
-            }
-        }
-    })
 }
 
 fn set_definition_property(
@@ -284,6 +170,11 @@ mod tests {
     use super::*;
     use crate::RuntimeConfigError;
     use jsonschema::{Draft, JSONSchema};
+    use registry_platform_config::blocks::SECRET_REFERENCE_PATTERN;
+    use registry_platform_config::{
+        ConfigBlockErrorKind, MAX_ASSERTION_ISSUERS_PER_CLIENT, MAX_ASSERTION_ISSUER_BYTES,
+        MAX_ASSERTION_ISSUER_CLIENTS, MAX_ASSERTION_ISSUER_CLIENT_BYTES,
+    };
 
     fn runtime_schema() -> JSONSchema {
         let documents = runtime_documents().expect("the runtime schema generates");
@@ -314,7 +205,7 @@ mod tests {
             "apiVersion": RUNTIME_CONFIG_API_VERSION,
             "kind": RUNTIME_CONFIG_KIND,
             "package": {"root": "/var/lib/casework/package"},
-            "listener": {"tlsTermination": "development-loopback"},
+            "listener": {"bind": "127.0.0.1:8100", "tlsTermination": "development-loopback"},
             "secretProviders": secret_providers,
             "database": {
                 "runtimeUrlRef": supporting_reference,
@@ -353,8 +244,17 @@ mod tests {
             ])
         );
         assert_eq!(
-            document["$defs"]["OidcJwksSource"]["oneOf"][1]["properties"]["documentRef"]["pattern"],
-            SECRET_REFERENCE_SCHEMA_PATTERN
+            document["$defs"]["JwksSource"]["oneOf"][2]["properties"]["documentRef"]["pattern"],
+            SECRET_REFERENCE_PATTERN
+        );
+        // The shared blocks carry their own bounds into this schema.
+        assert_eq!(
+            document["$defs"]["AuditConfig"]["properties"]["hashKeyRef"]["$ref"],
+            "#/$defs/SecretReference"
+        );
+        assert_eq!(
+            document["$defs"]["OidcConfig"]["properties"]["issuer"]["pattern"],
+            "^https?://"
         );
     }
 
@@ -362,15 +262,15 @@ mod tests {
     fn assertion_issuer_schema_states_the_bounds_the_runtime_enforces() {
         // The published schema is what an operator's editor reads before the
         // runtime ever sees the document, so it refuses the same maps
-        // `RuntimeConfig::validate_assertion_issuers` refuses at load, whose own
-        // coverage lives beside it in `config`.
+        // the shared `OidcClientsConfig::check` refuses at load, whose own
+        // coverage lives beside it in `registry-platform-config`.
         let schema = runtime_schema();
         let with = |issuers: Value| {
             let mut instance = runtime_instance("secret:file/jwks.json", "file");
             instance["authentication"]["oidc"]["assertionIssuers"] = issuers;
             instance
         };
-        let many_clients = (0..=crate::config::MAXIMUM_ASSERTION_ISSUER_CLIENTS)
+        let many_clients = (0..=MAX_ASSERTION_ISSUER_CLIENTS)
             .map(|index| {
                 (
                     format!("task-agent-{index}"),
@@ -378,12 +278,12 @@ mod tests {
                 )
             })
             .collect::<Map<_, _>>();
-        let many_issuers = (0..=crate::config::MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT)
+        let many_issuers = (0..=MAX_ASSERTION_ISSUERS_PER_CLIENT)
             .map(|index| Value::String(format!("https://exchange-{index}.example.test")))
             .collect::<Vec<_>>();
         let mut long_client = Map::new();
         long_client.insert(
-            "a".repeat(crate::config::MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES + 1),
+            "a".repeat(MAX_ASSERTION_ISSUER_CLIENT_BYTES + 1),
             serde_json::json!(["https://exchange.example.test"]),
         );
         for (label, issuers) in [
@@ -402,7 +302,7 @@ mod tests {
                 "over-long issuer",
                 serde_json::json!({"task-agent": [format!(
                     "https://{}.example.test",
-                    "a".repeat(crate::config::MAXIMUM_ASSERTION_ISSUER_BYTES)
+                    "a".repeat(MAX_ASSERTION_ISSUER_BYTES)
                 )]}),
             ),
             (
@@ -577,8 +477,9 @@ mod tests {
                 serde_json::from_value(instance.clone()).expect("the runtime shape parses");
             assert!(matches!(
                 config.check(),
-                Err(RuntimeConfigError::InvalidSecretReference { path })
-                    if path == "authentication.oidc.jwksSource.documentRef"
+                Err(RuntimeConfigError::Block(error))
+                    if error.kind() == ConfigBlockErrorKind::InvalidSecretReference
+                        && error.field() == "authentication.oidc.jwksSource.documentRef"
             ));
             assert!(
                 !schema.is_valid(&instance),
@@ -599,8 +500,9 @@ mod tests {
                     serde_json::from_value(instance.clone()).expect("the runtime shape parses");
                 assert!(matches!(
                     config.check(),
-                    Err(RuntimeConfigError::SecretProviderRequired { path })
-                        if path == "authentication.oidc.jwksSource.documentRef"
+                    Err(RuntimeConfigError::Block(error))
+                        if error.kind() == ConfigBlockErrorKind::SecretProviderDisabled
+                            && error.field() == "authentication.oidc.jwksSource.documentRef"
                 ));
                 assert!(
                     !schema.is_valid(&instance),

@@ -509,8 +509,11 @@ fn load_yaml(path: &Path, label: &str) -> Result<Value> {
     serde_norway::from_slice(&bytes).with_context(|| format!("parsing {label}"))
 }
 pub(super) fn load_and_check_policy(project: &Path) -> Result<CaseworkProject> {
-    let policy = CaseworkProject::load(project.join("casework.yaml"))
-        .context("loading and checking casework.yaml")?;
+    let policy_path = project.join("casework.yaml");
+    let policy =
+        CaseworkProject::load(&policy_path).context("loading and checking casework.yaml")?;
+    let authored = fs::read_to_string(&policy_path).context("reading casework.yaml")?;
+    registry_platform_config::reject_environment_expressions_in_authored_yaml(&authored)?;
     if policy.sources.is_empty() {
         if policy.review_kinds.is_empty() || policy.review_producers.is_empty() {
             bail!("declare a review kind and producer or connect a source before checking the project");
@@ -779,8 +782,8 @@ fn secret_references(config: &RuntimeConfig) -> Vec<(String, &str)> {
     if let Some(reference) = config.database.trusted_root_certificate_ref.as_deref() {
         references.push(("database.trustedRootCertificateRef".to_owned(), reference));
     }
-    if let registry_casework::OidcJwksSource::Static { document_ref } =
-        &config.authentication.oidc.jwks_source
+    if let registry_casework::JwksSource::Static { document_ref } =
+        &config.authentication.oidc.provider.jwks_source
     {
         references.push((
             "authentication.oidc.jwksSource.documentRef".to_owned(),
@@ -789,7 +792,7 @@ fn secret_references(config: &RuntimeConfig) -> Vec<(String, &str)> {
     }
     references.push((
         "audit.hashKeyRef".to_owned(),
-        config.audit.hash_key_ref.as_str(),
+        config.audit.key.hash_key_ref.as_str(),
     ));
     for (id, binding) in &config.sources {
         for (setting, reference) in [
@@ -1055,7 +1058,7 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
     // Resolve the audit key as a readiness check without retaining or reporting
     // its bytes. Database references are resolved inside PostgresStore.
     resolver
-        .resolve(&config.audit.hash_key_ref)
+        .resolve(config.audit.key.hash_key_ref.as_str())
         .map_err(|error| {
             doctor_dependency_failure(
                 "secretFiles",
@@ -1173,7 +1176,7 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
     let audit_chain = verify_audit_journal(
         &config.audit.path,
         &resolver,
-        &config.audit.hash_key_ref,
+        config.audit.key.hash_key_ref.as_str(),
         None,
     )
     .map_err(|error| {
@@ -1578,6 +1581,7 @@ fn async_runtime() -> Result<tokio::runtime::Runtime> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_config::ConfigBlockErrorKind;
 
     #[test]
     fn template_has_only_checkpoint_capabilities() {
@@ -1832,7 +1836,7 @@ mod tests {
     fn attempt_mark_uncertain_without_the_migration_credential_refuses_before_the_database() {
         use std::os::unix::fs::PermissionsExt as _;
         const RUNTIME_URL: &str = "postgresql://runtime-only@127.0.0.1:1/casework";
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::canonical_tempdir();
         fs::write(directory.path().join("casework.yaml"), CASEWORK_YAML).unwrap();
         fs::create_dir(directory.path().join("sources")).unwrap();
         fs::write(
@@ -1997,7 +2001,7 @@ mod tests {
                 ],
             ),
         ] {
-            let root = tempfile::tempdir().unwrap();
+            let root = crate::canonical_tempdir();
             let project = root.path().join(template);
             let report = init(&project, template).unwrap();
             assert!(report["created"]
@@ -2041,7 +2045,7 @@ mod tests {
                     .collect::<std::collections::BTreeSet<_>>()
             );
         }
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let project = root.path().join("standalone");
         init(&project, "standalone-decision").unwrap();
         assert!(init(&project, "standalone-decision").is_err());
@@ -2051,7 +2055,7 @@ mod tests {
     fn the_secret_file_preflight_names_every_unusable_reference() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let secrets = root.path().to_path_buf();
         let write = |name: &str, bytes: &[u8], mode: u32| {
             let path = secrets.join(name);
@@ -2106,7 +2110,7 @@ mod tests {
     fn the_secret_file_preflight_reports_one_result_per_reference() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let project = root.path().join("standalone");
         init(&project, "standalone-decision").unwrap();
         let secrets = project.join("secrets");
@@ -2156,7 +2160,7 @@ mod tests {
     fn the_secret_file_preflight_checks_completion_destination_secrets() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let project = root.path().join("standalone");
         init(&project, "standalone-decision").unwrap();
         let secrets = project.join("secrets");
@@ -2222,7 +2226,7 @@ mod tests {
     fn doctor_refuses_a_symlinked_file_root_for_a_migration_only_file_reference() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let project = root.path().join("standalone");
         init(&project, "standalone-decision").unwrap();
         let actual_secrets = root.path().join("actual-secrets");
@@ -2257,7 +2261,7 @@ mod tests {
     fn doctor_refuses_malformed_secret_references_before_live_checks() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let project = root.path().join("standalone");
         init(&project, "standalone-decision").unwrap();
         let secrets = project.join("secrets");
@@ -2295,14 +2299,15 @@ mod tests {
             assert!(
                 matches!(
                     runtime_error,
-                    Some(registry_casework::RuntimeConfigError::InvalidSecretReference { path })
-                        if path == setting
+                    Some(registry_casework::RuntimeConfigError::Block(block))
+                        if block.kind() == ConfigBlockErrorKind::InvalidSecretReference
+                            && block.field() == setting
                 ),
                 "{error:#}"
             );
             let refusal = format!("{error:#}");
             assert!(
-                refusal.contains(&format!("{setting} is not a valid secret reference")),
+                refusal.contains(&format!("{setting} must be an exact secret")),
                 "{refusal}"
             );
             assert!(!refusal.contains(malformed), "{refusal}");
@@ -2311,7 +2316,7 @@ mod tests {
 
     #[test]
     fn doctor_refuses_a_completion_secret_in_a_reserved_header() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let project = root.path().join("standalone");
         init(&project, "standalone-decision").unwrap();
         let runtime_config = project.join("runtime.example.yaml");
@@ -2343,7 +2348,7 @@ mod tests {
     fn standalone_starter_checks_real_review_display_schema_without_a_source() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let project = root.path().join("standalone");
         init(&project, "standalone-decision").unwrap();
         assert_eq!(
@@ -2390,7 +2395,7 @@ mod tests {
 
     #[test]
     fn package_stages_only_verified_policy_inputs_and_refuses_replacement() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let project = root.path().join("standalone");
         let output = root.path().join("deployment/policy");
         init(&project, "standalone-decision").unwrap();
@@ -2416,7 +2421,7 @@ mod tests {
 
     #[test]
     fn package_pins_the_exact_strictly_decoded_source_description() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let project = root.path().join("authored");
         let output = root.path().join("package");
         fs::create_dir_all(project.join("sources")).unwrap();
@@ -2454,7 +2459,7 @@ mod tests {
             count
         }
 
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let project = root.path().join("standalone");
         init(&project, "standalone-decision").unwrap();
         let files_before = count_files(&project);
@@ -2476,7 +2481,7 @@ mod tests {
 
     #[test]
     fn package_dry_run_still_refuses_an_invalid_project() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let project = root.path().join("standalone");
         init(&project, "standalone-decision").unwrap();
         let actual_policy = root.path().join("actual-casework.yaml");
@@ -2493,14 +2498,14 @@ mod tests {
 
     #[test]
     fn source_description_paths_cannot_leave_the_project() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         assert!(project_input_path(root.path(), "../source.json").is_err());
         assert!(project_input_path(root.path(), "/tmp/source.json").is_err());
     }
 
     #[test]
     fn generated_runtime_config_loads_through_runtime_contract() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::canonical_tempdir();
         fs::write(directory.path().join("casework.yaml"), CASEWORK_YAML).unwrap();
         fs::create_dir(directory.path().join("sources")).unwrap();
         fs::write(
@@ -2526,7 +2531,7 @@ mod tests {
         casework_yaml: &str,
         description: &str,
     ) -> (tempfile::TempDir, PathBuf) {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let project = root.path().join("authored");
         fs::create_dir_all(project.join("sources")).unwrap();
         fs::write(project.join("casework.yaml"), casework_yaml).unwrap();
@@ -3212,7 +3217,7 @@ mod tests {
         description["sourceId"] = json!("response-register");
         description["request"]["requestEntity"] = json!("response-correction");
 
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::canonical_tempdir();
         let project = root.path().join("authored");
         fs::create_dir_all(project.join("sources")).unwrap();
         fs::write(

@@ -79,7 +79,7 @@ pub(crate) fn verify(runtime_config: &Path, from_head: Option<&str>) -> Result<V
     let verification = verify_audit_journal(
         &config.audit.path,
         &resolver,
-        &config.audit.hash_key_ref,
+        config.audit.key.hash_key_ref.as_str(),
         from_head.map(|(head, _)| head),
     )
     .map_err(chain_failure)?;
@@ -108,7 +108,7 @@ pub(crate) fn export(runtime_config: &Path, output: &Path) -> Result<Value> {
         let verification = export_audit_journal(
             &config.audit.path,
             &resolver,
-            &config.audit.hash_key_ref,
+            config.audit.key.hash_key_ref.as_str(),
             &mut sink,
         )
         .map_err(chain_failure)?;

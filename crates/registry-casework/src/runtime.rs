@@ -9,7 +9,7 @@ use clap::{Arg, Command};
 use registry_casework_breg::BregBinding;
 use registry_casework_core::{CaseworkProject, SourceAdapter};
 use registry_platform_audit::{AuditEnvelope, AuditProfile, ChainState, DurableSegmentedJsonlSink};
-use registry_platform_config::{SecretProvider, SecretResolver};
+use registry_platform_config::SecretResolver;
 use registry_platform_httputil::{read_bounded, BearerToken, OutboundClientBuilder};
 use serde_json::Value;
 use thiserror::Error;
@@ -514,7 +514,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         keys,
         config.authentication.oidc.human_identity.clone(),
     ));
-    let audit_secret = resolve_audit_secret(&secrets, &config.audit.hash_key_ref)?;
+    let audit_secret = resolve_audit_secret(&secrets, config.audit.key.hash_key_ref.as_str())?;
     let audit_profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
         audit_secret.expose_secret().to_vec(),
     ))
@@ -671,7 +671,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         )),
         None => None,
     };
-    let listener = tokio::net::TcpListener::bind(config.listener.bind)
+    let listener = tokio::net::TcpListener::bind(config.listener.bind.socket_addr())
         .await
         .map_err(RuntimeError::Listen)?;
     let served = serve_until_worker_stops(listener, app, metrics, worker_stops).await;
@@ -1458,7 +1458,7 @@ pub async fn acknowledge_audit_restore(
     let secrets = secret_resolver(config)?;
     let store = PostgresStore::connect_runtime(&config.database, &secrets)?;
     store.ready().await?;
-    let audit_secret = resolve_audit_secret(&secrets, &config.audit.hash_key_ref)?;
+    let audit_secret = resolve_audit_secret(&secrets, config.audit.key.hash_key_ref.as_str())?;
     let profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
         audit_secret.expose_secret().to_vec(),
     ))
@@ -1571,22 +1571,10 @@ async fn acknowledge_audit_restore_in(
 }
 
 pub fn secret_resolver(config: &RuntimeConfig) -> Result<SecretResolver, RuntimeError> {
-    let mut providers = Vec::new();
-    if config.secret_providers.file.is_some() {
-        providers.push(SecretProvider::File);
-    }
-    if config.secret_providers.environment.is_some() {
-        providers.push(SecretProvider::Environment);
-    }
-    SecretResolver::new(
-        providers,
-        config
-            .secret_providers
-            .file
-            .as_ref()
-            .map_or_else(|| Path::new(""), |file| file.root.as_path()),
-    )
-    .map_err(|_| RuntimeError::SecretConfiguration)
+    config
+        .secret_providers
+        .resolver()
+        .map_err(|_| RuntimeError::SecretConfiguration)
 }
 
 /// Audit publication for one runtime. At most one runtime per Casework schema
@@ -2020,6 +2008,7 @@ fn update_audit_health(
 mod tests {
     use chrono::{TimeZone as _, Utc};
     use registry_platform_audit::JsonlFileSink;
+    use registry_platform_config::SecretProvider;
     use tokio::sync::Mutex;
     use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
