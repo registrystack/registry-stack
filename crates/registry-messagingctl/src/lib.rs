@@ -407,7 +407,7 @@ fn init(directory: &Path) -> Outcome {
                 "directory": directory,
                 "created": created,
                 "next": [
-                    "Run messagingctl check --package DIRECTORY.",
+                    "Run messagingctl check --package DIRECTORY, then messagingctl dev DIRECTORY to run it locally against PostgreSQL and Mailpit containers.",
                     "Copy runtime.example.yaml to runtime.yaml, set its absolute paths and secret references, run messaging migrate, then messagingctl apply --apply, then messaging serve.",
                 ],
             }),
@@ -1536,6 +1536,36 @@ audit:
         args.extend_from_slice(arguments);
         let (exit, stdout, _) = run(&args);
         (exit, serde_json::from_str(&stdout).unwrap())
+    }
+
+    #[test]
+    fn init_points_at_the_local_dev_session() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("starter");
+        let (exit, report) = json_run(&[OsStr::new("init"), directory.as_os_str()]);
+        assert_eq!(exit, ExitCode::SUCCESS);
+        let next: Vec<&str> = report["next"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|step| step.as_str().unwrap())
+            .collect();
+        assert!(
+            next.iter()
+                .any(|step| step.contains("messagingctl dev DIRECTORY")),
+            "{next:?}"
+        );
+
+        let directory = root.path().join("human");
+        let (exit, stdout, _) = run(&[OsStr::new("init"), directory.as_os_str()]);
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert!(
+            stdout
+                .lines()
+                .any(|line| line.starts_with("next: ")
+                    && line.contains("messagingctl dev DIRECTORY")),
+            "{stdout}"
+        );
     }
 
     #[test]
