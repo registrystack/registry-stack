@@ -7,9 +7,11 @@ import io
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 import unittest.mock
 import urllib.parse
@@ -270,9 +272,9 @@ printf 'exited %s\\n' "$sampler_status"
 """
         # The trap leaves a live sampler behind at exit; if the trap did not stop
         # it, the sampler would hold the output pipes open past the timeout.
-        trapped = """
-trap stop_samplers EXIT INT TERM
-bash -c 'touch "$1"; exec sleep 30' _ "$READY/trapped" &
+        traps = "".join(f"{line}\n" for line in runner.splitlines() if line.startswith("trap "))
+        trapped = f"""
+{traps}bash -c 'touch "$1"; exec sleep 30' _ "$READY/trapped" &
 db_pid=$!
 until [[ -e "$READY/trapped" ]]; do sleep 0.01; done
 exit 7
@@ -294,6 +296,59 @@ exit 7
         self.assertEqual([result.stderr for result in results], ["", ""])
         self.assertIn("The database wait sampler failed with status $sampler_status", runner)
         self.assertIn('--db-sampler-exit-code "$sampler_status"', runner)
+
+    def test_interrupt_ends_the_run_and_stops_a_live_sampler(self) -> None:
+        runner = (MODULE_PATH.parent.parent / "run.sh").read_text(encoding="utf-8")
+        start = runner.index("stop_samplers() {")
+        function = runner[start : runner.index("\n}\n", start) + 3]
+        traps = "".join(f"{line}\n" for line in runner.splitlines() if line.startswith("trap "))
+        # Each rate starts a sampler and a k6 stand-in that, like k6, handles INT
+        # and TERM and exits 105. A signal must end the loop, not only the current rate.
+        loop = """
+for rate in 1 2 3; do
+  printf 'rate %s\\n' "$rate"
+  bash -c 'printf "%s\\n" "$$" >"$1"; exec sleep 30' _ "$READY/sampler-$rate" >/dev/null 2>&1 &
+  db_pid=$!
+  until [[ -s "$READY/sampler-$rate" ]]; do sleep 0.01; done
+  k6_status=0
+  python3 -c 'import pathlib, signal, sys, time
+for received in (signal.SIGINT, signal.SIGTERM): signal.signal(received, lambda *_: sys.exit(105))
+pathlib.Path(sys.argv[1]).touch()
+time.sleep(30)' "$READY/k6-$rate" || k6_status=$?
+  stop_samplers
+done
+"""
+        for received, expected in ((signal.SIGINT, 130), (signal.SIGTERM, 143)):
+            with self.subTest(signal=received.name), tempfile.TemporaryDirectory() as directory:
+                process = subprocess.Popen(
+                    ["bash", "-c", f"set -euo pipefail\ndb_pid=\"\"\nsampler_status=0\n{function}{traps}{loop}"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    env={**os.environ, "READY": directory},
+                    start_new_session=True,
+                )
+                try:
+                    for _ in range(1000):
+                        if (Path(directory) / "k6-1").exists():
+                            break
+                        time.sleep(0.01)
+                    sampler = int((Path(directory) / "sampler-1").read_text(encoding="ascii"))
+                    # A terminal delivers Ctrl-C to the whole foreground process group.
+                    os.killpg(process.pid, received)
+                    try:
+                        stdout, stderr = process.communicate(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        self.fail(f"{received.name} did not end the loop; it moved on to the next rate")
+                    self.assertEqual(process.returncode, expected, stderr)
+                    self.assertEqual(stdout.splitlines(), ["rate 1"])
+                    self.assertEqual(stderr, "")
+                    with self.assertRaises(ProcessLookupError):
+                        os.kill(sampler, 0)
+                finally:
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGKILL)
+                    process.communicate()
 
     def test_runner_refuses_to_disable_thresholds_or_replace_the_offered_load(self) -> None:
         runner = MODULE_PATH.parent.parent / "run.sh"

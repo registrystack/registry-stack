@@ -172,7 +172,11 @@ stop_samplers() {
     sampler_status="$code"
   fi
 }
-trap stop_samplers EXIT INT TERM
+trap stop_samplers EXIT
+# A signal ends the whole run once the current k6 returns; the exit trap then
+# stops the sampler. Returning from a signal trap would move on to the next run.
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Decision flows consume the flow pool in order, one entry per iteration. The
 # offset advances by the scenario's upper bound before k6 starts, so an
