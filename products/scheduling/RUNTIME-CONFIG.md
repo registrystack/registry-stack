@@ -26,14 +26,20 @@ kind: SchedulingRuntimeConfig
 ```
 
 `package.root` selects one directory. The runtime always loads
-`package.root/scheduling.yaml`; no second project selector can override it.
-With `listener.tlsTermination: operator-controlled-upstream`, the directory
-must also contain a matching `scheduling.package.json`. Development loopback
-may select an authored project directory without that manifest.
+`package.root/scheduling.yaml`; no second project selector can override it. In
+every listener mode, with or without `package.expectedDigest`, the directory
+must be a package `schedulingctl package --output` wrote: a `SHA256SUMS` file
+listing exactly `scheduling.yaml`, whose bytes match the listed digest. A
+changed, missing, or extra file is refused by name, and so is a directory
+without `SHA256SUMS`, such as an authored project; each refusal names
+`schedulingctl package`. A directory that holds the retired
+`scheduling.package.json` is refused the same way.
+
 `package.expectedDigest` optionally pins the package the runtime must serve:
-the `sha256:` label `schedulingctl package` records as the policy digest. A
-different package, or a pin over a directory without a manifest, is a startup
-refusal.
+`sha256:` followed by 64 lowercase hexadecimal digits, the `packageDigest`
+`schedulingctl package` prints, which is the SHA-256 digest of the package's
+`SHA256SUMS`. Any other package is a startup refusal that names the expected
+digest and the one found.
 
 `listener` is required. `listener.bind` is required and is one numeric
 socket address, including bracketed IPv6 forms. `listener.tlsTermination` is

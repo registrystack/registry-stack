@@ -115,9 +115,30 @@ if [ "$plain_explain" = "$banded_explain" ]; then
   exit 1
 fi
 
-# The package journey on a fresh project: the manifest the runtime verifies.
-"$schedulingctl_bin" init "$work/package" --template standalone-exact-time >/dev/null
-"$schedulingctl_bin" package "$work/package" >/dev/null
+# The package journey on a fresh project: the shared package the runtime
+# verifies, planned and then written to the same digest.
+"$schedulingctl_bin" init "$work/package-project" --template standalone-exact-time >/dev/null
+planned=$("$schedulingctl_bin" package "$work/package-project" --dry-run --format json |
+  python3 -c 'import json, sys; print(json.load(sys.stdin)["packageDigest"])')
+written=$("$schedulingctl_bin" package "$work/package-project" --output "$work/package" --format json |
+  python3 -c 'import json, sys; print(json.load(sys.stdin)["packageDigest"])')
+if [ "$planned" != "$written" ]; then
+  echo "the planned package digest $planned differs from the written $written" >&2
+  exit 1
+fi
+if [ ! -f "$work/package/SHA256SUMS" ] || [ ! -f "$work/package/scheduling.yaml" ]; then
+  echo 'schedulingctl package wrote no SHA256SUMS or scheduling.yaml' >&2
+  exit 1
+fi
+sums_digest="sha256:$(python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$work/package/SHA256SUMS")"
+if [ "$written" != "$sums_digest" ]; then
+  echo "the package digest $written is not the SHA-256 digest of SHA256SUMS" >&2
+  exit 1
+fi
+if [ -e "$work/package/scheduling.package.json" ]; then
+  echo 'schedulingctl package wrote the retired scheduling.package.json' >&2
+  exit 1
+fi
 
 # The committed examples are the starter templates' output, so neither can
 # drift from what an adopter initializes, including its live records document.

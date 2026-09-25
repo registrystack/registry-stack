@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The operator runtime configuration document and the policy package
-//! identity it verifies.
+//! The operator runtime configuration document and the package it
+//! verifies.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -9,10 +9,12 @@ use std::time::Duration;
 
 use jsonwebtoken::Algorithm;
 pub(crate) use registry_platform_config::describe_secret_failure;
+use registry_platform_config::package::is_envelope_file;
 use registry_platform_config::{
     redact_refused_values, reject_environment_expressions_in_authored_yaml, sha256_uri,
-    ConfigBlockError, PackageDigestMismatch, RemovedKey, RuntimeConfigErrorKind,
-    RuntimeConfigLoader, RuntimeEnvelope, SecretResolver, REMOVED_OIDC_JWKS_URI,
+    ConfigBlockError, PackageDigestMismatch, PackageError, PackageErrorKind, PackageLimits,
+    RemovedKey, RuntimeConfigErrorKind, RuntimeConfigLoader, RuntimeEnvelope, SecretResolver,
+    VerifiedPackage, REMOVED_OIDC_JWKS_URI,
 };
 pub use registry_platform_config::{
     AuditKeyConfig, DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
@@ -24,25 +26,22 @@ use registry_platform_oidc::{
     OidcDiscoveryConfig, TokenVerifierConfig,
 };
 use registry_scheduling_core::{
-    parse_policy_yaml, SchedulingPolicy, AUTHORED_POLICY_FILE, SCHEDULING_PACKAGE_MANIFEST_FILE,
-    SCHEDULING_RUNTIME_API_VERSION, SCHEDULING_RUNTIME_KIND,
+    parse_policy_yaml, SchedulingPolicy, AUTHORED_POLICY_FILE, SCHEDULING_RUNTIME_API_VERSION,
+    SCHEDULING_RUNTIME_KIND,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use thiserror::Error;
 
 const MAXIMUM_POLICY_FILE_BYTES: usize = 1024 * 1024;
-const MAXIMUM_PACKAGE_MANIFEST_BYTES: usize = 1024 * 1024;
 
-/// apiVersion of the package manifest written beside the authored policy.
-///
-/// The manifest names a package identity; the authored policy names a policy.
-/// They are two documents with two readers, so they carry two names and
-/// neither reader accepts the other's document.
-pub const SCHEDULING_PACKAGE_MANIFEST_API_VERSION: &str =
-    "registry.registrystack.org/scheduling-policy-package-manifest/v1alpha1";
+/// The command that writes a Scheduling package, named by every package
+/// refusal.
+pub const PACKAGE_COMMAND: &str = "schedulingctl package";
 
-/// Kind of the package manifest written beside the authored policy.
-pub const SCHEDULING_PACKAGE_MANIFEST_KIND: &str = "SchedulingPolicyPackageManifest";
+/// The manifest file an earlier `schedulingctl package` wrote beside the
+/// policy. A package root that still holds it is refused with the command
+/// that rebuilds the package.
+pub const RETIRED_PACKAGE_MANIFEST_FILE: &str = "scheduling.package.json";
 
 /// The default number of days a stored idempotency receipt is replayable
 /// before the retention sweep erases it. The default is a floor, not a
@@ -215,97 +214,42 @@ const fn default_hook_payload_days() -> u16 {
     7
 }
 
-/// The immutable identity of a packaged policy: the digest of the package
-/// envelope over its exact authored files. A scheduling package is one
-/// authored policy file, so the manifest is small, but it is still a
-/// separate document the runtime verifies rather than trusts.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PolicyPackageManifest {
-    pub api_version: String,
-    pub kind: String,
-    pub policy_digest: String,
-    pub files: Vec<PolicyPackageFile>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PolicyPackageFile {
-    pub path: String,
-    pub sha256: String,
-    pub bytes: u64,
-}
-
-impl PolicyPackageManifest {
-    /// Build the immutable identity for an already validated policy text.
-    pub fn build(policy_text: &str) -> Result<Self, PolicyPackageError> {
-        let bytes = policy_text.as_bytes();
-        if bytes.len() > MAXIMUM_POLICY_FILE_BYTES {
-            return Err(PolicyPackageError::Invalid);
-        }
-        let files = vec![PolicyPackageFile {
-            path: AUTHORED_POLICY_FILE.to_owned(),
-            sha256: sha256_uri(bytes),
-            bytes: u64::try_from(bytes.len()).map_err(|_| PolicyPackageError::Invalid)?,
-        }];
-        Ok(Self {
-            api_version: SCHEDULING_PACKAGE_MANIFEST_API_VERSION.to_owned(),
-            kind: SCHEDULING_PACKAGE_MANIFEST_KIND.to_owned(),
-            policy_digest: package_digest(&files)?,
-            files,
-        })
-    }
-
-    fn verify(&self, policy_text: &str) -> Result<(), PolicyPackageError> {
-        let expected = Self::build(policy_text)?;
-        if self.api_version != expected.api_version
-            || self.kind != expected.kind
-            || self.files != expected.files
-            || self.policy_digest != expected.policy_digest
-        {
-            return Err(PolicyPackageError::Invalid);
-        }
-        Ok(())
+/// The bounds a Scheduling package holds to: each file at most one MiB.
+#[must_use]
+pub fn package_limits() -> PackageLimits {
+    PackageLimits {
+        max_file_bytes: MAXIMUM_POLICY_FILE_BYTES as u64,
+        ..PackageLimits::default()
     }
 }
 
-/// Verify the package beside `scheduling.yaml`. An absent manifest is
-/// distinguished so local authored development remains usable.
-pub fn verify_policy_package(
-    policy_path: &Path,
-    policy_text: &str,
-) -> Result<Option<String>, PolicyPackageError> {
-    if policy_path.file_name().and_then(|name| name.to_str()) != Some(AUTHORED_POLICY_FILE) {
-        return Err(PolicyPackageError::Invalid);
+/// Verify the package at `package.root`: its `SHA256SUMS`, the
+/// `package.expectedDigest` pin, and that it holds exactly `scheduling.yaml`.
+/// Every listener mode serves a package: a directory without `SHA256SUMS` is
+/// refused with the packaging command, whether or not a digest is pinned.
+pub fn verify_scheduling_package(
+    package: &PackageConfig,
+) -> Result<VerifiedPackage, RuntimeConfigError> {
+    if std::fs::symlink_metadata(package.root.join(RETIRED_PACKAGE_MANIFEST_FILE)).is_ok() {
+        return Err(RuntimeConfigError::RetiredPackageManifest);
     }
-    let root = policy_path.parent().ok_or(PolicyPackageError::Invalid)?;
-    let manifest_path = root.join(SCHEDULING_PACKAGE_MANIFEST_FILE);
-    if !manifest_path.exists() {
-        return Ok(None);
+    let verified = package
+        .verify_package(&package_limits(), PACKAGE_COMMAND)
+        .map_err(|error| match error.kind() {
+            PackageErrorKind::DigestMismatch(mismatch) => {
+                RuntimeConfigError::PackageDigest(mismatch.clone())
+            }
+            _ => RuntimeConfigError::Package(error),
+        })?;
+    let extra = verified
+        .files()
+        .filter(|path| !is_envelope_file(path) && *path != AUTHORED_POLICY_FILE)
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    if verified.file_digest(AUTHORED_POLICY_FILE).is_none() || !extra.is_empty() {
+        return Err(RuntimeConfigError::PackageContents { extra });
     }
-    let metadata = std::fs::symlink_metadata(&manifest_path).map_err(PolicyPackageError::Read)?;
-    if !metadata.file_type().is_file()
-        || metadata.file_type().is_symlink()
-        || metadata.len() > MAXIMUM_PACKAGE_MANIFEST_BYTES as u64
-    {
-        return Err(PolicyPackageError::Invalid);
-    }
-    let bytes = std::fs::read(&manifest_path).map_err(PolicyPackageError::Read)?;
-    let manifest: PolicyPackageManifest =
-        serde_json::from_slice(&bytes).map_err(|_| PolicyPackageError::Invalid)?;
-    manifest.verify(policy_text)?;
-    Ok(Some(manifest.policy_digest))
-}
-
-fn package_digest(files: &[PolicyPackageFile]) -> Result<String, PolicyPackageError> {
-    let identity = serde_json::json!({
-        "apiVersion": SCHEDULING_PACKAGE_MANIFEST_API_VERSION,
-        "kind": SCHEDULING_PACKAGE_MANIFEST_KIND,
-        "files": files,
-    });
-    let canonical = registry_platform_canonical_json::canonicalize_json(&identity)
-        .map_err(|_| PolicyPackageError::Invalid)?;
-    Ok(sha256_uri(&canonical))
+    Ok(verified)
 }
 
 impl RuntimeConfig {
@@ -329,8 +273,9 @@ impl RuntimeConfig {
         self.package.root.join(AUTHORED_POLICY_FILE)
     }
 
-    /// Read and validate the authored policy this deployment runs.
+    /// Read and validate the packaged policy this deployment runs.
     pub fn load_policy(&self) -> Result<SchedulingPolicy, RuntimeConfigError> {
+        let package = verify_scheduling_package(&self.package)?;
         let policy_text =
             std::fs::read_to_string(self.policy_path()).map_err(RuntimeConfigError::PolicyRead)?;
         let policy = parse_policy_yaml(&policy_text).map_err(|error| {
@@ -352,20 +297,22 @@ impl RuntimeConfig {
         if !policy.check().is_empty() {
             return Err(RuntimeConfigError::PolicyFindings);
         }
-        // A present manifest is verified against the exact policy text; the
-        // digest the runtime publishes is the policy's own, not the manifest's.
-        verify_policy_package(&self.policy_path(), &policy_text)
-            .map_err(RuntimeConfigError::PolicyPackage)?;
+        // The policy is served only when the text just parsed is the text the
+        // package lists; the digest the runtime publishes is the policy's
+        // own, not the package's.
+        if package.file_digest(AUTHORED_POLICY_FILE).as_deref()
+            != Some(sha256_uri(policy_text.as_bytes()).as_str())
+        {
+            return Err(RuntimeConfigError::PolicyChanged);
+        }
         Ok(policy)
     }
 
-    /// Return the verified package identity, if this is a packaged
-    /// deployment. Production configurations always have one.
-    pub fn policy_package_digest(&self) -> Result<Option<String>, RuntimeConfigError> {
-        let policy_text =
-            std::fs::read_to_string(self.policy_path()).map_err(RuntimeConfigError::PolicyRead)?;
-        verify_policy_package(&self.policy_path(), &policy_text)
-            .map_err(RuntimeConfigError::PolicyPackage)
+    /// Return the digest of the verified package this deployment serves.
+    pub fn package_digest(&self) -> Result<String, RuntimeConfigError> {
+        Ok(verify_scheduling_package(&self.package)?
+            .digest()
+            .to_owned())
     }
 
     pub fn check(&self) -> Result<(), RuntimeConfigError> {
@@ -449,16 +396,6 @@ impl RuntimeConfig {
             self.destinations.hooks.keys().map(String::as_str).collect();
         if !declared_hook_destinations.is_subset(&configured_hook_destinations) {
             return Err(RuntimeConfigError::HookDestinationInventoryMismatch);
-        }
-        let package_digest = self.policy_package_digest()?;
-        match package_digest.as_deref() {
-            Some(found) => self.package.verify_digest(found)?,
-            None if self.listener.tls_termination == TlsTermination::OperatorControlledUpstream
-                || self.package.expected_digest.is_some() =>
-            {
-                return Err(RuntimeConfigError::ProductionPolicyPackageRequired);
-            }
-            None => {}
         }
         #[cfg(not(feature = "postgres-test"))]
         if self.database.test_only_plaintext {
@@ -620,14 +557,6 @@ fn refused_yaml(error: serde_path_to_error::Error<serde_norway::Error>) -> (Stri
 }
 
 #[derive(Debug, Error)]
-pub enum PolicyPackageError {
-    #[error("the Scheduling policy package could not be read")]
-    Read(#[source] std::io::Error),
-    #[error("the Scheduling policy package is invalid or does not match its exact inputs")]
-    Invalid,
-}
-
-#[derive(Debug, Error)]
 pub enum RuntimeConfigError {
     #[error(transparent)]
     Load(#[from] registry_platform_config::RuntimeConfigError),
@@ -651,10 +580,21 @@ pub enum RuntimeConfigError {
     PolicyParse { path: String, cause: String },
     #[error("the authored scheduling policy does not pass its checks")]
     PolicyFindings,
-    #[error("the Scheduling policy package is invalid")]
-    PolicyPackage(#[source] PolicyPackageError),
-    #[error("operator-controlled production requires a verified Scheduling policy package")]
-    ProductionPolicyPackageRequired,
+    #[error(transparent)]
+    Package(PackageError),
+    #[error(
+        "the package at package.root must hold exactly scheduling.yaml{}; rebuild it with `schedulingctl package`",
+        extra_files(extra)
+    )]
+    PackageContents { extra: Vec<String> },
+    #[error(
+        "package.root holds scheduling.package.json, which Scheduling no longer reads; rebuild the package with `schedulingctl package`, which writes SHA256SUMS"
+    )]
+    RetiredPackageManifest,
+    #[error(
+        "package.root/scheduling.yaml changed after its package was verified; deploy the whole package again"
+    )]
+    PolicyChanged,
     #[error("listener is not valid for its declared TLS termination and network exposure")]
     InvalidListener,
     #[error("authentication.oidc is invalid")]
@@ -700,21 +640,33 @@ impl RuntimeConfigError {
             Self::PolicyRead(_)
             | Self::PolicyParse { .. }
             | Self::PolicyEnvironmentExpression { .. } => "package.root/scheduling.yaml",
-            Self::PolicyFindings | Self::PolicyPackage(_) => "package.root",
-            Self::ProductionPolicyPackageRequired => "package.root",
+            Self::PolicyChanged => "package.root/scheduling.yaml",
+            Self::PolicyFindings
+            | Self::Package(_)
+            | Self::PackageContents { .. }
+            | Self::RetiredPackageManifest => "package.root",
         }
+    }
+}
+
+fn extra_files(extra: &[String]) -> String {
+    if extra.is_empty() {
+        String::new()
+    } else {
+        format!(", not {}", extra.join(", "))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_config::package::write_sum_file;
+    use registry_platform_config::SUM_FILE;
     use registry_platform_config::{
         MAX_ASSERTION_ISSUERS_PER_CLIENT, MAX_ASSERTION_ISSUER_BYTES, MAX_ASSERTION_ISSUER_CLIENTS,
         MAX_ASSERTION_ISSUER_CLIENT_BYTES,
     };
     use registry_platform_oidc::is_access_token_typ_pair;
-    use registry_scheduling_core::{SCHEDULING_POLICY_API_VERSION, SCHEDULING_POLICY_KIND};
 
     const POLICY: &str = r#"apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
 kind: SchedulingPolicyPackage
@@ -761,8 +713,18 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
     }
 
     fn write_policy(root: &Path) {
+        package_policy(root, POLICY);
+    }
+
+    /// Write `policy` as the package's `scheduling.yaml` and list it in a
+    /// fresh `SHA256SUMS`, as `schedulingctl package` does.
+    fn package_policy(root: &Path, policy: &str) {
         std::fs::create_dir_all(root).unwrap();
-        std::fs::write(root.join(AUTHORED_POLICY_FILE), POLICY).unwrap();
+        std::fs::write(root.join(AUTHORED_POLICY_FILE), policy).unwrap();
+        if root.join(SUM_FILE).exists() {
+            std::fs::remove_file(root.join(SUM_FILE)).unwrap();
+        }
+        write_sum_file(root, None, &package_limits(), PACKAGE_COMMAND).unwrap();
     }
 
     fn operator_value(package: &Path, tls: &str) -> serde_json::Value {
@@ -819,40 +781,47 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
     }
 
     #[test]
-    fn production_requires_a_verified_package_while_loopback_accepts_authoring() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        write_policy(&package);
-        let operator = write_operator(
-            root.path(),
-            operator_value(&package, "operator-controlled-upstream"),
-        );
-        assert!(matches!(
-            RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::ProductionPolicyPackageRequired)
-        ));
+    fn every_listener_mode_verifies_the_package_without_a_pin() {
+        for tls in ["development-loopback", "operator-controlled-upstream"] {
+            let root = canonical_tempdir();
+            let package = root.path().join("package");
+            write_policy(&package);
+            let operator = write_operator(root.path(), operator_value(&package, tls));
+            let config = RuntimeConfig::load(&operator).expect("the package is admitted");
+            assert_eq!(
+                config.package_digest().unwrap(),
+                sha256_uri(&std::fs::read(package.join(SUM_FILE)).unwrap())
+            );
 
-        let manifest = PolicyPackageManifest::build(POLICY).unwrap();
-        std::fs::write(
-            package.join(SCHEDULING_PACKAGE_MANIFEST_FILE),
-            serde_json::to_vec_pretty(&manifest).unwrap(),
-        )
-        .unwrap();
-        let config = RuntimeConfig::load(&operator).expect("packaged production is accepted");
-        assert_eq!(
-            config.policy_package_digest().unwrap(),
-            Some(manifest.policy_digest)
-        );
+            let refused = |named: &str| {
+                let error = RuntimeConfig::load(&operator).unwrap_err();
+                let message = error.to_string();
+                assert_eq!(error.path(), "package.root", "{tls}: {message}");
+                assert!(message.contains(named), "{tls}: {message}");
+                assert!(message.contains(PACKAGE_COMMAND), "{tls}: {message}");
+            };
 
-        std::fs::write(
-            package.join(AUTHORED_POLICY_FILE),
-            POLICY.replace("30-minute", "31-minute"),
-        )
-        .unwrap();
-        assert!(matches!(
-            RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::PolicyPackage(_))
-        ));
+            let policy = package.join(AUTHORED_POLICY_FILE);
+            std::fs::write(&policy, format!("{POLICY}# changed\n")).unwrap();
+            refused("changed: scheduling.yaml");
+            std::fs::write(&policy, POLICY).unwrap();
+
+            std::fs::write(package.join("notes.txt"), "stale\n").unwrap();
+            refused("extra: notes.txt");
+            std::fs::remove_file(package.join("notes.txt")).unwrap();
+
+            std::fs::remove_file(&policy).unwrap();
+            refused("missing: scheduling.yaml");
+            std::fs::write(&policy, POLICY).unwrap();
+            RuntimeConfig::load(&operator).expect("the restored package is admitted");
+
+            std::fs::write(package.join(RETIRED_PACKAGE_MANIFEST_FILE), "{}").unwrap();
+            refused(RETIRED_PACKAGE_MANIFEST_FILE);
+            std::fs::remove_file(package.join(RETIRED_PACKAGE_MANIFEST_FILE)).unwrap();
+
+            std::fs::remove_file(package.join(SUM_FILE)).unwrap();
+            refused("has no SHA256SUMS");
+        }
     }
 
     #[test]
@@ -908,7 +877,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
         let hooked = format!(
             "{POLICY}hooks:\n  - id: appointment-observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: []\n    handler:\n      kind: url\n      destinationId: appointment-events\n"
         );
-        std::fs::write(package.join(AUTHORED_POLICY_FILE), hooked).unwrap();
+        package_policy(&package, &hooked);
         let mut document = operator_value(&package, "development-loopback");
         let operator = write_operator(root.path(), document.clone());
         assert!(matches!(
@@ -1038,15 +1007,13 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
     fn an_authored_policy_carrying_an_environment_expression_is_refused() {
         let root = canonical_tempdir();
         let package = root.path().join("package");
-        std::fs::create_dir_all(&package).unwrap();
-        std::fs::write(
-            package.join(AUTHORED_POLICY_FILE),
-            POLICY.replace(
+        package_policy(
+            &package,
+            &POLICY.replace(
                 "    because: test\nofferings:",
                 "    because: ${OPENING_REASON}\nofferings:",
             ),
-        )
-        .unwrap();
+        );
         let operator = write_operator(
             root.path(),
             operator_value(&package, "development-loopback"),
@@ -1063,12 +1030,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
     fn a_malformed_authored_policy_is_a_parse_refusal() {
         let root = canonical_tempdir();
         let package = root.path().join("package");
-        std::fs::create_dir_all(&package).unwrap();
-        std::fs::write(
-            package.join(AUTHORED_POLICY_FILE),
-            format!("{POLICY}services: [unterminated\n"),
-        )
-        .unwrap();
+        package_policy(&package, &format!("{POLICY}services: [unterminated\n"));
         let operator = write_operator(
             root.path(),
             operator_value(&package, "development-loopback"),
@@ -1085,16 +1047,13 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
         let root = canonical_tempdir();
         let package = root.path().join("package");
         write_policy(&package);
-        let manifest = PolicyPackageManifest::build(POLICY).unwrap();
-        std::fs::write(
-            package.join(SCHEDULING_PACKAGE_MANIFEST_FILE),
-            serde_json::to_vec_pretty(&manifest).unwrap(),
-        )
-        .unwrap();
+        let digest = sha256_uri(&std::fs::read(package.join(SUM_FILE)).unwrap());
 
         let mut document = operator_value(&package, "operator-controlled-upstream");
-        document["package"]["expectedDigest"] = serde_json::json!(manifest.policy_digest);
-        RuntimeConfig::load(write_operator(root.path(), document)).expect("the pin matches");
+        document["package"]["expectedDigest"] = serde_json::json!(digest);
+        let config =
+            RuntimeConfig::load(write_operator(root.path(), document)).expect("the pin matches");
+        assert_eq!(config.package_digest().unwrap(), digest);
 
         let mut document = operator_value(&package, "operator-controlled-upstream");
         document["package"]["expectedDigest"] =
@@ -1165,12 +1124,10 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
     fn a_refused_authored_policy_names_the_member_and_the_cause() {
         let root = canonical_tempdir();
         let package = root.path().join("package");
-        std::fs::create_dir_all(&package).unwrap();
-        std::fs::write(
-            package.join(AUTHORED_POLICY_FILE),
+        package_policy(
+            &package,
             "scheduling: {id: standalone-exact-time, version: one}\n",
-        )
-        .unwrap();
+        );
         let operator = write_operator(
             root.path(),
             operator_value(&package, "development-loopback"),
@@ -1185,56 +1142,11 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
         assert!(message.contains("column"), "{message}");
     }
 
-    // The package manifest and the policy it identifies are two documents
-    // with two readers: the manifest is verified by the runtime at startup,
-    // the policy is parsed by the authoring grammar. A reader that accepts
-    // one must be able to refuse the other on its declared names alone.
-    #[test]
-    fn a_package_manifest_is_a_different_document_from_the_policy_it_identifies() {
-        let manifest = PolicyPackageManifest::build(POLICY).expect("the policy is packaged");
-        assert_ne!(manifest.api_version, SCHEDULING_POLICY_API_VERSION);
-        assert_ne!(manifest.kind, SCHEDULING_POLICY_KIND);
-        assert_eq!(
-            manifest.api_version,
-            SCHEDULING_PACKAGE_MANIFEST_API_VERSION
-        );
-        assert_eq!(manifest.kind, SCHEDULING_PACKAGE_MANIFEST_KIND);
-    }
-
-    // A deployment identity is only an identity if a document of another kind
-    // cannot stand in for it. The manifest is verified against its own names,
-    // so an authored policy's names never carry a package identity.
-    #[test]
-    fn a_manifest_wearing_the_authored_policy_names_is_refused() {
-        let root = canonical_tempdir();
-        let package = root.path().join("package");
-        write_policy(&package);
-        let manifest = PolicyPackageManifest::build(POLICY).expect("the policy is packaged");
-        let mut document = serde_json::to_value(&manifest).unwrap();
-        document["apiVersion"] = serde_json::json!(SCHEDULING_POLICY_API_VERSION);
-        document["kind"] = serde_json::json!(SCHEDULING_POLICY_KIND);
-        std::fs::write(
-            package.join(SCHEDULING_PACKAGE_MANIFEST_FILE),
-            serde_json::to_vec_pretty(&document).unwrap(),
-        )
-        .unwrap();
-        assert!(matches!(
-            verify_policy_package(&package.join(AUTHORED_POLICY_FILE), POLICY),
-            Err(PolicyPackageError::Invalid)
-        ));
-    }
-
     #[test]
     fn a_production_deployment_must_name_the_clients_it_admits() {
         let root = canonical_tempdir();
         let package = root.path().join("package");
         write_policy(&package);
-        let manifest = PolicyPackageManifest::build(POLICY).unwrap();
-        std::fs::write(
-            package.join(SCHEDULING_PACKAGE_MANIFEST_FILE),
-            serde_json::to_vec_pretty(&manifest).unwrap(),
-        )
-        .unwrap();
 
         let mut document = operator_value(&package, "operator-controlled-upstream");
         document["authentication"]["oidc"]

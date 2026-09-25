@@ -3167,6 +3167,13 @@ fn unreachable_deployment(root: &std::path::Path) -> std::path::PathBuf {
         POLICY,
     )
     .expect("the authored policy");
+    registry_platform_config::package::write_sum_file(
+        &package,
+        None,
+        &registry_scheduling::config::package_limits(),
+        registry_scheduling::config::PACKAGE_COMMAND,
+    )
+    .expect("the package is sealed");
     let secret_name = format!("SCHEDULING_CLOSED_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
     std::env::set_var(
         &secret_name,

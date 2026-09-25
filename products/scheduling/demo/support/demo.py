@@ -384,7 +384,7 @@ def generate_database_tls(root: Path) -> None:
 
 
 def runtime_config(
-    project: Path,
+    package_root: Path,
     secrets_root: Path,
     audit_path: Path,
     port: int,
@@ -399,7 +399,7 @@ def runtime_config(
 apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1
 kind: SchedulingRuntimeConfig
 package:
-  root: {project}
+  root: {package_root}
 listener:
   bind: 127.0.0.1:{port}
   tlsTermination: development-loopback
@@ -435,7 +435,9 @@ def prepare(
     database_root_ca: Path | None,
 ) -> None:
     """Lay out the run directory: project copy, key material, records, and
-    the runtime configuration, all owner-only."""
+    the runtime configuration, all owner-only. The runtime serves the package
+    `schedulingctl package` writes from the project copy into `package`, so
+    the configuration names that directory before it exists."""
     project = root / "project"
     shutil.copytree(example, project)
     policy_path = project / "scheduling.yaml"
@@ -491,7 +493,11 @@ def prepare(
     (root / "records.yaml").write_text(DEMO_RECORDS)
     (root / "runtime.yaml").write_text(
         runtime_config(
-            project.resolve(), secrets_root.resolve(), audit_path.resolve(), port, trust_root
+            root.resolve() / "package",
+            secrets_root.resolve(),
+            audit_path.resolve(),
+            port,
+            trust_root,
         )
     )
 

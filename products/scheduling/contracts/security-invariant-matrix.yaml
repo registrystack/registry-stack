@@ -268,15 +268,15 @@ invariants:
       An unverified, drifted, or failing policy package is served, so the
       deployment answers under terms nobody reviewed.
     enforcementPoint: >-
-      Startup package verification in production, the authoring exception
-      confined to a loopback listener, and the authoring checks re-run before
-      the policy reaches the runtime.
+      Startup verification of the shared package against its SHA256SUMS in
+      every listener mode, and the authoring checks re-run before the policy
+      reaches the runtime.
     refusal: >-
       Refuse to start rather than serve an unverified package or a policy that
       carries findings.
     negativeTest:
       path: crates/registry-scheduling/src/config.rs
-      name: production_requires_a_verified_package_while_loopback_accepts_authoring
+      name: every_listener_mode_verifies_the_package_without_a_pin
   - id: SCHEDULING-SEC-16
     state: enforced
     threat: >-

@@ -187,6 +187,13 @@ async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
     let project = root.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
     std::fs::write(project.join("scheduling.yaml"), POLICY).unwrap();
+    registry_platform_config::package::write_sum_file(
+        &project,
+        None,
+        &registry_scheduling::config::package_limits(),
+        registry_scheduling::config::PACKAGE_COMMAND,
+    )
+    .expect("the package is sealed");
     std::fs::write(root.path().join("first.yaml"), FIRST_RECORDS).unwrap();
     std::fs::write(root.path().join("second.yaml"), SECOND_RECORDS).unwrap();
     std::fs::write(
@@ -330,6 +337,20 @@ async fn records_apply_rejects_a_different_deployment_identity_without_writing()
         POLICY.replacen("  id: registry-updates\n", "  id: permit-renewals\n", 1),
     )
     .unwrap();
+    registry_platform_config::package::write_sum_file(
+        &adopted_project,
+        None,
+        &registry_scheduling::config::package_limits(),
+        registry_scheduling::config::PACKAGE_COMMAND,
+    )
+    .expect("the package is sealed");
+    registry_platform_config::package::write_sum_file(
+        &other_project,
+        None,
+        &registry_scheduling::config::package_limits(),
+        registry_scheduling::config::PACKAGE_COMMAND,
+    )
+    .expect("the package is sealed");
     std::fs::write(root.path().join("first.yaml"), FIRST_RECORDS).unwrap();
     std::fs::write(root.path().join("second.yaml"), SECOND_RECORDS).unwrap();
 

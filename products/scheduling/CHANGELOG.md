@@ -17,8 +17,26 @@
 - Accept `${VAR}`, `${VAR:-default}`, and `${VAR:?message}` in string values of
   `runtime.yaml`, never in a `*Ref` field or beneath one, nor under
   `secretProviders`.
-- Add the optional `package.expectedDigest` pin, compared with the verified
-  package's policy digest at startup.
+- BREAKING: a Scheduling package is the shared Registry Stack package format.
+  `schedulingctl package PROJECT --output DIRECTORY` writes `scheduling.yaml`
+  and `SHA256SUMS`, one `sha256sum` line per file sorted by path, into a new
+  directory, in place of `scheduling.package.json` beside the project;
+  `--dry-run` reports the digest without writing, and `--revision TEXT`
+  records one free-text line in a `REVISION` file the digest covers. The
+  report names `packageDigest`, the SHA-256 digest of `SHA256SUMS`, and no
+  longer carries the manifest's `policyDigest`; the semantic policy digest
+  `explain` reports, the store records, and hooks carry is unchanged.
+- BREAKING: the runtime verifies `package.root` as a package at every start,
+  in every listener mode, with or without `package.expectedDigest`. A
+  changed, missing, or extra file, a directory without `SHA256SUMS` such as an
+  authored project, and a directory that still holds `scheduling.package.json`
+  are each refused by name, naming `schedulingctl package`. A
+  `development-loopback` runtime no longer serves an authored project; the
+  demo packages its project copy before it starts the runtime.
+- Add the optional `package.expectedDigest` pin, compared with the package
+  digest at startup. A mismatch is refused in the shape every Registry Stack
+  runtime shares:
+  `package.expectedDigest is <pin> but the package at package.root is <found>`.
 - BREAKING: `authentication.oidc.issuer` must be an absolute `https` URL
   without credentials, query, or fragment, or a loopback `http` URL under
   `development-loopback`, and `authentication.oidc.audience` is at most 512

@@ -11,13 +11,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
-use registry_scheduling::config::{verify_policy_package, PolicyPackageManifest};
+use registry_platform_config::package::{plan_package, write_package};
+use registry_platform_config::sha256_uri;
+use registry_scheduling::config::{package_limits, PACKAGE_COMMAND};
 use registry_scheduling_core::{
     parse_fixture_yaml, parse_policy_yaml, CaseStatus, FixtureExpectation, ReplayError,
     SchedulingDiagnostic, SchedulingFacts, SchedulingFixture, SchedulingPolicy,
-    AUTHORED_POLICY_FILE, SCHEDULING_PACKAGE_MANIFEST_FILE,
+    AUTHORED_POLICY_FILE,
 };
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 
 use crate::templates;
 
@@ -251,12 +254,16 @@ pub(super) fn explain(project: &Path) -> Result<Value> {
     }))
 }
 
-/// Write the verified package manifest beside the authored policy. The
-/// manifest is the deployment identity the runtime verifies at startup, so
-/// repackaging after an edit is a deliberate act: an existing manifest is
-/// never silently replaced, and the written manifest is proven to verify
-/// against the exact policy text before the command reports success.
-pub(super) fn package(project: &Path) -> Result<Value> {
+/// The project and the exact inputs a package of it carries.
+struct PackageContents {
+    project: PathBuf,
+    inputs: BTreeMap<String, Vec<u8>>,
+}
+
+/// Canonicalize the project, check the authored policy, and assemble the one
+/// file a package carries. Performs no writes, so both `package` and
+/// `package_dry_run` share it.
+fn compute_package(project: &Path) -> Result<PackageContents> {
     let project =
         fs::canonicalize(project).context("resolving the Scheduling authoring project")?;
     let policy_text = read_authoring_input(&project.join(AUTHORED_POLICY_FILE))?;
@@ -269,39 +276,70 @@ pub(super) fn package(project: &Path) -> Result<Value> {
             findings.len()
         );
     }
-    let manifest = PolicyPackageManifest::build(&policy_text)
-        .context("building the Scheduling policy package identity")?;
-    let manifest_path = project.join(SCHEDULING_PACKAGE_MANIFEST_FILE);
-    if manifest_path.exists() {
-        bail!(
-            "{} already exists; remove it deliberately before repackaging",
-            manifest_path.display()
-        );
-    }
-    let mut bytes =
-        serde_json::to_vec_pretty(&manifest).context("encoding the package manifest")?;
-    bytes.push(b'\n');
-    fs::write(&manifest_path, bytes)
-        .with_context(|| format!("writing {}", manifest_path.display()))?;
-    let verified = verify_policy_package(&project.join(AUTHORED_POLICY_FILE), &policy_text)
-        .with_context(|| format!("verifying the written {}", manifest_path.display()))?;
-    match verified {
-        Some(digest) if digest == manifest.policy_digest => {}
-        _ => bail!("the written package manifest does not verify against the authored policy"),
-    }
+    let inputs = BTreeMap::from([(AUTHORED_POLICY_FILE.to_owned(), policy_text.into_bytes())]);
+    Ok(PackageContents { project, inputs })
+}
+
+fn package_files(inputs: &BTreeMap<String, Vec<u8>>) -> Vec<Value> {
+    inputs
+        .iter()
+        .map(|(path, bytes)| {
+            json!({
+                "path": path,
+                "sha256": sha256_uri(bytes),
+                "bytes": bytes.len(),
+            })
+        })
+        .collect()
+}
+
+/// Write the checked policy into `output`, a new directory, as the package
+/// the runtime verifies at startup. The package is written once: an existing
+/// output is refused, so each candidate lands in its own directory.
+pub(super) fn package(project: &Path, output: &Path, revision: Option<&str>) -> Result<Value> {
+    let PackageContents { project, inputs } = compute_package(project)?;
+    let written = write_package(
+        output,
+        &inputs,
+        revision,
+        &package_limits(),
+        PACKAGE_COMMAND,
+    )?;
     Ok(json!({
         "ok": true,
         "command": "package",
         "project": project,
-        "manifest": manifest_path,
-        // The manifest on disk names its own byte-exact digest `policyDigest`
-        // (see `PolicyPackageManifest`); mirror that naming here instead of
-        // reporting the policy's separate semantic digest under the same
-        // key. `packageDigest` is that semantic digest, the one `explain`
-        // also reports.
-        "policyDigest": manifest.policy_digest,
-        "packageDigest": policy.policy_digest(),
-        "files": manifest.files,
+        "output": output,
+        "dryRun": false,
+        "packageDigest": written.digest(),
+        "revision": written.revision(),
+        "files": package_files(&inputs),
+        "runtimeConfigurationIncluded": false,
+        "secretsIncluded": false,
+        "networkAccess": false,
+        "databaseAccess": false,
+    }))
+}
+
+/// Report the exact `packageDigest` and `files` a package of this project
+/// would carry, without writing anything.
+pub(super) fn package_dry_run(project: &Path, revision: Option<&str>) -> Result<Value> {
+    let PackageContents { project, inputs } = compute_package(project)?;
+    let digest = plan_package(
+        &project,
+        &inputs,
+        revision,
+        &package_limits(),
+        PACKAGE_COMMAND,
+    )?;
+    Ok(json!({
+        "ok": true,
+        "command": "package",
+        "project": project,
+        "dryRun": true,
+        "packageDigest": digest,
+        "revision": revision,
+        "files": package_files(&inputs),
         "runtimeConfigurationIncluded": false,
         "secretsIncluded": false,
         "networkAccess": false,
@@ -519,11 +557,13 @@ mod tests {
         let base = root.path().canonicalize().unwrap();
         let project = base.join("project");
         init(&project, "standalone-exact-time").unwrap();
+        let output = base.join("package");
+        package(&project, &output, None).unwrap();
         let text = fs::read_to_string(project.join("runtime.example.yaml"))
             .unwrap()
             .replace(
                 EXAMPLE_PACKAGE_ROOT,
-                project.to_str().expect("utf-8 project path"),
+                output.to_str().expect("utf-8 package path"),
             )
             .replace(EXAMPLE_STATE_ROOT, base.to_str().expect("utf-8 root path"));
         let runtime = base.join("runtime.yaml");
@@ -531,8 +571,8 @@ mod tests {
         let config = RuntimeConfig::load(&runtime).expect("the emitted example loads");
         assert_eq!(
             config.policy_path(),
-            project.join(AUTHORED_POLICY_FILE),
-            "the example selects the project beside it"
+            output.join(AUTHORED_POLICY_FILE),
+            "the example selects the package it names"
         );
         assert_eq!(config.retention.attempt_receipt_days, 7);
         assert!(config.destinations.reminders.is_none());

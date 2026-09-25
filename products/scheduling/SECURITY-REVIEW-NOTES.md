@@ -236,16 +236,19 @@ keeping only the shape word. *Tests:*
 `typed_parse_path_does_not_echo_the_rejected_value`
 (SCHEDULING-SEC-13).
 
-**H. The package manifest is a different document from the policy it
-identifies.** *Threat:* one `apiVersion` and `kind` pair named both
-documents, so neither reader could refuse the other's document on its
-declared names, and the package identity digest folded in a pair that did
-not describe it. *Default:* the manifest declares its own pair, which the
-identity digest binds; a document carrying the authored policy's names
-never verifies as a package identity. *Tests:*
-`a_manifest_wearing_the_authored_policy_names_is_refused` with
-`a_package_manifest_is_a_different_document_from_the_policy_it_identifies`,
-`crates/registry-scheduling/src/config.rs`.
+**H. The runtime serves only a verified shared package.** *Threat:* a
+runtime that reads an authored project directly, or a package whose files
+were edited after review, serves a policy nobody packaged. *Default:* at
+every start, in every listener mode and with or without a pin, the runtime
+verifies `package.root` against its `SHA256SUMS`: a changed, missing, or
+extra file, an absent `SHA256SUMS`, or the retired `scheduling.package.json`
+is refused by name before the policy is parsed, and the package digest is
+the SHA-256 digest of `SHA256SUMS`. The semantic policy digest the store and
+hooks record is unchanged and no longer doubles as the package identity.
+*Tests:* `every_listener_mode_verifies_the_package_without_a_pin`,
+`crates/registry-scheduling/src/config.rs`, and
+`package_writes_a_package_the_runtime_verifies_and_refuses_replacement`,
+`crates/registry-schedulingctl/src/lib.rs`.
 
 **I. Client tolerance is response-only.** *Threat:* relaxing client-side
 parsing so a client outlives a deployment that adds a member would, if

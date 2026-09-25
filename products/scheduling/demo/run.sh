@@ -165,7 +165,7 @@ fi
 project="$run_dir/project"
 "$schedulingctl" check --deny-findings "$project" >/dev/null
 "$schedulingctl" test "$project" >/dev/null
-"$schedulingctl" package "$project" >/dev/null
+"$schedulingctl" package "$project" --output "$run_dir/package" >/dev/null
 "$scheduling" --runtime-config "$run_dir/runtime.yaml" migrate
 "$schedulingctl" records apply "$run_dir/runtime.yaml" "$run_dir/records.yaml" >/dev/null
 
