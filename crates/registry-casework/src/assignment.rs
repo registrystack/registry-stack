@@ -277,6 +277,7 @@ impl PostgresStore {
                 .get("revision")
                 .and_then(Value::as_i64)
                 .ok_or(StoreError::Corrupt)?;
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
             audit.commit(transaction).await?;
             return Ok(revision);
         }
@@ -597,6 +598,7 @@ impl PostgresStore {
         .await?
         {
             let record = serde_json::from_value(response).map_err(StoreError::Json)?;
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
             audit.commit(transaction).await?;
             return Ok(record);
         }
@@ -696,6 +698,7 @@ impl PostgresStore {
             if !can_manage_person(&transaction, actor, &replay.person).await? {
                 return Err(StoreError::Forbidden);
             }
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
             audit.commit(transaction).await?;
             return Ok(replay.revision);
         }
@@ -1148,6 +1151,7 @@ impl PostgresStore {
         }
         if let Some(response) = replay {
             let result = serde_json::from_value(response).map_err(StoreError::Json)?;
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
             audit.commit(transaction).await?;
             return Ok(result);
         }

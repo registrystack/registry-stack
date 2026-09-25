@@ -498,10 +498,13 @@ impl PostgresStore {
         )
         .await?
         {
-            return response
+            let revision = response
                 .get("revision")
                 .and_then(Value::as_i64)
-                .ok_or(StoreError::Corrupt);
+                .ok_or(StoreError::Corrupt)?;
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
+            audit.commit(transaction).await?;
+            return Ok(revision);
         }
         let actual: i64 = transaction
             .query_one(
@@ -994,7 +997,10 @@ impl PostgresStore {
         )
         .await?
         {
-            return serde_json::from_value(response).map_err(StoreError::Json);
+            let replayed = serde_json::from_value(response).map_err(StoreError::Json)?;
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
+            audit.commit(transaction).await?;
+            return Ok(replayed);
         }
         if claim && item.holder.is_some() {
             return Err(StoreError::AlreadyClaimed);
@@ -1142,7 +1148,10 @@ impl PostgresStore {
         )
         .await?
         {
-            return serde_json::from_value(response).map_err(StoreError::Json);
+            let replayed = serde_json::from_value(response).map_err(StoreError::Json)?;
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
+            audit.commit(transaction).await?;
+            return Ok(replayed);
         }
         if item.revision != expected_revision {
             return Err(StoreError::Conflict);
@@ -1266,6 +1275,8 @@ impl PostgresStore {
         .await?
         .is_some()
         {
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
+            audit.commit(transaction).await?;
             return Ok(true);
         }
         if item.revision != expected_revision {
@@ -1639,11 +1650,15 @@ impl PostgresStore {
             return Err(StoreError::AttemptPending);
         }
         if old == AttemptState::Completed {
-            return attempt_from_row(&row);
+            let attempt = attempt_from_row(&row)?;
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
+            audit.commit(transaction).await?;
+            return Ok(attempt);
         }
         if old == AttemptState::Uncertain && state == AttemptState::Uncertain {
             transaction.execute("UPDATE casework_attempts SET execution_lease_until=now(),updated_at=now() WHERE attempt_id=$1", &[&attempt_id]).await?;
             let attempt = attempt_from_row(&row)?;
+            audit.record_outcome(crate::audit::AuditOutcome::Unchanged);
             audit.commit(transaction).await?;
             return Ok(attempt);
         }
