@@ -86,7 +86,8 @@ Before the first activation, record:
 - The SQLite source path and the source profile the package already chose
 - The token issuer identity, discovery URL, audience, and accepted algorithms,
   or the decision that the deployment is fully anonymous
-- The audit sink path, its integrity key reference, and its retention policy
+- The audit destination and path, its rotation and retention settings, and where sealed files
+  are shipped for append-only storage
 - The cursor integrity key reference and maximum cursor age
 - The listener address, the TLS termination point, and the limits and quotas
 - The Unix service identity that owns every trusted path

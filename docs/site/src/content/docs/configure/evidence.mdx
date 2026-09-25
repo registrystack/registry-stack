@@ -96,7 +96,7 @@ not require target-host paths or secrets to exist, run fixtures, or prove live r
 ## The runtime file
 
 `runtime.yaml` binds one governed bundle to one process: where the bundle lives, what the
-listener binds to, where secrets and audit storage sit, and which private CA files a source may
+listener binds to, where secrets sit, where audit entries go, and which private CA files a source may
 trust. It is process-local operator configuration, not part of the reviewed bundle, and
 `products/evidence/contracts/runtime.schema.yaml` is its schema of record.
 
@@ -108,7 +108,7 @@ Top-level required fields:
 | `bundleDirectory` | Absolute path to the governed `bundle/` directory. |
 | `listener` | `bindHost` (loopback, private IPv4, or unique-local IPv6 only), `port`, `tlsTermination` (fixed at `operator-controlled-upstream`: TLS terminates ahead of Evidence Gateway), `trustProxyIdentityHeaders` (fixed `false`: proxy-supplied identity is never trusted), plus request-size, concurrency, timeout, and shutdown-grace bounds. |
 | `secretProviders.file.root` | The owner-only directory the file secret provider resolves every `secret:file/<name>` reference beneath. |
-| `auditStorage` | `path` for the active audit segment and `maximumFileBytes`, a per-segment rotation threshold. |
+| `audit` | `destination` (`file` by default, or `stdout`); for `file`, the absolute `path` of the active audit file, `rotateBytes` (100 MiB by default), and `retainDays` (90 by default). |
 | `outboundTls` | `systemRoots` (fixed `true`) plus named `trustProfiles`, each a local id bound to one CA bundle file a source can select through `tlsTrustProfile`. |
 
 An optional `metricsListener` (`bindHost`, `port`) serves `GET /metrics` on a second private
@@ -117,7 +117,7 @@ Metrics reference rather than in the public Evidence Gateway contract.
 
 `runtime.yaml` cannot override anything the bundle governs. The schema's `ownership` block closes
 the allowed set to the bundle directory, listener binding and process limits, the optional
-metrics listener binding, the file-secret root, audit path and rotation bound, and logical
+metrics listener binding, the file-secret root, the audit destination with its path, rotation size, and retention, and logical
 private-CA file bindings. Every other field, including service identity, authentication,
 authority, sources, disclosure, and signing policy, belongs to the bundle alone.
 
@@ -130,7 +130,7 @@ atomic revision (`products/evidence/contracts/bundle.schema.yaml`). Its top-leve
 | --- | --- |
 | `service`, `issuer` | The technical provider and the legal issuing authority, both URIs. |
 | `authentication` | The one trusted OIDC access-token profile: issuer, audiences, token type, algorithms, JWKS URI, maximum token lifetime, revoked key identifiers, and the claim names for principal, requester tags, evidence audience, grant id, and grant authority. |
-| `audit` | Keyed JSONL audit: the hash secret reference, key version, and fixed fail-closed behavior. |
+| `audit` | Audit pseudonyms: `hashKeyRef`, the secret the pseudonym key is derived from, and `hashKeyVersion`, stamped into every pseudonym. Every audit gate is fail closed. |
 | `subjectBinding` | The secret reference and key version behind the audience-scoped entity-reference HMAC. |
 | `rateLimits` | Per-principal request, burst, and failed-selector-attempt bounds. |
 | `signing` | Fixed ES256 signing, governed active and published public JWK files, revoked service key identifiers, the fixed JWKS path, and assertion validity and clock-skew bounds. |
@@ -258,8 +258,10 @@ for provider key, public JWK, proxy, and policy setup.
 
 ### `audit-hmac-key`
 
-Evidence Gateway uses this random secret to authenticate the audit chain. A changed, removed, or
-reordered audit entry then fails chain verification.
+Evidence Gateway derives the key for requester and subject pseudonyms in audit entries from this
+random secret, which the bundle's `audit.hashKeyRef` names. It must differ from the subject-binding
+secret. Replacing it without incrementing `audit.hashKeyVersion` silently changes every pseudonym
+under an unchanged version prefix.
 
 ### `subject-binding-hmac-key`
 
@@ -367,7 +369,7 @@ evidence --runtime runtime.yaml evaluate --fixture "bundle/fixtures/<cases>.yaml
 `evidence check` loads, compiles, and validates the complete bundle and runtime file together:
 every selector, role, profile, authority, and source binding resolves, every script compiles
 against the frozen ABI, and mounted signing material passes its provider self-test, all without
-opening the audit chain or contacting a source. `evidence evaluate` replays one fixture file's synthetic
+opening the audit destination or contacting a source. `evidence evaluate` replays one fixture file's synthetic
 cases through the reviewed adapter, derivation, and output gate, with no source and no network
 involved.
 
@@ -437,5 +439,5 @@ command contract.
   authentication and authority profile.
 - [Enable SD-JWT VC in a deployment](../enable-sd-jwt-vc/) to serialize the same assertion as a
   wallet-usable credential instead of a signed JWS.
-- [Verify and interpret the Evidence Gateway audit chain](../../operate/evidence-audit/) for the
-  audit history this deployment produces once handed to an operator.
+- [Read and ship the Evidence Gateway audit log](../../operate/evidence-audit/) for the audit
+  entries this deployment writes once handed to an operator.

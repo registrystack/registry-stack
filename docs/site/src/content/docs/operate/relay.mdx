@@ -33,8 +33,8 @@ administrative trust boundary.
 
 Prepare a dedicated Unix service identity, a private listener behind Transport Layer Security
 (TLS) termination, a sealed package, the matching snapshot or live read-only source, an audit
-location, independent audit-integrity and cursor-encryption keys, and a compatible OAuth issuer for
-protected access profiles.
+file path or a log collector on standard output, a cursor-encryption key, and a compatible OAuth
+issuer for protected access profiles.
 Do not place the package, source, secret, or audit path in a shared writable directory.
 For snapshot mode, make the SQLite file immutable outside Relay, preferably with a read-only mount.
 Relay verifies its captured digest before and after every statement, but a process cannot exclude a
@@ -58,8 +58,7 @@ packagePath: /etc/relay/business/package
 sources: {companies: {path: /srv/registries/business.sqlite}}
 authentication: {issuer: null}
 audit:
-  sink: /var/lib/relay/business/audit.jsonl
-  integrityKeyRef: secret:file/audit-integrity-key
+  path: /var/lib/relay/business/audit.jsonl
 cursor: {integrityKeyRef: secret:file/cursor-integrity-key, maximumAgeSeconds: 300}
 limits: {requestTimeoutMilliseconds: 1500, concurrentQueries: 32}
 quotas: {requestsPerMinute: 120, burst: 20}
@@ -146,10 +145,21 @@ that port. The `relay healthcheck` command validates the configured URL before m
 
 ## Retain value-free audit evidence
 
-For every data operation, including anonymous public access, Relay persists an attempt event before
-SQLite access and a terminal release, unresolved, or source-failed event before returning.
-The release event covers the exact response bytes.
-An audit failure blocks source access or withholds the response.
+For every data operation, including anonymous public access, Relay writes an attempt event as a
+`request` entry before SQLite access, and a refusal or a terminal release, unresolved, or
+source-failed event as a `response` entry before returning. Both entries carry the operation id as
+their `correlation`. The caller holds the exact serialized response bytes until the response entry's
+write returns, so that entry gates their release; it does not describe or bind them.
+An audit failure blocks source access or withholds the response with `503 audit.unavailable`.
+
+Each line is one envelope, `{schema, eventId, time, phase, correlation, record}`, with schema
+`registry.relay.audit/v2alpha2`; the package artifact `generated/artifacts/audit-event.schema.json`
+describes one line. `audit.destination` is `file` by default: `path` is absolute or relative to
+the runtime file, the file rotates at `rotateBytes` (100 MiB by default), and sealed files older
+than `retainDays` (90 by default) are deleted when the writer opens or rotates. One Relay process
+writes one path and holds a lock beside it, so give each replica its own path. A `stdout`
+destination writes one flushed line per entry for the platform's log collector, and
+`relay check --require-audit-under` refuses it because it has no path to prove.
 
 For Record operations, audit binds the Registry, resource, operation, access profile, disclosure
 profile, selected property identifiers or digest, processing handling, disclosure handling,
@@ -158,7 +168,16 @@ fail-closed attempt and terminal gates, but records the dataset's fixed access r
 structure surface, and selected SDMX wire format rather than inventing an access profile.
 It excludes tokens, selectors, raw principals, source values, response values, and raw Record
 identifiers.
-Keep the audit file and integrity key under one retention and access-control policy.
+The log carries no hash chain or signature, so it is not tamper-evident on the host. Ship sealed
+files, or the `stdout` stream, to append-only storage before retention deletes them, and restrict
+read access to the audit path separately from ordinary service operations.
+
+:::caution[Move the chained log aside before upgrading]
+Relay does not detect lines written in the older chained format, and retention deletes sealed
+files named `<path>.<sequence>`, which is how the older segments are named. Before the first start
+with `audit.path`, archive the existing audit file and its segments to append-only storage, and
+give the upgraded Relay a fresh path in a directory that holds no old segments.
+:::
 
 Operational logs are also value-free.
 Use them for route template, status, latency, and trace correlation, not to recover request or
@@ -173,7 +192,7 @@ Relay does not hot-reload, merge, overlay, or fall back across packages.
 3. Start a candidate on a private listener and wait for readiness.
 4. Send a smoke request through the production proxy policy.
 5. Shift traffic, drain the previous process, and terminate it.
-6. Retain the package, source revision, audit segment, and change review under institutional policy.
+6. Retain the package, source revision, audit files, and change review under institutional policy.
 
 Rollback activates a complete prior package only with its compatible source and runtime bindings.
 
@@ -185,14 +204,13 @@ Rollback activates a complete prior package only with its compatible source and 
 | Startup reports a package or schema error | The package, source, or review revision does not match | Stop deployment and return the change to the authoring workflow. |
 | A protected access profile returns `404 resource.not_found` | The issuer or token does not satisfy that profile's exact scope | Correct the issuer or caller authority. Do not expose a weaker profile as fallback. |
 | A spatial request returns `406 format.unsupported` | The selected access profile does not disclose a primary geometry or the format request is unsupported | Select an entitled geometry-bearing profile or request JSON or JSON-LD. |
-| A response is withheld | The terminal audit write failed | Restore the audit sink and verify its integrity before accepting traffic. |
+| A response is withheld | The terminal audit write failed and the writer stopped | Restore the audit storage, restart Relay, and wait for readiness before accepting traffic. |
 
 ## Next
 
 - [Rotate credentials, keys, certificates, and trust](../advanced/rotate-credentials-and-trust/)
-  to rotate the audit-integrity, cursor-encryption, or token issuer credentials this deployment
-  used.
-- [Retention and persistent state](../retention-and-persistent-state/) to plan audit segment
+  to rotate the cursor-encryption or token issuer credentials this deployment used.
+- [Retention and persistent state](../retention-and-persistent-state/) to plan audit file
   retention beyond what this guide covers.
 - [Inspect and diagnose a running deployment](../advanced/inspect-and-diagnose/) to diagnose a
   failing readiness or authorization check after deployment.

@@ -41,6 +41,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.6.0 | 2026-08-07 | draft | Clarified that Evidence Gateway durably records an access attempt before every actual source stage in a closed acquisition. |
 | 0.7.0 | 2026-08-11 | draft | The Relay V1 runtime and its adopter tooling are retired. Restated REQ-SEC-G-002, REQ-SEC-G-004, REQ-SEC-G-005, REQ-SEC-G-006, REQ-SEC-G-009, and REQ-SEC-G-012 for the Relay V2 runtime, rewrote Section 7 around the one replay authority the stack still holds, retired REQ-SEC-G-003, REQ-SEC-G-014, and REQ-SEC-G-015, and added REQ-SEC-G-018. |
 | 0.8.0 | 2026-08-13 | draft | Added Registry Mint's explicit client-secret compatibility path to REQ-SEC-G-016 while retaining asymmetric client assertions as the default and sole method for Evidence and delegated authority. |
+| 0.8.1 | 2026-09-25 | draft | Named audit pseudonym secrets, rather than audit-chain secrets, in REQ-SEC-G-013. |
 
 ## 1. Scope and references
 
@@ -153,7 +154,7 @@ Problem details are a client-facing protocol surface, not an operator diagnostic
 
 The security model ends where the deployment begins. The following are operator responsibilities, not behavior this specification defines: secret and key provisioning, key custody and the rotation schedule, audit retention and storage, tenant isolation, transport termination and certificate management, network rate limiting at the edge, deployment configuration, and incident response. Registry Platform and the runtime services provide the primitives; the operator provisions, configures, and operates them.
 
-REQ-SEC-G-013: An implementation MUST NOT embed secret material (private keys, credential secrets, audit-chain secrets) in a portable metadata artifact or in any artifact intended for distribution or inspection. Secrets are provided to a running service by the operator at deployment time.
+REQ-SEC-G-013: An implementation MUST NOT embed secret material (private keys, credential secrets, audit pseudonym secrets) in a portable metadata artifact or in any artifact intended for distribution or inspection. Secrets are provided to a running service by the operator at deployment time.
 
 ## Conformance
 

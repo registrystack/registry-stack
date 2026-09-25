@@ -1,6 +1,6 @@
 ---
 title: Run Registry Render in serve mode
-description: Build Registry Render, write its runtime configuration, provision its two secrets, start serve mode behind your TLS proxy, and verify its audit ledger.
+description: Build Registry Render, write its runtime configuration, provision its API key, start serve mode behind your TLS proxy, and read and ship its audit log.
 status: draft
 owner: registry-docs
 source_repos:
@@ -32,13 +32,14 @@ scaffolding, authoring, and sealing. This page starts from a sealed bundle direc
   sha256 hashes into the bundle's `manifest.yaml`, and serve verifies the seal at startup and
   again in the worker on every request, so a bundle that drifts while the service runs is
   refused, not rendered. Treat the directory as content the deployment does not write.
-- **Two secrets in owner-only files: a caller API key and an audit chain key.** The API key is at
-  least 32 bytes of ASCII material; serve trims exactly one trailing line ending from the file
-  and refuses to start if the key carries any other whitespace, because a silently mis-armed key
-  would reject every caller while health stays green.
-- **One directory for the audit ledger.** The process appends a keyed hash-chained JSONL ledger
-  and refuses a directory it cannot make owner-only. One process writes one chain; plan the
-  directory accordingly.
+- **One secret in an owner-only file: the caller API key.** The key is at least 32 bytes of
+  ASCII material; serve trims exactly one trailing line ending from the file and refuses to start
+  if the key carries any other whitespace, because a silently mis-armed key would reject every
+  caller while health stays green.
+- **One path for the audit file, or a log collector on standard output.** The process appends
+  one JSON line per audit entry and refuses a directory that group or others can write. One
+  process writes one file, and a second process pointed at the same path refuses to start; give
+  each replica its own path.
 - **A TLS proxy or ingress in front of the listener.** The process serves plain HTTP, defaults to
   `127.0.0.1:8080`, and refuses to start on a public or all-interfaces address. TLS termination,
   HSTS, and client addresses stay with your proxy, and the listener reads no forwarded header.
@@ -88,14 +89,16 @@ limits:
   maxRequestBodyBytes: 8388608
   maxConcurrency: 4
 audit:
-  directory: /var/lib/registry-render/audit
-  integrityKeyRef: secret:file/render-audit-key
-  maxSegmentBytes: 67108864
+  path: /var/lib/registry-render/audit/render.jsonl
+  rotateBytes: 67108864
+  retainDays: 90
 ```
 
 Secret references resolve against files beside the runtime file or named environment variables.
-Relative `bundle.path` and `audit.directory` values anchor to the runtime file's directory too, so
+Relative `bundle.path` and `audit.path` values anchor to the runtime file's directory too, so
 the same file behaves identically wherever the process is launched from.
+`audit.destination` is `file` by default; set it to `stdout`, without `path`, `rotateBytes`, or
+`retainDays`, to hand the entries to your log collector instead.
 The limits carry hard ceilings the runtime refuses to exceed: the output cap cannot exceed 8 MiB
 and the request body cap 64 MiB, so a configuration mistake cannot unbound the process. On
 shutdown the process drains in-flight renders for one grace period, gives open connections a
@@ -103,7 +106,7 @@ second one, and then abandons the rest; `shutdownGraceSeconds` is therefore the 
 with your stop timeout, not a decorative field. It must be between 1 and 3600 seconds: zero would
 drop the renders it exists to protect, and startup refuses both ends.
 
-{/* Evidence: crates/registry-render/src/runtime.rs, LimitsRuntime and validate_bind;
+{/* Evidence: crates/registry-render/src/runtime.rs, LimitsRuntime, AuditRuntime, and validate_bind;
     crates/registry-render/src/server.rs, serve. */}
 
 ## Start and verify
@@ -117,8 +120,8 @@ curl -s http://127.0.0.1:8080/ready
 ```
 
 `GET /health` answers with the bundle version and hash and the renderer version, so you can
-reconcile the running service against what you deployed. `GET /ready` includes the audit ledger:
-if the sink cannot answer, readiness fails. Both are value-free.
+reconcile the running service against what you deployed. `GET /ready` includes the audit writer:
+if it has stopped, readiness fails. Both are value-free.
 `registry-render healthcheck --runtime <file>` performs the same probe for a supervisor script.
 
 {/* Evidence: crates/registry-render/src/server.rs, health and healthcheck;
@@ -151,31 +154,49 @@ the limit mid-stream cannot be answered at all. `Idempotency-Key` is echoed and 
 opaque correlation id; rendering is deterministic, so no deduplication exists or is needed.
 
 Failures are RFC 9457 problem documents with a closed vocabulary, on HTTP and in the CLI's exit
-codes, and every render response, success or refusal, is preceded by its audit event: if the
-ledger cannot be written, the render fails closed. Refusals that precede authentication, a 401 or
-an oversized body, are audited on a best-effort basis and still answer.
+codes. A render writes a `request` audit entry before the worker starts and a `response` entry
+with the outcome before the document leaves; if either cannot be written, the call fails closed
+with `audit-failed` and no document is returned. A refusal decided before any render, such as
+invalid data or an unknown document type, is one `response` entry and fails closed the same way.
+A 401 or an oversized body is also one `response` entry, but best-effort: a failed write is logged
+at error level and the refusal still answers.
 
 {/* Evidence: crates/registry-render/src/server.rs, render_route and refuse_oversized_bodies;
     crates/registry-render/src/problem.rs, ProblemKind;
     crates/registry-render/src/audit.rs, append;
     crates/registry-render/src/openapi.rs, OPENAPI_JSON. */}
 
-## Verify the ledger
+## Read and ship the audit log
 
-The ledger is a keyed hash chain in sealed segments. Stop the process first: the writer holds the
-active segment; once no writer holds it, the newest segment is verified too. Then:
+Each line is one entry: `schema` (`render.registrystack.org/audit/v1`), `eventId`, `time`,
+`phase` (`request` or `response`), `correlation`, and the value-free `record`: hashes, versions,
+the caller's key fingerprint, the outcome, and the trace and correlation ids, never data values or
+image bytes. The `request` entry carries no outcome. Both entries of one render share their
+`correlation`: the caller's `Idempotency-Key`, or a random identifier when there is none. For
+example, to list outcomes by correlation:
 
 ```sh
-target/release/registry-render audit-verify --runtime /etc/registry-render/runtime.yaml
+jq -c '{correlation, phase, outcome: .record.outcome}' /var/lib/registry-render/audit/render.jsonl
 ```
 
-The command prints the record and segment counts. If it reports zero records against a non-empty
-ledger, it says so: either the process is still running, or the chain is not what you expect, and
-both are worth knowing before an audit depends on it. One event per render, value-free: hashes,
-versions, the caller's key fingerprint, and the trace and correlation ids, never data values or
-image bytes.
+When the active file would pass `rotateBytes` (100 MiB by default), it is renamed to
+`<path>.<sequence>` with an eight-digit sequence and a fresh file opens. At startup and at each
+rotation, sealed files last modified more than `retainDays` ago (90 by default) are deleted.
+Never rename, edit, or truncate the active file while the process runs; the writer then stops and
+every render fails closed until a restart.
 
-{/* Evidence: crates/registry-render/src/audit.rs, verify_chain and RenderAuditEvent. */}
+The log carries no hash chain or signature, so it is not tamper-evident on the host. Ship sealed
+files, or the `stdout` stream, to append-only storage before retention deletes them. A directory
+that held the older chained ledger is not an audit path to reuse: archive its segments first and
+point `audit.path` at a fresh directory.
+
+`registry-render check --bundle <dir> --runtime <file> --require-audit-under <root>` proves the
+audit file resolves under a persistent root, as a container preflight, and refuses a `stdout`
+destination.
+
+{/* Evidence: crates/registry-render/src/audit.rs, AUDIT_SCHEMA, RenderAuditEvent, and correlation;
+    crates/registry-render/src/cli.rs, require_audit_under;
+    crates/registry-platform-audit/src/writer.rs, DEFAULT_AUDIT_ROTATE_BYTES and DEFAULT_AUDIT_RETAIN_DAYS. */}
 
 ## Upgrade discipline
 

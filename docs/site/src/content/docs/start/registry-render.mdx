@@ -42,8 +42,8 @@ library:
 - **Offline, at a terminal.** `registry-render compile` renders one document from a bundle directory and a
   data file, for branch printing, template authoring, and CI checks on the templates themselves.
 - **As a service.** `registry-render serve` exposes one rendering endpoint behind a static API key, renders
-  in supervised worker processes it can kill at a timeout, and appends one value-free audit event
-  per render before it answers.
+  in supervised worker processes it can kill at a timeout, and appends a value-free audit entry
+  before each render starts and another before it answers.
 - **As a library.** The `registry_render` crate renders in process for embedding, with the same
   validation and the same problem vocabulary.
 

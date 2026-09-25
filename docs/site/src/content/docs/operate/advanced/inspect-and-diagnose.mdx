@@ -34,12 +34,12 @@ Public problem details give callers stable, minimized classifications; Relay's `
 resource.not_found` concealment for both an unknown and an unauthorized access profile is one
 instance of that discipline.
 Relay and Evidence Gateway each write their own audit or operational records and keep their own keys
-separate: Relay's audit sink and Evidence Gateway's keyed JSONL audit chain
+separate: each writes its own JSONL audit log through its own audit writer
 (`products/evidence/OPERATOR-CONTRACT.md`, Audit and operational data).
 
 No deployment exposes a cross-product view: each product reports only its own health, readiness,
-and audit chain. Relay V2 has no separate operator-facing posture or admin surface beyond
-`/health`, `/ready`, and its audit sink.
+and audit log. Relay V2 has no separate operator-facing posture or admin surface beyond
+`/health`, `/ready`, and its audit log.
 
 {/* Evidence: crates/registry-relay-v2/src/server.rs, crates/registry-relay-v2/src/api.rs,
     crates/registry-relay-v2/src/cursor.rs, crates/registry-relay-v2/src/startup.rs,
@@ -54,8 +54,8 @@ Inspect each surface for its own purpose:
 | Surface | Use | Boundary |
 | --- | --- | --- |
 | `GET /health` (Relay and Evidence Gateway) | Process liveness | Does not check all dependencies or data freshness; Evidence Gateway's `/health` answers 200 even when a source credential is missing |
-| `GET /ready` | Current traffic-admission readiness | Does not prove backup freshness or country approval; Relay's `/ready` ANDs audit-sink readiness, bound SQLite source readiness, and OIDC issuer readiness when an issuer is configured; Evidence Gateway checks its signing, audit, subject-binding, and source credentials |
-| Product audit records | Security and request evidence | Retained chain integrity does not prove complete off-host receipt; use `evidence verify-audit` for Evidence Gateway. Relay V2 has no equivalent offline verification command; inspect the sealed segment sequence directly |
+| `GET /ready` | Current traffic-admission readiness | Does not prove backup freshness or country approval; Relay's `/ready` ANDs audit-writer readiness, bound SQLite source readiness, and OIDC issuer readiness when an issuer is configured; Evidence Gateway checks its signing, audit, subject-binding, and source credentials |
+| Product audit records | Security and request evidence | Entries are not chained or signed, so a local file proves neither integrity nor completeness; read the copies shipped to append-only storage, and join a request entry to its response entry by `correlation` |
 | `GET /openapi.json` | Concrete API shape for the running instance | Relay's document reflects the operations compiled into the running package and needs no credential; Evidence Gateway's is the released generated artifact, unauthenticated and independent of the deployed bundle |
 | Evidence Gateway `GET /metrics` (only when `metricsListener` is configured) | Request-boundary counts and latency by route, method, status, and problem code | Absent unless configured; never serves evidence routes and reveals no request content |
 
@@ -211,7 +211,7 @@ whose trace holds one of those values is refused before the trace is printed, in
 stopped on an error.
 
 The flag is offline only. A served request has no equivalent: diagnose it from its public problem
-and the keyed audit chain.
+and its audit entries.
 
 ### Diagnostic classes that do not apply to Relay V2
 
@@ -247,7 +247,7 @@ Retain:
 - Relay's package `packageRevision` digest and runtime file path identifying the deployed
   instance, rather than a signed bundle sequence.
 - Evidence Gateway's `traceId` from a problem response or the W3C `traceparent`
-  response header, and the output of `evidence verify-audit` when a signing or
+  response header, and the shipped audit entries for the operation when a signing or
   audit failure is suspected. The public trace is not the internal audit
   operation identifier. Do not retain the assertion or access token.
 - Redacted audit correlation ids and the tested synthetic canary outcome.
@@ -259,7 +259,7 @@ The `404` and `406` response classes and the cursor-error categories above ident
 documented Relay V2 failure classes with safe remediation; Relay V2's startup refusal is evidenced
 by its log message rather than a separate stable code catalog. Health and readiness prove only the
 checks each endpoint runs; Relay V2 exposes no posture surface distinct from `/health` and
-`/ready`. Audit records prove the retained product event chain under the configured sink and key.
+`/ready`. Audit records show the product events retained in the append-only store they were shipped to.
 The instance OpenAPI proves the exposed API description returned by that instance.
 
 These surfaces do not prove off-host audit completeness, legal approval, country acceptance,
