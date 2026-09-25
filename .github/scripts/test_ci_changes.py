@@ -562,6 +562,18 @@ class CiChangesTest(unittest.TestCase):
         }
         self.assertLessEqual(packages, CONFIG_CONFORMANCE_PACKAGES)
         self.assertIn("registry-platform-config", CONFIG_CONFORMANCE_PACKAGES)
+        schemas = {
+            entry.path for row in gate.ROWS for entry in row.hand_schemas
+        } | {
+            row.runtime_schema
+            for row in gate.ROWS
+            if isinstance(row.runtime_schema, str)
+        }
+        for path in sorted(schemas):
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["config_conformance"]
+                )
 
     def test_shards_cover_every_workspace_package_once(self) -> None:
         assigned = [package for packages in SHARDS.values() for package in packages]

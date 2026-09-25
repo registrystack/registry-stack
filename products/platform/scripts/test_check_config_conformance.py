@@ -162,6 +162,57 @@ class ConfigConformanceFixtureTest(unittest.TestCase):
             "RuntimeConfigLoader"
         )
 
+    def assert_loader_refused(self) -> None:
+        self.assert_one_problem(
+            "sample: no source under crates/sample/src reads runtime.yaml through "
+            "RuntimeConfigLoader"
+        )
+
+    def without_loader(self) -> str:
+        return LOADER_SOURCE.replace("RuntimeConfigLoader::new(ENVELOPE)", "parse()")
+
+    def test_a_loader_call_inside_a_test_module_does_not_count(self) -> None:
+        self.write_text(
+            "crates/sample/src/lib.rs",
+            self.without_loader().replace(
+                "fn a_reference_refuses_substitution() {}",
+                "fn a_reference_refuses_substitution() {\n"
+                "        let _ = RuntimeConfigLoader::new(ENVELOPE);\n    }",
+            ),
+        )
+        self.assert_loader_refused()
+
+    def test_a_loader_call_in_a_comment_or_a_string_does_not_count(self) -> None:
+        self.write_text(
+            "crates/sample/src/lib.rs",
+            self.without_loader()
+            + "// RuntimeConfigLoader::new(ENVELOPE)\n"
+            + "/* RuntimeConfigLoader::new(ENVELOPE) */\n"
+            + 'const NOTE: &str = "RuntimeConfigLoader::new(ENVELOPE)";\n'
+            + 'const RAW: &str = r#"RuntimeConfigLoader::new(ENVELOPE)"#;\n',
+        )
+        self.assert_loader_refused()
+
+    def test_a_loader_call_in_a_test_only_module_file_does_not_count(self) -> None:
+        self.write_text(
+            "crates/sample/src/lib.rs",
+            self.without_loader()
+            + "#[cfg(test)]\nmod loader_tests;\n"
+            + '#[cfg(test)]\n#[path = "elsewhere/probe.rs"]\nmod probe;\n',
+        )
+        call = "fn t() { let _ = RuntimeConfigLoader::new(ENVELOPE); }\n"
+        self.write_text("crates/sample/src/loader_tests.rs", call)
+        self.write_text("crates/sample/src/elsewhere/probe.rs", call)
+        self.assert_loader_refused()
+
+    def test_a_loader_call_after_a_test_module_still_counts(self) -> None:
+        self.write_text(
+            "crates/sample/src/lib.rs",
+            self.without_loader()
+            + "\npub fn late() { let _ = RuntimeConfigLoader::new(ENVELOPE); }\n",
+        )
+        self.assertEqual([], self.problems())
+
     def test_a_product_still_calling_the_legacy_expansion_is_refused(self) -> None:
         self.write_text(
             "crates/sample/src/legacy.rs",
@@ -227,6 +278,183 @@ class ConfigConformanceFixtureTest(unittest.TestCase):
                     authored_refusal=gate.Exemption("no authored project file"),
                 )
             ),
+        )
+
+    def block_row(self, *blocks: object) -> object:
+        return row(
+            rust_blocks=blocks
+            or (
+                gate.RustBlock(
+                    "crates/sample/src/lib.rs", "SampleRuntime", "package", "PackageConfig"
+                ),
+            )
+        )
+
+    def with_runtime_struct(self, declaration: str, imports: str = "PackageConfig") -> None:
+        self.write_text(
+            "crates/sample/src/lib.rs",
+            f"use registry_platform_config::{{{imports}, RuntimeConfigLoader}};\n"
+            + declaration
+            + LOADER_SOURCE.replace(
+                "use registry_platform_config::RuntimeConfigLoader;\n", ""
+            ),
+        )
+
+    RUNTIME_STRUCT = """
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SampleRuntime {
+    pub listener: ListenerRuntime,
+    /// The sealed package.
+    pub package: PackageConfig,
+    #[serde(default)]
+    pub limits: Limits,
+}
+"""
+
+    def test_a_runtime_struct_holding_the_shared_type_passes(self) -> None:
+        self.with_runtime_struct(self.RUNTIME_STRUCT)
+        self.assertEqual([], self.problems(self.block_row()))
+
+    def test_a_runtime_field_of_another_type_is_refused(self) -> None:
+        self.with_runtime_struct(
+            self.RUNTIME_STRUCT.replace(
+                "pub package: PackageConfig", "pub package: PackageRuntime"
+            )
+        )
+        self.assert_one_problem(
+            "sample: crates/sample/src/lib.rs SampleRuntime.package is not typed "
+            "PackageConfig",
+            self.block_row(),
+        )
+
+    def test_a_local_copy_of_a_shared_type_is_refused(self) -> None:
+        self.with_runtime_struct(
+            self.RUNTIME_STRUCT + "pub struct PackageConfig { pub root: String }\n",
+            imports="ListenerBind",
+        )
+        problems = self.problems(self.block_row())
+        self.assertIn(
+            "sample: crates/sample/src/lib.rs declares its own PackageConfig "
+            "instead of using the shared block",
+            problems,
+        )
+        self.assertIn(
+            "sample: crates/sample/src/lib.rs does not import PackageConfig from "
+            "registry_platform_config",
+            problems,
+        )
+
+    def test_a_shared_type_named_by_its_full_path_passes(self) -> None:
+        self.with_runtime_struct(
+            self.RUNTIME_STRUCT.replace(
+                "pub package: PackageConfig",
+                "pub package: registry_platform_config::PackageConfig",
+            ),
+            imports="ListenerBind",
+        )
+        self.assertEqual([], self.problems(self.block_row()))
+
+    def test_a_missing_runtime_struct_is_refused(self) -> None:
+        self.assert_one_problem(
+            "sample: crates/sample/src/lib.rs has no struct SampleRuntime",
+            self.block_row(),
+        )
+
+    def test_a_runtime_struct_inside_a_test_module_does_not_count(self) -> None:
+        self.with_runtime_struct(
+            "#[cfg(test)]\nmod fixtures {\n" + self.RUNTIME_STRUCT + "}\n"
+        )
+        self.assert_one_problem(
+            "sample: crates/sample/src/lib.rs has no struct SampleRuntime",
+            self.block_row(),
+        )
+
+    def test_a_rust_block_the_platform_does_not_publish_is_refused(self) -> None:
+        self.with_runtime_struct(
+            self.RUNTIME_STRUCT.replace("PackageConfig", "AuditConfig"),
+            imports="AuditConfig",
+        )
+        self.assert_one_problem(
+            "sample: shared block AuditConfig is not in "
+            "products/platform/generated/runtime-config-blocks.schema.json",
+            self.block_row(
+                gate.RustBlock(
+                    "crates/sample/src/lib.rs", "SampleRuntime", "package", "AuditConfig"
+                )
+            ),
+        )
+
+    HAND_LISTENER = {
+        "type": "object",
+        "required": ["bind"],
+        "properties": {
+            "bind": {
+                "type": "string",
+                "maxLength": 64,
+                "description": "A socket address literal.",
+                "allOf": [{"pattern": ":[0-9]+$"}],
+            }
+        },
+    }
+
+    def hand_row(self) -> object:
+        return row(
+            hand_schemas=(
+                gate.HandSchema(
+                    "crates/sample/hand.schema.json",
+                    ("properties", "listener"),
+                    "ListenerConfig",
+                ),
+            )
+        )
+
+    def write_hand_schema(self, listener: object) -> None:
+        self.write_json(
+            "crates/sample/hand.schema.json",
+            {"type": "object", "properties": {"listener": listener}},
+        )
+
+    def test_a_hand_written_block_that_only_narrows_passes(self) -> None:
+        self.write_hand_schema(self.HAND_LISTENER)
+        self.assertEqual([], self.problems(self.hand_row()))
+
+    def assert_hand_drift(self, listener: object, detail: str) -> None:
+        self.write_hand_schema(listener)
+        self.assert_one_problem(
+            "sample: crates/sample/hand.schema.json at /properties/listener does "
+            f"not match shared block ListenerConfig: {detail}",
+            self.hand_row(),
+        )
+
+    def test_a_hand_written_block_with_a_changed_bound_is_refused(self) -> None:
+        listener = json.loads(json.dumps(self.HAND_LISTENER))
+        listener["properties"]["bind"]["maxLength"] = 4096
+        self.assert_hand_drift(listener, "maxLength differs at /properties/bind")
+
+    def test_a_hand_written_block_with_an_extra_member_is_refused(self) -> None:
+        listener = json.loads(json.dumps(self.HAND_LISTENER))
+        listener["properties"]["port"] = {"type": "integer"}
+        self.assert_hand_drift(listener, "properties differ at /")
+
+    def test_a_hand_written_block_that_drops_a_requirement_is_refused(self) -> None:
+        listener = json.loads(json.dumps(self.HAND_LISTENER))
+        listener["required"] = []
+        self.assert_hand_drift(listener, "required differs at /")
+
+    def test_a_hand_written_block_that_widens_is_refused(self) -> None:
+        listener = json.loads(json.dumps(self.HAND_LISTENER))
+        listener["properties"]["bind"]["anyOf"] = [{"type": "integer"}]
+        self.assert_hand_drift(
+            listener, "anyOf is not a narrowing keyword at /properties/bind"
+        )
+
+    def test_a_missing_hand_written_block_is_refused(self) -> None:
+        self.write_json("crates/sample/hand.schema.json", {"type": "object"})
+        self.assert_one_problem(
+            "sample: crates/sample/hand.schema.json has no schema at "
+            "/properties/listener",
+            self.hand_row(),
         )
 
     def test_a_missing_canonical_schema_is_refused(self) -> None:
