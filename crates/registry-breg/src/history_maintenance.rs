@@ -4,9 +4,12 @@
 //!
 //! Every maintenance path runs under the same interlock: the configured
 //! migration authority, bounded lock and statement timeouts, the exclusive
-//! Registry advisory lock, a ready registry identity, and one audit entry,
-//! appended after the transaction commits, whose record carries references
-//! and counts instead of values. The erasure and rebaseline paths differ only
+//! Registry advisory lock, a ready registry identity, and a correlated pair
+//! of audit entries whose records carry references and counts instead of
+//! values: a `request` entry accepted before the transaction opens, and a
+//! `response` entry appended after it commits. A path run inside a parent
+//! maintenance lifecycle runs under that lifecycle's request entry. The
+//! erasure and rebaseline paths differ only
 //! in what they change inside that transaction, so the interlock lives here
 //! once.
 

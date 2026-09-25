@@ -17,6 +17,7 @@
 use registry_platform_audit::AuditEntry;
 use serde_json::json;
 use tokio_postgres::Client;
+use uuid::Uuid;
 
 use crate::audit::RegistryAudit;
 use crate::history_commit::{
@@ -143,14 +144,26 @@ pub async fn rebaseline_history_coverage_with_connection(
 /// Re-establish snapshot coverage from the current state through an already
 /// opened migration connection. The transaction takes the exclusive Registry
 /// advisory lock, then the commit-head row, preserving the runtime lock order
-/// the erasure path uses. The rebaseline's `response` entry is appended after
-/// the transaction commits.
+/// the erasure path uses. The rebaseline's `request` entry is accepted before
+/// the transaction opens, and its `response` entry, under the same
+/// correlation, is appended after the transaction commits.
 pub async fn rebaseline_history_coverage(
     client: &mut Client,
     request: HistoryRebaselineRequest<'_>,
 ) -> Result<HistoryRebaselineOutcome, HistoryRebaselineError> {
     validate_request(&request)?;
     verify_migration_role(client, request.migration_role).await?;
+    // The baseline position is known only once the transaction allocates it,
+    // so one invocation correlates its two entries by a fresh identifier.
+    let correlation = Uuid::new_v4().to_string();
+    append_maintenance_entries(
+        request.audit,
+        vec![history_rebaseline_request_entry(
+            &request,
+            correlation.clone(),
+        )?],
+    )
+    .await?;
 
     let transaction = client
         .transaction()
@@ -167,8 +180,7 @@ pub async fn rebaseline_history_coverage(
     verify_ready_identity(&transaction, request.expected).await?;
 
     let outcome = rebaseline_history_coverage_in_transaction(&transaction, &request).await?;
-    let entry =
-        history_rebaseline_entry(&request, &outcome, outcome.baseline_position.to_string())?;
+    let entry = history_rebaseline_entry(&request, &outcome, correlation)?;
     transaction
         .commit()
         .await
@@ -298,15 +310,13 @@ async fn has_unindexed_journal_heads(
 /// Build the rebaseline's `response` entry under `correlation`: the new
 /// baseline position for a standalone rebaseline, or the lifecycle reference
 /// of the compound lifecycle that closed with it.
-pub(crate) fn history_rebaseline_entry(
+fn rebaseline_operator_reference(
     request: &HistoryRebaselineRequest<'_>,
-    outcome: &HistoryRebaselineOutcome,
-    correlation: String,
-) -> Result<AuditEntry, HistoryRebaselineError> {
+) -> Result<String, HistoryRebaselineError> {
     if !profile_is_keyed(request.audit.profile()) {
         return Err(HistoryRebaselineError::InvalidInput);
     }
-    let operator_reference = request
+    request
         .audit
         .profile()
         .key_hasher()
@@ -315,7 +325,36 @@ pub(crate) fn history_rebaseline_entry(
             &request.expected.package_revision,
             request.operator_reference,
         )
-        .map_err(|_| HistoryRebaselineError::InvalidInput)?;
+        .map_err(|_| HistoryRebaselineError::InvalidInput)
+}
+
+/// Build a standalone rebaseline's `request` entry. It names only the
+/// operation, package revision, and keyed operator reference its `response`
+/// entry already records.
+fn history_rebaseline_request_entry(
+    request: &HistoryRebaselineRequest<'_>,
+    correlation: String,
+) -> Result<AuditEntry, HistoryRebaselineError> {
+    let operator_reference = rebaseline_operator_reference(request)?;
+    Ok(AuditEntry::request(
+        HISTORY_REBASELINE_AUDIT_SCHEMA,
+        correlation,
+        json!({
+            "phase": "attempt",
+            "outcome": "started",
+            "operationId": AUDIT_OPERATION_ID,
+            "packageRevision": request.expected.package_revision,
+            "operatorReference": operator_reference,
+        }),
+    ))
+}
+
+pub(crate) fn history_rebaseline_entry(
+    request: &HistoryRebaselineRequest<'_>,
+    outcome: &HistoryRebaselineOutcome,
+    correlation: String,
+) -> Result<AuditEntry, HistoryRebaselineError> {
+    let operator_reference = rebaseline_operator_reference(request)?;
     Ok(AuditEntry::response(
         HISTORY_REBASELINE_AUDIT_SCHEMA,
         correlation,
