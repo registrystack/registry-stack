@@ -231,7 +231,10 @@ impl PostgresStore {
             .collect::<String>();
         if let Some(previous) = transaction.query_opt("SELECT request_hash,record,invalidated_at IS NOT NULL FROM casework_task_grants WHERE item_id=$1 AND approver_issuer=$2 AND approver_subject=$3 AND approver_profile=$4 AND idempotency_key=$5", &[&item.item_id,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&key]).await? {
             if previous.get::<_,String>(0) != hash { return Err(StoreError::IdempotencyConflict); }
-            return Ok(StoredTaskGrant { grant: serde_json::from_value(previous.get(1))?, invalidated: previous.get(2) });
+            let stored = StoredTaskGrant { grant: serde_json::from_value(previous.get(1))?, invalidated: previous.get(2) };
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
+            audit.commit(transaction).await?;
+            return Ok(stored);
         }
         if item.revision != expected_revision {
             return Err(StoreError::Conflict);
@@ -574,11 +577,13 @@ impl PostgresStore {
             if previous.get::<_, String>(0) != hash {
                 return Err(StoreError::IdempotencyConflict);
             }
-            audit.commit(transaction).await?;
-            return Ok(StoredReviewTaskGrant {
+            let stored = StoredReviewTaskGrant {
                 grant: serde_json::from_value(previous.get(1))?,
                 invalidated: previous.get(2),
-            });
+            };
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
+            audit.commit(transaction).await?;
+            return Ok(stored);
         }
         if request_id != grant.request_id
             || revision != grant.task_revision
@@ -886,6 +891,9 @@ impl PostgresStore {
                 actor,
             )
             .await?;
+        } else {
+            // The grant was already invalidated, so no domain event is recorded.
+            audit.record_outcome(crate::audit::AuditOutcome::Unchanged);
         }
         audit.commit(transaction).await?;
         Ok(())
@@ -966,6 +974,9 @@ async fn invalidate(
 ) -> Result<(), StoreError> {
     if transaction.execute("UPDATE casework_task_grants SET invalidated_at=now(),invalidation_reason=$2 WHERE grant_id=$1 AND invalidated_at IS NULL", &[&id,&reason]).await? == 1 {
         task_event(transaction,audit,item,if reason=="revoked" {"task_revoked"} else {"task_invalidated"},actor,id).await?;
+    } else {
+        // The grant was already invalidated, so no domain event is recorded.
+        audit.record_outcome(crate::audit::AuditOutcome::Unchanged);
     }
     Ok(())
 }

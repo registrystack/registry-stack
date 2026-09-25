@@ -16,7 +16,10 @@
     transaction commits. A destination that refuses either fails the call
     with `service.unavailable`; a refused response leaves the committed
     change in place. An accountability read returns protected fields only
-    after its response entry is accepted.
+    after its response entry is accepted. A requested operation that records
+    no domain event, such as an idempotent replay or a request whose state
+    already held, writes one response entry whose `outcome` is `replayed` or
+    `unchanged` and returns its result only after that entry is accepted.
   - Entries are no longer hash-chained, and the runtime keeps no audit state
     in PostgreSQL. Schema version 17 drops `casework_audit_outbox`; `migrate`
     refuses with `casework.migration.refused` while the outbox still holds

@@ -103,6 +103,7 @@ impl PostgresStore {
             &[&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&resource,&idempotency_key],
         ).await? {
             if row.get::<_,String>(0)!=digest{return Err(StoreError::IdempotencyConflict)}
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
             audit.commit(transaction).await?;
             return Ok(())
         }
@@ -126,6 +127,7 @@ impl PostgresStore {
                 &Value::Null,
             )
             .await?;
+            audit.record_outcome(crate::audit::AuditOutcome::Unchanged);
             audit.commit(transaction).await?;
             return Ok(());
         }
@@ -335,7 +337,10 @@ impl PostgresStore {
         let request_hash = digest_json(&json!({"previewId":preview_id}))?;
         if let Some(row)=transaction.query_opt("SELECT request_hash,response FROM casework_idempotency WHERE issuer=$1 AND subject=$2 AND profile_id=$3 AND operation='clock.recompute.apply' AND resource=$4 AND idempotency_key=$5 FOR UPDATE",&[&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&preview_id.to_string(),&idempotency_key]).await?{
             if row.get::<_,String>(0)!=request_hash{return Err(StoreError::IdempotencyConflict)}
-            return serde_json::from_value(row.get::<_,Option<Value>>(1).ok_or(StoreError::IdempotencyExpired)?).map_err(StoreError::Json)
+            let replayed = serde_json::from_value(row.get::<_,Option<Value>>(1).ok_or(StoreError::IdempotencyExpired)?).map_err(StoreError::Json)?;
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
+            audit.commit(transaction).await?;
+            return Ok(replayed);
         }
         // Match reconciliation's subject -> item -> clock order across every
         // occurrence in this all-or-nothing preview.
