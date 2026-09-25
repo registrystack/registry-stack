@@ -89,6 +89,7 @@ cargo test --locked -p 'registry-platform-*' --all-targets --all-features
 cargo llvm-cov --locked -p 'registry-platform-*' --all-features --fail-under-lines 80
 cargo deny check
 products/platform/scripts/check-hygiene-alignment.sh
+products/platform/scripts/check-config-conformance.py --check-generated
 gitleaks dir --config .gitleaks.toml --no-banner --redact --timeout 120 .
 ```
 

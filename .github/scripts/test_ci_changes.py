@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+import importlib.util
 import json
 import os
 import re
@@ -30,6 +31,7 @@ from ci_changes import (
     RELAY_CLIENT_PACKAGES,
     RELAY_TUTORIAL_INPUTS,
     STACK_CLIENT_PACKAGES,
+    CONFIG_CONFORMANCE_PACKAGES,
     SECURITY_WORKFLOW_GATES,
     SHARDS,
     LockChange,
@@ -305,6 +307,9 @@ class CiChangesTest(unittest.TestCase):
             ),
             "docs-archives": "needs.changes.outputs.docs_archives == 'true'",
             "editor-extensions": "needs.changes.outputs.editors == 'true'",
+            "config-conformance": (
+                "needs.changes.outputs.config_conformance == 'true'"
+            ),
         }
         deferred = {
             name
@@ -347,6 +352,7 @@ class CiChangesTest(unittest.TestCase):
             "breg-contracts",
             "breg-wasm",
             "identifiers",
+            "config-conformance",
             "rust-result",
             "casework-postgres",
             "scheduling-contracts",
@@ -386,6 +392,7 @@ class CiChangesTest(unittest.TestCase):
                 "casework-postgres",
                 "scheduling-postgres",
                 "scheduling-contracts",
+                "config-conformance",
             ),
             "release-tool-required": ("changes", "release-tool"),
             "release-source-proof-required": ("changes", "release-source-proof"),
@@ -411,6 +418,7 @@ class CiChangesTest(unittest.TestCase):
                 "casework-postgres",
                 "scheduling-postgres",
                 "scheduling-contracts",
+                "config-conformance",
                 "release-tool",
                 "release-source-proof",
                 "evidence-tutorials",
@@ -466,7 +474,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(31, len(final_needs))
+        self.assertEqual(32, len(final_needs))
 
         def embedded_python(job: dict[str, Any]) -> str:
             run = job["steps"][0]["run"]
@@ -517,6 +525,43 @@ class CiChangesTest(unittest.TestCase):
                     expected_status = 0 if accepted else 1
                     self.assertEqual(expected_status, rust_status)
                     self.assertEqual(rust_status, final_status)
+
+    def test_config_conformance_inputs_select_the_conformance_gate(self) -> None:
+        for path in (
+            "crates/registry-platform-config/src/blocks.rs",
+            "crates/registry-relay-v2/src/contract.rs",
+            "crates/registry-relayctl/schemas/authoring/runtime.schema.json",
+            "crates/registry-render/src/manifest.rs",
+            "crates/registry-discovery/src/startup.rs",
+            "crates/registry-scheduling/src/config.rs",
+            "products/platform/generated/runtime-config-blocks.schema.json",
+            "products/platform/scripts/check-config-conformance.py",
+            "products/scheduling/generated/runtime/runtime.schema.json",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["config_conformance"]
+                )
+        self.assertFalse(
+            classify(self.workspace, ("docs/site/src/content/docs/index.mdx",))[
+                "config_conformance"
+            ]
+        )
+
+    def test_every_config_conformance_row_is_routed(self) -> None:
+        script = Path("products/platform/scripts/check-config-conformance.py")
+        spec = importlib.util.spec_from_file_location("config_conformance", script)
+        assert spec is not None and spec.loader is not None
+        gate = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = gate
+        spec.loader.exec_module(gate)
+        packages = {
+            Path(source).parts[1]
+            for row in gate.ROWS
+            for source in row.loader_sources
+        }
+        self.assertLessEqual(packages, CONFIG_CONFORMANCE_PACKAGES)
+        self.assertIn("registry-platform-config", CONFIG_CONFORMANCE_PACKAGES)
 
     def test_shards_cover_every_workspace_package_once(self) -> None:
         assigned = [package for packages in SHARDS.values() for package in packages]
