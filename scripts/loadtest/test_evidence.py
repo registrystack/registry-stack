@@ -360,6 +360,57 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(result["database"]["waits"]["auditLockWaitersPeak"], 2)
             self.assertTrue(result["pass"])
 
+    def test_sweep_counts_a_held_rate_without_a_result_as_failed(self) -> None:
+        def held_rate(root: Path, rate: str, passed: bool | None) -> None:
+            directory = root / f"rate-{rate}"
+            directory.mkdir()
+            if passed is None:
+                return
+            result = {
+                "offered": {"rateOps": float(rate)},
+                "achieved": {
+                    "operationsPerSecond": float(rate),
+                    "httpRequestsPerSecond": float(rate),
+                    "droppedOperations": 0,
+                    "failedRequestRate": 0,
+                },
+                "latency": {"overall": {"p95Ms": 10, "p99Ms": 20}},
+                "pass": passed,
+            }
+            (directory / "result.json").write_text(json.dumps(result), encoding="utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            held_rate(root, "50", True)
+            held_rate(root, "75", None)
+            held_rate(root, "100", False)
+            out = root / "sweep-result.json"
+            evidence.aggregate_sweep(argparse.Namespace(root=root, out=out))
+            sweep = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual([row["offeredOperationsPerSecond"] for row in sweep["rates"]], [50, 75, 100])
+            self.assertEqual([row["pass"] for row in sweep["rates"]], [True, False, False])
+            self.assertEqual([row["missing"] for row in sweep["rates"]], [False, True, False])
+            self.assertEqual(sweep["rates"][1]["artifact"], "rate-75")
+            self.assertIsNone(sweep["rates"][1]["achievedOperationsPerSecond"])
+            self.assertEqual(sweep["firstFailingRate"], 75)
+            self.assertFalse(sweep["pass"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            held_rate(root, "50", True)
+            held_rate(root, "75", True)
+            out = root / "sweep-result.json"
+            evidence.aggregate_sweep(argparse.Namespace(root=root, out=out))
+            sweep = json.loads(out.read_text(encoding="utf-8"))
+            self.assertIsNone(sweep["firstFailingRate"])
+            self.assertTrue(sweep["pass"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            out = root / "sweep-result.json"
+            evidence.aggregate_sweep(argparse.Namespace(root=root, out=out))
+            self.assertFalse(json.loads(out.read_text(encoding="utf-8"))["pass"])
+
 
 @unittest.skipUnless(shutil.which("node"), "node is required to exercise the shared k6 modules")
 class K6ConfigTests(unittest.TestCase):
