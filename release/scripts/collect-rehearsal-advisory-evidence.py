@@ -27,7 +27,7 @@ import image_exposure
 
 ROOT = Path(__file__).resolve().parents[2]
 IMAGE_NAMES = frozenset(
-    {"breg", "casework", "discovery", "evidence", "relay", "scheduling"}
+    {"breg", "casework", "discovery", "evidence", "messaging", "relay", "scheduling"}
 )
 SEMVER_RE = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
 SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}")

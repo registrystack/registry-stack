@@ -181,6 +181,8 @@ jobs:
               "bregctl": "bregctl",
               "casework": "casework",
               "caseworkctl": "caseworkctl",
+              "messaging": "messaging",
+              "messagingctl": "messagingctl",
               "relay": "relay",
               "relayctl": "relayctl",
           }

@@ -39,6 +39,7 @@ PUBLIC_PACKAGES = (
     "breg",
     "casework",
     "scheduling",
+    "messaging",
     "relay",
 )
 

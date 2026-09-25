@@ -1846,6 +1846,9 @@ class RegistryReleaseTest(TestCase):
                 "casework-postgres",
                 "scheduling-contracts",
                 "scheduling-postgres",
+                "messaging-contracts",
+                "messaging-postgres",
+                "messaging-smtp",
             },
             set(rust_result["needs"]),
         )
@@ -2392,7 +2395,7 @@ class RegistryReleaseTest(TestCase):
         for current in (
             "_relay_v2_payload_inventory",
             "payloads: $payloads[0]",
-            "image_names=(relay evidence discovery breg casework scheduling)",
+            "image_names=(relay evidence discovery breg casework scheduling messaging)",
             "images: $images[0]",
             "scans: $scans[0]",
             '"discovery-image"',
@@ -2400,6 +2403,7 @@ class RegistryReleaseTest(TestCase):
             '"breg-image"',
             '"casework-image"',
             '"scheduling-image"',
+            '"messaging-image"',
             '"relay-image"',
         ):
             self.assertIn(current, workflow)
@@ -2473,6 +2477,7 @@ class RegistryReleaseTest(TestCase):
                 "breg",
                 "casework",
                 "scheduling",
+                "messaging",
                 "relay",
             )
         }
@@ -2498,6 +2503,7 @@ class RegistryReleaseTest(TestCase):
             "breg",
             "casework",
             "scheduling",
+            "messaging",
             "relay",
         ):
             self.assertIn(
@@ -2509,7 +2515,7 @@ class RegistryReleaseTest(TestCase):
                 f"/workspace/runtime-root/usr/local/bin/{name}",
                 release_dockerfiles[name],
             )
-        for name in ("evidence", "breg", "casework", "scheduling", "relay"):
+        for name in ("evidence", "breg", "casework", "scheduling", "messaging", "relay"):
             self.assertIn(
                 "--mount=type=bind,source=THIRD_PARTY_NOTICES,"
                 "target=/workspace/THIRD_PARTY_NOTICES,readonly",
@@ -2522,7 +2528,7 @@ class RegistryReleaseTest(TestCase):
             )
         self.assertNotIn("THIRD_PARTY_NOTICES", release_dockerfiles["discovery"])
         self.assertIn(
-            "discovery|evidence|breg|casework|scheduling|relay)", image_recipe
+            "discovery|evidence|breg|casework|scheduling|messaging|relay)", image_recipe
         )
         self.assertNotIn("registry-relay)", image_recipe)
 
@@ -2824,6 +2830,83 @@ class RegistryReleaseTest(TestCase):
         self.assertIn("-p registry-scheduling --bin scheduling", recipe)
         self.assertIn('"scheduling-${tag}-linux-amd64"', recipe)
         self.assertIn("image_bin_binaries+=(scheduling)", recipe)
+
+    def test_messaging_release_surface_begins_after_v0_34(self) -> None:
+        module = load_registry_release()
+        previous = {
+            name: "0.34.0"
+            for name in (
+                module.RELAY_V2_ARTIFACT_INVENTORY
+                | {
+                    "relay-installer",
+                    "registry-docs",
+                    "discovery",
+                    "breg",
+                    "bregctl",
+                    "breg-installer",
+                    "casework",
+                    "caseworkctl",
+                    "casework-installer",
+                    "scheduling",
+                    "registry-client-node",
+                    "registry-client-python",
+                }
+            )
+            if name != "mint"
+            and name
+            not in {
+                "evidence-client-node",
+                "evidence-client-python",
+            }
+        }
+        self.assertEqual([], module.artifact_inventory_errors("0.34.0", previous))
+        self.assertNotEqual(
+            [],
+            module.artifact_inventory_errors(
+                "0.34.0",
+                previous | {"messaging": "0.34.0", "messagingctl": "0.34.0"},
+            ),
+        )
+        future = {name: "0.35.0" for name in previous}
+        future.update({"messaging": "0.35.0", "messagingctl": "0.35.0"})
+        self.assertEqual([], module.artifact_inventory_errors("0.35.0", future))
+        for missing in ("messaging", "messagingctl"):
+            with self.subTest(missing=missing):
+                incomplete = dict(future)
+                del incomplete[missing]
+                self.assertNotEqual(
+                    [], module.artifact_inventory_errors("0.35.0", incomplete)
+                )
+
+        recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("RELEASE_INCLUDE_MESSAGING", recipe)
+        self.assertIn("-p registry-messaging --bin messaging", recipe)
+        self.assertIn("-p registry-messagingctl --bin messagingctl", recipe)
+        self.assertIn('"messaging-${tag}-linux-amd64"', recipe)
+        self.assertIn('"messagingctl-${tag}-linux-amd64"', recipe)
+        self.assertIn("image_bin_binaries+=(messaging)", recipe)
+
+    def test_release_candidate_smokes_messaging_assets_from_v0_35(self) -> None:
+        workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
+            encoding="utf-8"
+        )
+        assemble = workflow.split("\n  assemble:", 1)[1].split("\n  attest:", 1)[0]
+        smoke = assemble.split(
+            "if (( relay_major > 0 || relay_minor >= 35 )); then", 1
+        )[1].split("\n          fi\n", 1)[0]
+        self.assertIn("for messaging_binary in messaging messagingctl; do", smoke)
+        self.assertIn(
+            '"candidate/bundle-root/${messaging_binary}-'
+            '${{ needs.validate.outputs.tag }}-linux-amd64" --version',
+            smoke,
+        )
+        self.assertIn(
+            '"${messaging_binary} ${{ needs.validate.outputs.version }}"', smoke
+        )
+        self.assertIn('init "${messaging_project}"', smoke)
+        self.assertIn('check --package "${messaging_project}"', smoke)
 
     def test_unified_client_manifest_surface_replaces_individual_clients(self) -> None:
         module = load_registry_release()
@@ -4189,6 +4272,9 @@ def write_manifest(
         artifacts.pop("mint")
     if version_tuple >= (0, 33, 0):
         artifacts["scheduling"] = version
+    if version_tuple >= (0, 35, 0):
+        artifacts["messaging"] = version
+        artifacts["messagingctl"] = version
     manifest = {
         "stack": {
             "release": "beta-6",

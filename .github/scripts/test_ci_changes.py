@@ -27,6 +27,8 @@ from ci_changes import (
     REGISTRY_RECORD_CROSS_PRODUCT_INPUTS,
     BREG_PACKAGES,
     CASEWORK_PACKAGES,
+    MESSAGING_PACKAGES,
+    MESSAGING_TUTORIAL_INPUTS,
     RELAY_CLIENT_PACKAGES,
     RELAY_TUTORIAL_INPUTS,
     STACK_CLIENT_PACKAGES,
@@ -282,6 +284,15 @@ class CiChangesTest(unittest.TestCase):
             "scheduling-contracts": (
                 "needs.changes.outputs.scheduling_contracts == 'true'"
             ),
+            "messaging-postgres": (
+                "needs.changes.outputs.messaging_postgres == 'true'"
+            ),
+            "messaging-contracts": (
+                "needs.changes.outputs.messaging_contracts == 'true'"
+            ),
+            "messaging-smtp": (
+                "needs.changes.outputs.messaging_postgres == 'true'"
+            ),
             "platform-fuzz": "needs.changes.outputs.platform_assurance == 'true'",
             "platform-coverage": (
                 "needs.changes.outputs.platform_assurance == 'true'"
@@ -299,6 +310,9 @@ class CiChangesTest(unittest.TestCase):
             "breg-tutorial": "needs.changes.outputs.breg_tutorial == 'true'",
             "casework-tutorial": (
                 "needs.changes.outputs.casework_tutorial == 'true'"
+            ),
+            "messaging-tutorial": (
+                "needs.changes.outputs.messaging_tutorial == 'true'"
             ),
             "breg-evidence-composition": (
                 "needs.changes.outputs.breg_evidence_composition == 'true'"
@@ -351,6 +365,9 @@ class CiChangesTest(unittest.TestCase):
             "casework-postgres",
             "scheduling-contracts",
             "scheduling-postgres",
+            "messaging-contracts",
+            "messaging-postgres",
+            "messaging-smtp",
             "release-tool",
             "release-tool-required",
             "release-source-proof",
@@ -358,6 +375,7 @@ class CiChangesTest(unittest.TestCase):
             "evidence-tutorials",
             "breg-tutorial",
             "casework-tutorial",
+            "messaging-tutorial",
             "breg-evidence-composition",
             "evidence-anchors",
             "docs",
@@ -386,6 +404,9 @@ class CiChangesTest(unittest.TestCase):
                 "casework-postgres",
                 "scheduling-postgres",
                 "scheduling-contracts",
+                "messaging-postgres",
+                "messaging-contracts",
+                "messaging-smtp",
             ),
             "release-tool-required": ("changes", "release-tool"),
             "release-source-proof-required": ("changes", "release-source-proof"),
@@ -411,11 +432,15 @@ class CiChangesTest(unittest.TestCase):
                 "casework-postgres",
                 "scheduling-postgres",
                 "scheduling-contracts",
+                "messaging-postgres",
+                "messaging-contracts",
+                "messaging-smtp",
                 "release-tool",
                 "release-source-proof",
                 "evidence-tutorials",
                 "breg-tutorial",
                 "casework-tutorial",
+                "messaging-tutorial",
                 "breg-evidence-composition",
                 "evidence-anchors",
                 "docs",
@@ -455,6 +480,7 @@ class CiChangesTest(unittest.TestCase):
             "evidence-tutorials",
             "breg-tutorial",
             "casework-tutorial",
+            "messaging-tutorial",
             "breg-evidence-composition",
             "evidence-anchors",
             "docs",
@@ -466,7 +492,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(31, len(final_needs))
+        self.assertEqual(35, len(final_needs))
 
         def embedded_python(job: dict[str, Any]) -> str:
             run = job["steps"][0]["run"]
@@ -756,6 +782,21 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertIn("registry-casework-client-py", python["rust_packages"])
         self.assertTrue(python["casework_postgres"])
+
+    def test_messaging_product_and_core_select_the_checkpoint_crates(self) -> None:
+        product = classify(self.workspace, ("products/messaging/README.md",))
+        self.assertLessEqual(set(MESSAGING_PACKAGES), set(product["rust_packages"]))
+        selected = {row["name"] for row in product["rust_matrix"]["include"]}
+        self.assertIn("messaging", selected)
+        self.assertTrue(product["messaging_contracts"])
+        self.assertTrue(product["messaging_postgres"])
+        core = classify(self.workspace, ("crates/registry-messaging-core/src/access.rs",))
+        self.assertLessEqual(set(MESSAGING_PACKAGES), set(core["rust_packages"]))
+        self.assertTrue(core["messaging_contracts"])
+        self.assertTrue(core["messaging_postgres"])
+        unrelated = classify(self.workspace, ("crates/registry-scheduling/src/lib.rs",))
+        self.assertFalse(unrelated["messaging_contracts"])
+        self.assertFalse(unrelated["messaging_postgres"])
 
     def test_shared_review_protocol_selects_casework_and_breg_consumers(self) -> None:
         outputs = classify(
@@ -1111,6 +1152,68 @@ class CiChangesTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(classify(self.workspace, (path,))["casework_tutorial"])
 
+    def test_messaging_tutorial_inputs_cover_every_registered_tutorial(self) -> None:
+        # The gate's registry is the source of truth for which tutorials it
+        # replays. A tutorial missing here would not trigger the job that
+        # replays it, so it could break without any pull request noticing.
+        gate = (
+            Path(__file__).resolve().parents[2]
+            / "docs/site/scripts/check-messaging-tutorial.sh"
+        )
+        registry = re.search(
+            r"^MESSAGING_TUTORIALS=\((.*?)^\)",
+            gate.read_text(),
+            re.DOTALL | re.MULTILINE,
+        )
+        if registry is None:
+            self.fail("the gate must declare MESSAGING_TUTORIALS")
+        slugs = registry.group(1).split()
+        self.assertTrue(slugs, "the gate must register at least one tutorial")
+        for slug in slugs:
+            with self.subTest(slug=slug):
+                page = f"docs/site/src/content/docs/{slug}.mdx"
+                self.assertTrue(
+                    any(
+                        fnmatch.fnmatchcase(page, pattern)
+                        for pattern in MESSAGING_TUTORIAL_INPUTS
+                    )
+                )
+
+    def test_messaging_tutorial_routing(self) -> None:
+        infrastructure = (
+            "docs/site/scripts/check-messaging-tutorial.sh",
+            "docs/site/scripts/check-messaging-tutorial.test.mjs",
+            "docs/site/src/content/docs/tutorials/first-messaging.mdx",
+            "docs/site/package.json",
+        )
+        for path in infrastructure:
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["messaging_tutorial"])
+        # The replay builds and runs messagingctl, which links the runtime in
+        # process for its local session.
+        for path in (
+            "crates/registry-messaging/src/runtime.rs",
+            "crates/registry-messagingctl/src/dev/mod.rs",
+            "crates/registry-messagingctl/src/starter.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["messaging_tutorial"])
+        # The source-neutral core is linked by the runtime, so a change to it
+        # reaches the replay through reverse dependencies.
+        self.assertTrue(
+            classify(self.workspace, ("crates/registry-messaging-core/src/lib.rs",))[
+                "messaging_tutorial"
+            ]
+        )
+        # Pages that share the tutorials directory and reach none of the
+        # Registry Messaging replay.
+        for path in (
+            "docs/site/src/content/docs/tutorials/first-casework.mdx",
+            "docs/site/scripts/check-casework-tutorial.sh",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(classify(self.workspace, (path,))["messaging_tutorial"])
+
     def test_breg_evidence_composition_routing(self) -> None:
         # The proof drives bregctl, evidencectl and the Evidence runtime over
         # the reviewed teaching inputs, so a change to any of those three, to a
@@ -1168,6 +1271,20 @@ class CiChangesTest(unittest.TestCase):
                 self.assertTrue(outputs["platform"])
                 self.assertTrue(outputs["platform_hygiene"])
 
+    def test_dispatch_changes_select_the_job_running_its_postgres_suite(self) -> None:
+        # The dispatch core's PostgreSQL suite runs in the Scheduling
+        # PostgreSQL job, whose service database it borrows. A dispatch
+        # change must schedule that job whether or not a Scheduling crate
+        # happens to depend on dispatch.
+        for path in (
+            "crates/registry-platform-dispatch/src/postgres/dispatcher.rs",
+            "crates/registry-platform-dispatch/tests/postgres_dispatch.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertIn("registry-platform-dispatch", outputs["rust_packages"])
+                self.assertTrue(outputs["scheduling_postgres"])
+
     def test_platform_changes_select_relay_client_reverse_dependents(self) -> None:
         # The Relay SDK deliberately reuses the shared bounded outbound and
         # OAuth primitives. A platform change can therefore alter its wire
@@ -1207,6 +1324,22 @@ class CiChangesTest(unittest.TestCase):
                 self.assertTrue(
                     Path("crates/registry-casework/tests", f"{target}.rs").is_file(),
                     f"casework-postgres invokes missing test target {target}",
+                )
+
+    def test_messaging_postgres_job_names_existing_integration_test_targets(
+        self,
+    ) -> None:
+        commands = "\n".join(
+            str(step.get("run", ""))
+            for step in self.workflow_jobs["messaging-postgres"]["steps"]
+        )
+        targets = set(re.findall(r"--test\s+([a-zA-Z0-9_-]+)", commands))
+        self.assertTrue(targets)
+        for target in targets:
+            with self.subTest(target=target):
+                self.assertTrue(
+                    Path("crates/registry-messaging/tests", f"{target}.rs").is_file(),
+                    f"messaging-postgres invokes missing test target {target}",
                 )
 
     def test_docs_only_change_skips_rust(self) -> None:
@@ -1523,6 +1656,33 @@ class CiChangesTest(unittest.TestCase):
                 self.workspace, ("crates/registry-casework-client-py/src/lib.rs",)
             )["evidence_tutorial"]
         )
+
+    def test_messaging_bindings_run_the_native_client_job(self) -> None:
+        # The Messaging bindings are covered only by the shared native-client
+        # job, and the Python one also ships in the assembled package the
+        # application tutorial imports.
+        for path in (
+            "crates/registry-messaging-client-node/src/lib.rs",
+            "crates/registry-messaging-client-py/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["client_bindings"])
+                self.assertTrue(outputs["messaging_contracts"])
+        self.assertTrue(
+            classify(
+                self.workspace, ("crates/registry-messaging-client-py/src/lib.rs",)
+            )["evidence_tutorial"]
+        )
+
+    def test_messaging_node_sources_run_the_linux_release_addon_proof(self) -> None:
+        for path in (
+            "crates/registry-messaging-client/src/client.rs",
+            "crates/registry-messaging-client-node/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["release_linux_node_clients"])
 
     def test_casework_node_sources_run_the_linux_release_addon_proof(self) -> None:
         for path in (
@@ -1895,6 +2055,19 @@ on:
                 selected = {row["name"] for row in outputs["rust_matrix"]["include"]}
                 self.assertIn("casework", selected)
 
+    def test_messaging_command_changes_select_docs_and_product_checks(self) -> None:
+        for path in (
+            "crates/registry-messaging/src/runtime.rs",
+            "crates/registry-messagingctl/src/lib.rs",
+            "crates/registry-messagingctl/src/main.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["docs"])
+                self.assertTrue(outputs["messaging_postgres"])
+                selected = {row["name"] for row in outputs["rust_matrix"]["include"]}
+                self.assertIn("messaging", selected)
+
     def test_docs_rebuild_from_generator_inputs_without_rendered_changes(self) -> None:
         for path in (
             "crates/registry-cli-docs/Cargo.toml",
@@ -2260,7 +2433,7 @@ class LockfileSelectionTest(unittest.TestCase):
         self,
     ) -> None:
         # tree-sitter-yaml compiles C, so it is proven by the full sweep; its
-        # pure-Rust companion rhai reaches five members through normal edges.
+        # pure-Rust companion rhai reaches six members through normal edges.
         change = self.change(bump_lock_package(self.lock, "rhai", "1.26.2"))
         self.assertEqual(
             change.members,
@@ -2270,6 +2443,7 @@ class LockfileSelectionTest(unittest.TestCase):
                     "registry-evidence",
                     "registry-evidence-authoring",
                     "registry-evidencectl",
+                    "registry-messaging",
                     "registry-platform-script",
                 }
             ),
@@ -2278,6 +2452,7 @@ class LockfileSelectionTest(unittest.TestCase):
         self.assertTrue(outputs["platform"])
         self.assertTrue(outputs["breg_contracts"])
         self.assertTrue(outputs["evidence_contracts"])
+        self.assertTrue(outputs["messaging_contracts"])
 
     def test_sys_bump_forces_full(self) -> None:
         change = self.change(bump_lock_package(self.lock, "libsqlite3-sys", "0.38.3"))

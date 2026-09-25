@@ -68,10 +68,11 @@ jobs:
             -p registry-bregctl \
             -p registry-caseworkctl \
             -p registry-schedulingctl \
+            -p registry-messagingctl \
             -p registry-relayctl \
             -p registry-evidencectl \
             -p registry-discoveryctl
-          for binary in bregctl caseworkctl schedulingctl relayctl evidencectl discoveryctl; do
+          for binary in bregctl caseworkctl schedulingctl messagingctl relayctl evidencectl discoveryctl; do
             "target/debug/${binary}" --version
           done
 
@@ -81,6 +82,7 @@ jobs:
           set -euo pipefail
           products/casework/scripts/check-checkpoint.sh
           products/scheduling/scripts/check-checkpoint.sh
+          products/messaging/scripts/check-checkpoint.sh
           products/relay-v2/scripts/check-generated.sh
           products/evidence/scripts/check-authoring-no-io.sh
 

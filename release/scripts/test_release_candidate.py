@@ -50,6 +50,7 @@ def security_evidence_members(
         "breg",
         "relay",
         "scheduling",
+        "messaging",
     ),
 ) -> dict[str, bytes]:
     refs = {
@@ -383,6 +384,7 @@ class ReleaseCandidateTest(TestCase):
             "casework",
             "relay",
             "scheduling",
+            "messaging",
         )
         evidence_members = security_evidence_members(image_names)
         evidence_name = "registry-stack-v1.2.3-security-evidence.tar.gz"
@@ -893,6 +895,30 @@ class ReleaseCandidateTest(TestCase):
             self.module._relay_v2_payload_inventory("0.33.0"),
         )
 
+    def test_messaging_joins_only_the_v0_35_rosters(self) -> None:
+        self.assertEqual(
+            self.module._candidate_image_names("0.33.0"),
+            self.module._candidate_image_names("0.34.0"),
+        )
+        self.assertEqual(
+            self.module._candidate_image_names("0.34.0") | {"messaging"},
+            self.module._candidate_image_names("0.35.0"),
+        )
+        historical = self.module._relay_v2_payload_inventory("0.34.0")
+        self.assertFalse(any(name.startswith("messaging") for name in historical))
+        current = self.module._relay_v2_payload_inventory("0.35.0")
+        self.assertEqual(
+            {
+                "messaging-v0.35.0-linux-amd64": "binary",
+                "messagingctl-v0.35.0-linux-amd64": "binary",
+            },
+            {
+                name: kind
+                for name, kind in current.items()
+                if name.startswith("messaging")
+            },
+        )
+
     def test_retirement_preserves_every_v0_30_release(self) -> None:
         for version, expected in (
             ("0.30.0", True),
@@ -916,6 +942,11 @@ class ReleaseCandidateTest(TestCase):
             ("0.31.0", "breg casework discovery evidence relay\n"),
             ("0.32.0", "breg casework discovery evidence relay\n"),
             ("0.33.0", "breg casework discovery evidence relay scheduling\n"),
+            ("0.34.0", "breg casework discovery evidence relay scheduling\n"),
+            (
+                "0.35.0",
+                "breg casework discovery evidence messaging relay scheduling\n",
+            ),
         )
         for version, expected in cases:
             with self.subTest(version=version):
@@ -989,6 +1020,44 @@ class ReleaseCandidateTest(TestCase):
                 root, "0.33.0", allow_missing_baseline=True
             )
 
+    def test_v0_35_messaging_onboarding_stays_closed_until_external_setup(self) -> None:
+        root = self.onboarding_repository()
+        for image_name in ("scheduling", "messaging"):
+            shutil.copy2(
+                ROOT / f"release/docker/Dockerfile.{image_name}",
+                root / f"release/docker/Dockerfile.{image_name}",
+            )
+        shutil.copy2(
+            ROOT / "release/security/scheduling-advisory-baseline.json",
+            root / "release/security/scheduling-advisory-baseline.json",
+        )
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "messaging advisory baseline is missing",
+        ):
+            self.module.check_image_onboarding(root, "0.35.0")
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "CANDIDATE_PACKAGES must contain messaging-candidate",
+        ):
+            self.module.check_image_onboarding(
+                root, "0.35.0", allow_missing_baseline=True
+            )
+        cleanup = root / "release/scripts/cleanup-release-candidates.py"
+        cleanup.write_text(
+            cleanup.read_text(encoding="utf-8").replace(
+                '    "scheduling-candidate",\n',
+                '    "scheduling-candidate",\n    "messaging-candidate",\n',
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            self.module._candidate_image_names("0.35.0"),
+            self.module.check_image_onboarding(
+                root, "0.35.0", allow_missing_baseline=True
+            ),
+        )
+
     def test_image_onboarding_rejects_a_noncanonical_version(self) -> None:
         with self.assertRaisesRegex(
             self.module.CandidateError,
@@ -1038,7 +1107,7 @@ class ReleaseCandidateTest(TestCase):
         recipe = root / "release/scripts/build-release-image.sh"
         recipe.write_text(
             recipe.read_text(encoding="utf-8").replace(
-                "discovery|evidence|breg|casework|scheduling|relay",
+                "discovery|evidence|breg|casework|scheduling|messaging|relay",
                 "discovery|evidence|mint|relay",
             ),
             encoding="utf-8",
@@ -1363,7 +1432,7 @@ class ReleaseCandidateTest(TestCase):
         candidate, _, bundle_root, _ = self.make_v2_candidate()
         members = security_evidence_members()
         required = self.module._security_evidence_required_files(
-            self.module.SCHEDULING_RUNTIME_IMAGE_NAMES
+            self.module.MESSAGING_RUNTIME_IMAGE_NAMES
         )
         for missing in sorted(required):
             with self.subTest(missing=missing):

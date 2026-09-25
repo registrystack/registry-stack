@@ -1,11 +1,11 @@
 ---
 title: Registry Stack client API reference
-description: Construction, operations, outcomes, and errors for the Registry Discovery, Evidence Gateway, Registry Relay, Base Registry Engine, and Registry Casework namespaces of the unified Registry Stack client.
+description: Construction, operations, outcomes, and errors for the Registry Discovery, Evidence Gateway, Registry Relay, Base Registry Engine, Registry Casework, and Registry Messaging namespaces of the unified Registry Stack client.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-20"
+last_reviewed: "2026-09-25"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -14,9 +14,9 @@ standards_referenced:
 ---
 
 One package carries every maintained Registry Stack client API: `@registrystack/client` on npm and
-`registry-stack-client` on PyPI. It holds five namespaces, one per product: `discovery` for Registry
+`registry-stack-client` on PyPI. It holds six namespaces, one per product: `discovery` for Registry
 Discovery, `evidence` for Evidence Gateway, `relay` for Registry Relay, `breg` for Base Registry
-Engine (BReg), and `casework` for Registry Casework. Each namespace keeps its own routes,
+Engine (BReg), `casework` for Registry Casework, and `messaging` for Registry Messaging. Each namespace keeps its own routes,
 authentication, errors, and verification rules, because those contracts differ. Relay and BReg share
 only the neutral `registry-record` types they decode Registry Record responses into.
 
@@ -33,7 +33,8 @@ deployment it calls unless a release note states a wider compatibility range.
 The unified packages are published beginning with Registry Stack v0.26.1. Releases through v0.26.0
 carry no Base Registry Engine client package and no unified package; they distribute one standalone
 package per product instead. The `casework` namespace is present in those same unified packages
-beginning with Registry Stack v0.30.0. Python requires version 3.10 or later and the wheels use the
+beginning with Registry Stack v0.30.0, and the `messaging` namespace beginning with Registry Stack
+v0.35.0. Python requires version 3.10 or later and the wheels use the
 Python 3.10 stable ABI (`abi3-py310`), so a later Python imports the same file. Node requires version 22.12
 or later. Both packages select a native build for Linux amd64 with glibc, Linux arm64 with glibc, or
 macOS arm64, and require glibc 2.17 or newer on Linux. The version-specific GitHub Release retains
@@ -78,8 +79,8 @@ npm install --save-dev "@types/node"
 The package does not declare that dependency itself, because a JavaScript consumer does not need it.
 
 A Rust application takes the source crate from the matching release tag. `registry-stack-client` is
-the facade that re-exports the five product clients under `breg`, `casework`, `discovery`,
-`evidence`, and `relay` modules; a single-product application can depend on that product's crate
+the facade that re-exports the six product clients under `breg`, `casework`, `discovery`,
+`evidence`, `messaging`, and `relay` modules; a single-product application can depend on that product's crate
 directly instead.
 
 ```toml
@@ -91,18 +92,18 @@ registry-stack-client = { git = "https://github.com/registrystack/registry-stack
     crates/registry-stack-client-py/README.md, crates/registry-stack-client/Cargo.toml,
     release/scripts/assemble-registry-client-wheel.py */}
 
-## One import, five namespaces
+## One import, six namespaces
 
 ```python
-from registry_client import breg, casework, discovery, evidence, relay
+from registry_client import breg, casework, discovery, evidence, messaging, relay
 ```
 
 ```js
-const { breg, casework, discovery, evidence, relay } = require('@registrystack/client');
+const { breg, casework, discovery, evidence, messaging, relay } = require('@registrystack/client');
 ```
 
 ```rust
-use registry_stack_client::{breg, casework, discovery, evidence, relay};
+use registry_stack_client::{breg, casework, discovery, evidence, messaging, relay};
 ```
 
 Import only the namespaces an application uses. Nothing crosses a namespace: a Relay error is never
@@ -1275,6 +1276,172 @@ value outside the schema itself, and both reasons carry the instance path of the
     CaseworkErrorKind and ValidationDetail, crates/registry-casework-client-py/src/lib.rs,
     crates/registry-casework-client-node/client.d.ts, CaseworkClientError */}
 
+## Registry Messaging
+
+The Messaging client covers six routes: liveness, readiness, the submission of one message, the
+read of one message's status, the cancellation of one message before dispatch, and the preview of
+one template version. It carries no operator route and no provider callback route. The client never
+reaches the Messaging runtime or its operator tooling; it speaks the public HTTP contract any caller
+uses.
+
+### Construct a Messaging client
+
+```rust
+use registry_messaging_client::{MessagingClient, MessagingClientConfig};
+use url::Url;
+
+let client = MessagingClient::new(MessagingClientConfig::new(
+    Url::parse("https://messaging.example.invalid/")?,
+))?;
+```
+
+```python
+from registry_client import messaging
+
+client = messaging.MessagingClient("https://messaging.example.invalid/")
+```
+
+```js
+const { messaging } = require('@registrystack/client');
+
+const client = new messaging.MessagingClient({
+  baseUrl: 'https://messaging.example.invalid/',
+});
+```
+
+`MessagingClientConfig` provides `with_request_timeout`, `with_connect_timeout`,
+`with_max_response_bytes`, `with_user_agent`, and `with_trusted_root_certificates`. The Python
+constructor takes the same settings as keyword arguments and the Node constructor as config members.
+A response is bounded to 4 MiB by default and to 16 MiB at most. The configuration holds no
+credential, and its debug output redacts the base URL, the user agent, and any trusted root
+certificates.
+
+{/* Evidence: crates/registry-messaging-client/src/config.rs, MessagingClientConfig,
+    DEFAULT_MAXIMUM_RESPONSE_BYTES, and MAXIMUM_RESPONSE_BYTES,
+    crates/registry-messaging-client-py/python/registry_messaging_client/__init__.pyi,
+    crates/registry-messaging-client-node/client.d.ts, MessagingClientConfig */}
+
+### Messaging operations
+
+Method names are given in the Rust and Python form. Node uses the camel case form of the same name.
+
+| Method | Takes | Returns |
+| --- | --- | --- |
+| `health` | Nothing | An empty value while the process serves |
+| `ready` | Nothing | An empty value when the runtime can serve, and a `service.unavailable` problem otherwise |
+| `submit` | The bearer token, an idempotency key, and the submission | The `MessageReceipt`: the message `id`, its `status`, and `links` |
+| `message` | The bearer token and a message identifier | The `MessageView`: `status`, `dispatch`, `report`, the attempt summaries, and `links` |
+| `cancel` | The bearer token and a message identifier | The `MessageView` as the cancellation left it |
+| `preview` | The bearer token, a template identifier, a version, and a `TemplatePreviewRequest` of `locale` and `data` | The `TemplatePreview`: the template reference, `locale`, `channel`, `packageDigest`, the rendered `parts`, and `sms` segment counts for an SMS template |
+
+Every call that reaches a caller route takes the request's bearer token as its first argument and
+retains none. In Rust it is a `BearerToken`, built with `BearerToken::new(token)`. The module is for
+a trusted server host, the way the Casework module is.
+
+A submission requires an idempotency key the caller chose: 1 to 128 visible ASCII characters,
+refused before any exchange otherwise. The client never generates a key, replaces one, or retries a
+submission. After a lost response, send the same key with the same submission, and the runtime
+answers the stored receipt instead of accepting a second message. A message identifier must be the
+lowercase hyphenated UUID the runtime answered; any other value is refused before any exchange. The
+view carries the recipient's channel with the value `redacted`, and no rendered content.
+
+`cancel` withdraws a message whose dispatch has not started. A cancellation that lost the race
+answers `message.dispatch-started` when dispatch began first, and `message.terminal` when the
+message was already final; the client never retries either. `preview` renders one template version
+for a locale and data and sends nothing. The template identifier must be a lowercase kebab
+identifier of at most 64 bytes and the version a package version label of at most 32 bytes, and
+both are refused before any exchange otherwise. A version the active package does not ship answers
+`template.not-found`; data its schema refuses, a locale it does not carry, and a render the runtime
+stopped answer `template.data-invalid`, `template.locale-unavailable`, and
+`template.render-refused`.
+
+```python
+receipt = client.submit(
+    token,
+    "reminder-case-42-1",
+    {
+        "senderProfile": "reminders-sms",
+        "to": {"phone": "+15555550100"},
+        "template": {"id": "appointment-reminder-sms", "version": "1"},
+        "locale": "en",
+        "data": {"name": "Ada", "day": "2026-10-01", "office": "North"},
+    },
+)
+view = client.message(token, receipt["value"]["id"])
+cancelled = client.cancel(token, receipt["value"]["id"])
+preview = client.preview(
+    token,
+    "appointment-reminder-sms",
+    "1",
+    {"locale": "en", "data": {"name": "Ada", "day": "2026-10-01", "office": "North"}},
+)
+```
+
+{/* Evidence: crates/registry-messaging-client/src/client.rs, MessagingClient, submit(),
+    message(), cancel(), preview(), is_idempotency_key(), and is_message_id();
+    crates/registry-messaging-core/src/access.rs, valid_identifier(),
+    MAXIMUM_PROFILE_IDENTIFIER_BYTES; crates/registry-messaging-core/src/package.rs,
+    valid_template_version(), MAXIMUM_TEMPLATE_VERSION_BYTES;
+    crates/registry-messaging-client-node/client.d.ts, MessagingClient;
+    crates/registry-messaging-client-py/README.md, crates/registry-stack-client-node/README.md,
+    Messaging notes; crates/CLIENTS.md */}
+
+### Messaging outcomes
+
+A successful call returns `MessagingComplete<T>` in Rust, a dict carrying `kind` (`complete`),
+`value`, and `trace_id` in Python, and an object carrying `kind`, `value`, and `traceId` in Node. The
+value is the camel case wire DTO the service returned; `health` and `ready` carry none.
+
+{/* Evidence: crates/registry-messaging-client/src/client.rs, MessagingComplete,
+    crates/registry-messaging-client-node/client.d.ts, MessagingOutcome,
+    crates/registry-messaging-client-py/python/registry_messaging_client/__init__.pyi, Complete */}
+
+### Messaging error contract
+
+`MessagingClientError` is distinct from every other namespace's error type. Rust answers with
+`Configuration`, `InvalidRequest`, `Transport`, `Problem`, or `Protocol`. A `Problem` carries the
+status, the typed `ProblemCode` from the Messaging problem catalogue, and the validated trace
+identifier. A `Protocol` carries a `MessagingProtocolFailure` of `HeaderBounds`, `TraceContext`,
+`Body`, `MediaType`, `Problem`, or `Status`.
+
+The catalogue is closed. A problem becomes a typed `Problem` only when its code is in the
+catalogue, its status is the one the code pins, its type URI is the pinned one, and its trace
+identifier matches the response's trace header. Anything else, including a code the client does
+not know, is a `Protocol` failure with `Problem`. The title and detail are not compared: the caller
+reads the pinned copies through `code.title()` and `code.detail()`, so a deployment that rewords
+them still answers a refusal the caller can match.
+
+A submission over its access profile's request rate or daily limit is refused with
+`rate-limit.exceeded` or `quota.exceeded` and status 429. That `Problem` also carries
+`retry_after_seconds`, the whole seconds the response's `Retry-After` asked the caller to wait. The
+client accepts only a single delta-seconds value from 1 through `MAXIMUM_RETRY_AFTER_SECONDS`
+(86,400, one day); an absent, repeated, or out-of-range header leaves the wait unset and the refusal
+still typed. The wait is unset on every other status. The client never waits or retries on its own.
+
+Python raises `messaging.MessagingClientError`, an `Exception` whose attributes are `kind`, `code`,
+`title`, `detail`, `status`, `trace_id`, `retry_after_seconds`, `transport_kind`, and
+`protocol_failure`; an absent member is `None`. Node rejects with `messaging.MessagingClientError`,
+an `Error` with `kind` and the optional `code`, `title`, `detail`, `status`, `traceId`,
+`retryAfterSeconds`, `transportKind`, and `protocolFailure`; an absent member is undefined. The
+`MessagingProblemCode` type in both bindings names every code of the catalogue, including
+`rate-limit.exceeded` and `quota.exceeded`.
+
+| Kind | Meaning | Members set |
+| --- | --- | --- |
+| `configuration` | The construction inputs were refused | none |
+| `invalid_request` | An input was refused before any exchange | none |
+| `transport` | The exchange failed below HTTP | `transport_kind` |
+| `problem` | Messaging answered with an accepted problem | `status`, `code`, `title`, `detail`, and `trace_id`, plus `retry_after_seconds` on a 429 that named a wait |
+| `protocol` | The response violated the contract | `status`, `protocol_failure`, and `trace_id` when one was validated |
+
+{/* Evidence: crates/registry-messaging-client/src/error.rs, MessagingClientError and
+    MessagingProtocolFailure; crates/registry-messaging-client/src/client.rs, domain_problem(),
+    MAXIMUM_RETRY_AFTER_SECONDS; crates/registry-platform-httputil/src/lib.rs,
+    retry_after_seconds();
+    crates/registry-messaging-client-py/python/registry_messaging_client/__init__.pyi,
+    MessagingErrorKind and MessagingProblemCode; crates/registry-messaging-client-node/client.d.ts,
+    MessagingClientError and MessagingProblemCode */}
+
 ## Shared implementation boundary
 
 The canonical Rust clients own product-neutral outbound policy, bearer acquisition, prefix-safe route
@@ -1292,6 +1459,8 @@ Deployment-defined data stays dynamic at the SDK boundary.
 - [Base Registry Engine API reference](../breg-api/) for the BReg HTTP and Problem contracts.
 - [Registry Casework API](../apis/registry-casework/) for the Casework HTTP, header, and problem
   contracts.
+- [Registry Messaging API](../apis/registry-messaging/) for the Messaging HTTP, idempotency, limit,
+  and problem contracts.
 - [Instance API references](../apis/) for the deployment-generated Relay OpenAPI boundary.
 - [Relayctl command reference](../relayctl/) for Relay project authoring and package commands.
 - [Errors and status codes](../errors/) for the wider Registry Stack error vocabulary.

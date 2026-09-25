@@ -131,6 +131,27 @@ class MonorepoSourceModelTest(unittest.TestCase):
                 self.assertNotEqual(0, result.returncode)
                 self.assertIn(name, result.stderr)
 
+    def test_monorepo_mode_requires_every_messaging_client_crate(self) -> None:
+        for crate, name in (
+            ("registry-messaging-client", "registry-messaging client crate"),
+            (
+                "registry-messaging-client-node",
+                "registry-messaging Node client binding",
+            ),
+            (
+                "registry-messaging-client-py",
+                "registry-messaging Python client binding",
+            ),
+        ):
+            with self.subTest(crate=crate):
+                with MonorepoFixture() as stack_root:
+                    shutil.rmtree(stack_root / "crates" / crate)
+
+                    result = run_monorepo_validator(stack_root)
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(name, result.stderr)
+
     def test_monorepo_mode_records_all_declared_external_release_refs(self) -> None:
         with MonorepoFixture() as stack_root:
             result = run_monorepo_validator(stack_root)
@@ -264,6 +285,9 @@ class MonorepoFixture:
             "crates/registry-casework-client",
             "crates/registry-casework-client-node",
             "crates/registry-casework-client-py",
+            "crates/registry-messaging-client",
+            "crates/registry-messaging-client-node",
+            "crates/registry-messaging-client-py",
             "crates/registry-stack-client-node",
             "crates/registry-stack-client-py",
         ):

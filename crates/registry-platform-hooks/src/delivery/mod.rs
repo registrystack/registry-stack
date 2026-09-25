@@ -36,6 +36,7 @@
 mod insert;
 mod seams;
 mod service;
+mod store;
 
 pub use insert::{insert_delivery, DeliveryCapture};
 pub use seams::{

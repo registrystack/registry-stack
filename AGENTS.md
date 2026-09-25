@@ -4,7 +4,7 @@ This is the Registry Stack monorepo: registry-facing services over the data
 institutions already hold and the registries they do not hold yet. Pre-1.0;
 APIs and deployment contracts may change.
 
-Five independent runtime products are relevant:
+Six independent runtime products are relevant:
 
 - **Base Registry Engine** compiles a declared registry project into a
   PostgreSQL-backed writable registry: schema, REST API, per-profile
@@ -19,6 +19,9 @@ Five independent runtime products are relevant:
 - **Registry Scheduling** publishes bookable services over anchored supply
   and gives authorized callers short holds and confirmed appointments, with
   every capacity decision made inside one transaction under a task grant.
+- **Registry Messaging** sends one message to one destination over one
+  channel for an authorized caller, rendered from a reviewed template through
+  an operator-configured provider, and reports what is known about delivery.
 
 The products compose without merging their boundaries. Evidence may use a Base
 Registry Engine route or a Relay-protected API as a fixed HTTP source and
@@ -92,6 +95,10 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-scheduling` | PostgreSQL-backed Scheduling runtime and the `scheduling` binary |
 | `crates/registry-schedulingctl` | Scheduling authoring and local operator tooling and the `schedulingctl` binary |
 | `crates/registry-scheduling-client` | Bounded Rust Scheduling client over the runtime's HTTP contract |
+| `crates/registry-messaging-core` | Source-neutral Messaging access decisions, package model, wire DTOs, and problem codes |
+| `crates/registry-messaging` | PostgreSQL-backed Messaging runtime and the `messaging` binary |
+| `crates/registry-messagingctl` | Messaging operator tooling and the `messagingctl` binary |
+| `crates/registry-messaging-client` | Bounded Rust Messaging client over the runtime's HTTP contract |
 | `crates/registry-record` | Product-neutral Registry Record v1 response DTOs shared by the Base Registry Engine and Relay clients |
 | `crates/registry-render` | Registry Render: governed, byte-stable PDF documents from registry data, rendered with Typst, and the `registry-render` binary |
 | `crates/registry-stack-client` | Rust facade over the maintained Registry Stack product clients |
@@ -182,6 +189,23 @@ already does. Adding such a crate relaxes this sentence here and in the gate,
 in the same change; until then the sentence stands as written and no local
 exception may be taken to it. The runtime, the source-neutral core, the client,
 and adopter tooling stay on the strict side of it in every case.
+
+Registry Messaging is implemented by `registry-messaging`,
+`registry-messaging-core`, `registry-messagingctl`, and its Rust client crate.
+Its product contracts, generated schemas, examples, and focused gates live
+under `products/messaging`. Messaging owns rendering, its dispatch queue,
+provider calls, receipts, attempt history, payload retention, and its audit
+journal. Why and when to send, who the recipient is, and consent to be
+contacted stay with the caller's source of record. No Messaging crate reaches
+a BReg, Casework, Scheduling, Evidence, or Relay crate, and no product crate
+reaches the Messaging runtime or `messagingctl`: products reach Messaging over
+its public HTTP contract like any external caller, and the
+dependency-direction gate enforces that on the whole forward closure.
+Messaging inherits no authorization from a caller product: a Casework worker
+allowed to act on an item is not thereby allowed to send a message, the
+Messaging access profile decides. Messaging never writes to another product's
+database. The source-neutral core depends on no other Messaging crate, and the
+client never reaches the runtime.
 
 Registry Discovery is a curated index over public provider descriptions, not
 a trust broker, authorization service, protocol adapter, or data proxy.
@@ -459,6 +483,25 @@ configuration schema is regenerated, never hand-edited:
 cargo run -p registry-scheduling --features schema --example runtime-schema -- \
   --output products/scheduling/generated/runtime
 ```
+
+Registry Messaging product and gates:
+
+```bash
+products/messaging/scripts/check-checkpoint.sh
+products/messaging/scripts/check-contracts.sh
+MESSAGING_TEST_DATABASE_URL=<disposable database> cargo test --locked \
+  -p registry-messaging --features postgres-test --test postgres_migrate
+python3 products/identifiers/scripts/generate.py --check-references
+```
+
+The checkpoint builds `messagingctl` (or runs the one `MESSAGINGCTL_BIN`
+names), runs the database-free checks, and fails when the committed runtime
+schema or OpenAPI document drifts from its generator; `products/messaging/README.md`
+gives the regeneration commands. The PostgreSQL suite fails, rather than
+skips, without `MESSAGING_TEST_DATABASE_URL`. The contracts check holds every
+security invariant row in `products/messaging/contracts/` to a threat, an
+enforcement point, a refusal, and either a runnable negative test or the
+later slice that owes one.
 
 The unified Node.js and Python packages are generated from the maintained product
 bindings. After changing a binding or facade, run:

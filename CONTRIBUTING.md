@@ -261,6 +261,19 @@ RUSTSEC advisories with no upstream fix are ignored in `deny.toml` with a
 scoped rationale and a review trigger; a newly published advisory fails CI
 until it is fixed or gets its own documented ignore.
 
+Registry Messaging product checks:
+
+```bash
+products/messaging/scripts/check-checkpoint.sh
+products/messaging/scripts/check-contracts.sh
+MESSAGING_TEST_DATABASE_URL=<disposable database> cargo test --locked \
+  -p registry-messaging --features postgres-test --test postgres_migrate
+```
+
+The Messaging PostgreSQL suites fail, rather than skip, without
+`MESSAGING_TEST_DATABASE_URL`; point it at a server whose databases you can
+discard.
+
 Release source checks:
 
 These checks require Python 3.11 or later.

@@ -23,10 +23,12 @@ integration-test fixtures.
 | [`registry-platform-canonical-json`](crates/registry-platform-canonical-json/README.md) | Canonical JSON serialization for digests and signatures. |
 | [`registry-platform-config`](crates/registry-platform-config/README.md) | Environment expansion and shared configuration parsing helpers. |
 | [`registry-platform-crypto`](crates/registry-platform-crypto/README.md) | Ed25519 JWK parsing, provider-backed signing, verification, DID validation, and JSON canonicalization. |
+| [`registry-platform-dispatch`](crates/registry-platform-dispatch/README.md) | At-least-once dispatch core: fenced PostgreSQL job leases, retry and expiry policy, and operator replay over a product-owned job table. |
 | [`registry-platform-hooks`](crates/registry-platform-hooks/README.md) | Shared hook contract: declarations, envelope, handler messages, compile-time rules, and the delivery core behind the `postgres` feature. |
 | [`registry-platform-httpsec`](crates/registry-platform-httpsec/README.md) | Axum/Tower HTTP security middleware, CORS policy validation, body limits, and RFC 9457 Problem Details responses. |
 | [`registry-platform-httputil`](crates/registry-platform-httputil/README.md) | Outbound HTTP clients, bounded response reads, URL construction, and SSRF-resistant fetch validation. |
 | [`registry-platform-oidc`](crates/registry-platform-oidc/README.md) | OIDC discovery, JWKS caching, and JWT verifier configuration shared by registry services. |
+| [`registry-platform-ratelimit`](crates/registry-platform-ratelimit/README.md) | Bounded in-memory keyed rate limiting: a token bucket and a fixed window counter over opaque caller keys. |
 | [`registry-platform-sdjwt`](crates/registry-platform-sdjwt/README.md) | SD-JWT VC issuance and holder-proof validation helpers. |
 | [`registry-platform-sqlite`](crates/registry-platform-sqlite/README.md) | Bounded read-only SQLite execution shared by Relay and Evidence. |
 | [`registry-platform-testing`](crates/registry-platform-testing/README.md) | Mock IdP, mock HTTP upstreams, key fixtures, and cross-crate assertions for consumers. |

@@ -11,10 +11,14 @@
 //! lifetime and never exposes them through the opaque transport types.
 
 use std::fmt;
+use std::future::Future;
 use std::marker::PhantomData;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::pin::Pin;
 use std::str::FromStr;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -604,23 +608,14 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             DestinationProfile::PinnedLoopbackHttpsTest => {}
         }
 
-        for cidr in allowed_private_cidrs {
-            if dns_family == DestinationDnsFamily::Ipv4Only && matches!(cidr, IpNet::V6(_)) {
-                return Err(DestinationPolicyError::Ipv4OnlyIpv6ConfigurationDenied);
-            }
-            let canonical = cidr.trunc();
-            if canonical != *cidr {
-                return Err(DestinationPolicyError::PrivateCidrNotCanonical);
-            }
-            if !cidr_is_eligible_private(canonical) || cidr_is_metadata_singleton(canonical) {
-                return Err(DestinationPolicyError::PrivateCidrDenied);
-            }
+        if dns_family == DestinationDnsFamily::Ipv4Only
+            && allowed_private_cidrs
+                .iter()
+                .any(|cidr| matches!(cidr, IpNet::V6(_)))
+        {
+            return Err(DestinationPolicyError::Ipv4OnlyIpv6ConfigurationDenied);
         }
-
-        let mut retained = Vec::with_capacity(allowed_private_cidrs.len());
-        retained.extend(allowed_private_cidrs.iter().map(IpNet::trunc));
-        retained.sort_unstable();
-        retained.dedup();
+        let retained = retain_private_cidrs(allowed_private_cidrs)?;
 
         // Native trust discovery can require an expensive operating-system
         // trust-store traversal. Initialize it once while activating the
@@ -810,6 +805,7 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
         if request_remaining.is_zero() {
             return Err(DestinationSendError::DeadlineExceeded);
         }
+        let connection = ConnectionObserverLayer::default();
         let client_builder = reqwest::Client::builder()
             // Workspace feature unification can enable multiple TLS backends.
             // Keep this security transport on its reviewed rustls substrate.
@@ -834,7 +830,8 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             .no_brotli()
             .no_zstd()
             .no_deflate()
-            .resolve_to_addrs(host, pinned.as_slice());
+            .resolve_to_addrs(host, pinned.as_slice())
+            .connector_layer(connection.clone());
         let mut client_builder = client_builder;
         for root in destination_native_roots() {
             client_builder = client_builder.add_root_certificate(root.clone());
@@ -902,10 +899,21 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             builder = builder.body(sensitive_reqwest_body(body));
         }
 
-        let response = timeout_at(deadline, builder.send())
-            .await
-            .map_err(|_| DestinationSendError::DeadlineExceeded)?
-            .map_err(|_| DestinationSendError::TransportFailed)?;
+        let response = timeout_at(deadline, builder.send()).await;
+        let response = match response {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => {
+                return Err(match (connection.established(), error.is_timeout()) {
+                    (false, _) => DestinationSendError::TransportFailed,
+                    (true, true) => DestinationSendError::DeadlineExceededAfterConnect,
+                    (true, false) => DestinationSendError::TransportFailedAfterConnect,
+                });
+            }
+            Err(_) if connection.established() => {
+                return Err(DestinationSendError::DeadlineExceededAfterConnect);
+            }
+            Err(_) => return Err(DestinationSendError::DeadlineExceeded),
+        };
         validate_response_headers(response.headers())?;
 
         Ok(BoundedDestinationResponse {
@@ -1002,31 +1010,7 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
                 }
             }
             DestinationProfile::ProductionHttps => {
-                if let IpAddr::V6(ipv6) = ip {
-                    if let Some(embedded) = decode_well_known_nat64(ipv6) {
-                        return self.classify_address(IpAddr::V4(embedded));
-                    }
-                }
-                if is_cloud_metadata_ip(ip) {
-                    return Err(DestinationSendError::CloudMetadataDenied);
-                }
-                if is_always_denied_in_production(ip) {
-                    return Err(DestinationSendError::AlwaysDeniedAddress);
-                }
-                if is_globally_routable(ip) {
-                    return Ok(());
-                }
-                if is_eligible_private_address(ip) {
-                    if self
-                        .allowed_private_cidrs
-                        .iter()
-                        .any(|cidr| cidr.contains(&ip))
-                    {
-                        return Ok(());
-                    }
-                    return Err(DestinationSendError::PrivateAddressNotAllowed);
-                }
-                Err(DestinationSendError::NonGlobalAddressDenied)
+                classify_production_address(ip, &self.allowed_private_cidrs)
             }
         }
     }
@@ -1036,6 +1020,102 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             .port_or_known_default()
             .expect("fixed destination construction proves a port")
     }
+}
+
+/// The production address policy of a fixed destination, for a transport
+/// that is not HTTP.
+///
+/// A product that opens its own connection over another protocol
+/// resolves its configured host once, classifies every answer here, and
+/// connects only to an address this policy admitted. The private-CIDR
+/// validation and the classification are the ones a
+/// [`DestinationProfile::ProductionHttps`] destination applies, not a copy:
+/// globally routable addresses pass, cloud metadata, loopback, link-local,
+/// unspecified, and multicast addresses never do, and an RFC 1918, RFC 6598,
+/// or IPv6 ULA address passes only inside an allowed private CIDR.
+/// IPv4-mapped and well-known NAT64 IPv6 addresses are classified as the IPv4
+/// address they carry. `Debug` reports only the CIDR count.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProductionAddressPolicy {
+    allowed_private_cidrs: Vec<IpNet>,
+}
+
+impl ProductionAddressPolicy {
+    /// Validate and freeze the private-CIDR allowlist under the rules
+    /// [`FixedDestinationPolicy::new`] applies: at most
+    /// [`MAX_DESTINATION_PRIVATE_CIDRS`], each canonical and wholly inside
+    /// RFC 1918, RFC 6598 CGNAT, or IPv6 ULA space, and never a cloud
+    /// metadata singleton.
+    pub fn new(allowed_private_cidrs: &[IpNet]) -> Result<Self, DestinationPolicyError> {
+        if allowed_private_cidrs.len() > MAX_DESTINATION_PRIVATE_CIDRS {
+            return Err(DestinationPolicyError::TooManyPrivateCidrs);
+        }
+        Ok(Self {
+            allowed_private_cidrs: retain_private_cidrs(allowed_private_cidrs)?,
+        })
+    }
+
+    /// Classify one resolved address. A caller refuses the connection unless
+    /// every answer it resolved is admitted.
+    pub fn classify(&self, ip: IpAddr) -> Result<(), DestinationSendError> {
+        classify_production_address(normalize_ipv4_mapped(ip), &self.allowed_private_cidrs)
+    }
+}
+
+impl fmt::Debug for ProductionAddressPolicy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProductionAddressPolicy")
+            .field("private_cidr_count", &self.allowed_private_cidrs.len())
+            .finish()
+    }
+}
+
+fn retain_private_cidrs(
+    allowed_private_cidrs: &[IpNet],
+) -> Result<Vec<IpNet>, DestinationPolicyError> {
+    for cidr in allowed_private_cidrs {
+        let canonical = cidr.trunc();
+        if canonical != *cidr {
+            return Err(DestinationPolicyError::PrivateCidrNotCanonical);
+        }
+        if !cidr_is_eligible_private(canonical) || cidr_is_metadata_singleton(canonical) {
+            return Err(DestinationPolicyError::PrivateCidrDenied);
+        }
+    }
+    let mut retained = Vec::with_capacity(allowed_private_cidrs.len());
+    retained.extend(allowed_private_cidrs.iter().map(IpNet::trunc));
+    retained.sort_unstable();
+    retained.dedup();
+    Ok(retained)
+}
+
+/// Classify a normalized address under the production profile.
+fn classify_production_address(
+    ip: IpAddr,
+    allowed_private_cidrs: &[IpNet],
+) -> Result<(), DestinationSendError> {
+    if let IpAddr::V6(ipv6) = ip {
+        if let Some(embedded) = decode_well_known_nat64(ipv6) {
+            return classify_production_address(IpAddr::V4(embedded), allowed_private_cidrs);
+        }
+    }
+    if is_cloud_metadata_ip(ip) {
+        return Err(DestinationSendError::CloudMetadataDenied);
+    }
+    if is_always_denied_in_production(ip) {
+        return Err(DestinationSendError::AlwaysDeniedAddress);
+    }
+    if is_globally_routable(ip) {
+        return Ok(());
+    }
+    if is_eligible_private_address(ip) {
+        if allowed_private_cidrs.iter().any(|cidr| cidr.contains(&ip)) {
+            return Ok(());
+        }
+        return Err(DestinationSendError::PrivateAddressNotAllowed);
+    }
+    Err(DestinationSendError::NonGlobalAddressDenied)
 }
 
 fn deadline_from_remaining(
@@ -1062,6 +1142,66 @@ fn validate_absolute_deadline(
         return Err(DestinationSendError::InvalidRemainingTimeout);
     }
     Ok(())
+}
+
+/// Connector layer recording whether this send established its connection.
+///
+/// The layer wraps reqwest's base connector, whose future resolves only after
+/// TCP connect and, for HTTPS, the complete TLS handshake. Hyper writes the
+/// first request byte after that future resolves, so a failure while the flag
+/// is unset proves the request was not sent. Each send builds its own client
+/// and observer, and the connection pool retains no idle connection, so the
+/// flag belongs to exactly one request.
+#[derive(Clone, Default)]
+struct ConnectionObserverLayer {
+    established: Arc<AtomicBool>,
+}
+
+impl ConnectionObserverLayer {
+    fn established(&self) -> bool {
+        self.established.load(Ordering::Acquire)
+    }
+}
+
+impl<S> tower::Layer<S> for ConnectionObserverLayer {
+    type Service = ConnectionObserver<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        ConnectionObserver {
+            inner,
+            established: Arc::clone(&self.established),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ConnectionObserver<S> {
+    inner: S,
+    established: Arc<AtomicBool>,
+}
+
+impl<S, Target> tower::Service<Target> for ConnectionObserver<S>
+where
+    S: tower::Service<Target>,
+    S::Future: Send + 'static,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<S::Response, S::Error>> + Send>>;
+
+    fn poll_ready(&mut self, context: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(context)
+    }
+
+    fn call(&mut self, target: Target) -> Self::Future {
+        let connecting = self.inner.call(target);
+        let established = Arc::clone(&self.established);
+        Box::pin(async move {
+            let connection = connecting.await?;
+            established.store(true, Ordering::Release);
+            Ok(connection)
+        })
+    }
 }
 
 /// Owns the caller's zeroizing allocation while `Bytes` and reqwest retain it.
@@ -1146,16 +1286,74 @@ pub enum DestinationMethod {
     OAuth2ClientCredentialsPost,
     /// Canonical JSON event POST, valid only for an event destination slot.
     EventPost,
+    /// Request whose purpose is a side effect at the destination, such as
+    /// submitting work the destination then carries out.
+    ///
+    /// Only [`BoundedDestinationRequestTemplate::new_script_send`] compiles
+    /// this class, and every read-only constructor refuses it, so a send
+    /// can never travel through a template reviewed as read-only.
+    SideEffectingSend(SideEffectingSendMethod),
 }
 
 impl DestinationMethod {
+    /// Return whether this class performs a side effect at the destination.
+    #[must_use]
+    pub fn is_side_effecting(self) -> bool {
+        matches!(self, Self::SideEffectingSend(_))
+    }
+
+    /// Whether a script template of this class carries a host-typed body.
+    fn carries_script_body(self) -> bool {
+        matches!(
+            self,
+            Self::ReviewedReadOnlyPost | Self::SideEffectingSend(SideEffectingSendMethod::Post)
+        )
+    }
+
     fn as_reqwest(self) -> reqwest::Method {
         match self {
-            Self::Get => reqwest::Method::GET,
-            Self::ReviewedReadOnlyPost | Self::OAuth2ClientCredentialsPost | Self::EventPost => {
-                reqwest::Method::POST
+            Self::Get | Self::SideEffectingSend(SideEffectingSendMethod::Get(_)) => {
+                reqwest::Method::GET
             }
+            Self::ReviewedReadOnlyPost
+            | Self::OAuth2ClientCredentialsPost
+            | Self::EventPost
+            | Self::SideEffectingSend(SideEffectingSendMethod::Post) => reqwest::Method::POST,
         }
+    }
+}
+
+/// HTTP method of one side-effecting send.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SideEffectingSendMethod {
+    /// POST carrying the send in a JSON or form body.
+    Post,
+    /// GET carrying the send in the query string, for destinations that
+    /// accept nothing else. The acknowledgement records that the send's
+    /// content reaches the destination's access logs.
+    Get(QueryStringContentAcknowledgement),
+}
+
+/// Explicit acknowledgement that a side-effecting GET places its content in
+/// the request target, where the destination's access logs and
+/// intermediaries retain it.
+///
+/// The private field means the value exists only where a caller named this
+/// consequence:
+///
+/// ```compile_fail
+/// use registry_platform_httputil::destination::QueryStringContentAcknowledgement;
+///
+/// let acknowledgement = QueryStringContentAcknowledgement(());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueryStringContentAcknowledgement(());
+
+impl QueryStringContentAcknowledgement {
+    /// Accept that the send's content reaches the destination's access logs.
+    #[must_use]
+    pub const fn acknowledge_content_in_access_logs() -> Self {
+        Self(())
     }
 }
 
@@ -1624,8 +1822,83 @@ impl BoundedDestinationRequestTemplate<DataDestination> {
     ///
     /// Query names and values remain script-authored and are bounded at render time. Header
     /// names and path shape are frozen here. Authentication material remains host-owned.
+    ///
+    /// Only read-only classes are accepted; a side-effecting send compiles
+    /// through [`Self::new_script_send`].
     #[allow(clippy::too_many_arguments)]
     pub fn new_script(
+        method: DestinationMethod,
+        path_rule: &str,
+        request_headers: &[&str],
+        authorization: DestinationAuthorizationTemplate,
+        api_key_header: Option<(&str, usize)>,
+        api_key_query: Option<(&str, usize)>,
+        max_request_bytes: usize,
+    ) -> Result<Self, DestinationRequestError> {
+        if method.is_side_effecting() {
+            return Err(DestinationRequestError::MethodSlotMismatch);
+        }
+        Self::compile_script(
+            method,
+            path_rule,
+            request_headers,
+            authorization,
+            api_key_header,
+            api_key_query,
+            max_request_bytes,
+        )
+    }
+
+    /// Compile the maximum request authority of one side-effecting send, such
+    /// as submitting work the destination then carries out.
+    ///
+    /// The authority is the same as [`Self::new_script`]: a frozen path rule
+    /// and header names, script-authored query members, and host-owned Basic,
+    /// Bearer, API-key header, or API-key query authentication. A POST send
+    /// requires a JSON or form body. A GET send forbids a body and exists only
+    /// behind [`QueryStringContentAcknowledgement`].
+    ///
+    /// The method type admits only send classes, so a read-only class cannot
+    /// be compiled here:
+    ///
+    /// ```compile_fail
+    /// use registry_platform_httputil::destination::{
+    ///     DataDestinationRequestTemplate, DestinationAuthorizationTemplate, DestinationMethod,
+    /// };
+    ///
+    /// let template = DataDestinationRequestTemplate::new_script_send(
+    ///     DestinationMethod::Get,
+    ///     "/submissions",
+    ///     &[],
+    ///     DestinationAuthorizationTemplate::Forbidden,
+    ///     None,
+    ///     None,
+    ///     1_024,
+    /// );
+    /// ```
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_script_send(
+        method: SideEffectingSendMethod,
+        path_rule: &str,
+        request_headers: &[&str],
+        authorization: DestinationAuthorizationTemplate,
+        api_key_header: Option<(&str, usize)>,
+        api_key_query: Option<(&str, usize)>,
+        max_request_bytes: usize,
+    ) -> Result<Self, DestinationRequestError> {
+        Self::compile_script(
+            DestinationMethod::SideEffectingSend(method),
+            path_rule,
+            request_headers,
+            authorization,
+            api_key_header,
+            api_key_query,
+            max_request_bytes,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compile_script(
         method: DestinationMethod,
         path_rule: &str,
         request_headers: &[&str],
@@ -1681,7 +1954,7 @@ impl BoundedDestinationRequestTemplate<DataDestination> {
         let header_count = retained_headers.len()
             + usize::from(matches!(api_key, Some(ScriptApiKeyPolicy::Header { .. })))
             + usize::from(authorization != DestinationAuthorizationTemplate::Forbidden)
-            + usize::from(method == DestinationMethod::ReviewedReadOnlyPost);
+            + usize::from(method.carries_script_body());
         if header_count > MAX_DESTINATION_REQUEST_HEADERS
             || max_request_bytes == 0
             || max_request_bytes
@@ -1705,10 +1978,16 @@ impl BoundedDestinationRequestTemplate<DataDestination> {
             headers: Vec::new(),
             authorization,
             body: match method {
-                DestinationMethod::Get => DestinationBodyTemplate::Forbidden,
-                DestinationMethod::ReviewedReadOnlyPost => DestinationBodyTemplate::Required {
-                    max_bytes: MAX_DESTINATION_REQUEST_BODY_BYTES,
-                },
+                DestinationMethod::Get
+                | DestinationMethod::SideEffectingSend(SideEffectingSendMethod::Get(_)) => {
+                    DestinationBodyTemplate::Forbidden
+                }
+                DestinationMethod::ReviewedReadOnlyPost
+                | DestinationMethod::SideEffectingSend(SideEffectingSendMethod::Post) => {
+                    DestinationBodyTemplate::Required {
+                        max_bytes: MAX_DESTINATION_REQUEST_BODY_BYTES,
+                    }
+                }
                 DestinationMethod::OAuth2ClientCredentialsPost => unreachable!(),
                 DestinationMethod::EventPost => unreachable!(),
             },
@@ -1769,9 +2048,16 @@ impl BoundedDestinationRequestTemplate<DataDestination> {
             retained.push(name);
         }
         match (self.method, body_format) {
-            (DestinationMethod::Get, None) | (DestinationMethod::ReviewedReadOnlyPost, Some(_)) => {
-                Ok(())
-            }
+            (
+                DestinationMethod::Get
+                | DestinationMethod::SideEffectingSend(SideEffectingSendMethod::Get(_)),
+                None,
+            )
+            | (
+                DestinationMethod::ReviewedReadOnlyPost
+                | DestinationMethod::SideEffectingSend(SideEffectingSendMethod::Post),
+                Some(_),
+            ) => Ok(()),
             _ => Err(DestinationRequestError::BodyPresenceMismatch),
         }
     }
@@ -1850,10 +2136,18 @@ impl BoundedDestinationRequestTemplate<DataDestination> {
             headers.push((name, Zeroizing::new((*value).to_vec())));
         }
         match (self.method, body_format, body.as_ref()) {
-            (DestinationMethod::Get, None, None) => {}
-            (DestinationMethod::ReviewedReadOnlyPost, Some(format), Some(value))
-                if !value.is_empty() =>
-            {
+            (
+                DestinationMethod::Get
+                | DestinationMethod::SideEffectingSend(SideEffectingSendMethod::Get(_)),
+                None,
+                None,
+            ) => {}
+            (
+                DestinationMethod::ReviewedReadOnlyPost
+                | DestinationMethod::SideEffectingSend(SideEffectingSendMethod::Post),
+                Some(format),
+                Some(value),
+            ) if !value.is_empty() => {
                 let value: &[u8] = match format {
                     ScriptRequestBodyFormat::Json => b"application/json",
                     ScriptRequestBodyFormat::Form => b"application/x-www-form-urlencoded",
@@ -1944,7 +2238,9 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
     ) -> Result<Self, DestinationRequestError> {
         if matches!(
             method,
-            DestinationMethod::OAuth2ClientCredentialsPost | DestinationMethod::EventPost
+            DestinationMethod::OAuth2ClientCredentialsPost
+                | DestinationMethod::EventPost
+                | DestinationMethod::SideEffectingSend(_)
         ) {
             return Err(DestinationRequestError::MethodSlotMismatch);
         }
@@ -1984,7 +2280,9 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
     ) -> Result<Self, DestinationRequestError> {
         if matches!(
             method,
-            DestinationMethod::OAuth2ClientCredentialsPost | DestinationMethod::EventPost
+            DestinationMethod::OAuth2ClientCredentialsPost
+                | DestinationMethod::EventPost
+                | DestinationMethod::SideEffectingSend(_)
         ) {
             return Err(DestinationRequestError::MethodSlotMismatch);
         }
@@ -2021,7 +2319,9 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
     ) -> Result<Self, DestinationRequestError> {
         if matches!(
             method,
-            DestinationMethod::OAuth2ClientCredentialsPost | DestinationMethod::EventPost
+            DestinationMethod::OAuth2ClientCredentialsPost
+                | DestinationMethod::EventPost
+                | DestinationMethod::SideEffectingSend(_)
         ) {
             return Err(DestinationRequestError::MethodSlotMismatch);
         }
@@ -2098,6 +2398,9 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
             return Err(DestinationRequestError::BodyTooLarge);
         }
         match method {
+            DestinationMethod::SideEffectingSend(_) => {
+                return Err(DestinationRequestError::MethodSlotMismatch);
+            }
             DestinationMethod::Get if S::CREDENTIAL_EXCHANGE || S::EVENT_DELIVERY => {
                 return Err(DestinationRequestError::MethodSlotMismatch);
             }
@@ -2913,10 +3216,12 @@ impl<S: DestinationSlot> BoundedDestinationRequest<S> {
         use base64::Engine as _;
 
         let method = match self.method {
-            DestinationMethod::Get => "GET",
+            DestinationMethod::Get
+            | DestinationMethod::SideEffectingSend(SideEffectingSendMethod::Get(_)) => "GET",
             DestinationMethod::ReviewedReadOnlyPost
             | DestinationMethod::OAuth2ClientCredentialsPost
-            | DestinationMethod::EventPost => "POST",
+            | DestinationMethod::EventPost
+            | DestinationMethod::SideEffectingSend(SideEffectingSendMethod::Post) => "POST",
         };
         let target = std::str::from_utf8(&self.target)
             .expect("bounded destination targets are validated UTF-8");
@@ -2989,7 +3294,7 @@ impl<S: DestinationSlot> BoundedDestinationRequest<S> {
         {
             return Err(DestinationRequestError::BodyTooLarge);
         }
-        if method == DestinationMethod::Get && body.is_some() {
+        if method.as_reqwest() == reqwest::Method::GET && body.is_some() {
             return Err(DestinationRequestError::GetBodyDenied);
         }
         PathAndQuery::from_str(target_text).map_err(|_| DestinationRequestError::InvalidTarget)?;
@@ -3087,6 +3392,12 @@ pub enum DestinationRequestError {
 }
 
 /// Value-free resolve, destination-policy, and transport failures.
+///
+/// Every failure also answers whether the destination may have received the
+/// request, through [`DestinationSendError::delivery_certainty`].
+/// [`DestinationSendError::DeadlineExceeded`] and
+/// [`DestinationSendError::TransportFailed`] mean the connection was never
+/// established. Their `AfterConnect` counterparts mean it was.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum DestinationSendError {
     #[error("remaining operation timeout is invalid")]
@@ -3123,14 +3434,81 @@ pub enum DestinationSendError {
     TlsMaterialUnavailable,
     #[error("destination client construction failed")]
     ClientBuildFailed,
+    /// The deadline passed before a connection to the destination was
+    /// established.
     #[error("destination operation deadline was exceeded")]
     DeadlineExceeded,
+    /// Connecting failed: the connection was refused, reset, or unreachable,
+    /// or the TLS handshake failed.
     #[error("destination transport failed")]
     TransportFailed,
+    /// The deadline passed after the connection was established, while the
+    /// request was being written or its response awaited.
+    #[error("destination operation deadline was exceeded after the connection was established")]
+    DeadlineExceededAfterConnect,
+    /// The connection failed after it was established, while the request was
+    /// being written or its response awaited.
+    #[error("destination transport failed after the connection was established")]
+    TransportFailedAfterConnect,
     #[error("upstream response has too many headers")]
     TooManyResponseHeaders,
     #[error("upstream response header bytes exceed the platform bound")]
     ResponseHeaderBytesExceeded,
+}
+
+/// Whether a failed send may have reached the destination.
+///
+/// A side-effecting caller uses this to decide between retrying and
+/// reconciling: a request that was not sent is safe to send again, while a
+/// request that may have been sent could already have taken effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DestinationDeliveryCertainty {
+    /// The request never left this process: it was refused by policy, its
+    /// resolution failed, or connecting and the TLS handshake failed.
+    NotSent,
+    /// The destination may have received the request.
+    MaybeSent,
+}
+
+impl DestinationSendError {
+    /// Classify whether the destination may have received the request.
+    ///
+    /// The boundary is the established connection. Resolution, address
+    /// policy, TCP connect, and the TLS handshake all complete before the
+    /// HTTP client writes a request byte, and TLS early data is never
+    /// enabled, so a failure there is [`DestinationDeliveryCertainty::NotSent`].
+    /// Once the connection is established the HTTP client cannot report how
+    /// much of the request was written or whether the destination acted on
+    /// it, so every later failure, including a response refused for its
+    /// headers, is conservatively [`DestinationDeliveryCertainty::MaybeSent`].
+    #[must_use]
+    pub fn delivery_certainty(self) -> DestinationDeliveryCertainty {
+        match self {
+            Self::DeadlineExceededAfterConnect
+            | Self::TransportFailedAfterConnect
+            | Self::TooManyResponseHeaders
+            | Self::ResponseHeaderBytesExceeded => DestinationDeliveryCertainty::MaybeSent,
+            Self::InvalidRemainingTimeout
+            | Self::InvalidFrozenPolicy
+            | Self::InvalidFrozenRequest
+            | Self::ResolutionFailed
+            | Self::ResolutionCapacityUnavailable
+            | Self::TooManyResolverAnswers
+            | Self::NoResolverAnswers
+            | Self::ResolverPortMismatch
+            | Self::ResolverAddressFamilyMismatch
+            | Self::LiteralOriginMismatch
+            | Self::CloudMetadataDenied
+            | Self::AlwaysDeniedAddress
+            | Self::PrivateAddressNotAllowed
+            | Self::NonGlobalAddressDenied
+            | Self::DevelopmentAddressDenied
+            | Self::TlsMaterialUnavailable
+            | Self::ClientBuildFailed
+            | Self::DeadlineExceeded
+            | Self::TransportFailed => DestinationDeliveryCertainty::NotSent,
+        }
+    }
 }
 
 /// One response from a consumed bounded destination request.
@@ -4384,6 +4762,85 @@ mod tests {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.append(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         assert!(!closed_json_content_type(&headers));
+    }
+
+    #[test]
+    fn production_address_policy_classifies_exactly_like_a_production_destination() {
+        let allowlist = ["10.20.0.0/16", "fd00:1::/64"];
+        let destination = production(&allowlist);
+        let cidrs: Vec<_> = allowlist.iter().map(|raw| cidr(raw)).collect();
+        let addresses =
+            ProductionAddressPolicy::new(&cidrs).expect("production address policy validates");
+        for raw in [
+            "93.184.216.34",
+            "2606:4700::1111",
+            "10.20.3.4",
+            "10.21.3.4",
+            "192.168.1.1",
+            "100.64.0.1",
+            "127.0.0.1",
+            "::1",
+            "0.0.0.0",
+            "169.254.169.254",
+            "100.100.100.200",
+            "192.0.2.1",
+            "224.0.0.1",
+            "fd00:1::5",
+            "fd00:2::5",
+            "fe80::1",
+            "2001:db8::1",
+            "::ffff:10.20.3.4",
+            "::ffff:127.0.0.1",
+            "64:ff9b::a14:304",
+            "64:ff9b::7f00:1",
+        ] {
+            let ip: IpAddr = raw.parse().expect("test address parses");
+            assert_eq!(
+                addresses.classify(ip),
+                destination.classify_address(normalize_ipv4_mapped(ip)),
+                "{raw}"
+            );
+        }
+        assert_eq!(addresses.classify("10.20.3.4".parse().unwrap()), Ok(()));
+        assert_eq!(
+            addresses.classify("10.21.3.4".parse().unwrap()),
+            Err(DestinationSendError::PrivateAddressNotAllowed)
+        );
+        assert_eq!(
+            addresses.classify("::ffff:127.0.0.1".parse().unwrap()),
+            Err(DestinationSendError::AlwaysDeniedAddress)
+        );
+    }
+
+    #[test]
+    fn production_address_policy_refuses_the_private_cidrs_a_destination_refuses() {
+        for (raw, refusal) in [
+            (
+                "10.0.0.1/8",
+                DestinationPolicyError::PrivateCidrNotCanonical,
+            ),
+            ("8.8.8.0/24", DestinationPolicyError::PrivateCidrDenied),
+            ("127.0.0.0/8", DestinationPolicyError::PrivateCidrDenied),
+            (
+                "169.254.169.254/32",
+                DestinationPolicyError::PrivateCidrDenied,
+            ),
+            ("0.0.0.0/0", DestinationPolicyError::PrivateCidrDenied),
+        ] {
+            assert_eq!(
+                ProductionAddressPolicy::new(&[cidr(raw)]).map(|_| ()),
+                Err(refusal),
+                "{raw}"
+            );
+        }
+        let too_many: Vec<_> = (0..=MAX_DESTINATION_PRIVATE_CIDRS)
+            .map(|index| cidr(&format!("10.{index}.0.0/16")))
+            .collect();
+        assert_eq!(
+            ProductionAddressPolicy::new(&too_many).map(|_| ()),
+            Err(DestinationPolicyError::TooManyPrivateCidrs)
+        );
+        assert!(ProductionAddressPolicy::new(&[]).is_ok());
     }
 
     #[test]
@@ -6862,6 +7319,539 @@ mod tests {
             .await
             .expect("service-hop response body remains bounded");
         assert_eq!(body.as_bytes(), b"service-hop-response");
+    }
+
+    /// One captured request as the loopback destination saw it.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct CapturedSend {
+        method: String,
+        target: String,
+        content_type: Option<String>,
+        authorization: Option<String>,
+        body: Vec<u8>,
+    }
+
+    async fn spawn_capturing_destination(
+        path: &'static str,
+    ) -> (SocketAddr, Arc<Mutex<Vec<CapturedSend>>>) {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let route_captured = Arc::clone(&captured);
+        let app = Router::new().route(
+            path,
+            axum::routing::any(
+                move |method: http::Method,
+                      OriginalUri(uri): OriginalUri,
+                      headers: HeaderMap,
+                      body: Bytes| {
+                    let route_captured = Arc::clone(&route_captured);
+                    async move {
+                        let header = |name| {
+                            headers
+                                .get(name)
+                                .and_then(|value: &HeaderValue| value.to_str().ok())
+                                .map(str::to_owned)
+                        };
+                        route_captured
+                            .lock()
+                            .expect("capture lock")
+                            .push(CapturedSend {
+                                method: method.as_str().to_owned(),
+                                target: uri.to_string(),
+                                content_type: header(CONTENT_TYPE),
+                                authorization: header(AUTHORIZATION),
+                                body: body.to_vec(),
+                            });
+                        (StatusCode::ACCEPTED, "queued")
+                    }
+                },
+            ),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind send test server");
+        let address = listener.local_addr().expect("send test address");
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve send test app");
+        });
+        (address, captured)
+    }
+
+    fn loopback_send_policy(address: SocketAddr) -> DataDestinationPolicy {
+        DataDestinationPolicy::new(
+            "message-provider",
+            &format!("http://127.0.0.1:{}/", address.port()),
+            DestinationProfile::LoopbackDevelopmentHttp,
+            &[],
+        )
+        .expect("loopback send policy validates")
+    }
+
+    fn post_send_template() -> DataDestinationRequestTemplate {
+        DataDestinationRequestTemplate::new_script_send(
+            SideEffectingSendMethod::Post,
+            "/messages",
+            &[],
+            DestinationAuthorizationTemplate::Forbidden,
+            None,
+            None,
+            16 * 1024,
+        )
+        .expect("side-effecting POST compiles")
+    }
+
+    fn post_send_request() -> DataDestinationRequest {
+        post_send_template()
+            .render_script(
+                "/messages",
+                &[],
+                None,
+                None,
+                Some(ScriptRequestBodyFormat::Json),
+                Some(Zeroizing::new(br#"{"text":"hello"}"#.to_vec())),
+            )
+            .expect("send request renders")
+    }
+
+    #[tokio::test]
+    async fn side_effecting_post_sends_json_and_form_bodies_with_host_owned_authorization() {
+        let (address, captured) = spawn_capturing_destination("/messages").await;
+        let policy = loopback_send_policy(address);
+        let template = DataDestinationRequestTemplate::new_script_send(
+            SideEffectingSendMethod::Post,
+            "/messages",
+            &["x-request-id"],
+            DestinationAuthorizationTemplate::Basic {
+                max_value_bytes: 256,
+            },
+            None,
+            None,
+            16 * 1024,
+        )
+        .expect("side-effecting POST compiles");
+
+        for (format, body, content_type) in [
+            (
+                ScriptRequestBodyFormat::Json,
+                br#"{"to":"+15550100","text":"hello"}"#.as_slice(),
+                "application/json",
+            ),
+            (
+                ScriptRequestBodyFormat::Form,
+                b"To=%2B15550100&Body=hello".as_slice(),
+                "application/x-www-form-urlencoded",
+            ),
+        ] {
+            let request = template
+                .render_script(
+                    "/messages",
+                    &[("x-request-id", b"message-1")],
+                    Some(
+                        DestinationAuthorizationValue::basic(b"dXNlcjpwYXNz".to_vec())
+                            .expect("basic value"),
+                    ),
+                    None,
+                    Some(format),
+                    Some(Zeroizing::new(body.to_vec())),
+                )
+                .expect("side-effecting POST renders");
+            let response = policy
+                .send(request, Duration::from_secs(2))
+                .await
+                .expect("side-effecting POST is sent");
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+            let last = captured
+                .lock()
+                .expect("capture lock")
+                .last()
+                .cloned()
+                .expect("destination captured the send");
+            assert_eq!(
+                last,
+                CapturedSend {
+                    method: "POST".to_owned(),
+                    target: "/messages".to_owned(),
+                    content_type: Some(content_type.to_owned()),
+                    authorization: Some("Basic dXNlcjpwYXNz".to_owned()),
+                    body: body.to_vec(),
+                }
+            );
+        }
+
+        assert_eq!(
+            template
+                .render_script("/messages", &[], None, None, None, None)
+                .unwrap_err(),
+            DestinationRequestError::BodyPresenceMismatch,
+            "a side-effecting POST carries its send in the body"
+        );
+        let effect = post_send_request().noncredential_effect_value("provider");
+        assert_eq!(effect["method"], "POST");
+    }
+
+    #[tokio::test]
+    async fn acknowledged_side_effecting_get_sends_through_the_query_string_only() {
+        let (address, captured) = spawn_capturing_destination("/cgi-bin/sendsms").await;
+        let policy = loopback_send_policy(address);
+        let method = SideEffectingSendMethod::Get(
+            QueryStringContentAcknowledgement::acknowledge_content_in_access_logs(),
+        );
+        let template = DataDestinationRequestTemplate::new_script_send(
+            method,
+            "/cgi-bin/sendsms",
+            &[],
+            DestinationAuthorizationTemplate::Forbidden,
+            None,
+            Some(("password", 64)),
+            16 * 1024,
+        )
+        .expect("acknowledged side-effecting GET compiles");
+        assert!(DestinationMethod::SideEffectingSend(method).is_side_effecting());
+
+        let request = template
+            .render_script(
+                "/cgi-bin/sendsms?to=%2B15550100&text=hello%20world",
+                &[],
+                None,
+                Some(Zeroizing::new(b"gateway-key".to_vec())),
+                None,
+                None,
+            )
+            .expect("acknowledged side-effecting GET renders");
+        let effect = request.effect_value_without_api_key_query("provider");
+        assert_eq!(effect["method"], "GET");
+        let response = policy
+            .send(request, Duration::from_secs(2))
+            .await
+            .expect("acknowledged side-effecting GET is sent");
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(
+            captured.lock().expect("capture lock").as_slice(),
+            [CapturedSend {
+                method: "GET".to_owned(),
+                target: "/cgi-bin/sendsms?to=%2B15550100&text=hello%20world&password=gateway-key"
+                    .to_owned(),
+                content_type: None,
+                authorization: None,
+                body: Vec::new(),
+            }]
+        );
+
+        assert_eq!(
+            template
+                .render_script(
+                    "/cgi-bin/sendsms?to=%2B15550100",
+                    &[],
+                    None,
+                    Some(Zeroizing::new(b"gateway-key".to_vec())),
+                    Some(ScriptRequestBodyFormat::Form),
+                    Some(Zeroizing::new(b"text=hello".to_vec())),
+                )
+                .unwrap_err(),
+            DestinationRequestError::BodyPresenceMismatch,
+            "a side-effecting GET never carries a body"
+        );
+    }
+
+    #[test]
+    fn side_effecting_and_read_only_classes_cannot_be_interchanged() {
+        let acknowledged = SideEffectingSendMethod::Get(
+            QueryStringContentAcknowledgement::acknowledge_content_in_access_logs(),
+        );
+        for send in [SideEffectingSendMethod::Post, acknowledged] {
+            let method = DestinationMethod::SideEffectingSend(send);
+            assert!(method.is_side_effecting());
+            assert_eq!(
+                DataDestinationRequestTemplate::new_script(
+                    method,
+                    "/messages",
+                    &[],
+                    DestinationAuthorizationTemplate::Forbidden,
+                    None,
+                    None,
+                    16 * 1024,
+                )
+                .unwrap_err(),
+                DestinationRequestError::MethodSlotMismatch,
+                "the read-only script constructor refuses a side-effecting send"
+            );
+            let body = if send == SideEffectingSendMethod::Post {
+                DestinationBodyTemplate::Required { max_bytes: 64 }
+            } else {
+                DestinationBodyTemplate::Forbidden
+            };
+            assert_eq!(
+                DataDestinationRequestTemplate::new(
+                    method,
+                    "/messages",
+                    &[],
+                    &[],
+                    DestinationAuthorizationTemplate::Forbidden,
+                    body,
+                    1_024,
+                )
+                .unwrap_err(),
+                DestinationRequestError::MethodSlotMismatch
+            );
+            assert_eq!(
+                DataDestinationRequestTemplate::new_with_path_segment(
+                    method,
+                    "/messages/",
+                    64,
+                    &[],
+                    &[],
+                    DestinationAuthorizationTemplate::Forbidden,
+                    body,
+                    1_024,
+                )
+                .unwrap_err(),
+                DestinationRequestError::MethodSlotMismatch
+            );
+            assert_eq!(
+                DataDestinationRequestTemplate::new_with_exact_headers(
+                    method,
+                    "/messages",
+                    &[],
+                    &[],
+                    DestinationAuthorizationTemplate::Forbidden,
+                    body,
+                    1_024,
+                )
+                .unwrap_err(),
+                DestinationRequestError::MethodSlotMismatch
+            );
+            assert_eq!(
+                EventDestinationRequestTemplate::new(
+                    method,
+                    "/events",
+                    &[],
+                    &[],
+                    DestinationAuthorizationTemplate::Forbidden,
+                    body,
+                    1_024,
+                )
+                .unwrap_err(),
+                DestinationRequestError::MethodSlotMismatch
+            );
+        }
+        for read_only in [
+            DestinationMethod::Get,
+            DestinationMethod::ReviewedReadOnlyPost,
+            DestinationMethod::OAuth2ClientCredentialsPost,
+            DestinationMethod::EventPost,
+        ] {
+            assert!(!read_only.is_side_effecting());
+        }
+    }
+
+    #[test]
+    fn every_send_failure_reports_whether_the_request_may_have_been_sent() {
+        use DestinationDeliveryCertainty::{MaybeSent, NotSent};
+        for (error, expected) in [
+            (DestinationSendError::InvalidRemainingTimeout, NotSent),
+            (DestinationSendError::InvalidFrozenPolicy, NotSent),
+            (DestinationSendError::InvalidFrozenRequest, NotSent),
+            (DestinationSendError::ResolutionFailed, NotSent),
+            (DestinationSendError::ResolutionCapacityUnavailable, NotSent),
+            (DestinationSendError::TooManyResolverAnswers, NotSent),
+            (DestinationSendError::NoResolverAnswers, NotSent),
+            (DestinationSendError::ResolverPortMismatch, NotSent),
+            (DestinationSendError::ResolverAddressFamilyMismatch, NotSent),
+            (DestinationSendError::LiteralOriginMismatch, NotSent),
+            (DestinationSendError::CloudMetadataDenied, NotSent),
+            (DestinationSendError::AlwaysDeniedAddress, NotSent),
+            (DestinationSendError::PrivateAddressNotAllowed, NotSent),
+            (DestinationSendError::NonGlobalAddressDenied, NotSent),
+            (DestinationSendError::DevelopmentAddressDenied, NotSent),
+            (DestinationSendError::TlsMaterialUnavailable, NotSent),
+            (DestinationSendError::ClientBuildFailed, NotSent),
+            (DestinationSendError::DeadlineExceeded, NotSent),
+            (DestinationSendError::TransportFailed, NotSent),
+            (
+                DestinationSendError::DeadlineExceededAfterConnect,
+                MaybeSent,
+            ),
+            (DestinationSendError::TransportFailedAfterConnect, MaybeSent),
+            (DestinationSendError::TooManyResponseHeaders, MaybeSent),
+            (DestinationSendError::ResponseHeaderBytesExceeded, MaybeSent),
+        ] {
+            assert_eq!(error.delivery_certainty(), expected, "{error:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn refused_connection_is_reported_not_sent() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a port to release");
+        let address = listener.local_addr().expect("released port address");
+        drop(listener);
+
+        let error = loopback_send_policy(address)
+            .send(post_send_request(), Duration::from_secs(2))
+            .await
+            .expect_err("nothing listens on the released port");
+        assert_eq!(error, DestinationSendError::TransportFailed);
+        assert_eq!(
+            error.delivery_certainty(),
+            DestinationDeliveryCertainty::NotSent
+        );
+    }
+
+    #[tokio::test]
+    async fn tls_handshake_failure_is_reported_not_sent() {
+        let (address, wrong_root, _, server) = spawn_tls_server("other.test").await;
+        let policy = DataDestinationPolicy::new(
+            "tls-send",
+            &format!("https://registry.test:{}/", address.port()),
+            DestinationProfile::PinnedLoopbackHttpsTest,
+            &[],
+        )
+        .expect("test TLS policy validates");
+        let resolver = FakeResolver {
+            answers: vec![address],
+            calls: AtomicUsize::new(0),
+        };
+
+        let error = policy
+            .send_with_resolver(
+                post_send_request(),
+                Duration::from_secs(2),
+                &resolver,
+                TransportTrust::TestRoot(wrong_root),
+            )
+            .await
+            .expect_err("the certificate does not name the destination");
+        assert_eq!(error, DestinationSendError::TransportFailed);
+        assert_eq!(
+            error.delivery_certainty(),
+            DestinationDeliveryCertainty::NotSent
+        );
+        assert!(
+            server.await.expect("TLS server task completed").is_err(),
+            "the server never received a request"
+        );
+    }
+
+    #[tokio::test]
+    async fn dns_policy_refusal_and_resolution_failure_are_reported_not_sent() {
+        let policy = production(&[]);
+        for (address, expected) in [
+            ("169.254.169.254", DestinationSendError::CloudMetadataDenied),
+            ("10.0.0.7", DestinationSendError::PrivateAddressNotAllowed),
+        ] {
+            let resolver = FakeResolver {
+                answers: vec![answer(address, 443)],
+                calls: AtomicUsize::new(0),
+            };
+            let error = policy
+                .send_with_resolver(
+                    post_send_request(),
+                    Duration::from_secs(2),
+                    &resolver,
+                    TransportTrust::System,
+                )
+                .await
+                .expect_err("the resolved address is refused before connect");
+            assert_eq!(error, expected);
+            assert_eq!(
+                error.delivery_certainty(),
+                DestinationDeliveryCertainty::NotSent
+            );
+        }
+
+        let failing = UnavailableIpv6Resolver {
+            ipv4_answers: Vec::new(),
+            ipv4_only_calls: AtomicUsize::new(0),
+            dual_stack_calls: AtomicUsize::new(0),
+        };
+        let error = policy
+            .send_with_resolver(
+                post_send_request(),
+                Duration::from_secs(2),
+                &failing,
+                TransportTrust::System,
+            )
+            .await
+            .expect_err("resolution fails");
+        assert_eq!(error, DestinationSendError::ResolutionFailed);
+        assert_eq!(
+            error.delivery_certainty(),
+            DestinationDeliveryCertainty::NotSent
+        );
+    }
+
+    /// Accept one connection, read the request head, report it, and then
+    /// either hold the connection open without answering or close it.
+    async fn spawn_silent_destination(
+        close_after_request: bool,
+    ) -> (
+        SocketAddr,
+        tokio::sync::oneshot::Receiver<Vec<u8>>,
+        JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind silent test server");
+        let address = listener.local_addr().expect("silent test address");
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let handle = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept the send");
+            let mut request = Vec::with_capacity(1_024);
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let mut chunk = [0_u8; 512];
+                let read = stream.read(&mut chunk).await.expect("read the send");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..read]);
+            }
+            sender
+                .send(request)
+                .expect("the test awaits the received request");
+            if !close_after_request {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
+            drop(stream);
+        });
+        (address, receiver, handle)
+    }
+
+    #[tokio::test]
+    async fn deadline_after_the_request_was_written_is_reported_maybe_sent() {
+        let (address, received, server) = spawn_silent_destination(false).await;
+
+        let error = loopback_send_policy(address)
+            .send(post_send_request(), Duration::from_millis(500))
+            .await
+            .expect_err("the destination never answers");
+        let head = received.await.expect("the destination received the send");
+        assert!(head.starts_with(b"POST /messages HTTP/1.1\r\n"));
+        assert_eq!(error, DestinationSendError::DeadlineExceededAfterConnect);
+        assert_eq!(
+            error.delivery_certainty(),
+            DestinationDeliveryCertainty::MaybeSent
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn connection_closed_after_the_request_was_written_is_reported_maybe_sent() {
+        let (address, received, server) = spawn_silent_destination(true).await;
+
+        let error = loopback_send_policy(address)
+            .send(post_send_request(), Duration::from_secs(2))
+            .await
+            .expect_err("the destination closes without answering");
+        let head = received.await.expect("the destination received the send");
+        assert!(head.starts_with(b"POST /messages HTTP/1.1\r\n"));
+        assert_eq!(error, DestinationSendError::TransportFailedAfterConnect);
+        assert_eq!(
+            error.delivery_certainty(),
+            DestinationDeliveryCertainty::MaybeSent
+        );
+        server.await.expect("silent server completed");
     }
 
     proptest! {

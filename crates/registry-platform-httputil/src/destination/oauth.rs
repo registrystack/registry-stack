@@ -149,10 +149,34 @@ pub struct FreshBearerToken {
 }
 
 /// Closed OAuth response contract for generic client-credentials operations.
+///
+/// The `Bearer*` schemas accept exactly their members with `token_type`
+/// spelled `Bearer`. The `Rfc6749Bearer*` schemas close the same member set
+/// but also accept the optional string `scope` member RFC 6749 section 5.1
+/// allows, and compare `token_type` case-insensitively as section 7.1
+/// requires. Every other member is refused under every schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StrictOAuthTokenSchema {
     BearerWithExpiresIn,
     BearerWithoutExpiry,
+    Rfc6749BearerWithExpiresIn,
+    Rfc6749BearerWithoutExpiry,
+}
+
+impl StrictOAuthTokenSchema {
+    const fn expects_expiry(self) -> bool {
+        matches!(
+            self,
+            Self::BearerWithExpiresIn | Self::Rfc6749BearerWithExpiresIn
+        )
+    }
+
+    const fn follows_rfc6749(self) -> bool {
+        matches!(
+            self,
+            Self::Rfc6749BearerWithExpiresIn | Self::Rfc6749BearerWithoutExpiry
+        )
+    }
 }
 
 /// Value-free failures from the generic strict OAuth response decoder.
@@ -219,19 +243,25 @@ pub fn decode_strict_oauth_token(
     let Value::Object(object) = sensitive.value_mut() else {
         return Err(StrictOAuthTokenDecodeError::ResponseContractViolation);
     };
-    let expected_members = match schema {
-        StrictOAuthTokenSchema::BearerWithExpiresIn => 3,
-        StrictOAuthTokenSchema::BearerWithoutExpiry => 2,
+    let scope_members = match (schema.follows_rfc6749(), object.get("scope")) {
+        (true, Some(Value::String(_))) => 1,
+        (true, Some(_)) => return Err(StrictOAuthTokenDecodeError::ResponseContractViolation),
+        _ => 0,
     };
+    let expected_members = (if schema.expects_expiry() { 3 } else { 2 }) + scope_members;
     if object.len() != expected_members
         || !object.contains_key("access_token")
         || !object.contains_key("token_type")
-        || (matches!(schema, StrictOAuthTokenSchema::BearerWithExpiresIn)
-            != object.contains_key("expires_in"))
+        || (schema.expects_expiry() != object.contains_key("expires_in"))
     {
         return Err(StrictOAuthTokenDecodeError::ResponseContractViolation);
     }
-    if object.get("token_type").and_then(Value::as_str) != Some("Bearer") {
+    let bearer = match object.get("token_type").and_then(Value::as_str) {
+        Some(token_type) if schema.follows_rfc6749() => token_type.eq_ignore_ascii_case("Bearer"),
+        Some(token_type) => token_type == "Bearer",
+        None => false,
+    };
+    if !bearer {
         return Err(StrictOAuthTokenDecodeError::ResponseContractViolation);
     }
     let Value::String(access_token) = object
@@ -244,34 +274,31 @@ pub fn decode_strict_oauth_token(
     if value.len() > access_token_max_bytes || !is_oauth_bearer_token(value.as_bytes()) {
         return Err(StrictOAuthTokenDecodeError::InvalidAccessToken);
     }
-    let usable_lifetime_ms = match schema {
-        StrictOAuthTokenSchema::BearerWithoutExpiry => None,
-        StrictOAuthTokenSchema::BearerWithExpiresIn => {
-            let expires_in = object
-                .remove("expires_in")
-                .and_then(|value| value.as_u64())
-                .and_then(|value| u32::try_from(value).ok())
-                .ok_or(StrictOAuthTokenDecodeError::InvalidExpiry)?;
-            let minimum =
-                expires_in_min_seconds.ok_or(StrictOAuthTokenDecodeError::InvalidExpiry)?;
-            let maximum =
-                expires_in_max_seconds.ok_or(StrictOAuthTokenDecodeError::InvalidExpiry)?;
-            if !(minimum..=maximum).contains(&expires_in) {
-                return Err(StrictOAuthTokenDecodeError::InvalidExpiry);
-            }
-            let lifetime_ms = expires_in
-                .checked_mul(1_000)
-                .ok_or(StrictOAuthTokenDecodeError::InvalidExpiry)?
-                .min(max_token_lifetime_ms.ok_or(StrictOAuthTokenDecodeError::InvalidExpiry)?);
-            Some(
-                lifetime_ms
-                    .checked_sub(
-                        expiry_safety_skew_ms.ok_or(StrictOAuthTokenDecodeError::InvalidExpiry)?,
-                    )
-                    .and_then(NonZeroU32::new)
-                    .ok_or(StrictOAuthTokenDecodeError::InvalidExpiry)?,
-            )
+    let usable_lifetime_ms = if schema.expects_expiry() {
+        let expires_in = object
+            .remove("expires_in")
+            .and_then(|value| value.as_u64())
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or(StrictOAuthTokenDecodeError::InvalidExpiry)?;
+        let minimum = expires_in_min_seconds.ok_or(StrictOAuthTokenDecodeError::InvalidExpiry)?;
+        let maximum = expires_in_max_seconds.ok_or(StrictOAuthTokenDecodeError::InvalidExpiry)?;
+        if !(minimum..=maximum).contains(&expires_in) {
+            return Err(StrictOAuthTokenDecodeError::InvalidExpiry);
         }
+        let lifetime_ms = expires_in
+            .checked_mul(1_000)
+            .ok_or(StrictOAuthTokenDecodeError::InvalidExpiry)?
+            .min(max_token_lifetime_ms.ok_or(StrictOAuthTokenDecodeError::InvalidExpiry)?);
+        Some(
+            lifetime_ms
+                .checked_sub(
+                    expiry_safety_skew_ms.ok_or(StrictOAuthTokenDecodeError::InvalidExpiry)?,
+                )
+                .and_then(NonZeroU32::new)
+                .ok_or(StrictOAuthTokenDecodeError::InvalidExpiry)?,
+        )
+    } else {
+        None
     };
     Ok(ParsedBearerToken {
         value,
@@ -397,6 +424,133 @@ mod tests {
             .err(),
             Some(StrictOAuthTokenDecodeError::InvalidExpiry)
         );
+    }
+
+    fn decode_generic(
+        raw: &[u8],
+        schema: StrictOAuthTokenSchema,
+    ) -> Result<ParsedBearerToken, StrictOAuthTokenDecodeError> {
+        let expiring = matches!(
+            schema,
+            StrictOAuthTokenSchema::BearerWithExpiresIn
+                | StrictOAuthTokenSchema::Rfc6749BearerWithExpiresIn
+        );
+        decode_strict_oauth_token(
+            body(raw),
+            schema,
+            1_024,
+            64,
+            expiring.then_some(30),
+            expiring.then_some(120),
+            expiring.then_some(120_000),
+            expiring.then_some(5_000),
+        )
+    }
+
+    #[test]
+    fn rfc6749_schemas_accept_an_optional_string_scope() {
+        let expiring = decode_generic(
+            br#"{"access_token":"abc","token_type":"Bearer","expires_in":60,"scope":"send"}"#,
+            StrictOAuthTokenSchema::Rfc6749BearerWithExpiresIn,
+        )
+        .expect("scope is tolerated");
+        assert_eq!(expiring.usable_lifetime_ms(), Some(55_000));
+        let no_expiry = decode_generic(
+            br#"{"access_token":"abc","token_type":"Bearer","scope":"send read"}"#,
+            StrictOAuthTokenSchema::Rfc6749BearerWithoutExpiry,
+        )
+        .expect("scope is tolerated");
+        assert_eq!(no_expiry.usable_lifetime_ms(), None);
+        for (raw, schema) in [
+            (
+                br#"{"access_token":"abc","token_type":"Bearer","expires_in":60}"#.as_slice(),
+                StrictOAuthTokenSchema::Rfc6749BearerWithExpiresIn,
+            ),
+            (
+                br#"{"access_token":"abc","token_type":"Bearer"}"#,
+                StrictOAuthTokenSchema::Rfc6749BearerWithoutExpiry,
+            ),
+        ] {
+            assert!(decode_generic(raw, schema).is_ok(), "scope is optional");
+        }
+        for raw in [
+            br#"{"access_token":"abc","token_type":"Bearer","scope":["send"]}"#.as_slice(),
+            br#"{"access_token":"abc","token_type":"Bearer","scope":null}"#,
+        ] {
+            assert_eq!(
+                decode_generic(raw, StrictOAuthTokenSchema::Rfc6749BearerWithoutExpiry).err(),
+                Some(StrictOAuthTokenDecodeError::ResponseContractViolation),
+                "a scope that is not a string is refused"
+            );
+        }
+    }
+
+    #[test]
+    fn rfc6749_schemas_compare_the_token_type_case_insensitively() {
+        for token_type in ["bearer", "BEARER", "Bearer", "bEaReR"] {
+            let raw =
+                format!(r#"{{"access_token":"abc","token_type":"{token_type}","expires_in":60}}"#);
+            assert!(
+                decode_generic(
+                    raw.as_bytes(),
+                    StrictOAuthTokenSchema::Rfc6749BearerWithExpiresIn
+                )
+                .is_ok(),
+                "{token_type} is the bearer type"
+            );
+        }
+    }
+
+    #[test]
+    fn rfc6749_schemas_still_refuse_other_members_and_other_token_types() {
+        for raw in [
+            br#"{"access_token":"abc","token_type":"Bearer","refresh_token":"r"}"#.as_slice(),
+            br#"{"access_token":"abc","token_type":"Bearer","scope":"a","id_token":"x"}"#,
+            br#"{"access_token":"abc","token_type":"Bearer","expires_in":60}"#,
+            br#"{"access_token":"abc","token_type":"MAC"}"#,
+            br#"{"access_token":"abc","token_type":"bearer-ish"}"#,
+            br#"{"access_token":"abc","token_type":"Bearer","scope":"a","scope":"b"}"#,
+            br#"{"token_type":"Bearer","scope":"a"}"#,
+        ] {
+            assert_eq!(
+                decode_generic(raw, StrictOAuthTokenSchema::Rfc6749BearerWithoutExpiry).err(),
+                Some(StrictOAuthTokenDecodeError::ResponseContractViolation),
+                "{}",
+                String::from_utf8_lossy(raw)
+            );
+        }
+        assert_eq!(
+            decode_generic(
+                br#"{"access_token":"abc","token_type":"Bearer","scope":"a"}"#,
+                StrictOAuthTokenSchema::Rfc6749BearerWithExpiresIn
+            )
+            .err(),
+            Some(StrictOAuthTokenDecodeError::ResponseContractViolation),
+            "the expiring schema still needs expires_in"
+        );
+    }
+
+    #[test]
+    fn the_exact_schemas_still_refuse_scope_and_a_lowercase_token_type() {
+        for schema in [
+            StrictOAuthTokenSchema::BearerWithExpiresIn,
+            StrictOAuthTokenSchema::BearerWithoutExpiry,
+        ] {
+            for raw in [
+                br#"{"access_token":"abc","token_type":"Bearer","expires_in":60,"scope":"a"}"#
+                    .as_slice(),
+                br#"{"access_token":"abc","token_type":"Bearer","scope":"a"}"#,
+                br#"{"access_token":"abc","token_type":"bearer","expires_in":60}"#,
+                br#"{"access_token":"abc","token_type":"bearer"}"#,
+            ] {
+                assert_eq!(
+                    decode_generic(raw, schema).err(),
+                    Some(StrictOAuthTokenDecodeError::ResponseContractViolation),
+                    "{schema:?} {}",
+                    String::from_utf8_lossy(raw)
+                );
+            }
+        }
     }
 
     #[test]

@@ -132,6 +132,7 @@ EXCLUDED_EVIDENCE_TUTORIALS=(
 	first-run-with-solmara-lab                       # historical; the Solmara Lab stack is replayed by check-tutorial.sh, not here
 	first-breg                            # Base Registry Engine journey; product CI runs quickstart/run.sh --smoke, reader execution checks the documented steps
 	first-casework                                   # Registry Casework journey; replayed end to end by check-casework-tutorial.sh in the casework-tutorial job
+	first-messaging                                  # Registry Messaging journey; replayed end to end by check-messaging-tutorial.sh in the messaging-tutorial job
 	first-render-document                            # Registry Render journey; offline render CLI steps against the products/render example bundles, verified in reader mode outside the Evidence runner
 	review-breg-changes-in-casework                  # cross-product boundary guide with no Evidence CLI journey; real BReg-to-Casework composition runs in the owning product aggregate
 	extend-a-registry-with-a-module                  # Base Registry Engine journey; offline bregctl steps on the quickstart project, verified in reader mode outside the Evidence runner

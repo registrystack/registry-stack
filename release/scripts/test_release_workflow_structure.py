@@ -408,6 +408,22 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             },
             module._candidate_image_names("0.33.0"),
         )
+        self.assertEqual(
+            module._candidate_image_names("0.33.0"),
+            module._candidate_image_names("0.34.0"),
+        )
+        self.assertEqual(
+            {
+                "breg",
+                "casework",
+                "discovery",
+                "evidence",
+                "messaging",
+                "relay",
+                "scheduling",
+            },
+            module._candidate_image_names("0.35.0"),
+        )
         self.assertFalse(
             any(
                 "registry-notary" in name
@@ -585,7 +601,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertEqual("validate", shards["needs"])
         self.assertFalse(shards["strategy"]["fail-fast"])
         self.assertEqual(
-            ["core", "breg", "casework", "scheduling"],
+            ["core", "breg", "casework", "scheduling", "messaging"],
             shards["strategy"]["matrix"]["group"],
         )
         checkout = shards["steps"][0]
@@ -612,13 +628,14 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         downloads = [
             step for step in consumer["steps"] if "download-artifact@" in str(step)
         ]
-        self.assertEqual(4, len(downloads))
+        self.assertEqual(5, len(downloads))
         self.assertEqual(
             {
                 "binary-shards/core",
                 "binary-shards/breg",
                 "binary-shards/casework",
                 "binary-shards/scheduling",
+                "binary-shards/messaging",
             },
             {step["with"]["path"] for step in downloads},
         )
@@ -631,9 +648,22 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "--breg binary-shards/breg",
             "--casework binary-shards/casework",
             "--scheduling binary-shards/scheduling",
+            "--messaging binary-shards/messaging",
             '--builder-image "${RELEASE_BUILDER_IMAGE}"',
         ):
             self.assertIn(binding, merge)
+        messaging_smoke = merge.split(
+            "if (( release_major > 0 || release_minor >= 35 )); then", 1
+        )[1].split("fi", 1)[0]
+        for binary in ("messaging", "messagingctl"):
+            self.assertIn(
+                f'"dist/bin/{binary}-${{{{ needs.validate.outputs.tag }}}}-linux-amd64" --version',
+                messaging_smoke,
+            )
+            self.assertIn(
+                f'"{binary} ${{{{ needs.validate.outputs.version }}}}"',
+                messaging_smoke,
+            )
         assemble_download = next(
             step
             for step in document["jobs"]["assemble"]["steps"]
@@ -1351,6 +1381,73 @@ class NativeBenchmarkWorkflowStructureTest(unittest.TestCase):
         self.assertIn('0o644 if binary.name.endswith(".tar.gz") else 0o755', merge_run)
         self.assertIn("stat.S_IMODE(binary.stat().st_mode) != expected_mode", merge_run)
         self.assertEqual(text.count("actions/upload-artifact@"), 2)
+
+
+class MessagingClientWorkflowStructureTest(unittest.TestCase):
+    MESSAGING_LOCK = "crates/registry-messaging-client-node/package-lock.json"
+
+    def test_candidate_builds_messaging_clients_from_version_0_35(self) -> None:
+        _, document = workflow("release-candidate.yml")
+        clients = document["jobs"]["clients"]
+        setup_node = next(
+            step for step in clients["steps"] if step.get("name") == "Setup Node"
+        )
+        self.assertIn(
+            self.MESSAGING_LOCK,
+            setup_node["with"]["cache-dependency-path"].splitlines(),
+        )
+        cargo_cache = next(
+            step
+            for step in clients["steps"]
+            if step.get("name") == "Restore native client Cargo cache"
+        )
+        self.assertIn(f"'{self.MESSAGING_LOCK}'", cargo_cache["with"]["key"])
+
+        gate = "if (( client_major > 0 || client_minor >= 35 )); then\n  include_messaging=1\nfi"
+        python = step_run(document, "clients", "Build Python client wheels")
+        node = step_run(document, "clients", "Build Node client packages")
+        for build in (python, node):
+            self.assertIn(gate, build)
+            self.assertIn(
+                'if [[ "${include_messaging}" -eq 1 ]]; then\n  clients+=(messaging)\nfi',
+                build,
+            )
+        self.assertIn("wheel_stem=registry_messaging_client_native", python)
+        self.assertIn("--messaging-wheel", python)
+        self.assertIn('"${messaging_wheel_args[@]}"', python)
+        self.assertIn(
+            'if [[ "${include_messaging}" -eq 1 ]]; then\n'
+            "    platform_clients+=(messaging)\n"
+            "  fi",
+            node,
+        )
+        smoke = step_run(document, "clients", "Smoke Node client packages")
+        self.assertIn("if (( major > 0 || minor >= 35 )); then", smoke)
+        self.assertIn(
+            'if [[ "${include_messaging}" -eq 1 ]]; then\n'
+            "      expected_addons=$((expected_addons + 1))",
+            smoke,
+        )
+
+    def test_rehearsal_builds_messaging_into_the_unified_node_client(self) -> None:
+        _, document = workflow("release-rehearsal.yml")
+        clients = document["jobs"]["node-clients"]
+        setup_node = next(
+            step for step in clients["steps"] if step.get("name") == "Setup Node"
+        )
+        self.assertIn(
+            self.MESSAGING_LOCK,
+            setup_node["with"]["cache-dependency-path"].splitlines(),
+        )
+        build = step_run(
+            document, "node-clients", "Build, package, and smoke Linux Node clients"
+        )
+        self.assertIn("clients+=(breg casework messaging)", build)
+        self.assertIn(
+            "for client in discovery evidence relay breg casework messaging; do",
+            build,
+        )
+        self.assertIn("-maxdepth 1 -name '*.node' | wc -l)\" -eq 6", build)
 
 
 class MacOSFipsWorkflowStructureTest(unittest.TestCase):
@@ -2095,6 +2192,23 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 "relay",
                 "scheduling",
             ],
+            "v0.34.0": [
+                "breg",
+                "casework",
+                "discovery",
+                "evidence",
+                "relay",
+                "scheduling",
+            ],
+            "v0.35.0": [
+                "breg",
+                "casework",
+                "discovery",
+                "evidence",
+                "messaging",
+                "relay",
+                "scheduling",
+            ],
         }
         manifests = {}
         for tag, image_names in cases.items():
@@ -2163,11 +2277,28 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         )
         self.assertNotEqual(0, rejected.returncode)
 
+        missing_messaging = dict(manifests["v0.35.0"])
+        missing_messaging["images"] = [
+            image
+            for image in missing_messaging["images"]
+            if image["name"] != "messaging"
+        ]
+        rejected = subprocess.run(
+            ["jq", "-e", "--arg", "tag", "v0.35.0", jq_filter],
+            input=json.dumps(missing_messaging),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(0, rejected.returncode)
+
         self.assertIn(
-            "breg|casework|discovery|evidence|mint|relay|scheduling)", verify
+            "breg|casework|discovery|evidence|messaging|mint|relay|scheduling)",
+            verify,
         )
         self.assertIn("`casework` from\n`v0.30.0`", verify)
         self.assertIn("Registry Scheduling joins at `v0.33.0`", verify)
+        self.assertIn("Registry Messaging joins at `v0.35.0`", verify)
 
     def test_operator_docs_match_the_latest_non_prerelease_contract(self) -> None:
         operations = (ROOT / "release/OPERATIONS.md").read_text(encoding="utf-8")

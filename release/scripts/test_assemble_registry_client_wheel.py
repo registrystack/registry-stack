@@ -15,7 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "release/scripts/assemble-registry-client-wheel.py"
-PRODUCTS = ("discovery", "evidence", "relay", "breg", "casework")
+PRODUCTS = ("discovery", "evidence", "relay", "breg", "casework", "messaging")
 TAG = "cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64"
 
 
@@ -61,6 +61,12 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
                         "class CaseworkClient: ...\n",
                     )
                     archive.writestr("registry_casework_client/py.typed", b"")
+                if product == "messaging":
+                    archive.writestr(
+                        "registry_messaging_client/__init__.pyi",
+                        "class MessagingClient: ...\n",
+                    )
+                    archive.writestr("registry_messaging_client/py.typed", b"")
                 if product == "evidence":
                     archive.writestr(
                         "registry_evidence_client.libs/libfixture.so",
@@ -73,8 +79,15 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
             self.wheels[product] = wheel
 
     def run_assembler(
-        self, *, version: str | None = None, include_casework: bool = False
+        self,
+        *,
+        version: str | None = None,
+        include_casework: bool = False,
+        include_messaging: bool = True,
     ) -> subprocess.CompletedProcess[str]:
+        # The checkout's facade version may precede Messaging's public roster,
+        # so a local assembly selects Messaging explicitly unless a test is
+        # proving that refusal.
         command = [
             "python3",
             str(SCRIPT),
@@ -85,6 +98,8 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
         ]
         if include_casework:
             command.append("--include-casework")
+        if include_messaging:
+            command.append("--include-messaging")
         for product, wheel in self.wheels.items():
             command.extend((f"--{product}-wheel", str(wheel)))
         return subprocess.run(command, capture_output=True, text=True, check=False)
@@ -113,6 +128,11 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
                 b"class CaseworkClient: ...\n",
             )
             self.assertIn("registry_client/casework/py.typed", names)
+            self.assertEqual(
+                archive.read("registry_client/messaging/__init__.pyi"),
+                b"class MessagingClient: ...\n",
+            )
+            self.assertIn("registry_client/messaging/py.typed", names)
             self.assertIn("registry_client/__init__.py", names)
             self.assertIn(
                 "registry_client/registry_evidence_client.libs/libfixture.so",
@@ -164,15 +184,16 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
         for product in PRODUCTS:
             self.assertIn(f"`registry_client.{product}`", description)
 
-    def test_assembled_facade_imports_all_five_product_namespaces(self) -> None:
+    def test_assembled_facade_imports_all_six_product_namespaces(self) -> None:
         result = self.run_assembler()
         self.assertEqual(result.returncode, 0, result.stderr)
         # The fixture modules exercise facade imports without claiming a native
         # build. Native extension loading remains covered by the package smoke.
         import_script = (
             "import sys; sys.path.insert(0, sys.argv[1]); "
-            "from registry_client import discovery, evidence, relay, breg, casework; "
-            "print(discovery.PRODUCT, evidence.PRODUCT, relay.PRODUCT, breg.PRODUCT, casework.PRODUCT)"
+            "from registry_client import discovery, evidence, relay, breg, casework, messaging; "
+            "print(discovery.PRODUCT, evidence.PRODUCT, relay.PRODUCT, breg.PRODUCT, "
+            "casework.PRODUCT, messaging.PRODUCT)"
         )
         imported = subprocess.run(
             [
@@ -182,7 +203,9 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
             capture_output=True, text=True, check=False,
         )
         self.assertEqual(imported.returncode, 0, imported.stderr)
-        self.assertEqual(imported.stdout.strip(), "discovery evidence relay breg casework")
+        self.assertEqual(
+            imported.stdout.strip(), "discovery evidence relay breg casework messaging"
+        )
 
     def test_unified_and_legacy_distributions_never_own_the_same_path(self) -> None:
         result = self.run_assembler()
@@ -199,6 +222,13 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
             self.assertTrue(legacy_paths)
             self.assertTrue(unified_paths.isdisjoint(legacy_paths), product)
 
+    def test_rejects_a_malformed_version_without_a_traceback(self) -> None:
+        result = self.run_assembler(version="not-a-version")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unsupported client version", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertFalse((self.directory / "dist").exists())
+
     def test_rejects_an_input_for_another_version(self) -> None:
         result = self.run_assembler(version="99.0.0")
         self.assertNotEqual(result.returncode, 0)
@@ -208,6 +238,13 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
         result = self.run_assembler(version="0.29.0")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("explicit --include-casework", result.stderr)
+
+    def test_0_34_refuses_the_messaging_facade_without_explicit_selection(
+        self,
+    ) -> None:
+        result = self.run_assembler(version="0.34.0", include_messaging=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("explicit --include-messaging", result.stderr)
 
     def test_repeated_assembly_is_byte_for_byte_deterministic(self) -> None:
         first = self.run_assembler()

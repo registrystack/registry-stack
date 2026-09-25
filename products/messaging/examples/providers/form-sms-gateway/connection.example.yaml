@@ -1,0 +1,19 @@
+# Runtime settings for the example package, for one environment. The account
+# identifier in baseUrl is a placeholder; the credentials are secret
+# references resolved at startup, never values.
+baseUrl: https://api.twilio.com/2010-04-01/Accounts/AC00000000000000000000000000000000/
+timeoutMilliseconds: 10000
+maximumResponseBytes: 65536
+concurrencyLimit: 4
+redirects: deny
+authentication:
+  kind: basic
+  usernameRef: secret:file/sms-account-sid
+  passwordRef: secret:file/sms-auth-token
+callbackVerifier:
+  kind: hmac-sha1-url-form
+  # The status callback URL the provider is given and signs, exactly as it
+  # is given: this deployment's public address for the callback route.
+  url: https://messaging.example.org/v1/provider-callbacks/sms-gateway
+  header: X-Twilio-Signature
+  secretRef: secret:file/sms-auth-token

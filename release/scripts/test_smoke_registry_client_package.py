@@ -26,6 +26,7 @@ NAMESPACES = {
     "casework": ("CaseworkClient", "CaseworkClientError"),
     "discovery": ("DiscoveryClient", "DiscoveryClientError"),
     "evidence": ("EvidenceClient", "EvidenceClientError"),
+    "messaging": ("MessagingClient", "MessagingClientError"),
     "relay": ("RelayClient", "RelayClientError"),
 }
 
@@ -112,6 +113,23 @@ class SmokeRegistryClientPackageTest(unittest.TestCase):
             raise RuntimeError("the casework extension module failed to load")
 
         self.package.casework.CaseworkClient.__init__ = refuse
+        with self.assertRaises(RuntimeError):
+            self.run_smoke()
+
+    def test_a_messaging_namespace_from_another_module_is_refused(self) -> None:
+        self.package.messaging.MessagingClientError.__module__ = (
+            "registry_messaging_client"
+        )
+        with self.assertRaises(SystemExit):
+            self.run_smoke()
+
+    def test_a_messaging_extension_that_cannot_load_is_refused(self) -> None:
+        # A wheel whose messaging directory is present but whose native module
+        # fails on construction must not pass the publication smoke.
+        def refuse(self: object, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("the messaging extension module failed to load")
+
+        self.package.messaging.MessagingClient.__init__ = refuse
         with self.assertRaises(RuntimeError):
             self.run_smoke()
 

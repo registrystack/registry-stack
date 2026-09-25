@@ -16,6 +16,8 @@ pub fn catalog() -> Catalog {
         command_reference(registry_casework::command(), None, None),
         command_reference(registry_scheduling::runtime::command(), None, None),
         command_reference(registry_schedulingctl::command(), None, None),
+        command_reference(registry_messaging::runtime::command(), None, None),
+        command_reference(registry_messagingctl::command(), None, None),
         command_reference(registry_breg::command(), None, None),
         command_reference(
             registry_bregctl::command(),
@@ -90,6 +92,8 @@ mod tests {
                 "evidence",
                 "evidence-oid4vci",
                 "evidencectl",
+                "messaging",
+                "messagingctl",
                 "registry-render",
                 "relay",
                 "relayctl",
@@ -97,6 +101,31 @@ mod tests {
                 "schedulingctl",
             ]
         );
+    }
+
+    #[test]
+    fn messaging_publishes_its_runtime_and_package_commands() {
+        let catalog = catalog();
+        for invocation in [
+            "messaging migrate",
+            "messaging serve",
+            "messagingctl init",
+            "messagingctl check",
+            "messagingctl preview",
+            "messagingctl apply",
+            "messagingctl messages list",
+            "messagingctl messages show",
+            "messagingctl messages retry",
+            "messagingctl messages settle",
+            "messagingctl messages cancel",
+        ] {
+            assert!(!find_command(&catalog.binaries, invocation).usage.is_empty());
+        }
+        let messaging = find_command(&catalog.binaries, "messaging");
+        assert!(messaging
+            .options
+            .iter()
+            .any(|option| option.display.starts_with("--runtime-config ")));
     }
 
     #[test]

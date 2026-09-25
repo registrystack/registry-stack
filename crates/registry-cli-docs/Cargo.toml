@@ -26,5 +26,7 @@ registry-caseworkctl.workspace = true
 registry-casework.workspace = true
 registry-scheduling.workspace = true
 registry-schedulingctl.workspace = true
+registry-messaging.workspace = true
+registry-messagingctl.workspace = true
 serde.workspace = true
 serde_json.workspace = true

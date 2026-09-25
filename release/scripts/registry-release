@@ -58,6 +58,7 @@ DISCOVERY_RUNTIME_MINIMUM_VERSION = (0, 24, 0)
 BREG_RELEASE_MINIMUM_VERSION = (0, 26, 0)
 CASEWORK_RELEASE_MINIMUM_VERSION = (0, 30, 0)
 SCHEDULING_RELEASE_MINIMUM_VERSION = (0, 33, 0)
+MESSAGING_RELEASE_MINIMUM_VERSION = (0, 35, 0)
 UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 26, 1)
 RELEASE_PLAN_SCHEMA = "registry-release.plan.v1"
 CANDIDATE_VERIFICATION_PLAN_SCHEMA = "registry-release.candidate-verification.v3"
@@ -107,6 +108,10 @@ NODE_CLIENT_RELEASE_SURFACES = (
         "crates/registry-casework-client-node",
         "@registrystack/casework-client-native",
     ),
+    (
+        "crates/registry-messaging-client-node",
+        "@registrystack/messaging-client-native",
+    ),
 )
 PYTHON_CLIENT_RELEASE_SURFACES = (
     (
@@ -133,6 +138,11 @@ PYTHON_CLIENT_RELEASE_SURFACES = (
         "crates/registry-casework-client-py",
         "registry-casework-client-native",
         "casework-client-sdk",
+    ),
+    (
+        "crates/registry-messaging-client-py",
+        "registry-messaging-client-native",
+        "messaging-client-sdk",
     ),
 )
 FUZZ_LOCK_RELEASE_SURFACE_PATHS = (
@@ -227,6 +237,8 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
             )
         if parsed_version >= SCHEDULING_RELEASE_MINIMUM_VERSION:
             expected_inventory.add("scheduling")
+        if parsed_version >= MESSAGING_RELEASE_MINIMUM_VERSION:
+            expected_inventory.update({"messaging", "messagingctl"})
         missing = sorted(expected_inventory - artifact_names)
         unexpected = sorted(artifact_names - expected_inventory)
         if missing or unexpected:

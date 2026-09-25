@@ -1,0 +1,360 @@
+---
+title: Send your first message
+description: Run the Registry Messaging starter locally with messagingctl dev, send one SMS through the mock provider until it is delivered, and send one email you can read in Mailpit.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-25"
+doc_type: tutorial
+persona:
+  - operator
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+If you are evaluating Registry Messaging as the service your applications hand messages to, start
+with one SMS and one email on your own machine. You will create the starter package, run it with
+`messagingctl dev`, send an SMS as the starter's caller until the mock provider reports it
+delivered, then send an email and read it in Mailpit.
+
+<QuickstartMeta
+  outcome="One SMS reported delivered by the mock provider and one email received by Mailpit, both sent through a local Messaging runtime."
+  time="About 20 minutes, plus the build and the image download"
+  level="Local evaluation only"
+  prerequisites={['Linux amd64 or arm64, or macOS on Apple Silicon', 'A Registry Stack checkout and a Rust toolchain', 'A Bash or zsh shell', 'Running Docker', 'curl 7.76 or later', 'Python 3']}
+/>
+
+{/* Evidence: crates/registry-messagingctl/src/lib.rs, Command;
+    crates/registry-messagingctl/src/dev/mod.rs, StartArgs and TokenArgs;
+    products/messaging/README.md, Running locally. */}
+
+## Get messagingctl
+
+Registry Messaging is unreleased, so build `messagingctl` from a Registry Stack checkout and put it
+on your `PATH`:
+
+```sh
+cargo build --release --locked -p registry-messagingctl
+export PATH="$PWD/target/release:$PATH"
+```
+
+On macOS, build through the repository's helper instead, because the FIPS crypto library is a
+dynamic library the shell cannot find on its own:
+
+```sh
+. scripts/cargo-runtime-library-path.sh
+registry_cargo_build "$PWD" --release --locked -p registry-messagingctl
+export PATH="$PWD/target/release:$PATH"
+```
+
+Then change to an empty directory in the same terminal. Run every later command from there.
+
+{/* Evidence: scripts/cargo-runtime-library-path.sh, registry_cargo_build;
+    docs/site/src/content/docs/configure/messaging.mdx. */}
+
+## Create a package
+
+Create the maintained starter:
+
+```sh
+mkdir -p tutorial-work
+messagingctl init tutorial-work/notices
+```
+
+```text
+created: tutorial-work/notices
+  messaging.yaml
+  providers/sms-gateway/provider.yaml
+  providers/sms-gateway/scripts/interpret.rhai
+  providers/sms-gateway/scripts/prepare.rhai
+  providers/sms-gateway/scripts/receipt.rhai
+  runtime.example.yaml
+  templates/appointment-reminder-sms/1/en/text.j2
+  templates/appointment-reminder-sms/1/sample.json
+  templates/appointment-reminder-sms/1/schema.json
+  templates/appointment-reminder-sms/1/template.yaml
+  templates/appointment-reminder/1/en/html.j2
+  templates/appointment-reminder/1/en/subject.j2
+  templates/appointment-reminder/1/en/text.j2
+  templates/appointment-reminder/1/fr/html.j2
+  templates/appointment-reminder/1/fr/subject.j2
+  templates/appointment-reminder/1/fr/text.j2
+  templates/appointment-reminder/1/sample.json
+  templates/appointment-reminder/1/schema.json
+  templates/appointment-reminder/1/template.yaml
+next: Run messagingctl check --package DIRECTORY, then messagingctl dev DIRECTORY to run it locally against PostgreSQL and Mailpit containers.
+next: Copy runtime.example.yaml to runtime.yaml, set its absolute paths and secret references, run messaging migrate, then messagingctl apply --apply, then messaging serve.
+```
+
+The two `next:` lines describe a deployment. This tutorial runs the package locally instead.
+
+`init` refuses an existing destination. The starter declares an `smtp` provider for email and an
+`http` provider for SMS, the `transactional` and `reminders-sms` sender profiles, one email and one
+SMS template, and the `case-notices` access profile its `case-system` caller sends under. Its SMS
+provider speaks the protocol of the mock gateway the development session runs, so the package runs
+unchanged.
+
+{/* Evidence: crates/registry-messagingctl/src/starter.rs;
+    products/messaging/examples/providers/mock/provider.yaml. */}
+
+## Start the session
+
+:::caution[Use synthetic data only]
+The session writes private local credentials, a generated runtime configuration, and a log under
+`tutorial-work/notices/.messaging/dev/`. Keep that directory out of version control and support
+messages, and send only to example addresses and numbers.
+:::
+
+```sh
+messagingctl dev tutorial-work/notices
+```
+
+The session runs in the foreground and prints a ready report once the runtime answers `/ready`.
+`<directory>` stands for the directory you run the tutorial from:
+
+```text
+ready
+  api: http://127.0.0.1:8107
+  metrics: http://127.0.0.1:9107/metrics
+  mailpit: http://127.0.0.1:32838
+  mock gateway: http://127.0.0.1:56575
+  runtime config: <directory>/tutorial-work/notices/.messaging/dev/runtime.yaml
+  log: <directory>/tutorial-work/notices/.messaging/dev/logs/messaging.log
+next: messagingctl dev token CLIENT, then send with curl -H @HEADER_FILE; Ctrl-C stops the session
+```
+
+Leave it running. It owns a PostgreSQL container, a Mailpit container every `smtp` provider sends
+to, a mock gateway every `http` provider sends to, and the Messaging runtime on port 8107. The
+Mailpit and mock gateway ports are chosen when the session starts, so yours differ.
+
+Open a second terminal, repeat the commands under [Get messagingctl](#get-messagingctl) there
+(Cargo finds the binary already built), and change to the same directory. Every later command runs
+in that second terminal.
+
+{/* Evidence: crates/registry-messagingctl/src/dev/mod.rs, StartArgs and DevArgs;
+    crates/registry-messagingctl/src/lib.rs, render_dev; products/messaging/README.md,
+    Running locally. */}
+
+## Get a token
+
+Sign a bearer token for the starter's caller:
+
+```sh
+messagingctl dev token case-system tutorial-work/notices
+api="http://127.0.0.1:${MESSAGINGCTL_DEV_PORT:-8107}"
+header=tutorial-work/notices/.messaging/dev/tokens/case-system.header
+```
+
+```text
+header file: <directory>/tutorial-work/notices/.messaging/dev/tokens/case-system.header
+valid for 3600 seconds; send with curl -H @<directory>/tutorial-work/notices/.messaging/dev/tokens/case-system.header
+```
+
+The header file is owner-only and valid for one hour. If you started the session on another port,
+the variable carries it.
+
+{/* Evidence: crates/registry-messagingctl/src/dev/mod.rs, token;
+    crates/registry-messagingctl/src/dev/config.rs, header_file. */}
+
+## Send an SMS
+
+Submit the reminder to an example number. The idempotency key is yours to choose; repeating the
+same body under it returns the same message instead of sending a second one.
+
+```sh
+curl --silent --show-error \
+  --header @"$header" \
+  --header 'Idempotency-Key: tutorial-sms-1' \
+  --header 'Content-Type: application/json' \
+  --data '{"senderProfile":"reminders-sms","to":{"phone":"+15555550100"},"template":{"id":"appointment-reminder-sms","version":"1"},"locale":"en","data":{"name":"Ada","day":"2026-10-01","office":"North"}}' \
+  --output tutorial-work/sms.json --write-out 'HTTP %{http_code}\n' \
+  "$api/v1/messages"
+sms_id="$(python3 -c 'import json; print(json.load(open("tutorial-work/sms.json"))["id"])')"
+```
+
+```text
+HTTP 202
+```
+
+Messaging answers HTTP `202` once the message is accepted and queued. The mock gateway answers the
+send after 200 milliseconds and then posts a signed delivery report to the runtime. Read the
+message until the report arrives:
+
+```sh
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+  curl --silent --show-error --header @"$header" \
+    --output tutorial-work/sms-status.json "$api/v1/messages/$sms_id"
+  if python3 -c 'import json, sys; sys.exit(json.load(open("tutorial-work/sms-status.json"))["status"] != "delivered")'; then
+    break
+  fi
+  sleep 1
+done
+python3 -m json.tool tutorial-work/sms-status.json
+```
+
+```json
+{
+    "id": "90fdc182-3bb2-41d0-aa7c-96633d0cdd23",
+    "status": "delivered",
+    "dispatch": "submitted",
+    "report": "delivered",
+    "reportedAt": "2026-09-25T00:56:30.885Z",
+    "channel": "sms",
+    "senderProfile": "reminders-sms",
+    "to": {
+        "phone": "redacted"
+    },
+    "template": {
+        "id": "appointment-reminder-sms",
+        "version": "1"
+    },
+    "acceptedAt": "2026-09-25T00:56:30.152Z",
+    "expiresAt": "2026-09-26T00:56:30.152Z",
+    "updatedAt": "2026-09-25T00:56:30.381Z",
+    "attempts": [
+        {
+            "generation": 1,
+            "attempt": 1,
+            "outcome": "accepted",
+            "startedAt": "2026-09-25T00:56:30.157Z",
+            "finishedAt": "2026-09-25T00:56:30.381Z",
+            "providerReference": true
+        }
+    ],
+    "links": {
+        "self": "/v1/messages/90fdc182-3bb2-41d0-aa7c-96633d0cdd23",
+        "cancel": "/v1/messages/90fdc182-3bb2-41d0-aa7c-96633d0cdd23/cancel"
+    }
+}
+```
+
+The status is `delivered`: the dispatch reached the provider, and the provider's report said the
+message arrived. The response names the recipient's channel but not the number, and records one
+attempt the provider accepted. Your identifiers and times differ.
+
+{/* Evidence: crates/registry-messaging/src/http.rs; crates/registry-messaging/src/messages.rs;
+    crates/registry-messaging/src/callbacks.rs; products/messaging/README.md, HTTP contract. */}
+
+## Send an email
+
+Submit the same reminder as an email, in French, with a correlation identifier your own system
+would use to find it again:
+
+```sh
+curl --silent --show-error \
+  --header @"$header" \
+  --header 'Idempotency-Key: tutorial-email-1' \
+  --header 'Content-Type: application/json' \
+  --data '{"senderProfile":"transactional","to":{"email":"ada@example.org"},"template":{"id":"appointment-reminder","version":"1"},"locale":"fr","data":{"name":"Ada","day":"2026-10-01","office":"North"},"correlationId":"case-42"}' \
+  --output tutorial-work/email.json --write-out 'HTTP %{http_code}\n' \
+  "$api/v1/messages"
+email_id="$(python3 -c 'import json; print(json.load(open("tutorial-work/email.json"))["id"])')"
+```
+
+```text
+HTTP 202
+```
+
+Read the message until Mailpit accepts it:
+
+```sh
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+  curl --silent --show-error --header @"$header" \
+    --output tutorial-work/email-status.json "$api/v1/messages/$email_id"
+  if python3 -c 'import json, sys; sys.exit(json.load(open("tutorial-work/email-status.json"))["status"] != "submitted")'; then
+    break
+  fi
+  sleep 1
+done
+python3 -m json.tool tutorial-work/email-status.json
+```
+
+```json
+{
+    "id": "667f8296-08f3-4b1b-b40b-59ae8f6687ed",
+    "status": "submitted",
+    "dispatch": "submitted",
+    "report": "unavailable",
+    "channel": "email",
+    "senderProfile": "transactional",
+    "to": {
+        "email": "redacted"
+    },
+    "template": {
+        "id": "appointment-reminder",
+        "version": "1"
+    },
+    "correlationId": "case-42",
+    "acceptedAt": "2026-09-25T00:56:31.331Z",
+    "expiresAt": "2026-09-26T00:56:31.331Z",
+    "updatedAt": "2026-09-25T00:56:31.413Z",
+    "attempts": [
+        {
+            "generation": 1,
+            "attempt": 1,
+            "outcome": "accepted",
+            "startedAt": "2026-09-25T00:56:31.390Z",
+            "finishedAt": "2026-09-25T00:56:31.413Z",
+            "providerReference": true
+        }
+    ],
+    "links": {
+        "self": "/v1/messages/667f8296-08f3-4b1b-b40b-59ae8f6687ed",
+        "cancel": "/v1/messages/667f8296-08f3-4b1b-b40b-59ae8f6687ed/cancel"
+    }
+}
+```
+
+The status is `submitted`, and it stays there: the mail server accepted the message, and SMTP sends
+no delivery report back, so the report is `unavailable`. Messaging reports what it knows, never more.
+
+Read the message Mailpit received. The session records the Mailpit address it printed in its ready
+report:
+
+```sh
+mailpit="$(python3 -c 'import json; print(json.load(open("tutorial-work/notices/.messaging/dev/session.json"))["detail"]["mailpit"])')"
+curl --silent --show-error --output tutorial-work/mailbox.json "$mailpit/api/v1/messages"
+python3 -c 'import json; m = json.load(open("tutorial-work/mailbox.json"))["messages"][0]; print("To:", m["To"][0]["Address"]); print("Subject:", m["Subject"]); print(m["Snippet"])'
+```
+
+```text
+To: ada@example.org
+Subject: Votre rendez-vous du 01/10/2026
+Bonjour Ada, Votre rendez-vous à North est fixé au 01/10/2026. Merci d'apporter cet avis.
+```
+
+Messaging rendered the French subject and body from the template and the request's `data`.
+
+Open the same Mailpit address in a browser to see the rendered HTML part beside the plain text one.
+
+{/* Evidence: crates/registry-messaging/src/messages.rs, MessageReport;
+    crates/registry-messagingctl/src/dev/mod.rs, Session; products/messaging/README.md,
+    Running locally. */}
+
+## Stop the session
+
+Press Ctrl-C in the first terminal. The session stops the runtime and removes its containers and
+their volumes:
+
+```text
+stopped; the session's containers are removed
+session directory: <directory>/tutorial-work/notices/.messaging/dev
+```
+
+Nothing the session sent or recorded outlives it. The session directory stays, holding the log and
+the audit journal, and the next `messagingctl dev` in the project replaces it.
+
+{/* Evidence: crates/registry-messagingctl/src/lib.rs, render_dev;
+    crates/registry-messagingctl/src/dev/mod.rs, clear_previous. */}
+
+## Next
+
+- [Author a Messaging package](../../configure/messaging/) to declare your own providers, sender
+  profiles, templates, and access profiles.
+- [Deploy Registry Messaging](../../operate/messaging/) to serve a recorded package against your
+  own database and providers.
+- [Registry Messaging API](../../reference/apis/registry-messaging/) for every route, status, and
+  problem code.

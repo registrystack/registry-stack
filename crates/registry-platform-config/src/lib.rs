@@ -112,6 +112,76 @@ pub fn expand_config_env_vars_with(
     Ok(expanded)
 }
 
+/// A `${...}` expression found where the product accepts none. Only the
+/// member's path is kept: the member might hold a credential typed in the
+/// wrong place, so the refusal never repeats its value.
+#[derive(Debug, Clone, Eq, PartialEq, thiserror::Error)]
+#[error("{path} must not contain a ${{...}} environment expression")]
+pub struct ConfigEnvExpressionRefused {
+    path: String,
+}
+
+impl ConfigEnvExpressionRefused {
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+}
+
+/// Refuse a `${` in any string at or below a member whose name `protected`
+/// accepts. Run it on the document as written, before
+/// [`expand_config_env_vars_with`], so a product can keep members such as
+/// secret references out of environment expansion. Paths use `.` between
+/// member names and `[index]` for sequence entries.
+pub fn reject_config_env_expressions_in(
+    root: &Value,
+    protected: impl Fn(&str) -> bool,
+) -> Result<(), ConfigEnvExpressionRefused> {
+    reject_config_env_expressions_below(root, "", false, &protected)
+}
+
+fn reject_config_env_expressions_below(
+    value: &Value,
+    path: &str,
+    inside_protected: bool,
+    protected: &impl Fn(&str) -> bool,
+) -> Result<(), ConfigEnvExpressionRefused> {
+    match value {
+        Value::String(text) if inside_protected && text.contains("${") => {
+            Err(ConfigEnvExpressionRefused {
+                path: path.to_owned(),
+            })
+        }
+        Value::Array(entries) => {
+            for (index, entry) in entries.iter().enumerate() {
+                reject_config_env_expressions_below(
+                    entry,
+                    &format!("{path}[{index}]"),
+                    inside_protected,
+                    protected,
+                )?;
+            }
+            Ok(())
+        }
+        Value::Object(members) => {
+            for (name, entry) in members {
+                let child = if path.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{path}.{name}")
+                };
+                reject_config_env_expressions_below(
+                    entry,
+                    &child,
+                    inside_protected || protected(name),
+                    protected,
+                )?;
+            }
+            Ok(())
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => Ok(()),
+    }
+}
+
 fn split_config_path(path: impl Into<String>) -> Vec<String> {
     path.into()
         .split('.')
@@ -323,6 +393,49 @@ mod tests {
 
         assert_eq!(err.field(), "server.cors.allow_credentials");
         assert!(err.to_string().contains("credentials are always disabled"));
+    }
+
+    #[test]
+    fn config_env_expression_is_refused_in_a_protected_member_and_below_it() {
+        let protected = |name: &str| name.ends_with("Ref");
+        for (root, path) in [
+            (
+                json!({"database": {"urlRef": "${DATABASE_URL}"}}),
+                "database.urlRef",
+            ),
+            (json!({"keyRef": "secret:env/${NAME:-X}"}), "keyRef"),
+            (
+                json!({"sources": [{"name": "a"}, {"tokenRef": {"value": "${T}"}}]}),
+                "sources[1].tokenRef.value",
+            ),
+            (json!({"listRef": ["plain", "x${Y}"]}), "listRef[1]"),
+        ] {
+            let error = reject_config_env_expressions_in(&root, protected)
+                .expect_err("an expression in a protected member is refused");
+            assert_eq!(error.path(), path);
+        }
+    }
+
+    #[test]
+    fn config_env_expression_is_accepted_outside_protected_members() {
+        let root = json!({
+            "listener": {"bind": "${BIND}"},
+            "reference": "${NOT_A_CREDENTIAL}",
+            "database": {"urlRef": "secret:env/DATABASE_URL", "pool": 4},
+            "${KEY}Ref": "literal",
+        });
+        reject_config_env_expressions_in(&root, |name| name.ends_with("Ref"))
+            .expect("expressions outside protected members are left for expansion");
+    }
+
+    #[test]
+    fn config_env_expression_refusal_never_repeats_the_member_value() {
+        let root = json!({"passwordRef": "${X:-postgres://user:hunter2@db}"});
+        let error = reject_config_env_expressions_in(&root, |name| name.ends_with("Ref"))
+            .expect_err("refused");
+        assert!(!format!("{error:?}").contains("hunter2"));
+        assert!(!error.to_string().contains("hunter2"));
+        assert!(error.to_string().contains("passwordRef"));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 # Registry Stack client guidance
 
-This guide covers the six product clients, the Node.js and Python bindings
-maintained for five of them, `registry-stack-client`, the unified
+This guide covers the seven product clients, the Node.js and Python bindings
+maintained for six of them, `registry-stack-client`, the unified
 native-package facades, and shared `registry-record` DTOs. Apply the owning
 product guide as well.
 
@@ -14,11 +14,11 @@ that every checkout or release ships it.
 
 | Area | Owns |
 |---|---|
-| `registry-{breg,casework,discovery,evidence,relay,scheduling}-client` | Canonical Rust product HTTP and response contract |
+| `registry-{breg,casework,discovery,evidence,messaging,relay,scheduling}-client` | Canonical Rust product HTTP and response contract |
 | `registry-evidence-verifier` | Evidence response formats, payload contract, and relying-party verification |
-| BReg, Casework, Discovery, Evidence, and Relay `-client-node` / `-client-py` crates | Thin napi-rs / PyO3 bindings and language conversion over the Rust decisions |
+| BReg, Casework, Discovery, Evidence, Messaging, and Relay `-client-node` / `-client-py` crates | Thin napi-rs / PyO3 bindings and language conversion over the Rust decisions |
 | `registry-scheduling-client` | Rust-only Scheduling client over `registry-scheduling-core` wire types |
-| `registry-stack-client` | Curated Rust facade for BReg, Casework, Discovery, Evidence, and Relay, with separate product, record, and auth modules |
+| `registry-stack-client` | Curated Rust facade for BReg, Casework, Discovery, Evidence, Messaging, and Relay, with separate product, record, and auth modules |
 | `registry-stack-client-node` | Public `@registrystack/client` facade and platform package definitions |
 | `registry-stack-client-py` | Public `registry-stack-client` Python metadata and `registry_client` facade, assembled with all native bindings |
 | `registry-record` | Neutral Registry Record DTOs and strict envelope decoding, without product authorization semantics |
@@ -50,6 +50,13 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   permissions in a binding. Validate a mutation before token acquisition or
   I/O; never generate its idempotency key or retry it implicitly. Record ETags
   and lifecycle-action ETags are distinct.
+- Messaging submissions take a caller-chosen idempotency key; a binding never
+  generates one or retries a submission or a cancellation. Message, template,
+  and version names are checked by the Rust client before any request.
+  Bindings add no Messaging semantics: the closed problem catalogue, message
+  view, receipt, and template preview come from the Rust client unchanged. A
+  429 limit refusal carries the bounded `Retry-After` wait the Rust client
+  read; waiting and retrying stay the caller's decision.
 - Preserve strict duplicate-member rejection, bounded responses, product media
   types, trace/Problem validation, and value-free errors. Bindings must not
   expose URLs, headers, payloads, selectors, credentials, or transport chains
@@ -82,7 +89,8 @@ cmp ../../LICENSE LICENSE
 ```
 
 For Python bindings, run from the changed `-client-py` directory, replacing
-`<product>` with `breg`, `casework`, `discovery`, `evidence`, or `relay`:
+`<product>` with `breg`, `casework`, `discovery`, `evidence`, `messaging`, or
+`relay`:
 
 ```sh
 cargo build --locked -p registry-<product>-client-py --lib --features registry-<product>-client-py/extension-module
@@ -91,7 +99,8 @@ cmp ../../LICENSE LICENSE
 ```
 
 In checkouts containing the unified Node.js and Python packages, those packages
-are generated from the BReg, Casework, Discovery, Evidence, and Relay bindings.
+are generated from the BReg, Casework, Discovery, Evidence, Messaging, and
+Relay bindings.
 When changing that assembly,
 confirm the facade directories, `sync-registry-client-node.py`, and
 `test_assemble_registry_client_wheel.py` are present, then run from the monorepo
@@ -110,7 +119,7 @@ python3 -m unittest release/scripts/test_assemble_registry_client_wheel.py
 Where this assembly exists, regenerate the Node facade with
 `sync-registry-client-node.py` when its source bindings change; do not hand-edit
 copied product wrappers. Python assembly
-combines five version-matched internal native wheels with the public facade;
+combines six version-matched internal native wheels with the public facade;
 the facade directory is not built directly. Follow current release inventory
 for publication instead of assuming standalone package instructions apply.
 For a checkout without unified native assembly, use the product binding checks

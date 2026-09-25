@@ -296,6 +296,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
             "breg",
             "casework",
             "scheduling",
+            "messaging",
             "relay",
             "other-candidate",
         ):
@@ -324,6 +325,17 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
         self.assertIn("scheduling", self.module.PUBLIC_PACKAGES)
         self.assertIn("scheduling-candidate", self.module.CANDIDATE_PACKAGES)
         self.module.assert_candidate_package("scheduling-candidate")
+
+    def test_messaging_remains_publicly_denylisted_before_candidate_onboarding(
+        self,
+    ) -> None:
+        self.assertIn("messaging", self.module.PUBLIC_PACKAGES)
+        self.assertNotIn("messaging-candidate", self.module.CANDIDATE_PACKAGES)
+        with self.assertRaisesRegex(
+            self.module.CleanupError,
+            "package is not in the exact candidate allowlist",
+        ):
+            self.module.assert_candidate_package("messaging-candidate")
 
     def test_malformed_or_future_timestamp_fails_without_deleting(self) -> None:
         for timestamp in ("not-a-date", "2026-07-25T12:00:01Z"):

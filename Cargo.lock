@@ -1634,6 +1634,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "email-encoding"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "420b9da095f052ea597503e39073b5b3c522f7db933fbac202d91d24492693fd"
+dependencies = [
+ "base64 0.23.1",
+ "memchr",
+]
+
+[[package]]
 name = "email_address"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3241,6 +3251,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
+name = "lettre"
+version = "0.11.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2c646bd5cc763b1087b15493e29a64be6147ba8f19342004fa52048ee596eae"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "email-encoding",
+ "email_address",
+ "fastrand",
+ "futures-io",
+ "futures-util",
+ "httpdate",
+ "idna",
+ "mime",
+ "nom 8.0.0",
+ "percent-encoding",
+ "quoted_printable",
+ "rustls",
+ "socket2",
+ "tokio",
+ "tokio-rustls",
+ "url",
+ "webpki-roots 1.0.9",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3440,10 +3477,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "memo-map"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5449c8c750f1a07ea702bbd212bd999fceece9b3d1508b17023b3e174583124b"
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
+
+[[package]]
+name = "minijinja"
+version = "2.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86886cf6dbf4e614b19c9a1eec9775f021869d7eadde0fc73921a81b90c9b4c9"
+dependencies = [
+ "memo-map",
+ "serde",
+]
 
 [[package]]
 name = "minimal-lexical"
@@ -4588,6 +4641,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "quoted_printable"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "478e0585659a122aa407eb7e3c0e1fa51b1d8a870038bd29f0cf4a8551eea972"
+
+[[package]]
 name = "r-efi"
 version = "5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5189,6 +5248,8 @@ dependencies = [
  "registry-evidence",
  "registry-evidence-oid4vci",
  "registry-evidencectl",
+ "registry-messaging",
+ "registry-messagingctl",
  "registry-relay-v2",
  "registry-relayctl",
  "registry-render",
@@ -5361,6 +5422,7 @@ dependencies = [
  "registry-platform-httpsec",
  "registry-platform-httputil",
  "registry-platform-oidc",
+ "registry-platform-ratelimit",
  "registry-platform-sdjwt",
  "registry-platform-sqlite",
  "reqwest",
@@ -5630,6 +5692,153 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-messaging"
+version = "0.34.0"
+dependencies = [
+ "async-trait",
+ "aws-lc-rs",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "clap",
+ "deadpool-postgres",
+ "hex",
+ "ipnet",
+ "jsonwebtoken",
+ "lettre",
+ "rcgen",
+ "registry-messaging-client",
+ "registry-messaging-core",
+ "registry-platform-audit",
+ "registry-platform-authcommon",
+ "registry-platform-buildinfo",
+ "registry-platform-canonical-json",
+ "registry-platform-config",
+ "registry-platform-dispatch",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "registry-platform-oidc",
+ "registry-platform-ratelimit",
+ "registry-platform-script",
+ "registry-platform-testing",
+ "reqwest",
+ "rhai",
+ "rustls",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "serde_path_to_error",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "tokio-rustls",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "wiremock",
+ "zeroize",
+]
+
+[[package]]
+name = "registry-messaging-client"
+version = "0.34.0"
+dependencies = [
+ "axum",
+ "registry-messaging-core",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "registry-messaging-client-node"
+version = "0.34.0"
+dependencies = [
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "registry-messaging-client",
+ "serde",
+ "serde_json",
+ "url",
+]
+
+[[package]]
+name = "registry-messaging-client-py"
+version = "0.34.0"
+dependencies = [
+ "pyo3",
+ "pyo3-build-config",
+ "registry-messaging-client",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "registry-messaging-core"
+version = "0.34.0"
+dependencies = [
+ "base64 0.22.1",
+ "hex",
+ "jsonschema",
+ "minijinja",
+ "registry-platform-crypto",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "url",
+]
+
+[[package]]
+name = "registry-messagingctl"
+version = "0.34.0"
+dependencies = [
+ "aws-lc-rs",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "clap",
+ "hex",
+ "jsonwebtoken",
+ "rcgen",
+ "registry-messaging",
+ "registry-messaging-core",
+ "registry-platform-audit",
+ "registry-platform-buildinfo",
+ "registry-platform-crypto",
+ "registry-platform-dispatch",
+ "registry-platform-oidc",
+ "registry-platform-testing",
+ "reqwest",
+ "rustix 1.1.5",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "signal-hook",
+ "tempfile",
+ "tokio",
+ "tokio-postgres",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "registry-platform-audit"
 version = "0.34.0"
 dependencies = [
@@ -5735,12 +5944,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-platform-dispatch"
+version = "0.34.0"
+dependencies = [
+ "async-trait",
+ "getrandom 0.4.3",
+ "hex",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-postgres",
+ "uuid",
+]
+
+[[package]]
 name = "registry-platform-hooks"
 version = "0.34.0"
 dependencies = [
  "async-trait",
- "hex",
  "registry-platform-canonical-json",
+ "registry-platform-dispatch",
  "registry-platform-httputil",
  "schemars",
  "serde",
@@ -5798,6 +6021,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-rustls",
+ "tower",
  "url",
  "uuid",
  "wiremock",
@@ -5816,6 +6040,14 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
+name = "registry-platform-ratelimit"
+version = "0.34.0"
+dependencies = [
  "thiserror 2.0.20",
  "tokio",
 ]
@@ -6202,6 +6434,7 @@ dependencies = [
  "registry-casework-client",
  "registry-discovery-client",
  "registry-evidence-client",
+ "registry-messaging-client",
  "registry-platform-httputil",
  "registry-record",
  "registry-relay-client",

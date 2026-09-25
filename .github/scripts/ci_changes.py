@@ -30,10 +30,12 @@ SHARDS = {
         "registry-platform-canonical-json",
         "registry-platform-config",
         "registry-platform-crypto",
+        "registry-platform-dispatch",
         "registry-platform-hooks",
         "registry-platform-httpsec",
         "registry-platform-httputil",
         "registry-platform-oidc",
+        "registry-platform-ratelimit",
         "registry-platform-script",
         "registry-platform-sdjwt",
         "registry-platform-sqlite",
@@ -75,6 +77,14 @@ SHARDS = {
         "registry-schedulingctl",
         "registry-scheduling-client",
     ),
+    "messaging": (
+        "registry-messaging-core",
+        "registry-messaging",
+        "registry-messagingctl",
+        "registry-messaging-client",
+        "registry-messaging-client-node",
+        "registry-messaging-client-py",
+    ),
     "stack-client": ("registry-record", "registry-stack-client"),
     "evidence": (
         "registry-evidence",
@@ -104,6 +114,7 @@ RELAY_CLIENT_PACKAGES = frozenset(SHARDS["relay-client"])
 BREG_PACKAGES = frozenset(SHARDS["breg"])
 CASEWORK_PACKAGES = frozenset(SHARDS["casework"])
 SCHEDULING_PACKAGES = frozenset(SHARDS["scheduling"])
+MESSAGING_PACKAGES = frozenset(SHARDS["messaging"])
 STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
 
 # These are the cross-product semantic commitments implemented independently by
@@ -254,6 +265,20 @@ CASEWORK_TUTORIAL_INPUTS = (
     "docs/site/src/content/docs/tutorials/review-breg-changes-in-casework.mdx",
 )
 
+# Every input the Registry Messaging tutorial gate replays or is built from.
+# The gate starts the local session the page tells a reader to run; that
+# session and the starter project the page initializes are both written by
+# registry-messagingctl, so package routing already carries them.
+MESSAGING_TUTORIAL_INPUTS = (
+    "Cargo.lock",
+    "Cargo.toml",
+    "docs/site/package-lock.json",
+    "docs/site/package.json",
+    "docs/site/scripts/check-messaging-tutorial.sh",
+    "docs/site/scripts/check-messaging-tutorial.test.mjs",
+    "docs/site/src/content/docs/tutorials/first-messaging.mdx",
+)
+
 # This guide explains the authoring form across three intentionally separate
 # enforcement layers: the shared form model, the evidencectl compiler, and the
 # frozen bundle validator. Keep the routing list at module ownership rather
@@ -309,6 +334,11 @@ CLI_REFERENCE_INPUTS = (
         "crates/registry-casework/src/runtime.rs",
     ),
     ("crates/registry-caseworkctl/src/**", "crates/registry-caseworkctl/src/lib.rs"),
+    (
+        "crates/registry-messaging/src/runtime.rs",
+        "crates/registry-messaging/src/runtime.rs",
+    ),
+    ("crates/registry-messagingctl/src/**", "crates/registry-messagingctl/src/lib.rs"),
 )
 CLI_REFERENCE_PATTERNS = tuple(pattern for pattern, _ in CLI_REFERENCE_INPUTS)
 
@@ -330,12 +360,16 @@ BREG_BINDING_PACKAGES = frozenset(
 CASEWORK_BINDING_PACKAGES = frozenset(
     {"registry-casework-client-node", "registry-casework-client-py"}
 )
+MESSAGING_BINDING_PACKAGES = frozenset(
+    {"registry-messaging-client-node", "registry-messaging-client-py"}
+)
 NATIVE_BINDING_PACKAGES = (
     DISCOVERY_BINDING_PACKAGES
     | EVIDENCE_BINDING_PACKAGES
     | RELAY_BINDING_PACKAGES
     | BREG_BINDING_PACKAGES
     | CASEWORK_BINDING_PACKAGES
+    | MESSAGING_BINDING_PACKAGES
 )
 LINUX_NODE_BINDING_PACKAGES = frozenset(
     {
@@ -344,6 +378,7 @@ LINUX_NODE_BINDING_PACKAGES = frozenset(
         "registry-relay-client-node",
         "registry-breg-client-node",
         "registry-casework-client-node",
+        "registry-messaging-client-node",
     }
 )
 # The shared Linux release job also builds the Evidence Python wheel. Keep its
@@ -466,6 +501,12 @@ BREG_TUTORIAL_PACKAGES = frozenset(
 CASEWORK_TUTORIAL_PACKAGES = frozenset(
     {"registry-casework", "registry-caseworkctl", "registry-breg", "registry-bregctl", "registry-thunderid-tooling"}
 )
+
+# The gate builds and runs exactly messagingctl, which links the Messaging
+# runtime in process for its local session and issues every token the reader's
+# calls carry. The client crates in the Messaging shard are not on the
+# replayed path.
+MESSAGING_TUTORIAL_PACKAGES = frozenset({"registry-messaging", "registry-messagingctl"})
 
 # The offline proof of the native BReg to Evidence composition drives bregctl,
 # evidencectl and the Evidence runtime over the reviewed teaching inputs. It
@@ -1019,6 +1060,8 @@ def classify(
                 seeds.update(CASEWORK_PACKAGES)
             elif path.startswith("products/scheduling/"):
                 seeds.update(SCHEDULING_PACKAGES)
+            elif path.startswith("products/messaging/"):
+                seeds.update(MESSAGING_PACKAGES)
             elif path.startswith("products/identifiers/"):
                 # The catalog gate compiles its focused Relay V2 exporter.
                 # Catalog-only tooling does not require the full Rust matrix.
@@ -1231,6 +1274,12 @@ def classify(
         or bool(affected & CASEWORK_TUTORIAL_PACKAGES)
     )
 
+    messaging_tutorial = (
+        complete
+        or any(matches(path, *MESSAGING_TUTORIAL_INPUTS) for path in paths)
+        or bool(affected & MESSAGING_TUTORIAL_PACKAGES)
+    )
+
     breg_evidence_composition = (
         complete
         or any(matches(path, *BREG_EVIDENCE_COMPOSITION_INPUTS) for path in paths)
@@ -1290,7 +1339,13 @@ def classify(
         "casework_postgres": bool(affected & CASEWORK_PACKAGES)
         or breg_contracts
         or "registry-scheduling" in affected,
-        "scheduling_postgres": bool(affected & SCHEDULING_PACKAGES),
+        # The Scheduling PostgreSQL job also runs the dispatch core's suite
+        # against its service database.
+        "scheduling_postgres": bool(
+            affected & (SCHEDULING_PACKAGES | {"registry-platform-dispatch"})
+        ),
+        "messaging_contracts": bool(affected & MESSAGING_PACKAGES),
+        "messaging_postgres": bool(affected & MESSAGING_PACKAGES),
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,
         "docs": docs,
@@ -1301,6 +1356,7 @@ def classify(
         "evidence_tutorial": evidence_tutorial,
         "breg_tutorial": breg_tutorial,
         "casework_tutorial": casework_tutorial,
+        "messaging_tutorial": messaging_tutorial,
         "breg_evidence_composition": breg_evidence_composition,
         "identifiers": identifiers,
     }

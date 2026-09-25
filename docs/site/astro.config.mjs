@@ -67,6 +67,7 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
   const hasCasework = Boolean(selectedDocset.products?.['registry-casework']);
   const hasScheduling = Boolean(selectedDocset.products?.['registry-scheduling']);
   const hasRender = Boolean(selectedDocset.products?.['registry-render']);
+  const hasMessaging = Boolean(selectedDocset.products?.['registry-messaging']);
   const currentDocset = docsets.docsets.find((entry) => entry.id === docsets.current);
   if (!currentDocset) throw new Error(`current docs docset "${docsets.current}" not found`);
   /** @param {string} path */
@@ -87,6 +88,7 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
     hasCasework,
     hasScheduling,
     hasRender,
+    hasMessaging,
     internalRedirect,
     currentDocsetRedirect,
   };
@@ -101,6 +103,7 @@ const {
   hasCasework,
   hasScheduling,
   hasRender,
+  hasMessaging,
   internalRedirect,
   currentDocsetRedirect,
 } = resolveDocsetBuildContext(docsetsManifest);
@@ -157,6 +160,32 @@ export function schedulingRedirects(hasScheduling, currentDocsetRedirect) {
     [route, currentDocsetRedirect(route)],
   ]));
 }
+const messagingOpenApiSchema = {
+  base: 'reference/apis/messaging',
+  schema: './openapi/registry-messaging.openapi.json',
+  sidebar: {
+    label: 'API operations',
+    collapsed: true,
+    operations: { labels: /** @type {'path'} */ ('path'), badges: true },
+  },
+};
+const messagingRoutes = [
+  '/start/messaging/',
+  '/tutorials/first-messaging/',
+  '/configure/messaging/',
+  '/operate/messaging/',
+  '/reference/apis/registry-messaging/',
+];
+/**
+ * @param {boolean} hasMessaging
+ * @param {(path: string) => string} currentDocsetRedirect
+ */
+export function messagingRedirects(hasMessaging, currentDocsetRedirect) {
+  if (hasMessaging) return {};
+  return Object.fromEntries(messagingRoutes.flatMap((route) => [
+    [route, currentDocsetRedirect(route)],
+  ]));
+}
 const caseworkRoutes = [
   '/start/casework/',
   '/tutorials/first-casework/',
@@ -196,6 +225,7 @@ export default defineConfig({
     ...buildRelayV2RetirementRedirects(currentDocsetRedirect),
     ...caseworkRedirects(hasCasework, currentDocsetRedirect),
     ...schedulingRedirects(hasScheduling, currentDocsetRedirect),
+    ...messagingRedirects(hasMessaging, currentDocsetRedirect),
     '/start/': internalRedirect('/'),
     '/start/see-it-live/': internalRedirect('/'),
     // Retired product choosers. The homepage chooses between the products, so
@@ -335,6 +365,7 @@ export default defineConfig({
           },
           ...[caseworkOpenApiSchema].filter(() => hasCasework),
           ...[schedulingOpenApiSchema].filter(() => hasScheduling),
+          ...[messagingOpenApiSchema].filter(() => hasMessaging),
         ]),
       ],
       defaultLocale: 'root',
@@ -587,6 +618,25 @@ export default defineConfig({
             { label: 'Render your first document', slug: 'tutorials/first-render-document' },
             { label: 'How Render stays byte-stable', slug: 'explanation/render-determinism' },
             { label: 'Run serve mode', slug: 'operate/registry-render' },
+          ],
+        }] : []),
+        ...(hasMessaging ? [{
+          label: 'Registry Messaging',
+          collapsed: true,
+          items: [
+            { label: 'Overview', slug: 'start/messaging' },
+            { label: 'Send your first message', slug: 'tutorials/first-messaging' },
+            { label: 'Author a package', slug: 'configure/messaging' },
+            { label: 'Deploy Messaging', slug: 'operate/messaging' },
+            { label: 'API contract', slug: 'reference/apis/registry-messaging' },
+            // The Messaging operations follow Evidence, Casework, and
+            // Scheduling in the OpenAPI plugin list, and only the products this
+            // docset carries are registered there.
+            ...openAPISidebarGroups.slice(
+              1 + Number(hasCasework) + Number(hasScheduling),
+              2 + Number(hasCasework) + Number(hasScheduling),
+            ),
+            { label: 'Client API reference', slug: 'reference/client-api' },
           ],
         }] : []),
         {

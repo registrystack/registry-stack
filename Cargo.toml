@@ -32,10 +32,12 @@ members = [
     "crates/registry-platform-canonical-json",
     "crates/registry-platform-config",
     "crates/registry-platform-crypto",
+    "crates/registry-platform-dispatch",
     "crates/registry-platform-hooks",
     "crates/registry-platform-httpsec",
     "crates/registry-platform-httputil",
     "crates/registry-platform-oidc",
+    "crates/registry-platform-ratelimit",
     "crates/registry-platform-script",
     "crates/registry-platform-sdjwt",
     "crates/registry-platform-sqlite",
@@ -63,6 +65,12 @@ members = [
     "crates/registry-scheduling",
     "crates/registry-schedulingctl",
     "crates/registry-scheduling-client",
+    "crates/registry-messaging-core",
+    "crates/registry-messaging",
+    "crates/registry-messagingctl",
+    "crates/registry-messaging-client",
+    "crates/registry-messaging-client-node",
+    "crates/registry-messaging-client-py",
 ]
 exclude = [
     "products/breg/wasm-handler-sdk",
@@ -125,6 +133,12 @@ registry-scheduling = { path = "crates/registry-scheduling", version = "0.34.0" 
 registry-scheduling-core = { path = "crates/registry-scheduling-core", version = "0.34.0" }
 registry-schedulingctl = { path = "crates/registry-schedulingctl", version = "0.34.0" }
 registry-scheduling-client = { path = "crates/registry-scheduling-client", version = "0.34.0" }
+registry-messaging = { path = "crates/registry-messaging", version = "0.34.0" }
+registry-messaging-core = { path = "crates/registry-messaging-core", version = "0.34.0" }
+registry-messagingctl = { path = "crates/registry-messagingctl", version = "0.34.0" }
+registry-messaging-client = { path = "crates/registry-messaging-client", version = "0.34.0" }
+registry-messaging-client-node = { path = "crates/registry-messaging-client-node", version = "0.34.0" }
+registry-messaging-client-py = { path = "crates/registry-messaging-client-py", version = "0.34.0" }
 registry-breg = { path = "crates/registry-breg", version = "0.34.0", default-features = false }
 registry-bregctl = { path = "crates/registry-bregctl", version = "0.34.0" }
 registry-stack-client = { path = "crates/registry-stack-client", version = "0.34.0" }
@@ -136,10 +150,12 @@ registry-cli-reference = { path = "crates/registry-cli-reference", version = "0.
 registry-platform-canonical-json = { path = "crates/registry-platform-canonical-json", version = "0.34.0" }
 registry-platform-config = { path = "crates/registry-platform-config", version = "0.34.0" }
 registry-platform-crypto = { path = "crates/registry-platform-crypto", version = "0.34.0" }
+registry-platform-dispatch = { path = "crates/registry-platform-dispatch", version = "0.34.0" }
 registry-platform-hooks = { path = "crates/registry-platform-hooks", version = "0.34.0" }
 registry-platform-httpsec = { path = "crates/registry-platform-httpsec", version = "0.34.0", default-features = false }
 registry-platform-httputil = { path = "crates/registry-platform-httputil", version = "0.34.0" }
 registry-platform-oidc = { path = "crates/registry-platform-oidc", version = "0.34.0" }
+registry-platform-ratelimit = { path = "crates/registry-platform-ratelimit", version = "0.34.0" }
 registry-platform-script = { path = "crates/registry-platform-script", version = "0.34.0" }
 registry-platform-sdjwt = { path = "crates/registry-platform-sdjwt", version = "0.34.0" }
 registry-platform-sqlite = { path = "crates/registry-platform-sqlite", version = "0.34.0" }
@@ -179,6 +195,15 @@ ipnet = { version = "2" }
 # already holds in memory, so neither belongs in the dependency graph.
 jsonschema = { version = "0.18", default-features = false, features = ["draft202012"] }
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
+# Messaging SMTP only. Default features stay off: no connection pool, no
+# native-tls, no hostname lookup, and no sendmail or file transport. `tracing`
+# stays off because it logs every written line, the AUTH exchange included.
+lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
+# Messaging templates only. Every default feature stays off: no loader, no
+# includes, macros, or built-in filters and globals, so a template reaches
+# nothing but the closed filters and tests the renderer registers. `fuel`
+# bounds execution.
+minijinja = { version = "2.24", default-features = false, features = ["fuel"] }
 napi = { version = "3.12.0", features = ["async", "serde-json"] }
 napi-build = { version = "2.4.0" }
 napi-derive = { version = "3.6.2" }

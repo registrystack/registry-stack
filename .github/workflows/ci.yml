@@ -63,6 +63,8 @@ jobs:
       scheduling_postgres: ${{ steps.filter.outputs.scheduling_postgres }}
       evidence_contracts: ${{ steps.filter.outputs.evidence_contracts }}
       scheduling_contracts: ${{ steps.filter.outputs.scheduling_contracts }}
+      messaging_contracts: ${{ steps.filter.outputs.messaging_contracts }}
+      messaging_postgres: ${{ steps.filter.outputs.messaging_postgres }}
       release_tool: ${{ steps.filter.outputs.release_tool }}
       release_source_proof: ${{ steps.filter.outputs.release_source_proof }}
       docs: ${{ steps.filter.outputs.docs }}
@@ -73,6 +75,7 @@ jobs:
       evidence_tutorial: ${{ steps.filter.outputs.evidence_tutorial }}
       breg_tutorial: ${{ steps.filter.outputs.breg_tutorial }}
       casework_tutorial: ${{ steps.filter.outputs.casework_tutorial }}
+      messaging_tutorial: ${{ steps.filter.outputs.messaging_tutorial }}
       breg_evidence_composition: ${{ steps.filter.outputs.breg_evidence_composition }}
       identifiers: ${{ steps.filter.outputs.identifiers }}
     steps:
@@ -844,6 +847,149 @@ jobs:
         env:
           SCHEDULING_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ job.services.postgres.ports['5432'] }}/scheduling_intents
         run: cargo test --locked -p registry-schedulingctl --features postgres-test --test intents_postgres
+      - name: Create isolated dispatch-core test database
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: docker exec "$POSTGRES_CONTAINER_ID" createdb -U scheduling dispatch
+      - name: Verify the shared dispatch core's fenced lease transitions
+        env:
+          DISPATCH_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ job.services.postgres.ports['5432'] }}/dispatch
+        run: cargo test --locked -p registry-platform-dispatch --features postgres-test
+
+  messaging-contracts:
+    name: Messaging product contracts and vendor neutrality
+    needs: [changes, rust-policy]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.messaging_contracts == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Messaging contract consistency
+        run: products/messaging/scripts/check-contracts.sh
+
+      - name: Self-test the Messaging vendor-neutrality gate
+        run: products/messaging/scripts/test-check-vendor-neutrality.sh
+
+      - name: Enforce Messaging vendor neutrality
+        run: products/messaging/scripts/check-vendor-neutrality.sh
+
+  messaging-postgres:
+    name: Messaging PostgreSQL runtime
+    needs: [changes, rust-policy]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.messaging_postgres == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        env:
+          POSTGRES_DB: messaging
+          POSTGRES_USER: messaging
+          POSTGRES_PASSWORD: messaging_test
+        options: >-
+          --health-cmd "pg_isready -U messaging -d messaging"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432/tcp
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: Rust cache
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build the Messaging operator tool
+        run: cargo build --locked -p registry-messagingctl
+      - name: Verify Messaging product contracts and offline configuration checks
+        env:
+          MESSAGINGCTL_BIN: ${{ github.workspace }}/target/debug/messagingctl
+        run: products/messaging/scripts/check-checkpoint.sh
+      - name: Verify migrations, readiness, and the served runtime
+        env:
+          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
+        run: cargo test --locked -p registry-messaging --features postgres-test --test postgres_migrate
+      - name: Verify the package ledger and template stability
+        env:
+          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
+        run: cargo test --locked -p registry-messaging --features postgres-test --test postgres_package
+      - name: Verify message submission, visibility, and cancellation routes
+        env:
+          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
+        run: cargo test --locked -p registry-messaging --features postgres-test --test postgres_messages
+      - name: Verify dispatch worker outcomes and settlement
+        env:
+          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
+        run: cargo test --locked -p registry-messaging --features postgres-test --test postgres_dispatch
+      - name: Verify provider callbacks and delivery reports
+        env:
+          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
+        run: cargo test --locked -p registry-messaging --features postgres-test --test postgres_callbacks
+      - name: Verify retention erasure
+        env:
+          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
+        run: cargo test --locked -p registry-messaging --features postgres-test --test postgres_retention
+      - name: Verify messagingctl messages commands
+        env:
+          MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
+        run: cargo test --locked -p registry-messagingctl --features postgres-test --tests
+      - name: Send one email and one SMS through messagingctl dev
+        env:
+          MESSAGINGCTL_BIN: ${{ github.workspace }}/target/debug/messagingctl
+        run: products/messaging/scripts/test-dev.sh
+
+  messaging-smtp:
+    name: Messaging SMTP provider
+    needs: [changes, rust-policy]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.messaging_postgres == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      mailpit:
+        image: axllent/mailpit:v1.31.2@sha256:74d609a42ec279aa63c6b4622a6fa9b5408d1ad5b1d76a1c4be40a265ce0863d
+        options: >-
+          --health-cmd "/mailpit readyz"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 1025/tcp
+          - 8025/tcp
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: Rust cache
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Verify the SMTP provider against a real relay
+        env:
+          MESSAGING_SMTP_TEST_MAILPIT_SMTP: 127.0.0.1:${{ job.services.mailpit.ports['1025'] }}
+          MESSAGING_SMTP_TEST_MAILPIT_API: http://127.0.0.1:${{ job.services.mailpit.ports['8025'] }}
+        run: cargo test --locked -p registry-messaging --features smtp-test --test smtp_mailpit
 
   breg-contracts:
     name: Base Registry Engine product contracts (${{ matrix.lane }})
@@ -1057,6 +1203,9 @@ jobs:
       - casework-postgres
       - scheduling-postgres
       - scheduling-contracts
+      - messaging-postgres
+      - messaging-contracts
+      - messaging-smtp
     runs-on: ubuntu-slim
     timeout-minutes: 5
     env:
@@ -1357,7 +1506,7 @@ jobs:
           # The tutorial installs the maintained client package, so the replay
           # imports that same package, assembled from this commit. maturin gets
           # the pinned release build environment. The CI profile exercises the
-          # same four-binding assembly and installed facade without release LTO.
+          # same six-binding assembly and installed facade without release LTO.
           # Production optimization remains covered by release recipe checks.
           python3 -m venv "${RUNNER_TEMP}/maturin"
           "${RUNNER_TEMP}/maturin/bin/pip" install --quiet \
@@ -1369,6 +1518,7 @@ jobs:
           python3 release/scripts/assemble-registry-client-packages.py \
             --artifacts python \
             --include-casework \
+            --include-messaging \
             --python-profile ci \
             --output-dir "${out_dir}" \
             --work-dir "${RUNNER_TEMP}/client-assembly" \
@@ -1599,6 +1749,62 @@ jobs:
           # container of its own, which is why the replay stays on the Docker
           # runner rather than inside a clean read-only container.
           bash docs/site/scripts/check-casework-tutorial.sh
+
+  messaging-tutorial:
+    name: Registry Messaging tutorial from source
+    needs:
+      - changes
+      - rust-policy
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.messaging_tutorial == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Test the tutorial gate helpers
+        working-directory: docs/site
+        run: npm run test:tutorial:messaging
+
+      - name: Check tutorial command drift
+        working-directory: docs/site
+        run: npm run check:tutorial:messaging:dry-run
+
+      - name: Build messagingctl under test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked -p registry-messagingctl
+
+      - name: Execute the Registry Messaging tutorial from a reader directory
+        shell: bash
+        env:
+          MESSAGINGCTL_BIN: ${{ github.workspace }}/target/debug/messagingctl
+        run: |
+          set -euo pipefail
+          # The tutorial passes no port flags, and this runner listens on
+          # neither default, so the replay runs on the ports a reader gets.
+          # The session the page starts runs PostgreSQL and Mailpit in
+          # containers of its own, which is why the replay stays on the
+          # Docker runner rather than inside a clean read-only container.
+          bash docs/site/scripts/check-messaging-tutorial.sh
 
   breg-evidence-composition:
     # The offline proof that a BReg evidence-source export composes into an
@@ -1885,6 +2091,7 @@ jobs:
             crates/registry-relay-client-node/package-lock.json
             crates/registry-breg-client-node/package-lock.json
             crates/registry-casework-client-node/package-lock.json
+            crates/registry-messaging-client-node/package-lock.json
             crates/registry-stack-client-node/package-lock.json
 
       - name: Cache Cargo registry
@@ -1898,7 +2105,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in registry-discovery-client-node registry-evidence-client-node registry-relay-client-node registry-breg-client-node registry-casework-client-node; do
+          for client in registry-discovery-client-node registry-evidence-client-node registry-relay-client-node registry-breg-client-node registry-casework-client-node registry-messaging-client-node; do
             (
               cd "crates/${client}"
               npm ci
@@ -1920,7 +2127,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in registry-discovery-client-py registry-evidence-client-py registry-relay-client-py registry-breg-client-py registry-casework-client-py; do
+          for client in registry-discovery-client-py registry-evidence-client-py registry-relay-client-py registry-breg-client-py registry-casework-client-py registry-messaging-client-py; do
             cargo build --locked -p "${client}" --lib --features "${client}/extension-module"
             (
               cd "crates/${client}"
@@ -1975,6 +2182,7 @@ jobs:
             crates/registry-relay-client-node/package-lock.json
             crates/registry-breg-client-node/package-lock.json
             crates/registry-casework-client-node/package-lock.json
+            crates/registry-messaging-client-node/package-lock.json
             crates/registry-stack-client-node/package-lock.json
 
       - name: Install pinned Linux client build tools
@@ -1991,7 +2199,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in discovery evidence relay breg casework; do
+          for client in discovery evidence relay breg casework messaging; do
             client_dir="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"
             (cd "${client_dir}" && npm ci)
             release/scripts/build-linux-node-client \
@@ -1999,12 +2207,15 @@ jobs:
               --target "${{ matrix.target }}" \
               --napi-platform "${{ matrix.napi_platform }}" \
               --zig-python "${RUNNER_TEMP}/maturin/bin/python"
-            if [[ "${client}" == breg || "${client}" == casework ]]; then
+            if [[ "${client}" == breg || "${client}" == casework || "${client}" == messaging ]]; then
               class_name=BaseRegistryClient
               base_url=https://registry.invalid
               if [[ "${client}" == casework ]]; then
                 class_name=CaseworkClient
                 base_url=https://casework.invalid
+              elif [[ "${client}" == messaging ]]; then
+                class_name=MessagingClient
+                base_url=https://messaging.invalid
               fi
               node -e "const Client = require('${client_dir}/client')['${class_name}']; new Client({ baseUrl: '${base_url}' })"
               continue
@@ -2019,7 +2230,7 @@ jobs:
           done
           client_dir="${GITHUB_WORKSPACE}/crates/registry-stack-client-node"
           platform_dir="${client_dir}/npm/${{ matrix.napi_platform }}"
-          for client in discovery evidence relay breg casework; do
+          for client in discovery evidence relay breg casework messaging; do
             cp "${GITHUB_WORKSPACE}/crates/registry-${client}-client-node/${client}-client.${{ matrix.napi_platform }}.node" \
               "${platform_dir}/"
           done
@@ -2082,11 +2293,15 @@ jobs:
       - casework-postgres
       - scheduling-postgres
       - scheduling-contracts
+      - messaging-postgres
+      - messaging-contracts
+      - messaging-smtp
       - release-tool
       - release-source-proof
       - evidence-tutorials
       - breg-tutorial
       - casework-tutorial
+      - messaging-tutorial
       - breg-evidence-composition
       - evidence-anchors
       - docs

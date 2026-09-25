@@ -19,6 +19,9 @@ Crypto primitives shared by registry services.
 - Version 1 hook delivery signing and receiver verification, including input
   bounds, signature-version checks, constant-time comparison, and
   receiver-selected delivery-time skew.
+- HMAC-SHA256 and legacy-interoperability HMAC-SHA1 tags in `mac`, with
+  constant-time verification that refuses a tag of the wrong length, and a
+  constant-time byte comparison for shared secrets such as URL tokens.
 - Constant-time comparison dependencies for consumers that need them.
 
 ## Typical Use
@@ -104,6 +107,9 @@ interoperability and security policy.
 - `did:web` validation rejects IP literals, localhost, obvious metadata hosts,
   empty labels, and path traversal.
 - Signing helpers validate key material before use.
+- `mac::verify_hmac_sha1` exists only to verify schemes a provider already
+  signs with HMAC-SHA1; a scheme a registry product defines uses HMAC-SHA256.
+  A `MacMismatch` refusal carries no tag, key, or message.
 - The delivery signature helper preserves the exact length-prefixed Version 1
   wire input. Receivers pass the HTTP method, request target, content type,
   delivery headers, and body exactly as received, and choose a bounded accepted

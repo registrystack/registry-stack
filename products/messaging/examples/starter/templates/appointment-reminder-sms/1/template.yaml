@@ -1,0 +1,3 @@
+channel: sms
+locales: [en]
+parts: [text]

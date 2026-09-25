@@ -981,7 +981,9 @@ event identity, `ce-source` plus `ce-id`, or on a business key.
 An empty `webhook list` result is neither a delivery history nor proof of receiver acceptance,
 and an expired payload cannot be replayed.
 
-{/* Evidence: crates/registry-platform-hooks/src/delivery/service.rs, claim(), finalize(), replay(), delivery_idempotency_key(), and verify_retained_bindings();
+{/* Evidence: crates/registry-platform-hooks/src/delivery/service.rs, replay(), delivery_idempotency_key(), and verify_retained_bindings();
+    crates/registry-platform-hooks/src/delivery/store.rs, finished_columns() and after_finished();
+    crates/registry-platform-dispatch/src/postgres/dispatcher.rs, claim(), finish(), and replay();
     crates/registry-breg/src/webhook.rs, WebhookDeliveryService and WebhookDeliveryStatusKind;
     crates/registry-breg/src/compiler.rs, compile_event_delivery_inventory() and MAX_WEBHOOK_PAYLOAD_BYTES;
     crates/registry-breg/src/runtime_config.rs, default_webhook_payload_retention_days();

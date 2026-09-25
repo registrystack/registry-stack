@@ -3,13 +3,16 @@
 """Rehearse the forward state path from the previous release to this source.
 
 The rehearsal downloads the previous release's published Base Registry
-Engine, Casework, and Evidence binaries, authenticates them the way
+Engine, Casework, Evidence, and Messaging binaries, authenticates them the way
 release/VERIFY.md describes, and uses them to write real state: a signed,
 activated registry package with records and revisions, a Casework review
-queue with answered and in-flight work, and an Evidence audit chain with a
-signed response. It then points the binaries built from this source at that
+queue with answered and in-flight work, an Evidence audit chain with a
+signed response, and a Messaging package ledger with scheduled and cancelled
+messages. It then points the binaries built from this source at that
 exact state, runs the documented upgrade steps, and fails unless the state is
-still served unchanged and no table lost a row.
+still served unchanged and no table lost a row. A product the previous
+release did not ship has no state to carry forward, so its leg is omitted and
+the report says why.
 
 Only the release download reaches the network. PostgreSQL runs in one
 disposable, loopback-bound container, and every credential is synthetic,
@@ -67,8 +70,16 @@ FORWARD_PATH_EXCEPTION = (
     "release"
 )
 
-BINARIES = ("breg", "bregctl", "casework", "caseworkctl", "evidence", "evidencectl")
+BINARIES = (
+    "breg", "bregctl", "casework", "caseworkctl", "evidence", "evidencectl",
+    "messaging", "messagingctl",
+)
 PLATFORMS = ("linux-amd64", "macos-arm64")
+PRODUCTS = ("breg", "casework", "evidence", "messaging")
+# A product joins the rehearsal from the first release that published it, and
+# is downloaded only for the platforms that release publishes it for.
+PRODUCT_FIRST_RELEASE = {"messaging": (0, 35, 0)}
+PRODUCT_PLATFORMS = {"messaging": ("linux-amd64",)}
 POSTGRES_IMAGE = (
     "postgres:17.11@sha256:"
     "67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675"
@@ -152,6 +163,35 @@ def check_forward_path(from_tag: str, version: str) -> None:
         )
     if start < FORWARD_PATH_FLOOR:
         raise RehearsalError(f"refusing {from_tag}: {FORWARD_PATH_EXCEPTION}")
+
+
+def select_products(requested: list[str] | None, from_tag: str, platform: str,
+                    downloading: bool) -> tuple[list[str], dict[str, str]]:
+    """The legs to run, and why each default leg the start cannot supply is omitted.
+
+    A product named with --product that the starting release cannot supply
+    is refused rather than omitted, so a focused run never passes empty.
+    """
+
+    start = parse_tag(from_tag)
+    products: list[str] = []
+    omitted: dict[str, str] = {}
+    for product in requested or PRODUCTS:
+        reason = None
+        first = PRODUCT_FIRST_RELEASE.get(product)
+        platforms = PRODUCT_PLATFORMS.get(product, PLATFORMS)
+        if first is not None and start < first:
+            reason = (f"{product} was first shipped in v{first[0]}.{first[1]}.{first[2]}, "
+                      f"so {from_tag} holds no {product} state to upgrade")
+        elif downloading and platform not in platforms:
+            reason = f"{product} publishes no {platform} asset to download"
+        if reason is None:
+            products.append(product)
+        elif requested:
+            raise RehearsalError(reason)
+        else:
+            omitted[product] = reason
+    return products, omitted
 
 
 def product_binaries(products: list[str]) -> tuple[str, ...]:
@@ -449,7 +489,8 @@ class Side:
 
     def env(self) -> dict[str, str]:
         env = {key: value for key, value in os.environ.items()
-               if not key.startswith(("DYLD_", "REGISTRY_", "CASEWORK_", "BREG_"))}
+               if not key.startswith(("DYLD_", "REGISTRY_", "CASEWORK_", "BREG_",
+                                      "MESSAGING_"))}
         env["SSL_CERT_FILE"] = str(self.ca_file)
         # Tools that delegate to a runtime (evidencectl to evidence) must reach
         # this side's binary, never one from the caller's environment.
@@ -1186,6 +1227,196 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
 
 
 # ---------------------------------------------------------------------------
+# Messaging: migrate, apply the starter, schedule and cancel messages, upgrade,
+# compare.
+
+
+MESSAGING_ISSUER = "https://issuer.upgrade-rehearsal.invalid"
+MESSAGING_AUDIENCE = "urn:upgrade-rehearsal:messaging"
+MESSAGING_KID = "upgrade-rehearsal-messaging-rsa"
+MESSAGING_SENDER = {"sub": "upgrade-rehearsal-sender", "azp": "case-system",
+                    "registry_scopes": "messaging:send",
+                    "registry_actor_kind": "service"}
+MESSAGING_TEMPLATES = {"email": "appointment-reminder", "sms": "appointment-reminder-sms"}
+MESSAGING_RECIPIENTS = {"email": {"email": "upgrade-rehearsal@example.invalid"},
+                        "sms": {"phone": "+15555550100"}}
+MESSAGING_SENDER_PROFILES = {"email": "transactional", "sms": "reminders-sms"}
+
+
+class Messaging:
+    def __init__(self, work: Path, keys: Keys, postgres: Postgres) -> None:
+        self.work = private_directory(work)
+        self.keys = keys
+        self.postgres = postgres
+        self.secrets = private_directory(work / "secrets")
+        self.audit = private_directory(work / "audit")
+        self.project = work / "package"
+        self.runtime = work / "runtime.yaml"
+        self.port = free_port()
+        # Every message is scheduled a day out, so no dispatch attempt can
+        # change what the previous release served before the upgrade.
+        now = time.time()
+        self.not_before = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now + 86400))
+        self.expires_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now + 2 * 86400))
+
+    def provision(self) -> None:
+        migration, runtime = secrets.token_hex(16), secrets.token_hex(16)
+        self.postgres.sql("postgres", f"""
+            CREATE ROLE messaging_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+              NOINHERIT NOBYPASSRLS PASSWORD '{migration}';
+            CREATE ROLE messaging_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+              NOINHERIT NOBYPASSRLS PASSWORD '{runtime}';
+        """)
+        self.postgres.sql("postgres", "CREATE DATABASE messaging;")
+        self.postgres.sql("messaging", """
+            REVOKE ALL ON DATABASE messaging FROM PUBLIC;
+            GRANT CONNECT ON DATABASE messaging TO messaging_migration, messaging_runtime;
+            ALTER SCHEMA public OWNER TO messaging_migration;
+            REVOKE ALL ON SCHEMA public FROM PUBLIC;
+            GRANT USAGE ON SCHEMA public TO messaging_runtime;
+            ALTER DEFAULT PRIVILEGES FOR ROLE messaging_migration IN SCHEMA public
+              GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO messaging_runtime;
+            ALTER DEFAULT PRIVILEGES FOR ROLE messaging_migration IN SCHEMA public
+              GRANT USAGE, SELECT ON SEQUENCES TO messaging_runtime;
+        """)
+        write_secret(self.secrets / "runtime-database-url",
+                     self.postgres.url("messaging_runtime", runtime, "messaging"))
+        write_secret(self.secrets / "migration-database-url",
+                     self.postgres.url("messaging_migration", migration, "messaging"))
+        write_secret(self.secrets / "postgres-ca.pem", self.postgres.ca_file.read_bytes())
+        write_secret(self.secrets / "messaging-audit-key", secrets.token_hex(32))
+        write_secret(self.secrets / "jwks.json",
+                     json.dumps({"keys": [self.keys.rsa_jwk(MESSAGING_KID)]}))
+
+    def grant_existing(self) -> None:
+        self.postgres.sql("messaging", """
+            GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public
+              TO messaging_runtime;
+            GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO messaging_runtime;
+        """)
+
+    def author(self, side: Side) -> None:
+        side.run("messagingctl", "init", str(self.project))
+        side.run("messagingctl", "check", "--package", str(self.project))
+        dump_yaml(self.runtime, {
+            "apiVersion": "registry.registrystack.org/messaging-runtime/v1alpha1",
+            "kind": "MessagingRuntimeConfig",
+            "package": {"root": str(self.project)},
+            "listener": {"bind": f"127.0.0.1:{self.port}",
+                         "tlsTermination": "development-loopback",
+                         "networkExposure": "private-address"},
+            "secretProviders": {"file": {"root": str(self.secrets)}},
+            "database": {"runtimeUrlRef": "secret:file/runtime-database-url",
+                         "migrationUrlRef": "secret:file/migration-database-url",
+                         "trustedRootCertificateRef": "secret:file/postgres-ca.pem"},
+            "authentication": {"oidc": {
+                "issuer": MESSAGING_ISSUER, "audience": MESSAGING_AUDIENCE,
+                "allowedClients": ["case-system", "operations-console"],
+                "jwksSource": {"kind": "static", "documentRef": "secret:file/jwks.json"}}},
+            "audit": {"path": str(self.audit / "messaging.ndjson"),
+                      "hashKeyRef": "secret:file/messaging-audit-key"},
+        })
+
+    def call(self, method: str, path: str, body: Any = None,
+             headers: dict[str, str] | None = None) -> tuple[int, dict[str, str], Any]:
+        claims = {"iss": MESSAGING_ISSUER, "aud": MESSAGING_AUDIENCE, **MESSAGING_SENDER}
+        request_headers = {
+            "Authorization": "Bearer " + self.keys.mint("RS256", MESSAGING_KID, claims),
+            "Accept": "application/json", **(headers or {})}
+        return http(method, f"http://127.0.0.1:{self.port}{path}",
+                    headers=request_headers, body=body)
+
+    def submission(self, channel: str, reference: str) -> dict[str, Any]:
+        template = MESSAGING_TEMPLATES[channel]
+        sample = self.project / "templates" / template / "1" / "sample.json"
+        return {"senderProfile": MESSAGING_SENDER_PROFILES[channel],
+                "to": MESSAGING_RECIPIENTS[channel],
+                "template": {"id": template, "version": "1"}, "locale": "en",
+                "data": json.loads(sample.read_text(encoding="utf-8")),
+                "correlationId": reference,
+                "notBefore": self.not_before, "expiresAt": self.expires_at}
+
+    def submit(self, key: str, body: dict[str, Any]) -> dict[str, Any]:
+        status, _headers, receipt = self.call("POST", "/v1/messages", body,
+                                              {"Idempotency-Key": key})
+        expect_status("message submission", status, receipt, 202)
+        return receipt
+
+    def cancel(self, message_id: str) -> None:
+        status, _headers, body = self.call("POST", f"/v1/messages/{message_id}/cancel")
+        expect_status("message cancellation", status, body, 200)
+
+    def views(self, message_ids: list[str]) -> dict[str, Any]:
+        views: dict[str, Any] = {}
+        for message_id in message_ids:
+            status, _headers, body = self.call("GET", f"/v1/messages/{message_id}")
+            expect_status("read message", status, body, 200)
+            views[f"message/{message_id}"] = body
+        return views
+
+
+def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Side,
+                       report: dict[str, Any]) -> None:
+    messaging = Messaging(work, keys, postgres)
+    messaging.provision()
+    messaging.author(old)
+    runtime = ["--runtime-config", str(messaging.runtime)]
+    old.run("messaging", *runtime, "migrate")
+    messaging.grant_existing()
+    old.run("messagingctl", "apply", "--runtime-config", str(messaging.runtime), "--apply")
+    ready = f"http://127.0.0.1:{messaging.port}/ready"
+    service = Service(old, "messaging", [*runtime, "serve"], work / "messaging-old.log", ready)
+    try:
+        submitted = []
+        for index, channel in enumerate(("email", "sms", "email")):
+            key = str(uuid.uuid4())
+            body = messaging.submission(channel, f"upgrade-rehearsal-{index}")
+            submitted.append((key, body, messaging.submit(key, body)))
+        message_ids = [receipt["id"] for _key, _body, receipt in submitted]
+        messaging.cancel(message_ids[0])
+        before_views = messaging.views(message_ids)
+    finally:
+        service.stop()
+    before_counts = postgres.row_counts("messaging")
+
+    new.run("messaging", *runtime, "migrate")
+    messaging.grant_existing()
+    new.run("messagingctl", "check", "--runtime-config", str(messaging.runtime))
+    # The ledger must still name the package on disk: a dry run that reports
+    # a change means the upgrade lost the activation.
+    ledger = new.run_json("messagingctl", "--format", "json", "apply", "--runtime-config",
+                          str(messaging.runtime))
+    differences = []
+    if ledger.get("change") != "none" or ledger.get("activeDigest") != ledger.get(
+            "packageDigest"):
+        differences.append("the package ledger no longer names the applied package")
+    losses = row_count_losses(before_counts, postgres.row_counts("messaging"))
+    service = Service(new, "messaging", [*runtime, "serve"], work / "messaging-new.log", ready)
+    try:
+        after_views = messaging.views(message_ids)
+        differences += view_differences(before_views, after_views)
+        key, body, receipt = submitted[1]
+        if messaging.submit(key, body) != receipt:
+            differences.append("an idempotent resubmission no longer answers its "
+                               "stored receipt")
+        messaging.cancel(message_ids[1])
+        messaging.submit(str(uuid.uuid4()), messaging.submission("sms", "after-upgrade"))
+    finally:
+        service.stop()
+    losses += row_count_losses(before_counts, postgres.row_counts("messaging"))
+
+    report["messaging"] = {
+        "messages": len(message_ids),
+        "tables": len(before_counts),
+        "viewDifferences": differences,
+        "rowLosses": losses,
+    }
+    if differences or losses:
+        raise RehearsalError("Messaging state did not survive the upgrade: "
+                             + "; ".join(differences + losses))
+
+
+# ---------------------------------------------------------------------------
 # Evidence: build a bundle, sign a response, upgrade, verify the audit chain.
 
 
@@ -1373,14 +1604,12 @@ def check_binaries(side: Side, expected_version: str | None,
     return versions
 
 
-PRODUCTS = ("breg", "casework", "evidence")
-
-
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--to-bin-dir", type=Path, required=True,
                         help="directory holding breg, bregctl, casework, caseworkctl, "
-                             "evidence, and evidencectl built from this source")
+                             "evidence, evidencectl, messaging, and messagingctl built "
+                             "from this source")
     parser.add_argument("--from-tag",
                         help="published release to upgrade from; defaults to the newest "
                              "release at or below the workspace version")
@@ -1405,13 +1634,16 @@ def main(argv: list[str]) -> int:
         version = workspace_version(ROOT)
         from_tag = args.from_tag or select_from_tag(published_tags(), version)
         check_forward_path(from_tag, version)
+        products, omitted = select_products(args.product, from_tag, args.platform,
+                                            args.from_bin_dir is None)
         if args.work_dir.exists():
             raise RehearsalError(f"{args.work_dir} already exists")
         work = private_directory(args.work_dir.resolve())
         tls = work / "tls"
         report: dict[str, Any] = {"from": from_tag, "toWorkspaceVersion": version,
-                                  "platform": args.platform}
-        products = args.product or list(PRODUCTS)
+                                  "platform": args.platform, "omitted": omitted}
+        for product, reason in omitted.items():
+            print(f"omitting {product}: {reason}", flush=True)
         binaries = product_binaries(products)
         if args.from_bin_dir is None:
             from_bin = work / "from-bin"
@@ -1428,7 +1660,7 @@ def main(argv: list[str]) -> int:
         keys = Keys(work / "keys")
         postgres = None
         try:
-            if {"breg", "casework"} & set(products):
+            if {"breg", "casework", "messaging"} & set(products):
                 postgres = Postgres(args.container_name, tls)
             else:
                 Postgres._make_certificates(tls)
@@ -1439,6 +1671,8 @@ def main(argv: list[str]) -> int:
                     rehearse_breg(leg_work, keys, postgres, old, new, report)
                 elif product == "casework":
                     rehearse_casework(leg_work, keys, postgres, old, new, report)
+                elif product == "messaging":
+                    rehearse_messaging(leg_work, keys, postgres, old, new, report)
                 else:
                     rehearse_evidence(leg_work, keys, old, new, report)
                 print(f"{product}: state served and no rows dropped", flush=True)

@@ -189,7 +189,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
             for index, line in enumerate(self.rendered)
             if "maturin build --release --locked" in line
         ]
-        self.assertEqual(5, len(builds))
+        self.assertEqual(6, len(builds))
         assemble = next(
             index
             for index, line in enumerate(self.rendered)
@@ -219,9 +219,14 @@ class AssembleClientPackagesTest(unittest.TestCase):
             "registry_casework_client_native-9.9.9-cp310-abi3-macosx_11_0_arm64.whl",
             assemble,
         )
+        self.assertIn(
+            "--messaging-wheel /work/product-wheels/"
+            "registry_messaging_client_native-9.9.9-cp310-abi3-macosx_11_0_arm64.whl",
+            assemble,
+        )
         self.assertIn(f"--macos-library-root {ROOT / 'target'}", assemble)
 
-    def test_ci_profile_only_changes_all_five_binding_build_profiles(self) -> None:
+    def test_ci_profile_only_changes_all_six_binding_build_profiles(self) -> None:
         for napi_platform in self.module.PLATFORMS:
             with self.subTest(platform=napi_platform):
                 args = (
@@ -264,14 +269,15 @@ class AssembleClientPackagesTest(unittest.TestCase):
         command = [
             sys.executable, str(SCRIPT), "--output-dir", "/out",
             "--napi-platform", "linux-x64-gnu", "--artifacts", "python", "--dry-run",
-            "--include-casework", "--zig-python", "/maturin/python",
+            "--include-casework", "--include-messaging",
+            "--zig-python", "/maturin/python",
             "--maturin", "/maturin/maturin",
         ]
         result = subprocess.run(
             [*command, "--python-profile", "ci"], capture_output=True, text=True, check=True
         )
-        self.assertEqual(result.stdout.count("build-linux-python-client"), 5)
-        self.assertEqual(result.stdout.count("--profile ci"), 5)
+        self.assertEqual(result.stdout.count("build-linux-python-client"), 6)
+        self.assertEqual(result.stdout.count("--profile ci"), 6)
         self.assertNotIn("--profile release", result.stdout)
         invalid = subprocess.run(
             [*command, "--python-profile", "dev"], capture_output=True, text=True
@@ -302,8 +308,8 @@ class AssembleClientPackagesTest(unittest.TestCase):
             for step in steps
             if step.argv[0].endswith("build-linux-python-client")
         ]
-        self.assertEqual(len(builds), 5)
-        for product, step in zip(self.module.PRODUCTS, builds):
+        self.assertEqual(len(builds), 6)
+        for product, step in zip(self.module.PRODUCTS, builds, strict=True):
             self.assertEqual(step.cwd, ROOT)
             self.assertIn(("--client", product), tuple(zip(step.argv, step.argv[1:])))
             self.assertIn("x86_64-unknown-linux-gnu", step.argv)
@@ -356,6 +362,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
                 "--napi-platform",
                 "darwin-arm64",
                 "--include-casework",
+                "--include-messaging",
                 "--dry-run",
             ],
             capture_output=True,
@@ -377,9 +384,11 @@ class AssembleClientPackagesTest(unittest.TestCase):
             Path("/out"),
         )
         with self.assertRaisesRegex(ValueError, "explicit --include-casework"):
-            self.module.plan(*args)
+            self.module.plan(*args, include_messaging=True)
 
-        candidate = self.module.plan(*args, include_casework=True)
+        candidate = self.module.plan(
+            *args, include_casework=True, include_messaging=True
+        )
         rendered = [step.render() for step in candidate]
         self.assertTrue(
             any("casework-client.darwin-arm64.node" in line for line in rendered)
@@ -404,6 +413,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
             "maturin",
             Path("/work"),
             Path("/out"),
+            include_messaging=True,
         )
         rendered = [step.render() for step in steps]
         self.assertTrue(
@@ -415,6 +425,53 @@ class AssembleClientPackagesTest(unittest.TestCase):
             if "assemble-registry-client-wheel.py" in line
         )
         self.assertNotIn("--include-casework", wheel)
+
+    def test_0_34_requires_explicit_messaging_candidate_selection(self) -> None:
+        args = (
+            ROOT,
+            "0.34.0",
+            "darwin-arm64",
+            "all",
+            "maturin",
+            Path("/work"),
+            Path("/out"),
+        )
+        with self.assertRaisesRegex(ValueError, "explicit --include-messaging"):
+            self.module.plan(*args)
+
+        candidate = self.module.plan(*args, include_messaging=True)
+        rendered = [step.render() for step in candidate]
+        self.assertTrue(
+            any("messaging-client.darwin-arm64.node" in line for line in rendered)
+        )
+        wheel = next(
+            line
+            for line in rendered
+            if "assemble-registry-client-wheel.py" in line
+        )
+        self.assertIn("--include-messaging", wheel)
+        self.assertNotIn("--include-casework", wheel)
+
+    def test_0_35_includes_messaging_without_the_candidate_override(self) -> None:
+        steps = self.module.plan(
+            ROOT,
+            "0.35.0",
+            "darwin-arm64",
+            "all",
+            "maturin",
+            Path("/work"),
+            Path("/out"),
+        )
+        rendered = [step.render() for step in steps]
+        self.assertTrue(
+            any("messaging-client.darwin-arm64.node" in line for line in rendered)
+        )
+        wheel = next(
+            line
+            for line in rendered
+            if "assemble-registry-client-wheel.py" in line
+        )
+        self.assertNotIn("--include-messaging", wheel)
 
     def test_an_unsupported_host_is_refused(self) -> None:
         self.assertNotIn(("Windows", "AMD64"), self.module.HOST_PLATFORMS)
