@@ -1,5 +1,18 @@
 {
   "$defs": {
+    "AuditKeyConfig": {
+      "description": "The key that keys an audit journal's hashes, written `audit.hashKeyRef`\nbeside the product's own audit settings.",
+      "properties": {
+        "hashKeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the audit hash key."
+        }
+      },
+      "required": [
+        "hashKeyRef"
+      ],
+      "type": "object"
+    },
     "DatabaseConfig": {
       "additionalProperties": false,
       "description": "The PostgreSQL connection a stateful runtime uses. Both URLs are secret\nreferences and may name the same secret.",
@@ -139,6 +152,34 @@
       ],
       "type": "string"
     },
+    "OidcIssuerConfig": {
+      "description": "The OIDC issuer a runtime accepts access tokens from: the exact `iss`\nvalue, the `aud` value a token must carry, and where the issuer's signing\nkeys come from, written under `authentication.oidc` beside the product's\nown token rules.",
+      "properties": {
+        "audience": {
+          "description": "The audience every accepted access token must carry in `aud`.",
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "issuer": {
+          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL.",
+          "pattern": "^https?://",
+          "type": "string"
+        },
+        "jwksSource": {
+          "$ref": "#/$defs/JwksSource",
+          "default": {
+            "kind": "discovery"
+          },
+          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
+        }
+      },
+      "required": [
+        "issuer",
+        "audience"
+      ],
+      "type": "object"
+    },
     "PackageConfig": {
       "additionalProperties": false,
       "description": "The package a runtime serves: `root` is the absolute package directory,\nand `expectedDigest`, when set, pins the package identity the runtime must\nfind there.",
@@ -233,6 +274,11 @@
         }
       },
       "type": "object"
+    },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+      "type": "string"
     },
     "TlsTermination": {
       "description": "Declares the trusted transport boundary for a runtime's plaintext HTTP\nlistener. Production listeners require operator-controlled upstream TLS\ntermination; direct plaintext is limited to the explicit loopback-only\ndevelopment mode.",

@@ -289,3 +289,234 @@ fn blocks_serialize_back_to_the_form_they_were_read_from() {
         providers
     );
 }
+
+/// A product audit block embedding the shared key beside its own sink setting.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProductAudit {
+    path: String,
+    #[serde(flatten)]
+    key: AuditKeyConfig,
+}
+
+#[test]
+fn the_audit_key_embeds_beside_product_members_and_redacts_its_reference() {
+    let audit: ProductAudit =
+        serde_norway::from_str("path: /var/lib/audit\nhashKeyRef: secret:file/audit-key")
+            .expect("embedded audit key parses");
+    assert_eq!(audit.path, "/var/lib/audit");
+    assert_eq!(audit.key.hash_key_ref.as_str(), "secret:file/audit-key");
+    assert!(!format!("{audit:?}").contains("audit-key"), "{audit:?}");
+
+    for (text, reason) in [
+        (
+            "path: /var/lib/audit\nhashKeyRef: secret:file/audit-key\nother: 1",
+            "an unknown member beside the embedded key",
+        ),
+        (
+            "path: /var/lib/audit\nhashSecretRef: secret:file/audit-key",
+            "the key under another name",
+        ),
+        ("path: /var/lib/audit", "no key"),
+    ] {
+        assert!(
+            serde_norway::from_str::<ProductAudit>(text).is_err(),
+            "{reason} must be refused"
+        );
+    }
+
+    let error = serde_norway::from_str::<ProductAudit>(
+        "path: /var/lib/audit\nhashKeyRef: plaintext-literal-key",
+    )
+    .expect_err("a literal is not a reference");
+    assert!(
+        !error.to_string().contains("plaintext-literal-key"),
+        "{error}"
+    );
+}
+
+#[test]
+fn the_audit_key_names_an_enabled_provider() {
+    let key: AuditKeyConfig = serde_norway::from_str("hashKeyRef: secret:env/AUDIT_KEY").unwrap();
+    key.check(&providers("environment: {}"))
+        .expect("enabled provider");
+    let error = key
+        .check(&providers("file: {root: /run/secrets}"))
+        .expect_err("disabled provider");
+    assert_eq!(error.kind(), ConfigBlockErrorKind::SecretProviderDisabled);
+    assert_eq!(error.field(), "audit.hashKeyRef");
+    assert_eq!(
+        serde_json::to_value(&key).unwrap(),
+        serde_json::json!({"hashKeyRef": "secret:env/AUDIT_KEY"})
+    );
+}
+
+/// A product OIDC block embedding the shared issuer beside its own members.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProductOidc {
+    #[serde(flatten)]
+    issuer: OidcIssuerConfig,
+    token_types: Vec<String>,
+}
+
+#[test]
+fn the_oidc_issuer_embeds_beside_product_members() {
+    let oidc: ProductOidc = serde_norway::from_str(
+        "issuer: https://issuer.example.test\naudience: urn:example:api\n\
+         jwksSource: {kind: uri, uri: https://issuer.example.test/jwks}\ntokenTypes: [at+jwt]",
+    )
+    .expect("embedded issuer parses");
+    assert_eq!(oidc.issuer.issuer, "https://issuer.example.test");
+    assert_eq!(oidc.issuer.audience, "urn:example:api");
+    assert_eq!(
+        oidc.issuer.jwks_source.uri(),
+        Some("https://issuer.example.test/jwks")
+    );
+    assert_eq!(oidc.token_types, ["at+jwt"]);
+
+    let defaulted: ProductOidc = serde_norway::from_str(
+        "issuer: https://issuer.example.test\naudience: urn:example:api\ntokenTypes: []",
+    )
+    .unwrap();
+    assert_eq!(defaulted.issuer.jwks_source, JwksSource::Discovery {});
+
+    for (text, reason) in [
+        (
+            "issuer: https://issuer.example.test\naudience: a\ntokenTypes: []\nother: 1",
+            "an unknown member",
+        ),
+        (
+            "issuer: https://issuer.example.test\naudiences: [a]\ntokenTypes: []",
+            "a plural audience",
+        ),
+        (
+            "issuer: https://issuer.example.test\naudience: a\njwksUri: https://issuer.example.test/jwks\ntokenTypes: []",
+            "a bare JWKS URI",
+        ),
+    ] {
+        assert!(
+            serde_norway::from_str::<ProductOidc>(text).is_err(),
+            "{reason} must be refused"
+        );
+    }
+}
+
+fn issuer(issuer: &str, audience: &str, jwks_source: JwksSource) -> OidcIssuerConfig {
+    OidcIssuerConfig {
+        issuer: issuer.to_owned(),
+        audience: audience.to_owned(),
+        jwks_source,
+    }
+}
+
+#[test]
+fn the_oidc_issuer_is_an_https_url_and_the_audience_is_bounded_text() {
+    let field = "authentication.oidc";
+    issuer(
+        "https://issuer.example.test",
+        "urn:example:api",
+        JwksSource::default(),
+    )
+    .check(field, false)
+    .expect("https issuer");
+    issuer("http://127.0.0.1:8082", "api", JwksSource::default())
+        .check(field, true)
+        .expect("supervised loopback issuer");
+
+    for (candidate, loopback, expected_field) in [
+        (
+            issuer("http://issuer.example.test", "api", JwksSource::default()),
+            true,
+            "authentication.oidc.issuer",
+        ),
+        (
+            issuer("http://127.0.0.1:8082", "api", JwksSource::default()),
+            false,
+            "authentication.oidc.issuer",
+        ),
+        (
+            issuer(
+                "https://user:pass@issuer.example.test",
+                "api",
+                JwksSource::default(),
+            ),
+            false,
+            "authentication.oidc.issuer",
+        ),
+        (
+            issuer(
+                "https://issuer.example.test#fragment",
+                "api",
+                JwksSource::default(),
+            ),
+            false,
+            "authentication.oidc.issuer",
+        ),
+        (
+            issuer("issuer.example.test", "api", JwksSource::default()),
+            false,
+            "authentication.oidc.issuer",
+        ),
+        (
+            issuer("https://issuer.example.test", "", JwksSource::default()),
+            false,
+            "authentication.oidc.audience",
+        ),
+        (
+            issuer("https://issuer.example.test", "a\nb", JwksSource::default()),
+            false,
+            "authentication.oidc.audience",
+        ),
+        (
+            issuer(
+                "https://issuer.example.test",
+                &"a".repeat(MAX_OIDC_AUDIENCE_CHARACTERS + 1),
+                JwksSource::default(),
+            ),
+            false,
+            "authentication.oidc.audience",
+        ),
+        (
+            issuer(
+                "https://issuer.example.test",
+                "api",
+                JwksSource::Uri {
+                    uri: "http://keys.example.test/jwks".to_owned(),
+                },
+            ),
+            false,
+            "authentication.oidc.jwksSource.uri",
+        ),
+    ] {
+        let error = candidate
+            .check(field, loopback)
+            .expect_err("refused issuer");
+        assert_eq!(error.field(), expected_field, "{error}");
+        assert!(!error.to_string().contains("user:pass"), "{error}");
+    }
+}
+
+#[test]
+fn a_secret_reference_reads_and_writes_as_its_text() {
+    let reference: SecretReference =
+        serde_json::from_value(serde_json::json!("secret:file/a")).expect("reference parses");
+    assert_eq!(
+        serde_json::to_value(&reference).unwrap(),
+        serde_json::json!("secret:file/a")
+    );
+    let error = serde_json::from_value::<SecretReference>(serde_json::json!("literal-value"))
+        .expect_err("literal refused");
+    assert!(!error.to_string().contains("literal-value"), "{error}");
+    let ordered = std::collections::BTreeSet::from([
+        SecretReference::parse("secret:file/b").unwrap(),
+        SecretReference::parse("secret:file/a").unwrap(),
+    ]);
+    assert_eq!(
+        ordered
+            .iter()
+            .map(SecretReference::as_str)
+            .collect::<Vec<_>>(),
+        ["secret:file/a", "secret:file/b"]
+    );
+}

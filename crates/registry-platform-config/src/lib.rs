@@ -16,11 +16,12 @@ mod secrets;
 use sha2::{Digest, Sha256};
 
 pub use blocks::{
-    describe_secret_failure, is_sha256_label, require_absolute, ConfigBlockError,
+    describe_secret_failure, is_sha256_label, require_absolute, AuditKeyConfig, ConfigBlockError,
     ConfigBlockErrorKind, DatabaseConfig, EnvironmentSecretProviderConfig,
     FileSecretProviderConfig, JwksSource, ListenerBind, ListenerConfig, ListenerNetworkExposure,
-    PackageConfig, PackageDigestMismatch, PrivateListenerConfig, SecretProvidersConfig,
-    TlsTermination, MAX_LISTENER_BIND_CHARACTERS,
+    OidcIssuerConfig, PackageConfig, PackageDigestMismatch, PrivateListenerConfig,
+    SecretProvidersConfig, TlsTermination, MAX_LISTENER_BIND_CHARACTERS,
+    MAX_OIDC_AUDIENCE_CHARACTERS,
 };
 pub use loader::{
     contains_environment_expression, reject_environment_expressions_in_authored_yaml,

@@ -2,9 +2,10 @@
 //!
 //! A product's runtime configuration embeds these types under the same keys,
 //! so an operator reads `secretProviders`, `database`, `listener.bind`,
-//! `package` and `authentication.oidc.jwksSource` the same way in every
-//! product, and one implementation checks them. Product-specific siblings
-//! stay in the product's own configuration types.
+//! `package`, `audit.hashKeyRef` and `authentication.oidc` the same way in
+//! every product, and one implementation checks them. Product-specific
+//! siblings stay in the product's own configuration types: the audit key and
+//! the OIDC issuer are embedded with `#[serde(flatten)]` beside them.
 
 use std::fmt;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
@@ -37,8 +38,10 @@ pub enum ConfigBlockErrorKind {
     Empty,
     /// `package.expectedDigest` is not a `sha256:` label.
     InvalidDigest,
-    /// A JWKS URI is not an absolute `https` URL.
+    /// A JWKS URI or an OIDC issuer is not an absolute `https` URL.
     InvalidUri,
+    /// An OIDC audience is empty, too long, or holds a control character.
+    InvalidAudience,
 }
 
 /// A shared block refusal naming its field and never a configured value.
@@ -391,6 +394,88 @@ fn valid_jwks_uri(value: &str, allow_loopback_http: bool) -> bool {
                 )
         }
         _ => false,
+    }
+}
+
+/// The key that keys an audit journal's hashes, written `audit.hashKeyRef`
+/// beside the product's own audit settings.
+// A product's `audit` block embeds this with `#[serde(flatten)]`, so every
+// product spells the key the same way and one implementation checks it.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditKeyConfig {
+    /// Secret reference to the audit hash key.
+    pub hash_key_ref: SecretReference,
+}
+
+impl AuditKeyConfig {
+    /// The key names a provider `secret_providers` enables.
+    pub fn check(&self, secret_providers: &SecretProvidersConfig) -> Result<(), ConfigBlockError> {
+        secret_providers.check_reference("audit.hashKeyRef", self.hash_key_ref.as_str())
+    }
+}
+
+/// The longest `authentication.oidc.audience` accepted, in characters.
+pub const MAX_OIDC_AUDIENCE_CHARACTERS: usize = 512;
+
+/// The OIDC issuer a runtime accepts access tokens from: the exact `iss`
+/// value, the `aud` value a token must carry, and where the issuer's signing
+/// keys come from, written under `authentication.oidc` beside the product's
+/// own token rules.
+// A product's `authentication.oidc` block embeds this with
+// `#[serde(flatten)]`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OidcIssuerConfig {
+    /// Exact issuer accepted in access-token `iss` claims, an absolute
+    /// `https` URL.
+    #[cfg_attr(feature = "schema", schemars(extend("pattern" = "^https?://")))]
+    pub issuer: String,
+    /// The audience every accepted access token must carry in `aud`.
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 512)))]
+    pub audience: String,
+    /// Where the issuer's signing keys come from. Absent reads the issuer's
+    /// OpenID Connect discovery document.
+    #[serde(default)]
+    pub jwks_source: JwksSource,
+}
+
+impl OidcIssuerConfig {
+    /// The issuer is an absolute `https` URL without credentials or fragment,
+    /// the audience is non-empty bounded text without control characters, and
+    /// the key source passes [`JwksSource::check`]. A loopback `http` issuer
+    /// or key URI is accepted only when `allow_loopback_http` is set, for
+    /// supervised local development. `field` is the dotted path of the block,
+    /// such as `authentication.oidc`.
+    pub fn check(&self, field: &str, allow_loopback_http: bool) -> Result<(), ConfigBlockError> {
+        let issuer_ok = valid_jwks_uri(&self.issuer, allow_loopback_http)
+            && url::Url::parse(&self.issuer).is_ok_and(|url| url.fragment().is_none());
+        if !issuer_ok {
+            let field = format!("{field}.issuer");
+            return Err(ConfigBlockError::new(
+                ConfigBlockErrorKind::InvalidUri,
+                &field,
+                format!("{field} must be an absolute https URL without credentials or fragment"),
+            ));
+        }
+        let audience_ok = !self.audience.is_empty()
+            && self.audience.chars().count() <= MAX_OIDC_AUDIENCE_CHARACTERS
+            && !self.audience.chars().any(char::is_control);
+        if !audience_ok {
+            let field = format!("{field}.audience");
+            return Err(ConfigBlockError::new(
+                ConfigBlockErrorKind::InvalidAudience,
+                &field,
+                format!(
+                    "{field} must be non-empty text of at most {MAX_OIDC_AUDIENCE_CHARACTERS} \
+                     characters without control characters"
+                ),
+            ));
+        }
+        self.jwks_source
+            .check(&format!("{field}.jwksSource"), allow_loopback_http)
     }
 }
 
