@@ -179,12 +179,17 @@ relevant product pages on this site rather than duplicating release notes.
   `apply.migration.failed`, and its message names the SQLSTATE, its class,
   and the table, column, or constraint PostgreSQL reported, never the
   PostgreSQL message or a stored value. `registry-breg` reports it as
-  `MigrationError::StatementFailed`, and `PostgresFailure` is exported from
-  `registry_breg::postgres` under every feature set. The target stays pinned
-  as before. See
+  `MigrationError::StatementFailed`, from the new
+  `PostgresKernelError::Statement` variant, so an exhaustive match on either
+  enum needs the new arm; `PostgresFailure` is exported from
+  `registry_breg::postgres` under every feature set. A lost connection,
+  including a session the server ended (SQLSTATE class 08, 57P01 to 57P05,
+  25P03), still reports `apply.migration.failed`, while a compiler or
+  reviewed statement that times out is a refused statement with SQLSTATE
+  57014. The target stays pinned as before. See
   [troubleshooting](../operate/breg-changes/#troubleshooting).
 
-{/* Evidence: crates/registry-breg/src/postgres/mod.rs, PostgresKernelError::from_statement_error();
+{/* Evidence: crates/registry-breg/src/postgres/mod.rs, PostgresKernelError::from_statement_error(), a_server_ended_session_is_a_connection_failure_not_a_refused_statement;
     crates/registry-breg/src/migration.rs, MigrationError::StatementFailed;
     crates/registry-bregctl/src/lib.rs, apply_reports_a_refused_statement_with_its_sqlstate_and_objects;
     crates/registry-breg/tests/postgres_migration.rs, refused_step_reports_its_sqlstate. */}

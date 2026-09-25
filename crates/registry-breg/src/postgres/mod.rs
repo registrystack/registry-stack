@@ -229,15 +229,29 @@ pub enum PostgresKernelError {
 
 impl PostgresKernelError {
     /// Classifies the error of one migration statement. A server refusal
-    /// keeps its SQLSTATE and object names; a lost connection stays
+    /// keeps its SQLSTATE and object names; a lost connection, whether the
+    /// client lost it or the server ended the session, stays
     /// [`Self::Connection`].
     pub(crate) fn from_statement_error(error: &tokio_postgres::Error) -> Self {
-        if error.as_db_error().is_some() {
-            Self::Statement(PostgresFailure::from_error(error))
-        } else {
-            Self::Connection
+        match error.as_db_error() {
+            Some(db_error) if !sqlstate_ends_the_session(db_error.code().code()) => {
+                Self::Statement(PostgresFailure::from_error(error))
+            }
+            _ => Self::Connection,
         }
     }
+}
+
+/// Whether a server-reported SQLSTATE ends the session rather than refusing
+/// one statement: a connection exception (class `08`), an administrator or
+/// crash shutdown, a server not accepting connections, a dropped database,
+/// or an idle-session or idle-in-transaction timeout.
+fn sqlstate_ends_the_session(code: &str) -> bool {
+    code.starts_with("08")
+        || matches!(
+            code,
+            "57P01" | "57P02" | "57P03" | "57P04" | "57P05" | "25P03"
+        )
 }
 
 impl From<tokio_postgres::Error> for PostgresKernelError {
@@ -248,3 +262,25 @@ impl From<tokio_postgres::Error> for PostgresKernelError {
 
 /// Result returned by PostgreSQL kernel operations.
 pub type Result<T> = std::result::Result<T, PostgresKernelError>;
+
+#[cfg(test)]
+mod tests {
+    use super::sqlstate_ends_the_session;
+
+    #[test]
+    fn a_server_ended_session_is_a_connection_failure_not_a_refused_statement() {
+        for code in [
+            "08000", "08003", "08006", "57P01", "57P02", "57P03", "57P04", "57P05", "25P03",
+        ] {
+            assert!(sqlstate_ends_the_session(code), "{code} ends the session");
+        }
+        for code in [
+            "57014", "55P03", "22P02", "23502", "42703", "25P02", "40001",
+        ] {
+            assert!(
+                !sqlstate_ends_the_session(code),
+                "{code} refuses one statement"
+            );
+        }
+    }
+}
