@@ -22,7 +22,7 @@ ambiguity, or audit-write failure without collecting source rows or secret value
 
 - Use the protected operator network and a least-privilege posture or API credential.
 - Know the active product and instance for Relay: its runtime file path, bound source path, and
-  package `packageRevision` digest. Know the deployment revision for Evidence Gateway: its runtime
+  package digest. Know the deployment revision for Evidence Gateway: its runtime
   file path and bundle revision.
 - Keep public problem responses, operator diagnostics, and protected audit records in separate
   access classes.
@@ -236,7 +236,7 @@ Relay V2 deployment:
 - **Signed-bundle rejection codes.** `relay.startup.bundle_signature_rejected`,
   `_binding_rejected`, `_validation_rejected`, and `_rollback_rejected` assumed a signed product
   bundle and an anti-rollback ratchet. Relay V2 packages are integrity-digested through
-  `packageRevision`, not signed, and carry no anti-rollback state, so there is no signature,
+  their package digest, not signed, and carry no anti-rollback state, so there is no signature,
   binding, or rollback check to reject.
 
 ## Expected evidence
@@ -245,7 +245,7 @@ Retain:
 
 - Timestamped health and readiness status without response secrets.
 - Stable public diagnostic codes and status classes.
-- Relay's package `packageRevision` digest and runtime file path identifying the deployed
+- Relay's package digest and runtime file path identifying the deployed
   instance, rather than a signed bundle sequence.
 - Evidence Gateway's `traceId` from a problem response or the W3C `traceparent`
   response header, and the shipped audit entries for the operation when a signing or

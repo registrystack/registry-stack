@@ -49,7 +49,7 @@ use crate::identification::{
 use crate::model::{
     CompileProfile, CompileReport, CompiledRegistry, Diagnostic, DiagnosticSeverity,
 };
-use crate::package::{build_package, PackageManifest};
+use crate::package::{build_package, PackageError, PackageSummary};
 use crate::server::{
     router, AlignmentMetadata, InstitutionMetadata, QuotaConfig, RelayService, ServiceMetadata,
 };
@@ -107,7 +107,11 @@ pub struct DiffOptions {
 #[derive(Clone, Debug)]
 pub struct PackageOptions {
     pub project_root: PathBuf,
-    pub output_dir: PathBuf,
+    /// The new directory the package is written into; `None` reports the
+    /// package without writing it.
+    pub output_dir: Option<PathBuf>,
+    /// One printable line recorded as the package's `REVISION`.
+    pub revision: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -177,7 +181,7 @@ pub enum ToolingDetails {
         report: Option<ChangeImpactReport>,
     },
     Package {
-        manifest: Option<PackageManifest>,
+        package: Option<PackageSummary>,
     },
 }
 
@@ -984,7 +988,7 @@ pub fn package_project(options: &PackageOptions) -> Result<ToolingReport, Toolin
         ProjectCompilation::Refused(report) => {
             return Ok(ToolingReport::refused(
                 report.diagnostics,
-                ToolingDetails::Package { manifest: None },
+                ToolingDetails::Package { package: None },
             ));
         }
     };
@@ -992,17 +996,36 @@ pub fn package_project(options: &PackageOptions) -> Result<ToolingReport, Toolin
         contract, registry, ..
     } = *project;
     let artifacts = generate_artifacts(&registry).map_err(|_| ToolingError::Generate)?;
-    let manifest = build_package(
+    let built = build_package(
         &options.project_root,
-        &options.output_dir,
+        options.output_dir.as_deref(),
+        options.revision.as_deref(),
         &contract,
         &registry,
         &artifacts,
-    )
-    .map_err(|_| ToolingError::Package)?;
-    Ok(ToolingReport::success(ToolingDetails::Package {
-        manifest: Some(manifest),
-    }))
+    );
+    match built {
+        Ok(package) => Ok(ToolingReport::success(ToolingDetails::Package {
+            package: Some(package),
+        })),
+        // A refusal of the package format names files relative to the
+        // package and the fixing command; the directory is named by role.
+        Err(PackageError::Package(error)) => Ok(ToolingReport::refused(
+            vec![diagnostic(
+                "package.refused",
+                ".",
+                &error
+                    .naming_root_as(if options.output_dir.is_some() {
+                        "the --output directory"
+                    } else {
+                        "the project"
+                    })
+                    .to_string(),
+            )],
+            ToolingDetails::Package { package: None },
+        )),
+        Err(_) => Err(ToolingError::Package),
+    }
 }
 
 #[derive(Serialize)]

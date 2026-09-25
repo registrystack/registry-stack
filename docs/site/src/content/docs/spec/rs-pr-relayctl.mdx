@@ -51,7 +51,7 @@ This specification covers:
 - Authoring and production compilation profiles.
 - Deterministic generated artifacts and offline fixture execution.
 - Change classification between two project revisions.
-- The sealed deployment package and its manifest.
+- The sealed deployment package and its `SHA256SUMS`.
 - Report presentation and process exit statuses.
 - The process boundary between `relayctl` and `relay`.
 
@@ -215,23 +215,23 @@ Packaging MUST re-derive the compiled registry and every generated artifact from
 and refuse when a re-derived byte differs.
 
 REQ-PR-RELAYCTL-022: The package root MUST contain `registry.yaml`, the authored `governed/`
-closure, the canonical `compiled/registry.json`, the `generated/` artifacts, and the
-`relay-package.json` manifest.
+closure, the canonical `compiled/registry.json`, the `generated/` artifacts, and a `SHA256SUMS`
+file in the shared Registry Stack package format, plus a `REVISION` file when `--revision` is given.
 `runtime.yaml` MUST NOT be packaged: deployment-local bindings stay with the deployment.
 
-REQ-PR-RELAYCTL-023: The manifest MUST declare the package version, the package revision, the
-contract revision, the expected source schema fingerprint and observed schema for every source, the
-artifact inventory with per-artifact visibility and digest, the operation-to-artifact bindings, and
-one entry per packaged file with its size and digest.
-The package revision MUST be the SHA-256 digest of the canonical manifest without that field.
-It is an integrity digest, not an authenticity proof: any party can recompute it, so acceptance MUST
-NOT rest on the revision alone.
+REQ-PR-RELAYCTL-023: `SHA256SUMS` MUST list the SHA-256 digest of every other package file, and the
+package digest MUST be the SHA-256 digest of `SHA256SUMS`.
+The package report MUST state the package digest, the contract revision, the expected source schema
+fingerprint for every source, one entry per packaged file with its size and digest, and the derived
+exposure of every generated artifact; `--dry-run` MUST report the same digest without writing.
+The package digest is an integrity digest, not an authenticity proof: any party can recompute it,
+so acceptance MUST NOT rest on the digest alone.
 
-REQ-PR-RELAYCTL-024: Packaging MUST enforce closure bounds on file count, manifest size, and total
+REQ-PR-RELAYCTL-024: Packaging MUST enforce closure bounds on file count, file size, and total
 package size, and MUST refuse a symbolic link inside the closure.
 On a Unix host it MUST leave directories at mode `0755` and files at mode `0644`.
-A partially written destination MUST be left in place for inspection rather than removed, and a
-later packaging attempt MUST refuse it.
+A failed write MUST remove only the destination directory it created, and a packaging attempt MUST
+refuse a destination that already exists.
 
 ## 10. Reports and output
 
@@ -263,8 +263,8 @@ closure MUST be discarded.
 
 The project workflow JSON report carries no schema-version field and is not a versioned automation
 contract.
-Automation that must survive a release upgrade uses the sealed package and its manifest, which are
-versioned, rather than the report shape.
+Automation that must survive a release upgrade uses the sealed package and its `SHA256SUMS`, which
+follow the shared Registry Stack package format, rather than the report shape.
 
 ## 11. Exit statuses
 
@@ -316,7 +316,7 @@ A `relayctl` release conforms to this specification when it:
   (REQ-PR-RELAYCTL-013 through REQ-PR-RELAYCTL-017).
 - Classifies change impact including disclosure and access widening, without mutating either project
   (REQ-PR-RELAYCTL-018 and REQ-PR-RELAYCTL-019).
-- Builds a re-derived, bounded, hardened sealed package with a complete manifest and no
+- Builds a re-derived, bounded, hardened sealed package with a complete `SHA256SUMS` and no
   `runtime.yaml` (REQ-PR-RELAYCTL-020 through REQ-PR-RELAYCTL-024).
 - Keeps workflow reports, editor reports, and LSP output distinct and emits value-free diagnostics
   under both command output modes (REQ-PR-RELAYCTL-025 through REQ-PR-RELAYCTL-027).
@@ -353,7 +353,7 @@ tests.
 {/* Evidence: crates/registry-relay-v2/src/compiler.rs holds the authoring and production severity
      split for unobserved schemas, unreviewed classification, and review-document status. */}
 {/* Evidence: crates/registry-relay-v2/src/package.rs implements re-derivation, the package layout,
-     the canonical manifest, the closure bounds, symlink refusal, and permission hardening. */}
+     the shared package format, the closure bounds, symlink refusal, and permission hardening. */}
 {/* Evidence: crates/registry-relay-v2/src/fixtures.rs plans only the selected step, accumulates
      observations as the journey runs, and treats an absent prior observation as a mismatch. */}
 {/* Evidence: crates/registry-relay-v2/src/diff.rs implements the change classes, the impact scale,

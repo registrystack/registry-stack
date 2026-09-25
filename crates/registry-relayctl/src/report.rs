@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use crate::shared::{
     ChangeImpact, ChangeImpactReport, Diagnostic, DiagnosticSeverity, FixturePlanReport,
-    InspectedObject, PackageManifest, ToolingDetails, ToolingReport, ToolingStatus,
+    InspectedObject, PackageSummary, ToolingDetails, ToolingReport, ToolingStatus,
 };
 
 /// Ordinary detail indent, and the width of one nesting level.
@@ -106,14 +106,19 @@ fn lead(report: &ToolingReport, refused: bool) -> String {
             ),
             (false, None) => "Change classification reported nothing.".to_owned(),
         },
-        ToolingDetails::Package { manifest } => match (refused, manifest) {
+        ToolingDetails::Package { package } => match (refused, package) {
             (true, _) => "Packaging refused.".to_owned(),
-            (false, Some(manifest)) => format!(
-                "Sealed a deployment package. {}, {}.",
-                counted(manifest.artifacts.len(), "artifact"),
-                counted(manifest.files.len(), "file")
+            (false, Some(package)) => format!(
+                "{} {}, {}.",
+                if package.dry_run {
+                    "Planned a deployment package without writing it."
+                } else {
+                    "Wrote a deployment package."
+                },
+                counted(package.artifacts.len(), "artifact"),
+                counted(package.files.len(), "file")
             ),
-            (false, None) => "Sealed a deployment package.".to_owned(),
+            (false, None) => "Wrote a deployment package.".to_owned(),
         },
     }
 }
@@ -214,9 +219,9 @@ fn detail_lines(
                 push_changes(lines, impact)?;
             }
         }
-        ToolingDetails::Package { manifest } => {
-            if let Some(manifest) = manifest {
-                push_manifest(lines, manifest);
+        ToolingDetails::Package { package } => {
+            if let Some(package) = package {
+                push_package(lines, package);
             }
         }
     }
@@ -363,26 +368,19 @@ fn push_changes(
     Ok(())
 }
 
-fn push_manifest(lines: &mut Vec<String>, manifest: &PackageManifest) {
-    push_pairs(
-        lines,
-        INDENT,
-        &[
-            ("package version", manifest.package_version.clone()),
-            ("package revision", manifest.package_revision.clone()),
-            ("contract revision", manifest.contract_revision.clone()),
-            (
-                "artifact bindings",
-                manifest.operation_artifact_bindings.len().to_string(),
-            ),
-        ],
-    );
-    if manifest.source_schema_fingerprints.is_empty() {
+fn push_package(lines: &mut Vec<String>, package: &PackageSummary) {
+    let mut pairs = vec![("package digest", package.package_digest.clone())];
+    if let Some(revision) = &package.revision {
+        pairs.push(("revision", revision.clone()));
+    }
+    pairs.push(("contract revision", package.contract_revision.clone()));
+    push_pairs(lines, INDENT, &pairs);
+    if package.source_schema_fingerprints.is_empty() {
         return;
     }
     lines.push(String::new());
     lines.push(format!("{INDENT}source schema fingerprints"));
-    let pairs = manifest
+    let pairs = package
         .source_schema_fingerprints
         .iter()
         .map(|(source, fingerprint)| (source.as_str(), fingerprint.clone()))
@@ -678,58 +676,46 @@ mod tests {
       "diagnostics": [],
       "details": {
         "kind": "package",
-        "manifest": {
-          "packageVersion": "relay.registrystack.org/package/v1alpha3",
-          "packageRevision": "sha256:3333",
+        "package": {
+          "packageDigest": "sha256:3333",
+          "revision": null,
+          "dryRun": false,
           "contractRevision": "sha256:4444",
           "sourceSchemaFingerprints": {"records": "sha256:5555"},
-          "sourceSchemas": {
-            "records": {
-              "source": "records",
-              "fingerprint": "sha256:5555",
-              "views": [
-                {
-                  "name": "relay_records",
-                  "columns": [
-                    {"name": "record_identifier", "declaredType": "TEXT", "nullable": true, "primaryKey": false}
-                  ]
-                }
-              ]
-            }
-          },
+          "files": [
+            {"path": "compiled/registry.json", "sha256": "sha256:6666", "bytes": 2048},
+            {"path": "registry.yaml", "sha256": "sha256:7777", "bytes": 512}
+          ],
           "artifacts": [
             {
-              "id": "capability-inventory",
-              "path": "generated/artifacts/capabilities.json",
+              "id": "openapi-public",
+              "path": "generated/openapi.public.json",
               "mediaType": "application/json",
               "visibility": "public",
               "operationIdentifier": null,
               "accessBinding": null,
-              "sha256": "sha256:6666"
-            }
-          ],
-          "operationArtifactBindings": [
-            {
-              "operationIdentifier": "record.list",
-              "accessProfileIdentifier": "public-view",
-              "vocabularyPath": "artifacts/record--list.vocabulary.jsonld",
-              "contextPath": "artifacts/record--list.context.jsonld",
-              "accessProfileSchemaPath": "artifacts/record--list.schema.json",
-              "accessProfileShaclPath": "artifacts/record--list.shacl.ttl",
-              "classificationPath": "artifacts/record--list.classifications.json",
-              "processingPath": "artifacts/record--list.processing.json"
-            }
-          ],
-          "files": [
-            {
-              "path": "generated/artifacts/capabilities.json",
-              "size": 512,
-              "sha256": "sha256:6666",
-              "mediaType": "application/json",
-              "visibility": "public",
-              "generated": true
+              "sha256": "sha256:8888"
             }
           ]
+        }
+      }
+    }"#;
+
+    const PACKAGE_PLANNED: &str = r#"{
+      "status": "success",
+      "diagnostics": [],
+      "details": {
+        "kind": "package",
+        "package": {
+          "packageDigest": "sha256:3333",
+          "revision": "release 7",
+          "dryRun": true,
+          "contractRevision": "sha256:4444",
+          "sourceSchemaFingerprints": {},
+          "files": [
+            {"path": "registry.yaml", "sha256": "sha256:7777", "bytes": 512}
+          ],
+          "artifacts": []
         }
       }
     }"#;
@@ -744,12 +730,12 @@ mod tests {
           "message": "production compilation requires reviewed classification"
         }
       ],
-      "details": {"kind": "package", "manifest": null}
+      "details": {"kind": "package", "package": null}
     }"#;
 
     /// Every fixture above is one report the shared library can return, so the
     /// rendering tests never describe a shape the JSON contract does not have.
-    const EVERY_FIXTURE: [&str; 11] = [
+    const EVERY_FIXTURE: [&str; 12] = [
         INITIALIZED,
         INITIALIZATION_REFUSED,
         INSPECTION,
@@ -760,6 +746,7 @@ mod tests {
         DIFF_CHANGED,
         DIFF_UNCHANGED,
         PACKAGED,
+        PACKAGE_PLANNED,
         PACKAGE_REFUSED,
     ];
 
@@ -963,24 +950,31 @@ artifacts/long.json\n",
     }
 
     #[test]
-    fn a_sealed_package_renders_its_revisions_and_source_fingerprints() {
+    fn a_package_renders_its_digest_revisions_and_source_fingerprints() {
         assert_eq!(
             rendered(PACKAGED),
             concat!(
-                "Sealed a deployment package. 1 artifact, 1 file.\n",
-                "  package version    relay.registrystack.org/package/v1alpha3\n",
-                "  package revision   sha256:3333\n",
+                "Wrote a deployment package. 1 artifact, 2 files.\n",
+                "  package digest     sha256:3333\n",
                 "  contract revision  sha256:4444\n",
-                "  artifact bindings  1\n",
                 "\n",
                 "  source schema fingerprints\n",
                 "    records  sha256:5555\n",
             )
         );
+        assert_eq!(
+            rendered(PACKAGE_PLANNED),
+            concat!(
+                "Planned a deployment package without writing it. 0 artifacts, 1 file.\n",
+                "  package digest     sha256:3333\n",
+                "  revision           release 7\n",
+                "  contract revision  sha256:4444\n",
+            )
+        );
     }
 
     #[test]
-    fn a_refused_package_renders_the_refusal_without_a_manifest() {
+    fn a_refused_package_renders_the_refusal_without_a_package() {
         assert_eq!(
             rendered(PACKAGE_REFUSED),
             concat!(

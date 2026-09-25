@@ -586,28 +586,26 @@ a different digest here than the authoring check printed above. The revision cov
 files the contract points at, so recording the review changed it, and every answer the service
 gives will carry this value rather than the earlier one.
 
-## Seal the package
+## Package the project
 
 ```sh
 relayctl package . --output package
 ```
 
 ```text test-expect
-Sealed a deployment package. <n> artifacts, <n> files.
-  package version    relay.registrystack.org/package/v1alpha3
-  package revision   sha256:<package-revision>
+Wrote a deployment package. <n> artifacts, <n> files.
+  package digest     sha256:<package-digest>
   contract revision  sha256:<contract-revision>
-  artifact bindings  <n>
 
   source schema fingerprints
     registry  sha256:b3c73e50829bf63f8034bac74ce23c9b387fa4e84ca0afc27bb98d5eccc0fe18
 ```
 
-That report summarizes `package/relay-package.json`, which names every file and artifact in
-the package with a digest for each and records the full observed schema of every source. The
-package holds the compiled contract, the generated artifacts, and the governed files. It
-does not hold the database. Packaging recompiles under the production profile, so a package
-cannot be produced from a revision that would fail `check --production`.
+The package holds the compiled contract, the generated artifacts, and the governed files, plus a
+`SHA256SUMS` file that lists the digest of every other file. The package digest is the digest of
+`SHA256SUMS`, and it is the value `package.expectedDigest` pins. The package does not hold the
+database. Packaging recompiles under the production profile, so a package cannot be produced from
+a revision that would fail `check --production`.
 
 ## Serve it
 
@@ -626,7 +624,7 @@ limits: {requestTimeoutMilliseconds: 1500, concurrentQueries: 8}
 ```
 
 `package.root` must be absolute. It reads the `RELAY_PACKAGE_ROOT` environment variable and falls
-back to `/srv/relay/package` when that is unset, so you point it at the package you just sealed
+back to `/srv/relay/package` when that is unset, so you point it at the package you just wrote
 without editing the file. The audit key is a secret reference, never a substituted value, and
 `secretProviders.environment` is what lets it resolve from the environment.
 

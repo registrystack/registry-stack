@@ -80,9 +80,9 @@ Two Relay surfaces belong in this table instead of an OpenAPI artifact:
   registry.registrystack.org/relay-runtime/v1alpha1`, `kind: RelayRuntimeConfig`). Both are closed shapes: an
   unrecognized key is a parse failure rather than an ignored field. Compatibility for recognized
   keys follows the release policy.
-- The sealed package format, `relay.registrystack.org/package/v1alpha3`, whose manifest is
-  `relay-package.json`. `relayctl package` produces it and `relay serve` verifies it before
-  activation. Its `packageRevision` is an integrity digest over canonical JSON, not an
+- The sealed package format: a directory whose `SHA256SUMS` file lists the digest of every other
+  file. `relayctl package` produces it and `relay serve` verifies it before activation. Its
+  package digest, the `sha256:` digest of `SHA256SUMS`, is an integrity digest, not an
   authenticity proof: packages are unsigned, so the operator's own transport and storage are what
   bind a package to its author.
 
@@ -147,5 +147,6 @@ authority that runs the registry.
 
 ## Compatibility boundaries
 
-- Relay's authoring grammar and sealed package format are versioned `v2alpha1` and `v1alpha3`. Both
-  are pre-1.0 and can change with a documented migration in a release note.
+- Relay's authoring grammar is versioned `v2alpha1`, and its sealed package follows the shared
+  Registry Stack package format. Both are pre-1.0 and can change with a documented migration in a
+  release note.

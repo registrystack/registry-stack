@@ -132,7 +132,7 @@ The full pipeline, from an existing SQLite database to a running service:
 | Prove behavior offline | `relayctl test <PROJECT>` | The project's fixture cases run through the same kernel the server uses. |
 | Inspect the artifacts | `relayctl generate <PROJECT> --output <DIR>` | The deterministic generated inventory: OpenAPI, JSON Schema, SHACL, JSON-LD context and vocabulary. |
 | Classify the change | `relayctl diff <PREVIOUS> <CURRENT>` | Every difference, each carrying a change class and an impact. |
-| Seal it | `relayctl package <PROJECT> --output <DIR>` | A sealed package directory with a revision digest over its own contents. |
+| Seal it | `relayctl package <PROJECT> --output <DIR>` | A sealed package directory whose `SHA256SUMS` lists every file, and the package digest over it. |
 | Serve it | `relay serve --runtime-config <PATH>` | One process serving one package, with deployment-local settings supplied separately. |
 
 Two properties of this pipeline matter more than the command list.
@@ -167,28 +167,28 @@ A global `--json` flag emits the shared report for local automation.
 `relayctl package` writes a directory containing the authored `registry.yaml`, the
 governed input files it referenced under `governed/`, the compiled model at
 `compiled/registry.json`, the generated artifacts under `generated/`, and a
-`relay-package.json` manifest that lists every file with its digest.
-The manifest's `packageRevision` is a digest over the canonical form of that list.
-The command refuses to write into a directory that already exists, and it leaves a
-partially written directory in place rather than deleting evidence of a failed attempt.
+`SHA256SUMS` file that lists every other file with its digest.
+The package digest is the digest of `SHA256SUMS`, the value `package.expectedDigest` pins.
+The command refuses to write into a directory that already exists, and a failed write
+removes the directory it created.
 
-At startup, Relay re-derives that digest from the files on disk and compares it byte for
+At startup, Relay checks every file against `SHA256SUMS`, refuses a changed, missing, or
+extra file by name, and recompiles the contract and regenerates every artifact byte for
 byte before it serves anything.
 
 This is an integrity check, not an authenticity check.
-`packageRevision` proves that the package you are serving is the package that was built.
+The package digest proves that the package you are serving is the package that was built.
 It does not prove who built it.
 Relay packages are not signed, and Relay signs no response.
 If you need an authenticity proof, it has to come from the channel you distributed the
 package over, or from your own signing step around it.
 
-{/* Evidence: crates/registry-relay-v2/src/package.rs:25-26 declares
-     PACKAGE_VERSION relay.registrystack.org/package/v1alpha3 and
-     COMPILED_REGISTRY_PATH compiled/registry.json; :224-236 writes
-     registry.yaml, governed/, compiled/registry.json, generated/, and
-     relay-package.json, and fs::create_dir refuses an existing output
-     directory; the comment at :348-350 records that packageRevision is an
-     integrity digest, not an authenticity proof. */}
+{/* Evidence: crates/registry-relay-v2/src/package.rs declares
+     COMPILED_REGISTRY_PATH compiled/registry.json; build_package() writes
+     registry.yaml, governed/, compiled/registry.json, and generated/ through
+     registry_platform_config::package, which writes SHA256SUMS and refuses an
+     existing output directory; verify_artifact_derivation() records that the
+     package digest is an integrity digest, not an authenticity proof. */}
 
 The deployment-local half stays outside the package entirely.
 Listener address, source file paths, issuer, audit sink, secrets, limits, and quotas live

@@ -185,9 +185,10 @@ impl BusinessImage {
 
         let report = package_project(&PackageOptions {
             project_root: etc.clone(),
-            output_dir: package,
+            output_dir: Some(package),
+            revision: None,
         })
-        .expect("sealed package operation succeeds");
+        .expect("package operation succeeds");
         assert!(
             report.is_success(),
             "acceptance project packages: {report:?}"
@@ -277,18 +278,12 @@ async fn built_relay_serves_a_sealed_package_over_real_tcp_and_shuts_down() {
 #[test]
 fn built_relay_check_honors_a_package_digest_pin() {
     let image = BusinessImage::prepare();
-    let manifest: Value = serde_json::from_slice(
-        &fs::read(image.runtime.package.root.join("relay-package.json"))
-            .expect("package manifest reads"),
-    )
-    .expect("package manifest parses");
-    let revision = manifest["packageRevision"]
-        .as_str()
-        .expect("package revision")
-        .to_owned();
+    let digest = registry_platform_config::sha256_uri(
+        &fs::read(image.runtime.package.root.join("SHA256SUMS")).expect("package sums read"),
+    );
 
     let mut pinned = image.runtime.clone();
-    pinned.package.expected_digest = Some(revision);
+    pinned.package.expected_digest = Some(digest);
     write_runtime(&image.runtime_path, &pinned);
     let output = relay_check(&image.runtime_path);
     assert!(
@@ -306,6 +301,27 @@ fn built_relay_check_honors_a_package_digest_pin() {
     assert!(stderr.contains("package.expectedDigest"), "{stderr}");
     assert!(
         stderr.contains("deploy the pinned package or update package.expectedDigest"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn built_relay_check_refuses_a_changed_package_file_by_name_without_a_pin() {
+    let image = BusinessImage::prepare();
+    assert_eq!(image.runtime.package.expected_digest, None);
+    let contract = image.runtime.package.root.join("registry.yaml");
+    let mut bytes = fs::read(&contract).expect("packaged contract reads");
+    bytes.extend_from_slice(b"\n");
+    fs::write(&contract, bytes).expect("packaged contract changes");
+
+    let output = relay_check(&image.runtime_path);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("changed: registry.yaml"), "{stderr}");
+    assert!(stderr.contains("package.root"), "{stderr}");
+    assert!(stderr.contains("relayctl package"), "{stderr}");
+    assert!(
+        !stderr.contains(&*image.runtime.package.root.to_string_lossy()),
         "{stderr}"
     );
 }

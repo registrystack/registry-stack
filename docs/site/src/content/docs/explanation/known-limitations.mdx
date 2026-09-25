@@ -391,8 +391,8 @@ that narrowness rather than an unfinished feature. Its boundaries are covered in
 
 ### What the guarantees do not cover
 
-- A package is verified, not authenticated: `packageRevision` is a SHA-256 integrity digest over
-  the canonical manifest. Startup re-runs the compiler and the artifact generator and requires
+- A package is verified, not authenticated: the package digest is a SHA-256 integrity digest over
+  the package's `SHA256SUMS`. Startup re-runs the compiler and the artifact generator and requires
   byte-for-byte equality, which detects drift and tampering. It cannot distinguish a legitimate
   package from a well-formed forgery, because nothing signs a package. Package provenance rests on
   the delivery path and the filesystem ownership checks, not on the format.
