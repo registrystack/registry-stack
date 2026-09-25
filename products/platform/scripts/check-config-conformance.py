@@ -245,6 +245,59 @@ ROWS: tuple[Row, ...] = (
         ),
     ),
     Row(
+        product="breg",
+        loader_sources=("crates/registry-breg/src",),
+        runtime_schema="products/breg/generated/runtime/runtime.schema.json",
+        shared_blocks=(
+            "EnvironmentSecretProviderConfig",
+            "FileSecretProviderConfig",
+            "JwksSource",
+            "ListenerBind",
+            "SecretProvidersConfig",
+            "SecretReference",
+        ),
+        reference_refusal=TestRef(
+            "crates/registry-breg/tests/runtime_config.rs",
+            "a_substitution_inside_a_secret_reference_is_refused",
+        ),
+        authored_refusal=TestRef(
+            "crates/registry-breg/tests/compiler_contract.rs",
+            "an_authored_project_carrying_an_environment_expression_is_refused",
+        ),
+        rust_blocks=(
+            RustBlock(
+                "crates/registry-breg/src/runtime_config.rs",
+                "RawRuntimeConfig",
+                "secret_providers",
+                "SecretProvidersConfig",
+            ),
+            RustBlock(
+                "crates/registry-breg/src/runtime_config.rs",
+                "RawListenerConfig",
+                "bind",
+                "ListenerBind",
+            ),
+            RustBlock(
+                "crates/registry-breg/src/runtime_config.rs",
+                "RawMetricsListenerConfig",
+                "bind",
+                "ListenerBind",
+            ),
+            RustBlock(
+                "crates/registry-breg/src/runtime_config.rs",
+                "RawOidcVerifierConfig",
+                "provider",
+                "OidcIssuerConfig",
+            ),
+            RustBlock(
+                "crates/registry-breg/src/runtime_config.rs",
+                "RawAuditConfig",
+                "key",
+                "AuditKeyConfig",
+            ),
+        ),
+    ),
+    Row(
         product="scheduling",
         loader_sources=("crates/registry-scheduling/src",),
         runtime_schema="products/scheduling/generated/runtime/runtime.schema.json",

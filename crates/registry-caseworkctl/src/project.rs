@@ -1071,9 +1071,7 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
     config
         .audit
         .destination()
-        .map_err(|error| {
-            audit_failure("the Casework audit destination is invalid", error.into())
-        })?
+        .map_err(|error| audit_failure("the Casework audit destination is invalid", error.into()))?
         .check_writable()
         .map_err(|error| {
             audit_failure(

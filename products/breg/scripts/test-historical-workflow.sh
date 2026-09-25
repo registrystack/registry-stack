@@ -700,7 +700,7 @@ start_server() {
   local config=$1
   local url=$2
   local log=$3
-  BREG_LOG=error "$breg" --config "$config" >"$log" 2>&1 &
+  BREG_LOG=error "$breg" --runtime-config "$config" >"$log" 2>&1 &
   breg_pid=$!
   wait_ready_status "${url}ready" 200
 }

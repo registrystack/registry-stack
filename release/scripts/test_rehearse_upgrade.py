@@ -254,6 +254,10 @@ class EvidenceGrammarTest(unittest.TestCase):
                          ["check", "--runtime-config", "/srv/runtime.yaml"])
         self.assertEqual(MODULE.evidence_arguments(False, runtime, "check"),
                          ["--runtime", "/srv/runtime.yaml", "check"])
+        self.assertEqual(MODULE.breg_arguments(True, runtime),
+                         ["--runtime-config", "/srv/runtime.yaml"])
+        self.assertEqual(MODULE.breg_arguments(False, runtime),
+                         ["--config", "/srv/runtime.yaml"])
 
 
 class StateComparisonTest(unittest.TestCase):

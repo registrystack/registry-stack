@@ -647,7 +647,7 @@ enum RequestRetentionCommand {
 #[derive(Debug, Args)]
 struct AttachmentCleanupArgs {
     /// Absolute Base Registry Engine runtime configuration file.
-    #[arg(long, visible_alias = "config", value_name = "ABSOLUTE_FILE")]
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 }
 
@@ -12643,22 +12643,29 @@ mod tests {
 
     #[test]
     fn request_retention_cleanup_accepts_config_without_request_scope() {
-        for flag in ["--runtime-config", "--config"] {
-            let parsed = Cli::try_parse_from([
-                "bregctl",
-                "request-retention",
-                "cleanup-attachments",
-                flag,
-                "/tmp/runtime.yaml",
-            ])
-            .unwrap();
-            assert!(matches!(
-                parsed.command,
-                Command::RequestRetention(RequestRetentionArgs {
-                    command: RequestRetentionCommand::CleanupAttachments(_)
-                })
-            ));
-        }
+        let parsed = Cli::try_parse_from([
+            "bregctl",
+            "request-retention",
+            "cleanup-attachments",
+            "--runtime-config",
+            "/tmp/runtime.yaml",
+        ])
+        .unwrap();
+        assert!(matches!(
+            parsed.command,
+            Command::RequestRetention(RequestRetentionArgs {
+                command: RequestRetentionCommand::CleanupAttachments(_)
+            })
+        ));
+        let removed = Cli::try_parse_from([
+            "bregctl",
+            "request-retention",
+            "cleanup-attachments",
+            "--config",
+            "/tmp/runtime.yaml",
+        ])
+        .expect_err("the removed --config alias is refused");
+        assert_eq!(removed.kind(), clap::error::ErrorKind::UnknownArgument);
         let report = AttachmentCleanupSuccessReport {
             ok: true,
             command: "request-retention cleanup-attachments",

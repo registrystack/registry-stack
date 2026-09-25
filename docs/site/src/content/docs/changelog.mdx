@@ -329,6 +329,40 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-evidence/tests/cli.rs, the_removed_runtime_inputs_are_refused_with_their_replacement_named;
     release/docker/Dockerfile.evidence. */}
 
+- BREAKING: Base Registry Engine reads `runtime.yaml` through the shared
+  runtime configuration loader and declares its OpenID Connect issuer, audit
+  key, listeners, and secret providers through the shared blocks. `breg`
+  takes the runtime file as `--runtime-config FILE`; `--config` is refused
+  with the replacement named, `bregctl request-retention cleanup-attachments`
+  no longer accepts its `--config` alias, and the container image passes the
+  new flag in its default command. `${VAR}`, `${VAR:-default}`, and
+  `${VAR:?message}` are substituted in string values after parsing, so a
+  substituted value is always text and never a number, boolean, or YAML
+  structure; a `${...}` expression in a field ending in `Ref` or under
+  `secretProviders` is refused as
+  `runtime_config.substitution_in_reference`, and one in the authored project
+  or module files is refused as `source.environment_expression`. An empty
+  YAML scalar is now null rather than an empty string, so quote `""` where an
+  empty string is meant. `authentication.oidc.issuer` must be an `https` URL
+  without credentials or fragment, with plain `http` accepted only on an IPv4
+  loopback host, `audience` is at most 512 characters, and `jwksSource`
+  gains `kind: uri` beside `discovery` and `static`. A file missing
+  `apiVersion` or `kind` is refused as `runtime_config.invalid_api_version`
+  or `runtime_config.invalid_kind`. To migrate, replace `--config FILE` with
+  `--runtime-config FILE` in service definitions and write any number or
+  boolean that came from a variable directly in the file. See
+  [deploy a registry](../operate/breg/#write-the-runtime-configuration).
+
+{/* Evidence: crates/registry-breg/src/runtime_config.rs, parse_runtime_config_with_env and runtime_config_error_from_loader;
+    crates/registry-breg/src/cli.rs, removed_config_flag;
+    crates/registry-breg/src/contract.rs, reject_authored_environment_expression;
+    crates/registry-breg/tests/runtime_config.rs, a_substitution_inside_a_secret_reference_is_refused,
+    substituted_values_stay_strings, a_substituted_value_cannot_inject_document_structure,
+    oidc_issuer_and_audience_follow_the_shared_issuer_block and
+    jwks_source_uri_kind_skips_discovery_under_the_shared_rules;
+    crates/registry-breg/tests/compiler_contract.rs, an_authored_project_carrying_an_environment_expression_is_refused;
+    release/docker/Dockerfile.breg. */}
+
 - BREAKING: Registry Relay reads `runtime.yaml` through the shared
   runtime configuration loader. The file now opens with
   `apiVersion: registry.registrystack.org/relay-runtime/v1alpha1` and

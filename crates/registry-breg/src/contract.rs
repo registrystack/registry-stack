@@ -4,6 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jsonschema::{Draft, JSONSchema};
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
+use registry_platform_config::{
+    reject_environment_expressions_in_authored_yaml, RuntimeConfigErrorKind,
+};
 pub use registry_platform_hooks::{HookHandlerSource, HookPhase};
 use serde::{
     de::DeserializeOwned, de::Error as _, de::IntoDeserializer, Deserialize, Deserializer,
@@ -3369,6 +3372,7 @@ fn parse_json<T: DeserializeOwned>(bytes: &[u8], root: &str) -> Result<T, Compil
 }
 
 fn parse_yaml<T: DeserializeOwned>(bytes: &[u8], root: &str) -> Result<T, CompileFailure> {
+    reject_authored_environment_expression(bytes, root)?;
     let deserializer = serde_norway::Deserializer::from_slice(bytes);
     serde_path_to_error::deserialize(deserializer).map_err(|error| {
         CompileFailure::from_one(Diagnostic::error(
@@ -3400,6 +3404,48 @@ fn deserialize_value<T: DeserializeOwned>(
 }
 
 /// Join the document root with the member path `serde_path_to_error` recorded.
+/// `${...}` substitution belongs to `runtime.yaml`; an authored project or
+/// module is reviewed as written, so an environment expression in one is
+/// refused with the member that holds it. A document the shared reader cannot
+/// parse falls through to the ordinary parse, which reports its own diagnostic.
+fn reject_authored_environment_expression(bytes: &[u8], root: &str) -> Result<(), CompileFailure> {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return Ok(());
+    };
+    match reject_environment_expressions_in_authored_yaml(text) {
+        Err(error) if error.kind() == RuntimeConfigErrorKind::AuthoredExpression => {
+            Err(CompileFailure::from_one(Diagnostic::error(
+                "source.environment_expression",
+                authored_member_path(root, error.field()),
+                "the authored value holds an environment expression; ${...} substitution \
+                 applies to runtime.yaml only, so write the value in the authored file directly",
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Render the shared reader's dotted field, whose sequence indexes are numeric
+/// segments, in the `root.member[index]` form the compiler's other
+/// diagnostics use.
+fn authored_member_path(root: &str, field: &str) -> String {
+    let mut path = root.to_owned();
+    if field == "/" {
+        return path;
+    }
+    for segment in field.split('.') {
+        if !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit()) {
+            path.push('[');
+            path.push_str(segment);
+            path.push(']');
+        } else {
+            path.push('.');
+            path.push_str(segment);
+        }
+    }
+    path
+}
+
 pub(crate) fn document_path<E: std::fmt::Display>(
     root: &str,
     error: &serde_path_to_error::Error<E>,

@@ -184,7 +184,7 @@ casework --runtime-config /etc/registry-casework/runtime.yaml migrate
 
 bregctl doctor --runtime-config /etc/registry-breg/runtime.yaml
 caseworkctl doctor --runtime-config /etc/registry-casework/runtime.yaml
-breg --config /etc/registry-breg/runtime.yaml
+breg --runtime-config /etc/registry-breg/runtime.yaml
 casework --runtime-config /etc/registry-casework/runtime.yaml serve
 
 curl --fail --silent https://registry.example.org/ready

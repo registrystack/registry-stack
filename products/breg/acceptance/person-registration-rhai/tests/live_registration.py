@@ -106,7 +106,7 @@ def main() -> None:
             return response.status, json.load(response)
 
     with (output / "server.log").open("wb") as log:
-        server = subprocess.Popen([str(args.breg), "--config", str(active_runtime)], stdout=log, stderr=log)
+        server = subprocess.Popen([str(args.breg), "--runtime-config", str(active_runtime)], stdout=log, stderr=log)
         try:
             deadline = time.monotonic() + 20
             while True:

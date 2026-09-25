@@ -168,7 +168,7 @@ HTTP_PROBE_DOCKERFILES = {
     Path("release/docker/Dockerfile.breg"): {
         "binary": "breg",
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/breg"]',
-        "command": 'CMD ["--config", "/etc/breg/runtime.yaml"]',
+        "command": 'CMD ["--runtime-config", "/etc/breg/runtime.yaml"]',
     },
     Path("release/docker/Dockerfile.casework"): {
         "binary": "casework",

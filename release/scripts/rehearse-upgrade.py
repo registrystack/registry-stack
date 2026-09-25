@@ -990,7 +990,8 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
     old.run_json("bregctl", "--format", "json", "apply", "--runtime-config",
                  str(breg.runtime), "--package", str(package), "--initial")
     ready = f"http://127.0.0.1:{breg.port}/ready"
-    service = Service(old, "breg", ["--config", str(breg.runtime)], work / "breg-old.log", ready)
+    service = Service(old, "breg", breg_arguments(breg_reads_runtime_config(old), breg.runtime),
+                      work / "breg-old.log", ready)
     try:
         seeded = breg.seed("before")
         before_views = breg.views(seeded)
@@ -1019,7 +1020,7 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
     breg.write_runtime(breg.runtime, "registry", successor, successor_revision,
                        registry["package"]["sequence"], breg.port)
     new.run_json("bregctl", "--format", "json", "verify", "--runtime-config", str(breg.runtime))
-    service = Service(new, "breg", ["--config", str(breg.runtime)],
+    service = Service(new, "breg", breg_arguments(breg_reads_runtime_config(new), breg.runtime),
                       work / "breg-successor.log", ready)
     try:
         successor_views = breg.views(seeded)
@@ -1345,6 +1346,16 @@ def migrate_evidence_runtime(document: dict[str, Any]) -> dict[str, Any]:
         else:
             migrated[key] = json.loads(json.dumps(value))
     return migrated
+
+
+def breg_arguments(reads_runtime_config: bool, runtime: Path) -> list[str]:
+    """Name the runtime file the way one side's `breg` binary reads it."""
+
+    return ["--runtime-config" if reads_runtime_config else "--config", str(runtime)]
+
+
+def breg_reads_runtime_config(side: Side) -> bool:
+    return "--runtime-config" in side.run("breg", "--help").stdout
 
 
 def evidence_arguments(reads_runtime_config: bool, runtime: Path, subcommand: str) -> list[str]:

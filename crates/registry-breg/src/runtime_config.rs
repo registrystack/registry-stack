@@ -16,7 +16,8 @@ use base64::Engine as _;
 use jsonwebtoken::jwk::JwkSet;
 use registry_platform_audit::{AuditDestination, AuditDestinationKind, AuditProfile};
 use registry_platform_config::{
-    expand_config_env_vars_with, SecretError, SecretProvider, SecretReference, SecretResolver,
+    AuditKeyConfig, JwksSource, ListenerBind, OidcIssuerConfig, RuntimeConfigErrorKind,
+    RuntimeConfigLoader, RuntimeEnvelope, SecretError, SecretReference, SecretResolver,
 };
 use registry_platform_crypto::{parse_json_strict, PublicJwk, SigningAlgorithm};
 #[cfg(feature = "schema")]
@@ -129,6 +130,8 @@ pub enum RuntimeConfigError {
     Bounds,
     #[error("runtime configuration environment expansion was refused")]
     EnvExpansion,
+    #[error("runtime configuration substitutes into a secret reference or secret provider")]
+    SubstitutionInReference,
     #[error("the runtime configuration document is invalid")]
     Document,
     #[error("runtime configuration uses an unsupported apiVersion")]
@@ -219,6 +222,7 @@ impl RuntimeConfigError {
             Self::UnsafeFile => "runtime_config.unsafe_file",
             Self::Bounds => "runtime_config.bounds",
             Self::EnvExpansion => "runtime_config.env_expansion",
+            Self::SubstitutionInReference => "runtime_config.substitution_in_reference",
             Self::Document => "runtime_config.document",
             Self::InvalidApiVersion => "runtime_config.invalid_api_version",
             Self::InvalidKind => "runtime_config.invalid_kind",
@@ -258,6 +262,7 @@ impl RuntimeConfigError {
             | Self::UnsafeFile
             | Self::Bounds
             | Self::EnvExpansion
+            | Self::SubstitutionInReference
             | Self::Document
             | Self::GovernedMember
             | Self::InvalidBinding
@@ -330,31 +335,84 @@ pub fn parse_runtime_config_with_env(
     {
         return Err(RuntimeConfigError::Bounds);
     }
-    let expanded =
-        expand_config_env_vars_with(raw, lookup).map_err(|_| RuntimeConfigError::EnvExpansion)?;
-    if expanded.len() > usize::try_from(MAX_RUNTIME_CONFIG_BYTES).unwrap_or(usize::MAX) {
+    let substituted = RuntimeConfigLoader::new(RuntimeEnvelope {
+        api_version: RUNTIME_CONFIG_API_VERSION,
+        kind: RUNTIME_CONFIG_KIND,
+    })
+    .max_bytes(MAX_RUNTIME_CONFIG_BYTES)
+    .parse_str::<Value>(raw, lookup)
+    .map_err(|error| runtime_config_error_from_loader(&error))?
+    .config;
+    // A substituted value may be longer than the expression it replaced, so
+    // the substituted document is held to the same bound as the file.
+    let substituted_len = serde_json::to_string(&substituted)
+        .map_err(|_| RuntimeConfigError::Document)?
+        .len();
+    if substituted_len > usize::try_from(MAX_RUNTIME_CONFIG_BYTES).unwrap_or(usize::MAX) {
         return Err(RuntimeConfigError::Bounds);
     }
-    parse_expanded_runtime_config(&expanded)
-}
-
-fn parse_expanded_runtime_config(expanded: &str) -> Result<RuntimeConfig> {
-    reject_governed_members(expanded)?;
+    if contains_governed_member(&substituted) {
+        return Err(RuntimeConfigError::GovernedMember);
+    }
+    reject_invalid_binding_text(&substituted)?;
     let raw: RawRuntimeConfig =
-        serde_norway::from_str(expanded).map_err(|_| RuntimeConfigError::Document)?;
+        serde_json::from_value(substituted).map_err(|_| RuntimeConfigError::Document)?;
     RuntimeConfig::from_raw(raw)
 }
 
-fn reject_governed_members(raw: &str) -> Result<()> {
-    let value: serde_norway::Value =
-        serde_norway::from_str(raw).map_err(|_| RuntimeConfigError::Document)?;
-    if contains_governed_member(&value) {
-        return Err(RuntimeConfigError::GovernedMember);
+/// The shared loader parses the document, checks its envelope, and substitutes
+/// `${VAR}` inside string values; each of its refusals keeps the code this
+/// runtime reported for the same cause.
+fn runtime_config_error_from_loader(
+    error: &registry_platform_config::RuntimeConfigError,
+) -> RuntimeConfigError {
+    match error.kind() {
+        RuntimeConfigErrorKind::Envelope if error.field() == "apiVersion" => {
+            RuntimeConfigError::InvalidApiVersion
+        }
+        RuntimeConfigErrorKind::Envelope => RuntimeConfigError::InvalidKind,
+        RuntimeConfigErrorKind::Substitution => RuntimeConfigError::EnvExpansion,
+        RuntimeConfigErrorKind::SubstitutionInReference => {
+            RuntimeConfigError::SubstitutionInReference
+        }
+        RuntimeConfigErrorKind::Bounds => RuntimeConfigError::Bounds,
+        RuntimeConfigErrorKind::Path | RuntimeConfigErrorKind::UnsafeFile => {
+            RuntimeConfigError::UnsafeFile
+        }
+        RuntimeConfigErrorKind::Unavailable => RuntimeConfigError::Unavailable,
+        _ => RuntimeConfigError::Document,
+    }
+}
+
+/// A listener address or an audit key reference that does not parse is
+/// refused as that binding, the code it had when the binding parsed its own
+/// text, before the typed document reports every other shape problem as a
+/// document error.
+fn reject_invalid_binding_text(document: &Value) -> Result<()> {
+    let refuses = |pointer: &str, parses: fn(&Value) -> bool| {
+        document
+            .pointer(pointer)
+            .is_some_and(|value| value.is_string() && !parses(value))
+    };
+    if refuses("/listener/bind", |value| {
+        ListenerBind::deserialize(value).is_ok()
+    }) {
+        return Err(RuntimeConfigError::InvalidListener);
+    }
+    if refuses("/metricsListener/bind", |value| {
+        ListenerBind::deserialize(value).is_ok()
+    }) {
+        return Err(RuntimeConfigError::InvalidMetricsListener);
+    }
+    if refuses("/audit/hashKeyRef", |value| {
+        SecretReference::deserialize(value).is_ok()
+    }) {
+        return Err(RuntimeConfigError::InvalidAudit);
     }
     Ok(())
 }
 
-fn contains_governed_member(value: &serde_norway::Value) -> bool {
+fn contains_governed_member(value: &Value) -> bool {
     const GOVERNED: &[&str] = &[
         "entities",
         "fields",
@@ -379,22 +437,20 @@ fn contains_governed_member(value: &serde_norway::Value) -> bool {
         "cors",
     ];
     match value {
-        serde_norway::Value::Mapping(mapping) => mapping.iter().any(|(key, value)| {
-            key.as_str().is_some_and(|key| GOVERNED.contains(&key))
+        Value::Object(mapping) => mapping.iter().any(|(key, value)| {
+            GOVERNED.contains(&key.as_str())
                 // Binding-map keys are compiler-issued logical ids. Do not
                 // reinterpret an id such as `hooks` as a governed field; the
                 // strict binding value types still reject undeployed members.
-                || (key.as_str().is_none_or(|key| {
-                    !matches!(
-                        key,
-                        "eventDestinations"
-                            | "evidenceProviders"
-                            | "reviewAuthorities"
-                            | "reviewExecutors"
-                    )
-                }) && contains_governed_member(value))
+                || (!matches!(
+                    key.as_str(),
+                    "eventDestinations"
+                        | "evidenceProviders"
+                        | "reviewAuthorities"
+                        | "reviewExecutors"
+                ) && contains_governed_member(value))
         }),
-        serde_norway::Value::Sequence(values) => values.iter().any(contains_governed_member),
+        Value::Array(values) => values.iter().any(contains_governed_member),
         _ => false,
     }
 }
@@ -1011,10 +1067,7 @@ pub struct ListenerConfig {
 
 impl ListenerConfig {
     fn from_raw(raw: RawListenerConfig) -> Result<Self> {
-        let bind = raw
-            .bind
-            .parse::<SocketAddr>()
-            .map_err(|_| RuntimeConfigError::InvalidListener)?;
+        let bind = raw.bind.socket_addr();
         Ok(Self {
             bind,
             public_origin: raw
@@ -1058,10 +1111,7 @@ pub struct MetricsListenerConfig {
 
 impl MetricsListenerConfig {
     fn from_raw(raw: RawMetricsListenerConfig) -> Result<Self> {
-        let bind = raw
-            .bind
-            .parse::<SocketAddr>()
-            .map_err(|_| RuntimeConfigError::InvalidMetricsListener)?;
+        let bind = raw.bind.socket_addr();
         if bind.port() == 0 {
             return Err(RuntimeConfigError::InvalidMetricsListener);
         }
@@ -1249,44 +1299,29 @@ impl fmt::Debug for DeploymentIdentity {
     }
 }
 
+/// The shared secret-provider block, checked once at load. Its `Debug` keeps
+/// the file root out of logs.
 #[derive(Clone)]
 pub struct SecretProvidersConfig {
-    environment: bool,
-    file: Option<FileSecretProviderConfig>,
+    block: registry_platform_config::SecretProvidersConfig,
 }
 
 impl SecretProvidersConfig {
-    fn from_raw(raw: RawSecretProvidersConfig) -> Result<Self> {
-        if raw.environment.is_none() && raw.file.is_none() {
-            return Err(RuntimeConfigError::InvalidSecretProvider);
+    fn from_raw(raw: registry_platform_config::SecretProvidersConfig) -> Result<Self> {
+        raw.check()
+            .map_err(|_| RuntimeConfigError::InvalidSecretProvider)?;
+        if let Some(file) = &raw.file {
+            validate_absolute_lexical_path(&file.root, RuntimeConfigError::InvalidSecretProvider)?;
         }
-        let file = raw
-            .file
-            .map(FileSecretProviderConfig::from_raw)
-            .transpose()?;
-        Ok(Self {
-            environment: raw.environment.is_some(),
-            file,
-        })
+        Ok(Self { block: raw })
     }
 
     fn resolver(&self) -> Result<SecretResolver> {
-        let mut providers = Vec::new();
-        if self.environment {
-            providers.push(SecretProvider::Environment);
-        }
-        if self.file.is_some() {
-            providers.push(SecretProvider::File);
-        }
-        let root = self
-            .file
-            .as_ref()
-            .map_or_else(PathBuf::new, |file| file.root.clone());
-        SecretResolver::new(providers, root).map_err(Into::into)
+        self.block.resolver().map_err(Into::into)
     }
 
     fn file_root(&self) -> Option<&Path> {
-        self.file.as_ref().map(|file| file.root.as_path())
+        self.block.file.as_ref().map(|file| file.root.as_path())
     }
 }
 
@@ -1294,21 +1329,9 @@ impl fmt::Debug for SecretProvidersConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("SecretProvidersConfig")
-            .field("environment", &self.environment)
-            .field("file", &self.file.as_ref().map(|_| "<redacted>"))
+            .field("environment", &self.block.environment.is_some())
+            .field("file", &self.block.file.as_ref().map(|_| "<redacted>"))
             .finish()
-    }
-}
-
-#[derive(Clone)]
-pub struct FileSecretProviderConfig {
-    root: PathBuf,
-}
-
-impl FileSecretProviderConfig {
-    fn from_raw(raw: RawFileSecretProviderConfig) -> Result<Self> {
-        validate_absolute_lexical_path(&raw.root, RuntimeConfigError::InvalidSecretProvider)?;
-        Ok(Self { root: raw.root })
     }
 }
 
@@ -1476,8 +1499,14 @@ pub struct OidcVerifierConfig {
 
 impl OidcVerifierConfig {
     fn from_raw(raw: RawOidcVerifierConfig) -> Result<Self> {
-        validate_oidc_value(&raw.issuer)?;
-        validate_oidc_value(&raw.audience)?;
+        validate_oidc_value(&raw.provider.issuer)?;
+        validate_oidc_value(&raw.provider.audience)?;
+        // A loopback `http` issuer or key URI stays accepted for the local
+        // development and test deployments that run their issuer beside the
+        // registry; every other issuer and key URI is `https`.
+        raw.provider
+            .check("authentication.oidc", true)
+            .map_err(|_| RuntimeConfigError::InvalidOidc)?;
         validate_oidc_value(&raw.access_token_type)?;
         validate_claim_name(&raw.scope_claim)?;
         if raw.scope_separator.is_control() || raw.scope_separator.is_alphanumeric() {
@@ -1494,9 +1523,9 @@ impl OidcVerifierConfig {
             return Err(RuntimeConfigError::InvalidOidc);
         }
         // Duplicate assertion-issuer client keys are already refused before this
-        // point: `reject_governed_members` parses the whole document into a
-        // generic value first, and that parse rejects any duplicate YAML mapping
-        // key anywhere in the document, including here.
+        // point: the shared loader parses the whole document into a generic
+        // value first, and that parse rejects any duplicate YAML mapping key
+        // anywhere in the document, including here.
         let assertion_issuer_clients = raw.assertion_issuers.keys().cloned().collect::<Vec<_>>();
         validate_bounded_list(&assertion_issuer_clients)?;
         for issuers in raw.assertion_issuers.values() {
@@ -1508,9 +1537,10 @@ impl OidcVerifierConfig {
         }
         let max_token_lifetime = seconds_bounded(raw.max_token_lifetime_seconds, 1, 7200)?;
         let leeway = oidc_leeway(raw.leeway_milliseconds)?;
+        let jwks_source = OidcJwksSource::from_block(raw.provider.jwks_source)?;
         Ok(Self {
-            issuer: raw.issuer,
-            audience: raw.audience,
+            issuer: raw.provider.issuer,
+            audience: raw.provider.audience,
             allowed_algorithm: raw.allowed_algorithm,
             access_token_type: raw.access_token_type,
             scope_claim: raw.scope_claim,
@@ -1521,11 +1551,7 @@ impl OidcVerifierConfig {
             max_token_lifetime,
             leeway,
             jwks_cache: JwksCacheConfig::from_raw(raw.jwks_cache)?,
-            jwks_source: raw
-                .jwks_source
-                .map(OidcJwksSource::from_raw)
-                .transpose()?
-                .unwrap_or(OidcJwksSource::Discovery),
+            jwks_source,
         })
     }
 
@@ -1576,6 +1602,10 @@ impl OidcVerifierConfig {
                     self.jwks_fetcher_config(),
                 )))
             }
+            OidcJwksSource::Uri { uri } => Ok(Arc::new(JwksFetcher::new(
+                uri.clone(),
+                self.jwks_fetcher_config(),
+            ))),
             OidcJwksSource::Static { document_ref } => {
                 let document = resolver
                     .resolve_reference(document_ref)
@@ -1663,14 +1693,16 @@ impl OidcAlgorithm {
 #[derive(Clone)]
 enum OidcJwksSource {
     Discovery,
+    Uri { uri: String },
     Static { document_ref: SecretReference },
 }
 
 impl OidcJwksSource {
-    fn from_raw(raw: RawOidcJwksSource) -> Result<Self> {
-        match raw {
-            RawOidcJwksSource::Discovery {} => Ok(Self::Discovery),
-            RawOidcJwksSource::Static { document_ref } => Ok(Self::Static {
+    fn from_block(block: JwksSource) -> Result<Self> {
+        match block {
+            JwksSource::Discovery {} => Ok(Self::Discovery),
+            JwksSource::Uri { uri } => Ok(Self::Uri { uri }),
+            JwksSource::Static { document_ref } => Ok(Self::Static {
                 document_ref: parse_secret_reference(
                     document_ref,
                     RuntimeConfigError::InvalidOidc,
@@ -1682,6 +1714,7 @@ impl OidcJwksSource {
     const fn kind(&self) -> OidcJwksSourceKind {
         match self {
             Self::Discovery => OidcJwksSourceKind::Discovery,
+            Self::Uri { .. } => OidcJwksSourceKind::Uri,
             Self::Static { .. } => OidcJwksSourceKind::Static,
         }
     }
@@ -1690,6 +1723,7 @@ impl OidcJwksSource {
 #[derive(Clone, Copy, Debug)]
 enum OidcJwksSourceKind {
     Discovery,
+    Uri,
     Static,
 }
 
@@ -2013,8 +2047,7 @@ pub struct AuditConfig {
 
 impl AuditConfig {
     fn from_raw(raw: RawAuditConfig) -> Result<Self> {
-        let hash_key_ref =
-            parse_secret_reference(raw.hash_key_ref, RuntimeConfigError::InvalidAudit)?;
+        let hash_key_ref = raw.key.hash_key_ref;
         let destination = AuditDestination::from_settings(
             raw.destination,
             raw.path.map(PathBuf::from),
@@ -2441,7 +2474,7 @@ struct RawRuntimeConfig {
     kind: String,
     listener: RawListenerConfig,
     identity: RawDeploymentIdentity,
-    secret_providers: RawSecretProvidersConfig,
+    secret_providers: registry_platform_config::SecretProvidersConfig,
     database: RawDatabaseConfig,
     /// Defaults to PostgreSQL; S3 requires a bucket with versioning never enabled.
     #[serde(default)]
@@ -2488,7 +2521,7 @@ struct RawRuntimeConfig {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawListenerConfig {
-    bind: String,
+    bind: ListenerBind,
     /// Canonical HTTPS origin (loopback HTTP for local development) for QGIS
     /// discovery and pagination. Required when the registry exposes GIS collections.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2501,7 +2534,7 @@ struct RawListenerConfig {
 struct RawMetricsListenerConfig {
     /// Operator-private loopback or private numeric address and named port,
     /// for example `127.0.0.1:9100`.
-    bind: String,
+    bind: ListenerBind,
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
@@ -2512,26 +2545,6 @@ struct RawDeploymentIdentity {
     instance_id: String,
     database_id: String,
     database_initialization_environment: String,
-}
-
-#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RawSecretProvidersConfig {
-    environment: Option<RawEnvironmentSecretProviderConfig>,
-    file: Option<RawFileSecretProviderConfig>,
-}
-
-#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawEnvironmentSecretProviderConfig {}
-
-#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawFileSecretProviderConfig {
-    root: PathBuf,
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
@@ -2600,8 +2613,8 @@ struct RawAuthenticationConfig {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawOidcVerifierConfig {
-    issuer: String,
-    audience: String,
+    #[serde(flatten)]
+    provider: OidcIssuerConfig,
     allowed_algorithm: OidcAlgorithm,
     /// The one admitted access-token `typ` semantics. Configuring the
     /// RFC 9068 access-token media type as `at+jwt` or
@@ -2622,21 +2635,6 @@ struct RawOidcVerifierConfig {
     /// Optional JWKS fetch and cache tuning. Defaults to bounded cache behavior.
     #[serde(default)]
     jwks_cache: RawJwksCacheConfig,
-    #[serde(default)]
-    jwks_source: Option<RawOidcJwksSource>,
-}
-
-#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
-#[derive(Deserialize)]
-#[serde(
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields,
-    tag = "kind"
-)]
-enum RawOidcJwksSource {
-    Discovery {},
-    Static { document_ref: String },
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
@@ -2711,7 +2709,8 @@ impl From<RawContextualClaimNames> for ClaimNames {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawAuditConfig {
-    hash_key_ref: String,
+    #[serde(flatten)]
+    key: AuditKeyConfig,
     /// `file` (the default) writes a durable, rotated JSON Lines file at
     /// `path`; `stdout` writes one JSON line per entry to standard output.
     #[serde(default)]
@@ -3179,12 +3178,6 @@ fn install_schema_constraints(schema: &mut Value) {
             VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
         ),
         (
-            "/$defs/RawFileSecretProviderConfig/properties/root",
-            1,
-            MAX_PATH_BYTES,
-            "",
-        ),
-        (
             "/$defs/RawDatabaseConfig/properties/runtimeUrlRef",
             1,
             MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
@@ -3236,12 +3229,12 @@ fn install_schema_constraints(schema: &mut Value) {
             "/$defs/RawOidcVerifierConfig/properties/issuer",
             1,
             MAX_OIDC_VALUE_BYTES,
-            VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
+            "",
         ),
         (
             "/$defs/RawOidcVerifierConfig/properties/audience",
             1,
-            MAX_OIDC_VALUE_BYTES,
+            registry_platform_config::MAX_OIDC_AUDIENCE_CHARACTERS,
             VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
         ),
         (
@@ -3263,12 +3256,6 @@ fn install_schema_constraints(schema: &mut Value) {
             SCOPE_SEPARATOR_SCHEMA_PATTERN,
         ),
         (
-            "/$defs/RawOidcJwksSource/oneOf/1/properties/documentRef",
-            1,
-            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
-            SECRET_REFERENCE_SCHEMA_PATTERN,
-        ),
-        (
             "/$defs/RawAuthorityClaimsConfig/properties/principal",
             1,
             128,
@@ -3279,12 +3266,6 @@ fn install_schema_constraints(schema: &mut Value) {
             1,
             128,
             CLAIM_NAME_SCHEMA_PATTERN,
-        ),
-        (
-            "/$defs/RawAuditConfig/properties/hashKeyRef",
-            1,
-            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
-            SECRET_REFERENCE_SCHEMA_PATTERN,
         ),
         (
             "/$defs/RawCursorConfig/properties/secretRef",
