@@ -338,7 +338,7 @@ relevant product pages on this site rather than duplicating release notes.
   in `Ref` or under `secretProviders` is refused, and one in `casework.yaml`
   is refused by the runtime and by `caseworkctl check`. `listener.bind` is
   required. `authentication.oidc.issuer` must be an `https` URL without
-  credentials or fragment, with plain `http` accepted only on an IPv4
+  credentials, query, or fragment, with plain `http` accepted only on an IPv4
   loopback host under `development-loopback`, and `audience` is at most 512
   characters. `authentication.oidc.jwksUri` is removed: declare `jwksSource`
   with `kind: uri` and the same URL as `uri`. `audit.hashKeyRef` must be an
@@ -369,8 +369,8 @@ relevant product pages on this site rather than duplicating release notes.
   or module files is refused as `source.environment_expression`. An empty
   YAML scalar is now null rather than an empty string, so quote `""` where an
   empty string is meant. `authentication.oidc.issuer` must be an `https` URL
-  without credentials or fragment, with plain `http` accepted only on an IPv4
-  loopback host, `audience` is at most 512 characters, and `jwksSource`
+  without credentials, query, or fragment, with plain `http` accepted only on
+  an IPv4 loopback host, `audience` is at most 512 characters, and `jwksSource`
   gains `kind: uri` beside `discovery` and `static`. A file missing
   `apiVersion` or `kind` is refused as `runtime_config.invalid_api_version`
   or `runtime_config.invalid_kind`. To migrate, replace `--config FILE` with

@@ -498,6 +498,29 @@ fn the_oidc_issuer_is_an_https_url_and_the_audience_is_bounded_text() {
 }
 
 #[test]
+fn an_oidc_issuer_with_a_query_is_refused_without_echoing_it() {
+    let field = "authentication.oidc";
+    issuer(
+        "https://issuer.example.test/realms/pilot",
+        "api",
+        JwksSource::default(),
+    )
+    .check(field, false)
+    .expect("an issuer with a path");
+    for candidate in [
+        "https://issuer.example.test/realms/pilot?tenant=query-canary",
+        "https://issuer.example.test/?",
+    ] {
+        let error = issuer(candidate, "api", JwksSource::default())
+            .check(field, false)
+            .expect_err("an issuer with a query is refused");
+        assert_eq!(error.field(), "authentication.oidc.issuer", "{error}");
+        assert!(error.to_string().contains("query"), "{error}");
+        assert!(!error.to_string().contains("query-canary"), "{error}");
+    }
+}
+
+#[test]
 fn a_secret_reference_reads_and_writes_as_its_text() {
     let reference: SecretReference =
         serde_json::from_value(serde_json::json!("secret:file/a")).expect("reference parses");
