@@ -897,7 +897,9 @@ publication with a unique correlation ID, follows only the correlated run, runs
 the public verifier, and waits for the correlated documentation and identifier
 deployments. The tag is annotated but not cryptographically signed. The command
 never approves a protected environment. It prints the environment and exact run
-URL when an authorized reviewer must use **Review deployments**.
+URL when an authorized reviewer must use **Review deployments**. Status output
+is flushed line by line, so redirecting it to a log file still shows a pending
+approval as soon as it appears instead of only after the command exits.
 
 The command is resumable. Rerun the same `publish --plan ... --wait` invocation
 after an interruption. It accepts only an exact local-only or immutable remote
