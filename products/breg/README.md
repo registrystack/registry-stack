@@ -153,7 +153,10 @@ configured domain or a compatible additive schema change.
 
 For a compatible successor, repeat test, package, external signing, and apply
 with the active runtime configuration as the baseline, then restart the same
-server executable on the successor package. A migration failure after
+server executable on the successor package. Removing or narrowing an access
+profile removes its obsolete compiled row-security policies during apply;
+activation still requires the exact candidate catalog. Unexpected policies
+remain catalog drift and are not silently deleted. A migration failure after
 maintenance begins leaves the database durably in maintenance and readiness
 fails until an operator resolves the cause and applies the exact target
 package again, or restores the operator's own pre-activation backup and

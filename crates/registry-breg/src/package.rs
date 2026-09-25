@@ -29,7 +29,7 @@ use crate::generated_ddl::{
     drop_spatial_candidate_view_statement, generate_ddl_with_actions, quote_identifier,
     replace_vocabulary_check_statement, set_column_not_null_statement,
     spatial_bbox_function_statement, spatial_projection_fields, spatial_projection_statements,
-    DdlPolicy, DdlPolicyRole, DdlStatement, DdlStatementKind, DdlTable,
+    DdlInventory, DdlPolicy, DdlPolicyRole, DdlStatement, DdlStatementKind, DdlTable,
 };
 use crate::history_schema::{
     serialize_descriptor, HistoryEntityDescriptor, HistoryLifecycleDescriptor,
@@ -2065,7 +2065,13 @@ fn additive_migration_plan(
         &previous.physical_names,
         &previous.actions,
     );
-    let mut removed_dependency_statements = Vec::new();
+    let (policy_drops, policy_creates) =
+        successor_managed_policy_delta(&previous_ddl, candidate.ddl());
+    let mut dropped_policy_statement_ids = policy_drops
+        .iter()
+        .map(|statement| statement.id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut removed_dependency_statements = policy_drops;
     let previous_probe_functions = previous_ddl
         .statements
         .iter()
@@ -2093,33 +2099,24 @@ fn additive_migration_plan(
             }
         }
     }
-    // Drop obsolete membership and consent policies before their helper
-    // dependencies. The activation ACL reconciliation installs the candidate
-    // policies afterward.
+    // A reviewed table replacement or removal runs later, but any policy that
+    // depends on a retiring membership or consent helper must be removed
+    // first so PostgreSQL can drop the helper function. The complete same-table
+    // delta above already owns these drops; deduplicate that shared case.
     for table in &previous_ddl.tables {
         let candidate_table = candidate
             .ddl()
             .tables
             .iter()
-            .find(|other| other.entity_id == table.entity_id);
+            .find(|candidate| candidate.entity_id == table.entity_id);
         for policy in &table.policies {
-            let probe_policy = ROW_PROBE_PREFIXES.iter().any(|prefix| {
-                policy.name.starts_with(&format!("registry_{prefix}"))
-                    || policy
-                        .using_expression
-                        .iter()
-                        .chain(&policy.check_expression)
-                        .any(|expression| {
-                            expression.contains(&format!("registry_context.\"{prefix}"))
-                        })
-            });
-            if probe_policy && !candidate_table.is_some_and(|other| other.policies.contains(policy))
+            if policy_depends_on_row_probe(policy)
+                && !candidate_table.is_some_and(|candidate| candidate.policies.contains(policy))
             {
-                removed_dependency_statements.push(drop_policy_statement(
-                    &table.entity_id,
-                    table,
-                    &policy.name,
-                ));
+                let drop = drop_policy_statement(&table.entity_id, table, &policy.name);
+                if dropped_policy_statement_ids.insert(drop.id.clone()) {
+                    removed_dependency_statements.push(drop);
+                }
             }
         }
     }
@@ -2192,18 +2189,11 @@ fn additive_migration_plan(
                             .any(|candidate| candidate.name == policy.name)
                     }))
             {
-                removed_dependency_statements.push(DdlStatement {
-                    id: format!(
-                        "entity.{}.policy.{}.drop",
-                        previous_table.entity_id, policy.name
-                    ),
-                    kind: DdlStatementKind::Policy,
-                    sql: format!(
-                        "DROP POLICY IF EXISTS {} ON registry_data.{}",
-                        quote_identifier(&policy.name),
-                        quote_identifier(&previous_entity.physical_table)
-                    ),
-                });
+                let drop =
+                    drop_policy_statement(&previous_table.entity_id, previous_table, &policy.name);
+                if dropped_policy_statement_ids.insert(drop.id.clone()) {
+                    removed_dependency_statements.push(drop);
+                }
             }
         }
         for field in removed_fields {
@@ -2419,6 +2409,7 @@ fn additive_migration_plan(
             );
         }
     }
+    statements.extend(policy_creates);
     MigrationPlan {
         from_revision: Some(prior_package_revision.to_owned()),
         prior_baseline: Some(previous.clone()),
@@ -2438,6 +2429,17 @@ fn is_row_probe_function_statement(id: &str) -> bool {
         ROW_PROBE_PREFIXES
             .iter()
             .any(|prefix| name.starts_with(prefix))
+    })
+}
+
+fn policy_depends_on_row_probe(policy: &DdlPolicy) -> bool {
+    ROW_PROBE_PREFIXES.iter().any(|prefix| {
+        policy.name.starts_with(&format!("registry_{prefix}"))
+            || policy
+                .using_expression
+                .iter()
+                .chain(&policy.check_expression)
+                .any(|expression| expression.contains(&format!("registry_context.\"{prefix}")))
     })
 }
 
@@ -2542,7 +2544,6 @@ fn reviewed_successor_migration_plan(
                 .cloned(),
         );
     }
-    statements.extend(reviewed_successor_managed_policy_delta(baseline, candidate));
     Ok(MigrationPlan {
         from_revision: Some(change_set.from_revision.clone()),
         prior_baseline: Some(baseline.clone()),
@@ -2553,35 +2554,29 @@ fn reviewed_successor_migration_plan(
     })
 }
 
-fn reviewed_successor_managed_policy_delta(
-    baseline: &CompiledRegistryMigrationBaseline,
-    candidate: &CompiledRegistry,
-) -> Vec<DdlStatement> {
-    let previous_ddl = generate_ddl_with_actions(
-        &baseline.entities,
-        &baseline.physical_names,
-        &baseline.actions,
-    );
+fn successor_managed_policy_delta(
+    previous_ddl: &DdlInventory,
+    candidate_ddl: &DdlInventory,
+) -> (Vec<DdlStatement>, Vec<DdlStatement>) {
     let previous_tables = previous_ddl
         .tables
         .iter()
         .map(|table| (table.entity_id.as_str(), table))
         .collect::<BTreeMap<_, _>>();
-    let candidate_tables = candidate
-        .ddl()
+    let candidate_tables = candidate_ddl
         .tables
         .iter()
         .map(|table| (table.entity_id.as_str(), table))
         .collect::<BTreeMap<_, _>>();
-    let candidate_policy_statements = candidate
-        .ddl()
+    let candidate_policy_statements = candidate_ddl
         .statements
         .iter()
         .filter(|statement| statement.kind == DdlStatementKind::Policy)
         .map(|statement| (statement.id.as_str(), statement))
         .collect::<BTreeMap<_, _>>();
 
-    let mut statements = Vec::new();
+    let mut drops = Vec::new();
+    let mut creates = Vec::new();
     for (entity_id, previous_table) in previous_tables {
         let Some(candidate_table) = candidate_tables.get(entity_id) else {
             continue;
@@ -2589,27 +2584,40 @@ fn reviewed_successor_managed_policy_delta(
         if previous_table.physical_name != candidate_table.physical_name {
             continue;
         }
-        let previous_policies = reviewed_successor_managed_policies(previous_table);
-        let candidate_policies = reviewed_successor_managed_policies(candidate_table);
+        let previous_policies = managed_policies(previous_table);
+        let candidate_policies = managed_policies(candidate_table);
+        let created_policies = reviewed_successor_created_policies(candidate_table);
         for (name, previous_policy) in &previous_policies {
             if candidate_policies.get(name) != Some(previous_policy) {
-                statements.push(drop_policy_statement(entity_id, previous_table, name));
+                drops.push(drop_policy_statement(entity_id, previous_table, name));
             }
         }
-        for (name, candidate_policy) in &candidate_policies {
-            if previous_policies.get(name) == Some(candidate_policy) {
+        // Runtime ACL reconciliation installs every candidate policy after the
+        // complete migration. Keep compiler-plan creates to the reviewed
+        // action and change-request policies it historically owned; ordinary
+        // and probe policies may refer to columns installed by reviewed SQL.
+        for (name, candidate_policy) in created_policies {
+            if previous_policies.get(name).copied() == Some(candidate_policy) {
                 continue;
             }
             let statement_id = format!("entity.{entity_id}.policy.{name}");
             if let Some(statement) = candidate_policy_statements.get(statement_id.as_str()) {
-                statements.push((*statement).clone());
+                creates.push((*statement).clone());
             }
         }
     }
-    statements
+    (drops, creates)
 }
 
-fn reviewed_successor_managed_policies(table: &DdlTable) -> BTreeMap<&str, &DdlPolicy> {
+fn managed_policies(table: &DdlTable) -> BTreeMap<&str, &DdlPolicy> {
+    table
+        .policies
+        .iter()
+        .map(|policy| (policy.name.as_str(), policy))
+        .collect()
+}
+
+fn reviewed_successor_created_policies(table: &DdlTable) -> BTreeMap<&str, &DdlPolicy> {
     table
         .policies
         .iter()

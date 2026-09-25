@@ -147,10 +147,22 @@ fn project_rhai_planner_package_is_deterministic_and_rederives_exact_source() {
         CompiledRegistryChangeCode::ChangeRequestContractChanged,
     );
     assert_eq!(changes.changes.len(), 1);
-    assert!(change_set_to_applicable_migration_plan(&changes)
-        .expect("a request-contract-only change has no database migration")
+    let policy_plan = change_set_to_applicable_migration_plan(&changes)
+        .expect("a request-contract-only change has a compiler-owned policy migration");
+    assert!(!policy_plan.statements.is_empty());
+    assert!(policy_plan
         .statements
-        .is_empty());
+        .iter()
+        .all(|statement| statement.sql.starts_with("DROP POLICY ")
+            || statement.sql.starts_with("CREATE POLICY ")));
+    assert!(policy_plan
+        .statements
+        .iter()
+        .any(|statement| statement.sql.starts_with("DROP POLICY ")));
+    assert!(policy_plan
+        .statements
+        .iter()
+        .any(|statement| statement.sql.starts_with("CREATE POLICY ")));
 
     let inspected = inspect_prepared(&first);
     let rederived = inspected.registry().entities()["request"]
@@ -411,21 +423,23 @@ fn reviewed_bbox_enablement_compiles_storage_without_author_written_sql() {
     let candidate = compile_source(&source);
     let package = prepare_spatial_successor(previous, source, &candidate);
     let statements = &package.manifest().migration_plan.statements;
-    assert_eq!(statements.len(), 4);
-    assert!(statements[0]
-        .sql
-        .contains("CREATE OR REPLACE FUNCTION registry_context.spatial_bbox_geometry"));
-    assert!(statements[1].sql.contains("ADD COLUMN"));
-    assert!(statements[1].sql.contains("GENERATED ALWAYS AS"));
+    assert_eq!(statements.len(), 5);
+    assert!(statements[0].sql.starts_with("DROP POLICY "));
+    assert!(statements[0].sql.contains("registry_rls_select_"));
     assert!(statements[1]
         .sql
+        .contains("CREATE OR REPLACE FUNCTION registry_context.spatial_bbox_geometry"));
+    assert!(statements[2].sql.contains("ADD COLUMN"));
+    assert!(statements[2].sql.contains("GENERATED ALWAYS AS"));
+    assert!(statements[2]
+        .sql
         .contains("registry_spatial_ext.geometry(Point,4326)"));
-    assert!(statements[2].sql.contains("USING gist"));
-    assert_eq!(statements[3].id, "entity.asset.spatial-candidates-view");
-    assert!(statements[3]
+    assert!(statements[3].sql.contains("USING gist"));
+    assert_eq!(statements[4].id, "entity.asset.spatial-candidates-view");
+    assert!(statements[4]
         .sql
         .starts_with("CREATE VIEW registry_context."));
-    assert!(statements[3]
+    assert!(statements[4]
         .sql
         .contains("security_invoker=false, security_barrier=true"));
     assert!(!statements
@@ -444,18 +458,21 @@ fn reviewed_bbox_removal_drops_candidates_and_policy_before_internal_projection(
     let candidate = compile_source(&source);
     let package = prepare_spatial_successor(previous, source, &candidate);
     let statements = &package.manifest().migration_plan.statements;
-    assert_eq!(statements.len(), 5);
+    assert_eq!(statements.len(), 6);
+    assert!(statements[0].sql.starts_with("DROP POLICY"));
+    assert!(statements[0].sql.contains("registry_rls_select_"));
+    assert!(statements[1].sql.starts_with("DROP POLICY"));
+    assert!(statements[1].sql.contains("registry_spatial_bbox_rls_"));
     assert_eq!(
-        statements[0].id,
+        statements[2].id,
         "entity.asset.spatial-candidates-view.drop"
     );
-    assert!(statements[0]
+    assert!(statements[2]
         .sql
         .starts_with("DROP VIEW IF EXISTS registry_context."));
-    assert!(statements[1].sql.starts_with("DROP POLICY"));
-    assert!(statements[2].sql.starts_with("DROP INDEX"));
-    assert!(statements[3].sql.contains("DROP COLUMN"));
-    assert!(statements[4].sql.starts_with("DROP FUNCTION"));
+    assert!(statements[3].sql.starts_with("DROP INDEX"));
+    assert!(statements[4].sql.contains("DROP COLUMN"));
+    assert!(statements[5].sql.starts_with("DROP FUNCTION"));
     assert!(!statements
         .iter()
         .any(|statement| statement.sql.contains(&logical_point_column)));
@@ -474,11 +491,12 @@ fn changing_primary_bbox_point_replaces_projection_without_replacing_source_fiel
     let package = prepare_spatial_successor(previous, source, &candidate);
     let statements = &package.manifest().migration_plan.statements;
     assert_eq!(statements.len(), 7);
+    assert!(statements[0].sql.starts_with("DROP POLICY"));
+    assert!(statements[0].sql.contains("registry_spatial_bbox_rls_"));
     assert_eq!(
-        statements[0].id,
+        statements[1].id,
         "entity.asset.spatial-candidates-view.drop"
     );
-    assert!(statements[1].sql.starts_with("DROP POLICY"));
     assert!(statements[2].sql.starts_with("DROP INDEX"));
     assert!(statements[3].sql.contains("DROP COLUMN"));
     assert!(statements[4].sql.contains("ADD COLUMN"));
@@ -509,19 +527,21 @@ fn changing_bbox_grant_replaces_candidate_view_without_rewriting_point_storage()
     let candidate = compile_source(&source);
     let package = prepare_spatial_successor(previous, source, &candidate);
     let statements = &package.manifest().migration_plan.statements;
-    assert_eq!(statements.len(), 2);
+    assert_eq!(statements.len(), 3);
+    assert!(statements[0].sql.starts_with("DROP POLICY"));
+    assert!(statements[0].sql.contains("registry_spatial_bbox_rls_"));
     assert_eq!(
-        statements[0].id,
+        statements[1].id,
         "entity.asset.spatial-candidates-view.drop"
     );
-    assert_eq!(statements[1].id, "entity.asset.spatial-candidates-view");
+    assert_eq!(statements[2].id, "entity.asset.spatial-candidates-view");
     let candidate_definition = candidate
         .ddl()
         .statements
         .iter()
         .find(|statement| statement.id == "entity.asset.spatial-candidates-view")
         .unwrap();
-    assert_eq!(statements[1], *candidate_definition);
+    assert_eq!(statements[2], *candidate_definition);
 }
 
 #[cfg(feature = "tooling")]
@@ -2730,7 +2750,11 @@ fn cross_entity_read_path_grant_addition_and_removal_are_policy_successors() {
     let changes = compiled_registry_change_set(&granted, &removed, PRIOR_REVISION);
     let plan = change_set_to_applicable_migration_plan(&changes)
         .expect("removing a source read-path grant is a policy successor");
-    assert!(plan.statements.is_empty());
+    assert_eq!(plan.statements.len(), 3);
+    assert!(plan.statements.iter().all(|statement| {
+        statement.sql.starts_with("DROP POLICY ")
+            && statement.sql.contains("registry_path_rls_select_")
+    }));
     assert!(changes
         .changes
         .iter()
