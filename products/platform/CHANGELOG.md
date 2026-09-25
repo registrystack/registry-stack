@@ -61,6 +61,12 @@
   issuer URL, one bounded audience, and the `jwksSource`; a product embeds it
   beside its own token rules. `SecretReference` now reads and writes as its
   reference text, so a configuration struct can hold one directly.
+- Add the shared `authentication.oidc` client block (`OidcClientsConfig`):
+  `allowedClients` and the bounded `assertionIssuers` map, at most 64 clients
+  of at most 128 bytes, each with at most 16 distinct issuers of at most 512
+  bytes. Add `registry_platform_oidc::parse_static_jwks`, which refuses a
+  static key set that is empty, holds a symmetric key, or leaves a key without
+  a unique `kid`.
 - Add Ed25519 and ES256 private key generation beside ES384, with RFC 7638
   thumbprint tests for RSA, EC, and OKP keys.
 - BREAKING: remove `reject_deprecated_config_fields`; runtimes declare removed

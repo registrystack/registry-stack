@@ -19,9 +19,10 @@ pub use blocks::{
     describe_secret_failure, is_sha256_label, require_absolute, AuditKeyConfig, ConfigBlockError,
     ConfigBlockErrorKind, DatabaseConfig, EnvironmentSecretProviderConfig,
     FileSecretProviderConfig, JwksSource, ListenerBind, ListenerConfig, ListenerNetworkExposure,
-    OidcIssuerConfig, PackageConfig, PackageDigestMismatch, PrivateListenerConfig,
-    SecretProvidersConfig, TlsTermination, MAX_LISTENER_BIND_CHARACTERS,
-    MAX_OIDC_AUDIENCE_CHARACTERS,
+    OidcClientsConfig, OidcIssuerConfig, PackageConfig, PackageDigestMismatch,
+    PrivateListenerConfig, SecretProvidersConfig, TlsTermination, MAX_ASSERTION_ISSUERS_PER_CLIENT,
+    MAX_ASSERTION_ISSUER_BYTES, MAX_ASSERTION_ISSUER_CLIENTS, MAX_ASSERTION_ISSUER_CLIENT_BYTES,
+    MAX_LISTENER_BIND_CHARACTERS, MAX_OIDC_AUDIENCE_CHARACTERS,
 };
 pub use loader::{
     contains_environment_expression, reject_environment_expressions_in_authored_yaml,

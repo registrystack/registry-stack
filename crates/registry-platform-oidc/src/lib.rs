@@ -240,6 +240,34 @@ impl fmt::Debug for JwksFetcher {
     }
 }
 
+/// Parse an operator-supplied static JWKS document for
+/// [`JwksFetcher::new_static`]: a non-empty key set of RSA or elliptic-curve
+/// keys, each with a non-empty `kid` no other key in the set repeats. A
+/// symmetric key or an unnamed key is refused here, at startup, rather than
+/// when a token first selects it.
+pub fn parse_static_jwks(bytes: &[u8]) -> Result<JwkSet, OidcError> {
+    let jwks: JwkSet = serde_json::from_slice(bytes).map_err(|_| OidcError::Parse)?;
+    if jwks.keys.is_empty() {
+        return Err(OidcError::EmptyKeySet);
+    }
+    let mut kids = BTreeSet::new();
+    let all_named_asymmetric = jwks.keys.iter().all(|key| {
+        matches!(
+            key.algorithm,
+            AlgorithmParameters::RSA(_) | AlgorithmParameters::EllipticCurve(_)
+        ) && key
+            .common
+            .key_id
+            .as_deref()
+            .is_some_and(|kid| !kid.is_empty() && kids.insert(kid))
+    });
+    if all_named_asymmetric {
+        Ok(jwks)
+    } else {
+        Err(OidcError::InvalidJwk)
+    }
+}
+
 impl JwksFetcher {
     #[must_use]
     pub fn new(jwks_uri: String, config: JwksFetcherConfig) -> Self {
@@ -4059,5 +4087,49 @@ mod tests {
             .expect("non-empty issuer with override succeeds under dev policy");
         assert_eq!(document.issuer, "https://issuer.example");
         assert_eq!(document.jwks_uri, "http://127.0.0.1/jwks");
+    }
+
+    #[test]
+    fn a_static_key_set_requires_unique_named_asymmetric_keys() {
+        let keys = parse_static_jwks(
+            br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"},{"kty":"EC","kid":"two","crv":"P-256","x":"f83OJ3D2xF4k1JQWctzS0r8uXH6Gz-l4WfXccj5WHv0","y":"x_FEzRu9dVvZt2pSuGQgH7u9tZxU7I5oUJu-4G8Azjo"}]}"#,
+        )
+        .expect("RSA and EC keys with distinct kids");
+        assert_eq!(keys.keys.len(), 2);
+
+        for (reason, invalid, expected) in [
+            ("no keys member", br#"{}"#.as_slice(), "parse"),
+            ("not JSON", b"not-json", "parse"),
+            ("an empty key set", br#"{"keys":[]}"#, "empty"),
+            (
+                "a symmetric key",
+                br#"{"keys":[{"kty":"oct","kid":"one","k":"AA"}]}"#,
+                "jwk",
+            ),
+            (
+                "a key without kid",
+                br#"{"keys":[{"kty":"RSA","n":"AQAB","e":"AQAB"}]}"#,
+                "jwk",
+            ),
+            (
+                "an empty kid",
+                br#"{"keys":[{"kty":"RSA","kid":"","n":"AQAB","e":"AQAB"}]}"#,
+                "jwk",
+            ),
+            (
+                "a repeated kid",
+                br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"},{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#,
+                "jwk",
+            ),
+        ] {
+            let error = parse_static_jwks(invalid).expect_err(reason);
+            let kind = match error {
+                OidcError::Parse => "parse",
+                OidcError::EmptyKeySet => "empty",
+                OidcError::InvalidJwk => "jwk",
+                other => panic!("{reason}: unexpected {other:?}"),
+            };
+            assert_eq!(kind, expected, "{reason}");
+        }
     }
 }

@@ -3,8 +3,8 @@
 use serde_json::{Map, Value};
 
 use crate::blocks::{
-    AuditKeyConfig, DatabaseConfig, JwksSource, ListenerConfig, OidcIssuerConfig, PackageConfig,
-    PrivateListenerConfig, SecretProvidersConfig,
+    AuditKeyConfig, DatabaseConfig, JwksSource, ListenerConfig, OidcClientsConfig,
+    OidcIssuerConfig, PackageConfig, PrivateListenerConfig, SecretProvidersConfig,
 };
 
 /// File name the shared-blocks generator writes.
@@ -23,6 +23,7 @@ struct SharedBlocks {
     private_listener: PrivateListenerConfig,
     audit_key: AuditKeyConfig,
     oidc_issuer: OidcIssuerConfig,
+    oidc_clients: OidcClientsConfig,
 }
 
 /// The pretty-printed shared-blocks document, newline terminated.

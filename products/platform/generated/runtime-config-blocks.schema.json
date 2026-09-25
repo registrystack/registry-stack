@@ -152,6 +152,40 @@
       ],
       "type": "string"
     },
+    "OidcClientsConfig": {
+      "description": "The OAuth clients a runtime admits access tokens for, and the assertion\nauthorities each client may exchange a subject token from, written under\n`authentication.oidc` beside the issuer.",
+      "properties": {
+        "allowedClients": {
+          "default": [],
+          "description": "Client identifiers whose access tokens are admitted. A runtime decides\nwhether an empty list is acceptable in production.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "assertionIssuers": {
+          "additionalProperties": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 16,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "default": {},
+          "description": "Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. An empty map applies no rule. Once a\nclient is listed, a token it exchanged is accepted only for one of\nthat client's declared authorities.",
+          "maxProperties": 64,
+          "propertyNames": {
+            "maxLength": 128,
+            "minLength": 1
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "OidcIssuerConfig": {
       "description": "The OIDC issuer a runtime accepts access tokens from: the exact `iss`\nvalue, the `aud` value a token must carry, and where the issuer's signing\nkeys come from, written under `authentication.oidc` beside the product's\nown token rules.",
       "properties": {
