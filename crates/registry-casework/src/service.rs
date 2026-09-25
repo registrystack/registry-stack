@@ -58,19 +58,35 @@ pub struct CaseworkService {
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct AuditPublisherHealth(Arc<AtomicBool>);
+pub(crate) struct AuditPublisherHealth(Arc<AuditPublisherFlags>);
+
+#[derive(Default)]
+struct AuditPublisherFlags {
+    failed: AtomicBool,
+    leader: AtomicBool,
+}
 
 impl AuditPublisherHealth {
     pub(crate) fn mark_failed(&self) {
-        self.0.store(true, Ordering::Release);
+        self.0.failed.store(true, Ordering::Release);
     }
 
     pub(crate) fn mark_recovered(&self) {
-        self.0.store(false, Ordering::Release);
+        self.0.failed.store(false, Ordering::Release);
     }
 
     pub(crate) fn is_ready(&self) -> bool {
-        !self.0.load(Ordering::Acquire)
+        !self.0.failed.load(Ordering::Acquire)
+    }
+
+    /// Record whether this runtime holds the audit publication lease. A
+    /// standby that does not hold it is still ready.
+    pub(crate) fn set_leader(&self, leader: bool) {
+        self.0.leader.store(leader, Ordering::Release);
+    }
+
+    pub(crate) fn is_leader(&self) -> bool {
+        self.0.leader.load(Ordering::Acquire)
     }
 }
 

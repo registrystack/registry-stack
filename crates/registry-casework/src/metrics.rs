@@ -124,6 +124,7 @@ async fn metrics(State(state): State<MetricsState>) -> Response {
         registry_platform_buildinfo::DISPLAY_VERSION,
         inner.package_digest.as_deref(),
         inner.audit_health.is_ready(),
+        inner.audit_health.is_leader(),
         database
             .as_ref()
             .map(|(health, pending)| (health.as_slice(), *pending)),
@@ -142,6 +143,7 @@ fn render(
     version: &str,
     package_digest: Option<&str>,
     audit_publisher_ready: bool,
+    audit_publisher_leader: bool,
     database: Option<(&[SourceReconciliationHealth], i64)>,
     now: DateTime<Utc>,
 ) -> String {
@@ -166,6 +168,16 @@ fn render(
         out,
         "casework_audit_publisher_up {}",
         u8::from(audit_publisher_ready)
+    );
+    gauge(
+        &mut out,
+        "casework_audit_publisher_leader",
+        "Whether this runtime holds the audit publication lease and is the one appending to the audit journal.",
+    );
+    let _ = writeln!(
+        out,
+        "casework_audit_publisher_leader {}",
+        u8::from(audit_publisher_leader)
     );
     gauge(
         &mut out,
@@ -252,10 +264,18 @@ mod tests {
             source("permits", 0, Some(now - chrono::Duration::seconds(90))),
             source("licences", 4, None),
         ];
-        let rendered = render("1.2.3", Some("sha256:abc"), true, Some((&health, 7)), now);
+        let rendered = render(
+            "1.2.3",
+            Some("sha256:abc"),
+            true,
+            true,
+            Some((&health, 7)),
+            now,
+        );
         for line in [
             "casework_build_info{version=\"1.2.3\",package_digest=\"sha256:abc\"} 1",
             "casework_audit_publisher_up 1",
+            "casework_audit_publisher_leader 1",
             "casework_database_up 1",
             "casework_audit_outbox_pending 7",
             "casework_source_reconciliation_consecutive_failures{source_id=\"permits\"} 0",
@@ -280,11 +300,13 @@ mod tests {
             "1.2.3",
             None,
             false,
+            false,
             None,
             Utc.with_ymd_and_hms(2026, 9, 25, 12, 0, 0).unwrap(),
         );
         assert!(rendered.contains("casework_database_up 0\n"));
         assert!(rendered.contains("casework_audit_publisher_up 0\n"));
+        assert!(rendered.contains("casework_audit_publisher_leader 0\n"));
         assert!(rendered.contains("package_digest=\"\"} 1\n"));
         assert!(!rendered.contains("casework_audit_outbox_pending"));
         assert!(!rendered.contains("casework_source_reconciliation"));

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -534,8 +534,17 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         &secrets,
     )?);
 
-    let (audit_sink, audit_chain, mut audit_publication_state) =
-        open_audit_journal(&config.audit.path, &audit_profile).await?;
+    let mut audit_publication = AuditPublication::new(
+        store.clone(),
+        config.audit.path.clone(),
+        audit_profile.clone(),
+    );
+    if !audit_publication.take_at_startup().await? {
+        tracing::info!(
+            "another Casework runtime holds the audit publication lease; this runtime serves \
+             requests and publishes audit records once it can take the lease"
+        );
+    }
 
     // A bad signing key or audit configuration must not retire the live
     // instance's task templates before this instance can serve requests.
@@ -627,16 +636,10 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             },
         ));
     }
-    let metrics_store = store.clone();
-    let audit_publisher = RuntimeAuditPublisher {
-        store,
-        chain: audit_chain,
-        sink: audit_sink,
-        identifiers: audit_profile.key_hasher(),
-    };
     let audit_health = service.audit_publisher_health();
+    audit_health.set_leader(audit_publication.is_leader());
     let metrics_state = crate::metrics::MetricsState::new(
-        Arc::new(metrics_store),
+        Arc::new(store),
         config.sources.keys().cloned().collect(),
         package_digest.clone(),
         audit_health.clone(),
@@ -646,11 +649,9 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         let mut failed_stage = None;
         loop {
             interval.tick().await;
-            update_audit_health(
-                &audit_health,
-                &mut failed_stage,
-                publish_audit_pass(&audit_publisher, &mut audit_publication_state).await,
-            );
+            let result = audit_publication.pass().await;
+            audit_health.set_leader(audit_publication.is_leader());
+            update_audit_health(&audit_health, &mut failed_stage, result);
         }
     }));
 
@@ -963,8 +964,14 @@ async fn open_audit_journal(
 > {
     refuse_rotated_audit_layout(path)?;
     let sink = Arc::new(
-        DurableSegmentedJsonlSink::open(path, MAXIMUM_AUDIT_SEGMENT_BYTES)
-            .map_err(|error| RuntimeError::AuditJournal(describe_audit_journal_failure(&error)))?,
+        DurableSegmentedJsonlSink::open(path, MAXIMUM_AUDIT_SEGMENT_BYTES).map_err(|error| {
+            match error {
+                registry_platform_audit::AuditError::SinkLocked { .. } => {
+                    RuntimeError::AuditJournalLocked
+                }
+                error => RuntimeError::AuditJournal(describe_audit_journal_failure(&error)),
+            }
+        })?,
     );
     let chain = Arc::new(
         profile
@@ -1125,8 +1132,154 @@ pub fn secret_resolver(config: &RuntimeConfig) -> Result<SecretResolver, Runtime
     .map_err(|_| RuntimeError::SecretConfiguration)
 }
 
-struct RuntimeAuditPublisher {
+/// Audit publication for one runtime. At most one runtime per Casework schema
+/// holds the publication lease; only that runtime opens the audit journal and
+/// appends to it, so replicas never write the same record into two chains.
+/// Every other runtime serves requests and takes the lease once it is free.
+struct AuditPublication {
     store: PostgresStore,
+    path: PathBuf,
+    profile: AuditProfile,
+    leader: Option<AuditPublicationLeader>,
+}
+
+struct AuditPublicationLeader {
+    publisher: RuntimeAuditPublisher,
+    state: AuditPublicationState,
+}
+
+enum AuditTakeoverError {
+    Lease(crate::StoreError),
+    Journal(RuntimeError),
+}
+
+impl AuditPublication {
+    fn new(store: PostgresStore, path: PathBuf, profile: AuditProfile) -> Self {
+        Self {
+            store,
+            path,
+            profile,
+            leader: None,
+        }
+    }
+
+    fn is_leader(&self) -> bool {
+        self.leader.is_some()
+    }
+
+    /// Take the lease before serving. A journal this runtime cannot open or
+    /// verify refuses startup exactly as it would for a single runtime; a
+    /// lease another runtime holds is not a refusal.
+    async fn take_at_startup(&mut self) -> Result<bool, RuntimeError> {
+        match self.take_lease().await {
+            Ok(taken) => Ok(taken),
+            Err(AuditTakeoverError::Lease(error)) => Err(error.into()),
+            Err(AuditTakeoverError::Journal(error)) => Err(error),
+        }
+    }
+
+    /// Take the lease and open the journal under it. When another process
+    /// still holds the journal's single-writer lock, as a runtime whose
+    /// database session ended but which has not yet noticed does, the lease
+    /// is released again and this runtime stays a standby.
+    async fn take_lease(&mut self) -> Result<bool, AuditTakeoverError> {
+        let Some(lease) = self
+            .store
+            .try_audit_publication_lease()
+            .await
+            .map_err(AuditTakeoverError::Lease)?
+        else {
+            return Ok(false);
+        };
+        match open_audit_journal(&self.path, &self.profile).await {
+            Ok((sink, chain, state)) => {
+                self.leader = Some(AuditPublicationLeader {
+                    publisher: RuntimeAuditPublisher {
+                        lease,
+                        chain,
+                        sink,
+                        identifiers: self.profile.key_hasher(),
+                    },
+                    state,
+                });
+                Ok(true)
+            }
+            Err(RuntimeError::AuditJournalLocked) => Ok(false),
+            Err(error) => Err(AuditTakeoverError::Journal(error)),
+        }
+    }
+
+    async fn pass(&mut self) -> Result<(), AuditPublicationFailure> {
+        self.release_lost_lease();
+        if self.leader.is_none() {
+            match self.take_lease().await {
+                Ok(true) => {
+                    tracing::info!("this Casework runtime took the audit publication lease")
+                }
+                Ok(false) => return Ok(()),
+                Err(AuditTakeoverError::Lease(_)) => return Err(AuditPublicationFailure::Lease),
+                Err(AuditTakeoverError::Journal(error)) => {
+                    tracing::warn!(
+                        error = %error,
+                        "Casework took the audit publication lease but could not open the audit journal"
+                    );
+                    return Err(AuditPublicationFailure::JournalOpen);
+                }
+            }
+        }
+        let Some(leader) = self.leader.as_mut() else {
+            return Ok(());
+        };
+        let result = publish_audit_pass(&leader.publisher, &mut leader.state).await;
+        if result.is_err() {
+            self.release_lost_lease();
+        }
+        result
+    }
+
+    /// Give up the journal once the leased session has ended, so the runtime
+    /// that takes the lease next can open it.
+    fn release_lost_lease(&mut self) {
+        if self
+            .leader
+            .as_ref()
+            .is_some_and(|leader| leader.publisher.lease.is_lost())
+        {
+            self.leader = None;
+            tracing::warn!(
+                "Casework lost the audit publication lease and closed the audit journal; it \
+                 publishes again once it can take the lease"
+            );
+        }
+    }
+}
+
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub struct AuditPublicationForTest(AuditPublication);
+
+#[cfg(feature = "postgres-test")]
+impl AuditPublicationForTest {
+    pub fn new(store: PostgresStore, path: PathBuf, profile: AuditProfile) -> Self {
+        Self(AuditPublication::new(store, path, profile))
+    }
+
+    pub async fn pass(&mut self) -> Result<(), &'static str> {
+        self.0.pass().await.map_err(AuditPublicationFailure::as_str)
+    }
+
+    pub fn is_leader(&self) -> bool {
+        self.0.is_leader()
+    }
+
+    /// Drop the lease and close the journal, as a stopping runtime does.
+    pub fn stop(&mut self) {
+        self.0.leader = None;
+    }
+}
+
+struct RuntimeAuditPublisher {
+    lease: crate::store::AuditPublicationLease,
     chain: Arc<ChainState>,
     sink: Arc<DurableSegmentedJsonlSink>,
     identifiers: registry_platform_audit::AuditKeyHasher,
@@ -1134,6 +1287,8 @@ struct RuntimeAuditPublisher {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AuditPublicationFailure {
+    Lease,
+    JournalOpen,
     PendingRead,
     RecordIdentity,
     SinkAppend,
@@ -1143,6 +1298,8 @@ enum AuditPublicationFailure {
 impl AuditPublicationFailure {
     const fn as_str(self) -> &'static str {
         match self {
+            Self::Lease => "lease",
+            Self::JournalOpen => "journal-open",
             Self::PendingRead => "pending-read",
             Self::RecordIdentity => "record-identity",
             Self::SinkAppend => "sink-append",
@@ -1177,7 +1334,7 @@ impl AuditPublicationState {
 #[async_trait]
 impl AuditPublicationBackend for RuntimeAuditPublisher {
     async fn pending(&self, maximum: i64) -> Result<Vec<(Uuid, Value)>, ()> {
-        self.store.pending_audit(maximum).await.map_err(|_| ())
+        self.lease.pending(maximum).await.map_err(|_| ())
     }
 
     async fn append(&self, record: Value) -> Result<(), ()> {
@@ -1190,10 +1347,7 @@ impl AuditPublicationBackend for RuntimeAuditPublisher {
     }
 
     async fn mark_published(&self, event_id: Uuid) -> Result<(), ()> {
-        self.store
-            .mark_audit_published(event_id)
-            .await
-            .map_err(|_| ())
+        self.lease.mark_published(event_id).await.map_err(|_| ())
     }
 }
 
@@ -2760,6 +2914,11 @@ pub enum RuntimeError {
     AuditSecret(String),
     #[error("the Casework audit journal could not be initialized: {0}")]
     AuditJournal(String),
+    #[error(
+        "the Casework audit journal could not be initialized: another process holds the \
+         single-writer lock beside audit.path; stop it before starting this one"
+    )]
+    AuditJournalLocked,
     #[error(
         "the retained audit chain neither holds the given head nor continues from it; \
          the journal was replaced or truncated after that head was recorded"

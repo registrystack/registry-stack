@@ -3213,6 +3213,74 @@ impl PostgresStore {
         Ok(())
     }
 
+    /// Try to take the audit publication lease: the one PostgreSQL session
+    /// lock that makes a single runtime the audit publisher for this Casework
+    /// schema. The lease lives on a connection taken out of the pool, so it is
+    /// released when the lease is dropped or its connection ends, never by
+    /// returning a still-locked session to the pool.
+    pub(crate) async fn try_audit_publication_lease(
+        &self,
+    ) -> Result<Option<AuditPublicationLease>, StoreError> {
+        let client = self.client().await?;
+        let acquired: bool = client
+            .query_one(
+                "SELECT pg_try_advisory_lock(hashtextextended($1::text || current_schema()::text, 0))",
+                &[&AUDIT_PUBLICATION_LEASE_PREFIX],
+            )
+            .await?
+            .get(0);
+        if acquired {
+            Ok(Some(AuditPublicationLease {
+                client: deadpool_postgres::Object::take(client),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+/// The lock name is scoped by schema, so separate Casework deployments that
+/// share one database each elect their own publisher.
+const AUDIT_PUBLICATION_LEASE_PREFIX: &str = "casework.audit-publication:";
+
+/// The held audit publication lease. Pending reads and publication marks go
+/// through the leased session, so a runtime whose lease has ended cannot mark
+/// a record another runtime is now publishing.
+pub(crate) struct AuditPublicationLease {
+    client: deadpool_postgres::ClientWrapper,
+}
+
+impl AuditPublicationLease {
+    /// Whether the leased session has ended, which releases the lock.
+    pub(crate) fn is_lost(&self) -> bool {
+        self.client.is_closed()
+    }
+
+    pub(crate) async fn pending(&self, limit: i64) -> Result<Vec<(Uuid, Value)>, StoreError> {
+        Ok(self
+            .client
+            .query(
+                "SELECT event_id,audit_record FROM casework_audit_outbox WHERE published_at IS NULL ORDER BY event_id LIMIT $1",
+                &[&limit],
+            )
+            .await?
+            .into_iter()
+            .map(|row| (row.get(0), row.get(1)))
+            .collect())
+    }
+
+    pub(crate) async fn mark_published(&self, event_id: Uuid) -> Result<(), StoreError> {
+        self.client
+            .execute(
+                "UPDATE casework_audit_outbox SET published_at=now() WHERE event_id=$1 AND published_at IS NULL",
+                &[&event_id],
+            )
+            .await?;
+        Ok(())
+    }
+}
+
+impl PostgresStore {
     pub async fn events(
         &self,
         after: Option<Uuid>,

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Replicas no longer publish the same audit record twice. One runtime at a
+  time holds the audit publication lease, a PostgreSQL session lock scoped to
+  the Casework schema, and only that runtime opens the audit file and appends
+  to it; every other runtime serves requests, stays ready, and takes the
+  lease once the publisher stops or its database session ends. A new
+  `casework_audit_publisher_leader` metric reports which runtime publishes,
+  and a failed pass may now name the `lease` or `journal-open` stage. Give
+  every replica the same `audit.path` on a filesystem that honours advisory
+  file locks, or run one replica. While a runtime of an earlier release still
+  runs against the same database, it publishes without the lease; stop every
+  earlier runtime before the first replica of this release starts.
 - `caseworkctl audit verify` checks the retained audit chain against
   `audit.hashKeyRef` and reports the last record's `headHash`; with
   `--from-head` it refuses a chain that no longer holds a head recorded

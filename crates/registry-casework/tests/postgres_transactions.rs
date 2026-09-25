@@ -2709,3 +2709,198 @@ async fn a_superseding_observation_leaves_an_item_with_a_live_attempt_unchanged(
     assert_superseding_observation_leaves_live_attempt_item("race_uncertain_attempt", "uncertain")
         .await;
 }
+
+fn audit_publication_profile() -> registry_platform_audit::AuditProfile {
+    registry_platform_audit::AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+        b"casework-audit-publication-lease-secret".to_vec(),
+    ))
+    .expect("audit profile")
+}
+
+/// An owner-only audit directory, as the runtime requires.
+fn owner_only_audit_directory(root: &std::path::Path, name: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let directory = root.join(name);
+    std::fs::create_dir(&directory).expect("audit directory");
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+        .expect("audit directory mode");
+    directory.join("casework.jsonl")
+}
+
+async fn insert_pending_audit(client: &tokio_postgres::Client, count: usize) {
+    for _ in 0..count {
+        client
+            .execute(
+                "INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)",
+                &[
+                    &uuid::Uuid::new_v4(),
+                    &serde_json::json!({"event": "casework.test"}),
+                ],
+            )
+            .await
+            .expect("insert a pending audit record");
+    }
+}
+
+/// Every event id the journal at `path` holds, in chain order.
+fn journal_event_ids(path: &std::path::Path) -> Vec<String> {
+    if !path.exists() {
+        return Vec::new();
+    }
+    registry_platform_audit::segmented_audit_paths(path)
+        .expect("journal segments")
+        .iter()
+        .flat_map(|segment| {
+            std::fs::read_to_string(segment)
+                .expect("journal segment")
+                .lines()
+                .map(|line| {
+                    serde_json::from_str::<serde_json::Value>(line).expect("audit envelope")
+                        ["record"]["eventId"]
+                        .as_str()
+                        .expect("event id")
+                        .to_owned()
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn assert_each_event_once(journals: &[&std::path::Path], expected: usize) {
+    let mut event_ids = journals
+        .iter()
+        .flat_map(|journal| journal_event_ids(journal))
+        .collect::<Vec<_>>();
+    assert_eq!(event_ids.len(), expected, "every record is published");
+    event_ids.sort();
+    event_ids.dedup();
+    assert_eq!(event_ids.len(), expected, "no record is published twice");
+}
+
+#[tokio::test]
+async fn one_runtime_publishes_the_audit_outbox_while_another_stands_by() {
+    let (store, client, _schema) = isolated_schema("audit_publication_lease").await;
+    store.migrate().await.expect("migrate");
+    let root = tempfile::tempdir().expect("deployment root");
+    let first_journal = owner_only_audit_directory(root.path(), "first");
+    let second_journal = owner_only_audit_directory(root.path(), "second");
+    let mut first = registry_casework::AuditPublicationForTest::new(
+        store.clone(),
+        first_journal.clone(),
+        audit_publication_profile(),
+    );
+    let mut second = registry_casework::AuditPublicationForTest::new(
+        store.clone(),
+        second_journal.clone(),
+        audit_publication_profile(),
+    );
+    insert_pending_audit(&client, 3).await;
+
+    first
+        .pass()
+        .await
+        .expect("the first runtime takes the lease");
+    second
+        .pass()
+        .await
+        .expect("a standby pass is not a failure");
+    assert!(first.is_leader());
+    assert!(!second.is_leader(), "one runtime holds the lease");
+
+    insert_pending_audit(&client, 2).await;
+    for _ in 0..3 {
+        second.pass().await.expect("the standby stays a standby");
+        first.pass().await.expect("the leader publishes");
+    }
+    assert!(
+        !second_journal.exists(),
+        "a standby never opens its audit journal"
+    );
+    assert_eq!(journal_event_ids(&first_journal).len(), 5);
+    assert_eq!(store.audit_outbox_pending().await.expect("backlog"), 0);
+
+    first.stop();
+    insert_pending_audit(&client, 1).await;
+    second
+        .pass()
+        .await
+        .expect("the standby takes the released lease and publishes");
+    assert!(second.is_leader());
+    assert_eq!(journal_event_ids(&second_journal).len(), 1);
+    assert_each_event_once(&[&first_journal, &second_journal], 6);
+}
+
+#[tokio::test]
+async fn a_runtime_whose_lease_session_ends_releases_the_shared_journal() {
+    let (store, client, schema) = isolated_schema("audit_publication_handover").await;
+    store.migrate().await.expect("migrate");
+    let root = tempfile::tempdir().expect("deployment root");
+    let journal = owner_only_audit_directory(root.path(), "shared");
+    let mut first = registry_casework::AuditPublicationForTest::new(
+        store.clone(),
+        journal.clone(),
+        audit_publication_profile(),
+    );
+    let mut second = registry_casework::AuditPublicationForTest::new(
+        store.clone(),
+        journal.clone(),
+        audit_publication_profile(),
+    );
+    insert_pending_audit(&client, 2).await;
+    first.pass().await.expect("the first runtime publishes");
+    assert!(first.is_leader());
+
+    // End the leader's database session the way a lost connection does.
+    let lease_holder = "SELECT pid FROM pg_locks WHERE locktype='advisory' AND objsubid=1 AND granted \
+         AND ((classid::bigint << 32) | objid::bigint) = hashtextextended('casework.audit-publication:' || $1::text, 0)";
+    let terminated = client
+        .query(
+            &format!("SELECT pg_terminate_backend(pid) FROM ({lease_holder}) holder"),
+            &[&schema],
+        )
+        .await
+        .expect("terminate the lease session");
+    assert_eq!(terminated.len(), 1, "exactly one session holds the lease");
+    for _ in 0..100 {
+        if client
+            .query(lease_holder, &[&schema])
+            .await
+            .expect("read the lease holder")
+            .is_empty()
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    // The lease is free, but the first runtime still holds the journal's
+    // single-writer lock, so the second one stays a standby.
+    second
+        .pass()
+        .await
+        .expect("a held journal lock keeps the runtime a standby");
+    assert!(!second.is_leader());
+
+    insert_pending_audit(&client, 1).await;
+    for _ in 0..3 {
+        if store.audit_outbox_pending().await.expect("backlog") == 0 {
+            break;
+        }
+        // A pass that reads through the ended session fails once, closes
+        // the journal, and takes the free lease again on the next pass.
+        if let Err(stage) = first.pass().await {
+            assert_eq!(stage, "pending-read");
+        }
+    }
+    assert_eq!(store.audit_outbox_pending().await.expect("backlog"), 0);
+
+    first.stop();
+    insert_pending_audit(&client, 1).await;
+    second
+        .pass()
+        .await
+        .expect("the standby takes the lease and continues the shared chain");
+    assert!(second.is_leader());
+    assert_each_event_once(&[&journal], 4);
+}

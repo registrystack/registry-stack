@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-20"
+last_reviewed: "2026-09-25"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -573,6 +573,7 @@ replica serves. `GET /metrics` answers the Prometheus text format, read at scrap
 | --- | --- |
 | `casework_build_info{version,package_digest}` | Always `1`; the labels carry the build and the package digest. |
 | `casework_audit_publisher_up` | `1` while the last audit publication pass appended every due record, `0` after a failed pass. |
+| `casework_audit_publisher_leader` | `1` while this runtime holds the audit publication lease and appends to the audit file, `0` on a standby. |
 | `casework_database_up` | `1` when this scrape read PostgreSQL. The series below appear only then. |
 | `casework_audit_outbox_pending` | Audit records committed to the database and not yet appended to the audit file. |
 | `casework_source_reconciliation_consecutive_failures{source_id}` | Failed reconciliation passes in a row for each configured source. |
@@ -590,8 +591,8 @@ the package digest.
 
 The audit publication worker runs once a second: it reads pending records, appends them to the
 keyed chain, and marks them published. A failed pass makes readiness fail, logs only the stage that
-failed (`pending-read`, `record-identity`, `sink-append`, or `published-mark`) rather than the
-record, and retries; a passing run restores readiness. A maintenance pass runs every two seconds
+failed (`lease`, `journal-open`, `pending-read`, `record-identity`, `sink-append`, or
+`published-mark`) rather than the record, and retries; a passing run restores readiness. A maintenance pass runs every two seconds
 and a source reconciliation pass per bound source at that binding's
 `reconciliationIntervalMilliseconds`, every 60 seconds unless set. A source outage stays visible
 on the affected work-item operations rather than turning an inbox into an apparently complete empty
@@ -631,6 +632,36 @@ is among the items it reads.
     crates/registry-casework/src/assignment.rs, assignment_visible_item_for_origin();
     crates/registry-casework/src/task_grants.rs, preview_tasks(), approve_task(), and list_tasks();
     crates/registry-casework-breg/src/lib.rs, BregAdapter::read() and BregAdapter::read_result(). */}
+
+### Run more than one replica
+
+One runtime at a time publishes audit records. Before it opens the audit file, a runtime takes the
+audit publication lease, a PostgreSQL session lock scoped to the Casework schema. The runtime that
+holds it opens the audit file, appends every pending record, and marks it published through the
+leased session. Every other runtime serves requests, stays ready, reports
+`casework_audit_publisher_leader 0`, and logs once at startup that
+`another Casework runtime holds the audit publication lease`. A standby takes the lease once it is
+free: when the publisher stops, or when its database session ends. A runtime whose session ended
+closes the audit file on its next pass and logs `Casework lost the audit publication lease`.
+
+Give every replica the same `audit.path` on a filesystem that honours advisory file locks, so each
+publisher continues the one chain the last one left. A replica that takes the lease while the
+previous publisher still holds the lock beside the audit file stays a standby and tries again on the
+next pass. Replicas with separate audit files publish no record twice, but after the lease moves the
+chain continues in another file, so a chain verified in one file no longer holds every record. If you
+cannot share the audit directory, run one replica.
+
+A replica that takes the lease but cannot open or verify the audit file fails its pass at
+`journal-open`, logs the same cause startup would, and fails readiness until a pass succeeds. The
+runtime that holds the lease at startup refuses to start on that cause instead.
+
+{/* Evidence: crates/registry-casework/src/runtime.rs, AuditPublication::take_at_startup(),
+    take_lease(), pass(), and release_lost_lease();
+    crates/registry-casework/src/store.rs, try_audit_publication_lease() and
+    AuditPublicationLease;
+    crates/registry-casework/tests/postgres_transactions.rs,
+    one_runtime_publishes_the_audit_outbox_while_another_stands_by() and
+    a_runtime_whose_lease_session_ends_releases_the_shared_journal(). */}
 
 ## Establish directory authority
 
