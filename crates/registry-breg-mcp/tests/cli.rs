@@ -229,14 +229,20 @@ fn serve_answers_health_and_stops_on_terminate() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("breg-mcp starts");
+    // Retry until an HTTP answer arrives: under load a first connection can
+    // close before the server answers it.
     let mut answer = String::new();
     for _ in 0..100 {
         if let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {
-            stream
-                .write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
-                .expect("request writes");
-            stream.read_to_string(&mut answer).expect("response reads");
-            break;
+            answer.clear();
+            let written = stream
+                .write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+            if written.is_ok()
+                && stream.read_to_string(&mut answer).is_ok()
+                && answer.starts_with("HTTP/")
+            {
+                break;
+            }
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
