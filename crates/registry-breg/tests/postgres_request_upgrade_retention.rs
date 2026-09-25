@@ -1398,10 +1398,15 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
     let audit_entries = database.audit_entries();
     assert_eq!(
         audit_entries.len(),
-        1,
-        "operator erasure appends one durable audit entry"
+        2,
+        "operator erasure appends a request entry and a response entry"
     );
-    assert_eq!(audit_entries[0]["phase"], "response");
+    assert_eq!(audit_entries[0]["phase"], "request");
+    assert_eq!(audit_entries[1]["phase"], "response");
+    assert_eq!(
+        audit_entries[0]["correlation"], audit_entries[1]["correlation"],
+        "the erasure response shares its request's correlation"
+    );
 
     let active_scope = RequestDetailErasureScope {
         request_entity_id: REQUEST_ENTITY,
@@ -1421,17 +1426,23 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
     let audit_entries = database.audit_entries();
     assert_eq!(
         audit_entries.len(),
-        3,
-        "cleanup appends a request and a response entry independently of erasure eligibility"
+        5,
+        "the refused erasure records its request, and cleanup appends a request and a \
+         response entry independently of erasure eligibility"
     );
-    assert_eq!(audit_entries[1]["phase"], "request");
-    assert_eq!(audit_entries[2]["phase"], "response");
+    assert_eq!(audit_entries[2]["phase"], "request");
+    assert_ne!(
+        audit_entries[2]["correlation"], audit_entries[1]["correlation"],
+        "each erasure invocation has its own correlation"
+    );
+    assert_eq!(audit_entries[3]["phase"], "request");
+    assert_eq!(audit_entries[4]["phase"], "response");
     assert_eq!(
-        audit_entries[1]["correlation"], audit_entries[2]["correlation"],
+        audit_entries[3]["correlation"], audit_entries[4]["correlation"],
         "the cleanup response shares its request's correlation"
     );
     assert_eq!(
-        audit_entries[1]["schema"],
+        audit_entries[3]["schema"],
         "breg-attachment-cleanup-audit/v1"
     );
 
