@@ -908,6 +908,32 @@ pub(crate) fn leading_field_indexed(
         })
 }
 
+/// Whether a list read path can use an index leading with `field`. Beyond
+/// [`leading_field_indexed`], a unique constraint scoped to exactly
+/// `when: [active_lifecycle]` counts on an entity without a change request,
+/// because every select policy there already requires
+/// `record_lifecycle = 'active'`. A change request's select policy also
+/// admits tombstoned rows, and a reference index needs whole-table coverage
+/// for foreign-key checks, so neither may use this.
+pub(crate) fn leading_field_indexed_for_list_finding(
+    field: &str,
+    indexes: &BTreeMap<String, Vec<String>>,
+    constraints: &BTreeMap<String, crate::contract::ConstraintSource>,
+    has_change_request: bool,
+) -> bool {
+    leading_field_indexed(field, indexes, constraints)
+        || (!has_change_request
+            && constraints.values().any(|constraint| {
+                matches!(
+                    constraint,
+                    crate::contract::ConstraintSource::Unique { fields, when: Some(when), .. }
+                        if fields.first().is_some_and(|first| first == field)
+                            && when.as_slice()
+                                == [crate::contract::UniqueWhenPredicate::ActiveLifecycle {}]
+                )
+            }))
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledEntity {

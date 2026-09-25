@@ -208,6 +208,126 @@ fn unindexed_list_filters_and_sorts_are_authoring_findings_at_the_declaring_fiel
 }
 
 #[test]
+fn an_active_lifecycle_partial_unique_serves_the_list_finding_on_an_ordinary_entity() {
+    // Every select policy on an entity with no change request restricts to
+    // `record_lifecycle = 'active'` (see `request_get_lifecycle_expression`
+    // in generated_ddl.rs), so a partial unique index scoped to the same
+    // predicate serves every list read path even though it is not a
+    // whole-table index.
+    let mut value = source();
+    asset_mut(&mut value)["constraints"] = json!([{"kind":"unique","id":"active-code",
+        "fields":["code","site"],"when":[{"kind":"active_lifecycle"}]}]);
+    let permission = &mut value["accessProfiles"][0]["permissions"][0];
+    permission["filterableFields"] = json!(["code"]);
+    permission["sortableFields"] = json!(["code"]);
+
+    let registry = compile(&value, CompileProfile::Authoring);
+    assert!(index_findings(&registry).is_empty());
+}
+
+#[test]
+fn a_field_predicate_unique_constraint_still_reports_the_list_finding() {
+    let mut value = source();
+    asset_mut(&mut value)["fields"]
+        .as_array_mut()
+        .expect("fields")
+        .push(json!({"id":"flag","type":"boolean","classification":"internal"}));
+    asset_mut(&mut value)["constraints"] = json!([{"kind":"unique","id":"flagged-code",
+        "fields":["code","site"],"when":[{"kind":"field_equals","field":"flag","value":true}]}]);
+    let permission = &mut value["accessProfiles"][0]["permissions"][0];
+    permission["readableFields"] = json!(["site", "owner", "code", "flag"]);
+    permission["filterableFields"] = json!(["code"]);
+    permission["sortableFields"] = json!(["code"]);
+
+    let registry = compile(&value, CompileProfile::Authoring);
+    assert_eq!(
+        index_findings(&registry),
+        vec![
+            (
+                UNINDEXED_FILTER.to_owned(),
+                "entities[id=asset].accessProfiles[id=reader].filterableFields[field=code]"
+                    .to_owned()
+            ),
+            (
+                UNINDEXED_SORT.to_owned(),
+                "entities[id=asset].accessProfiles[id=reader].sortableFields[field=code]"
+                    .to_owned()
+            ),
+        ],
+        "a predicate other than exactly active_lifecycle does not let Postgres \
+         prove the partial index covers every list row"
+    );
+}
+
+#[test]
+fn a_change_requests_active_lifecycle_unique_still_reports_the_list_finding() {
+    // A change-request entity's Get select policy also admits tombstoned
+    // rows (see `request_get_lifecycle_expression`), so its partial unique
+    // index cannot be assumed to serve every list read path.
+    let value = json!({
+        "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
+        "registry":{"id":"change-request-index-example","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://change-request-index.example.test"},
+        "entities":[
+          {"id":"site","primaryDataset":"test-dataset","route":"sites","mutationMode":"create_only","classification":"internal",
+           "fields":[{"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"}]},
+          {"id":"placement","primaryDataset":"test-dataset","route":"placements","mutationMode":"mutable","classification":"internal",
+           "changeControl":{"requiredFor":["patch"]},
+           "fields":[{"id":"site","type":"reference","target":"site","required":true,"classification":"internal"},
+                     {"id":"label","type":"string","maxLength":64,"classification":"internal"}]},
+          {"id":"placement-correction-request","primaryDataset":"test-dataset","route":"placement-correction-requests","mutationMode":"mutable","classification":"internal",
+           "fields":[{"id":"placement","type":"reference","target":"placement","required":true,"classification":"internal"},
+                     {"id":"proposed-site","type":"reference","target":"site","required":true,"classification":"internal"},
+                     {"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"internal"},
+                     {"id":"code","type":"string","maxLength":8,"required":true,"classification":"internal"}],
+           "constraints":[{"kind":"unique","id":"active-code","fields":["code"],
+             "when":[{"kind":"active_lifecycle"}]}],
+           "changeRequest":{
+             "effects":[{"target":{"fromField":"placement"},"operation":"patch",
+               "set":{"site":{"fromField":"proposed-site"}},"clear":["label"]}],
+             "review":{"authority":"casework-main","policyId":"placement-correction"},
+             "onApproved":{"mode":"manual"}
+           }}
+        ],
+        "accessProfiles":[{
+          "id":"request-reviewer","default":true,"principalClaim":"principal","permissions":[{
+            "rowBoundaries": [], "entity":"placement-correction-request",
+            "operations":["get","list","submit_request"],
+            "readableFields":["placement","proposed-site","reason","code"],
+            "filterableFields":["code"],"sortableFields":["code"]
+          }]
+        },{
+          "id":"request-applier","principalClaim":"principal","permissions":[{
+            "rowBoundaries": [], "entity":"placement-correction-request","operations":["get","apply_request"],
+            "readableFields":["placement"],
+            "applyTargets":[{"entity":"placement","rowBoundaries":[]}]
+          }]
+        }]
+    });
+    let registry = compile(&value, CompileProfile::Authoring);
+    let findings = index_findings(&registry)
+        .into_iter()
+        .filter(|(_, path)| path.starts_with("entities[id=placement-correction-request]"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        findings,
+        vec![
+            (
+                UNINDEXED_FILTER.to_owned(),
+                "entities[id=placement-correction-request].accessProfiles[id=request-reviewer].filterableFields[field=code]"
+                    .to_owned()
+            ),
+            (
+                UNINDEXED_SORT.to_owned(),
+                "entities[id=placement-correction-request].accessProfiles[id=request-reviewer].sortableFields[field=code]"
+                    .to_owned()
+            ),
+        ],
+        "a change request's Get policy admits tombstoned rows, so the active-lifecycle \
+         partial index does not serve the list finding"
+    );
+}
+
+#[test]
 fn unindexed_read_path_filters_and_sorts_point_at_the_read_path_grant() {
     let mut value = source();
     value["entities"][0]["readPaths"] =
