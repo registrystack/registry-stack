@@ -544,7 +544,7 @@ mod tests {
         {
           "severity": "error",
           "code": "runtime.issuer_missing",
-          "location": "runtime.yaml.authentication.issuer",
+          "location": "runtime.yaml.authentication.oidc",
           "message": "a Registry with protected operations requires one configured issuer"
         },
         {
@@ -829,7 +829,7 @@ mod tests {
             concat!(
                 "Production check refused.\n",
                 "\n",
-                "  error    runtime.issuer_missing  runtime.yaml.authentication.issuer\n",
+                "  error    runtime.issuer_missing  runtime.yaml.authentication.oidc\n",
                 "           a Registry with protected operations requires one configured issuer\n",
                 "  error    source.schema_observation_missing  sources.registry\n",
                 "           production compilation requires the observed source schema\n",

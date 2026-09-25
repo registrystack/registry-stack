@@ -702,16 +702,17 @@ mod tests {
             argument.display == "--attribute-column <COLUMN>" && argument.repeatable
         }));
 
-        for (invocation, option) in [
-            ("evidence-oid4vci check", "--config <CONFIG>"),
-            ("relay serve", "--runtime <RUNTIME>"),
-        ] {
-            assert!(find_command(&catalog.binaries, invocation)
-                .options
-                .iter()
-                .any(|argument| argument.display == option
-                    && argument.environment.is_some()
-                    && !argument.always_required));
-        }
+        assert!(find_command(&catalog.binaries, "evidence-oid4vci check")
+            .options
+            .iter()
+            .any(|argument| argument.display == "--config <CONFIG>"
+                && argument.environment.is_some()
+                && !argument.always_required));
+        assert!(find_command(&catalog.binaries, "relay serve")
+            .options
+            .iter()
+            .any(|argument| argument.display == "--runtime-config <FILE>"
+                && argument.environment.is_none()
+                && argument.always_required));
     }
 }

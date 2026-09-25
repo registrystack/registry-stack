@@ -159,8 +159,8 @@ async fn a_new_unsaved_runtime_document_contributes_compiler_diagnostics() {
     let invalid = fs::read_to_string(project.join("runtime.yaml"))
         .expect("the runtime fixture reads")
         .replacen(
-            "apiVersion: relay.registrystack.org/v2alpha1",
-            "apiVersion: relay.registrystack.org/unsupported",
+            "apiVersion: registry.registrystack.org/relay-runtime/v1alpha1",
+            "apiVersion: registry.registrystack.org/relay-runtime/unsupported",
             1,
         );
     fs::remove_file(project.join("runtime.yaml")).expect("the runtime starts absent");

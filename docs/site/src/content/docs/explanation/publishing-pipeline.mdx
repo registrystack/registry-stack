@@ -133,7 +133,7 @@ The full pipeline, from an existing SQLite database to a running service:
 | Inspect the artifacts | `relayctl generate <PROJECT> --output <DIR>` | The deterministic generated inventory: OpenAPI, JSON Schema, SHACL, JSON-LD context and vocabulary. |
 | Classify the change | `relayctl diff <PREVIOUS> <CURRENT>` | Every difference, each carrying a change class and an impact. |
 | Seal it | `relayctl package <PROJECT> --output <DIR>` | A sealed package directory with a revision digest over its own contents. |
-| Serve it | `relay serve --runtime <PATH>` | One process serving one package, with deployment-local settings supplied separately. |
+| Serve it | `relay serve --runtime-config <PATH>` | One process serving one package, with deployment-local settings supplied separately. |
 
 Two properties of this pipeline matter more than the command list.
 

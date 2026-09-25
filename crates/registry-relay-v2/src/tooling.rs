@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use registry_platform_audit::{AuditDestination, AuditWriter, FileDestination};
+use registry_platform_config::DEFAULT_MAX_RUNTIME_CONFIG_BYTES;
 use registry_platform_sqlite::{
     inspect_schema as inspect_sqlite_schema, materialize_fixture, CapturedSnapshot,
     DatabaseProfile, LiveDatabaseFile, SchemaObjectKind,
@@ -30,7 +31,7 @@ use crate::contract::{
     RegistryContract, RelayRuntime, ResourceSource, ReviewStatus, SdmxBindingDefinition,
     StatisticalAttributeDefinition, StatisticalBindings, StatisticalDimensionDefinition,
     StatisticalMeasureDefinition, StatisticalPublication, StatisticalQueryProfile,
-    StatisticalValueType, MAXIMUM_RUNTIME_BYTES,
+    StatisticalValueType,
 };
 use crate::cursor::CursorKey;
 use crate::diff::{diff_registries, ChangeImpactReport};
@@ -1279,12 +1280,12 @@ fn compile_project(
         let yaml = read_runtime_utf8(&runtime_path)?;
         match RelayRuntime::parse_yaml(&yaml) {
             Ok(runtime) => Some(runtime),
-            Err(_) => {
+            Err(refusal) => {
                 return Ok(ProjectCompilation::Refused(CompileReport {
                     diagnostics: vec![diagnostic(
                         "runtime.yaml_invalid",
-                        "runtime.yaml",
-                        "the deployment binding is not valid strict YAML",
+                        &crate::authoring::runtime_location(refusal.field()),
+                        refusal.message(),
                     )],
                 }));
             }
@@ -1512,10 +1513,10 @@ fn read_runtime_utf8(path: &Path) -> Result<String, ToolingError> {
     let mut file = fs::File::open(path).map_err(|_| ToolingError::Read)?;
     let mut bytes = Vec::new();
     std::io::Read::by_ref(&mut file)
-        .take(MAXIMUM_RUNTIME_BYTES.saturating_add(1))
+        .take(DEFAULT_MAX_RUNTIME_CONFIG_BYTES.saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(|_| ToolingError::Read)?;
-    if bytes.len() as u64 > MAXIMUM_RUNTIME_BYTES {
+    if bytes.len() as u64 > DEFAULT_MAX_RUNTIME_CONFIG_BYTES {
         return Err(ToolingError::Read);
     }
     String::from_utf8(bytes).map_err(|_| ToolingError::Read)
@@ -1580,12 +1581,12 @@ resources:
 metadataVisibility: {service: public, resources: operation-bound, semantics: operation-bound, classifications: operator-only, processing: operation-bound}
 "#;
 
-const STARTER_RUNTIME: &str = r#"apiVersion: relay.registrystack.org/v2alpha1
-kind: RelayRuntime
-server: {bind: "127.0.0.1:8080"}
-packagePath: package
+const STARTER_RUNTIME: &str = r#"apiVersion: registry.registrystack.org/relay-runtime/v1alpha1
+kind: RelayRuntimeConfig
+listener: {bind: "127.0.0.1:8080"}
+package: {root: "${RELAY_PACKAGE_ROOT:-/srv/relay/package}"}
+secretProviders: {environment: {}}
 sources: {registry: {path: registry.sqlite}}
-authentication: {issuer: null}
 audit: {destination: file, path: var/audit.jsonl}
 limits: {requestTimeoutMilliseconds: 1500, concurrentQueries: 8}
 "#;
@@ -1618,6 +1619,21 @@ mod tests {
         runtime.authentication =
             serde_norway::from_str(authentication).expect("authentication parses");
         runtime
+    }
+
+    #[test]
+    fn the_starter_runtime_takes_its_package_root_from_the_environment() {
+        let authored = RelayRuntime::parse_yaml(STARTER_RUNTIME).expect("starter parses");
+        assert_eq!(authored.package.root, Path::new("/srv/relay/package"));
+
+        let deployed = RelayRuntime::parse_yaml_with(STARTER_RUNTIME, |name| {
+            (name == "RELAY_PACKAGE_ROOT").then(|| "/home/reader/registry/package".to_owned())
+        })
+        .expect("starter parses with the package root set");
+        assert_eq!(
+            deployed.package.root,
+            Path::new("/home/reader/registry/package")
+        );
     }
 
     #[test]
@@ -1695,15 +1711,15 @@ mod tests {
 
     #[test]
     fn tooling_runtime_loading_matches_the_startup_issuer_profile() {
-        let runtime = |discovery_url: &str| {
+        let runtime = |issuer: &str| {
             STARTER_RUNTIME.replace(
-                "authentication: {issuer: null}",
+                "audit:",
                 &format!(
-                    "authentication:\n  issuer:\n    id: issuer\n    discoveryUrl: {discovery_url}\n    audience: registry\n    tokenTypes: [at+jwt]\n    algorithms: [EdDSA]"
+                    "authentication:\n  oidc:\n    issuer: '{issuer}'\n    audience: registry\n    tokenTypes: [at+jwt]\n    algorithms: [EdDSA]\naudit:"
                 ),
             )
         };
-        let valid = "https://identity.example.invalid/.well-known/openid-configuration";
+        let valid = "https://identity.example.invalid";
         assert!(RelayRuntime::parse_yaml(&runtime(valid)).is_ok());
 
         let temporary = tempfile::tempdir().expect("temporary root");
@@ -1713,11 +1729,10 @@ mod tests {
         )
         .expect("contract writes");
         for invalid in [
-            "https://operator:credential@identity.example.invalid/.well-known/openid-configuration",
-            "https://identity.example.invalid/.well-known/openid-configuration?tenant=x",
-            "https://identity.example.invalid/.well-known/openid-configuration#fragment",
-            "https://identity.example.invalid/.well-known/oauth-authorization-server",
-            "https:///.well-known/openid-configuration",
+            "https://operator:credential@identity.example.invalid",
+            "https://identity.example.invalid/?tenant=x",
+            "https://identity.example.invalid/#fragment",
+            "http://identity.example.invalid",
         ] {
             fs::write(temporary.path().join("runtime.yaml"), runtime(invalid))
                 .expect("runtime writes");
@@ -1730,7 +1745,8 @@ mod tests {
             assert!(report
                 .diagnostics
                 .iter()
-                .any(|item| item.code == "runtime.yaml_invalid"));
+                .any(|item| item.code == "runtime.yaml_invalid"
+                    && item.location == "runtime.yaml.authentication.oidc.issuer"));
         }
     }
 
@@ -1738,17 +1754,20 @@ mod tests {
     fn tooling_runtime_reads_match_the_startup_byte_ceiling() {
         let temporary = tempfile::tempdir().expect("temporary root");
         let path = temporary.path().join("runtime.yaml");
-        fs::write(&path, vec![b' '; MAXIMUM_RUNTIME_BYTES as usize])
+        fs::write(&path, vec![b' '; DEFAULT_MAX_RUNTIME_CONFIG_BYTES as usize])
             .expect("boundary runtime writes");
         assert_eq!(
             read_runtime_utf8(&path)
                 .expect("the exact startup byte ceiling reads")
                 .len(),
-            MAXIMUM_RUNTIME_BYTES as usize
+            DEFAULT_MAX_RUNTIME_CONFIG_BYTES as usize
         );
 
-        fs::write(&path, vec![b' '; MAXIMUM_RUNTIME_BYTES as usize + 1])
-            .expect("oversized runtime writes");
+        fs::write(
+            &path,
+            vec![b' '; DEFAULT_MAX_RUNTIME_CONFIG_BYTES as usize + 1],
+        )
+        .expect("oversized runtime writes");
         assert!(matches!(read_runtime_utf8(&path), Err(ToolingError::Read)));
         fs::write(
             temporary.path().join("registry.yaml"),
@@ -1769,7 +1788,7 @@ mod tests {
             serde_norway::from_str("{scope: registry:statistics:read}")
                 .expect("protected statistical access");
 
-        let diagnostics = validate_runtime(&contract, Some(&runtime("{issuer: null}")));
+        let diagnostics = validate_runtime(&contract, Some(&runtime("{}")));
         assert!(diagnostics
             .iter()
             .any(|item| item.code == "runtime.issuer_missing"));
@@ -1988,8 +2007,7 @@ mod tests {
             )
             .expect("lookup parses"),
         );
-        let lookup_diagnostics =
-            validate_runtime(&lookup_contract, Some(&runtime("{issuer: null}")));
+        let lookup_diagnostics = validate_runtime(&lookup_contract, Some(&runtime("{}")));
         assert!(lookup_diagnostics
             .iter()
             .any(|item| item.code == "runtime.lookup_quota_missing"));
@@ -2000,15 +2018,13 @@ mod tests {
         let mut second = template;
         second.id = "second-record".into();
         metadata_contract.resources.push(second);
-        let metadata_diagnostics =
-            validate_runtime(&metadata_contract, Some(&runtime("{issuer: null}")));
+        let metadata_diagnostics = validate_runtime(&metadata_contract, Some(&runtime("{}")));
         assert!(metadata_diagnostics
             .iter()
             .any(|item| item.code == "runtime.cursor_missing"));
 
         metadata_contract.metadata_visibility.resources = crate::contract::Visibility::OperatorOnly;
-        let operator_only_diagnostics =
-            validate_runtime(&metadata_contract, Some(&runtime("{issuer: null}")));
+        let operator_only_diagnostics = validate_runtime(&metadata_contract, Some(&runtime("{}")));
         assert!(!operator_only_diagnostics
             .iter()
             .any(|item| item.code == "runtime.cursor_missing"));
@@ -2020,8 +2036,7 @@ mod tests {
             )
             .expect("protected read operation"),
         );
-        let one_public_diagnostics =
-            validate_runtime(&metadata_contract, Some(&runtime("{issuer: null}")));
+        let one_public_diagnostics = validate_runtime(&metadata_contract, Some(&runtime("{}")));
         assert!(!one_public_diagnostics
             .iter()
             .any(|item| item.code == "runtime.cursor_missing"));
@@ -2029,7 +2044,7 @@ mod tests {
         metadata_contract.metadata_visibility.resources =
             crate::contract::Visibility::OperationBound;
         let operation_bound_diagnostics =
-            validate_runtime(&metadata_contract, Some(&runtime("{issuer: null}")));
+            validate_runtime(&metadata_contract, Some(&runtime("{}")));
         assert!(operation_bound_diagnostics
             .iter()
             .any(|item| item.code == "runtime.cursor_missing"));

@@ -26,7 +26,7 @@ change none of the meaning inside them.
 | Replay fixtures | `relayctl test <project>` | Data publisher |
 | Seal the revision | `relayctl package <project> --output <dir>` | Data publisher |
 | Bind the deployment | `runtime.yaml` | Deployment operator |
-| Run | `relay serve --runtime <file>` | Deployment operator |
+| Run | `relay serve --runtime-config <file>` | Deployment operator |
 | Confirm | `GET /health` and `GET /ready` | Deployment operator |
 
 Packaging recompiles the project under the production profile, so a package
@@ -59,7 +59,7 @@ the verified directory.
 `~/.local/bin`.
 
 The container image is `ghcr.io/registrystack/relay:v0.26.1`, built on
-distroless nonroot. It exposes port 8080, runs `relay serve --runtime
+distroless nonroot. It exposes port 8080, runs `relay serve --runtime-config
 /etc/relay/runtime.yaml` by default, and probes itself with `relay healthcheck`.
 
 `relayctl` also ships for each platform in
@@ -94,7 +94,7 @@ Before the first activation, record:
 
 Relay resolves secrets through `secret:env/<NAME>` or `secret:file/<name>`
 references in `runtime.yaml`, where `<name>` is a single flat lowercase
-filename. Secret values never belong in the package, and the
+filename under the declared `secretProviders.file.root`. Secret values never belong in the package, and the
 package never travels with the database.
 
 ## The package proves integrity, not authenticity

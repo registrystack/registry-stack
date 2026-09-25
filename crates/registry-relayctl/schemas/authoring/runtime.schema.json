@@ -123,15 +123,16 @@
     "AuthenticationRuntime": {
       "additionalProperties": false,
       "properties": {
-        "issuer": {
+        "oidc": {
           "anyOf": [
             {
-              "$ref": "#/$defs/IssuerRuntime"
+              "$ref": "#/$defs/OidcRuntime"
             },
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "The one OIDC issuer whose access tokens protected operations accept.\nA Registry whose every operation is public declares none."
         }
       },
       "type": "object"
@@ -154,7 +155,103 @@
       ],
       "type": "object"
     },
-    "IssuerRuntime": {
+    "EnvironmentSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The environment secret provider. It takes no settings.",
+      "type": "object"
+    },
+    "FileSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The file secret provider.",
+      "properties": {
+        "root": {
+          "description": "Absolute directory holding one file per secret. Each file must be a\nregular file owned by the runtime user, mode 0400 or 0600, with exactly\none hard link.",
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "JwksSource": {
+      "description": "Where a runtime obtains the OIDC issuer's signing keys.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Read `jwks_uri` from the issuer's OpenID Connect discovery document.",
+          "properties": {
+            "kind": {
+              "const": "discovery",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Fetch the key set from this absolute `https` URI, skipping discovery.",
+          "properties": {
+            "kind": {
+              "const": "uri",
+              "type": "string"
+            },
+            "uri": {
+              "pattern": "^https?://",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "uri"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Read the key set from a secret, for deployments without network access\nto the issuer.",
+          "properties": {
+            "documentRef": {
+              "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+              "type": "string"
+            },
+            "kind": {
+              "const": "static",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "documentRef"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ListenerBind": {
+      "description": "Socket address the runtime listens on, written host:port with an IP address host ([addr]:port for IPv6).",
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "ListenerConfig": {
+      "additionalProperties": false,
+      "description": "The listener of a runtime that declares no TLS or exposure settings.",
+      "properties": {
+        "bind": {
+          "$ref": "#/$defs/ListenerBind"
+        }
+      },
+      "required": [
+        "bind"
+      ],
+      "type": "object"
+    },
+    "OidcRuntime": {
       "additionalProperties": false,
       "properties": {
         "algorithms": {
@@ -166,43 +263,52 @@
         "audience": {
           "type": "string"
         },
-        "discoveryUrl": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "id": {
+        "issuer": {
+          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL.",
           "type": "string"
         },
-        "jwksUrl": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+        "jwksSource": {
+          "$ref": "#/$defs/JwksSource",
+          "default": {
+            "kind": "discovery"
+          },
+          "description": "Where the issuer's signing keys come from: `{kind: discovery}` reads\nthe issuer's OpenID Connect discovery document, and\n`{kind: uri, uri}` fetches the key set directly. Relay does not\naccept `kind: static`."
         },
         "tokenTypes": {
           "items": {
             "type": "string"
           },
           "type": "array"
-        },
-        "trustedIssuer": {
-          "default": null,
-          "description": "Exact issuer accepted in access-token `iss` claims.\n\nExisting runtimes may omit this when `discoveryUrl` uses the canonical\nissuer origin. A distinct discovery transport or direct JWKS transport\nrequires this field so network routing never changes token identity.",
+        }
+      },
+      "required": [
+        "issuer",
+        "audience",
+        "tokenTypes",
+        "algorithms"
+      ],
+      "type": "object"
+    },
+    "PackageConfig": {
+      "additionalProperties": false,
+      "description": "The package a runtime serves: `root` is the absolute package directory,\nand `expectedDigest`, when set, pins the package identity the runtime must\nfind there.",
+      "properties": {
+        "expectedDigest": {
+          "description": "`sha256:` label of the package identity. When set, the runtime refuses\nto start on any other package.",
+          "pattern": "^sha256:[0-9a-f]{64}$",
           "type": [
             "string",
             "null"
           ]
+        },
+        "root": {
+          "description": "Absolute path of the package directory.",
+          "pattern": "^/",
+          "type": "string"
         }
       },
       "required": [
-        "id",
-        "audience",
-        "tokenTypes",
-        "algorithms"
+        "root"
       ],
       "type": "object"
     },
@@ -250,6 +356,7 @@
       "additionalProperties": false,
       "properties": {
         "path": {
+          "description": "SQLite file of this source, absolute or relative to the directory of\nthe runtime configuration.",
           "type": "string"
         }
       },
@@ -258,16 +365,55 @@
       ],
       "type": "object"
     },
-    "ServerRuntime": {
+    "SecretProvidersConfig": {
       "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        },
+        {
+          "properties": {
+            "environment": {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            }
+          },
+          "required": [
+            "environment"
+          ]
+        }
+      ],
+      "description": "The secret providers a runtime enables. A reference is resolved only by a\nprovider declared here: `secret:file/name` under `file.root`, and\n`secret:env/NAME` only when `environment: {}` is present.",
       "properties": {
-        "bind": {
-          "type": "string"
+        "environment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Enables `secret:env/NAME` references, read from the process\nenvironment. Declared as an empty mapping: `environment: {}`."
+        },
+        "file": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Enables `secret:file/name` references, read from files under `root`."
         }
       },
-      "required": [
-        "bind"
-      ],
       "type": "object"
     },
     "ShutdownRuntime": {
@@ -297,7 +443,8 @@
       "$ref": "#/$defs/AuditRuntime"
     },
     "authentication": {
-      "$ref": "#/$defs/AuthenticationRuntime"
+      "$ref": "#/$defs/AuthenticationRuntime",
+      "default": {}
     },
     "cursor": {
       "anyOf": [
@@ -316,8 +463,11 @@
     "limits": {
       "$ref": "#/$defs/RuntimeLimits"
     },
-    "packagePath": {
-      "type": "string"
+    "listener": {
+      "$ref": "#/$defs/ListenerConfig"
+    },
+    "package": {
+      "$ref": "#/$defs/PackageConfig"
     },
     "quotas": {
       "anyOf": [
@@ -330,8 +480,8 @@
       ],
       "default": null
     },
-    "server": {
-      "$ref": "#/$defs/ServerRuntime"
+    "secretProviders": {
+      "$ref": "#/$defs/SecretProvidersConfig"
     },
     "shutdown": {
       "anyOf": [
@@ -354,10 +504,10 @@
   "required": [
     "apiVersion",
     "kind",
-    "server",
-    "packagePath",
+    "listener",
+    "package",
+    "secretProviders",
     "sources",
-    "authentication",
     "audit",
     "limits"
   ],

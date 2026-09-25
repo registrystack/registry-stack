@@ -128,7 +128,7 @@ The registry stack comprises four formal products: Registry Platform, Registry R
 
 **governed contract**: The authored `kind: RegistryContract` document, at `apiVersion: relay.registrystack.org/v2alpha1`, that declares one Relay deployment's registry identity, sources, resources, operations, access profiles, disclosure profiles, and statistical datasets. It rejects unknown fields at every nested structure. Registry Stack product term.
 
-**deployment binding**: The deployment-local half of a Relay deployment, authored as a closed `kind: RelayRuntime` document at the same `apiVersion`. It carries the listener, the identity issuer, source file paths, the audit destination, and quotas, and it rejects every governed field, so an operator cannot widen governed intent through deployment configuration. Replaces the Relay 1.0 term runtime binding. Registry Stack product term.
+**deployment binding**: The deployment-local half of a Relay deployment, authored as a closed `kind: RelayRuntimeConfig` document at `apiVersion: registry.registrystack.org/relay-runtime/v1alpha1`. It carries the listener, the identity issuer, source file paths, the audit destination, and quotas, and it rejects every governed field, so an operator cannot widen governed intent through deployment configuration. Replaces the Relay 1.0 term runtime binding. Registry Stack product term.
 
 **compiled Registry**: The canonical model derived from a governed contract together with the reviewed source schema observations recorded beside it. Every generated artifact derives from the compiled Registry, and the runtime re-derives both at startup rather than trusting the packaged copy. Registry Stack product term.
 

@@ -29,7 +29,6 @@ The `relay` binary reads these variables.
 
 | Name | Purpose | Default or required |
 | --- | --- | --- |
-| `RELAY_RUNTIME` | Path to the deployment binding that names the sealed package, the local sources, authentication, audit, and limits. Equivalent to `--runtime` on `relay check` and `relay serve`. | Required for `relay serve`, by flag or by variable. `relay check` defaults to `/etc/relay/runtime.yaml`. |
 | `RELAY_HEALTHCHECK_URL` | Complete HTTP or HTTPS URL of the unauthenticated `/health` endpoint to probe. Equivalent to the `--url` flag on `relay healthcheck`. | Defaults to `http://127.0.0.1:8080/health`. |
 | `RELAY_LOG` | Level for the JSON operational records the process writes on standard error. | Defaults to `info`. |
 
@@ -37,14 +36,14 @@ The `relay` binary reads these variables.
 
 ### Secret references in `runtime.yaml`
 
-Relay resolves secrets through two providers, environment and file, rooted at the directory holding the runtime file. One field takes a reference: `cursor.integrityKeyRef`, which applies when the deployment enables cursors.
+Relay reads no variable for the runtime path: `relay check` and `relay serve` take it as the required absolute `--runtime-config <FILE>` flag. Relay resolves secrets through the providers `runtime.yaml` declares under `secretProviders`: `environment: {}` enables `secret:env/` references and `file: {root: <absolute directory>}` enables `secret:file/` references. One field takes a reference: `cursor.integrityKeyRef`, which applies when the deployment enables cursors. Other runtime values may use `${VAR}` or `${VAR:-default}` substitution; a field ending in `Ref` refuses it.
 
 | Grammar | Resolves to | Accepted name |
 | --- | --- | --- |
-| `secret:env/<NAME>` | The value of the environment variable `<NAME>` | Starts with an uppercase ASCII letter, then uppercase ASCII letters, digits, or `_`, up to 128 characters |
-| `secret:file/<name>` | A file named `<name>` under the runtime file's directory | Starts with a lowercase ASCII letter, then lowercase ASCII letters, digits, `.`, `_`, or `-`, up to 128 characters |
+| `secret:env/<NAME>` | The value of the environment variable `<NAME>`, when `secretProviders.environment` is declared | Starts with an uppercase ASCII letter, then uppercase ASCII letters, digits, or `_`, up to 128 characters |
+| `secret:file/<name>` | A file named `<name>` under `secretProviders.file.root` | Starts with a lowercase ASCII letter, then lowercase ASCII letters, digits, `.`, `_`, or `-`, up to 128 characters |
 
-A reference that matches neither grammar makes the runtime document invalid, so the process refuses to start rather than serving with an unresolved secret. The variable names themselves are the operator's choice and appear nowhere in Relay's source. See [Configure Relay](../../configure/relay/) for the fields around them.
+A reference that matches neither grammar, or names a provider the document does not declare, makes the runtime document invalid, so the process refuses to start rather than serving with an unresolved secret. The variable names themselves are the operator's choice and appear nowhere in Relay's source. See [Configure Relay](../../configure/relay/) for the fields around them.
 
 ### Relay installer
 

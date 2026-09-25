@@ -2,7 +2,7 @@
   name: Relay Registry Contract Grammar
   owner: registry-relay
   status: current-source
-  surface: "Closed YAML grammar `relay.registrystack.org/v2alpha1` for the two documents an adopter authors: `registry.yaml` (`kind: RegistryContract`), declaring registry identity, resources, operations, access profiles, disclosure, and the closed public discovery publication; and `runtime.yaml` (`kind: RelayRuntime`), binding one deployment's package, SQLite source, authentication, audit, secrets, and listener."
+  surface: "Closed YAML grammars for the two documents an adopter authors: `registry.yaml` (`apiVersion: relay.registrystack.org/v2alpha1`, `kind: RegistryContract`), declaring registry identity, resources, operations, access profiles, disclosure, and the closed public discovery publication; and `runtime.yaml` (`apiVersion: registry.registrystack.org/relay-runtime/v1alpha1`, `kind: RelayRuntimeConfig`), binding one deployment's package, SQLite source, authentication, audit, secret providers, and listener."
   source_of_truth:
     label: Registry Stack contract reference
     url: /reference/contracts/

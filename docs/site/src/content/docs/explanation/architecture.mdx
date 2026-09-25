@@ -225,10 +225,11 @@ decision.
    fixed route set the package compiled. There is no adaptation step: the runtime executes only the
    statements the compiler produced, over the source columns the contract named, and returns only the
    properties a disclosure profile declares. The one runtime file (`runtime.yaml`,
-   `kind: RelayRuntime`) binds local paths, the audit sink, secret references, limits, and an optional
+   `kind: RelayRuntimeConfig`) binds local paths, the audit destination, secret references, limits, and an optional
    OIDC issuer, and cannot widen anything the package sealed.
-   {/* Evidence: the RelayRuntime struct is a closed deny_unknown_fields schema over server,
-        packagePath, sources, authentication, audit, cursor, limits, quotas, and shutdown only,
+   {/* Evidence: the RelayRuntime struct is a closed deny_unknown_fields schema over listener,
+        package, secretProviders, sources, authentication, audit, cursor, limits, quotas, and
+        shutdown only,
         crates/registry-relay-v2/src/contract.rs; startup verifies the package before
         opening any other resource, crates/registry-relay-v2/src/startup.rs:96-104. */}
 7. Evidence Gateway evaluates one predefined, versioned requirement per request, aligned with CCCEV through

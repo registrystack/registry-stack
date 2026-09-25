@@ -93,7 +93,7 @@ NATIVE_CHECKS = {
     ],
     "relay": [
         "check",
-        "--runtime",
+        "--runtime-config",
         "/etc/relay/runtime.yaml",
         AUDIT_CONTAINMENT_FLAG,
         AUDIT_PREFIXES["relay"],

@@ -70,12 +70,18 @@ tests do not require Docker.
 problem inventory used by `registry-relay-client`; it has no live deployment or
 fixture dependency.
 
-For an assembled deployment, `relay check --runtime <runtime.yaml>` performs
-the complete startup preparation without taking the listener socket. It
-verifies the sealed package, observed SQLite source, audit writer, secrets, and
-configured issuer discovery or JWKS transport. Exact token `iss` validation is
-bound to `authentication.issuer.trustedIssuer` when that explicit field is
-present, independent of the transport hostname.
+For an assembled deployment, `relay check --runtime-config
+/etc/relay/runtime.yaml` performs the complete startup preparation without
+taking the listener socket. The path is required and absolute; there is no
+default and no environment variable. It verifies the runtime envelope
+(`registry.registrystack.org/relay-runtime/v1alpha1`, kind
+`RelayRuntimeConfig`), the sealed package at `package.root` and its optional
+`package.expectedDigest` pin, the observed SQLite source, the audit writer,
+secrets through the declared `secretProviders`, and the issuer key source.
+Exact token `iss` validation is bound to `authentication.oidc.issuer`,
+independent of the `jwksSource` transport hostname. A removed key such as
+`server`, `packagePath`, `audit.integrityKeyRef`, or `authentication.issuer` is
+refused with a diagnostic naming its replacement.
 
 Adding `--require-audit-under <absolute-directory>` proves that the configured
 audit file resolves at or below a directory the deployment declares persistent.

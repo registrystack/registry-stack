@@ -778,7 +778,7 @@ impl Harness {
         fetcher.ensure_key_set().await.expect("fixture JWKS loads");
         let issuer = runtime
             .authentication
-            .issuer
+            .oidc
             .as_ref()
             .expect("statistical runtime has issuer");
         let mut verifier = oidc_verifier_config(idp.issuer(), vec![issuer.audience.clone()]);
@@ -878,7 +878,7 @@ impl Harness {
         let audience = &self
             .runtime
             .authentication
-            .issuer
+            .oidc
             .as_ref()
             .expect("runtime has issuer")
             .audience;

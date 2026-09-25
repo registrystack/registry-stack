@@ -239,10 +239,10 @@ can carry request URLs and headers, remain off at every level.
 A Relay-owned log record MUST carry fixed messages and value-free dimensions, and MUST NOT carry
 record values, credentials, or token contents.
 
-`RELAY_LOG` and `RELAY_RUNTIME`, which supplies the runtime document path, are the environment
-variables the `relay` process reads by name, alongside `RELAY_HEALTHCHECK_URL` for the healthcheck
-subcommand. It also reads whatever variable a `secret:env/<NAME>` reference in the runtime document
-names. The `relayctl` authoring tool defines no product-specific environment-variable configuration;
+`RELAY_LOG` is the environment variable the `relay` process reads by name, alongside
+`RELAY_HEALTHCHECK_URL` for the healthcheck subcommand; the runtime document path is the required
+`--runtime-config` flag. It also reads whatever variable a `secret:env/<NAME>` reference or a
+`${NAME}` substitution in the runtime document names. The `relayctl` authoring tool defines no product-specific environment-variable configuration;
 its fixture runner may use only the host's temporary-directory selection for internal materialization, per
 [RS-PR-RELAYCTL](../rs-pr-relayctl/).
 
@@ -312,8 +312,8 @@ runtime and exercised by its tests.
 - `verify_readiness_sources` in `crates/registry-relay-v2/src/sqlite_runtime.rs` re-verifies
   snapshot immutability and schema fingerprints under the request timeout, and its readiness gate
   coalesces concurrent probes (Section 3).
-- `RelayRuntime::is_valid` and `valid_secret_reference` in
-  `crates/registry-relay-v2/src/contract.rs` enforce the numeric bounds and the secret-reference
+- `RelayRuntime::check` in `crates/registry-relay-v2/src/contract.rs` and `SecretProvidersConfig`
+  in `crates/registry-platform-config` enforce the numeric bounds and the secret-reference
   forms (Section 5).
 - `QuotaLimiter` in `crates/registry-relay-v2/src/server.rs` implements the per-operation token
   bucket, and `crates/registry-relay-v2/src/problem.rs` fixes the refusal codes and statuses
