@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
+mod audit_lines;
+
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
+use audit_lines::AuditLines;
 use axum::body::{to_bytes, Body};
 use http::{Request, StatusCode};
-use registry_platform_audit::{AuditChainHasher, AuditEnvelope, AuditError, AuditSink, ChainState};
 use registry_platform_sqlite::{
     inspect_schema, materialize_fixture, CapturedSnapshot, DatabaseProfile, InspectionLimits,
     SchemaObjectKind,
@@ -122,55 +124,6 @@ resources:
         safeguards: [property-minimization]
 metadataVisibility: {service: public, resources: public, semantics: public, classifications: public, processing: public}
 "#;
-
-#[derive(Default)]
-struct RecordingSink {
-    records: Mutex<Vec<AuditEnvelope>>,
-}
-
-impl RecordingSink {
-    fn values(&self) -> Vec<Value> {
-        self.records
-            .lock()
-            .expect("audit lock")
-            .iter()
-            .map(|envelope| envelope.record.clone())
-            .collect()
-    }
-}
-
-#[async_trait::async_trait]
-impl AuditSink for RecordingSink {
-    async fn write(&self, envelope: &AuditEnvelope) -> Result<(), AuditError> {
-        self.records
-            .lock()
-            .expect("audit lock")
-            .push(envelope.clone());
-        Ok(())
-    }
-
-    #[allow(deprecated)]
-    async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
-        Ok(self
-            .records
-            .lock()
-            .expect("audit lock")
-            .last()
-            .map(|envelope| envelope.record_hash))
-    }
-
-    async fn tail_hash_with_hasher(
-        &self,
-        _hasher: &AuditChainHasher,
-    ) -> Result<Option<[u8; 32]>, AuditError> {
-        Ok(self
-            .records
-            .lock()
-            .expect("audit lock")
-            .last()
-            .map(|envelope| envelope.record_hash))
-    }
-}
 
 #[tokio::test]
 async fn governed_controlled_code_succeeds_at_the_exact_compiled_body_boundary() {
@@ -312,19 +265,13 @@ async fn governed_controlled_code_succeeds_at_the_exact_compiled_body_boundary()
         )
         .expect("SQLite runtime opens"),
     );
-    let sink = Arc::new(RecordingSink::default());
-    let sink_object: Arc<dyn AuditSink> = sink.clone();
-    let chain = Arc::new(
-        ChainState::bootstrap_unkeyed_dev_only(sink_object.as_ref())
-            .await
-            .expect("audit chain starts"),
-    );
+    let sink = AuditLines::recording();
     let service = Arc::new(RelayService::new(
         Arc::clone(&registry),
         artifacts,
         sqlite,
         None,
-        RelayAudit::new(chain, sink_object),
+        RelayAudit::new(sink.writer()),
         None,
         Duration::from_secs(300),
         Duration::from_secs(2),

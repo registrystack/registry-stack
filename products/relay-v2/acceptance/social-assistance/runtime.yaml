@@ -14,8 +14,8 @@ authentication:
     tokenTypes: [at+jwt]
     algorithms: [ES256]
 audit:
-  sink: var/audit.jsonl
-  integrityKeyRef: secret:env/RELAY_TEST_AUDIT_KEY
+  destination: file
+  path: var/audit.jsonl
 limits:
   requestTimeoutMilliseconds: 1500
   concurrentQueries: 16

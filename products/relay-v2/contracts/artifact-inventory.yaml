@@ -90,7 +90,7 @@ artifacts:
     visibility: operator-only
     source: relay-audit-vocabulary
     generated: true
-    invariant: Records categorical access-profile, format-profile, statistical data-or-structure surface, SDMX wire format, and query-shape identity without bbox, SDMX keys or constraints, principal, carrier, or source values.
+    invariant: Describes one audit line, the shared envelope with Relay's record nested under record, whose record carries categorical access-profile, format-profile, statistical data-or-structure surface, SDMX wire format, and query-shape identity without bbox, SDMX keys or constraints, principal, carrier, or source values.
   - id: identification-report
     mediaType: application/json
     visibility: operator-only

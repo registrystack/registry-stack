@@ -125,13 +125,16 @@ the Point once as its property and never duplicates carrier metadata.
 
 `RelayRuntime` is a separate strict deployment file. It binds listener,
 `packagePath`, SQLite paths, at most one issuer and audience, secrets, cursor
-key, audit sink, timeouts, concurrency, quotas, and
+key, audit destination, timeouts, concurrency, quotas, and
 shutdown.
 It cannot add or weaken a resource, operation, disclosure, access rule,
 classification, semantic mapping, or metadata visibility decision.
-Audit sink and integrity key are mandatory. There is no `failClosed` switch;
-durable refusal, source-access, and response-release gating cannot be disabled
-by deployment configuration.
+The audit block is mandatory and uses the shape every Registry Stack product
+shares: `destination` (`file`, the default, or `stdout`), `path` for a file,
+and optional `rotateBytes` and `retainDays` for a file. Relay records carry no
+keyed reference, so the block takes no audit key. There is no `failClosed`
+switch; durable refusal, source-access, and response-release gating cannot be
+disabled by deployment configuration.
 
 The shared compiler library's packager, exposed as `relayctl package`, is the
 only production packaging path. It creates a deterministic sealed directory
@@ -678,16 +681,23 @@ as a release gate:
 4. append a source-failed outcome before returning a source failure;
 5. serialize successful bytes and append the release outcome before those exact bytes leave the process.
 
-Audit sink failure returns `503` and prevents source access or response release
-at the relevant gate. Events contain stable Registry, resource, operation,
+Each gate is one line written through the shared platform audit writer, with
+schema `registry.relay.audit/v2alpha2`: the attempt is a `request` entry and a
+refusal or terminal outcome is a `response` entry, and both carry the operation
+id as `correlation`. A refusal decided before source access is one `response`
+entry. A `file` destination accepts an entry only after it is `fsync`ed; a
+`stdout` destination accepts it once the line is written and flushed. Audit
+destination failure returns `503` and prevents source access or response
+release at the relevant gate. Events contain stable Registry, resource, operation,
 access profile, access-rule, processing, disclosure, transform,
 selected-property, handling, contract, and truthful source revision identifiers. They contain no token, selector, SQL,
 path, source or response value, or raw principal identifier.
 
 Statistical events use the same ordering but name data and structure as
 distinct audit surfaces and SDMX-JSON and SDMX-CSV as distinct wire formats.
-They bind the dataset, dataflow/DSD artifact identity, query-plan identity,
-contract and source revisions, and exact released bytes. They never contain a
+They record the dataset, dataflow/DSD artifact identity, query-plan identity,
+and contract and source revisions, and the terminal entry gates release of the
+exact held bytes without recording the bytes or a digest of them. They never contain a
 key, component constraint, time bound, observation, codelist value, hidden
 authority value, or response value.
 

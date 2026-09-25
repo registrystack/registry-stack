@@ -18,7 +18,7 @@ workspace = true
 
 [features]
 default = []
-schema = ["dep:schemars"]
+schema = ["dep:schemars", "registry-platform-audit/schema"]
 tooling = ["dep:tempfile", "registry-platform-sqlite/fixture"]
 
 [dependencies]
@@ -64,7 +64,6 @@ url.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-async-trait.workspace = true
 futures.workspace = true
 jsonschema.workspace = true
 oxjsonld = "0.2.5"

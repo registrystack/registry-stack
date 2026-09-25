@@ -5952,7 +5952,6 @@ version = "0.34.0"
 name = "registry-relay-v2"
 version = "0.34.0"
 dependencies = [
- "async-trait",
  "axum",
  "base64 0.22.1",
  "bytes",

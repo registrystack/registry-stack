@@ -1,19 +1,51 @@
 {
   "$defs": {
-    "AuditRuntime": {
-      "additionalProperties": false,
-      "properties": {
-        "integrityKeyRef": {
+    "AuditDestinationKind": {
+      "description": "The configured audit destination kind, as written in product configuration.",
+      "oneOf": [
+        {
+          "const": "file",
+          "description": "Durable, rotated JSON Lines file.",
           "type": "string"
         },
-        "sink": {
+        {
+          "const": "stdout",
+          "description": "One JSON line per entry on standard output, flushed per entry.",
           "type": "string"
         }
+      ]
+    },
+    "AuditRuntime": {
+      "additionalProperties": false,
+      "description": "Where Relay writes its audit lines, in the shape every Registry Stack\nproduct shares. A relative `path` is resolved against the runtime file's\ndirectory at startup.",
+      "properties": {
+        "destination": {
+          "$ref": "#/$defs/AuditDestinationKind",
+          "default": "file"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retainDays": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "rotateBytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
       },
-      "required": [
-        "sink",
-        "integrityKeyRef"
-      ],
       "type": "object"
     },
     "AuthenticationRuntime": {

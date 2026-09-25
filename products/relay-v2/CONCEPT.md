@@ -592,7 +592,7 @@ Public operations may explicitly allow anonymous access. They still use the same
 
 ### Unsigned responses and Evidence composition
 
-Relay V2 registry responses are not signed. TLS protects transport, access tokens protect controlled operations, and provenance, revisions, and tamper-evident audit support accountability. An ETag, source digest, or contract revision is useful integrity and cache metadata, but is not presented as a signature.
+Relay V2 registry responses are not signed. TLS protects transport, access tokens protect controlled operations, and provenance, revisions, and durable value-free audit support accountability. An ETag, source digest, or contract revision is useful integrity and cache metadata, but is not presented as a signature.
 
 When a relying party needs a portable signed assertion with minimum disclosure, that remains Evidence's job. Evidence may use a Relay-protected exact lookup as an ordinary fixed HTTP source. The products compose without moving assertion signing or verification into Relay.
 
@@ -732,11 +732,11 @@ Relay V2 should reuse mature product-neutral primitives directly and avoid inher
 | `registry-platform-authcommon` | Strict bearer parsing and secret-safe authentication helpers. |
 | `registry-platform-oidc` | OIDC discovery or direct JWKS transport, JWKS caching, and strict JWT access-token verification for one trusted issuer. Exactly one transport is configured; its authority never changes token `iss` validation. Add only missing product-neutral claim checks required by Relay V2; multi-issuer selection is deferred. |
 | `registry-platform-httpsec` | Security headers, narrow CORS, request limits, and RFC 9457 problem responses extended by Relay with its stable code and trace ID. |
-| `registry-platform-audit` | Tamper-evident envelopes, durable sinks, chain verification, redaction, and pseudonymization primitives. Relay V2 owns its event vocabulary and does not inherit old consultation semantics. |
+| `registry-platform-audit` | The shared audit writer (one envelope per line, a single-writer `file` or a `stdout` destination, rotation, and retention), plus redaction and pseudonymization primitives. Relay V2 owns its event vocabulary and does not inherit old consultation semantics. |
 | `registry-platform-config` | Environment expansion, secret references, and optional signed governed-bundle verification. Relay still owns compilation of the registry contract. |
 | `registry-platform-canonical-json` | Deterministic revision, profile, and artifact digests. |
 | `registry-platform-buildinfo` | Consistent binary and release identity. |
-| `registry-platform-testing` | Mock OIDC, audit assertions, HTTP/security integration fixtures, and non-leak testing. |
+| `registry-platform-testing` | Mock OIDC, HTTP/security integration fixtures, and non-leak testing. |
 
 ### Selective or indirect reuse
 
@@ -830,7 +830,7 @@ The first coherent Relay V2 release should contain:
 10. snapshot and live read-only SQLite profiles, including useful unversioned live read and lookup deployments;
 11. deterministic disclosure plans, bounded queries, stable `404` lookup outcomes, atomic activation, and Registry Stack problems;
 12. unsigned registry responses with truthful Record, source, and contract revisions;
-13. tamper-evident attempt, refusal, and pre-release audit gates;
+13. durable attempt, refusal, and pre-release audit gates;
 14. fixture, schema-drift, contract-drift, change-impact, and security-safeguard checks.
 15. snapshot-only pre-aggregated statistical dataflows with generated exact
     dataflow and DSD artifacts and the bounded SDMX read profile.

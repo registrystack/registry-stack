@@ -2,6 +2,8 @@
 
 #![cfg(unix)]
 
+mod audit_lines;
+
 use std::fs;
 use std::io::Read as _;
 use std::net::TcpListener;
@@ -140,8 +142,7 @@ async fn built_relay_serves_a_sealed_package_over_real_tcp_and_shuts_down() {
         .pointer_mut("/sources/companies/path")
         .expect("business source binding") = Value::String(source.to_string_lossy().into_owned());
     runtime = serde_json::from_value(runtime_value).expect("modified runtime remains valid");
-    runtime.audit.sink = audit.join("events.jsonl").to_string_lossy().into_owned();
-    runtime.audit.integrity_key_ref = "secret:file/audit-integrity-key".into();
+    runtime.audit.path = Some(audit.join("events.jsonl").to_string_lossy().into_owned());
     runtime
         .cursor
         .as_mut()
@@ -152,10 +153,6 @@ async fn built_relay_serves_a_sealed_package_over_real_tcp_and_shuts_down() {
         serde_norway::to_string(&runtime).expect("runtime serializes"),
     )
     .expect("absolute runtime writes");
-    write_secret(
-        &etc.join("audit-integrity-key"),
-        b"a-32-byte-minimum-synthetic-audit-key",
-    );
     write_secret(
         &etc.join("cursor-integrity-key"),
         b"a-32-byte-minimum-synthetic-cursor-key",
@@ -183,6 +180,37 @@ async fn built_relay_serves_a_sealed_package_over_real_tcp_and_shuts_down() {
         first, second,
         "the same sealed package and snapshot must serialize identically after restart"
     );
+
+    let audit_log = audit.join("events.jsonl");
+    assert_eq!(
+        fs::metadata(&audit_log)
+            .expect("audit log exists")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600,
+        "the audit log is owner-only"
+    );
+    let entries = fs::read_to_string(&audit_log)
+        .expect("audit log reads")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("an audit line is JSON"))
+        .collect::<Vec<_>>();
+    let phases = entries
+        .iter()
+        .map(|entry| entry["phase"].as_str().expect("an entry has a phase"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        phases,
+        ["request", "response", "request", "response"],
+        "each lifecycle appends one read's request and response entries to the same log"
+    );
+    for entry in &entries {
+        audit_lines::assert_relay_envelope(entry);
+    }
+    assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
+    assert_eq!(entries[2]["correlation"], entries[3]["correlation"]);
+    assert_ne!(entries[0]["correlation"], entries[2]["correlation"]);
 }
 
 fn make_business_project_public_only(project: &Path, source: &Path) {
