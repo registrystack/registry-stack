@@ -8,8 +8,8 @@
 //! ledger snapshot whose hold expiries are evaluated in the query, run the
 //! pure evaluators from `registry-scheduling-core` in memory, and write the
 //! claim, the idempotency attempt, the history event, and the outbox rows in
-//! the same transaction. Three supervised workers run beside it: hold expiry,
-//! reminder-intent dispatch, and retention sweeps. A dead worker stops the
+//! the same transaction. Four supervised workers run beside it: hold expiry,
+//! reminder-intent dispatch, hook delivery, and retention sweeps. A dead worker stops the
 //! process rather than silently overselling.
 //!
 //! The dependency runs one way: this crate builds on the source-neutral core
