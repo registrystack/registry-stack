@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import importlib.util
 import io
+import json
 import tarfile
 import tempfile
 import unittest
@@ -202,6 +203,16 @@ class StateComparisonTest(unittest.TestCase):
             "public.c disappeared (held 0 rows)",
         ])
 
+    def test_only_retired_audit_tables_can_be_replaced_by_an_archive(self) -> None:
+        self.assertTrue(MODULE.row_count_losses({"public.records": 3}, {}, {"public.records": 3}))
+
+    def test_successor_preserves_record_state_while_etags_change(self) -> None:
+        before = {"records/1": {"etag": "old-package", "domainData": {"code": "a"}, "revision": "r1"}}
+        after = {"records/1": {"etag": "new-package", "domainData": {"code": "a"}, "revision": "r1"}}
+        self.assertEqual(MODULE.breg_view_differences(before, after), [])
+        after["records/1"]["domainData"] = {"code": "lost"}
+        self.assertTrue(MODULE.breg_view_differences(before, after))
+
     def test_growth_and_new_tables_are_not_losses(self) -> None:
         self.assertEqual(MODULE.row_count_losses({"a": 1}, {"a": 4, "b": 0}), [])
 
@@ -214,6 +225,72 @@ class StateComparisonTest(unittest.TestCase):
             "records/3 was not captured before the upgrade",
         ])
         self.assertEqual(MODULE.view_differences(before, dict(before)), [])
+
+
+class AuditUpgradeTest(unittest.TestCase):
+    def test_archives_every_old_segment_before_a_fresh_stream(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            audit = root / "audit"
+            audit.mkdir()
+            for name in ("evidence.jsonl", "evidence.jsonl.00000001"):
+                (audit / name).write_text('{"old":true}\n')
+            (audit / "other.jsonl").write_text("keep")
+            archive = root / "archive"
+            self.assertEqual(MODULE.archive_audit_files(audit, "evidence.jsonl", archive), 2)
+            self.assertEqual(MODULE.audit_record_count(archive, "evidence.jsonl"), 2)
+            self.assertEqual(sorted(path.name for path in audit.iterdir()), ["other.jsonl"])
+
+    def test_fresh_stream_requires_valid_response_envelopes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "evidence.jsonl"
+            schema = "registry.evidence.audit/v2"
+            for value in ({"old": True}, {"schema": schema, "phase": "response"}):
+                path.write_text(json.dumps(value) + "\n")
+                with self.assertRaises(Error):
+                    MODULE.audit_record_count(root, "evidence.jsonl", schema=schema)
+            path.write_text(json.dumps({"schema": schema, "phase": "response",
+                "eventId": "event-1", "time": "2026-09-25T00:00:00Z",
+                "correlation": "operation-1", "record": {}}) + "\n")
+            self.assertEqual(MODULE.audit_record_count(root, "evidence.jsonl", schema=schema), 1)
+
+    def test_retired_audit_tables_are_preserved_before_exclusion(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            postgres = unittest.mock.Mock()
+            postgres.sql.return_value = '{"record":1}\n{"record":2}\n'
+            table = "registry_internal.registry_audit"
+            before = {table: 2, "registry_internal.registry_state": 1}
+            archive = MODULE.archive_audit_tables(postgres, "registry", before, Path(temporary))
+            self.assertEqual(archive, {table: 2})
+            self.assertEqual(MODULE.row_count_losses(before,
+                {"registry_internal.registry_state": 1}, archive), [])
+            self.assertTrue(MODULE.row_count_losses(before, {}, archive))
+            self.assertTrue(MODULE.row_count_losses(before, {}, {table: 1}))
+            postgres.sql.return_value = '{"record":1}\n'
+            with self.assertRaisesRegex(Error, "archive"):
+                MODULE.archive_audit_tables(postgres, "registry", before, Path(temporary) / "bad")
+
+    def test_evidence_audit_upgrade_preserves_key_and_removes_legacy_settings(self) -> None:
+        bundle = {"audit": {"format": "jsonl", "failClosed": True,
+                            "hashSecretRef": "secret:file/audit", "hashKeyVersion": 7}}
+        runtime = {"auditStorage": {"path": "/audit/evidence.jsonl", "maximumFileBytes": 1048576}}
+        MODULE.upgrade_evidence_audit_configuration(bundle, runtime)
+        self.assertEqual(bundle["audit"], {"hashKeyRef": "secret:file/audit", "hashKeyVersion": 7})
+        self.assertEqual(runtime, {"audit": {"path": "/audit/evidence.jsonl", "rotateBytes": 1048576}})
+        MODULE.upgrade_evidence_audit_configuration(bundle, runtime)
+        self.assertEqual(bundle["audit"]["hashKeyVersion"], 7)
+
+    def test_outbox_drain_waits_and_refuses_a_timeout(self) -> None:
+        postgres = unittest.mock.Mock()
+        postgres.sql.side_effect = ["t", "2", "0"]
+        with unittest.mock.patch.object(MODULE.time, "sleep"):
+            MODULE.wait_for_casework_audit(postgres)
+        postgres.sql.side_effect = None
+        postgres.sql.return_value = "t"
+        with unittest.mock.patch.object(MODULE.time, "monotonic", side_effect=[0, 91]):
+            with self.assertRaisesRegex(Error, "drain"):
+                MODULE.wait_for_casework_audit(postgres)
 
 
 class GateWiringTest(unittest.TestCase):
