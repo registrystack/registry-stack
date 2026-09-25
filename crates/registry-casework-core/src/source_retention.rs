@@ -25,7 +25,6 @@ pub struct SourceRetentionReport {
     pub history_details: u64,
     pub event_details: u64,
     pub idempotency_responses: u64,
-    pub audit_records: u64,
     pub clock_occurrences: u64,
     pub clock_previews: u64,
 }

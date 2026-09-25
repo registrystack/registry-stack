@@ -442,7 +442,7 @@ inline value. A file reference names one path component under
 the runtime user, with mode `0400` or `0600`, and exactly one hard link. Every
 resolved value, from either provider, must be non-empty text of at most 64 KiB
 containing no NUL byte, so binary key material has to be encoded as text before
-it is stored. Generate the audit journal secret as hexadecimal text:
+it is stored. Generate the audit pseudonymization key as hexadecimal text:
 
 ```sh
 umask 077
@@ -554,7 +554,7 @@ migration database authority; repeat it with `--apply` only after review. Apply
 removes local payload copies and cancels local clock work while retaining
 bounded tombstones. A pending or uncertain source attempt blocks erasure until
 it is recovered or settled. The command makes no BReg call and does not erase
-the external audit JSONL file.
+entries already written to the audit destination.
 
 Settling an uncertain source attempt is an explicit operator decision for one
 attempt whose outcome recovery cannot observe. `caseworkctl attempt settle

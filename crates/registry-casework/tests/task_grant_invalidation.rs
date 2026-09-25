@@ -29,6 +29,7 @@ async fn fixture() -> (Client, Client, String) {
     };
     PostgresStore::connect_migration(&config, &secrets)
         .unwrap()
+        .with_audit(registry_casework::CaseworkAudit::capture().0)
         .migrate()
         .await
         .unwrap();

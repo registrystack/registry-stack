@@ -1,6 +1,7 @@
 //! Registry Casework runtime.
 
 mod assignment;
+mod audit;
 mod auth;
 mod clocks;
 mod config;
@@ -17,6 +18,9 @@ mod task_grants;
 
 pub(crate) use clocks::{reconcile_clock_observation, ResolvedClockPolicy};
 
+#[cfg(any(test, feature = "postgres-test"))]
+pub use audit::AuditCapture;
+pub use audit::{CaseworkAudit, CASEWORK_AUDIT_SCHEMA};
 pub use auth::*;
 pub use config::*;
 pub use http::*;

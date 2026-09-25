@@ -427,11 +427,13 @@ async fn fixture_for_issuer(
     };
     PostgresStore::connect_migration(&database_config, &secrets)
         .expect("payment migration store")
+        .with_audit(registry_casework::CaseworkAudit::capture().0)
         .migrate()
         .await
         .expect("payment fixture migrations");
-    let store =
-        PostgresStore::connect_runtime(&database_config, &secrets).expect("payment runtime store");
+    let store = PostgresStore::connect_runtime(&database_config, &secrets)
+        .expect("payment runtime store")
+        .with_audit(registry_casework::CaseworkAudit::capture().0);
     let (database, connection) = tokio_postgres::connect(&scoped_url, NoTls)
         .await
         .expect("payment schema connection");

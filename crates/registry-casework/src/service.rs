@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -36,24 +35,6 @@ pub struct CaseworkService {
     pub(crate) adapters: Arc<BTreeMap<String, Arc<dyn SourceAdapter>>>,
     pub(crate) project: Arc<CaseworkProject>,
     pub(crate) task_authority: Option<Arc<crate::task_grants::TaskAuthority>>,
-    audit_publisher_health: AuditPublisherHealth,
-}
-
-#[derive(Clone, Default)]
-pub(crate) struct AuditPublisherHealth(Arc<AtomicBool>);
-
-impl AuditPublisherHealth {
-    pub(crate) fn mark_failed(&self) {
-        self.0.store(true, Ordering::Release);
-    }
-
-    pub(crate) fn mark_recovered(&self) {
-        self.0.store(false, Ordering::Release);
-    }
-
-    pub(crate) fn is_ready(&self) -> bool {
-        !self.0.load(Ordering::Acquire)
-    }
 }
 
 /// How a caller read treats an active occurrence whose disclosed source
@@ -127,7 +108,6 @@ impl CaseworkService {
             store,
             adapters: Arc::new(registered),
             project: Arc::new(project),
-            audit_publisher_health: AuditPublisherHealth::default(),
             task_authority: None,
         })
     }
@@ -137,13 +117,11 @@ impl CaseworkService {
         &self.store
     }
 
-    pub(crate) fn audit_publisher_health(&self) -> AuditPublisherHealth {
-        self.audit_publisher_health.clone()
-    }
-
+    /// Ready only while the audit destination accepts entries and the
+    /// database schema is current.
     pub async fn ready(&self) -> Result<(), ServiceError> {
-        if !self.audit_publisher_health.is_ready() {
-            return Err(StoreError::Unavailable.into());
+        if !self.store.audit_ready().await {
+            return Err(StoreError::AuditUnavailable.into());
         }
         self.store.ready().await?;
         Ok(())

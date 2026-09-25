@@ -268,9 +268,8 @@ secretProviders:
 signer:
   kind: local-jwk
   privateKeyRef: secret:file/signing-key
-auditStorage:
+audit:
   path: {audit}
-  maximumFileBytes: 10485760
 outboundTls:
   systemRoots: true
   trustProfiles: {{}}
@@ -700,7 +699,9 @@ async fn fixture(issuer: &Issuer, key: registry_platform_crypto::PrivateJwk) -> 
         trusted_root_certificate_ref: None,
         test_only_plaintext: true,
     };
-    let store = PostgresStore::connect_migration(&db_config, &secrets).unwrap();
+    let store = PostgresStore::connect_migration(&db_config, &secrets)
+        .unwrap()
+        .with_audit(crate::CaseworkAudit::capture().0);
     store.migrate().await.unwrap();
     std::env::remove_var(name);
     let human = issuer

@@ -2707,6 +2707,14 @@ impl PostgresStore {
         idempotency_key: &str,
     ) -> Result<ReviewCancelResponse, ReviewRuntimeError> {
         let now = Utc::now();
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                "review_cancelled",
+                Some(actor),
+                &actor.profile_id,
+                json!({}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let record = load_request(&transaction, producer, request_id, true).await?;
@@ -2722,7 +2730,7 @@ impl PostgresStore {
         )
         .await?
         {
-            transaction.commit().await?;
+            audit.commit(transaction).await?;
             return serde_json::from_value(response).map_err(ReviewRuntimeError::from);
         }
         if record.subject != request.subject {
@@ -2748,7 +2756,7 @@ impl PostgresStore {
                 &serde_json::to_value(&response)?,
             )
             .await?;
-            transaction.commit().await?;
+            audit.commit(transaction).await?;
             return Ok(response);
         }
         let result = settle_review(
@@ -2773,28 +2781,23 @@ impl PostgresStore {
                 ],
             )
             .await?;
-        // The cancellation reaches the external audit stream like every other
-        // mutation, in the same transaction. The record stays minimal: the
-        // private reason never leaves the review history row.
-        transaction
-            .execute(
-                "INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)",
-                &[
-                    &cancel_event_id,
-                    &json!({
-                        "event": "casework.review_cancelled",
-                        "eventId": cancel_event_id,
-                        "requestId": request_id,
-                        "actor": {
-                            "issuer": actor.principal.issuer,
-                            "subject": actor.principal.subject,
-                        },
-                        "profileId": actor.profile_id,
-                        "resultId": result.result_id,
-                    }),
-                ],
-            )
-            .await?;
+        // The cancellation is audited like every other mutation once the
+        // transaction commits. The record stays minimal: the private reason
+        // never leaves the review history row.
+        audit.record(
+            cancel_event_id,
+            json!({
+                "event": "casework.review_cancelled",
+                "eventId": cancel_event_id,
+                "requestId": request_id,
+                "actor": {
+                    "issuer": actor.principal.issuer,
+                    "subject": actor.principal.subject,
+                },
+                "profileId": actor.profile_id,
+                "resultId": result.result_id,
+            }),
+        )?;
         let response = ReviewCancelResponse::Cancelled { result };
         insert_review_idempotency(
             &transaction,
@@ -2807,7 +2810,7 @@ impl PostgresStore {
             &serde_json::to_value(&response)?,
         )
         .await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(response)
     }
 
@@ -2819,6 +2822,14 @@ impl PostgresStore {
         idempotency_key: &str,
     ) -> Result<ReviewerTask, ReviewRuntimeError> {
         let now = Utc::now();
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                "task_claimed",
+                Some(actor),
+                &actor.profile_id,
+                json!({}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let request_id = transaction
@@ -2843,7 +2854,7 @@ impl PostgresStore {
         )
         .await?
         {
-            transaction.commit().await?;
+            audit.commit(transaction).await?;
             return serde_json::from_value(response).map_err(ReviewRuntimeError::from);
         }
         if record.lifecycle != ReviewRequestLifecycle::Reviewing {
@@ -2973,29 +2984,24 @@ impl PostgresStore {
                 )
                 .await?;
         }
-        // The claim reaches the external audit stream like every other
-        // mutation, in the same transaction. The record stays minimal: review
-        // history is erased at result expiry, so only who took responsibility
-        // survives in the chained audit.
-        transaction
-            .execute(
-                "INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)",
-                &[
-                    &claim_event_id,
-                    &json!({
-                        "event": "casework.task_claimed",
-                        "eventId": claim_event_id,
-                        "requestId": request_id,
-                        "taskId": task_id,
-                        "actor": {
-                            "issuer": actor.principal.issuer,
-                            "subject": actor.principal.subject,
-                        },
-                        "profileId": actor.profile_id,
-                    }),
-                ],
-            )
-            .await?;
+        // The claim is audited like every other mutation once the transaction
+        // commits. The record stays minimal: review history is erased at result
+        // expiry, so only who took responsibility survives in the audit
+        // journal.
+        audit.record(
+            claim_event_id,
+            json!({
+                "event": "casework.task_claimed",
+                "eventId": claim_event_id,
+                "requestId": request_id,
+                "taskId": task_id,
+                "actor": {
+                    "issuer": actor.principal.issuer,
+                    "subject": actor.principal.subject,
+                },
+                "profileId": actor.profile_id,
+            }),
+        )?;
         insert_review_idempotency(
             &transaction,
             request_id,
@@ -3007,7 +3013,7 @@ impl PostgresStore {
             &serde_json::to_value(&task)?,
         )
         .await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(task)
     }
 
@@ -3029,6 +3035,18 @@ impl PostgresStore {
             return Err(ReviewRuntimeError::Invalid);
         }
         let now = Utc::now();
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                if delegate {
+                    "task_delegated"
+                } else {
+                    "task_assigned"
+                },
+                Some(actor),
+                &actor.profile_id,
+                json!({}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let request_id = transaction
@@ -3080,7 +3098,7 @@ impl PostgresStore {
         )
         .await?
         {
-            transaction.commit().await?;
+            audit.commit(transaction).await?;
             return serde_json::from_value(response).map_err(ReviewRuntimeError::from);
         }
         if record.lifecycle != ReviewRequestLifecycle::Reviewing {
@@ -3229,37 +3247,32 @@ impl PostgresStore {
                 ],
             )
             .await?;
-        // The ownership transfer reaches the external audit stream like every
-        // other mutation, in the same transaction. The record stays minimal:
+        // The ownership transfer is audited like every other mutation once
+        // the transaction commits. The record stays minimal:
         // the private reason never leaves the review history row, and only who
         // transferred responsibility to whom survives result expiry.
-        transaction
-            .execute(
-                "INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)",
-                &[
-                    &assignment_event_id,
-                    &json!({
-                        "event": if delegate {
-                            "casework.task_delegated"
-                        } else {
-                            "casework.task_assigned"
-                        },
-                        "eventId": assignment_event_id,
-                        "requestId": request_id,
-                        "taskId": task_id,
-                        "actor": {
-                            "issuer": actor.principal.issuer,
-                            "subject": actor.principal.subject,
-                        },
-                        "profileId": actor.profile_id,
-                        "target": {
-                            "issuer": target.issuer,
-                            "subject": target.subject,
-                        },
-                    }),
-                ],
-            )
-            .await?;
+        audit.record(
+            assignment_event_id,
+            json!({
+                "event": if delegate {
+                    "casework.task_delegated"
+                } else {
+                    "casework.task_assigned"
+                },
+                "eventId": assignment_event_id,
+                "requestId": request_id,
+                "taskId": task_id,
+                "actor": {
+                    "issuer": actor.principal.issuer,
+                    "subject": actor.principal.subject,
+                },
+                "profileId": actor.profile_id,
+                "target": {
+                    "issuer": target.issuer,
+                    "subject": target.subject,
+                },
+            }),
+        )?;
         let task = ReviewerTask {
             task_id,
             request_id,
@@ -3286,7 +3299,7 @@ impl PostgresStore {
             &serde_json::to_value(&task)?,
         )
         .await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(task)
     }
 
@@ -3656,6 +3669,14 @@ impl PostgresStore {
         actor: &ActorContext,
         event_id: Uuid,
     ) -> Result<ReviewAccountabilityRecord, ReviewRuntimeError> {
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                "review_accountability_read",
+                Some(actor),
+                &actor.profile_id,
+                json!({"accountabilityEventId": event_id}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let row = transaction
@@ -3692,25 +3713,20 @@ impl PostgresStore {
             retained_until: row.get(11),
         };
         let read_event_id = Uuid::new_v4();
-        transaction
-            .execute(
-                "INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)",
-                &[
-                    &read_event_id,
-                    &json!({
-                        "event": "casework.review_accountability_read",
-                        "eventId": read_event_id,
-                        "accountabilityEventId": record.event_id,
-                        "actor": {
-                            "issuer": actor.principal.issuer,
-                            "subject": actor.principal.subject,
-                        },
-                        "profileId": actor.profile_id,
-                    }),
-                ],
-            )
-            .await?;
-        transaction.commit().await?;
+        audit.record(
+            read_event_id,
+            json!({
+                "event": "casework.review_accountability_read",
+                "eventId": read_event_id,
+                "accountabilityEventId": record.event_id,
+                "actor": {
+                    "issuer": actor.principal.issuer,
+                    "subject": actor.principal.subject,
+                },
+                "profileId": actor.profile_id,
+            }),
+        )?;
+        audit.commit(transaction).await?;
         Ok(record)
     }
 
@@ -3811,6 +3827,14 @@ impl PostgresStore {
         idempotency_key: &str,
     ) -> Result<ReviewerTask, ReviewRuntimeError> {
         let now = Utc::now();
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                "task_released",
+                Some(actor),
+                &actor.profile_id,
+                json!({}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let row = transaction
@@ -3839,7 +3863,7 @@ impl PostgresStore {
         )
         .await?
         {
-            transaction.commit().await?;
+            audit.commit(transaction).await?;
             return serde_json::from_value(response).map_err(ReviewRuntimeError::from);
         }
         if row.get::<_, String>(8) != "reviewing" || row.get::<_, i64>(7) != expected_revision {
@@ -3900,28 +3924,23 @@ impl PostgresStore {
                 ],
             )
             .await?;
-        // The release reaches the external audit stream like every other
-        // mutation, in the same transaction. The record stays minimal: only
+        // The release is audited like every other mutation once the
+        // transaction commits. The record stays minimal: only
         // who gave up responsibility survives result expiry.
-        transaction
-            .execute(
-                "INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)",
-                &[
-                    &release_event_id,
-                    &json!({
-                        "event": "casework.task_released",
-                        "eventId": release_event_id,
-                        "requestId": request_id,
-                        "taskId": task_id,
-                        "actor": {
-                            "issuer": actor.principal.issuer,
-                            "subject": actor.principal.subject,
-                        },
-                        "profileId": actor.profile_id,
-                    }),
-                ],
-            )
-            .await?;
+        audit.record(
+            release_event_id,
+            json!({
+                "event": "casework.task_released",
+                "eventId": release_event_id,
+                "requestId": request_id,
+                "taskId": task_id,
+                "actor": {
+                    "issuer": actor.principal.issuer,
+                    "subject": actor.principal.subject,
+                },
+                "profileId": actor.profile_id,
+            }),
+        )?;
         insert_review_idempotency(
             &transaction,
             request_id,
@@ -3933,7 +3952,7 @@ impl PostgresStore {
             &serde_json::to_value(&task)?,
         )
         .await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(task)
     }
 
@@ -3946,6 +3965,14 @@ impl PostgresStore {
         idempotency_key: &str,
     ) -> Result<ReviewTransition, ReviewRuntimeError> {
         let now = Utc::now();
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                "review_decided",
+                Some(actor),
+                &actor.profile_id,
+                json!({}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let request_id = transaction
@@ -3970,7 +3997,7 @@ impl PostgresStore {
         )
         .await?
         {
-            transaction.commit().await?;
+            audit.commit(transaction).await?;
             return serde_json::from_value(response).map_err(ReviewRuntimeError::from);
         }
         if record.lifecycle != ReviewRequestLifecycle::Reviewing {
@@ -4199,32 +4226,27 @@ impl PostgresStore {
             )
             .await?;
         // The decision is the strongest accountability event this service
-        // emits, so it reaches the external audit stream like every other
-        // mutation, in the same transaction. The record stays minimal: the
+        // emits, so it is audited like every other mutation once the
+        // transaction commits. The record stays minimal: the
         // private reason and the structured result never leave the
         // protected accountability row.
-        transaction
-            .execute(
-                "INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)",
-                &[
-                    &decision_event_id,
-                    &json!({
-                        "event": "casework.review_decided",
-                        "eventId": decision_event_id,
-                        "requestId": request_id,
-                        "taskId": task_id,
-                        "actor": {
-                            "issuer": actor.principal.issuer,
-                            "subject": actor.principal.subject,
-                        },
-                        "profileId": actor.profile_id,
-                        "decision": decision_name,
-                        "transition": transition_kind(&transition),
-                        "accountabilityEventId": accountability_event_id,
-                    }),
-                ],
-            )
-            .await?;
+        audit.record(
+            decision_event_id,
+            json!({
+                "event": "casework.review_decided",
+                "eventId": decision_event_id,
+                "requestId": request_id,
+                "taskId": task_id,
+                "actor": {
+                    "issuer": actor.principal.issuer,
+                    "subject": actor.principal.subject,
+                },
+                "profileId": actor.profile_id,
+                "decision": decision_name,
+                "transition": transition_kind(&transition),
+                "accountabilityEventId": accountability_event_id,
+            }),
+        )?;
         insert_review_idempotency(
             &transaction,
             request_id,
@@ -4236,7 +4258,7 @@ impl PostgresStore {
             &serde_json::to_value(&transition)?,
         )
         .await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(transition)
     }
 }

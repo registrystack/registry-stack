@@ -358,6 +358,7 @@ async fn app(
     };
     PostgresStore::connect_migration(&database_config, &secrets)
         .expect("migration store")
+        .with_audit(registry_casework::CaseworkAudit::capture().0)
         .migrate()
         .await
         .expect("review HTTP migrations");
@@ -384,7 +385,9 @@ async fn app(
         )
         .await
         .expect("bind reviewer membership to test issuer");
-    let store = PostgresStore::connect_runtime(&database_config, &secrets).expect("runtime store");
+    let store = PostgresStore::connect_runtime(&database_config, &secrets)
+        .expect("runtime store")
+        .with_audit(registry_casework::CaseworkAudit::capture().0);
     let project = project(&idp.issuer());
     project.check().expect("review HTTP project");
     let authenticator = CaseworkAuthenticator::new(
