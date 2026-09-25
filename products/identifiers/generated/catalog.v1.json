@@ -2759,7 +2759,7 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "da421a45c81d34a937235fa085261c51554e14302362c9a9ed9dd025329b40f7"
+        "sha256": "321e9fbacdde3c1fb2116c1ad59f935addd2f247d6d50cc36a400cb6be1c5c6d"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
@@ -2777,7 +2777,7 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "da421a45c81d34a937235fa085261c51554e14302362c9a9ed9dd025329b40f7"
+        "sha256": "321e9fbacdde3c1fb2116c1ad59f935addd2f247d6d50cc36a400cb6be1c5c6d"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
@@ -2795,7 +2795,7 @@
       "description": "Base Registry Engine runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "da421a45c81d34a937235fa085261c51554e14302362c9a9ed9dd025329b40f7"
+        "sha256": "321e9fbacdde3c1fb2116c1ad59f935addd2f247d6d50cc36a400cb6be1c5c6d"
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
@@ -2813,7 +2813,7 @@
       "description": "Registry Casework runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-casework/src/schema.rs",
-        "sha256": "0917963cbe609c32a44c84631dbf482ea6955eeea56a3bddc3129f0166dfed37"
+        "sha256": "6c2cc82b41c4ed9ca9d127413892f7d6be197a48d5ba8efdc00965e38c75cb90"
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
@@ -2867,7 +2867,7 @@
       "description": "Relay V2 generated public JSON Schema.",
       "source": {
         "path": "crates/registry-relay-v2/src/artifacts.rs",
-        "sha256": "7feb222632ac997903c8809e190fa0c008bf17790e39fa075fc10c3fd3e0bec1"
+        "sha256": "6f45eb85dba2b6ba0195a28b5c632280947d4dbe0b6a3fef567460bcd2604286"
       },
       "artifact": {
         "path": "products/identifiers/generated/artifacts/registry-relay/audit-event/v2alpha1.json",
