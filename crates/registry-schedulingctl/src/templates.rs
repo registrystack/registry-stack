@@ -592,7 +592,8 @@ pub(super) const RUNTIME_EXAMPLE: &str = r#"# A complete Scheduling runtime conf
 # String values in this file may use ${VAR}, ${VAR:-default}, or ${VAR:?message}
 # to take a deployment value from the environment when the runtime starts.
 # Substitution never applies to a *Ref field, whose value must be written as a
-# literal secret reference, nor to the authored scheduling.yaml.
+# literal secret reference, nor under secretProviders, nor to the authored
+# scheduling.yaml.
 apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1
 kind: SchedulingRuntimeConfig
 package:

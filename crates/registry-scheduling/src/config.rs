@@ -12,8 +12,8 @@ use jsonwebtoken::Algorithm;
 pub(crate) use registry_platform_config::describe_secret_failure;
 use registry_platform_config::{
     redact_refused_values, reject_environment_expressions_in_authored_yaml, sha256_uri,
-    ConfigBlockError, PackageDigestMismatch, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
-    SecretResolver,
+    ConfigBlockError, PackageDigestMismatch, RemovedKey, RuntimeConfigErrorKind,
+    RuntimeConfigLoader, RuntimeEnvelope, SecretResolver,
 };
 pub use registry_platform_config::{
     DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig, JwksSource,
@@ -345,14 +345,21 @@ impl RuntimeConfig {
     pub fn load_policy(&self) -> Result<SchedulingPolicy, RuntimeConfigError> {
         let policy_text =
             std::fs::read_to_string(self.policy_path()).map_err(RuntimeConfigError::PolicyRead)?;
-        reject_environment_expressions_in_authored_yaml(&policy_text).map_err(|error| {
-            RuntimeConfigError::PolicyEnvironmentExpression {
-                field: error.field().to_owned(),
-            }
-        })?;
         let policy = parse_policy_yaml(&policy_text).map_err(|error| {
             let (path, cause) = refused_yaml(error);
             RuntimeConfigError::PolicyParse { path, cause }
+        })?;
+        reject_environment_expressions_in_authored_yaml(&policy_text).map_err(|error| {
+            if error.kind() == RuntimeConfigErrorKind::AuthoredSyntax {
+                RuntimeConfigError::PolicyParse {
+                    path: error.field().to_owned(),
+                    cause: error.message().to_owned(),
+                }
+            } else {
+                RuntimeConfigError::PolicyEnvironmentExpression {
+                    field: error.field().to_owned(),
+                }
+            }
         })?;
         if !policy.check().is_empty() {
             return Err(RuntimeConfigError::PolicyFindings);
@@ -1111,6 +1118,27 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
             RuntimeConfigError::PolicyEnvironmentExpression { field } if field == "openings.0.because"
         ));
         assert!(error.to_string().contains("runtime.yaml only"), "{error}");
+    }
+
+    #[test]
+    fn a_malformed_authored_policy_is_a_parse_refusal() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(
+            package.join(AUTHORED_POLICY_FILE),
+            format!("{POLICY}services: [unterminated\n"),
+        )
+        .unwrap();
+        let operator = write_operator(
+            root.path(),
+            operator_value(&package, "development-loopback"),
+        );
+        let error = RuntimeConfig::load(&operator).unwrap_err();
+        assert!(
+            matches!(&error, RuntimeConfigError::PolicyParse { .. }),
+            "{error}"
+        );
     }
 
     #[test]

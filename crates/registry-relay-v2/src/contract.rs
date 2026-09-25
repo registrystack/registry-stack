@@ -143,9 +143,9 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for OrderedMap<T> {
 pub enum ContractParseError {
     #[error("contract YAML is not valid")]
     Invalid(#[source] serde_norway::Error),
-    /// The contract holds a `${...}` environment expression. Substitution
-    /// applies to `runtime.yaml` only, so the reviewed contract is the one
-    /// that runs.
+    /// The contract holds a `${...}` environment expression, or text the
+    /// expression check cannot read. Substitution applies to `runtime.yaml`
+    /// only, so the reviewed contract is the one that runs.
     #[error("{0}")]
     EnvironmentExpression(registry_platform_config::RuntimeConfigError),
 }
@@ -161,15 +161,26 @@ impl ContractParseError {
     /// The dotted contract field holding an environment expression.
     pub fn environment_expression_field(&self) -> Option<&str> {
         match self {
-            Self::Invalid(_) => None,
-            Self::EnvironmentExpression(error) => Some(error.field()),
+            Self::EnvironmentExpression(error) if !Self::is_unreadable(error) => {
+                Some(error.field())
+            }
+            _ => None,
         }
+    }
+
+    fn is_unreadable(error: &registry_platform_config::RuntimeConfigError) -> bool {
+        error.kind() == registry_platform_config::RuntimeConfigErrorKind::AuthoredSyntax
     }
 
     /// The single diagnostic every authoring surface reports for this
     /// refusal, located in `registry.yaml`.
     pub(crate) fn diagnostic(&self) -> crate::model::Diagnostic {
         let (code, location, message) = match self {
+            Self::EnvironmentExpression(error) if Self::is_unreadable(error) => (
+                "contract.yaml_invalid",
+                "registry.yaml".to_owned(),
+                "the governed contract is not valid strict YAML".to_owned(),
+            ),
             Self::Invalid(_) => (
                 "contract.yaml_invalid",
                 "registry.yaml".to_owned(),
@@ -2233,5 +2244,17 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
         let invalid = RegistryContract::parse_yaml("kind: [").expect_err("invalid YAML");
         assert!(invalid.environment_expression_field().is_none());
         assert!(invalid.detail().is_some());
+    }
+
+    #[test]
+    fn text_the_expression_check_cannot_read_is_reported_as_invalid_yaml() {
+        let unreadable = ContractParseError::EnvironmentExpression(
+            registry_platform_config::reject_environment_expressions_in_authored_yaml("kind: [")
+                .expect_err("the check fails closed"),
+        );
+        assert!(unreadable.environment_expression_field().is_none());
+        let diagnostic = unreadable.diagnostic();
+        assert_eq!(diagnostic.code, "contract.yaml_invalid");
+        assert_eq!(diagnostic.location, "registry.yaml");
     }
 }

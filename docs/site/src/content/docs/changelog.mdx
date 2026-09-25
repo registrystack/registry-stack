@@ -355,7 +355,7 @@ relevant product pages on this site rather than duplicating release notes.
   pass through a symbolic link; and an environment expression such as
   `${VAR}` in the authored `scheduling.yaml`, records, or fixtures is
   refused with the field that holds it. `runtime.yaml` string values
-  accept `${VAR}` outside `*Ref` fields, and an optional
+  accept `${VAR}` outside `*Ref` fields and `secretProviders`, and an optional
   `package.expectedDigest` pins the policy the runtime starts on.
 
 {/* Evidence: crates/registry-scheduling/src/config.rs, SCHEDULING_REMOVED_KEYS and

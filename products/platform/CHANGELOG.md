@@ -28,7 +28,10 @@
   for `runtime.yaml` that refuses symbolic links, removed keys, and a wrong
   envelope, then substitutes `${VAR}`, `${VAR:-default}`, and
   `${VAR:?message}` inside string values after parsing. Substitution is
-  refused inside `*Ref` fields and in authored package files.
+  refused inside `*Ref` fields, under `secretProviders`, and in authored
+  package files; the authored-file check refuses text it cannot read. No
+  refusal repeats a configured value: a `:?` message, an invalid variable
+  name, and a refused enum variant are all withheld.
 - Add the shared configuration blocks (`secretProviders`, `database`,
   `jwksSource`, `package`, `listener`) and their canonical JSON Schema under
   `products/platform/generated/`. The blocks also serialize back to the form
@@ -44,6 +47,10 @@
   thumbprint tests for RSA, EC, and OKP keys.
 - BREAKING: remove `reject_deprecated_config_fields`; runtimes declare removed
   keys on the loader instead.
+- BREAKING: `JwksSource::Discovery` is an empty struct variant, so a `uri` or
+  a `documentRef` written beside `kind: discovery` is refused.
+- BREAKING: `expand_config_env_vars` no longer repeats a `${VAR:?message}`
+  message or an invalid variable name in its refusal.
 
 ## v0.34.0 - 2026-09-25
 
