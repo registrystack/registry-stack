@@ -46,6 +46,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.3.1 | 2026-07-10 | draft | Scope-gated the remaining client-supplied trust-context headers, documented the policy-authoring boundary, and replaced exact trust values in audit records with keyed field-bound handles. |
 | 0.3.2 | 2026-08-04 | draft | Recorded that Registry Notary is retired: Sections 7 and 8 no longer name it as the destination of an evidence offering or as the credential issuer, and REQ-PR-RELAY-012 now states the `registry-notary` access kind that the runtime binding still requires. No Relay behavior changed. |
 | 1.0.0 | 2026-08-11 | draft | Rewritten for the Relay V2 runtime that replaced the V1 gateway. REQ-PR-RELAY-001 through REQ-PR-RELAY-023 are retired in full and MUST NOT be reused: they described a configuration-driven gateway over CSV, XLSX, Parquet, and PostgreSQL sources, per-dataset scopes, governed PDP enforcement, `/metadata/*` publication, evidence offerings, OGC and SP DCI adapters, and an admin listener, none of which exist in the current runtime. The V2 contract is numbered from REQ-PR-RELAY-101 so that no retired identifier carries a second meaning. |
+| 1.0.1 | 2026-09-25 | draft | Replaced the audit chain integrity scope note with the audit envelope structure, since Relay audit entries are not chained. |
 
 ## 1. Scope and references
 
@@ -65,7 +66,7 @@ This specification does not define:
 
 - Exact schemas: each deployment generates its own OpenAPI 3.1.0 description from its compiled contract. There is no product-wide OpenAPI document, so this specification states behavior a schema cannot and does not restate request and response shapes that vary by deployment.
 - The authoring form: the governed `registry.yaml` grammar an adopter writes, and the tooling that compiles and seals it, belong to [RS-PR-RELAYCTL](../rs-pr-relayctl/) and the [Relay authoring guide](../../configure/relay/).
-- Security model internals: token verification, audit chain integrity, and cursor key handling belong to [RS-SEC-G](../rs-sec-g/).
+- Security model internals: token verification, audit envelope structure, and cursor key handling belong to [RS-SEC-G](../rs-sec-g/).
 - Per-deployment shape: concrete resource identifiers, operation identifiers, access profile names, scope strings, and statistical dataset identifiers are contract data, not protocol data.
 
 Relay returns unsigned responses. Portable, signed, minimum-disclosure assertions are a separate product specified by [RS-PR-EVIDENCE](../rs-pr-evidence/). Media types and standards names are used per [RS-TERMS](../rs-terms/) and the [standards register](../../reference/standards/).

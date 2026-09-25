@@ -20,7 +20,7 @@ byte-identical to the offline one. Along the way you will see the two hashes wor
 record and the audit trail the service keeps.
 
 Everything you keep goes into one directory, `render-work`. You need macOS or Linux, the Rust
-toolchain, a Registry Stack checkout, and `curl`. Expect 20 minutes.
+toolchain, a Registry Stack checkout, `curl`, and `jq`. Expect 20 minutes.
 
 {/* Evidence: crates/registry-render/src/cli.rs, Command;
     products/render/README.md. */}
@@ -108,15 +108,13 @@ by name. Seal again after any intentional template edit.
 
 ## Serve on your machine
 
-Create two secrets and one runtime file. The API key is what callers present; the audit key signs
-the ledger. Both must be owner-only files, and the API key must be at least 32 bytes of ASCII:
+Create one secret and one runtime file. The API key is what callers present. It must be an
+owner-only file of at least 32 bytes of ASCII:
 
 ```sh
 mkdir -p render-work/deploy
 openssl rand -hex 32 > render-work/deploy/api.key
 chmod 600 render-work/deploy/api.key
-openssl rand -hex 32 > render-work/deploy/audit.key
-chmod 600 render-work/deploy/audit.key
 ```
 
 Then write `render-work/deploy/runtime.yaml`. Every path in it is relative to the file's own
@@ -139,8 +137,7 @@ limits:
   maxRequestBodyBytes: 8388608
   maxConcurrency: 2
 audit:
-  directory: ../audit
-  integrityKeyRef: secret:file/audit.key
+  path: ../audit/render.jsonl
 EOF
 ```
 
@@ -159,7 +156,7 @@ You know it is serving when health answers with the bundle hash and the renderer
 ```
 
 If startup fails instead, check the two relative paths: serve resolves `bundle.path` and
-`audit.directory` from the runtime file's directory, wherever you launched it from.
+`audit.path` from the runtime file's directory, wherever you launched it from.
 
 {/* Evidence: crates/registry-render/src/runtime.rs, RenderRuntime and validate_bind;
     crates/registry-render/src/audit.rs, RenderAudit. */}
@@ -220,8 +217,8 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:64123/v1/rende
   -d @render-work/request.json
 ```
 
-Answers `401`, and the refusal is written to the ledger, so a probe storm is visible after the
-fact.
+Answers `401`, and the refusal is written to the audit log, so a probe storm is visible after
+the fact.
 
 A missing issuance time, which is the one field Render will not invent for you:
 
@@ -233,32 +230,38 @@ curl -s -X POST http://127.0.0.1:64123/v1/render/letter \
 ```
 
 Answers `400` with a problem document whose `title` is `issued-at-missing`. Both refusals you just
-caused are in the ledger, which is the next thing you will check.
+caused are in the audit log, which is the next thing you will read.
 
 {/* Evidence: crates/registry-render/src/problem.rs, ProblemKind;
     crates/registry-render/tests/serve.rs, unauthorized_requests_are_refused_and_audited. */}
 
-## Stop and verify the audit trail
+## Stop and read the audit log
 
-Stop the server with SIGTERM (`kill` on the job, or Ctrl+C in its terminal), then verify the
-ledger. The writer holds the active segment while the server runs, so verify after shutdown, when
-every segment including the newest one is covered:
+Stop the server with SIGTERM (`kill` on the job, or Ctrl+C in its terminal), then read the audit
+file the runtime wrote beside your deployment directory. Each line is one JSON entry:
 
 ```sh
-target/release/registry-render audit-verify --runtime render-work/deploy/runtime.yaml
+jq -c '{correlation, phase, outcome: .record.outcome, problem: .record.problem}' \
+  render-work/audit/render.jsonl
 ```
 
-You know it worked when it counts your session:
+You know it worked when it lists your session in four lines (your correlation values differ):
 
 ```text
-audit chain verified: 3 record(s) across 1 segment(s)
+{"correlation":"0a17ca28-624f-4ae8-b94b-29e8f78d0a4d","phase":"request","outcome":null,"problem":null}
+{"correlation":"0a17ca28-624f-4ae8-b94b-29e8f78d0a4d","phase":"response","outcome":"rendered","problem":null}
+{"correlation":"d99748ee-808b-47b2-8de1-01f27aea1c04","phase":"response","outcome":"refused","problem":"unauthorized"}
+{"correlation":"cd49b481-c92f-4c70-8882-d4aa2208d033","phase":"response","outcome":"refused","problem":"issued-at-missing"}
 ```
 
-Three records: one successful render and the two refusals you provoked. Every event carries the
-hashes, versions, the caller's key fingerprint, and no document data.
+The successful render wrote two entries that share one correlation: a request entry before the
+render started and a response entry, with the PDF and data hashes, before the document left the
+service. Each refusal wrote a single response entry. Every entry carries the bundle hash, the
+renderer version, and the caller's key fingerprint, and none carries document data. The file is
+not chained or signed; a production deployment ships it to append-only storage.
 
-{/* Evidence: crates/registry-render/src/audit.rs, verify_chain;
-    crates/registry-render/tests/serve.rs, audit_chain_verifies_from_the_cli. */}
+{/* Evidence: crates/registry-render/src/audit.rs, RenderAuditEvent;
+    crates/registry-render/tests/serve.rs, a_render_writes_a_request_entry_then_a_response_entry_sharing_correlation. */}
 
 ## Clean up
 

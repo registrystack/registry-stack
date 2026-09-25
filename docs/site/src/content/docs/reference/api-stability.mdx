@@ -129,9 +129,9 @@ on an older binary. Pin your config to the release you deploy.
 
 None of the three products this page covers, Relay, Evidence Gateway, and Registry Manifest, has
 migrated state or a migration command. Relay owns no database: it
-reads the adopter's SQLite source through a read-only boundary and writes the keyed append-only
-audit stream named by `audit.sink` in its runtime file. Evidence Gateway persists the append-only
-audit log named by `auditStorage` in its runtime file. Relay's sealed package is an input to verify rather than state to migrate. `relay` reads the
+reads the adopter's SQLite source through a read-only boundary and writes the audit log named by
+the `audit` block in its runtime file. Evidence Gateway writes the audit log named by the `audit`
+block in its runtime file. Relay's sealed package is an input to verify rather than state to migrate. `relay` reads the
 package format version out of `relay-package.json` and refuses to activate a package whose version
 string is not the one that binary was built against, so a package-format change is a recompile of
 the authoring project rather than a conversion of an installed package.
@@ -209,7 +209,7 @@ The promise is machine-checked where a checker exists:
   `release/scripts/rehearse-upgrade.py` on every pull request that changes a release manifest, and
   on manual dispatch. It downloads the previous release's Base Registry Engine, Casework, and
   Evidence Gateway binaries, verifies them against the signed `SHA256SUMS` as `release/VERIFY.md`
-  describes, and writes records, review work, and an audit chain with them against disposable
+  describes, and writes records, review work, and audit entries with them against disposable
   PostgreSQL. It then runs the upgrade steps with the binaries built from the pull request and
   fails when any captured view is served differently or any table holds fewer rows. It refuses to
   start from a release before `v0.33.0`. Scheduling state is not rehearsed.

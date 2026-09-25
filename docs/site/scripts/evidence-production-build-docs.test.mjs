@@ -38,8 +38,9 @@ test('production Evidence tutorials keep their secret handling and signing bound
   // The access token goes into an owner-only file, never onto a command line or
   // into shell history.
   assert.match(build, /install -m 600 \/dev\/null "<owner-only-curl-config>"/u);
-  // The deployment procedure still verifies the audit chain it just moved.
-  assert.match(build, /verify-audit/u);
+  // The deployment procedure confirms the audit entries reached append-only
+  // storage, the only place the log is tamper-evident.
+  assert.match(build, /append-only audit store/u);
   // The provider keeps the private key: it cannot be exported, and it cannot be
   // backed up in the clear.
   assert.match(transit, /exportable=false/u);

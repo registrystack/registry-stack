@@ -70,12 +70,13 @@ authenticate, authorize, serve, audit.
   modes are allowed.
   [Disclosure modes and computed answers](../explanation/disclosure-modes-and-computed-answers/)
   covers this in depth.
-- Audit: the request is recorded in a hash-chained audit envelope capturing the caller
+- Audit: the request is recorded in a minimized audit entry capturing the caller
   principal kind, the authority exercised, a request identifier, and the governed revision the
   answer was produced under (REQ-SEC-G-008). Audit is fail-closed and there is no configuration to
   make it otherwise: a Relay request whose audit record cannot be written returns
-  `503 audit.unavailable` instead of an answer, and Relay re-checks its audit sink for readiness
-  rather than trusting the check it did at startup (REQ-SEC-G-009).
+  `503 audit.unavailable` instead of an answer, and Relay re-checks its audit file for readiness
+  rather than trusting the check it did at startup (REQ-SEC-G-009). Entries are not chained or
+  signed; tamper evidence comes from shipping them to append-only storage.
 
 {/* Evidence: IssuerRuntime::profile() requires token_types == ["at+jwt"], exactly one of
      EdDSA/ES256/RS256, and one canonical https discovery URL,
@@ -85,8 +86,8 @@ authenticate, authorize, serve, audit.
      crates/registry-relay-v2/src/api.rs, with the test
      audit_path_replacement_revokes_readiness in crates/registry-relay-v2/src/startup.rs; Evidence
      Gateway's inbound authentication is OIDC only, crates/registry-evidence/src/auth.rs, and its
-     audit is a fail-closed durable keyed JSONL chain with no enable switch,
-     crates/registry-evidence/src/audit.rs. */}
+     audit is a fail-closed write through the shared AuditWriter with no enable switch,
+     crates/registry-evidence/src/audit.rs and crates/registry-platform-audit/src/writer.rs. */}
 
 {/* TODO[evidence]: REQ-SEC-G-002, -003, -004, -008, and -009 are cited from RS-SEC-G, which is
      being revised for the V2 cutover in parallel with this page. The retired static-credential
