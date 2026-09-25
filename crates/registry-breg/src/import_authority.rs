@@ -930,24 +930,39 @@ impl ImportAuthorityOperatorService {
         self.commit(transaction, pending, transitioned).await
     }
 
-    /// Answer the newest authorities, bounded, after recording every
-    /// transition already due, so no listed authority reads as open past its
-    /// expiry or across a package change.
+    /// Answer the newest authorities, bounded, in a read-only transaction.
+    /// It takes no registry lock and needs no ready maintenance state, so it
+    /// neither waits for a write nor holds one back, and it still answers
+    /// while an apply is interrupted. It records nothing: an open authority
+    /// whose expiry has passed, or whose package revision is no longer
+    /// active, is listed with the status it has reached, and the next run,
+    /// chunk, or `close_expired` records that transition.
     pub async fn list(&self) -> Result<Vec<ImportAuthority>, ImportAuthorityError> {
         let pool = self.pool()?;
-        let mut client = pool
+        let mut pooled = pool
             .get()
             .await
             .map_err(|_| ImportAuthorityError::Unavailable)?;
-        let transaction = self.begin(&mut client).await?;
-        let mut pending = Vec::new();
-        settle_open(
+        let client: &mut tokio_postgres::Client = &mut pooled;
+        verify_migration_role(client, &self.migration_role)
+            .await
+            .map_err(|_| ImportAuthorityError::Unavailable)?;
+        let transaction = client
+            .build_transaction()
+            .read_only(true)
+            .start()
+            .await
+            .map_err(|_| ImportAuthorityError::Unavailable)?;
+        self.set_timeouts(&transaction).await?;
+        verify_catalog_identity_for_catalog(
             &transaction,
-            &mut pending,
-            &self.expected.package_revision,
-            None,
+            &self.expected,
+            &self.expected_catalog,
+            &self.migration_role,
+            &self.runtime_role,
         )
-        .await?;
+        .await
+        .map_err(|_| ImportAuthorityError::Unavailable)?;
         let rows = transaction
             .query(
                 &format!(
@@ -960,8 +975,20 @@ impl ImportAuthorityOperatorService {
             )
             .await
             .map_err(|_| ImportAuthorityError::Unavailable)?;
-        let listed = rows.iter().map(parse_row).collect::<Result<Vec<_>, _>>()?;
-        self.commit(transaction, pending, listed).await
+        let now = transaction_now(&transaction).await?;
+        let listed = rows
+            .iter()
+            .map(|row| {
+                let mut authority = parse_row(row)?;
+                if let Some(reached) =
+                    due_transition(&authority, &self.expected.package_revision, now)
+                {
+                    authority.status = reached;
+                }
+                Ok(authority)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.commit(transaction, Vec::new(), listed).await
     }
 
     /// Open one verified maintenance transaction on a fresh migration
@@ -979,17 +1006,7 @@ impl ImportAuthorityOperatorService {
             .transaction()
             .await
             .map_err(|_| ImportAuthorityError::Unavailable)?;
-        transaction
-            .query_one(
-                "SELECT set_config('lock_timeout', $1, true),
-                        set_config('statement_timeout', $2, true)",
-                &[
-                    &format!("{}ms", self.lock_timeout.as_millis()),
-                    &format!("{}ms", self.statement_timeout.as_millis()),
-                ],
-            )
-            .await
-            .map_err(|_| ImportAuthorityError::Unavailable)?;
+        self.set_timeouts(&transaction).await?;
         transaction
             .execute(
                 "SELECT pg_catalog.pg_advisory_xact_lock($1)",
@@ -1019,6 +1036,24 @@ impl ImportAuthorityOperatorService {
             return Err(ImportAuthorityError::NotReady);
         }
         Ok(transaction)
+    }
+
+    async fn set_timeouts(
+        &self,
+        transaction: &Transaction<'_>,
+    ) -> Result<(), ImportAuthorityError> {
+        transaction
+            .query_one(
+                "SELECT set_config('lock_timeout', $1, true),
+                        set_config('statement_timeout', $2, true)",
+                &[
+                    &format!("{}ms", self.lock_timeout.as_millis()),
+                    &format!("{}ms", self.statement_timeout.as_millis()),
+                ],
+            )
+            .await
+            .map(drop)
+            .map_err(|_| ImportAuthorityError::Unavailable)
     }
 
     fn pool(&self) -> Result<crate::postgres::RuntimePool, ImportAuthorityError> {

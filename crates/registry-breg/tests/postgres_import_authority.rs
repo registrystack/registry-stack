@@ -879,7 +879,7 @@ async fn an_authority_opens_only_over_an_import_grant() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn close_expired_and_list_record_every_due_transition_once() {
+async fn close_expired_records_every_due_transition_once() {
     let harness = Harness::create().await;
     let widget = harness.open("widget", "loader", 10, &[]).await;
     let gadget = harness.open("gadget", "loader", 10, &[]).await;
@@ -912,6 +912,64 @@ async fn close_expired_and_list_record_every_due_transition_once() {
     assert_eq!(
         harness.authority_records(widget.authority_id).await.len(),
         2
+    );
+}
+
+/// Listing is a read. It answers while a write holds the shared registry
+/// lock and while maintenance is not ready, records no transition, and names
+/// the status an authority has already reached.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn listing_takes_no_registry_lock_and_records_nothing() {
+    let harness = Harness::create().await;
+    let widget = harness.open("widget", "loader", 10, &[]).await;
+    harness.age_past_expiry(widget.authority_id).await;
+
+    // Hold the shared registry lock, as an in-flight write does, and leave
+    // maintenance short of ready, as an interrupted apply does.
+    let (holder, holder_task) = harness.database.connect_admin().await;
+    holder
+        .batch_execute(
+            "UPDATE registry_internal.registry_state
+                SET maintenance_status = 'failed',
+                    maintenance_target_revision = 'successor'
+              WHERE singleton;
+             BEGIN",
+        )
+        .await
+        .expect("the holder opens a transaction");
+    holder
+        .execute(
+            "SELECT pg_catalog.pg_advisory_xact_lock_shared($1)",
+            &[&harness.lock_key.get()],
+        )
+        .await
+        .expect("the holder takes the shared registry lock");
+    let listed = tokio::time::timeout(Duration::from_secs(5), harness.operator().list())
+        .await
+        .expect("listing does not wait for the registry lock")
+        .expect("listing answers");
+    holder
+        .batch_execute(
+            "COMMIT;
+             UPDATE registry_internal.registry_state
+                SET maintenance_status = 'ready',
+                    maintenance_target_revision = NULL
+              WHERE singleton",
+        )
+        .await
+        .expect("the holder releases the lock");
+    holder_task.abort();
+
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].status, ImportAuthorityStatus::Expired);
+    assert_eq!(
+        harness.authority(widget.authority_id).await.0,
+        "open",
+        "listing records no transition"
+    );
+    assert_eq!(
+        harness.authority_records(widget.authority_id).await.len(),
+        1
     );
 }
 

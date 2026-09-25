@@ -736,7 +736,7 @@ enum ImportAuthorityCommand {
     Close(ImportAuthorityCloseArgs),
     /// Record every expiry and supersession already due.
     CloseExpired(ImportAuthorityRuntimeArgs),
-    /// List the newest authorities, after recording every transition already due.
+    /// List the newest authorities, read only, with the status each has reached.
     List(ImportAuthorityRuntimeArgs),
 }
 
