@@ -846,6 +846,8 @@ pub enum PackageError {
     Closure,
     #[error("the package integrity check failed")]
     Integrity,
+    #[error("the shared package envelope is invalid")]
+    Envelope,
     #[error("the package deployment binding is invalid")]
     Binding,
     /// One deployment binding differs from the runtime configuration. Only
@@ -3848,14 +3850,26 @@ pub fn derive_package_revision(manifest: &PackageManifest) -> Result<String> {
 /// no network resolution and must complete before a database mutation or
 /// listener construction is attempted.
 pub fn load_package(root: &Path, context: &PackageLoadContext<'_>) -> Result<VerifiedPackage> {
+    let shared = verify_shared_package(root)?;
+    load_package_with_verified_envelope(root, context, &shared)
+}
+
+/// Load the BReg package whose complete shared envelope was just verified.
+pub fn load_package_with_verified_envelope(
+    root: &Path,
+    context: &PackageLoadContext<'_>,
+    shared: &SharedVerifiedPackage,
+) -> Result<VerifiedPackage> {
     validate_root(root)?;
     let production = context.database_initialization_environment != "local";
     if production {
         ensure_safe_permissions(root)?;
     }
+    bind_shared_envelope_files(root, shared, production)?;
 
     let manifest_path = root.join(MANIFEST_PATH);
     let manifest_bytes = read_bounded_regular(&manifest_path, MAX_MANIFEST_BYTES, production)?;
+    bind_shared_file(shared, MANIFEST_PATH, &manifest_bytes)?;
     let envelope: PackageEnvelope = parse_canonical(&manifest_bytes)?;
     if envelope.api_version != PACKAGE_API_VERSION
         || envelope.signed.files.is_empty()
@@ -3885,6 +3899,7 @@ pub fn load_package(root: &Path, context: &PackageLoadContext<'_>) -> Result<Ver
         &envelope.signed.files,
         manifest_bytes.len(),
         production,
+        shared,
     )?;
     let (registry, reviewed_migration_plan) = rederive(&envelope.signed, &loaded)?;
 
@@ -3896,6 +3911,38 @@ pub fn load_package(root: &Path, context: &PackageLoadContext<'_>) -> Result<Ver
     })
 }
 
+fn verify_shared_package(root: &Path) -> Result<SharedVerifiedPackage> {
+    registry_platform_config::package::verify_package(
+        root,
+        &shared_package_limits(),
+        "bregctl package",
+    )
+    .map_err(|_| PackageError::Envelope)
+}
+
+fn bind_shared_file(shared: &SharedVerifiedPackage, relative: &str, bytes: &[u8]) -> Result<()> {
+    if shared.file_digest(relative).as_deref() != Some(digest(bytes).as_str()) {
+        return Err(PackageError::Envelope);
+    }
+    Ok(())
+}
+
+fn bind_shared_envelope_files(
+    root: &Path,
+    shared: &SharedVerifiedPackage,
+    production: bool,
+) -> Result<()> {
+    let sums = read_bounded_regular(&root.join(SUM_FILE), MAX_MANIFEST_BYTES, production)?;
+    if digest(&sums) != shared.digest() {
+        return Err(PackageError::Envelope);
+    }
+    if shared.file_digest(REVISION_FILE).is_some() {
+        let revision = read_bounded_regular(&root.join(REVISION_FILE), 257, production)?;
+        bind_shared_file(shared, REVISION_FILE, &revision)?;
+    }
+    Ok(())
+}
+
 /// Rederive a closed package for integrity-only comparison.
 ///
 /// Signatures are checked for structural consistency but are not treated as a
@@ -3903,7 +3950,8 @@ pub fn load_package(root: &Path, context: &PackageLoadContext<'_>) -> Result<Ver
 /// permissions are still mandatory. The returned type carries no startup or
 /// activation authority.
 pub fn inspect_package_integrity(root: &Path) -> Result<IntegrityInspectedPackage> {
-    inspect_package(root, None)
+    let shared = verify_shared_package(root)?;
+    inspect_package(root, None, &shared)
 }
 
 /// Verify the active predecessor package for read-only successor planning.
@@ -3917,7 +3965,18 @@ pub fn load_predecessor_package(
     root: &Path,
     context: &PredecessorPackageContext<'_>,
 ) -> Result<VerifiedPredecessorPackage> {
-    load_predecessor_closure(root, context).map(|(package, _)| package)
+    let shared = verify_shared_package(root)?;
+    load_predecessor_package_with_verified_envelope(root, context, &shared)
+}
+
+/// Load an active predecessor from the same shared envelope verification used
+/// to select it.
+pub fn load_predecessor_package_with_verified_envelope(
+    root: &Path,
+    context: &PredecessorPackageContext<'_>,
+    shared: &SharedVerifiedPackage,
+) -> Result<VerifiedPredecessorPackage> {
+    load_predecessor_closure(root, context, shared).map(|(package, _)| package)
 }
 
 /// Verify the active predecessor package exactly as
@@ -3931,7 +3990,17 @@ pub fn load_predecessor_rehearsal_baseline(
     root: &Path,
     context: &PredecessorPackageContext<'_>,
 ) -> Result<(VerifiedPredecessorPackage, CompiledRegistry)> {
-    let (package, loaded) = load_predecessor_closure(root, context)?;
+    let shared = verify_shared_package(root)?;
+    load_predecessor_rehearsal_baseline_with_verified_envelope(root, context, &shared)
+}
+
+#[cfg(feature = "tooling")]
+pub fn load_predecessor_rehearsal_baseline_with_verified_envelope(
+    root: &Path,
+    context: &PredecessorPackageContext<'_>,
+    shared: &SharedVerifiedPackage,
+) -> Result<(VerifiedPredecessorPackage, CompiledRegistry)> {
+    let (package, loaded) = load_predecessor_closure(root, context, shared)?;
     let registry = compile_signed_sources(&package.manifest, &loaded)?;
     Ok((package, registry))
 }
@@ -3939,15 +4008,18 @@ pub fn load_predecessor_rehearsal_baseline(
 fn load_predecessor_closure(
     root: &Path,
     context: &PredecessorPackageContext<'_>,
+    shared: &SharedVerifiedPackage,
 ) -> Result<(VerifiedPredecessorPackage, BTreeMap<String, Vec<u8>>)> {
     validate_root(root)?;
     let production = context.database_initialization_environment != "local";
     if production {
         ensure_safe_permissions(root)?;
     }
+    bind_shared_envelope_files(root, shared, production)?;
 
     let manifest_path = root.join(MANIFEST_PATH);
     let manifest_bytes = read_bounded_regular(&manifest_path, MAX_MANIFEST_BYTES, production)?;
+    bind_shared_file(shared, MANIFEST_PATH, &manifest_bytes)?;
     let envelope: PackageEnvelope = parse_canonical(&manifest_bytes)?;
     if envelope.api_version != PACKAGE_API_VERSION
         || envelope.signed.files.is_empty()
@@ -3979,6 +4051,7 @@ fn load_predecessor_closure(
         &envelope.signed.files,
         manifest_bytes.len(),
         production,
+        shared,
     )?;
     validate_source_inventory(&envelope.signed)?;
     let governed = signed_predecessor_governed_model(&envelope.signed, &loaded)?;
@@ -4004,18 +4077,32 @@ pub fn inspect_package_with_context(
     root: &Path,
     context: &PackageInspectionContext<'_>,
 ) -> Result<IntegrityInspectedPackage> {
-    inspect_package(root, Some(context))
+    let shared = verify_shared_package(root)?;
+    inspect_package_with_context_and_verified_envelope(root, context, &shared)
+}
+
+/// Inspect a runtime-selected BReg package through the retained shared
+/// envelope verification that selected it.
+pub fn inspect_package_with_context_and_verified_envelope(
+    root: &Path,
+    context: &PackageInspectionContext<'_>,
+    shared: &SharedVerifiedPackage,
+) -> Result<IntegrityInspectedPackage> {
+    inspect_package(root, Some(context), shared)
 }
 
 fn inspect_package(
     root: &Path,
     context: Option<&PackageInspectionContext<'_>>,
+    shared: &SharedVerifiedPackage,
 ) -> Result<IntegrityInspectedPackage> {
     validate_root(root)?;
     ensure_safe_permissions(root)?;
+    bind_shared_envelope_files(root, shared, true)?;
 
     let manifest_path = root.join(MANIFEST_PATH);
     let manifest_bytes = read_bounded_regular(&manifest_path, MAX_MANIFEST_BYTES, true)?;
+    bind_shared_file(shared, MANIFEST_PATH, &manifest_bytes)?;
     let envelope: PackageEnvelope = parse_canonical(&manifest_bytes)?;
     if envelope.api_version != PACKAGE_API_VERSION
         || envelope.signed.files.is_empty()
@@ -4037,7 +4124,13 @@ fn inspect_package(
         }
         None => validate_publication_signatures(&envelope.signed, &envelope.signatures)?,
     }
-    let loaded = load_closure(root, &envelope.signed.files, manifest_bytes.len(), true)?;
+    let loaded = load_closure(
+        root,
+        &envelope.signed.files,
+        manifest_bytes.len(),
+        true,
+        shared,
+    )?;
     let (registry, _reviewed_migration_plan) = rederive(&envelope.signed, &loaded)?;
     #[cfg(feature = "tooling")]
     let migration =
@@ -4903,6 +4996,7 @@ fn load_closure(
     entries: &[PackageFile],
     manifest_size: usize,
     production: bool,
+    shared: &SharedVerifiedPackage,
 ) -> Result<BTreeMap<String, Vec<u8>>> {
     let mut listed = BTreeSet::new();
     let mut loaded = BTreeMap::new();
@@ -4922,6 +5016,7 @@ fn load_closure(
         reject_relative_symlinks(root, relative)?;
         let path = root.join(relative);
         let bytes = read_bounded_regular(&path, MAX_FILE_BYTES, production)?;
+        bind_shared_file(shared, &entry.path, &bytes)?;
         if bytes.len() as u64 != entry.size || digest(&bytes) != entry.sha256 {
             return Err(PackageError::Integrity);
         }
@@ -4937,10 +5032,14 @@ fn load_closure(
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
     expected.insert(MANIFEST_PATH.to_owned());
-    expected.insert(SUM_FILE.to_owned());
-    if actual.contains(REVISION_FILE) {
+    let shared_files = shared.files().map(str::to_owned).collect::<BTreeSet<_>>();
+    if shared_files.contains(REVISION_FILE) {
         expected.insert(REVISION_FILE.to_owned());
     }
+    if shared_files != expected {
+        return Err(PackageError::Envelope);
+    }
+    expected.insert(SUM_FILE.to_owned());
     if actual != expected {
         return Err(PackageError::Closure);
     }

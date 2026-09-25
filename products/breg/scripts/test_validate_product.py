@@ -761,6 +761,30 @@ class BRegProductCatalogTests(unittest.TestCase):
             any("unexpected entry tuples" in error for error in errors), errors
         )
 
+    def test_package_layout_requires_the_shared_envelope_and_optional_revision(self) -> None:
+        original = VALIDATOR.load_yaml
+
+        def load_without_shared_envelope(path: Path):
+            value = copy.deepcopy(original(path))
+            if path.name == "package-layout.yaml":
+                value["entries"] = [
+                    entry
+                    for entry in value["entries"]
+                    if entry["path"] not in {"SHA256SUMS", "REVISION"}
+                ]
+            return value
+
+        errors: list[str] = []
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_without_shared_envelope
+        ):
+            VALIDATOR.validate_package_layout(errors)
+        missing = "\n".join(errors)
+        self.assertIn("SHA256SUMS", missing)
+        self.assertIn("shared-checksum-envelope", missing)
+        self.assertIn("REVISION", missing)
+        self.assertIn("operator-revision", missing)
+
     def test_package_layout_binds_action_inventory_and_schemas_as_optional_generated_outputs(
         self,
     ) -> None:

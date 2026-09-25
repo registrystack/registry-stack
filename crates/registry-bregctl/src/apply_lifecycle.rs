@@ -10,8 +10,7 @@ use registry_breg::migration::{
     DestructiveBackupEvidence, MigrationError,
 };
 use registry_breg::package::{
-    load_package, load_predecessor_package, PackageError, PackageIntent, PackageLoadContext,
-    PredecessorPackageContext, VerifiedPredecessorPackage,
+    load_package, PackageError, PackageIntent, PackageLoadContext, VerifiedPredecessorPackage,
 };
 use registry_breg::postgres::ExpectedRegistryIdentity;
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
@@ -72,21 +71,9 @@ pub(crate) fn run(
         None
     } else {
         Some(
-            load_predecessor_package(
-                config.package().root(),
-                &PredecessorPackageContext {
-                    environment: config.identity().environment(),
-                    instance_id: config.identity().instance_id(),
-                    database_id: config.identity().database_id(),
-                    database_initialization_environment: config
-                        .identity()
-                        .database_initialization_environment(),
-                    trust_anchor: config.package_trust_anchor(),
-                    expected_package_revision: config.package().active_revision(),
-                    expected_sequence: config.package().active_sequence(),
-                },
-            )
-            .map_err(ApplyLifecycleError::CurrentPackage)?,
+            config
+                .load_active_predecessor_package()
+                .map_err(ApplyLifecycleError::CurrentPackage)?,
         )
     };
     let current_identity = current_package

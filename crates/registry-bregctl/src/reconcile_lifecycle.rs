@@ -78,7 +78,8 @@ pub(crate) fn run(
     // The active package carries the compiled registry whose expected catalog
     // an abandoned target has to leave behind, so it is verified in full under
     // the same startup binding the server itself requires.
-    let active = load_package(config.package().root(), &config.package_load_context())
+    let active = config
+        .load_active_package()
         .map_err(ReconcileLifecycleError::ActivePackage)?;
     let current = active_identity(&active)?;
     let target = load_package(

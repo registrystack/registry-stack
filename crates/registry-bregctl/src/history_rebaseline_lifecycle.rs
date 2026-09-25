@@ -17,7 +17,7 @@ use registry_breg::history_rebaseline::{
     rebaseline_history_coverage_with_connection, HistoryRebaselineError, HistoryRebaselineOutcome,
     HistoryRebaselineRequest, HistoryRebaselineTimeouts,
 };
-use registry_breg::package::{load_package, PackageError};
+use registry_breg::package::PackageError;
 use registry_breg::postgres::{ExpectedRegistryIdentity, RegistryLockKey};
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfigError};
 use registry_platform_canonical_json::parse_json_strict;
@@ -65,7 +65,8 @@ pub(crate) fn run(
     let rebaseline = load_rebaseline_request(request.request_file)?;
     let config = load_runtime_config(request.runtime_config)
         .map_err(HistoryRebaselineLifecycleError::RuntimeConfig)?;
-    let package = load_package(config.package().root(), &config.package_load_context())
+    let package = config
+        .load_active_package()
         .map_err(HistoryRebaselineLifecycleError::Package)?;
     let manifest = package.manifest();
     let package_sequence = i64::try_from(manifest.sequence)

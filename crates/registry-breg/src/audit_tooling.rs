@@ -271,7 +271,9 @@ impl AuditOperatorService {
             return Err(AuditToolingError::Unavailable);
         }
         let config = load_runtime_config(path).map_err(|_| AuditToolingError::Unavailable)?;
-        let package_root = config.package().root().to_path_buf();
+        let package = config
+            .load_active_package()
+            .map_err(|_| AuditToolingError::Unavailable)?;
         let runtime_connection = config
             .runtime_database_connection_config()
             .map_err(|_| AuditToolingError::Unavailable)?;
@@ -282,10 +284,8 @@ impl AuditOperatorService {
             .get()
             .await
             .map_err(|_| AuditToolingError::Unavailable)?;
-        let context = config.package_load_context();
-        let startup = crate::startup::prepare_startup(
-            &package_root,
-            &context,
+        let startup = crate::startup::prepare_loaded_startup(
+            package,
             &mut client,
             config.database().roles().migration(),
             config.database().roles().runtime(),

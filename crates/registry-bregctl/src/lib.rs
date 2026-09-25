@@ -5615,7 +5615,8 @@ fn inspection_failure(
                     "anchor_not_canonical",
                     SuggestedAction::VerifyPackageIntegrity,
                 ),
-                PackageError::Closure
+                PackageError::Envelope
+                | PackageError::Closure
                 | PackageError::Integrity
                 | PackageError::CanonicalJson
                 | PackageError::Derivation
@@ -5709,7 +5710,8 @@ fn package_diff_failure(error: PackageError) -> FailureReport {
             "diff.baseline.anchor_not_canonical",
             SuggestedAction::VerifyPackageIntegrity,
         ),
-        PackageError::Closure
+        PackageError::Envelope
+        | PackageError::Closure
         | PackageError::Integrity
         | PackageError::CanonicalJson
         | PackageError::Derivation

@@ -51,7 +51,6 @@ use crate::field_encryption::FieldEncryptionService;
 use crate::hook_handler::{BregHookHandler, HookHandlerRegistry};
 use crate::model::CompiledRegistry;
 use crate::mutation::{HookProposalApplication, HookProposalOutcome, MutationCoordinator};
-use crate::package::load_package;
 use crate::postgres::{ExpectedRegistryIdentity, RegistryLockKey, RuntimePool};
 use crate::runtime_config::load_runtime_config;
 use crate::startup::{OperationalEvent, WebhookStateTransitionCode};
@@ -95,14 +94,9 @@ pub struct WebhookOperatorService {
 impl WebhookOperatorService {
     pub async fn from_runtime_config(path: &Path) -> Result<Self, WebhookOperatorError> {
         let config = load_runtime_config(path).map_err(|_| WebhookOperatorError::Unavailable)?;
-        config
-            .verify_package_envelope()
+        let package = config
+            .load_active_package()
             .map_err(|_| WebhookOperatorError::Unavailable)?;
-        let package_root = config.package().root().to_path_buf();
-        {
-            let context = config.package_load_context();
-            load_package(&package_root, &context).map_err(|_| WebhookOperatorError::Unavailable)?;
-        }
         let connection = config
             .runtime_database_connection_config()
             .map_err(|_| WebhookOperatorError::Unavailable)?;
@@ -113,10 +107,8 @@ impl WebhookOperatorService {
             .get()
             .await
             .map_err(|_| WebhookOperatorError::Unavailable)?;
-        let context = config.package_load_context();
-        let startup = crate::startup::prepare_startup(
-            &package_root,
-            &context,
+        let startup = crate::startup::prepare_loaded_startup(
+            package,
             &mut client,
             config.database().roles().migration(),
             config.database().roles().runtime(),
