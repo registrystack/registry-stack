@@ -8,7 +8,7 @@ use clap::{Arg, Command};
 use registry_casework_breg::BregBinding;
 use registry_casework_core::{CaseworkProject, SourceAdapter};
 use registry_platform_audit::{AuditProfile, AuditWriter};
-use registry_platform_config::{SecretProvider, SecretResolver};
+use registry_platform_config::SecretResolver;
 use registry_platform_httputil::{read_bounded, BearerToken, OutboundClientBuilder};
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -632,7 +632,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         )),
         None => None,
     };
-    let listener = tokio::net::TcpListener::bind(config.listener.bind)
+    let listener = tokio::net::TcpListener::bind(config.listener.bind.socket_addr())
         .await
         .map_err(RuntimeError::Listen)?;
     let served = serve_until_worker_stops(listener, app, metrics, worker_stops).await;
@@ -744,7 +744,7 @@ pub async fn open_audit(
     secrets: &SecretResolver,
     process: Option<&str>,
 ) -> Result<crate::CaseworkAudit, RuntimeError> {
-    let audit_secret = resolve_audit_secret(secrets, &config.audit.hash_key_ref)?;
+    let audit_secret = resolve_audit_secret(secrets, config.audit.key.hash_key_ref.as_str())?;
     let audit_profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
         audit_secret.expose_secret().to_vec(),
     ))
@@ -786,27 +786,16 @@ fn resolve_audit_secret(
 }
 
 pub fn secret_resolver(config: &RuntimeConfig) -> Result<SecretResolver, RuntimeError> {
-    let mut providers = Vec::new();
-    if config.secret_providers.file.is_some() {
-        providers.push(SecretProvider::File);
-    }
-    if config.secret_providers.environment.is_some() {
-        providers.push(SecretProvider::Environment);
-    }
-    SecretResolver::new(
-        providers,
-        config
-            .secret_providers
-            .file
-            .as_ref()
-            .map_or_else(|| Path::new(""), |file| file.root.as_path()),
-    )
-    .map_err(|_| RuntimeError::SecretConfiguration)
+    config
+        .secret_providers
+        .resolver()
+        .map_err(|_| RuntimeError::SecretConfiguration)
 }
 
 #[cfg(test)]
 mod tests {
     use chrono::{TimeZone as _, Utc};
+    use registry_platform_config::SecretProvider;
     use uuid::Uuid;
     use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};

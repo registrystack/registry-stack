@@ -3,60 +3,27 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
 use jsonwebtoken::Algorithm;
 use registry_casework_core::{check_routing_policy, CaseworkProject};
 use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
+pub(crate) use registry_platform_config::describe_secret_failure;
 use registry_platform_config::{
-    SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,
+    reject_environment_expressions_in_authored_yaml, ConfigBlockError, RemovedKey,
+    RuntimeConfigErrorKind, RuntimeConfigLoader, RuntimeEnvelope, SecretResolver,
+    REMOVED_OIDC_JWKS_URI,
+};
+pub use registry_platform_config::{
+    AuditKeyConfig, DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
+    JwksSource, ListenerNetworkExposure, OidcClientsConfig, OidcIssuerConfig,
+    PrivateListenerConfig as ListenerConfig, SecretProvidersConfig, TlsTermination,
 };
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
-    TokenVerifierConfig,
+    access_token_typ_set, fetch_discovery, parse_static_jwks, JwksFetcher, JwksFetcherConfig,
+    OidcDiscoveryConfig, TokenVerifierConfig,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
-
-/// Explain one refused secret reference without disclosing what it protects.
-///
-/// A startup refusal reaches an operator as a single line, and the resolver
-/// reports only which rule broke. A valid reference is safe and useful to name,
-/// but invalid operator-authored text might itself be a literal credential, so
-/// only its field is named. The resolved bytes and opened path never appear.
-pub(crate) fn describe_secret_failure(
-    field: &'static str,
-    reference: &str,
-    error: &SecretError,
-) -> String {
-    let reason = match error {
-        SecretError::InvalidReference => {
-            "it is not an exact secret:env/NAME or secret:file/name reference".to_owned()
-        }
-        SecretError::ProviderDisabled => "its provider is not enabled for this runtime".to_owned(),
-        SecretError::InvalidProviderConfiguration => {
-            "the secret provider configuration is invalid".to_owned()
-        }
-        SecretError::Unavailable => {
-            "no readable secret of that name exists under the configured provider".to_owned()
-        }
-        SecretError::UnsafeFile => concat!(
-            "the secret file must be a regular file owned by the runtime user, ",
-            "with mode 0400 or 0600, and exactly one hard link"
-        )
-        .to_owned(),
-        SecretError::Read => "the secret could not be read".to_owned(),
-        SecretError::InvalidValue => format!(
-            "the secret value must be non-empty text of at most {MAX_SECRET_BYTES} bytes \
-             without NUL bytes"
-        ),
-    };
-    if error == &SecretError::InvalidReference {
-        format!("the secret reference configured at {field} could not be resolved: {reason}")
-    } else {
-        format!("the secret reference {reference} could not be resolved: {reason}")
-    }
-}
 
 pub const POLICY_PACKAGE_API_VERSION: &str =
     "registry.registrystack.org/casework-policy-package/v1alpha1";
@@ -65,16 +32,28 @@ pub const POLICY_PACKAGE_MANIFEST_FILE: &str = "casework.package.json";
 pub const RUNTIME_CONFIG_API_VERSION: &str = "registry.registrystack.org/casework-runtime/v1alpha1";
 pub const RUNTIME_CONFIG_KIND: &str = "CaseworkRuntimeConfig";
 pub const POLICY_FILE: &str = "casework.yaml";
+
+/// The envelope every Casework runtime configuration carries.
+pub const CASEWORK_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
+    api_version: RUNTIME_CONFIG_API_VERSION,
+    kind: RUNTIME_CONFIG_KIND,
+};
+
+/// Keys an earlier Casework runtime configuration accepted, each refused with
+/// the key that replaced it.
+pub const CASEWORK_REMOVED_KEYS: &[RemovedKey] = &[
+    REMOVED_OIDC_JWKS_URI,
+    RemovedKey {
+        path: "authentication.oidc.principalClaim",
+        replacement: "declare accessProfiles[].principalClaim in casework.yaml",
+    },
+];
 /// The RFC 9068 access-token media type this runtime verifies. The pair of
 /// spellings it admits is derived from this one value, never authored, so no
 /// deployment can widen it to an ordinary JWT.
 const CASEWORK_ACCESS_TOKEN_TYPE: &str = "at+jwt";
 const MAXIMUM_POLICY_PACKAGE_FILE_BYTES: usize = 1024 * 1024;
 const MAXIMUM_POLICY_PACKAGE_MANIFEST_BYTES: usize = 1024 * 1024;
-pub(crate) const MAXIMUM_ASSERTION_ISSUER_CLIENTS: usize = 64;
-pub(crate) const MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES: usize = 128;
-pub(crate) const MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT: usize = 16;
-pub(crate) const MAXIMUM_ASSERTION_ISSUER_BYTES: usize = 512;
 pub(crate) const MINIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS: u64 = 100;
 pub(crate) const MAXIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS: u64 = 30_000;
 pub(crate) const MINIMUM_REVIEW_COMPLETION_ATTEMPTS: u32 = 1;
@@ -549,18 +528,6 @@ pub struct RuntimePackageConfig {
     pub acknowledge_stranded_work: Option<String>,
 }
 
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ListenerConfig {
-    #[serde(default = "default_listener_bind")]
-    #[cfg_attr(feature = "schema", schemars(with = "String"))]
-    pub bind: SocketAddr,
-    pub tls_termination: TlsTermination,
-    #[serde(default)]
-    pub network_exposure: ListenerNetworkExposure,
-}
-
 /// Operator-private listener for `/metrics` and `/version`.
 ///
 /// It is separate from the API listener so the counters and the active
@@ -587,67 +554,18 @@ impl MetricsListenerConfig {
         // covering both families on every host; the IPv4 wildcard covers
         // only IPv4.
         let listener_address = listener.bind.ip();
+        let listener_port = listener.bind.socket_addr().port();
         let wildcard_covers_metrics = match listener_address {
             IpAddr::V4(listener_address) => listener_address.is_unspecified() && address.is_ipv4(),
             IpAddr::V6(listener_address) => listener_address.is_unspecified(),
         };
         if (address == listener_address || wildcard_covers_metrics)
-            && self.bind.port() == listener.bind.port()
+            && self.bind.port() == listener_port
         {
             return Err(RuntimeConfigError::InvalidMetricsListener);
         }
         Ok(())
     }
-}
-
-fn default_listener_bind() -> SocketAddr {
-    "127.0.0.1:8100"
-        .parse()
-        .expect("valid Casework listener default")
-}
-
-/// Declares the trusted transport boundary for the runtime's plaintext HTTP listener.
-///
-/// Production listeners require operator-controlled upstream TLS termination.
-/// Direct plaintext is limited to the explicit loopback-only development mode.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-pub enum TlsTermination {
-    OperatorControlledUpstream,
-    DevelopmentLoopback,
-}
-
-/// The operator-declared private network placement of the HTTP listener.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-pub enum ListenerNetworkExposure {
-    #[default]
-    PrivateAddress,
-    ContainerPrivate,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SecretProvidersConfig {
-    #[serde(default)]
-    pub file: Option<FileSecretProviderConfig>,
-    #[serde(default)]
-    pub environment: Option<EnvironmentSecretProviderConfig>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EnvironmentSecretProviderConfig {}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FileSecretProviderConfig {
-    pub root: PathBuf,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -657,53 +575,22 @@ pub struct AuthenticationConfig {
     pub oidc: OidcConfig,
 }
 
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DatabaseConfig {
-    pub runtime_url_ref: String,
-    pub migration_url_ref: String,
-    #[serde(default)]
-    pub trusted_root_certificate_ref: Option<String>,
-    #[serde(default)]
-    pub test_only_plaintext: bool,
-}
-
-impl std::fmt::Debug for DatabaseConfig {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("DatabaseConfig")
-            .field("runtime_url_ref", &"<redacted>")
-            .field("migration_url_ref", &"<redacted>")
-            .field(
-                "trusted_root_certificate_ref",
-                &self
-                    .trusted_root_certificate_ref
-                    .as_ref()
-                    .map(|_| "<redacted>"),
-            )
-            .field("test_only_plaintext", &self.test_only_plaintext)
-            .finish()
-    }
-}
-
+/// The access tokens this runtime accepts: the issuer and its keys, the
+/// clients admitted, the scope claim, and the claim that marks a human actor.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OidcConfig {
-    #[serde(default)]
-    pub allowed_clients: Vec<String>,
-    /// Assertion authorities each client may exchange a subject token from,
-    /// keyed by client identifier. An empty map applies no rule; see
+    /// The exact issuer, the one audience every token carries, and where the
+    /// issuer's signing keys come from.
+    #[serde(flatten)]
+    pub provider: OidcIssuerConfig,
+    /// The clients admitted and the assertion authorities each may exchange
+    /// a subject token from, keyed by client identifier. An empty
+    /// `assertionIssuers` map applies no rule; see
     /// [`registry_platform_oidc::TokenVerifierConfig::assertion_issuers`].
-    #[serde(default)]
-    pub assertion_issuers: BTreeMap<String, Vec<String>>,
-    pub issuer: String,
-    pub audience: String,
-    #[serde(default)]
-    pub jwks_uri: Option<String>,
-    #[serde(default)]
-    pub jwks_source: OidcJwksSource,
+    #[serde(flatten)]
+    pub clients: OidcClientsConfig,
     #[serde(default = "default_scope_claim")]
     pub scope_claim: String,
     #[serde(default)]
@@ -729,18 +616,6 @@ impl Default for HumanIdentityConfig {
     }
 }
 
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
-pub enum OidcJwksSource {
-    #[default]
-    Discovery,
-    Static {
-        #[serde(rename = "documentRef")]
-        document_ref: String,
-    },
-}
-
 fn default_scope_claim() -> String {
     "registry_scopes".to_owned()
 }
@@ -751,11 +626,14 @@ fn default_human_identity_value() -> String {
     "human".to_owned()
 }
 
+/// The audit journal: where it is written and the key its hashes use.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuditConfig {
-    pub hash_key_ref: String,
+    /// The secret keying the audit journal's hashes, `hashKeyRef`.
+    #[serde(flatten)]
+    pub key: AuditKeyConfig,
     /// Where audit entries go: a rotated `file` (the default) or `stdout`.
     #[serde(default)]
     pub destination: AuditDestinationKind,
@@ -789,38 +667,19 @@ impl AuditConfig {
 }
 
 impl RuntimeConfig {
+    /// Load and validate the operator document, reading the authored project
+    /// and its package beside it.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, RuntimeConfigError> {
-        if !path.as_ref().is_absolute() {
-            return Err(RuntimeConfigError::RelativeRuntimePath);
-        }
-        let bytes = std::fs::read(path.as_ref()).map_err(RuntimeConfigError::Read)?;
-        let value: serde_norway::Value =
-            serde_norway::from_slice(&bytes).map_err(|source| RuntimeConfigError::Parse {
-                path: "/".to_owned(),
-                source,
-            })?;
-        if value
-            .get("authentication")
-            .and_then(|value| value.get("oidc"))
-            .and_then(|value| value.get("principalClaim"))
-            .is_some()
-        {
-            return Err(RuntimeConfigError::RemovedPrincipalClaim);
-        }
-        let deserializer = serde_norway::Deserializer::from_slice(&bytes);
-        let config: Self = serde_path_to_error::deserialize(deserializer).map_err(|error| {
-            // `serde_path_to_error` renders a refusal it never attributed to a
-            // member as `.`, which names nothing an operator can look up, so a
-            // document refused whole is reported at the root every other
-            // whole-document refusal here already names.
-            let path = error.path().to_string();
-            RuntimeConfigError::Parse {
-                path: if path == "." { "/".to_owned() } else { path },
-                source: error.into_inner(),
-            }
-        })?;
-        config.check()?;
-        Ok(config)
+        let loaded = Self::loader().load::<Self>(path.as_ref())?;
+        loaded.config.check()?;
+        Ok(loaded.config)
+    }
+
+    /// The shared runtime configuration loader under Casework's envelope and
+    /// removed keys.
+    #[must_use]
+    pub const fn loader() -> RuntimeConfigLoader {
+        RuntimeConfigLoader::new(CASEWORK_RUNTIME_ENVELOPE).removed_keys(CASEWORK_REMOVED_KEYS)
     }
 
     #[must_use]
@@ -838,23 +697,12 @@ impl RuntimeConfig {
         if !self.package.root.is_absolute() {
             return Err(RuntimeConfigError::RelativeOperatedPath("package.root"));
         }
-        if self
-            .secret_providers
-            .file
-            .as_ref()
-            .is_some_and(|file| !file.root.is_absolute())
-        {
-            return Err(RuntimeConfigError::RelativeOperatedPath(
-                "secretProviders.file.root",
-            ));
-        }
+        self.secret_providers.check()?;
         self.audit.destination()?;
-        if self.secret_providers.file.is_none() && self.secret_providers.environment.is_none() {
-            return Err(RuntimeConfigError::InvalidSecretProviders);
-        }
         self.validate_secret_references()?;
         let policy_path = self.policy_path();
         let project = CaseworkProject::load(&policy_path).map_err(RuntimeConfigError::Project)?;
+        reject_authored_environment_expressions(&policy_path)?;
         let package_digest = verify_policy_package(&policy_path, &project)
             .map_err(RuntimeConfigError::PolicyPackage)?;
         if self.listener.tls_termination == TlsTermination::OperatorControlledUpstream
@@ -892,19 +740,21 @@ impl RuntimeConfig {
             .keys()
             .map(String::as_str)
             .collect::<BTreeSet<_>>();
-        if !valid_listener(
-            self.listener.bind.ip(),
-            self.listener.network_exposure,
-            self.listener.tls_termination,
-        ) {
+        if !self.listener.is_valid() {
             return Err(RuntimeConfigError::InvalidListener);
         }
         if let Some(metrics_listener) = &self.metrics_listener {
             metrics_listener.validate(&self.listener)?;
         }
-        if self.authentication.oidc.issuer.is_empty()
-            || self.authentication.oidc.audience.is_empty()
-            || self.authentication.oidc.scope_claim.is_empty()
+        self.authentication.oidc.provider.check(
+            "authentication.oidc",
+            self.listener.tls_termination == TlsTermination::DevelopmentLoopback,
+        )?;
+        self.authentication
+            .oidc
+            .clients
+            .check("authentication.oidc")?;
+        if self.authentication.oidc.scope_claim.is_empty()
             || self.authentication.oidc.human_identity.claim.is_empty()
             || self.authentication.oidc.human_identity.value.is_empty()
             || self.authentication.oidc.human_identity.claim == self.authentication.oidc.scope_claim
@@ -914,21 +764,26 @@ impl RuntimeConfig {
         {
             return Err(RuntimeConfigError::InvalidOidc);
         }
-        self.validate_assertion_issuers()?;
         if let Some(authority) = &self.task_authority {
             if !registry_platform_httputil::valid_resource_uri(&authority.issuer)
                 || !registry_platform_httputil::valid_resource_uri(&authority.exchange_audience)
-                || self.authentication.oidc.allowed_clients.is_empty()
+                || self.authentication.oidc.clients.allowed_clients.is_empty()
                 || authority.status_clients.len() > 64
                 || authority.status_clients.iter().any(|(client, resource)| {
-                    !self.authentication.oidc.allowed_clients.contains(client)
+                    !self
+                        .authentication
+                        .oidc
+                        .clients
+                        .allowed_clients
+                        .contains(client)
                         || !registry_platform_httputil::valid_resource_uri(resource)
                 })
                 || project.task_templates.iter().any(|template| {
-                    template.agent.issuer != self.authentication.oidc.issuer
+                    template.agent.issuer != self.authentication.oidc.provider.issuer
                         || !self
                             .authentication
                             .oidc
+                            .clients
                             .allowed_clients
                             .contains(&template.client)
                         || !registry_platform_httputil::valid_resource_uri(&template.resource)
@@ -941,9 +796,6 @@ impl RuntimeConfig {
         }
         if self.database.runtime_url_ref.is_empty() || self.database.migration_url_ref.is_empty() {
             return Err(RuntimeConfigError::InvalidDatabaseReference);
-        }
-        if self.audit.hash_key_ref.is_empty() {
-            return Err(RuntimeConfigError::InvalidAuditReference);
         }
         if self.sources.keys().any(String::is_empty) || configured_sources != declared_sources {
             return Err(RuntimeConfigError::InvalidSourceBindings);
@@ -1016,21 +868,17 @@ impl RuntimeConfig {
     }
 
     fn validate_secret_references(&self) -> Result<(), RuntimeConfigError> {
-        let mut references = vec![
-            (
-                "database.runtimeUrlRef".to_owned(),
-                &self.database.runtime_url_ref,
-            ),
-            (
-                "database.migrationUrlRef".to_owned(),
-                &self.database.migration_url_ref,
-            ),
-            ("audit.hashKeyRef".to_owned(), &self.audit.hash_key_ref),
-        ];
-        if let Some(reference) = &self.database.trusted_root_certificate_ref {
-            references.push(("database.trustedRootCertificateRef".to_owned(), reference));
-        }
-        if let OidcJwksSource::Static { document_ref } = &self.authentication.oidc.jwks_source {
+        let mut references: Vec<(String, &str)> = self
+            .database
+            .references()
+            .into_iter()
+            .map(|(field, reference)| (field.to_owned(), reference))
+            .collect();
+        references.push((
+            "audit.hashKeyRef".to_owned(),
+            self.audit.key.hash_key_ref.as_str(),
+        ));
+        if let Some(document_ref) = self.authentication.oidc.provider.jwks_source.document_ref() {
             references.push((
                 "authentication.oidc.jwksSource.documentRef".to_owned(),
                 document_ref,
@@ -1076,46 +924,8 @@ impl RuntimeConfig {
                 }
             }
         }
-        for (path, raw) in references {
-            let reference = SecretReference::parse(raw.clone())
-                .map_err(|_| RuntimeConfigError::InvalidSecretReference { path: path.clone() })?;
-            let enabled = match reference.provider() {
-                SecretProvider::File => self.secret_providers.file.is_some(),
-                SecretProvider::Environment => self.secret_providers.environment.is_some(),
-            };
-            if !enabled {
-                return Err(RuntimeConfigError::SecretProviderRequired { path });
-            }
-        }
-        Ok(())
-    }
-
-    /// Refuse an assertion-issuer map with too many clients, an oversized
-    /// client key or issuer string, too many issuers listed for one client, or
-    /// a repeated issuer within one client's list. This runs at configuration
-    /// load, before any verifier is built, so an operator sees the refusal
-    /// without the runtime ever starting.
-    fn validate_assertion_issuers(&self) -> Result<(), RuntimeConfigError> {
-        let assertion_issuers = &self.authentication.oidc.assertion_issuers;
-        if assertion_issuers.len() > MAXIMUM_ASSERTION_ISSUER_CLIENTS {
-            return Err(RuntimeConfigError::InvalidOidc);
-        }
-        for (client, issuers) in assertion_issuers {
-            if client.is_empty()
-                || client.len() > MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES
-                || issuers.len() > MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT
-            {
-                return Err(RuntimeConfigError::InvalidOidc);
-            }
-            let mut seen = BTreeSet::new();
-            for issuer in issuers {
-                if issuer.is_empty()
-                    || issuer.len() > MAXIMUM_ASSERTION_ISSUER_BYTES
-                    || !seen.insert(issuer)
-                {
-                    return Err(RuntimeConfigError::InvalidOidc);
-                }
-            }
+        for (field, raw) in references {
+            self.secret_providers.check_reference(&field, raw)?;
         }
         Ok(())
     }
@@ -1153,19 +963,26 @@ impl RuntimeConfig {
         secrets: &SecretResolver,
     ) -> Result<(TokenVerifierConfig, std::sync::Arc<JwksFetcher>), RuntimeConfigError> {
         let discovery_config = OidcDiscoveryConfig {
-            issuer: self.authentication.oidc.issuer.clone(),
-            jwks_uri_override: self.authentication.oidc.jwks_uri.clone(),
+            issuer: self.authentication.oidc.provider.issuer.clone(),
+            jwks_uri_override: self
+                .authentication
+                .oidc
+                .provider
+                .jwks_source
+                .uri()
+                .map(str::to_owned),
             discovery_timeout: Duration::from_secs(5),
             max_doc_bytes: 1024 * 1024,
         };
-        let fetcher = match &self.authentication.oidc.jwks_source {
-            OidcJwksSource::Discovery => {
+        let fetcher = match &self.authentication.oidc.provider.jwks_source {
+            JwksSource::Uri { uri } => JwksFetcher::new(uri.clone(), JwksFetcherConfig::defaults()),
+            JwksSource::Discovery {} => {
                 let discovery = fetch_discovery(&discovery_config)
                     .await
                     .map_err(|_| RuntimeConfigError::Oidc)?;
                 JwksFetcher::new(discovery.jwks_uri, JwksFetcherConfig::defaults())
             }
-            OidcJwksSource::Static { document_ref } => {
+            JwksSource::Static { document_ref } => {
                 let document = secrets.resolve(document_ref).map_err(|error| {
                     RuntimeConfigError::OidcJwksSecret(describe_secret_failure(
                         "authentication.oidc.jwksSource.documentRef",
@@ -1173,7 +990,8 @@ impl RuntimeConfig {
                         &error,
                     ))
                 })?;
-                let jwks = parse_static_jwks(document.expose_secret())?;
+                let jwks = parse_static_jwks(document.expose_secret())
+                    .map_err(|_| RuntimeConfigError::Oidc)?;
                 JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
             }
         };
@@ -1192,14 +1010,14 @@ impl RuntimeConfig {
     /// another purpose claim, draft, and act on casework.
     pub(crate) fn verifier_profile(&self) -> TokenVerifierConfig {
         TokenVerifierConfig::access_token_profile(
-            self.authentication.oidc.issuer.clone(),
-            vec![self.authentication.oidc.audience.clone()],
+            self.authentication.oidc.provider.issuer.clone(),
+            vec![self.authentication.oidc.provider.audience.clone()],
             vec![Algorithm::RS256, Algorithm::ES256],
             access_token_typ_set(CASEWORK_ACCESS_TOKEN_TYPE),
         )
         .with_scope_claim(self.authentication.oidc.scope_claim.clone())
-        .with_allowed_clients(self.authentication.oidc.allowed_clients.clone())
-        .with_assertion_issuers(self.authentication.oidc.assertion_issuers.clone())
+        .with_allowed_clients(self.authentication.oidc.clients.allowed_clients.clone())
+        .with_assertion_issuers(self.authentication.oidc.clients.assertion_issuers.clone())
     }
 }
 
@@ -1262,60 +1080,35 @@ fn validate_project_source_inputs(
     Ok(())
 }
 
-fn valid_listener(
-    address: IpAddr,
-    exposure: ListenerNetworkExposure,
-    tls_termination: TlsTermination,
-) -> bool {
-    if address.is_multicast() {
-        return false;
-    }
-    if tls_termination == TlsTermination::DevelopmentLoopback {
-        return exposure == ListenerNetworkExposure::PrivateAddress && address.is_loopback();
-    }
-    match (address, exposure) {
-        (IpAddr::V4(address), ListenerNetworkExposure::PrivateAddress) => {
-            address.is_loopback() || address.is_private()
+/// Refuse an authored project that carries an environment expression.
+/// Substitution applies to `runtime.yaml` only; `casework.yaml` is reviewed
+/// and packaged as written.
+fn reject_authored_environment_expressions(policy_path: &Path) -> Result<(), RuntimeConfigError> {
+    let bytes = read_bounded_file(policy_path, MAXIMUM_POLICY_PACKAGE_FILE_BYTES)
+        .map_err(RuntimeConfigError::PolicyPackage)?;
+    let text = String::from_utf8_lossy(&bytes);
+    reject_environment_expressions_in_authored_yaml(&text).map_err(|error| {
+        if error.kind() == RuntimeConfigErrorKind::AuthoredSyntax {
+            RuntimeConfigError::Load(error)
+        } else {
+            RuntimeConfigError::PolicyEnvironmentExpression {
+                field: error.field().to_owned(),
+            }
         }
-        (IpAddr::V6(address), ListenerNetworkExposure::PrivateAddress) => {
-            address.is_loopback() || is_unique_local(address)
-        }
-        (IpAddr::V4(address), ListenerNetworkExposure::ContainerPrivate) => {
-            address.is_unspecified() || address.is_loopback() || address.is_private()
-        }
-        (IpAddr::V6(address), ListenerNetworkExposure::ContainerPrivate) => {
-            address.is_unspecified() || address.is_loopback() || is_unique_local(address)
-        }
-    }
+    })
 }
 
 fn is_unique_local(address: Ipv6Addr) -> bool {
     address.octets()[0] & 0xfe == 0xfc
 }
 
-fn parse_static_jwks(bytes: &[u8]) -> Result<JwkSet, RuntimeConfigError> {
-    let jwks: JwkSet = serde_json::from_slice(bytes).map_err(|_| RuntimeConfigError::Oidc)?;
-    let mut kids = BTreeSet::new();
-    if jwks.keys.is_empty()
-        || jwks.keys.iter().any(|key| {
-            !matches!(
-                key.algorithm,
-                AlgorithmParameters::RSA(_) | AlgorithmParameters::EllipticCurve(_)
-            ) || key
-                .common
-                .key_id
-                .as_ref()
-                .is_none_or(|kid| kid.is_empty() || !kids.insert(kid.clone()))
-        })
-    {
-        return Err(RuntimeConfigError::Oidc);
-    }
-    Ok(jwks)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_config::{
+        MAX_ASSERTION_ISSUERS_PER_CLIENT, MAX_ASSERTION_ISSUER_BYTES, MAX_ASSERTION_ISSUER_CLIENTS,
+        MAX_ASSERTION_ISSUER_CLIENT_BYTES,
+    };
     use registry_platform_oidc::is_access_token_typ_pair;
 
     #[test]
@@ -1427,6 +1220,16 @@ reviewProducers:
         manifest
     }
 
+    fn canonical_tempdir() -> tempfile::TempDir {
+        tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap()
+    }
+
+    fn write_operator(root: &Path, document: &serde_json::Value) -> PathBuf {
+        let operator = root.join("operator.yaml");
+        std::fs::write(&operator, serde_norway::to_string(document).unwrap()).unwrap();
+        operator
+    }
+
     fn write_package(root: &Path) -> PolicyPackageManifest {
         write_package_with_project(root, SOURCE_PROJECT)
     }
@@ -1464,17 +1267,6 @@ reviewProducers:
         })
     }
 
-    #[test]
-    fn static_jwks_requires_unique_named_asymmetric_keys() {
-        assert!(parse_static_jwks(
-            br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#
-        )
-        .is_ok());
-        for invalid in [br#"{}"#.as_slice(),br#"{"keys":[]}"#,br#"{"keys":[{"kty":"oct","kid":"one","k":"AA"}]}"#,br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"},{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#,b"not-json"] {
-            assert!(parse_static_jwks(invalid).is_err());
-        }
-    }
-
     /// The commented alternative in the operator example must be loadable
     /// exactly as written, and its refusal must name the reference an operator
     /// has to go and fix.
@@ -1483,7 +1275,7 @@ reviewProducers:
     async fn a_static_jwks_source_loads_and_names_its_reference_when_refused() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         write_package(&package);
@@ -1508,8 +1300,8 @@ reviewProducers:
 
         let mut config = RuntimeConfig::load(&operator).expect("static JWKS source is accepted");
         assert!(matches!(
-            &config.authentication.oidc.jwks_source,
-            OidcJwksSource::Static { document_ref } if document_ref == "secret:file/jwks.json"
+            &config.authentication.oidc.provider.jwks_source,
+            JwksSource::Static { document_ref } if document_ref == "secret:file/jwks.json"
         ));
 
         let secrets = SecretResolver::new(
@@ -1529,7 +1321,8 @@ reviewProducers:
         );
 
         let literal_secret = "literal-jwks-credential-canary";
-        let OidcJwksSource::Static { document_ref } = &mut config.authentication.oidc.jwks_source
+        let JwksSource::Static { document_ref } =
+            &mut config.authentication.oidc.provider.jwks_source
         else {
             panic!("configured static JWKS source changed kind")
         };
@@ -1552,12 +1345,135 @@ reviewProducers:
     }
 
     #[test]
+    fn the_runtime_configuration_is_read_through_the_shared_loader() {
+        let error = RuntimeConfig::load("runtime.yaml").unwrap_err();
+        assert!(error.to_string().contains("absolute"), "{error}");
+
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let mut document = operator_value(&package, "development-loopback");
+        document["listener"].as_object_mut().unwrap().remove("bind");
+        let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
+        assert_eq!(error.path(), "listener");
+        assert!(error.to_string().contains("bind"), "{error}");
+    }
+
+    #[test]
+    fn a_removed_jwks_uri_names_its_replacement() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let mut document = operator_value(&package, "development-loopback");
+        document["authentication"]["oidc"]["jwksUri"] =
+            serde_json::json!("https://identity.example.test/jwks");
+        let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
+        assert_eq!(error.path(), "authentication.oidc.jwksUri");
+        assert!(
+            error.to_string().contains("authentication.oidc.jwksSource"),
+            "{error}"
+        );
+
+        let mut document = operator_value(&package, "development-loopback");
+        document["authentication"]["oidc"]["jwksSource"] =
+            serde_json::json!({"kind": "uri", "uri": "https://identity.example.test/jwks"});
+        let config = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap();
+        assert_eq!(
+            config.authentication.oidc.provider.jwks_source.uri(),
+            Some("https://identity.example.test/jwks")
+        );
+    }
+
+    #[test]
+    fn the_oidc_issuer_and_clients_are_the_shared_blocks() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+
+        let mut document = operator_value(&package, "operator-controlled-upstream");
+        document["authentication"]["oidc"]["issuer"] =
+            serde_json::json!("http://identity.example.test");
+        let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
+        assert_eq!(error.path(), "authentication.oidc.issuer");
+
+        let mut document = operator_value(&package, "operator-controlled-upstream");
+        document["authentication"]["oidc"]["issuerr"] =
+            serde_json::json!("https://identity.example.test");
+        let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
+        assert!(error.to_string().contains("issuerr"), "{error}");
+    }
+
+    #[test]
+    fn environment_expressions_substitute_values_but_never_secret_references() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let mut document = operator_value(&package, "development-loopback");
+        document["authentication"]["oidc"]["audience"] =
+            serde_json::json!("${CASEWORK_TEST_AUDIENCE:-urn:example:substituted}");
+        let config = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap();
+        assert_eq!(
+            config.authentication.oidc.provider.audience,
+            "urn:example:substituted"
+        );
+
+        for (pointer, field) in [
+            ("/database/runtimeUrlRef", "database.runtimeUrlRef"),
+            ("/audit/hashKeyRef", "audit.hashKeyRef"),
+        ] {
+            let mut document = operator_value(&package, "development-loopback");
+            *document.pointer_mut(pointer).unwrap() =
+                serde_json::json!("${CASEWORK_TEST_REFERENCE:-secret:env/RUNTIME}");
+            let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
+            assert!(
+                matches!(
+                    &error,
+                    RuntimeConfigError::Load(load)
+                        if load.code() == "runtime_config.substitution_in_reference"
+                ),
+                "{error}"
+            );
+            assert_eq!(error.path(), field);
+        }
+    }
+
+    #[test]
+    fn an_authored_project_carrying_an_environment_expression_is_refused() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package_with_project(
+            &package,
+            &SOURCE_PROJECT.replace("label: Review", "label: \"${QUEUE_LABEL}\""),
+        );
+        let operator = write_operator(
+            root.path(),
+            &operator_value(&package, "development-loopback"),
+        );
+        let error = RuntimeConfig::load(&operator).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                RuntimeConfigError::PolicyEnvironmentExpression { field }
+                    if field == "queues.0.label"
+            ),
+            "{error}"
+        );
+        assert_eq!(error.path(), "package.root/casework.yaml");
+        assert!(error.to_string().contains("runtime.yaml only"), "{error}");
+    }
+
+    #[test]
     fn static_source_uses_document_ref_camel_case() {
-        let source: OidcJwksSource =
+        let source: JwksSource =
             serde_json::from_str(r#"{"kind":"static","documentRef":"secret:file/keys.json"}"#)
                 .expect("static source");
         assert!(
-            matches!(source,OidcJwksSource::Static{document_ref} if document_ref=="secret:file/keys.json")
+            matches!(source,JwksSource::Static{document_ref} if document_ref=="secret:file/keys.json")
         );
     }
 
@@ -1600,7 +1516,7 @@ reviewProducers:
     async fn built_verifier(assertion_issuers: Option<serde_json::Value>) -> TokenVerifierConfig {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         write_package(&package);
@@ -1663,7 +1579,7 @@ reviewProducers:
 
     #[test]
     fn a_duplicate_issuer_within_one_clients_assertion_issuer_list_is_refused() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         write_package(&package);
@@ -1678,13 +1594,13 @@ reviewProducers:
         std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
         assert!(matches!(
             RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::InvalidOidc)
+            Err(RuntimeConfigError::Block(error)) if error.field() == "authentication.oidc.assertionIssuers"
         ));
     }
 
     #[test]
     fn an_empty_assertion_issuer_string_is_refused() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         write_package(&package);
@@ -1696,13 +1612,13 @@ reviewProducers:
         std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
         assert!(matches!(
             RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::InvalidOidc)
+            Err(RuntimeConfigError::Block(error)) if error.field() == "authentication.oidc.assertionIssuers"
         ));
     }
 
     #[test]
     fn an_empty_assertion_issuer_client_key_is_refused() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         write_package(&package);
@@ -1714,32 +1630,32 @@ reviewProducers:
         std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
         assert!(matches!(
             RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::InvalidOidc)
+            Err(RuntimeConfigError::Block(error)) if error.field() == "authentication.oidc.assertionIssuers"
         ));
     }
 
     #[test]
     fn an_over_long_assertion_issuer_client_key_is_refused() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         write_package(&package);
         let operator = root.path().join("runtime.yaml");
         let mut document = operator_value(&package, "development-loopback");
-        let client = "a".repeat(MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES + 1);
+        let client = "a".repeat(MAX_ASSERTION_ISSUER_CLIENT_BYTES + 1);
         document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
             client: ["https://exchange.example.test"]
         });
         std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
         assert!(matches!(
             RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::InvalidOidc)
+            Err(RuntimeConfigError::Block(error)) if error.field() == "authentication.oidc.assertionIssuers"
         ));
     }
 
     #[test]
     fn an_over_long_assertion_issuer_value_is_refused() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         write_package(&package);
@@ -1747,7 +1663,7 @@ reviewProducers:
         let mut document = operator_value(&package, "development-loopback");
         let issuer = format!(
             "https://{}.example.test",
-            "a".repeat(MAXIMUM_ASSERTION_ISSUER_BYTES)
+            "a".repeat(MAX_ASSERTION_ISSUER_BYTES)
         );
         document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
             "task-agent": [issuer]
@@ -1755,20 +1671,20 @@ reviewProducers:
         std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
         assert!(matches!(
             RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::InvalidOidc)
+            Err(RuntimeConfigError::Block(error)) if error.field() == "authentication.oidc.assertionIssuers"
         ));
     }
 
     #[test]
     fn too_many_assertion_issuer_clients_is_refused() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         write_package(&package);
         let operator = root.path().join("runtime.yaml");
         let mut document = operator_value(&package, "development-loopback");
         let mut assertion_issuers = serde_json::Map::new();
-        for index in 0..=MAXIMUM_ASSERTION_ISSUER_CLIENTS {
+        for index in 0..=MAX_ASSERTION_ISSUER_CLIENTS {
             assertion_issuers.insert(
                 format!("task-agent-{index}"),
                 serde_json::json!(["https://exchange.example.test"]),
@@ -1779,19 +1695,19 @@ reviewProducers:
         std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
         assert!(matches!(
             RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::InvalidOidc)
+            Err(RuntimeConfigError::Block(error)) if error.field() == "authentication.oidc.assertionIssuers"
         ));
     }
 
     #[test]
     fn too_many_issuers_for_one_assertion_issuer_client_is_refused() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         write_package(&package);
         let operator = root.path().join("runtime.yaml");
         let mut document = operator_value(&package, "development-loopback");
-        let issuers: Vec<String> = (0..=MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT)
+        let issuers: Vec<String> = (0..=MAX_ASSERTION_ISSUERS_PER_CLIENT)
             .map(|index| format!("https://exchange-{index}.example.test"))
             .collect();
         document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
@@ -1800,13 +1716,13 @@ reviewProducers:
         std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
         assert!(matches!(
             RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::InvalidOidc)
+            Err(RuntimeConfigError::Block(error)) if error.field() == "authentication.oidc.assertionIssuers"
         ));
     }
 
     #[test]
     fn package_identity_covers_exact_policy_and_imported_inputs() {
-        let package = tempfile::tempdir().unwrap();
+        let package = canonical_tempdir();
         let manifest = write_package(package.path());
         let project = CaseworkProject::load(package.path().join("casework.yaml")).unwrap();
         assert_eq!(
@@ -1823,7 +1739,7 @@ reviewProducers:
 
     #[test]
     fn production_requires_a_verified_package_while_loopback_accepts_authoring() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         write_package(&package);
@@ -1851,7 +1767,7 @@ reviewProducers:
 
     #[test]
     fn an_expected_policy_digest_admits_only_the_package_it_names() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         let manifest = write_package(&package);
@@ -1885,7 +1801,7 @@ reviewProducers:
 
     #[test]
     fn an_expected_policy_digest_refuses_an_unpackaged_project() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         let manifest = write_package(&package);
@@ -1907,7 +1823,7 @@ reviewProducers:
 
     #[test]
     fn a_malformed_expected_policy_digest_is_refused() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         let manifest = write_package(&package);
@@ -1936,7 +1852,7 @@ reviewProducers:
 
     #[test]
     fn a_stranded_work_acknowledgement_names_one_package_digest() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         let manifest = write_package(&package);
@@ -1970,7 +1886,7 @@ reviewProducers:
 
     #[test]
     fn source_context_review_namespaces_require_activated_adapters() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("source-context");
         std::fs::create_dir(&package).unwrap();
         write_package_with_project(&package, SOURCE_CONTEXT_REVIEW_PROJECT);
@@ -2018,7 +1934,7 @@ reviewProducers:
 
     #[test]
     fn retained_completion_destinations_may_remain_configured_after_policy_removal() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("source-context");
         std::fs::create_dir(&package).unwrap();
         write_package_with_project(&package, SOURCE_CONTEXT_REVIEW_PROJECT);
@@ -2037,7 +1953,7 @@ reviewProducers:
 
     #[test]
     fn a_completion_destination_names_a_safe_header_for_its_secret() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("source-context");
         std::fs::create_dir(&package).unwrap();
         write_package_with_project(&package, SOURCE_CONTEXT_REVIEW_PROJECT);
@@ -2150,12 +2066,12 @@ reviewProducers:
             "auth": {"header": "x-api-key", "secretRef": "secret:file/completion-key", "scheme": "Basic"}
         }))
         .expect_err("closed auth object");
-        assert!(matches!(unknown, RuntimeConfigError::Parse { .. }));
+        assert!(matches!(unknown, RuntimeConfigError::Load(_)));
     }
 
     #[test]
     fn the_optional_metrics_listener_is_absent_by_default_and_stays_operator_private() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         write_package(&package);
@@ -2219,28 +2135,28 @@ reviewProducers:
                 Some(serde_json::json!({"bind": "127.0.0.1:9100", "path": "/metrics"})),
                 "127.0.0.1:8100"
             ),
-            Err(RuntimeConfigError::Parse { .. })
+            Err(RuntimeConfigError::Load(_))
         ));
     }
 
     #[test]
     fn runtime_envelope_listener_and_operated_paths_are_strict() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         write_package(&package);
         let operator = root.path().join("runtime.yaml");
         let valid = operator_document(&package, "operator-controlled-upstream");
-        let defaulted_bind = valid.replace("  bind: 127.0.0.1:8100\n", "");
-        std::fs::write(&operator, &defaulted_bind).unwrap();
+        let omitted_bind = valid.replace("  bind: 127.0.0.1:8100\n", "");
+        std::fs::write(&operator, &omitted_bind).unwrap();
         assert_eq!(
-            RuntimeConfig::load(&operator).unwrap().listener.bind.port(),
-            8100
+            RuntimeConfig::load(&operator).unwrap_err().path(),
+            "listener"
         );
 
         assert!(matches!(
             RuntimeConfig::load("runtime.yaml"),
-            Err(RuntimeConfigError::RelativeRuntimePath)
+            Err(RuntimeConfigError::Load(load)) if load.kind() == RuntimeConfigErrorKind::Path
         ));
 
         std::fs::write(
@@ -2250,7 +2166,7 @@ reviewProducers:
         .unwrap();
         assert!(matches!(
             RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::InvalidApiVersion)
+            Err(RuntimeConfigError::Load(load)) if load.kind() == RuntimeConfigErrorKind::Envelope
         ));
 
         std::fs::write(
@@ -2260,13 +2176,13 @@ reviewProducers:
         .unwrap();
         assert!(matches!(
             RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::Parse { .. })
+            Err(RuntimeConfigError::Load(_))
         ));
     }
 
     #[test]
     fn removed_runtime_principal_claim_names_the_authored_replacement() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         write_package(&package);
@@ -2278,7 +2194,11 @@ reviewProducers:
         );
         std::fs::write(&operator, document).unwrap();
         let error = RuntimeConfig::load(&operator).unwrap_err();
-        assert!(matches!(&error, RuntimeConfigError::RemovedPrincipalClaim));
+        assert!(matches!(
+            &error,
+            RuntimeConfigError::Load(load) if load.kind() == RuntimeConfigErrorKind::RemovedKey
+        ));
+        assert_eq!(error.path(), "authentication.oidc.principalClaim");
         assert!(error
             .to_string()
             .contains("accessProfiles[].principalClaim"));
@@ -2286,7 +2206,7 @@ reviewProducers:
 
     #[test]
     fn an_out_of_range_source_binding_interval_is_refused_at_load() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         write_package(&package);
@@ -2306,7 +2226,7 @@ reviewProducers:
 
     #[test]
     fn a_request_timeout_shorter_than_the_connect_timeout_names_that_rule() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         write_package(&package);
@@ -2330,7 +2250,7 @@ reviewProducers:
 
     #[test]
     fn environment_secret_references_require_the_explicit_provider() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         write_package(&package);
@@ -2341,8 +2261,8 @@ reviewProducers:
         let error = RuntimeConfig::load(&operator).unwrap_err();
         assert!(matches!(
             &error,
-            RuntimeConfigError::SecretProviderRequired { path }
-                if path == "database.runtimeUrlRef"
+            RuntimeConfigError::Block(block)
+                if block.kind() == registry_platform_config::ConfigBlockErrorKind::SecretProviderDisabled
         ));
         assert_eq!(error.path(), "database.runtimeUrlRef");
     }
@@ -2355,7 +2275,7 @@ reviewProducers:
     /// access token and act with the scopes it carries.
     #[test]
     fn the_verifier_admits_only_the_rfc_9068_access_token_type() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         write_package(&package);
@@ -2379,17 +2299,17 @@ reviewProducers:
     /// refusal here already names.
     #[test]
     fn a_document_refused_whole_is_reported_at_its_root() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let runtime = root.path().join("runtime.yaml");
         std::fs::write(&runtime, "a scalar, not a runtime configuration\n").unwrap();
         let error = RuntimeConfig::load(&runtime).unwrap_err();
-        assert!(matches!(error, RuntimeConfigError::Parse { .. }));
+        assert!(matches!(error, RuntimeConfigError::Load(_)));
         assert_eq!(error.path(), "/");
     }
 
     #[test]
     fn typed_parse_path_does_not_echo_the_rejected_value() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         write_package(&package);
@@ -2407,7 +2327,7 @@ reviewProducers:
 
     #[test]
     fn startup_redecodes_packaged_source_metadata_instead_of_trusting_its_hash() {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let package = root.path().join("package");
         std::fs::create_dir(&package).unwrap();
         write_package(&package);
@@ -2447,79 +2367,48 @@ reviewProducers:
 
     #[test]
     fn listener_requires_a_private_address_or_explicit_container_network() {
-        use std::net::{Ipv4Addr, Ipv6Addr};
+        let valid = |bind: &str, exposure, tls_termination| {
+            ListenerConfig {
+                bind: bind.parse().expect("listener address"),
+                tls_termination,
+                network_exposure: exposure,
+            }
+            .is_valid()
+        };
+        let upstream = TlsTermination::OperatorControlledUpstream;
+        let loopback = TlsTermination::DevelopmentLoopback;
+        let private = ListenerNetworkExposure::PrivateAddress;
+        let container = ListenerNetworkExposure::ContainerPrivate;
 
-        assert!(valid_listener(
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            ListenerNetworkExposure::PrivateAddress,
-            TlsTermination::OperatorControlledUpstream,
-        ));
-        assert!(valid_listener(
-            "10.20.30.40".parse().expect("private IPv4"),
-            ListenerNetworkExposure::PrivateAddress,
-            TlsTermination::OperatorControlledUpstream,
-        ));
-        assert!(!valid_listener(
-            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-            ListenerNetworkExposure::PrivateAddress,
-            TlsTermination::OperatorControlledUpstream,
-        ));
-        assert!(valid_listener(
-            IpAddr::V6(Ipv6Addr::UNSPECIFIED),
-            ListenerNetworkExposure::ContainerPrivate,
-            TlsTermination::OperatorControlledUpstream,
-        ));
-        assert!(!valid_listener(
-            "203.0.113.10".parse().expect("public IPv4"),
-            ListenerNetworkExposure::ContainerPrivate,
-            TlsTermination::OperatorControlledUpstream,
-        ));
-        assert!(valid_listener(
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            ListenerNetworkExposure::PrivateAddress,
-            TlsTermination::DevelopmentLoopback,
-        ));
-        assert!(!valid_listener(
-            "10.20.30.40".parse().expect("private IPv4"),
-            ListenerNetworkExposure::PrivateAddress,
-            TlsTermination::DevelopmentLoopback,
-        ));
-        assert!(!valid_listener(
-            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-            ListenerNetworkExposure::ContainerPrivate,
-            TlsTermination::DevelopmentLoopback,
-        ));
+        assert!(valid("127.0.0.1:8100", private, upstream));
+        assert!(valid("10.20.30.40:8100", private, upstream));
+        assert!(!valid("0.0.0.0:8100", private, upstream));
+        assert!(valid("[::]:8100", container, upstream));
+        assert!(!valid("203.0.113.10:8100", container, upstream));
+        assert!(valid("127.0.0.1:8100", private, loopback));
+        assert!(!valid("10.20.30.40:8100", private, loopback));
+        assert!(!valid("0.0.0.0:8100", container, loopback));
     }
 }
 
 #[derive(Debug, Error)]
 pub enum RuntimeConfigError {
-    #[error("the Casework runtime configuration could not be read")]
-    Read(#[source] std::io::Error),
-    #[error("the Casework runtime configuration is not valid YAML at {path}")]
-    Parse {
-        path: String,
-        #[source]
-        source: serde_norway::Error,
-    },
+    #[error(transparent)]
+    Load(#[from] registry_platform_config::RuntimeConfigError),
+    #[error(transparent)]
+    Block(#[from] ConfigBlockError),
     #[error("unsupported Casework runtime apiVersion; expected registry.registrystack.org/casework-runtime/v1alpha1")]
     InvalidApiVersion,
     #[error("unsupported Casework runtime kind; expected CaseworkRuntimeConfig")]
     InvalidKind,
     #[error("the operated runtime path {0} must be absolute")]
     RelativeOperatedPath(&'static str),
-    #[error("the selected Casework runtime configuration path must be absolute")]
-    RelativeRuntimePath,
-    #[error("secretProviders must explicitly enable file, environment, or both")]
-    InvalidSecretProviders,
-    #[error("{path} is not a valid secret reference")]
-    InvalidSecretReference { path: String },
-    #[error("{path} uses a secret provider that is not explicitly enabled")]
-    SecretProviderRequired { path: String },
-    #[error("authentication.oidc.principalClaim has been removed; configure accessProfiles[].principalClaim in casework.yaml")]
-    RemovedPrincipalClaim,
     #[error("the Casework project is invalid")]
     Project(#[source] registry_casework_core::ConfigLoadError),
+    #[error(
+        "{field} in the authored Casework project holds an environment expression; ${{...}} substitution applies to runtime.yaml only, so write the value in casework.yaml directly"
+    )]
+    PolicyEnvironmentExpression { field: String },
     #[error("the Casework policy package is invalid")]
     PolicyPackage(#[source] PolicyPackageError),
     #[error("operator-controlled production requires a verified Casework policy package")]
@@ -2559,8 +2448,6 @@ pub enum RuntimeConfigError {
         "database.runtimeUrlRef and database.migrationUrlRef must be non-empty secret references"
     )]
     InvalidDatabaseReference,
-    #[error("audit.hashKeyRef must be a non-empty secret reference")]
-    InvalidAuditReference,
     #[error("{0}")]
     InvalidAuditDestination(#[source] AuditDestinationError),
     #[error("sources must exactly match the source ids declared by package.root/casework.yaml")]
@@ -2587,23 +2474,18 @@ impl RuntimeConfigError {
     #[must_use]
     pub fn path(&self) -> &str {
         match self {
+            Self::Load(error) => error.field(),
+            Self::Block(error) => error.field(),
             Self::InvalidApiVersion => "apiVersion",
             Self::InvalidKind => "kind",
             Self::RelativeOperatedPath(path) => path,
-            Self::RelativeRuntimePath | Self::Read(_) => "/",
-            Self::Parse { path, .. } => path,
-            Self::InvalidSecretProviders => "secretProviders",
-            Self::InvalidSecretReference { path }
-            | Self::SecretProviderRequired { path }
-            | Self::InvalidReviewCompletionAuth { path } => path,
+            Self::InvalidReviewCompletionAuth { path } => path,
             Self::InvalidSourceBinding { path, .. } => path,
-            Self::RemovedPrincipalClaim => "authentication.oidc.principalClaim",
             Self::InvalidOidc | Self::Oidc => "authentication.oidc",
             Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",
             Self::InvalidListener => "listener",
             Self::InvalidMetricsListener => "metricsListener",
             Self::InvalidDatabaseReference | Self::PlaintextDatabase => "database",
-            Self::InvalidAuditReference => "audit.hashKeyRef",
             Self::InvalidAuditDestination(error) => match error {
                 AuditDestinationError::MissingPath | AuditDestinationError::RelativePath => {
                     "audit.path"
@@ -2620,7 +2502,9 @@ impl RuntimeConfigError {
                 _ => "audit",
             },
             Self::InvalidSourceBindings | Self::SourceDescription => "sources",
-            Self::InactiveReviewSourceNamespace => "package.root/casework.yaml",
+            Self::InactiveReviewSourceNamespace | Self::PolicyEnvironmentExpression { .. } => {
+                "package.root/casework.yaml"
+            }
             Self::Project(_) => "package.root/casework.yaml",
             Self::PolicyPackage(_) | Self::ProductionPolicyPackageRequired => "package.root",
             Self::InvalidExpectedPolicyDigest | Self::PolicyDigestMismatch { .. } => {

@@ -329,6 +329,31 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-evidence/tests/cli.rs, the_removed_runtime_inputs_are_refused_with_their_replacement_named;
     release/docker/Dockerfile.evidence. */}
 
+- BREAKING: Registry Casework reads `runtime.yaml` through the shared
+  runtime configuration loader and declares its secret providers, database,
+  listener bind, OpenID Connect issuer and clients, and audit key through the
+  shared blocks. The runtime file may not pass through a symbolic link and is
+  at most 1 MiB. `${VAR}`, `${VAR:-default}`, and `${VAR:?message}` are
+  substituted in string values after parsing; an expression in a field ending
+  in `Ref` or under `secretProviders` is refused, and one in `casework.yaml`
+  is refused by the runtime and by `caseworkctl check`. `listener.bind` is
+  required. `authentication.oidc.issuer` must be an `https` URL without
+  credentials or fragment, with plain `http` accepted only on an IPv4
+  loopback host under `development-loopback`, and `audience` is at most 512
+  characters. `authentication.oidc.jwksUri` is removed: declare `jwksSource`
+  with `kind: uri` and the same URL as `uri`. `audit.hashKeyRef` must be an
+  exact secret reference. To migrate, add `listener.bind` if it was omitted,
+  replace `jwksUri`, and move any environment expression out of
+  `casework.yaml`. See
+  [configure the runtime](../operate/casework/).
+
+{/* Evidence: crates/registry-casework/src/config.rs, the_runtime_configuration_is_read_through_the_shared_loader,
+    a_removed_jwks_uri_names_its_replacement, the_oidc_issuer_and_clients_are_the_shared_blocks,
+    environment_expressions_substitute_values_but_never_secret_references and
+    an_authored_project_carrying_an_environment_expression_is_refused;
+    crates/registry-caseworkctl/src/lib.rs, removed_runtime_keys_name_the_replacement_path_and_action and
+    check_refuses_an_environment_expression_in_the_authored_project. */}
+
 - BREAKING: Base Registry Engine reads `runtime.yaml` through the shared
   runtime configuration loader and declares its OpenID Connect issuer, audit
   key, listeners, and secret providers through the shared blocks. `breg`
