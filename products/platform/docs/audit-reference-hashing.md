@@ -24,8 +24,8 @@ service needs a deterministic audit handle for a sensitive value.
   explicit development mode.
 
 The primitive domain-separates audit reference hashes from raw
-`AuditKeyHasher::hash` output and from audit-chain record hashes. Changing class,
-scope, or canonical input changes the output.
+`AuditKeyHasher::hash` output. Changing class, scope, or canonical input changes
+the output.
 
 The framed input to the platform hasher is:
 
