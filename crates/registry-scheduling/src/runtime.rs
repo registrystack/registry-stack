@@ -495,7 +495,7 @@ pub async fn open_audit(
     secrets: &SecretResolver,
     process: Option<&str>,
 ) -> Result<(registry_platform_audit::AuditKeyHasher, SchedulingAudit), RuntimeError> {
-    let audit_secret = resolve_audit_secret(secrets, &config.audit.hash_key_ref)?;
+    let audit_secret = resolve_audit_secret(secrets, config.audit.key.hash_key_ref.as_str())?;
     let audit_profile =
         AuditProfile::production_from_secret_bytes(audit_secret.expose_secret().to_vec().into())
             .map_err(|_| RuntimeError::Audit)?;

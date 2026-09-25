@@ -56,10 +56,10 @@ impl SchedulingAuthenticator {
         Self {
             verifier: TokenVerifier::new(verifier, keys),
             claim_names,
-            audience: oidc.audience.clone(),
+            audience: oidc.provider.audience.clone(),
             reads_scope: oidc.reads_scope.clone(),
             explain_scope: oidc.explain_scope.clone(),
-            binds_assertion_issuers: !oidc.assertion_issuers.is_empty(),
+            binds_assertion_issuers: !oidc.clients.assertion_issuers.is_empty(),
         }
     }
 
@@ -251,11 +251,15 @@ mod tests {
 
     fn oidc() -> OidcConfig {
         OidcConfig {
-            allowed_clients: vec![CLIENT.to_owned()],
-            assertion_issuers: std::collections::BTreeMap::new(),
-            issuer: ISSUER.to_owned(),
-            audience: AUDIENCE.to_owned(),
-            jwks_source: crate::config::JwksSource::Discovery {},
+            provider: crate::config::OidcIssuerConfig {
+                issuer: ISSUER.to_owned(),
+                audience: AUDIENCE.to_owned(),
+                jwks_source: crate::config::JwksSource::Discovery {},
+            },
+            clients: crate::config::OidcClientsConfig {
+                allowed_clients: vec![CLIENT.to_owned()],
+                assertion_issuers: std::collections::BTreeMap::new(),
+            },
             scope_claim: "registry_scopes".to_owned(),
             reads_scope: "scheduling-read".to_owned(),
             explain_scope: "scheduling-explain".to_owned(),
@@ -298,7 +302,7 @@ mod tests {
         )
         .with_scope_claim("registry_scopes")
         .with_allowed_clients(vec![CLIENT.to_owned()])
-        .with_assertion_issuers(oidc.assertion_issuers.clone());
+        .with_assertion_issuers(oidc.clients.assertion_issuers.clone());
         SchedulingAuthenticator::new(&oidc, verifier, keys)
     }
 
@@ -503,7 +507,7 @@ mod tests {
         );
 
         let mut declared = oidc();
-        declared.assertion_issuers =
+        declared.clients.assertion_issuers =
             std::collections::BTreeMap::from([(CLIENT.to_owned(), vec![AUTHORITY.to_owned()])]);
         authenticator_with(declared.clone())
             .authenticate_read(&credential)
