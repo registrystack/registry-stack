@@ -8,9 +8,10 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 use support::{
-    cookie_pair, Harness, Options, ADDRESS_A, B_REQUEST_ID, CITIZEN_A, CITIZEN_B, CURRENT_LINE_A,
-    EXPECTED_CSP, FOREIGN_TARGET_REQUEST_ID, HOSTILE_STREET, OTHER_REQUEST_ID, PROPOSED_LOCALITY,
-    REQUEST_ID,
+    browser, cookie_pair, sign_in_to, start_narrow_scope_provider, write_secret, Harness, Options,
+    ADDRESS_A, B_REQUEST_ID, CITIZEN_A, CITIZEN_B, CLIENT_ID, CURRENT_LINE_A, ENTITY, EXPECTED_CSP,
+    FOREIGN_TARGET_REQUEST_ID, HOSTILE_STREET, OTHER_REQUEST_ID, PROFILE, PROPOSED_LOCALITY,
+    REQUEST_ID, RESOURCE, SCOPE, TARGET_FIELD,
 };
 
 fn review_path() -> String {
@@ -989,4 +990,78 @@ async fn an_audit_failure_during_sign_in_leaves_no_session_behind() {
     assert_eq!(second.error_code(), Some("audit-unavailable"));
 
     std::fs::set_permissions(audit_path, original).expect("audit file permissions restore");
+}
+
+/// A sign-in against a provider whose token response states a scope
+/// narrower than the one the page asked for is refused at the callback, and
+/// opens no session: the provider is minimal on purpose, built only to say
+/// less than the request asked for, which the shared `TestAuthorizationServer`
+/// never does.
+#[tokio::test]
+async fn a_narrowed_token_response_is_refused_with_no_session_created() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let issuer = start_narrow_scope_provider().await;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let origin = format!("http://{address}");
+
+    // A loopback port nothing answers on: the callback is refused before the
+    // page ever reads the registry, so this address is never dialed.
+    let unused = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let registry_base = format!("http://{}/tenant/base", unused.local_addr().unwrap());
+    drop(unused);
+
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let secrets = directory.path().join("secrets");
+    std::fs::create_dir(&secrets).unwrap();
+    std::fs::set_permissions(&secrets, std::fs::Permissions::from_mode(0o700)).unwrap();
+    write_secret(
+        &secrets,
+        "client-key.jwk",
+        registry_platform_testing::fixtures::ED25519_PRIVATE_JWK.as_bytes(),
+    );
+    write_secret(&secrets, "audit-key", &[0x5a; 32]);
+    let audit_directory = directory.path().join("audit");
+    std::fs::create_dir(&audit_directory).unwrap();
+    std::fs::set_permissions(&audit_directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let audit_path = audit_directory.join("audit.jsonl");
+    let config_path = directory.path().join("runtime.yaml");
+    let document = format!(
+        "apiVersion: registry.registrystack.org/breg-review-runtime/v1alpha1\n\
+         kind: BRegReviewRuntimeConfig\n\
+         listener:\n  bind: \"{address}\"\n  tlsTermination: development-loopback\n\
+         publicOrigin: {origin}\n\
+         secretProviders:\n  file:\n    root: {secrets}\n\
+         signIn:\n  issuer: {issuer}\n  clientId: {CLIENT_ID}\n  clientKeyRef: secret:file/client-key.jwk\n  scopes: [\"{SCOPE}\"]\n\
+         registry:\n  baseUrl: {registry_base}\n  resource: {RESOURCE}\n  entity: {ENTITY}\n  targetField: {TARGET_FIELD}\n  accessProfile: {PROFILE}\n\
+         audit:\n  path: {audit}\n  hashKeyRef: secret:file/audit-key\n",
+        secrets = secrets.display(),
+        audit = audit_path.display(),
+    );
+    std::fs::write(&config_path, document).unwrap();
+
+    let config =
+        registry_breg_review::RuntimeConfig::load(&config_path).expect("runtime document loads");
+    let router = registry_breg_review::router(config)
+        .await
+        .expect("review page starts");
+    tokio::spawn(async move {
+        registry_breg_review::serve_until(listener, router, std::future::pending())
+            .await
+            .expect("review page serves");
+    });
+
+    let response = sign_in_to(&browser(), &origin, CITIZEN_A, REQUEST_ID).await;
+
+    assert_eq!(
+        response.status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        response.body
+    );
+    assert_eq!(response.error_code(), Some("sign-in-refused"));
+    assert!(response.set_cookie("breg-review-session").is_none());
 }

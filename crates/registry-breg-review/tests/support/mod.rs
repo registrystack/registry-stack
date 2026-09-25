@@ -733,6 +733,172 @@ pub fn write_secret(directory: &Path, name: &str, value: &[u8]) {
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 }
 
+/// A one-shot authorization code the narrow-scope provider issued.
+struct NarrowScopeCode {
+    subject: String,
+    nonce: Option<String>,
+    redirect_uri: String,
+}
+
+/// A minimal single-origin OpenID Connect provider whose token response
+/// always states a scope narrower than the one the request asked for.
+///
+/// The shared `TestAuthorizationServer` always echoes back exactly the scope
+/// a request asked for, so it cannot produce this response; this provider
+/// exists only to prove the sign-in client refuses a narrowed grant.
+struct NarrowScopeState {
+    issuer: String,
+    signing_key: registry_platform_crypto::PrivateJwk,
+    codes: Mutex<HashMap<String, NarrowScopeCode>>,
+}
+
+fn narrow_scope_unix_now() -> i64 {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock is after Unix epoch")
+        .as_secs();
+    i64::try_from(seconds).expect("the clock fits in i64")
+}
+
+/// Start the narrow-scope provider and return its issuer: a bare origin with
+/// no path, so discovery's `.well-known` suffix lands where the provider
+/// serves it.
+pub async fn start_narrow_scope_provider() -> String {
+    let (signing_key, _) = fixtures::ed25519_pair();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let issuer = format!("http://{address}");
+    let state = Arc::new(NarrowScopeState {
+        issuer: issuer.clone(),
+        signing_key,
+        codes: Mutex::new(HashMap::new()),
+    });
+    let app = Router::new()
+        .route(
+            "/.well-known/openid-configuration",
+            get(narrow_scope_metadata),
+        )
+        .route("/jwks.json", get(narrow_scope_jwks))
+        .route("/authorize", get(narrow_scope_authorize))
+        .route("/token", post(narrow_scope_token))
+        .with_state(state);
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    issuer
+}
+
+async fn narrow_scope_metadata(State(state): State<Arc<NarrowScopeState>>) -> Response {
+    json_response(
+        StatusCode::OK,
+        &json!({
+            "issuer": state.issuer,
+            "authorization_endpoint": format!("{}/authorize", state.issuer),
+            "token_endpoint": format!("{}/token", state.issuer),
+            "jwks_uri": format!("{}/jwks.json", state.issuer),
+        }),
+        &[],
+    )
+}
+
+async fn narrow_scope_jwks(State(state): State<Arc<NarrowScopeState>>) -> Response {
+    json_response(
+        StatusCode::OK,
+        &registry_platform_testing::jwks_from_private_jwk(&state.signing_key),
+        &[],
+    )
+}
+
+async fn narrow_scope_authorize(
+    State(state): State<Arc<NarrowScopeState>>,
+    RawQuery(query): RawQuery,
+) -> Response {
+    let pairs: HashMap<String, String> = query
+        .as_deref()
+        .map(|query| {
+            url::form_urlencoded::parse(query.as_bytes())
+                .into_owned()
+                .collect()
+        })
+        .unwrap_or_default();
+    let Some(redirect_uri) = pairs.get("redirect_uri") else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let request_state = pairs.get("state").cloned().unwrap_or_default();
+    let code = uuid::Uuid::new_v4().to_string();
+    state.codes.lock().unwrap().insert(
+        code.clone(),
+        NarrowScopeCode {
+            subject: pairs
+                .get("login_hint")
+                .cloned()
+                .unwrap_or_else(|| CITIZEN_A.to_owned()),
+            nonce: pairs.get("nonce").cloned(),
+            redirect_uri: redirect_uri.clone(),
+        },
+    );
+    let mut location = url::Url::parse(redirect_uri).unwrap();
+    location
+        .query_pairs_mut()
+        .append_pair("code", &code)
+        .append_pair("state", &request_state);
+    (
+        StatusCode::FOUND,
+        [(axum::http::header::LOCATION, location.to_string())],
+    )
+        .into_response()
+}
+
+async fn narrow_scope_token(State(state): State<Arc<NarrowScopeState>>, body: Bytes) -> Response {
+    let form: HashMap<String, String> = url::form_urlencoded::parse(&body).into_owned().collect();
+    let Some(code) = form.get("code") else {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            &json!({ "error": "invalid_request" }),
+            &[],
+        );
+    };
+    let Some(pending) = state.codes.lock().unwrap().remove(code) else {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            &json!({ "error": "invalid_grant" }),
+            &[],
+        );
+    };
+    let now = narrow_scope_unix_now();
+    let expires_at = now + 300;
+    let mut id_claims = serde_json::Map::new();
+    id_claims.insert("iss".to_owned(), json!(state.issuer));
+    id_claims.insert("sub".to_owned(), json!(pending.subject));
+    id_claims.insert("aud".to_owned(), json!(CLIENT_ID));
+    id_claims.insert("azp".to_owned(), json!(CLIENT_ID));
+    id_claims.insert("exp".to_owned(), json!(expires_at));
+    id_claims.insert("iat".to_owned(), json!(now));
+    if let Some(nonce) = &pending.nonce {
+        id_claims.insert("nonce".to_owned(), json!(nonce));
+    }
+    let id_token = registry_platform_testing::sign_ed25519_compact_jwt_with_key(
+        &state.signing_key,
+        "JWT",
+        "registry-platform-testing-ed25519-1",
+        Value::Object(id_claims),
+    );
+    json_response(
+        StatusCode::OK,
+        &json!({
+            "access_token": "narrow-scope-access-token",
+            "token_type": "Bearer",
+            "expires_in": 300,
+            // Deliberately narrower than the "address-correction:self" the
+            // request asked for: this response is the whole point of the
+            // provider, proving the sign-in client refuses it.
+            "scope": "citizen:profile",
+            "id_token": id_token,
+        }),
+        &[],
+    )
+}
+
 pub struct Options {
     pub token_lifetime: Duration,
     /// Top-level blocks appended to the runtime document, such as `limits`.

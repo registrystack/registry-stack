@@ -568,6 +568,7 @@ pub async fn router(config: RuntimeConfig) -> Result<Router, RuntimeError> {
         PrivateKeyJwtConfig::new(token_endpoint, config.sign_in.client_id.clone(), client_key)
             .with_audience(issuer.clone())
             .with_resource(config.registry.resource.clone())
+            .with_scopes(config.sign_in.scopes.clone())
             .with_fetch_url_policy(policy),
     )
     .map_err(|error| RuntimeError::SignInClient(error.to_string()))?;
