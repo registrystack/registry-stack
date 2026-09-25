@@ -419,20 +419,20 @@ async fn action_handlers_compute_refuse_retry_recover_and_preserve_compiled_auth
     )
     .await;
     assert_eq!(openapi.0, StatusCode::OK, "{}", openapi.1);
-    let problem_validator = jsonschema::JSONSchema::options()
+    let problem_validator = jsonschema::Validator::options()
         .with_draft(jsonschema::Draft::Draft202012)
-        .compile(&openapi.1["components"]["schemas"]["Problem"])
+        .build(&openapi.1["components"]["schemas"]["Problem"])
         .expect("caller-filtered problem schema compiles");
-    let coordinated_input_validator = jsonschema::JSONSchema::options()
+    let coordinated_input_validator = jsonschema::Validator::options()
         .with_draft(jsonschema::Draft::Draft202012)
-        .compile(
+        .build(
             &openapi.1["components"]["schemas"]
                 ["action-register-person-with-registration-invoke-input"],
         )
         .expect("caller-filtered handler input schema compiles");
-    let coordinated_response_validator = jsonschema::JSONSchema::options()
+    let coordinated_response_validator = jsonschema::Validator::options()
         .with_draft(jsonschema::Draft::Draft202012)
-        .compile(
+        .build(
             &openapi.1["components"]["schemas"]
                 ["action-register-person-with-registration-invoke-response"],
         )

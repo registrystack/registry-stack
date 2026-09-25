@@ -17,7 +17,7 @@ use std::{
 };
 
 use anyhow::{bail, Context as _, Result};
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use registry_evidence_authoring::{parse_project_marker, PROJECT_MARKER_FILE};
 use serde_json::{json, Value};
 
@@ -616,10 +616,10 @@ fn validate_runtime_structure(bytes: &[u8]) -> Result<()> {
         })?;
     let schema: Value = serde_norway::from_str(RUNTIME_SCHEMA)
         .context("the embedded Evidence runtime schema is invalid")?;
-    let validator = JSONSchema::options()
+    let validator = Validator::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
-        .compile(&schema)
+        .build(&schema)
         .map_err(|_| anyhow::anyhow!("the embedded Evidence runtime schema could not compile"))?;
     if let Err(errors) = validator.validate(&runtime) {
         let mut messages = errors

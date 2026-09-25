@@ -74,9 +74,9 @@ pub fn validate_data(
         None => return Ok(()),
         Some(schema) => schema,
     };
-    let validator = jsonschema::JSONSchema::options()
+    let validator = jsonschema::Validator::options()
         .with_draft(jsonschema::Draft::Draft202012)
-        .compile(schema)
+        .build(schema)
         .map_err(|err| {
             RenderProblem::new(
                 ProblemKind::ManifestInvalid,

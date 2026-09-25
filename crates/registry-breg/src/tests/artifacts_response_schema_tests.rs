@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use serde_json::{json, Value};
 
 use crate::compiler::{compile_project, CompileProfile};
@@ -11,9 +11,9 @@ use crate::model::{CompiledRegistry, HttpMethod};
 
 #[test]
 fn change_context_request_schema_rejects_present_empty_text() {
-    let schema = JSONSchema::options()
+    let schema = Validator::options()
         .with_draft(Draft::Draft202012)
-        .compile(&super::change_context_request_schema())
+        .build(&super::change_context_request_schema())
         .expect("generated ChangeContext request schema compiles");
     assert!(schema
         .validate(&json!({"reasonText": "why", "sourceReferences": ["case-1"]}))
@@ -24,9 +24,9 @@ fn change_context_request_schema_rejects_present_empty_text() {
 
 #[test]
 fn review_diagnostic_schema_bounds_machine_readable_retry_state() {
-    let schema = JSONSchema::options()
+    let schema = Validator::options()
         .with_draft(Draft::Draft202012)
-        .compile(&super::request_review_metadata_schema())
+        .build(&super::request_review_metadata_schema())
         .expect("generated review diagnostic schema compiles");
     let mut review = json!({
         "submission": {
@@ -256,9 +256,9 @@ fn served_field_projection_keeps_response_data_strict_but_subsettable() {
     let path = route_path(&registry, "placement-correction-request", Operation::Get);
     let response_schema =
         &openapi["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]["schema"];
-    let schema = JSONSchema::options()
+    let schema = Validator::options()
         .with_draft(Draft::Draft202012)
-        .compile(&json!({
+        .build(&json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "$ref": "#/$defs/response",
             "$defs": {"response": response_schema},
@@ -782,12 +782,12 @@ fn immediate_action_input_and_condition_schemas_are_strict_envelopes() {
     );
 }
 
-fn response_validator(openapi: &Value, path: &str, method: &str, status: &str) -> JSONSchema {
+fn response_validator(openapi: &Value, path: &str, method: &str, status: &str) -> Validator {
     let response_schema = &openapi["paths"][path][method]["responses"][status]["content"]
         ["application/json"]["schema"];
-    JSONSchema::options()
+    Validator::options()
         .with_draft(Draft::Draft202012)
-        .compile(&json!({
+        .build(&json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "$ref": "#/$defs/response",
             "$defs": {"response": response_schema},
@@ -796,10 +796,10 @@ fn response_validator(openapi: &Value, path: &str, method: &str, status: &str) -
         .expect("response schema compiles")
 }
 
-fn component_validator(openapi: &Value, component: &str) -> JSONSchema {
-    JSONSchema::options()
+fn component_validator(openapi: &Value, component: &str) -> Validator {
+    Validator::options()
         .with_draft(Draft::Draft202012)
-        .compile(&json!({
+        .build(&json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "$ref": format!("#/components/schemas/{component}"),
             "components": openapi["components"].clone()
@@ -807,14 +807,14 @@ fn component_validator(openapi: &Value, component: &str) -> JSONSchema {
         .expect("component schema compiles")
 }
 
-fn inline_validator(schema: &Value) -> JSONSchema {
-    JSONSchema::options()
+fn inline_validator(schema: &Value) -> Validator {
+    Validator::options()
         .with_draft(Draft::Draft202012)
-        .compile(schema)
+        .build(schema)
         .expect("schema compiles")
 }
 
-fn assert_valid(schema: &JSONSchema, value: &Value) {
+fn assert_valid(schema: &Validator, value: &Value) {
     if let Err(errors) = schema.validate(value) {
         panic!(
             "expected value to satisfy schema:\n{}",
@@ -826,7 +826,7 @@ fn assert_valid(schema: &JSONSchema, value: &Value) {
     }
 }
 
-fn assert_invalid(schema: &JSONSchema, value: &Value) {
+fn assert_invalid(schema: &Validator, value: &Value) {
     assert!(
         schema.validate(value).is_err(),
         "expected value to be rejected by schema: {value}"

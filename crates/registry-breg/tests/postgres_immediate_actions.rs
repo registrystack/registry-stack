@@ -250,9 +250,9 @@ async fn immediate_action_acquires_conditions_applies_atomically_and_replays_by_
     assert_eq!(openapi.status, StatusCode::OK, "{}", openapi.body);
     let response_schema =
         &openapi.body["components"]["schemas"]["action-register-household-contact-invoke-response"];
-    let response_validator = jsonschema::JSONSchema::options()
+    let response_validator = jsonschema::Validator::options()
         .with_draft(jsonschema::Draft::Draft202012)
-        .compile(response_schema)
+        .build(response_schema)
         .expect("caller-filtered immediate-action receipt schema compiles");
     let condition = response_parts(
         send(

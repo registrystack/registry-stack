@@ -7,7 +7,7 @@
 
 use std::sync::OnceLock;
 
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use serde_json::{json, Value};
 use thiserror::Error;
 
@@ -18,8 +18,8 @@ pub const REQUEST_NONCE_PATTERN: &str = "^[A-Za-z0-9_-]{43}$";
 /// Maximum Unicode character count for a public Evidence string value.
 pub const MAX_PUBLIC_STRING_LENGTH: u32 = 1024;
 
-static EVIDENCE_VALIDATOR: OnceLock<Result<JSONSchema, ContractValidationError>> = OnceLock::new();
-static PUBLIC_VALUE_VALIDATOR: OnceLock<Result<JSONSchema, ContractValidationError>> =
+static EVIDENCE_VALIDATOR: OnceLock<Result<Validator, ContractValidationError>> = OnceLock::new();
+static PUBLIC_VALUE_VALIDATOR: OnceLock<Result<Validator, ContractValidationError>> =
     OnceLock::new();
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
@@ -29,10 +29,10 @@ pub struct ContractValidationError;
 /// Validate a verified JWS payload against the exact generated Version 1 schema.
 pub fn evidence_contract_accepts(value: &Value) -> Result<bool, ContractValidationError> {
     match EVIDENCE_VALIDATOR.get_or_init(|| {
-        JSONSchema::options()
+        Validator::options()
             .with_draft(Draft::Draft202012)
             .should_validate_formats(true)
-            .compile(&evidence_schema())
+            .build(&evidence_schema())
             .map_err(|_| ContractValidationError)
     }) {
         Ok(validator) => Ok(validator.is_valid(value)),
@@ -43,10 +43,10 @@ pub fn evidence_contract_accepts(value: &Value) -> Result<bool, ContractValidati
 /// Validate one supported value against the value definition in the Evidence payload schema.
 pub fn public_value_contract_accepts(value: &Value) -> Result<bool, ContractValidationError> {
     match PUBLIC_VALUE_VALIDATOR.get_or_init(|| {
-        JSONSchema::options()
+        Validator::options()
             .with_draft(Draft::Draft202012)
             .should_validate_formats(true)
-            .compile(&json!({
+            .build(&json!({
                 "$schema": SCHEMA_DIALECT,
                 "$ref": "#/$defs/value",
                 "$defs": evidence_schema()["$defs"],

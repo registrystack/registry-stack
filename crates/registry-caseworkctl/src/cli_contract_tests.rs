@@ -3,7 +3,7 @@
 //! Conformance gate for the versioned `caseworkctl --format json` reports.
 
 use super::*;
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
@@ -58,9 +58,9 @@ fn assert_matches_contract(label: &str, kind: &str, report: &Value) {
         &std::fs::read(&path).unwrap_or_else(|error| panic!("schema {path:?} reads: {error}")),
     )
     .unwrap_or_else(|error| panic!("schema {path:?} parses: {error}"));
-    let compiled = JSONSchema::options()
+    let compiled = Validator::options()
         .with_draft(Draft::Draft202012)
-        .compile(&schema)
+        .build(&schema)
         .unwrap_or_else(|error| panic!("schema {path:?} compiles: {error}"));
     let validation = compiled.validate(report);
     if let Err(errors) = validation {

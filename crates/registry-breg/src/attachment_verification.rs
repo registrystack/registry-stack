@@ -609,7 +609,7 @@ mod tests {
         let schema = schema
             .pointer("/$defs/RawAttachmentVerificationConfig")
             .unwrap();
-        let validator = jsonschema::JSONSchema::compile(schema).unwrap();
+        let validator = jsonschema::Validator::new(schema).unwrap();
         let mut input = raw("https://example/verify");
         assert!(validator.is_valid(&input));
         input["authorizationRef"] = json!("inline-token-canary");

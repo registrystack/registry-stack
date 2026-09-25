@@ -250,9 +250,9 @@ async fn real_postgres_workspace_metadata_mutation_and_replay_contract() {
     assert_eq!(end["apiName"], "validTo");
     assert_eq!(end["nullable"], true);
     assert_eq!(end["removable"], true);
-    let nullable = jsonschema::JSONSchema::options()
+    let nullable = jsonschema::Validator::options()
         .with_draft(jsonschema::Draft::Draft202012)
-        .compile(&end["schema"])
+        .build(&end["schema"])
         .unwrap();
     assert!(nullable.is_valid(&Value::Null));
     assert!(nullable.is_valid(&json!("2026-08-31")));
@@ -273,9 +273,9 @@ async fn real_postgres_workspace_metadata_mutation_and_replay_contract() {
     let patch_schema = &openapi["paths"]["/v1/records/assets/{record_id}"]["patch"]["requestBody"]
         ["content"]["application/json-patch+json"]["schema"];
     assert_eq!(patch_schema, &patch["request"]["schema"]);
-    let validator = jsonschema::JSONSchema::options()
+    let validator = jsonschema::Validator::options()
         .with_draft(jsonschema::Draft::Draft202012)
-        .compile(patch_schema)
+        .build(patch_schema)
         .unwrap();
     for document in [
         json!([{"op":"add","path":"/data/label","value":"Value"}]),
@@ -337,9 +337,9 @@ async fn real_postgres_workspace_metadata_mutation_and_replay_contract() {
         json!(["asset", "site", "valid-from", "valid-to"])
     );
     let body = json!({"data":{"assetCode":"META-001","label":"Metadata contract asset","assetClass":"equipment"}});
-    assert!(jsonschema::JSONSchema::options()
+    assert!(jsonschema::Validator::options()
         .with_draft(jsonschema::Draft::Draft202012)
-        .compile(&create["request"]["schema"])
+        .build(&create["request"]["schema"])
         .unwrap()
         .is_valid(&body));
     let created = harness

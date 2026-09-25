@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Map, Value};
 use time::{format_description::well_known::Rfc3339, Date, Month, OffsetDateTime};
@@ -939,9 +939,9 @@ fn valid_structured(value: &Value, contract: &Map<String, Value>) -> bool {
     };
     registry_platform_canonical_json::canonicalize_json(value)
         .is_ok_and(|bytes| bytes.len() as u64 <= maximum)
-        && JSONSchema::options()
+        && Validator::options()
             .with_draft(Draft::Draft202012)
-            .compile(schema)
+            .build(schema)
             .is_ok_and(|compiled| compiled.is_valid(value))
 }
 

@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use chrono::NaiveDate;
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use registry_evidence_authoring::openapi::{
     openapi::Spec,
     types::{OperationKey, OperationParameter, ParameterLocation, RECURSIVE_REF_KEY},
@@ -766,10 +766,10 @@ fn contains_recursive_marker(value: &Value) -> bool {
 }
 
 fn schema_accepts(schema: &Value, value: &Value) -> Result<bool> {
-    let validator = JSONSchema::options()
+    let validator = Validator::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
-        .compile(schema)
+        .build(schema)
         .map_err(|_| anyhow!("parameter schema is invalid"))?;
     Ok(validator.is_valid(value))
 }

@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -73,9 +73,9 @@ pub struct RoutingFieldDescriptor {
 /// Check that an imported source descriptor carries a compilable generated
 /// JSON Schema before an adapter becomes active.
 pub fn check_source_field_descriptor(descriptor: &RoutingFieldDescriptor) -> bool {
-    JSONSchema::options()
+    Validator::options()
         .with_draft(Draft::Draft202012)
-        .compile(&descriptor.schema)
+        .build(&descriptor.schema)
         .is_ok()
 }
 
@@ -86,9 +86,9 @@ pub fn validate_source_field_value(
     descriptor: &RoutingFieldDescriptor,
     value: &Value,
 ) -> Result<(), RoutingDiagnostic> {
-    let schema = JSONSchema::options()
+    let schema = Validator::options()
         .with_draft(Draft::Draft202012)
-        .compile(&descriptor.schema)
+        .build(&descriptor.schema)
         .map_err(|_| {
             RoutingDiagnostic::new(
                 format!("source.fields.{}", descriptor.field),
@@ -320,9 +320,9 @@ pub fn check_routing_policy(
                         RoutingDiagnosticReason::UnknownField,
                     ));
                 };
-                let schema = JSONSchema::options()
+                let schema = Validator::options()
                     .with_draft(Draft::Draft202012)
-                    .compile(&descriptor.schema)
+                    .build(&descriptor.schema)
                     .map_err(|_| {
                         RoutingDiagnostic::new(&path, RoutingDiagnosticReason::UnknownField)
                     })?;
@@ -400,9 +400,9 @@ pub fn evaluate_routing(
                     RoutingDiagnosticReason::UnknownField,
                 )
             })?;
-            let schema = JSONSchema::options()
+            let schema = Validator::options()
                 .with_draft(Draft::Draft202012)
-                .compile(&descriptor.schema)
+                .build(&descriptor.schema)
                 .map_err(|_| {
                     RoutingDiagnostic::new(
                         format!("source.fields.{field}"),

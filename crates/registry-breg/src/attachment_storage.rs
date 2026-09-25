@@ -781,7 +781,7 @@ mod tests {
     fn storage_schema_refuses_inline_credentials_and_database_extras() {
         let schema = crate::runtime_config::runtime_config_schema().unwrap();
         let storage_schema = schema.pointer("/$defs/RawAttachmentStorageConfig").unwrap();
-        let validator = jsonschema::JSONSchema::compile(storage_schema).unwrap();
+        let validator = jsonschema::Validator::new(storage_schema).unwrap();
         let mut input = raw("https://storage.example");
         assert!(validator.is_valid(&input));
         input["accessKeyIdRef"] = json!("inline-credential-canary");

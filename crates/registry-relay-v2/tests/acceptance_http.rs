@@ -16,7 +16,7 @@ use bytes::Bytes;
 use futures::stream;
 use http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, LINK, VARY};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use oxjsonld::JsonLdParser;
 use registry_platform_audit::{
     AuditChainHasher, AuditEnvelope, AuditError, AuditSink, ChainState, JsonlFileSink,
@@ -1730,10 +1730,10 @@ async fn spatial_formats_validate_and_keep_distinct_cache_identities() {
     assert_eq!(record_schema_artifact.visibility, Visibility::Public);
     let record_schema: Value = serde_json::from_slice(&record_schema_artifact.content)
         .expect("public Record schema parses");
-    let record_validator = JSONSchema::options()
+    let record_validator = Validator::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
-        .compile(&record_schema)
+        .build(&record_schema)
         .expect("public Record schema compiles");
 
     let geojson_schema_id = access_profile
@@ -1760,10 +1760,10 @@ async fn spatial_formats_validate_and_keep_distinct_cache_identities() {
     );
     let (geojson_schema_artifact, geojson_schema) = &matching_geojson_schemas[0];
     assert_eq!(geojson_schema_artifact.visibility, Visibility::Public);
-    let geojson_validator = JSONSchema::options()
+    let geojson_validator = Validator::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
-        .compile(geojson_schema)
+        .build(geojson_schema)
         .expect("public GeoJSON response schema compiles");
 
     let context_artifact = harness
@@ -3285,10 +3285,10 @@ fn validate_response_contracts(
     );
 
     let shared_schema = load_registry_record_artifact("schema/registry-record-v1.schema.json");
-    let shared_validator = JSONSchema::options()
+    let shared_validator = Validator::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
-        .compile(&shared_schema)
+        .build(&shared_schema)
         .expect("the exact local Registry Record base schema compiles without resolution");
     assert!(
         shared_validator.is_valid(document),
@@ -3297,7 +3297,7 @@ fn validate_response_contracts(
     );
 
     let exact_schema = exact_generated_response_schema(harness, operation_identifier, media_type);
-    let mut exact_options = JSONSchema::options();
+    let mut exact_options = Validator::options();
     exact_options
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true);
@@ -3311,11 +3311,15 @@ fn validate_response_contracts(
         let schema: Value =
             serde_json::from_slice(&artifact.content).expect("generated schema parses");
         if let Some(identifier) = schema.get("$id").and_then(Value::as_str) {
-            exact_options.with_document(identifier.to_owned(), schema);
+            exact_options.with_resource(
+                identifier.to_owned(),
+                jsonschema::Resource::from_contents(schema.clone())
+                    .expect("generated schema is a valid resource"),
+            );
         }
     }
     let exact_validator = exact_options
-        .compile(&exact_schema)
+        .build(&exact_schema)
         .expect("the exact generated operation response schema compiles locally");
     assert!(
         exact_validator.is_valid(document),
@@ -3366,10 +3370,10 @@ fn validate_response_contracts(
             step.id
         );
         let (schema_artifact, schema) = &matching_schemas[0];
-        let validator = JSONSchema::options()
+        let validator = Validator::options()
             .with_draft(Draft::Draft202012)
             .should_validate_formats(true)
-            .compile(schema)
+            .build(schema)
             .unwrap_or_else(|_| {
                 panic!(
                     "{project}/{} generated permitted-access profile schema must compile",

@@ -932,10 +932,10 @@ async fn execute(
                 &declared,
                 0,
             )?;
-            let schema = jsonschema::JSONSchema::options()
+            let schema = jsonschema::Validator::options()
                 .with_draft(jsonschema::Draft::Draft202012)
                 .should_validate_formats(true)
-                .compile(binding.request_schema())
+                .build(binding.request_schema())
                 .map_err(|_| anyhow::anyhow!("advertised example input schema is invalid"))?;
             if !schema.is_valid(&json!({"data":data})) {
                 bail!("example {} step {} input does not match its advertised create schema; inspect payload {} before running",scenario.id,step.id,step.input.as_deref().unwrap_or_default());

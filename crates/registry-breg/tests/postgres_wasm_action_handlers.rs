@@ -327,9 +327,9 @@ async fn wasm_handlers_execute_refuse_replay_and_apply_multi_effect_effects() {
     )
     .await;
     assert_eq!(openapi.0, StatusCode::OK, "{}", openapi.1);
-    let problem_validator = jsonschema::JSONSchema::options()
+    let problem_validator = jsonschema::Validator::options()
         .with_draft(jsonschema::Draft::Draft202012)
-        .compile(&openapi.1["components"]["schemas"]["Problem"])
+        .build(&openapi.1["components"]["schemas"]["Problem"])
         .expect("caller-filtered problem schema compiles");
     for status in ["409", "422", "500", "503"] {
         assert!(

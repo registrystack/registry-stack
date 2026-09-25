@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 pub use registry_platform_hooks::{HookHandlerSource, HookPhase};
 use serde::{
@@ -2293,9 +2293,9 @@ pub(crate) fn valid_structured_schema(schema: &Value) -> bool {
     }) && canonicalize_json(schema).is_ok_and(|bytes| bytes.len() <= MAX_STRUCTURED_SCHEMA_BYTES)
         && schema_refs_are_local(schema)
         && object_schemas_are_closed(schema)
-        && JSONSchema::options()
+        && Validator::options()
             .with_draft(Draft::Draft202012)
-            .compile(schema)
+            .build(schema)
             .is_ok()
 }
 
@@ -2320,9 +2320,9 @@ pub(crate) fn valid_structured_value(value: &Value, max_bytes: u32, schema: &Val
     if bytes.len() > max_bytes as usize {
         return false;
     }
-    JSONSchema::options()
+    Validator::options()
         .with_draft(Draft::Draft202012)
-        .compile(schema)
+        .build(schema)
         .is_ok_and(|compiled| compiled.is_valid(value))
 }
 

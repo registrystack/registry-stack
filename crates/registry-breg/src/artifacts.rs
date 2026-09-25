@@ -4589,9 +4589,9 @@ mod problem_contract_tests {
     fn application_reason_contract_is_optional_bounded_and_closed() {
         for operation in [Operation::ApplyRequest] {
             let schema = openapi_request_action_input_schema(operation);
-            let validator = jsonschema::JSONSchema::options()
+            let validator = jsonschema::Validator::options()
                 .with_draft(jsonschema::Draft::Draft202012)
-                .compile(&schema)
+                .build(&schema)
                 .unwrap();
             let mut body =
                 json!({"proposalVersion": 1, "effectDigest": format!("sha256:{}", "a".repeat(64))});
@@ -4622,9 +4622,9 @@ mod problem_contract_tests {
     #[test]
     fn proposal_schema_exposes_only_the_frozen_review_binding() {
         let schema = request_proposal_schema();
-        let validator = jsonschema::JSONSchema::options()
+        let validator = jsonschema::Validator::options()
             .with_draft(jsonschema::Draft::Draft202012)
-            .compile(&schema)
+            .build(&schema)
             .unwrap();
         assert!(validator.is_valid(&json!({
             "review": {"authority": "casework-main", "policyId": "request-review"}
@@ -4643,9 +4643,9 @@ mod problem_contract_tests {
     #[test]
     fn problem_contract_accepts_declared_refusals_and_server_faults() {
         let schema = problem_schema();
-        let validator = jsonschema::JSONSchema::options()
+        let validator = jsonschema::Validator::options()
             .with_draft(jsonschema::Draft::Draft202012)
-            .compile(&schema)
+            .build(&schema)
             .unwrap();
         let mut refusal = problem_example("422", "action.refused", "A name is required.");
         assert!(
@@ -4674,9 +4674,9 @@ mod problem_contract_tests {
     #[test]
     fn evidence_dependency_problem_is_static_and_has_service_unavailable_status() {
         let schema = problem_schema();
-        let validator = jsonschema::JSONSchema::options()
+        let validator = jsonschema::Validator::options()
             .with_draft(jsonschema::Draft::Draft202012)
-            .compile(&schema)
+            .build(&schema)
             .unwrap();
         let mut problem = problem_example(
             "503",
@@ -4699,9 +4699,9 @@ mod problem_contract_tests {
     #[test]
     fn problem_contract_keeps_pattern_locations_paired_and_errors_closed() {
         let schema = problem_schema();
-        let validator = jsonschema::JSONSchema::options()
+        let validator = jsonschema::Validator::options()
             .with_draft(jsonschema::Draft::Draft202012)
-            .compile(&schema)
+            .build(&schema)
             .unwrap();
         let mut problem = problem_example("409", "mutation.conflict", "The write was refused.");
         assert!(validator.is_valid(&problem));
@@ -5029,7 +5029,7 @@ mod attachment_tests {
             schema["x-registry-attachment"]["classification"], "restricted",
             "the authored slot classification is discoverable next to the other slot facts"
         );
-        let validator = jsonschema::JSONSchema::compile(&schema).unwrap();
+        let validator = jsonschema::Validator::new(&schema).unwrap();
         let mut retained = json!({
             "slotId": "supporting-file", "proposalVersion": 1, "filled": true, "erased": false,
             "sha256": "a".repeat(64), "byteSize": 2048, "contentType": "text/plain",

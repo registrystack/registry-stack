@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use registry_discovery::{parse_index, prepare};
 use registry_discovery_profile::{
     parse_description, render_description, DiscoveryDescription, ServiceDescription,
@@ -48,16 +48,16 @@ fn load_yaml(relative: &str) -> Value {
         .expect("fixture is YAML")
 }
 
-fn validator(relative: &str) -> JSONSchema {
+fn validator(relative: &str) -> Validator {
     let schema = load_json(relative);
-    JSONSchema::options()
+    Validator::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
-        .compile(&schema)
+        .build(&schema)
         .unwrap_or_else(|error| panic!("{relative} compiles as Draft 2020-12: {error}"))
 }
 
-fn validators() -> BTreeMap<&'static str, JSONSchema> {
+fn validators() -> BTreeMap<&'static str, Validator> {
     BTreeMap::from([
         ("origins", validator("schemas/origins.schema.json")),
         (

@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use chrono_tz::Tz;
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use serde_json::{Map as JsonMap, Value};
 use thiserror::Error;
 
@@ -394,7 +394,7 @@ fn batch_selector_items_are_exact(
 /// level declares no `properties` object has no known property set, and only
 /// its compiled validation applies.
 struct ReviewedSchema {
-    compiled: JSONSchema,
+    compiled: Validator,
     declared_properties: Option<BTreeSet<String>>,
 }
 
@@ -422,10 +422,10 @@ pub struct OfflineKernel {
     statement_parameters_limits: BTreeMap<String, StatementParametersLimits>,
     batch_preparations: BTreeMap<String, CompiledBatchPreparation>,
     batch_extractions: BTreeMap<String, CompiledBatchExtraction>,
-    batch_response_schemas: BTreeMap<String, JSONSchema>,
+    batch_response_schemas: BTreeMap<String, Validator>,
     derivations: BTreeMap<String, CompiledDerivation>,
-    response_schemas: BTreeMap<String, JSONSchema>,
-    fact_schemas: BTreeMap<String, JSONSchema>,
+    response_schemas: BTreeMap<String, Validator>,
+    fact_schemas: BTreeMap<String, Validator>,
     reviewed_schemas: BTreeMap<String, ReviewedSchema>,
     codelist_handles: BTreeMap<String, BTreeMap<String, CodelistHandle>>,
 }
@@ -1200,7 +1200,7 @@ fn map_context_error(_: RhaiRuntimeError) -> KernelError {
 const REPORTED_SHAPE_VIOLATIONS: usize = 5;
 
 fn validate_source_response(
-    schema: &JSONSchema,
+    schema: &Validator,
     response: &Value,
     source_id: &str,
     schema_artifact: &str,
@@ -1262,7 +1262,7 @@ fn describe_response_shape_rejection<'a>(
 }
 
 /// Render a JSON Pointer, naming the document root rather than printing nothing.
-fn display_pointer(pointer: &jsonschema::paths::JSONPointer) -> String {
+fn display_pointer(pointer: &jsonschema::paths::Location) -> String {
     let rendered = pointer.to_string();
     if rendered.is_empty() {
         "the response root".to_owned()
@@ -1275,11 +1275,11 @@ fn display_pointer(pointer: &jsonschema::paths::JSONPointer) -> String {
 ///
 /// The compiler's own message quotes the schema node it rejected, so only the
 /// artifact and a static cause survive the boundary.
-fn compile_schema(artifact: &str, schema: &Value) -> Result<JSONSchema, KernelError> {
-    JSONSchema::options()
+fn compile_schema(artifact: &str, schema: &Value) -> Result<Validator, KernelError> {
+    Validator::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
-        .compile(schema)
+        .build(schema)
         .map_err(|_| refuse_artifact(artifact, "schema is not a valid JSON Schema"))
 }
 

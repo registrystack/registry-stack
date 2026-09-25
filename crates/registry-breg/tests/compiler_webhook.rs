@@ -391,9 +391,9 @@ fn lifecycle_request(transition: &str, to_state: &str) -> Value {
 #[test]
 fn lifecycle_event_reason_schema_matches_application_presence_and_negative_transition_pairs() {
     let schema = lifecycle_request_schema(&change_request_event_project());
-    let validator = jsonschema::JSONSchema::options()
+    let validator = jsonschema::Validator::options()
         .with_draft(jsonschema::Draft::Draft202012)
-        .compile(&schema)
+        .build(&schema)
         .unwrap();
     for (transition, state) in [("apply", "applied")] {
         let mut request = lifecycle_request(transition, state);
@@ -457,9 +457,9 @@ fn lifecycle_event_schema_preserves_authored_filter_intersection() {
     ] {
         source["entities"][2]["hooks"][0]["when"] = condition;
         let schema = lifecycle_request_schema(&source);
-        let validator = jsonschema::JSONSchema::options()
+        let validator = jsonschema::Validator::options()
             .with_draft(jsonschema::Draft::Draft202012)
-            .compile(&schema)
+            .build(&schema)
             .unwrap();
         assert!(validator.is_valid(&lifecycle_request("apply", "applied")));
         for (transition, state) in [("cancel", "cancelled"), ("submit", "submitted")] {
@@ -475,9 +475,9 @@ fn lifecycle_event_schema_preserves_authored_filter_intersection() {
         "toStates":["applied"]
     });
     let schema = lifecycle_request_schema(&source);
-    let validator = jsonschema::JSONSchema::options()
+    let validator = jsonschema::Validator::options()
         .with_draft(jsonschema::Draft::Draft202012)
-        .compile(&schema)
+        .build(&schema)
         .unwrap();
     let mut request = lifecycle_request("apply", "applied");
     request["reasonPresent"] = json!(true);
