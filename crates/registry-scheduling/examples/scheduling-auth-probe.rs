@@ -14,7 +14,7 @@ use std::sync::Arc;
 use jsonwebtoken::{jwk::JwkSet, Algorithm};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
 use registry_scheduling::auth::SchedulingAuthenticator;
-use registry_scheduling::config::{JwksSource, OidcConfig};
+use registry_scheduling::config::{JwksSource, OidcClientsConfig, OidcConfig, OidcIssuerConfig};
 use serde::Deserialize;
 
 const MAXIMUM_INPUT_BYTES: u64 = 1024 * 1024;
@@ -86,11 +86,15 @@ async fn authenticate(input: ProbeInput) -> Result<bool, ()> {
     let assertion_issuers =
         BTreeMap::from([(input.client.clone(), vec![input.assertion_issuer.clone()])]);
     let oidc = OidcConfig {
-        allowed_clients: vec![input.client.clone()],
-        assertion_issuers: assertion_issuers.clone(),
-        issuer: input.issuer.clone(),
-        audience: input.audience.clone(),
-        jwks_source: JwksSource::Discovery {},
+        provider: OidcIssuerConfig {
+            issuer: input.issuer.clone(),
+            audience: input.audience.clone(),
+            jwks_source: JwksSource::Discovery {},
+        },
+        clients: OidcClientsConfig {
+            allowed_clients: vec![input.client.clone()],
+            assertion_issuers: assertion_issuers.clone(),
+        },
         scope_claim: "scope".to_owned(),
         reads_scope: "scheduling-read".to_owned(),
         explain_scope: "scheduling-explain".to_owned(),

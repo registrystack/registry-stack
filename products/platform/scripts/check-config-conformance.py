@@ -311,6 +311,7 @@ ROWS: tuple[Row, ...] = (
             "PackageConfig",
             "PrivateListenerConfig",
             "SecretProvidersConfig",
+            "SecretReference",
             "TlsTermination",
         ),
         reference_refusal=TestRef(
@@ -320,6 +321,26 @@ ROWS: tuple[Row, ...] = (
         authored_refusal=TestRef(
             "crates/registry-scheduling/src/config.rs",
             "an_authored_policy_carrying_an_environment_expression_is_refused",
+        ),
+        rust_blocks=(
+            RustBlock(
+                "crates/registry-scheduling/src/config.rs",
+                "OidcConfig",
+                "provider",
+                "OidcIssuerConfig",
+            ),
+            RustBlock(
+                "crates/registry-scheduling/src/config.rs",
+                "OidcConfig",
+                "clients",
+                "OidcClientsConfig",
+            ),
+            RustBlock(
+                "crates/registry-scheduling/src/config.rs",
+                "AuditConfig",
+                "key",
+                "AuditKeyConfig",
+            ),
         ),
     ),
 )

@@ -2,6 +2,7 @@
   "$defs": {
     "AuditConfig": {
       "additionalProperties": false,
+      "description": "The audit journal: where it is written and the key its hashes use.",
       "else": {
         "properties": {
           "path": {
@@ -29,8 +30,8 @@
           "description": "Where audit entries go: a rotated `file` (the default) or `stdout`."
         },
         "hashKeyRef": {
-          "pattern": "^secret:(?:env|file)/",
-          "type": "string"
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the audit hash key."
         },
         "path": {
           "default": null,
@@ -320,9 +321,11 @@
     },
     "OidcConfig": {
       "additionalProperties": false,
+      "description": "The access tokens this runtime accepts: the issuer and its keys, the\nclients admitted, and the scopes each route family requires.",
       "properties": {
         "allowedClients": {
           "default": [],
+          "description": "Client identifiers whose access tokens are admitted. A runtime decides\nwhether an empty list is acceptable in production.",
           "items": {
             "type": "string"
           },
@@ -340,7 +343,7 @@
             "uniqueItems": true
           },
           "default": {},
-          "description": "The assertion authorities each client may exchange a subject token\nfrom, keyed by client identifier.\n\nA deployment that performs no token exchange leaves this empty. Once a\nclient is listed, a token it exchanged is accepted only for one of that\nclient's declared authorities, so an assertion minted by an unrelated\nauthority the issuer happens to federate cannot become a booking\ncredential here.",
+          "description": "Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. An empty map applies no rule. Once a\nclient is listed, a token it exchanged is accepted only for one of\nthat client's declared authorities.",
           "maxProperties": 64,
           "propertyNames": {
             "maxLength": 128,
@@ -349,6 +352,9 @@
           "type": "object"
         },
         "audience": {
+          "description": "The audience every accepted access token must carry in `aud`.",
+          "maxLength": 512,
+          "minLength": 1,
           "type": "string"
         },
         "explainScope": {
@@ -357,13 +363,16 @@
           "type": "string"
         },
         "issuer": {
+          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL.",
+          "pattern": "^https?://",
           "type": "string"
         },
         "jwksSource": {
           "$ref": "#/$defs/JwksSource",
           "default": {
             "kind": "discovery"
-          }
+          },
+          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
         },
         "readsScope": {
           "default": "scheduling-read",
@@ -518,6 +527,11 @@
         }
       },
       "type": "object"
+    },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+      "type": "string"
     },
     "TlsTermination": {
       "description": "Declares the trusted transport boundary for a runtime's plaintext HTTP\nlistener. Production listeners require operator-controlled upstream TLS\ntermination; direct plaintext is limited to the explicit loopback-only\ndevelopment mode.",
