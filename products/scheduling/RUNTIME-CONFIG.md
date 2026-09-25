@@ -80,11 +80,25 @@ here.
 Scopes authorize reads only. Every commitment takes its authority from a task
 grant instead, which [TASK_GRANTS.md](TASK_GRANTS.md) documents.
 
-`audit.path` is the absolute JSONL journal path. `audit.hashKeyRef` supplies
-its keyed-chain secret. Every commitment and every authorization refusal is
-journaled there, and the publication loop is the one worker whose lag bounds
-the record's durability. An expired hold writes its history entry as
-`system` and no audit row.
+`audit.hashKeyRef` supplies the key that pseudonymizes principals and grants in
+audit entries. `audit.destination` is `file`, the default, or `stdout`. A `file`
+destination requires `audit.path`, the absolute active audit file, which one
+process writes at a time; the file rotates at `audit.rotateBytes` (default 100
+MiB, at least 1 MiB) and rotated files are removed after `audit.retainDays`
+(default 90). `stdout` takes none of the three and leaves collection and
+retention to the platform that reads the stream. `schedulingctl records apply`
+writes beside the runtime, to `<stem>.schedulingctl.<ext>` next to
+`audit.path`, so the two processes never share a file.
+
+Every entry carries the schema `registry-scheduling-audit/v1`, a `request` or
+`response` phase, and a correlation shared by one decision's entries. A
+commitment's `request` entry is accepted before its capacity transaction opens,
+and its `response` entry after the transaction commits or rolls back; a
+permission refused before the transaction is one `response` entry. Audit fails
+closed: a refused `request` entry opens no transaction, and a refused `response`
+entry for a committed change answers `service.unavailable` with the change
+committed. `/readyz` reports unavailable while the destination refuses writes.
+An expired hold writes its history entry as `system` and no audit entry.
 
 `destinations` is optional. `destinations.reminders` is the one place due
 reminder intents are delivered, as CloudEvents 1.0 events over HTTPS POST with
@@ -114,8 +128,8 @@ binding is no longer available.
 cursors keep their fixed fifteen-minute lifetime. `retention.hookPayloadDays`
 sets the canonical observer payload's retry and dead-letter lifetime from 1
 through 30 days. Both configured values default to seven days, which is not a
-jurisdictional recommendation. Appointment, history, reminder outbox, and
-audit retention remain deferred. An idempotency receipt past its period is
+jurisdictional recommendation. Appointment, history, and reminder outbox
+retention remain deferred; `audit.retainDays` bounds rotated audit files. An idempotency receipt past its period is
 erased, so an exact retry after expiry answers `idempotency.expired` with HTTP
 410 instead of replaying the first answer.
 

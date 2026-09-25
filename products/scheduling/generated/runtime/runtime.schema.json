@@ -2,21 +2,108 @@
   "$defs": {
     "AuditConfig": {
       "additionalProperties": false,
+      "else": {
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "if": {
+        "properties": {
+          "destination": {
+            "const": "stdout"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
       "properties": {
+        "destination": {
+          "$ref": "#/$defs/AuditDestinationKind",
+          "default": "file",
+          "description": "Where audit entries go: a rotated `file` (the default) or `stdout`."
+        },
         "hashKeyRef": {
           "pattern": "^secret:(?:env|file)/",
           "type": "string"
         },
         "path": {
+          "default": null,
+          "description": "The active audit file. Required for, and only allowed with, `file`.",
           "pattern": "^/",
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retainDays": {
+          "default": null,
+          "description": "Delete rotated files older than this many days (default 90).",
+          "format": "uint32",
+          "maximum": 36500,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "rotateBytes": {
+          "default": null,
+          "description": "Rotate the active file once it reaches this many bytes (default 100 MiB).",
+          "format": "uint64",
+          "maximum": 4294967295,
+          "minimum": 1048576,
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "required": [
-        "path",
         "hashKeyRef"
       ],
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "path"
+              ]
+            },
+            {
+              "required": [
+                "rotateBytes"
+              ]
+            },
+            {
+              "required": [
+                "retainDays"
+              ]
+            }
+          ]
+        }
+      },
       "type": "object"
+    },
+    "AuditDestinationKind": {
+      "description": "The configured audit destination kind, as written in product configuration.",
+      "oneOf": [
+        {
+          "const": "file",
+          "description": "Durable, rotated JSON Lines file.",
+          "type": "string"
+        },
+        {
+          "const": "stdout",
+          "description": "One JSON line per entry on standard output, flushed per entry.",
+          "type": "string"
+        }
+      ]
     },
     "AuthenticationConfig": {
       "additionalProperties": false,

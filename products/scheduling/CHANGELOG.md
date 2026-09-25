@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+- BREAKING: write audit through the shared platform audit writer instead of
+  a hash-chained journal published from a PostgreSQL outbox.
+  - The `audit` block takes `hashKeyRef`, `destination` (`file`, the
+    default, or `stdout`), and, for `file` only, the absolute `path`,
+    `rotateBytes` (default 104857600, at least 1048576), and `retainDays`
+    (default 90, at most 36500). An existing `{path, hashKeyRef}` block keeps
+    working as a `file` destination.
+  - Every entry carries the schema `registry-scheduling-audit/v1`, a
+    `request` or `response` phase, and a correlation shared by a decision's
+    request and response entries; a response names that correlation as its
+    `eventId`. The runtime writes a commitment's request entry before it
+    opens the capacity transaction and its response entry after that
+    transaction commits or rolls back. A refused request entry opens no
+    transaction and answers `service.unavailable`; a refused response entry
+    for a committed commitment answers `service.unavailable` with the
+    commitment in place. A permission refused before the transaction is one
+    response entry.
+  - Hook delivery writes an attempt's request entry before egress and its
+    terminal response entry with the same correlation; a refused entry leaves
+    the delivery pending and sends nothing.
+  - Entries are no longer hash-chained, and the runtime keeps no audit state
+    in PostgreSQL. Schema version 8 drops `scheduling_audit_outbox`;
+    `migrate` refuses while the outbox still holds unpublished records, so
+    run the previous release until its publisher has drained the outbox,
+    then migrate.
+  - `/readyz` reports ready only while the audit writer is ready.
+  - `schedulingctl records apply` writes its request entry before it
+    replaces the records and its response entry after, to a sibling file
+    named for its role beside `audit.path` (`audit.schedulingctl.ndjson`
+    beside `audit.ndjson`), and refuses to replace anything when that file
+    cannot be opened.
+
 ## v0.34.0 - 2026-09-25
 
 - Registry Scheduling has no user-visible changes in this release.

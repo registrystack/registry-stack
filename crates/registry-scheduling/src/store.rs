@@ -70,10 +70,12 @@ const WINDOW_REVISION_HEADS_MIGRATION_VERSION: i64 = 6;
 const DUPLICATE_LOOKUP_INDEX_MIGRATION: &str =
     include_str!("../migrations/0007_duplicate_lookup_index.sql");
 const DUPLICATE_LOOKUP_INDEX_MIGRATION_VERSION: i64 = 7;
+const AUDIT_WRITER_MIGRATION: &str = include_str!("../migrations/0008_audit_writer.sql");
+const AUDIT_WRITER_MIGRATION_VERSION: i64 = 8;
 
 /// Every schema version in ledger order.
 const MIGRATIONS: [(i64, &str); 2] = [(1, SCHEDULING_MIGRATION), (2, FACTS_REVISION_MIGRATION)];
-const SCHEMA_VERSIONS: [i64; 7] = [
+const SCHEMA_VERSIONS: [i64; 8] = [
     1,
     2,
     HOOK_DELIVERY_MIGRATION_VERSION,
@@ -81,6 +83,7 @@ const SCHEMA_VERSIONS: [i64; 7] = [
     WINDOW_RECORDS_MIGRATION_VERSION,
     WINDOW_REVISION_HEADS_MIGRATION_VERSION,
     DUPLICATE_LOOKUP_INDEX_MIGRATION_VERSION,
+    AUDIT_WRITER_MIGRATION_VERSION,
 ];
 
 /// Serializes operator-run migrations on one session lock. A second migrator
@@ -121,6 +124,10 @@ pub enum StoreError {
     Corrupt,
     #[error("the Scheduling database belongs to another deployment")]
     DeploymentIdentity,
+    #[error(
+        "the Scheduling database holds {rows} audit record(s) that schema migration {version} would drop before they reach the audit journal; nothing was changed. Run the release that wrote them until its audit publisher has published every record, then migrate again"
+    )]
+    UnpublishedAuditWouldBeDropped { version: i64, rows: i64 },
     /// The environment records would retire or reduce supply that live
     /// appointments or holds still occupy. The swap is refused whole, so the
     /// operator either keeps the supply or closes what stands on it first.
@@ -329,10 +336,6 @@ pub struct Commitment<'c> {
     pub attempt_expires_at: DateTime<Utc>,
     /// The task grant's `exp`, re-checked inside the capacity transaction.
     pub grant_exp_unix: Option<u64>,
-    /// The audit identity of the commitment, written in the same
-    /// transaction as the state change.
-    pub audit_event: Uuid,
-    pub audit_record: Value,
     pub hooks: Option<&'c ActivatedHooks>,
 }
 
@@ -706,6 +709,38 @@ impl PostgresStore {
                 .await?;
         }
         transaction.commit().await?;
+
+        let transaction = client.transaction().await?;
+        let applied: bool = transaction
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM scheduling_schema_migrations WHERE version=$1)",
+                &[&AUDIT_WRITER_MIGRATION_VERSION],
+            )
+            .await?
+            .get(0);
+        if !applied {
+            let rows: i64 = transaction
+                .query_one(
+                    "SELECT count(*) FROM scheduling_audit_outbox WHERE published_at IS NULL",
+                    &[],
+                )
+                .await?
+                .get(0);
+            if rows != 0 {
+                return Err(StoreError::UnpublishedAuditWouldBeDropped {
+                    version: AUDIT_WRITER_MIGRATION_VERSION,
+                    rows,
+                });
+            }
+            transaction.batch_execute(AUDIT_WRITER_MIGRATION).await?;
+            transaction
+                .execute(
+                    "INSERT INTO scheduling_schema_migrations(version,applied_at) VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
+                    &[&AUDIT_WRITER_MIGRATION_VERSION],
+                )
+                .await?;
+        }
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -1023,19 +1058,10 @@ impl PostgresStore {
         &self,
         scheduling_id: &str,
         facts: &SchedulingFacts,
-        audit_event: Uuid,
-        audit_record: Value,
     ) -> Result<(), StoreError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        replace_facts_in_transaction(
-            &transaction,
-            scheduling_id,
-            facts,
-            audit_event,
-            audit_record,
-        )
-        .await?;
+        replace_facts_in_transaction(&transaction, scheduling_id, facts).await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -1319,9 +1345,6 @@ impl PostgresStore {
             )
             .await?;
         transaction
-            .insert_audit(commitment.audit_event, &commitment.audit_record)
-            .await?;
-        transaction
             .insert_attempt(
                 Uuid::new_v4(),
                 &commitment,
@@ -1430,9 +1453,6 @@ impl PostgresStore {
                 .await?;
         }
         transaction
-            .insert_audit(commitment.audit_event, &commitment.audit_record)
-            .await?;
-        transaction
             .insert_attempt(
                 Uuid::new_v4(),
                 &commitment,
@@ -1508,7 +1528,7 @@ impl PostgresStore {
         }
         if hold.actor != commitment.actor {
             // Confirming another caller's hold is never a state error: it is
-            // an authorization refusal the audit journal records.
+            // an authorization refusal the audit entries record.
             return Err(CommitError::Unauthorized);
         }
         self.recheck_grant(&commitment)?;
@@ -1578,9 +1598,6 @@ impl PostgresStore {
                 .capture(&transaction, APPOINTMENT_CONFIRMED_TRIGGER, &claim)
                 .await?;
         }
-        transaction
-            .insert_audit(commitment.audit_event, &commitment.audit_record)
-            .await?;
         transaction
             .insert_attempt(
                 Uuid::new_v4(),
@@ -1653,9 +1670,6 @@ impl PostgresStore {
             )
             .await?;
         transaction.suppress_pending_reminders(hold_id).await?;
-        transaction
-            .insert_audit(commitment.audit_event, &commitment.audit_record)
-            .await?;
         transaction
             .insert_attempt(
                 Uuid::new_v4(),
@@ -1810,9 +1824,6 @@ impl PostgresStore {
                 .await?;
         }
         transaction
-            .insert_audit(commitment.audit_event, &commitment.audit_record)
-            .await?;
-        transaction
             .insert_attempt(
                 Uuid::new_v4(),
                 &commitment,
@@ -1938,9 +1949,6 @@ impl PostgresStore {
                 .capture(&transaction, APPOINTMENT_CANCELLED_TRIGGER, &cancelled)
                 .await?;
         }
-        transaction
-            .insert_audit(commitment.audit_event, &commitment.audit_record)
-            .await?;
         transaction
             .insert_attempt(
                 Uuid::new_v4(),
@@ -2249,33 +2257,15 @@ impl PostgresStore {
         }
     }
 
-    /// Record an authorization refusal in the audit journal. The capacity
-    /// transactions write their audit rows in-transaction; a grant that lapsed
-    /// or an actor that did not own the claim changes nothing, so its audit
-    /// row is written beside the refusal instead.
-    pub async fn record_refusal_audit(
-        &self,
-        audit_event: Uuid,
-        audit_record: Value,
-    ) -> Result<(), StoreError> {
-        let client = self.client().await?;
-        client
-            .execute(
-                "INSERT INTO scheduling_audit_outbox(event_id, audit_record) VALUES($1,$2)",
-                &[&audit_event, &audit_record],
-            )
-            .await?;
-        Ok(())
-    }
-
     /// Erase idempotency receipts past their retention period. The answer is
     /// dropped, the row is kept and stamped erased: a key that answered once
     /// stays spent, so a retry after the period is refused as expired rather
     /// than executed again as a fresh request.
     ///
     /// This is the only retention the sweep enforces beside listing cursors.
-    /// Appointments, history, the delivery outbox and the audit journal are
-    /// not swept.
+    /// Appointments, history, and the delivery outbox are not swept, and
+    /// audit entries live outside the database under the audit destination's
+    /// own retention.
     pub async fn erase_expired_attempts(&self, now: DateTime<Utc>) -> Result<u64, StoreError> {
         let client = self.client().await?;
         Ok(client
@@ -2285,42 +2275,6 @@ impl PostgresStore {
                 &[&now],
             )
             .await?)
-    }
-
-    /// The pending audit journal, oldest first.
-    ///
-    /// The chain the publisher extends attests to *publication order*: the
-    /// order in which rows became visible and were appended, with each
-    /// batch internally ordered by the recorded sequence. The sequence is
-    /// allocated when a row is written, not when its transaction commits, so
-    /// two concurrent transactions can become visible in the opposite order
-    /// from their sequence numbers; the chain does not claim
-    /// insertion-sequence order, and a verifier of the chain verifies what
-    /// the deployment published, in the order it published it.
-    pub async fn pending_audit(&self, limit: i64) -> Result<Vec<(Uuid, Value)>, StoreError> {
-        let client = self.client().await?;
-        Ok(client
-            .query(
-                "SELECT event_id, audit_record FROM scheduling_audit_outbox \
-                 WHERE published_at IS NULL ORDER BY recorded_seq LIMIT $1",
-                &[&limit],
-            )
-            .await?
-            .into_iter()
-            .map(|row| (row.get(0), row.get(1)))
-            .collect())
-    }
-
-    pub async fn mark_audit_published(&self, event_id: Uuid) -> Result<(), StoreError> {
-        let client = self.client().await?;
-        client
-            .execute(
-                "UPDATE scheduling_audit_outbox SET published_at=now() \
-                 WHERE event_id=$1 AND published_at IS NULL",
-                &[&event_id],
-            )
-            .await?;
-        Ok(())
     }
 }
 
@@ -2889,8 +2843,6 @@ pub(crate) async fn replace_facts_in_transaction(
     transaction: &deadpool_postgres::Transaction<'_>,
     scheduling_id: &str,
     facts: &SchedulingFacts,
-    audit_event: Uuid,
-    audit_record: Value,
 ) -> Result<(), StoreError> {
     // Take every supply anchor before reading a claim. A capacity
     // transaction holds its own anchor from its snapshot until it commits,
@@ -3115,12 +3067,6 @@ pub(crate) async fn replace_facts_in_transaction(
             &[],
         )
         .await?;
-    transaction
-        .execute(
-            "INSERT INTO scheduling_audit_outbox(event_id, audit_record) VALUES($1,$2)",
-            &[&audit_event, &audit_record],
-        )
-        .await?;
     Ok(())
 }
 
@@ -3258,7 +3204,6 @@ trait CapacityStatements {
         status_code: u16,
         receipt: Value,
     ) -> Result<(), CommitError>;
-    async fn insert_audit(&self, event_id: Uuid, record: &Value) -> Result<(), StoreError>;
     async fn claim_in_transaction(&self, claim_id: Uuid) -> Result<Option<ClaimRow>, StoreError>;
     /// Take the caller's hold-ceiling lock, then count the holds it has open.
     ///
@@ -3503,15 +3448,6 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
             // service then reconciles against the winning receipt.
             return Err(CommitError::KeyReused);
         }
-        Ok(())
-    }
-
-    async fn insert_audit(&self, event_id: Uuid, record: &Value) -> Result<(), StoreError> {
-        self.execute(
-            "INSERT INTO scheduling_audit_outbox(event_id, audit_record) VALUES($1,$2)",
-            &[&event_id, &record],
-        )
-        .await?;
         Ok(())
     }
 

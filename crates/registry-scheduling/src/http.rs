@@ -155,8 +155,11 @@ async fn healthz() -> StatusCode {
     StatusCode::OK
 }
 
+/// Ready only while the database is at this release's schema and the audit
+/// destination still accepts entries: a stopped writer refuses every
+/// commitment, so a load balancer must stop routing to this process.
 async fn readyz(State(state): State<HttpState>) -> Result<StatusCode, HttpError> {
-    if state.store.ready().await.is_ok() {
+    if state.store.ready().await.is_ok() && state.service.audit_ready().await.is_ok() {
         Ok(StatusCode::OK)
     } else {
         Err(HttpError(ProblemCode::ServiceUnavailable))
@@ -520,9 +523,9 @@ const MAXIMUM_CANCELLATION_REASON_BYTES: usize = 4096;
 
 /// Bound every caller-supplied string an admission request carries.
 ///
-/// All of them are stored: the ledger entry, the idempotency receipt and the
-/// audit journal keep them verbatim, so an unbounded string is an unbounded
-/// write for anyone holding a credential. The bounds are the authoring
+/// All of them are stored: the ledger entry and the idempotency receipt keep
+/// them verbatim, so an unbounded string is an unbounded write for anyone
+/// holding a credential. The bounds are the authoring
 /// grammar's own, not new numbers: an offering and a channel are policy
 /// identifiers, a capability, a prerequisite and a duplicate key are scoped
 /// references, and a request may name no more references than a policy
@@ -1058,9 +1061,9 @@ mod tests {
     fn an_admission_request_is_bounded_before_it_reaches_the_store() {
         bounded_admission(&admission()).expect("an ordinary admission request passes the edge");
 
-        // Every one of these lands in the ledger, the idempotency receipt and
-        // the audit journal verbatim, so a caller with a body allowance of a
-        // megabyte could write a megabyte into each of them.
+        // Every one of these lands in the ledger and the idempotency receipt
+        // verbatim, so a caller with a body allowance of a megabyte could
+        // write a megabyte into each of them.
         let oversized = [
             AdmissionRequest {
                 offering: "o".repeat(65),
