@@ -48,9 +48,11 @@ const SOURCE_RECONCILIATION_HEALTH_MIGRATION: &str =
     include_str!("../migrations/0017_source_reconciliation_health.sql");
 const AUDIT_PUBLICATION_HEAD_MIGRATION: &str =
     include_str!("../migrations/0018_audit_publication_head.sql");
+const AUDIT_OUTBOX_PENDING_INDEX_MIGRATION: &str =
+    include_str!("../migrations/0019_audit_outbox_pending_index.sql");
 
 /// Every schema version in ledger order.
-const MIGRATIONS: [(i64, &str); 18] = [
+const MIGRATIONS: [(i64, &str); 19] = [
     (1, MIGRATION),
     (2, HOSTED_MIGRATION),
     (3, ASSIGNMENT_MIGRATION),
@@ -69,6 +71,7 @@ const MIGRATIONS: [(i64, &str); 18] = [
     (16, OCCURRENCE_IDENTITY_MIGRATION),
     (17, SOURCE_RECONCILIATION_HEALTH_MIGRATION),
     (18, AUDIT_PUBLICATION_HEAD_MIGRATION),
+    (19, AUDIT_OUTBOX_PENDING_INDEX_MIGRATION),
 ];
 
 /// The newest schema version this binary knows how to run against.

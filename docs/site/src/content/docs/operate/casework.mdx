@@ -593,10 +593,18 @@ a reconciliation age well beyond the source's interval: that age catches a pass 
 readiness does not. The only label values are the configured source identifiers, the version, and
 the package digest.
 
+The listener takes no credentials, so the database series do not follow the scrape rate: every
+scrape within five seconds of a database reading reuses it, scrapes that arrive during a reading
+wait for that one reading, and a reading that takes longer than five seconds reports
+`casework_database_up 0`. A burst of scrapes therefore holds at most one database connection at a
+time and runs at most one reading every five seconds. The backlog count reads a partial index of
+the unpublished outbox rows (migration 19), so it does not scan the published history.
+
 {/* Evidence: crates/registry-casework/src/config.rs, MetricsListenerConfig;
-    crates/registry-casework/src/metrics.rs, metrics_router() and render();
+    crates/registry-casework/src/metrics.rs, metrics_router(), MetricsInner::readings() and render();
     crates/registry-casework/src/runtime.rs, serve_from_path() and serve_until_worker_stops();
-    crates/registry-casework/src/store.rs, audit_outbox_pending(). */}
+    crates/registry-casework/src/store.rs, audit_outbox_pending();
+    crates/registry-casework/migrations/0019_audit_outbox_pending_index.sql. */}
 
 The audit publication worker runs once a second: it reads pending records, appends them to the
 keyed chain, and marks them published. A failed pass makes readiness fail, logs only the stage that

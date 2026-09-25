@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- The metrics listener no longer lets the scrape rate set the database load.
+  Scrapes within five seconds of a database reading reuse it, concurrent
+  scrapes wait for the one reading in flight, and a reading that takes longer
+  than five seconds reports `casework_database_up 0`. Migration 19 adds a
+  partial index of the unpublished audit outbox rows, which the backlog count
+  and the audit publisher read instead of scanning every published record;
+  run `casework migrate` before serving this release.
 - Replicas no longer publish the same audit record twice. One runtime at a
   time holds the audit publication lease, a PostgreSQL session advisory lock
   in the two-integer key space (class `1128354629`, the ASCII bytes of
