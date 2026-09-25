@@ -1155,7 +1155,7 @@ impl IngestionHarness {
             registry.clone(),
             identity.clone(),
             lock_key,
-            audit_profile.clone(),
+            database.audit(audit_profile.clone()),
             field_encryption.clone(),
         );
         Self {
@@ -1209,7 +1209,7 @@ impl IngestionHarness {
                 registry,
                 successor,
                 self.lock_key,
-                self.audit_profile.clone(),
+                self.database.audit(self.audit_profile.clone()),
                 self.field_encryption.clone(),
             ),
         }
@@ -1345,7 +1345,7 @@ fn build_router(
     registry: Arc<registry_breg::CompiledRegistry>,
     identity: registry_breg::postgres::ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
-    profile: AuditProfile,
+    profile: registry_breg::audit::RegistryAudit,
     field_encryption: Option<Arc<FieldEncryptionService>>,
 ) -> axum::Router {
     let cursors = Arc::new(

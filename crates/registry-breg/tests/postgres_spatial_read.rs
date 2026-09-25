@@ -21,6 +21,7 @@ use registry_breg::api::{
     router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
     VerifiedRequestClaims,
 };
+use registry_breg::audit::RegistryAudit;
 use registry_breg::compiler::{
     compile_project, compile_project_with_assets, module_digest_with_assets, CompileProfile,
 };
@@ -33,7 +34,7 @@ use registry_breg::postgres::{
     RowBoundaryContext, RuntimePool,
 };
 use registry_breg::runtime_config::PublicOrigin;
-use registry_platform_audit::{verify_jsonl_lines_with_hasher, AuditEnvelope, AuditProfile};
+use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
 use serde_json::{json, Value};
 use tokio_postgres::Transaction;
@@ -635,7 +636,7 @@ async fn real_postgres_spatial_bbox_reads_preserve_authority_and_geojson_audit()
     );
 
     assert_pool_context_clean(&harness.pool, &harness.database.runtime_role).await;
-    assert_spatial_audit_is_minimized(&harness.database, &harness.audit_profile).await;
+    assert_spatial_audit_is_minimized(&harness.database);
     harness.cleanup().await;
 }
 
@@ -920,7 +921,7 @@ async fn malformed_acquired_geojson_fails_atomically_and_records_terminal_audit(
     assert!(!text.contains("edge-west"));
     assert!(!text.contains(SECRET_CANARY));
 
-    let records = ordered_audit_records(&harness.database, &harness.audit_profile).await;
+    let records = harness.database.audit_records();
     let new_records = &records[usize::try_from(before).expect("audit count fits usize")..];
     assert_eq!(
         new_records
@@ -971,14 +972,16 @@ async fn predicate_free_geojson_works_on_plain_postgresql_without_postgis() {
         .expect("bounded runtime pool builds");
     let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock identity is bounded");
     seed_plain_row(&database, &pool, lock_key, &identity, &compiled).await;
-    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x39; 32].into())
-        .expect("test owns a strongly keyed audit profile");
+    let audit = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x39; 32].into())
+            .expect("test owns a strongly keyed audit profile"),
+    );
     let app = read_router(
         pool,
         compiled,
         identity,
         lock_key,
-        audit_profile,
+        audit,
         None,
         None,
         cursor_codec(),
@@ -1028,7 +1031,7 @@ struct SpatialHarness {
     lock_key: RegistryLockKey,
     compiled: Arc<registry_breg::CompiledRegistry>,
     identity: registry_breg::postgres::ExpectedRegistryIdentity,
-    audit_profile: AuditProfile,
+    audit: RegistryAudit,
 }
 
 impl SpatialHarness {
@@ -1068,15 +1071,17 @@ impl SpatialHarness {
             .build_pool()
             .expect("bounded runtime pool builds");
         let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock identity is bounded");
-        let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x5d; 32].into())
-            .expect("test owns a strongly keyed audit profile");
+        let audit = database.audit(
+            AuditProfile::production_from_secret_bytes(vec![0x5d; 32].into())
+                .expect("test owns a strongly keyed audit profile"),
+        );
         Self {
             database,
             pool,
             lock_key,
             compiled,
             identity,
-            audit_profile,
+            audit,
         }
     }
 
@@ -1102,7 +1107,7 @@ impl SpatialHarness {
             self.compiled.clone(),
             self.identity.clone(),
             self.lock_key,
-            self.audit_profile.clone(),
+            self.audit.clone(),
             fault,
             Some(query_plan),
             cursors,
@@ -1124,7 +1129,7 @@ impl SpatialHarness {
             self.compiled.clone(),
             self.identity.clone(),
             self.lock_key,
-            self.audit_profile.clone(),
+            self.audit.clone(),
             fault,
             None,
             cursors,
@@ -1144,7 +1149,7 @@ fn read_router(
     registry: Arc<registry_breg::CompiledRegistry>,
     identity: registry_breg::postgres::ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
-    profile: AuditProfile,
+    audit: RegistryAudit,
     fault: Option<ReadFaultPoint>,
     query_plan: Option<Arc<Mutex<Vec<Value>>>>,
     cursors: Arc<CursorCodec>,
@@ -1160,7 +1165,7 @@ fn read_router(
         identity,
         lock_key,
         Duration::from_secs(2),
-        profile,
+        audit,
         cursors.clone(),
     );
     if let Some(fault) = fault {
@@ -1289,7 +1294,7 @@ async fn assert_spatial_budget_refusal(
     assert!(!text.contains("budget-a"));
     assert!(!text.contains("notes"));
 
-    let records = ordered_audit_records(&harness.database, &harness.audit_profile).await;
+    let records = harness.database.audit_records();
     let new_records = &records[usize::try_from(before).expect("audit count fits usize")..];
     assert_eq!(
         new_records
@@ -2100,16 +2105,11 @@ fn immediately_expiring_cursor_codec() -> Arc<CursorCodec> {
 }
 
 async fn audit_count(database: &TestDatabase) -> i64 {
-    database
-        .admin
-        .query_one("SELECT count(*) FROM registry_internal.registry_audit", &[])
-        .await
-        .expect("administrator can inspect audit count")
-        .get(0)
+    i64::try_from(database.audit_entries().len()).expect("audit count fits i64")
 }
 
-async fn assert_spatial_audit_is_minimized(database: &TestDatabase, profile: &AuditProfile) {
-    let records = ordered_audit_records(database, profile).await;
+fn assert_spatial_audit_is_minimized(database: &TestDatabase) {
+    let records = database.audit_records();
     assert!(
         records.iter().any(|record| {
             record["phase"] == "attempt" && record["operationId"] == "records.service-site.list"
@@ -2155,50 +2155,6 @@ async fn assert_spatial_audit_is_minimized(database: &TestDatabase, profile: &Au
     ] {
         assert!(!text.contains(canary), "audit leaked {canary}");
     }
-}
-
-async fn ordered_audit_records(database: &TestDatabase, profile: &AuditProfile) -> Vec<Value> {
-    ordered_audit_envelopes(database, profile)
-        .await
-        .into_iter()
-        .map(|envelope| envelope.record)
-        .collect()
-}
-
-async fn ordered_audit_envelopes(
-    database: &TestDatabase,
-    profile: &AuditProfile,
-) -> Vec<AuditEnvelope> {
-    let rows = database
-        .admin
-        .query("SELECT envelope FROM registry_internal.registry_audit", &[])
-        .await
-        .expect("administrator can inspect audit envelopes");
-    let mut envelopes = rows
-        .iter()
-        .map(|row| {
-            serde_json::from_slice::<AuditEnvelope>(&row.get::<_, Vec<u8>>(0))
-                .expect("audit envelope is canonical platform JSON")
-        })
-        .collect::<Vec<_>>();
-    let mut ordered = Vec::with_capacity(envelopes.len());
-    let mut predecessor = None;
-    while !envelopes.is_empty() {
-        let position = envelopes
-            .iter()
-            .position(|envelope| envelope.prev_hash == predecessor)
-            .expect("database audit chain has one next envelope");
-        let envelope = envelopes.remove(position);
-        predecessor = Some(envelope.record_hash);
-        ordered.push(envelope);
-    }
-    let audit_lines = ordered
-        .iter()
-        .map(|envelope| serde_json::to_string(envelope).expect("audit envelope serializes"))
-        .collect::<Vec<_>>();
-    verify_jsonl_lines_with_hasher(audit_lines.iter(), &profile.chain_hasher())
-        .expect("database audit envelopes form one keyed platform chain");
-    ordered
 }
 
 fn quote_identifier(value: &str) -> String {

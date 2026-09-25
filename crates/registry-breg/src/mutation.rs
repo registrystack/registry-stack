@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use deadpool_postgres::Client;
-use registry_platform_audit::AuditProfile;
+use registry_platform_audit::{AuditEntry, AuditProfile};
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_crypto::field_encryption::{
     envelope_member_json, FieldCryptoError, MAX_FIELD_PLAINTEXT_BYTES,
@@ -29,9 +29,9 @@ use uuid::Uuid;
 
 use crate::artifacts::event_data_schema_binding;
 use crate::audit::{
-    append_action_terminal_audit, append_terminal_audit, profile_is_keyed,
-    record_action_pre_io_audit, record_pre_io_audit, PreIoAudit, PreIoAuditKind,
-    RegistryAuditError, TerminalAudit, TerminalAuditOutcome,
+    action_terminal_entry, profile_is_keyed, record_action_pre_io_audit, record_pre_io_audit,
+    terminal_entry, PreIoAudit, PreIoAuditKind, RegistryAudit, RegistryAuditError, TerminalAudit,
+    TerminalAuditOutcome,
 };
 use crate::compiler::{
     WEBHOOK_ATTEMPT_TIMEOUT_MS, WEBHOOK_BACKOFF_MULTIPLIER, WEBHOOK_INITIAL_BACKOFF_MS,
@@ -140,17 +140,8 @@ pub async fn install_mutation_schema(
 
     migration
         .batch_execute(&format!(
-            "CREATE TABLE IF NOT EXISTS registry_internal.registry_audit (
-                 envelope_id text PRIMARY KEY CHECK (envelope_id <> ''),
-                 record_hash bytea NOT NULL UNIQUE CHECK (octet_length(record_hash) = 32),
-                 envelope bytea NOT NULL
-                     CHECK (octet_length(envelope) > 0 AND octet_length(envelope) <= 65536),
-                 created_at timestamptz NOT NULL DEFAULT transaction_timestamp()
-             );
-             CREATE TABLE IF NOT EXISTS registry_internal.registry_audit_head (
-                 singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
-                 last_hash bytea CHECK (last_hash IS NULL OR octet_length(last_hash) = 32)
-             );
+            "DROP TABLE IF EXISTS registry_internal.registry_audit,
+                 registry_internal.registry_audit_head;
              CREATE TABLE IF NOT EXISTS registry_internal.registry_idempotency (
                  key_reference text PRIMARY KEY CHECK (key_reference <> ''),
                  binding_reference text NOT NULL CHECK (binding_reference <> ''),
@@ -238,8 +229,6 @@ pub async fn install_mutation_schema(
                  registry_internal.registry_outbox,
                  registry_internal.registry_webhook_deliveries,
                  registry_internal.registry_webhook_delivery_state,
-                 registry_internal.registry_audit,
-                 registry_internal.registry_audit_head,
                  registry_internal.registry_idempotency,
                  registry_internal.registry_immediate_action_results,
                  registry_internal.registry_immediate_action_applications FROM PUBLIC;",
@@ -386,15 +375,12 @@ pub async fn install_mutation_schema(
                  registry_internal.registry_outbox,
                  registry_internal.registry_webhook_deliveries,
                  registry_internal.registry_webhook_delivery_state,
-                 registry_internal.registry_audit,
-                 registry_internal.registry_audit_head,
                  registry_internal.registry_idempotency,
                  registry_internal.registry_immediate_action_results,
                  registry_internal.registry_immediate_action_applications FROM \"{role}\";
              GRANT SELECT, INSERT ON registry_internal.registry_revisions,
                  registry_internal.registry_outbox,
                  registry_internal.registry_webhook_deliveries,
-                 registry_internal.registry_audit,
                  registry_internal.registry_idempotency,
                  registry_internal.registry_immediate_action_results,
                  registry_internal.registry_immediate_action_applications TO \"{role}\";
@@ -403,7 +389,6 @@ pub async fn install_mutation_schema(
              GRANT UPDATE (payload) ON registry_internal.registry_outbox TO \"{role}\";
              GRANT SELECT, INSERT, UPDATE
                  ON registry_internal.registry_webhook_delivery_state TO \"{role}\";
-             GRANT SELECT, INSERT, UPDATE ON registry_internal.registry_audit_head TO \"{role}\";
              GRANT USAGE, SELECT ON SEQUENCE registry_internal.registry_outbox_outbox_id_seq
                  TO \"{role}\";"
         ))
@@ -810,7 +795,7 @@ pub struct MutationCoordinator {
     expected: ExpectedRegistryIdentity,
     attachment_storage: crate::attachment_storage::AttachmentStorage,
     attachment_verification: crate::attachment_verification::AttachmentVerification,
-    audit_profile: AuditProfile,
+    audit: RegistryAudit,
     event_destinations: Option<Arc<ActivatedEventDestinationRegistry>>,
     task_status: Option<Arc<dyn crate::task_grant::TaskGrantStatusChecker>>,
     field_encryption: Option<Arc<FieldEncryptionService>>,
@@ -828,9 +813,9 @@ impl MutationCoordinator {
         lock_key: RegistryLockKey,
         lock_timeout: Duration,
         expected: ExpectedRegistryIdentity,
-        audit_profile: AuditProfile,
+        audit: RegistryAudit,
     ) -> Self {
-        Self::new_with_event_destinations(lock_key, lock_timeout, expected, audit_profile, None)
+        Self::new_with_event_destinations(lock_key, lock_timeout, expected, audit, None)
     }
 
     #[must_use]
@@ -838,7 +823,7 @@ impl MutationCoordinator {
         lock_key: RegistryLockKey,
         lock_timeout: Duration,
         expected: ExpectedRegistryIdentity,
-        audit_profile: AuditProfile,
+        audit: RegistryAudit,
         event_destinations: Option<Arc<ActivatedEventDestinationRegistry>>,
     ) -> Self {
         Self {
@@ -847,7 +832,7 @@ impl MutationCoordinator {
             expected,
             attachment_storage: Default::default(),
             attachment_verification: Default::default(),
-            audit_profile,
+            audit,
             event_destinations,
             task_status: None,
             field_encryption: None,
@@ -954,12 +939,12 @@ impl MutationCoordinator {
             tx,
             &request.plan.entity,
             request.claims,
-            &self.audit_profile,
+            self.audit.profile(),
             &self.expected.database_id,
         )
         .await?;
         let binding = resolve_binding(
-            &self.audit_profile,
+            self.audit.profile(),
             &IdempotencyBinding {
                 key: request.idempotency_key,
                 context: request.claims,
@@ -974,7 +959,7 @@ impl MutationCoordinator {
         )?;
         let stored = lock_and_load(tx, &binding).await?;
         let actor = request_actor_reference(
-            &self.audit_profile,
+            self.audit.profile(),
             &self.expected.database_id,
             request.claims,
         )?;
@@ -992,7 +977,7 @@ impl MutationCoordinator {
         .await?;
         if stored.is_none() {
             let etag = strong_record_etag_for_representation(
-                &self.audit_profile,
+                self.audit.profile(),
                 request.claims,
                 &self.expected.package_revision,
                 &current.record_id,
@@ -1079,13 +1064,13 @@ impl MutationCoordinator {
         request: &MutationRequest<'_>,
         fault: FaultControl,
     ) -> Result<MutationOutcome, MutationError> {
-        if !profile_is_keyed(&self.audit_profile) {
+        if !profile_is_keyed(self.audit.profile()) {
             return Err(MutationError::Unavailable);
         }
         let normalized_body = match normalize_mutation_body(&request.plan.entity, &request.body) {
             Ok(body) => body,
             Err(error) => {
-                self.record_boundary_audit(client, request, PreIoAuditKind::Refusal)
+                self.record_boundary_audit(request, PreIoAuditKind::Refusal)
                     .await?;
                 return Err(error);
             }
@@ -1102,20 +1087,20 @@ impl MutationCoordinator {
             correlation: request.correlation.clone(),
         };
         if let Err(error) = validate_request(&request, &self.expected) {
-            self.record_boundary_audit(client, &request, PreIoAuditKind::Refusal)
+            self.record_boundary_audit(&request, PreIoAuditKind::Refusal)
                 .await?;
             return Err(error);
         }
-        self.record_boundary_audit(client, &request, PreIoAuditKind::Attempt)
+        self.record_boundary_audit(&request, PreIoAuditKind::Attempt)
             .await?;
         if let Err(error) = self.stage_attachment(client, &request).await {
-            self.record_boundary_audit(client, &request, PreIoAuditKind::Refusal)
+            self.record_boundary_audit(&request, PreIoAuditKind::Refusal)
                 .await?;
             return Err(error);
         }
         let result = self.execute_after_attempt(client, &request, fault).await;
         if result.is_err() && !fault.is_enabled() {
-            self.record_boundary_audit(client, &request, PreIoAuditKind::Refusal)
+            self.record_boundary_audit(&request, PreIoAuditKind::Refusal)
                 .await?;
         }
         // The retry distinction belongs to request actions. Ordinary mutations
@@ -1132,13 +1117,13 @@ impl MutationCoordinator {
         request: &BatchMutationRequest<'_>,
         fault: FaultControl,
     ) -> Result<MutationOutcome, MutationError> {
-        if !profile_is_keyed(&self.audit_profile) {
+        if !profile_is_keyed(self.audit.profile()) {
             return Err(MutationError::Unavailable);
         }
         let normalized_items = match normalize_batch_items(&request.plan.entity, &request.items) {
             Ok(items) => items,
             Err(error) => {
-                self.record_batch_boundary_audit(client, request, PreIoAuditKind::Refusal)
+                self.record_batch_boundary_audit(request, PreIoAuditKind::Refusal)
                     .await?;
                 return Err(error);
             }
@@ -1155,17 +1140,17 @@ impl MutationCoordinator {
             ingestion: request.ingestion,
         };
         if let Err(error) = validate_batch_request(&request, &self.expected) {
-            self.record_batch_boundary_audit(client, &request, PreIoAuditKind::Refusal)
+            self.record_batch_boundary_audit(&request, PreIoAuditKind::Refusal)
                 .await?;
             return Err(error);
         }
-        self.record_batch_boundary_audit(client, &request, PreIoAuditKind::Attempt)
+        self.record_batch_boundary_audit(&request, PreIoAuditKind::Attempt)
             .await?;
         let result = self
             .execute_batch_after_attempt(client, &request, fault)
             .await;
         if result.is_err() && !fault.is_enabled() {
-            self.record_batch_boundary_audit(client, &request, PreIoAuditKind::Refusal)
+            self.record_batch_boundary_audit(&request, PreIoAuditKind::Refusal)
                 .await?;
         }
         result.map_err(|error| match error {
@@ -1176,17 +1161,13 @@ impl MutationCoordinator {
 
     async fn record_batch_boundary_audit(
         &self,
-        client: &mut Client,
         request: &BatchMutationRequest<'_>,
         kind: PreIoAuditKind,
     ) -> Result<(), MutationError> {
         record_pre_io_audit(
-            client,
-            self.lock_key,
-            self.lock_timeout,
+            &self.audit,
             &self.expected,
             request.claims,
-            &self.audit_profile,
             PreIoAudit {
                 kind,
                 method: request.plan.route.method,
@@ -1202,17 +1183,13 @@ impl MutationCoordinator {
 
     async fn record_boundary_audit(
         &self,
-        client: &mut Client,
         request: &MutationRequest<'_>,
         kind: PreIoAuditKind,
     ) -> Result<(), MutationError> {
         record_pre_io_audit(
-            client,
-            self.lock_key,
-            self.lock_timeout,
+            &self.audit,
             &self.expected,
             request.claims,
-            &self.audit_profile,
             PreIoAudit {
                 kind,
                 method: request.plan.route.method,
@@ -1234,7 +1211,7 @@ impl MutationCoordinator {
     ) -> Result<MutationOutcome, MutationError> {
         let canonical_request_digest = canonical_request_digest(request)?;
         let binding = resolve_binding(
-            &self.audit_profile,
+            self.audit.profile(),
             &IdempotencyBinding {
                 key: request.idempotency_key,
                 context: request.claims,
@@ -1260,7 +1237,7 @@ impl MutationCoordinator {
             transaction.transaction(),
             &request.plan.entity,
             request.claims,
-            &self.audit_profile,
+            self.audit.profile(),
             &self.expected.database_id,
         )
         .await?;
@@ -1269,7 +1246,7 @@ impl MutationCoordinator {
         let mut attachment_version = None;
         if matches!(&request.body, MutationBody::Attachment(_)) {
             let actor = request_actor_reference(
-                &self.audit_profile,
+                self.audit.profile(),
                 &self.expected.database_id,
                 request.claims,
             )?;
@@ -1357,9 +1334,8 @@ impl MutationCoordinator {
             if !matches!(&stored.metadata, StoredResultMetadata::Record { .. }) {
                 return Err(MutationError::Unavailable);
             }
-            append_mutation_terminal_audit(
-                transaction.transaction(),
-                &self.audit_profile,
+            let entry = mutation_terminal_entry(
+                self.audit.profile(),
                 TerminalAudit {
                     grant: request.claims.grant_audit().cloned(),
                     outcome: TerminalAuditOutcome::Replayed,
@@ -1393,12 +1369,12 @@ impl MutationCoordinator {
                 },
                 &request.body,
                 attachment_version,
-            )
-            .await?;
+            )?;
             transaction
                 .commit()
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
+            self.audit.append(entry).await?;
             return Ok(MutationOutcome {
                 response: stored.response,
                 replayed: true,
@@ -1415,7 +1391,7 @@ impl MutationCoordinator {
         let current = apply_current_row(
             transaction.transaction(),
             request,
-            &self.audit_profile,
+            self.audit.profile(),
             &self.expected.package_revision,
             &self.expected.database_id,
             &self.attachment_storage,
@@ -1426,7 +1402,7 @@ impl MutationCoordinator {
         let record_reference = match request.record_id {
             Some(_) => binding.record_reference.clone(),
             None => record_reference(
-                &self.audit_profile,
+                self.audit.profile(),
                 &self.expected.package_revision,
                 &current.record_id,
             )?,
@@ -1524,9 +1500,8 @@ impl MutationCoordinator {
         load_attachment_response_metadata(transaction.transaction(), request, &mut current).await?;
         let held = self.held_response(request, &current, committed.reference.to_string())?;
         fault.fail_at(MutationFaultPoint::BeforeTerminalAudit)?;
-        append_mutation_terminal_audit(
-            transaction.transaction(),
-            &self.audit_profile,
+        let entry = mutation_terminal_entry(
+            self.audit.profile(),
             TerminalAudit {
                 grant: request.claims.grant_audit().cloned(),
                 outcome: TerminalAuditOutcome::Committed,
@@ -1546,8 +1521,7 @@ impl MutationCoordinator {
             },
             &request.body,
             request_version,
-        )
-        .await?;
+        )?;
         fault.fail_at(MutationFaultPoint::BeforeIdempotency)?;
         insert_result(
             transaction.transaction(),
@@ -1574,6 +1548,7 @@ impl MutationCoordinator {
             .commit()
             .await
             .map_err(|_| MutationError::Unavailable)?;
+        self.audit.append(entry).await?;
         fault.fail_at(MutationFaultPoint::AfterCommitBeforeResponseRelease)?;
         Ok(MutationOutcome {
             response: held,
@@ -1589,7 +1564,7 @@ impl MutationCoordinator {
     ) -> Result<MutationOutcome, MutationError> {
         let canonical_request_digest = canonical_batch_request_digest(request)?;
         let binding = resolve_binding(
-            &self.audit_profile,
+            self.audit.profile(),
             &IdempotencyBinding {
                 key: request.idempotency_key,
                 context: request.claims,
@@ -1650,14 +1625,14 @@ impl MutationCoordinator {
                 let replayed = stored.chunk_digest == chunk_binding.chunk_digest
                     && stored.prefix_digest == chunk_binding.prefix_digest;
                 // A replay that still holds its receipt releases the retained
-                // batch answer a second time, so it owes the journal a
-                // disclosure record in this same transaction: the append, not
-                // a later writer, gates the release, and an unkeyed process
-                // answers an outage instead of releasing unaudited. Refusals
-                // and erased receipts below release nothing and need no
-                // record.
+                // batch answer a second time, so it owes the audit log a
+                // disclosure record, appended after this transaction commits
+                // and before the receipt leaves: the accepted append gates the
+                // release, and an unkeyed process answers an outage instead
+                // of releasing unaudited. Refusals and erased receipts below
+                // release nothing and need no record.
                 let releasing = replayed && !stored.erased && stored.receipt.is_some();
-                if releasing && !crate::audit::profile_is_keyed(&self.audit_profile) {
+                if releasing && !crate::audit::profile_is_keyed(self.audit.profile()) {
                     return Err(MutationError::Unavailable);
                 }
                 record_attempt(
@@ -1672,24 +1647,23 @@ impl MutationCoordinator {
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
-                if releasing {
-                    crate::ingestion_store::append_run_audit(
-                        transaction.transaction(),
-                        &self.audit_profile,
-                        crate::ingestion_store::receipt_disclosure_record(
-                            &run,
-                            chunk_binding.chunk_index,
-                            &run.created_principal_reference,
-                            Some(&request.correlation.request_id().to_string()),
-                        ),
+                let disclosure_record = releasing.then(|| {
+                    crate::ingestion_store::receipt_disclosure_record(
+                        &run,
+                        chunk_binding.chunk_index,
+                        &run.created_principal_reference,
+                        Some(&request.correlation.request_id().to_string()),
                     )
-                    .await
-                    .map_err(|_| MutationError::Unavailable)?;
-                }
+                });
                 transaction
                     .commit()
                     .await
                     .map_err(|_| MutationError::Unavailable)?;
+                if let Some(record) = disclosure_record {
+                    crate::ingestion_store::append_run_audit(&self.audit, record)
+                        .await
+                        .map_err(|_| MutationError::Unavailable)?;
+                }
                 if !replayed {
                     return Err(MutationError::IngestionRefusal(
                         IngestionRefusal::ChunkMismatch,
@@ -1767,23 +1741,21 @@ impl MutationCoordinator {
                 audited_run.status = IngestionRunStatus::Blocked;
                 audited_run.blocked_reason =
                     Some(crate::ingestion_store::IngestionBlockedReason::ActivePackageChanged);
-                crate::ingestion_store::append_run_audit(
-                    transaction.transaction(),
-                    &self.audit_profile,
-                    crate::ingestion_store::run_audit_record(
-                        "blocked",
-                        &audited_run,
-                        &self.expected.package_revision,
-                        &run.created_principal_reference,
-                        Some(&request.correlation.request_id().to_string()),
-                    ),
-                )
-                .await
-                .map_err(|_| MutationError::Unavailable)?;
+                let blocked_record = crate::ingestion_store::run_audit_record(
+                    "blocked",
+                    &audited_run,
+                    &self.expected.package_revision,
+                    &run.created_principal_reference,
+                    Some(&request.correlation.request_id().to_string()),
+                );
                 // The blocked marking and its audit must outlive the refusal,
-                // so the refusal returns only after an explicit commit.
+                // so the refusal returns only after an explicit commit and
+                // the accepted audit append that follows it.
                 transaction
                     .commit()
+                    .await
+                    .map_err(|_| MutationError::Unavailable)?;
+                crate::ingestion_store::append_run_audit(&self.audit, blocked_record)
                     .await
                     .map_err(|_| MutationError::Unavailable)?;
                 return Err(MutationError::IngestionRefusal(
@@ -1867,9 +1839,8 @@ impl MutationCoordinator {
             let StoredResultMetadata::Batch { result_count } = stored.metadata else {
                 return Err(MutationError::Unavailable);
             };
-            append_terminal_audit(
-                transaction.transaction(),
-                &self.audit_profile,
+            let entry = terminal_entry(
+                self.audit.profile(),
                 TerminalAudit {
                     grant: request.claims.grant_audit().cloned(),
                     outcome: TerminalAuditOutcome::Replayed,
@@ -1887,8 +1858,7 @@ impl MutationCoordinator {
                     field_set_reference: None,
                     correlation: request.correlation.clone(),
                 },
-            )
-            .await?;
+            )?;
             if let (Some(chunk_binding), Some(run)) = (request.ingestion, ingestion_run.as_ref()) {
                 // An idempotent replay under a run still owes the checkpoint
                 // its row, so the receipt and the checkpoint cannot diverge
@@ -1918,6 +1888,7 @@ impl MutationCoordinator {
                 .commit()
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
+            self.audit.append(entry).await?;
             return Ok(MutationOutcome {
                 response: stored.response,
                 replayed: true,
@@ -1954,7 +1925,7 @@ impl MutationCoordinator {
             let current = apply_current_row(
                 transaction.transaction(),
                 &item_request,
-                &self.audit_profile,
+                self.audit.profile(),
                 &self.expected.package_revision,
                 &self.expected.database_id,
                 &self.attachment_storage,
@@ -1963,7 +1934,7 @@ impl MutationCoordinator {
             )
             .await?;
             let record_reference = record_reference(
-                &self.audit_profile,
+                self.audit.profile(),
                 &self.expected.package_revision,
                 &current.record_id,
             )?;
@@ -2081,9 +2052,8 @@ impl MutationCoordinator {
             )]),
         )?;
         fault.fail_at(MutationFaultPoint::BeforeTerminalAudit)?;
-        append_terminal_audit(
-            transaction.transaction(),
-            &self.audit_profile,
+        let entry = terminal_entry(
+            self.audit.profile(),
             TerminalAudit {
                 grant: request.claims.grant_audit().cloned(),
                 outcome: TerminalAuditOutcome::Committed,
@@ -2101,8 +2071,7 @@ impl MutationCoordinator {
                 field_set_reference: None,
                 correlation: request.correlation.clone(),
             },
-        )
-        .await?;
+        )?;
         fault.fail_at(MutationFaultPoint::BeforeIdempotency)?;
         insert_result(
             transaction.transaction(),
@@ -2121,6 +2090,7 @@ impl MutationCoordinator {
             )
             .await?;
         }
+        let mut run_record = None;
         if let (Some(chunk_binding), Some(run)) = (request.ingestion, ingestion_run.as_ref()) {
             // The chunk receipt, its record links, and the checkpoint advance
             // join the mutation transaction itself, so the committed prefix
@@ -2151,25 +2121,25 @@ impl MutationCoordinator {
             if audited_run.next_chunk_index == run.chunk_count {
                 audited_run.status = IngestionRunStatus::Complete;
             }
-            crate::ingestion_store::append_run_audit(
-                transaction.transaction(),
-                &self.audit_profile,
-                crate::ingestion_store::run_audit_record(
-                    "committed",
-                    &audited_run,
-                    &self.expected.package_revision,
-                    &chunk_binding.created_principal_reference,
-                    Some(&request.correlation.request_id().to_string()),
-                ),
-            )
-            .await
-            .map_err(|_| MutationError::Unavailable)?;
+            run_record = Some(crate::ingestion_store::run_audit_record(
+                "committed",
+                &audited_run,
+                &self.expected.package_revision,
+                &chunk_binding.created_principal_reference,
+                Some(&request.correlation.request_id().to_string()),
+            ));
         }
         fault.fail_at(MutationFaultPoint::BeforeCommit)?;
         transaction
             .commit()
             .await
             .map_err(|_| MutationError::Unavailable)?;
+        self.audit.append(entry).await?;
+        if let Some(record) = run_record {
+            crate::ingestion_store::append_run_audit(&self.audit, record)
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+        }
         fault.fail_at(MutationFaultPoint::AfterCommitBeforeResponseRelease)?;
         Ok(MutationOutcome {
             response: held,
@@ -2189,7 +2159,7 @@ impl MutationCoordinator {
             &request.response_fields,
         )?;
         let etag = strong_record_etag(
-            &self.audit_profile,
+            self.audit.profile(),
             request.claims,
             &self.expected.package_revision,
             &current.record_id,
@@ -2235,7 +2205,7 @@ impl MutationCoordinator {
         )
         .map_err(|_| MutationError::Unavailable)?;
         let etag = strong_record_etag_for_representation(
-            &self.audit_profile,
+            self.audit.profile(),
             request.claims,
             &self.expected.package_revision,
             &current.record_id,
@@ -3845,24 +3815,23 @@ fn selected_profile<'a>(
     Ok(profile)
 }
 
-async fn append_mutation_terminal_audit(
-    transaction: &Transaction<'_>,
+/// Build the `response` entry for one mutation. The caller appends it after
+/// the mutation transaction commits and before the response is released.
+fn mutation_terminal_entry(
     profile: &AuditProfile,
     terminal: TerminalAudit,
     body: &MutationBody,
     version: Option<i64>,
-) -> Result<(), RegistryAuditError> {
+) -> Result<AuditEntry, RegistryAuditError> {
     if let MutationBody::Attachment(attachment) = body {
-        crate::audit::append_attachment_terminal_audit(
-            transaction,
+        crate::audit::attachment_terminal_entry(
             profile,
             terminal,
             &attachment.slot_id,
             version.ok_or(RegistryAuditError::InvalidContext)?,
         )
-        .await
     } else {
-        append_terminal_audit(transaction, profile, terminal).await
+        terminal_entry(profile, terminal)
     }
 }
 

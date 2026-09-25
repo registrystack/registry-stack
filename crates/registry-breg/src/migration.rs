@@ -741,7 +741,6 @@ pub async fn apply_verified_package(
                     migration_role: request.roles.migration,
                     runtime_role: request.roles.runtime,
                 },
-                None,
             )
             .await
             .is_err()
@@ -769,7 +768,6 @@ pub async fn apply_verified_package(
                     migration_role: request.roles.migration,
                     runtime_role: request.roles.runtime,
                 },
-                None,
             )
             .await
             .is_ok()
@@ -819,7 +817,6 @@ pub async fn apply_verified_package(
                 migration_role: request.roles.migration,
                 runtime_role: request.roles.runtime,
             },
-            None,
         )
         .await;
     if activation_result.is_err() {

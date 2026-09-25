@@ -4059,6 +4059,12 @@ impl EventDestinationCompatibilityFixture {
         registry: &registry_breg::CompiledRegistry,
         path: &str,
     ) -> EventDestinationCompatibilityInventory {
+        let audit_path = self
+            .secret_root
+            .with_file_name("audit")
+            .join("audit.jsonl")
+            .display()
+            .to_string();
         let raw = format!(
             r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
 kind: BRegRuntimeConfig
@@ -4113,6 +4119,7 @@ authentication:
     purpose: registry_purpose
 audit:
   hashKeyRef: secret:file/audit-key
+  path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
   maxAgeSeconds: 300

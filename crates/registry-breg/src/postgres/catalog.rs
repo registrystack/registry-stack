@@ -159,14 +159,6 @@ impl ExpectedManagedCatalog {
                 &["INSERT", "SELECT"][..],
             ),
             (
-                "registry_internal.registry_audit",
-                &["INSERT", "SELECT"][..],
-            ),
-            (
-                "registry_internal.registry_audit_head",
-                &["INSERT", "SELECT", "UPDATE"][..],
-            ),
-            (
                 "registry_internal.registry_idempotency",
                 &["INSERT", "SELECT"][..],
             ),
@@ -208,6 +200,19 @@ impl ExpectedManagedCatalog {
             std::iter::empty::<&str>(),
             Some((false, false)),
         );
+        // History maintenance facts. Only the migration authority reads or
+        // writes them, in the commit of the maintenance step they record.
+        for name in [
+            "registry_internal.registry_history_erasure_coverage",
+            "registry_internal.registry_field_encryption_lifecycle_progress",
+        ] {
+            catalog.table(
+                name,
+                std::iter::empty::<&str>(),
+                std::iter::empty::<&str>(),
+                Some((false, false)),
+            );
+        }
         // Runtime workers scrub retained webhook payload bytes after delivery
         // or expiry without widening update access to outbox identity columns.
         catalog.column_privilege(

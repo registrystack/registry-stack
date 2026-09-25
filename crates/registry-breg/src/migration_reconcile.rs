@@ -14,7 +14,7 @@
 //! and it compares the live managed catalog with the exact verification an
 //! activation performs. Execution performs only the one transition the
 //! assessment named, through the same interlock an apply uses, and records it
-//! in the chained audit journal inside the transition's own transaction.
+//! in the audit journal once the transition's own transaction commits.
 //!
 //! This is not a repair tool. It never writes DDL, never edits catalog
 //! objects, never rewrites a ledger row, and never decides that a mismatched
@@ -24,8 +24,11 @@
 
 use std::time::Duration;
 
-use registry_platform_audit::{AuditChainHasher, AuditKeyHasher, AuditProfile};
+use registry_platform_audit::AuditEntry;
 use serde_json::json;
+
+use crate::audit::RegistryAudit;
+use crate::history_maintenance::profile_is_keyed;
 
 use crate::migration::{
     compiler_statement_checksums, package_ledger_entry, target_package_identity,
@@ -34,16 +37,17 @@ use crate::migration::{
 use crate::model::CompiledRegistry;
 use crate::package::VerifiedPackage;
 use crate::postgres::{
-    ConnectionConfig, ExpectedManagedCatalog, ExpectedRegistryIdentity, MaintenanceAuditRecord,
-    MaintenanceSnapshot, MaintenanceTransition, MigrationLedgerEntry, MigrationPlanKind,
-    PostgresKernelError, RegistryLockKey, ReviewedMigrationProgress, SqlIdentifier,
-    VerifiedPackageApplyConnection,
+    ConnectionConfig, ExpectedManagedCatalog, ExpectedRegistryIdentity, MaintenanceSnapshot,
+    MaintenanceTransition, MigrationLedgerEntry, MigrationPlanKind, PostgresKernelError,
+    RegistryLockKey, ReviewedMigrationProgress, SqlIdentifier, VerifiedPackageApplyConnection,
 };
 
 const MAX_LOCK_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_STATEMENT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const MAX_OPERATOR_REFERENCE_BYTES: usize = 512;
 const AUDIT_OPERATION_ID: &str = "migration-reconcile-maintenance";
+/// The audit schema of the reconciliation entry.
+pub const MIGRATION_RECONCILE_AUDIT_SCHEMA: &str = "breg-migration-reconcile-audit/v2";
 
 /// Why a pinned target can be neither completed nor abandoned. Every reason is
 /// a fixed sentence: no database or package value crosses this boundary.
@@ -89,7 +93,7 @@ pub struct ReconcileRequest<'a> {
     pub migration_role: &'a SqlIdentifier,
     pub runtime_role: &'a SqlIdentifier,
     pub timeouts: ReconcileTimeouts,
-    pub audit_profile: &'a AuditProfile,
+    pub audit: &'a RegistryAudit,
     pub operator_reference: &'a str,
     /// Perform the single safe transition the assessment names. Assessment
     /// alone writes nothing.
@@ -336,7 +340,7 @@ async fn reconcile_under_lock(
     }
     match report.outcome {
         ReconcileOutcome::Completable => {
-            let audit = audit_record(request, target, ledger, "completed", &report)?;
+            let entry = audit_entry(request, target, ledger, "completed", &report)?;
             connection
                 .activate_verified_package(
                     Some(request.current),
@@ -347,12 +351,12 @@ async fn reconcile_under_lock(
                         migration_role: request.migration_role,
                         runtime_role: request.runtime_role,
                     },
-                    Some(audit),
                 )
                 .await?;
+            append_after_commit(request.audit, entry).await?;
         }
         ReconcileOutcome::Revertible => {
-            let audit = audit_record(request, target, ledger, "reverted", &report)?;
+            let entry = audit_entry(request, target, ledger, "reverted", &report)?;
             connection
                 .revert_failed_package(
                     request.current,
@@ -363,9 +367,9 @@ async fn reconcile_under_lock(
                         migration_role: request.migration_role,
                         runtime_role: request.runtime_role,
                     },
-                    audit,
                 )
                 .await?;
+            append_after_commit(request.audit, entry).await?;
         }
         outcome @ (ReconcileOutcome::Ready
         | ReconcileOutcome::InProgress
@@ -410,17 +414,32 @@ fn unresolvable_reason(progress: Option<ReviewedMigrationProgress>) -> &'static 
     }
 }
 
+/// Append the reconciliation's entry after its transition committed. A
+/// refused entry reports the reconciliation unavailable even though the
+/// transition is durable; a rerun then finds the Registry ready.
+async fn append_after_commit(
+    audit: &RegistryAudit,
+    entry: AuditEntry,
+) -> Result<(), ReconcileError> {
+    audit
+        .append(entry)
+        .await
+        .map_err(|_| ReconcileError::Unavailable)
+}
+
 /// Records identities, the plan shape, and counts. The operator's reference is
-/// a keyed hash, and no catalog, package, or record value is written.
-fn audit_record<'a>(
-    request: &ReconcileRequest<'a>,
+/// a keyed hash, and no catalog, package, or record value is written. The
+/// entry is correlated by the target package revision it resolves.
+fn audit_entry(
+    request: &ReconcileRequest<'_>,
     target: &ExpectedRegistryIdentity,
     ledger: &MigrationLedgerEntry,
     action: &'static str,
     report: &ReconcileReport,
-) -> Result<MaintenanceAuditRecord<'a>, ReconcileError> {
+) -> Result<AuditEntry, ReconcileError> {
     let operator_reference = request
-        .audit_profile
+        .audit
+        .profile()
         .key_hasher()
         .audit_reference_hash(
             "breg-migration-reconcile-operator-v1",
@@ -428,10 +447,10 @@ fn audit_record<'a>(
             request.operator_reference,
         )
         .map_err(|_| ReconcileError::InvalidInput)?;
-    Ok(MaintenanceAuditRecord {
-        profile: request.audit_profile,
-        record: json!({
-            "schema": "breg-migration-reconcile-audit/v1",
+    Ok(AuditEntry::response(
+        MIGRATION_RECONCILE_AUDIT_SCHEMA,
+        target.package_revision.clone(),
+        json!({
             "phase": "terminal",
             "outcome": "committed",
             "operationId": AUDIT_OPERATION_ID,
@@ -447,7 +466,7 @@ fn audit_record<'a>(
             "targetCatalogVerified": report.target_catalog_finding.is_none(),
             "activeCatalogVerified": report.active_catalog_finding.is_none(),
         }),
-    })
+    ))
 }
 
 fn validate_request(request: &ReconcileRequest<'_>) -> Result<(), ReconcileError> {
@@ -455,16 +474,11 @@ fn validate_request(request: &ReconcileRequest<'_>) -> Result<(), ReconcileError
     if request.operator_reference.is_empty()
         || request.operator_reference.len() > MAX_OPERATOR_REFERENCE_BYTES
         || request.operator_reference.chars().any(char::is_control)
-        || !profile_is_keyed(request.audit_profile)
+        || !profile_is_keyed(request.audit.profile())
     {
         return Err(ReconcileError::InvalidInput);
     }
     Ok(())
-}
-
-fn profile_is_keyed(profile: &AuditProfile) -> bool {
-    matches!(profile.chain_hasher(), AuditChainHasher::Keyed(_))
-        && matches!(profile.key_hasher(), AuditKeyHasher::Keyed(_))
 }
 
 #[cfg(test)]

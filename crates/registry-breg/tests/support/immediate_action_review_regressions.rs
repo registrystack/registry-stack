@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use registry_platform_audit::AuditEnvelope;
 use tokio_postgres::error::SqlState;
 
 const LOCK_RECORD_X: &str = "00000000-0000-4000-8000-000000000301";
@@ -166,7 +165,9 @@ async fn condition_read_terminal_audit_gates_metadata_and_stays_minimized() {
         );
     }
 
-    install_condition_terminal_audit_failure(&database).await;
+    database
+        .audit_capture()
+        .fail_on(registry_breg::audit::AUDIT_SCHEMA, "terminal");
     let before_failure = action_counts(&database, &registry).await;
     let failed = response_parts(
         send(
@@ -207,19 +208,19 @@ async fn condition_read_terminal_audit_gates_metadata_and_stays_minimized() {
         }),
         "the failed condition read keeps its durable attempt audit"
     );
-    let refusal = after_records
-        .iter()
-        .find(|record| {
-            record["phase"] == "refusal"
-                && record["operationId"] == "actions.register-household-contact.target_conditions"
-        })
-        .expect("the failed condition read records a value-free refusal audit");
-    assert_eq!(refusal["actionId"], "register-household-contact");
-    assert_eq!(refusal["selectedAccessProfile"], "contact-registrar");
-    assert!(refusal.get("recordReference").is_none());
-    assert!(refusal.get("recordRevision").is_none());
-    assert!(!refusal.to_string().contains(HOUSEHOLD_ID));
-    assert!(!refusal.to_string().contains("ifMatch"));
+    assert!(
+        !after_records
+            .iter()
+            .any(|record| record["phase"] == "refusal"),
+        "a refused terminal entry leaves the writer failed, so no later entry is accepted"
+    );
+    assert!(
+        !after_records.iter().any(|record| {
+            let text = record.to_string();
+            text.contains(HOUSEHOLD_ID) || text.contains("ifMatch")
+        }),
+        "no accepted condition-read entry carries the target or its validator"
+    );
     assert_eq!(
         after_records
             .iter()
@@ -230,7 +231,7 @@ async fn condition_read_terminal_audit_gates_metadata_and_stays_minimized() {
             })
             .count(),
         1,
-        "the rejected terminal audit insert is rolled back rather than leaking a partial terminal record"
+        "the refused terminal entry is never accepted, so only the earlier terminal remains"
     );
     database.cleanup().await;
 }
@@ -1343,48 +1344,6 @@ fn uuid_from_chunks(chunks: [i64; 4]) -> Uuid {
     .expect("captured retry chunks reconstruct a UUID")
 }
 
-async fn install_condition_terminal_audit_failure(database: &TestDatabase) {
-    database
-        .admin
-        .batch_execute(
-            "CREATE FUNCTION registry_internal.reject_condition_terminal_audit()
-             RETURNS trigger
-             LANGUAGE plpgsql
-             SECURITY DEFINER
-             SET search_path = pg_catalog, registry_internal, pg_temp
-             AS $$
-             BEGIN
-                 IF convert_from(NEW.envelope, 'UTF8') LIKE '%\"phase\":\"terminal\"%'
-                    AND convert_from(NEW.envelope, 'UTF8') LIKE '%\"operationId\":\"actions.register-household-contact.target_conditions\"%' THEN
-                     RAISE EXCEPTION 'condition terminal audit failure probe' USING ERRCODE = 'XX000';
-                 END IF;
-                 RETURN NEW;
-             END;
-             $$;
-             CREATE TRIGGER reject_condition_terminal_audit
-             BEFORE INSERT ON registry_internal.registry_audit
-             FOR EACH ROW EXECUTE FUNCTION registry_internal.reject_condition_terminal_audit();",
-        )
-        .await
-        .expect("administrator installs terminal audit failure probe");
-}
-
 async fn audit_records(database: &TestDatabase) -> Vec<Value> {
-    database
-        .admin
-        .query(
-            "SELECT envelope
-             FROM registry_internal.registry_audit
-             ORDER BY created_at, envelope_id",
-            &[],
-        )
-        .await
-        .expect("administrator inspects audit envelopes")
-        .into_iter()
-        .map(|row| {
-            serde_json::from_slice::<AuditEnvelope>(&row.get::<_, Vec<u8>>(0))
-                .expect("audit envelope is canonical platform JSON")
-                .record
-        })
-        .collect()
+    database.audit_records()
 }

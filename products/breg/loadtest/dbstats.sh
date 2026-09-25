@@ -58,7 +58,7 @@ WITH table_sizes AS (
          n_live_tup AS "liveRows",
          n_dead_tup AS "deadRows"
   FROM pg_stat_user_tables
-  WHERE strpos(relname, 'registry_audit') = 1 OR strpos(relname, 'breg_e_') = 1
+  WHERE strpos(relname, 'breg_e_') = 1
   ORDER BY pg_total_relation_size(relid) DESC
   LIMIT 20
 ), current_waits AS (
@@ -71,8 +71,7 @@ WITH table_sizes AS (
 SELECT json_build_object(
   'timestamp', clock_timestamp(),
   'currentWaits', COALESCE((SELECT json_agg(current_waits) FROM current_waits), '[]'::json),
-  'tableSizes', COALESCE((SELECT json_agg(table_sizes) FROM table_sizes), '[]'::json),
-  'auditRows', (SELECT count(*) FROM registry_internal.registry_audit)
+  'tableSizes', COALESCE((SELECT json_agg(table_sizes) FROM table_sizes), '[]'::json)
 )::jsonb::text;
 SQL
   exit 0
@@ -84,7 +83,6 @@ WITH activity AS (
   SELECT wait_event_type,
          wait_event,
          state,
-         strpos(lower(query), 'registry_audit') > 0 AS audit_query,
          cardinality(pg_blocking_pids(pid)) > 0 AS blocked
   FROM pg_stat_activity
   WHERE datname = current_database() AND pid <> pg_backend_pid()
@@ -97,7 +95,6 @@ WITH activity AS (
 )
 SELECT json_build_object(
   'timestamp', clock_timestamp(),
-  'auditLockWaiters', (SELECT count(*) FROM activity WHERE state = 'active' AND audit_query AND wait_event_type = 'Lock'),
   'lockWaiters', (SELECT count(*) FROM activity WHERE state = 'active' AND wait_event_type = 'Lock'),
   'blockedBackends', (SELECT count(*) FROM activity WHERE state = 'active' AND blocked),
   'waitEvents', COALESCE((SELECT json_agg(waits) FROM waits), '[]'::json)

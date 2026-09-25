@@ -33,8 +33,6 @@ pub mod attachment_verification;
 pub mod attachment_verification_worker;
 #[cfg(feature = "runtime")]
 pub mod audit;
-#[cfg(all(feature = "runtime", feature = "tooling"))]
-pub mod audit_tooling;
 #[cfg(feature = "runtime")]
 pub mod auth;
 pub mod change_request;

@@ -584,6 +584,11 @@ fn write_runtime_config(parent: &Path, package: &PublishedPackage, trust_anchor:
         "runtime-{}.yaml",
         TEMPORARY_COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
+    let audit_path = secret_root
+        .with_file_name("audit")
+        .join("audit.jsonl")
+        .display()
+        .to_string();
     fs::write(
         &path,
         format!(
@@ -641,6 +646,7 @@ authentication:
     purpose: registry_purpose
 audit:
   hashKeyRef: secret:file/{VALUE_CANARY}
+  path: {audit_path}
 cursor:
   secretRef: secret:file/{VALUE_CANARY}
   maxAgeSeconds: 300

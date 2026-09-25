@@ -359,8 +359,11 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
         identity,
         RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives"),
         Duration::from_secs(2),
-        AuditProfile::production_from_secret_bytes(vec![0x7c; 32].into())
-            .expect("test audit profile is keyed"),
+        registry_breg::audit::test_support::capturing(
+            AuditProfile::production_from_secret_bytes(vec![0x7c; 32].into())
+                .expect("test audit profile is keyed"),
+        )
+        .0,
     );
 
     receiver.enqueue(ResponsePlan::Status(500)).await;
@@ -862,8 +865,10 @@ fn event_authority_router(
 ) -> axum::Router {
     let pool = database.runtime_config.build_pool().expect("pool builds");
     let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
-    let audit = AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into())
-        .expect("test audit profile is keyed");
+    let audit = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into())
+            .expect("test audit profile is keyed"),
+    );
     let cursors = Arc::new(
         CursorCodec::new(Zeroizing::new(vec![0x49; 32]), Duration::from_secs(300))
             .expect("cursor codec builds"),
@@ -1076,6 +1081,12 @@ impl DestinationFixture {
         &self,
         compiled: &registry_breg::CompiledRegistry,
     ) -> ActivatedEventDestinationRegistry {
+        let audit_path = self
+            .secret_root
+            .with_file_name("audit")
+            .join("audit.jsonl")
+            .display()
+            .to_string();
         let raw = format!(
             r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
 kind: BRegRuntimeConfig
@@ -1130,6 +1141,7 @@ authentication:
     purpose: registry_purpose
 audit:
   hashKeyRef: secret:file/audit-key
+  path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
   maxAgeSeconds: 300

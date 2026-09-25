@@ -1578,21 +1578,9 @@ async fn action_refusal_audit_records_only_compiled_access_profiles() {
 
 async fn refusal_audit_records(database: &TestDatabase) -> Vec<Value> {
     database
-        .admin
-        .query(
-            "SELECT convert_from(envelope, 'UTF8')
-               FROM registry_internal.registry_audit
-              WHERE convert_from(envelope, 'UTF8') LIKE '%\"phase\":\"refusal\"%'",
-            &[],
-        )
-        .await
-        .expect("administrator inspects minimized refusal audit events")
-        .iter()
-        .map(|row| {
-            serde_json::from_str::<Value>(row.get(0)).expect("audit envelope is platform JSON")
-                ["record"]
-                .clone()
-        })
+        .audit_records()
+        .into_iter()
+        .filter(|record| record["phase"] == "refusal")
         .collect()
 }
 
@@ -1703,8 +1691,6 @@ async fn action_counts(
                    (SELECT count(*) FROM registry_data.{household_table} WHERE {contact} IS NOT NULL),
                    (SELECT count(*) FROM registry_internal.registry_revisions),
                    (SELECT count(*) FROM registry_internal.registry_outbox),
-                   (SELECT count(*) FROM registry_internal.registry_audit
-                      WHERE convert_from(envelope, 'UTF8') LIKE '%\"phase\":\"terminal\"%'),
                    (SELECT count(*) FROM registry_internal.registry_idempotency
                       WHERE result_kind = 'immediate_action'),
                    (SELECT count(*) FROM registry_internal.registry_immediate_action_applications),
@@ -1724,10 +1710,17 @@ async fn action_counts(
         contacted_households: row.get(2),
         revisions: row.get(3),
         outbox: row.get(4),
-        terminal_audit: row.get(5),
-        idempotency: row.get(6),
-        applications: row.get(7),
-        results: row.get(8),
+        terminal_audit: i64::try_from(
+            database
+                .audit_records()
+                .iter()
+                .filter(|record| record["phase"] == "terminal")
+                .count(),
+        )
+        .expect("terminal audit count fits i64"),
+        idempotency: row.get(5),
+        applications: row.get(6),
+        results: row.get(7),
     }
 }
 
@@ -1790,17 +1783,15 @@ async fn outbox_count_for_entity(database: &TestDatabase, entity_id: &str) -> i6
 }
 
 async fn action_terminal_application_audit_count(database: &TestDatabase) -> i64 {
-    database
-        .admin
-        .query_one(
-            "SELECT count(*) FROM registry_internal.registry_audit
-              WHERE convert_from(envelope, 'UTF8') LIKE '%\"applicationReference\"%'
-                AND convert_from(envelope, 'UTF8') LIKE '%\"actionId\"%'",
-            &[],
-        )
-        .await
-        .expect("administrator counts action application audit references")
-        .get(0)
+    let count = database
+        .audit_entries()
+        .iter()
+        .map(Value::to_string)
+        .filter(|entry| {
+            entry.contains("\"applicationReference\"") && entry.contains("\"actionId\"")
+        })
+        .count();
+    i64::try_from(count).expect("application audit count fits i64")
 }
 
 async fn bump_household_revision_same_boundary(
@@ -2101,8 +2092,10 @@ fn action_router_with_fault_and_timeout(
         .runtime_config
         .build_pool()
         .expect("bounded runtime pool builds");
-    let profile = AuditProfile::production_from_secret_bytes(vec![0x42; 32].into())
-        .expect("test owns a keyed audit profile");
+    let profile = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x42; 32].into())
+            .expect("test owns a keyed audit profile"),
+    );
     let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
     let cursors = Arc::new(
         CursorCodec::new(Zeroizing::new(vec![0x63; 32]), Duration::from_secs(300))

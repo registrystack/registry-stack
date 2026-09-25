@@ -408,19 +408,10 @@ async fn a_failing_rhai_planner_refuses_the_submission_and_records_its_kind() {
 }
 
 async fn audit_refusal_reasons(database: &TestDatabase) -> Vec<String> {
-    let rows = database
-        .admin
-        .query("SELECT envelope FROM registry_internal.registry_audit", &[])
-        .await
-        .expect("administrator can inspect audit envelopes");
-    rows.iter()
-        .filter_map(|row| {
-            let envelope: Value = serde_json::from_slice(&row.get::<_, Vec<u8>>(0))
-                .expect("audit envelope is strict JSON");
-            envelope["record"]["refusalReason"]
-                .as_str()
-                .map(str::to_owned)
-        })
+    database
+        .audit_records()
+        .iter()
+        .filter_map(|record| record["refusalReason"].as_str().map(str::to_owned))
         .collect()
 }
 
@@ -528,8 +519,10 @@ fn staged_router(
 ) -> axum::Router {
     let pool = database.runtime_config.build_pool().expect("pool builds");
     let lock_key = RegistryLockKey::derive(package_id).expect("lock key derives");
-    let audit = AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into())
-        .expect("test audit profile is keyed");
+    let audit = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into())
+            .expect("test audit profile is keyed"),
+    );
     let cursors = Arc::new(
         CursorCodec::new(Zeroizing::new(vec![0x2d; 32]), Duration::from_secs(300))
             .expect("cursor codec builds"),
@@ -720,7 +713,6 @@ async fn staged_persistence_snapshot(
                     (SELECT count(*) FROM registry_internal.registry_request_results
                       WHERE request_entity_id = 'person-name-change-request' AND request_id = $1),
                     (SELECT count(*) FROM registry_internal.registry_outbox),
-                    (SELECT count(*) FROM registry_internal.registry_audit),
                     (SELECT count(*) FROM registry_internal.registry_idempotency)
                FROM registry_internal.registry_request_state
               WHERE request_entity_id = 'person-name-change-request' AND request_id = $1",
@@ -736,8 +728,8 @@ async fn staged_persistence_snapshot(
         applications: row.get(4),
         results: row.get(5),
         outbox: row.get(6),
-        audit: row.get(7),
-        idempotency: row.get(8),
+        audit: i64::try_from(database.audit_entries().len()).expect("audit count fits i64"),
+        idempotency: row.get(7),
     }
 }
 

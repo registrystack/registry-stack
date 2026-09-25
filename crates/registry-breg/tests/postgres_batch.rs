@@ -17,6 +17,7 @@ use registry_breg::api::{
     router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
     VerifiedRequestClaims,
 };
+use registry_breg::audit::RegistryAudit;
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
@@ -67,14 +68,16 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
         .build_pool()
         .expect("bounded runtime pool builds");
     let lock_key = RegistryLockKey::derive("batch-registry").expect("lock key is valid");
-    let profile = AuditProfile::production_from_secret_bytes(vec![0x6b; 32].into())
-        .expect("test audit profile is keyed");
+    let audit = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x6b; 32].into())
+            .expect("test audit profile is keyed"),
+    );
     let app = mutation_router(
         pool.clone(),
         registry.clone(),
         identity.clone(),
         lock_key,
-        profile.clone(),
+        audit.clone(),
         None,
     );
     let authorized_claims = claims(PRINCIPAL, "case-management", "zone-a");
@@ -302,7 +305,7 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
         registry.clone(),
         changed_identity,
         lock_key,
-        profile.clone(),
+        audit.clone(),
         None,
     );
     let changed_package = send_json(
@@ -528,7 +531,7 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
             registry.clone(),
             identity.clone(),
             lock_key,
-            profile.clone(),
+            audit.clone(),
             Some(fault),
         );
         let before_fault = effect_counts(&database, table).await;
@@ -548,17 +551,10 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
         );
     }
 
-    let audit_rows = database
-        .admin
-        .query(
-            "SELECT convert_from(envelope, 'UTF8') FROM registry_internal.registry_audit",
-            &[],
-        )
-        .await
-        .expect("administrator inspects minimized audit");
-    let audit_text = audit_rows
+    let audit_entries = database.audit_entries();
+    let audit_text = audit_entries
         .iter()
-        .map(|row| row.get::<_, String>(0))
+        .map(Value::to_string)
         .collect::<Vec<_>>()
         .join("\n");
     assert!(audit_text.contains("\"resultCount\":2"));
@@ -569,18 +565,15 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
     assert!(!audit_text.contains(&seed_id));
     assert!(!audit_text.contains("batch-created"));
     assert!(!audit_text.contains("registry_data"));
-    let committed_terminals: i64 = database
-        .admin
-        .query_one(
-            "SELECT count(*) FROM registry_internal.registry_audit
-             WHERE convert_from(envelope, 'UTF8') LIKE '%\"operationId\":\"records.widget.batch\"%'
-               AND convert_from(envelope, 'UTF8') LIKE '%\"phase\":\"terminal\"%'
-               AND convert_from(envelope, 'UTF8') LIKE '%\"outcome\":\"committed\"%'",
-            &[],
-        )
-        .await
-        .expect("administrator inspects batch terminal audit count")
-        .get(0);
+    let committed_terminals = audit_entries
+        .iter()
+        .filter(|entry| {
+            entry["phase"] == "response"
+                && entry["record"]["operationId"] == "records.widget.batch"
+                && entry["record"]["phase"] == "terminal"
+                && entry["record"]["outcome"] == "committed"
+        })
+        .count();
     assert_eq!(committed_terminals, 1);
 
     database.cleanup().await;
@@ -648,7 +641,7 @@ fn mutation_router(
     registry: Arc<registry_breg::CompiledRegistry>,
     identity: registry_breg::postgres::ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
-    profile: AuditProfile,
+    audit: RegistryAudit,
     fault: Option<MutationFaultPoint>,
 ) -> axum::Router {
     let cursors = Arc::new(
@@ -661,7 +654,7 @@ fn mutation_router(
         identity.clone(),
         lock_key,
         Duration::from_secs(2),
-        profile.clone(),
+        audit.clone(),
         cursors.clone(),
     ));
     let mutations = PostgresRecordMutationService::new(
@@ -670,7 +663,7 @@ fn mutation_router(
         identity.clone(),
         lock_key,
         Duration::from_secs(2),
-        profile,
+        audit,
     );
     let mutations = match fault {
         Some(fault) => mutations.with_fault_for_test(fault),
@@ -813,7 +806,6 @@ async fn effect_counts(database: &TestDatabase, table: &str) -> EffectCounts {
                    (SELECT count(*) FROM registry_data.\"{table}\"),
                    (SELECT count(*) FROM registry_internal.registry_revisions),
                    (SELECT count(*) FROM registry_internal.registry_outbox),
-                   (SELECT count(*) FROM registry_internal.registry_audit),
                    (SELECT count(*) FROM registry_internal.registry_idempotency),
                    (SELECT count(*) FROM registry_internal.registry_revision_commits),
                    (SELECT count(*) FROM registry_internal.registry_revision_commit_members)"
@@ -826,10 +818,10 @@ async fn effect_counts(database: &TestDatabase, table: &str) -> EffectCounts {
         current: row.get(0),
         revisions: row.get(1),
         outbox: row.get(2),
-        audit: row.get(3),
-        idempotency: row.get(4),
-        commits: row.get(5),
-        commit_members: row.get(6),
+        audit: i64::try_from(database.audit_entries().len()).expect("audit count fits i64"),
+        idempotency: row.get(3),
+        commits: row.get(4),
+        commit_members: row.get(5),
     }
 }
 

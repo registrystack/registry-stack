@@ -168,8 +168,11 @@ async fn unrelated_package_activation_preserves_pending_request_application() {
         database.migration_config.clone(),
         database.migration_role.clone(),
         database.runtime_role.clone(),
-        AuditProfile::production_from_secret_bytes(vec![0x8d; 32].into())
-            .expect("test audit profile is keyed"),
+        registry_breg::audit::test_support::capturing(
+            AuditProfile::production_from_secret_bytes(vec![0x8d; 32].into())
+                .expect("test audit profile is keyed"),
+        )
+        .0,
     );
     let erasure_scope = RequestDetailErasureScope {
         request_entity_id: "correction-request",
@@ -700,8 +703,11 @@ fn change_request_router(
 ) -> axum::Router {
     let pool = database.runtime_config.build_pool().expect("pool builds");
     let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
-    let audit = AuditProfile::production_from_secret_bytes(vec![0x8d; 32].into())
-        .expect("test audit profile is keyed");
+    let audit = registry_breg::audit::test_support::capturing(
+        AuditProfile::production_from_secret_bytes(vec![0x8d; 32].into())
+            .expect("test audit profile is keyed"),
+    )
+    .0;
     let cursors = Arc::new(
         CursorCodec::new(Zeroizing::new(vec![0x51; 32]), Duration::from_secs(300))
             .expect("cursor codec builds"),

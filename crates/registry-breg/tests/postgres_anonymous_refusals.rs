@@ -26,7 +26,8 @@ use registry_breg::postgres::{
     PostgresRecordReadService, RegistryLockKey, RegistryStateTestIdentity,
 };
 use registry_breg::startup::with_request_timeout_and_metrics_for_test;
-use registry_platform_audit::{verify_jsonl_lines_with_hasher, AuditEnvelope, AuditProfile};
+use registry_platform_audit::AuditProfile;
+use serde_json::Value;
 use tower::util::ServiceExt as _;
 use tower::Service as _;
 use zeroize::Zeroizing;
@@ -80,12 +81,12 @@ accessProfiles:
           - {field: jurisdiction, claim: jurisdictions, operator: in}
 "#;
 
-/// An unauthenticated caller must not be able to append to the hash-chained
+/// An unauthenticated caller must not be able to append to the audit
 /// journal. Anonymous pre-admission refusals are counted on the operator
 /// metrics listener instead, while a refusal that carries a principal is
-/// journaled exactly as before and the chain stays contiguous across the mix.
+/// journaled exactly as before.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn anonymous_refusals_are_counted_while_principal_refusals_stay_chained() {
+async fn anonymous_refusals_are_counted_while_principal_refusals_are_journaled() {
     let database = TestDatabase::create(8).await;
     let (migration, migration_task) = database.connect_migration().await;
     let registry = Arc::new(compiled_registry());
@@ -127,7 +128,7 @@ async fn anonymous_refusals_are_counted_while_principal_refusals_stay_chained() 
         identity.clone(),
         lock_key,
         Duration::from_secs(2),
-        audit_profile.clone(),
+        database.audit(audit_profile),
         Arc::clone(&cursors),
     );
     let service = Arc::new(HttpService::new(
@@ -151,7 +152,7 @@ async fn anonymous_refusals_are_counted_while_principal_refusals_stay_chained() 
     // this change only stops journaling refusals that name no principal.
     let admitted = send(&app, "/v1/records/cases", None).await;
     assert_eq!(admitted.status(), StatusCode::OK);
-    let admitted_rows = audit_count(&database).await;
+    let admitted_rows = audit_count(&database);
     assert_eq!(
         admitted_rows, 2,
         "an admitted anonymous read keeps its attempt and terminal records"
@@ -172,9 +173,9 @@ async fn anonymous_refusals_are_counted_while_principal_refusals_stay_chained() 
         );
     }
     assert_eq!(
-        audit_count(&database).await,
+        audit_count(&database),
         admitted_rows,
-        "anonymous pre-admission refusals append no chained journal record"
+        "anonymous pre-admission refusals append no audit entry"
     );
 
     // The same refusals from an authenticated principal stay journaled.
@@ -189,15 +190,15 @@ async fn anonymous_refusals_are_counted_while_principal_refusals_stay_chained() 
             "{uri} is refused for the authenticated caller too"
         );
     }
-    let after_principal_refusals = audit_count(&database).await;
+    let after_principal_refusals = audit_count(&database);
     assert_eq!(
         after_principal_refusals,
         admitted_rows + refusals.len() as i64,
-        "a refusal that names a principal still appends one chained record"
+        "a refusal that names a principal still appends one audit entry"
     );
 
-    // Mixed traffic afterwards: the chain remains contiguous and verifies
-    // under the keyed platform chain hasher.
+    // Mixed traffic afterwards: only the admitted authenticated read appends,
+    // as a request entry and a response entry sharing one correlation.
     let served = send(
         &app,
         "/v1/records/cases?accessProfile=caseworker",
@@ -208,28 +209,41 @@ async fn anonymous_refusals_are_counted_while_principal_refusals_stay_chained() 
     let anonymous = send(&app, "/v1/records/cases?accessProfile=caseworker", None).await;
     assert_eq!(anonymous.status(), StatusCode::NOT_FOUND);
 
-    let envelopes = ordered_audit_envelopes(&database, &audit_profile).await;
+    let entries = database.audit_entries();
     assert_eq!(
-        envelopes.len() as i64,
+        entries.len() as i64,
         after_principal_refusals + 2,
-        "only the admitted authenticated read extends the chain after the mix"
+        "only the admitted authenticated read appends after the mix"
     );
-    let phases = envelopes
+    let phases = entries
         .iter()
-        .map(|envelope| {
-            envelope.record["phase"]
-                .as_str()
-                .expect("phase is recorded")
+        .map(|entry| {
+            (
+                entry["phase"].as_str().expect("entry phase is recorded"),
+                entry["record"]["phase"]
+                    .as_str()
+                    .expect("record phase is recorded"),
+            )
         })
         .collect::<Vec<_>>();
     assert_eq!(
         phases,
-        vec!["attempt", "terminal", "refusal", "refusal", "attempt", "terminal"],
-        "the journal holds the admitted reads and the principal refusals only"
+        vec![
+            ("request", "attempt"),
+            ("response", "terminal"),
+            ("response", "refusal"),
+            ("response", "refusal"),
+            ("request", "attempt"),
+            ("response", "terminal"),
+        ],
+        "the audit holds the admitted reads and the principal refusals only"
     );
-    let audit_text = envelopes
+    assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
+    assert_eq!(entries[4]["correlation"], entries[5]["correlation"]);
+    assert_ne!(entries[0]["correlation"], entries[4]["correlation"]);
+    let audit_text = entries
         .iter()
-        .map(|envelope| envelope.record.to_string())
+        .map(Value::to_string)
         .collect::<Vec<_>>()
         .join("\n");
     assert!(!audit_text.contains(PRINCIPAL_CANARY));
@@ -334,47 +348,6 @@ async fn scrape(metrics: &Arc<Metrics>) -> String {
     String::from_utf8(body.to_vec()).expect("scrape body is UTF-8")
 }
 
-async fn audit_count(database: &TestDatabase) -> i64 {
-    database
-        .admin
-        .query_one("SELECT count(*) FROM registry_internal.registry_audit", &[])
-        .await
-        .expect("administrator can inspect audit count")
-        .get(0)
-}
-
-async fn ordered_audit_envelopes(
-    database: &TestDatabase,
-    profile: &AuditProfile,
-) -> Vec<AuditEnvelope> {
-    let rows = database
-        .admin
-        .query("SELECT envelope FROM registry_internal.registry_audit", &[])
-        .await
-        .expect("administrator can inspect audit envelopes");
-    let mut envelopes = rows
-        .iter()
-        .map(|row| {
-            serde_json::from_slice::<AuditEnvelope>(&row.get::<_, Vec<u8>>(0))
-                .expect("audit envelope is canonical platform JSON")
-        })
-        .collect::<Vec<_>>();
-    let mut ordered = Vec::with_capacity(envelopes.len());
-    let mut predecessor = None;
-    while !envelopes.is_empty() {
-        let position = envelopes
-            .iter()
-            .position(|envelope| envelope.prev_hash == predecessor)
-            .expect("database audit chain has one next envelope");
-        let envelope = envelopes.remove(position);
-        predecessor = Some(envelope.record_hash);
-        ordered.push(envelope);
-    }
-    let audit_lines = ordered
-        .iter()
-        .map(|envelope| serde_json::to_string(envelope).expect("audit envelope serializes"))
-        .collect::<Vec<_>>();
-    verify_jsonl_lines_with_hasher(audit_lines.iter(), &profile.chain_hasher())
-        .expect("database audit envelopes form one keyed platform chain");
-    ordered
+fn audit_count(database: &TestDatabase) -> i64 {
+    i64::try_from(database.audit_entries().len()).expect("audit count fits i64")
 }

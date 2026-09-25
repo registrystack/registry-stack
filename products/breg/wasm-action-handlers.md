@@ -36,7 +36,7 @@ recognize the handler kind. A current build without the `wasm` feature also
 refuses the whole package at load: integrity inspection rederives the package,
 the compiler reports `action.handler.wasm_build_unsupported`, and rederivation
 fails. Neither path activates the package, so no action can be invoked and no
-attempt audit row is written. The no-feature compiler suite pins the diagnostic;
+attempt audit entry is written. The no-feature compiler suite pins the diagnostic;
 the package integrity suite pins rederivation as a load prerequisite.
 
 `bregctl explain actions` surfaces this contract per handler: a WASM handler

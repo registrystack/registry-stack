@@ -96,7 +96,10 @@ impl Harness {
         migration_task.abort();
         let pool = database.runtime_config.build_pool().unwrap();
         let lock_key = RegistryLockKey::derive(PACKAGE_ID).unwrap();
-        let audit = AuditProfile::production_from_secret_bytes(vec![0x5e; 32].into()).unwrap();
+        let audit = registry_breg::audit::test_support::capturing(
+            AuditProfile::production_from_secret_bytes(vec![0x5e; 32].into()).unwrap(),
+        )
+        .0;
         let cursors = Arc::new(
             CursorCodec::new(Zeroizing::new(vec![0x4e; 32]), Duration::from_secs(300)).unwrap(),
         );

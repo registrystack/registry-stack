@@ -17,6 +17,7 @@ use base64::Engine as _;
 use hmac::{Hmac, KeyInit, Mac};
 use postgres_harness::TestDatabase;
 use rcgen::{generate_simple_self_signed, CertifiedKey};
+use registry_breg::audit::WEBHOOK_AUDIT_SCHEMA;
 use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{parse_project_json, ModuleAssetSource};
 use registry_breg::event_destination::ActivatedEventDestinationRegistry;
@@ -114,7 +115,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
     let service = WebhookDeliveryService::new(
@@ -125,7 +126,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         identity.clone(),
         lock_key,
         Duration::from_secs(2),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
     );
     let plan = MutationPlan::from_compiled(&compiled, "records.case.create")
         .expect("create plan retains the exact compiler delivery");
@@ -753,7 +754,9 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         "audit",
     )
     .await;
-    revoke_audit_insert(&database).await;
+    // A destination that refuses the attempt entry: the lease rolls back with
+    // it and nothing leaves the process.
+    database.audit_capture().fail_after(0);
     assert_eq!(
         service.deliver_once().await,
         Err(WebhookDeliveryError::Unavailable)
@@ -763,7 +766,19 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         delivery_state(&database, &audit_refused).await,
         (1, "pending".to_owned(), 0)
     );
-    grant_audit_insert(&database).await;
+    // The refused writer stays failed; a worker opened over the recovered
+    // destination delivers the same work.
+    database.audit_capture().restore();
+    let service = WebhookDeliveryService::new(
+        pool.clone(),
+        Arc::clone(&destinations),
+        hook_handlers(&compiled, &identity.package_revision),
+        Arc::new(compiled.clone()),
+        identity.clone(),
+        lock_key,
+        Duration::from_secs(2),
+        database.audit(audit_profile.clone()),
+    );
     receiver.enqueue(ResponsePlan::Status(204)).await;
     assert_eq!(
         service.deliver_once().await,
@@ -806,13 +821,13 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     let service_for_terminal_fault = service.clone();
     let attempt = tokio::spawn(async move { service_for_terminal_fault.deliver_once().await });
     receiver.wait_for_count(terminal_egress_before + 1).await;
-    revoke_audit_insert(&database).await;
+    database.audit_capture().fail_after(0);
     terminal_response_release.notify_one();
     assert_eq!(
         attempt.await.expect("terminal audit fault task joins"),
         Err(WebhookDeliveryError::Unavailable)
     );
-    grant_audit_insert(&database).await;
+    database.audit_capture().restore();
     assert_eq!(
         delivery_state(&database, &terminal_audit_refused).await,
         (1, "leased".to_owned(), 1),
@@ -870,7 +885,7 @@ async fn real_postgres_webhook_delivery_finishes_prior_package_work_after_compat
         lock_key,
         Duration::from_secs(2),
         original_identity.clone(),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
     let plan = MutationPlan::from_compiled(&compiled, "records.case.create")
@@ -927,7 +942,7 @@ async fn real_postgres_webhook_delivery_finishes_prior_package_work_after_compat
         successor_identity,
         lock_key,
         Duration::from_secs(2),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
     );
     service
         .verify_retained_bindings()
@@ -1007,7 +1022,7 @@ async fn real_postgres_webhook_delivery_reap_refuses_an_out_of_bounds_captured_a
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
     let plan = MutationPlan::from_compiled(&compiled, "records.case.create")
@@ -1036,7 +1051,7 @@ async fn real_postgres_webhook_delivery_reap_refuses_an_out_of_bounds_captured_a
         identity,
         lock_key,
         Duration::from_secs(2),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
     );
 
     // deployed_attempt_timeout_ms is bound by a database check constraint
@@ -1215,7 +1230,7 @@ async fn real_postgres_local_hook_delivery_runs_in_process_and_records_its_answe
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
     let service = WebhookDeliveryService::new(
@@ -1226,7 +1241,7 @@ async fn real_postgres_local_hook_delivery_runs_in_process_and_records_its_answe
         identity.clone(),
         lock_key,
         Duration::from_secs(2),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
     );
     let plan = MutationPlan::from_compiled(&compiled, "records.case.create")
         .expect("create plan retains the exact compiler delivery");
@@ -1369,7 +1384,7 @@ async fn real_postgres_url_hook_delivery_records_its_answer_and_refuses_one_over
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
     let service = WebhookDeliveryService::new(
@@ -1380,7 +1395,7 @@ async fn real_postgres_url_hook_delivery_records_its_answer_and_refuses_one_over
         identity.clone(),
         lock_key,
         Duration::from_secs(2),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
     );
     let plan = MutationPlan::from_compiled(&compiled, "records.case.create")
         .expect("create plan retains the exact compiler delivery");
@@ -1783,28 +1798,6 @@ async fn wait_until_retry_is_due(database: &TestDatabase, event: &CapturedEvent)
     .expect("the scheduled retry becomes claimable");
 }
 
-async fn revoke_audit_insert(database: &TestDatabase) {
-    database
-        .admin
-        .batch_execute(&format!(
-            "REVOKE INSERT ON registry_internal.registry_audit FROM \"{}\";",
-            database.runtime_role.as_str()
-        ))
-        .await
-        .expect("administrator injects an audit write fault");
-}
-
-async fn grant_audit_insert(database: &TestDatabase) {
-    database
-        .admin
-        .batch_execute(&format!(
-            "GRANT INSERT ON registry_internal.registry_audit TO \"{}\";",
-            database.runtime_role.as_str()
-        ))
-        .await
-        .expect("administrator restores audit write authority");
-}
-
 async fn assert_exact_audit_outcome(
     database: &TestDatabase,
     profile: &AuditProfile,
@@ -1854,22 +1847,12 @@ async fn audit_outcomes(
         )
         .expect("test can derive the keyed event reference");
     database
-        .admin
-        .query(
-            "SELECT envelope
-             FROM registry_internal.registry_audit
-             ORDER BY created_at, envelope_id",
-            &[],
-        )
-        .await
-        .expect("administrator can inspect minimized audit envelopes")
+        .audit_entries()
         .into_iter()
-        .filter_map(|row| serde_json::from_slice::<Value>(&row.get::<_, Vec<u8>>(0)).ok())
-        .filter_map(|envelope| envelope.get("record").cloned())
+        .filter(|entry| entry["schema"] == WEBHOOK_AUDIT_SCHEMA)
+        .filter_map(|entry| entry.get("record").cloned())
         .filter(|record| {
-            record.get("schema").and_then(Value::as_str) == Some("breg-webhook-audit/v1")
-                && record.get("eventReference").and_then(Value::as_str)
-                    == Some(event_reference.as_str())
+            record.get("eventReference").and_then(Value::as_str) == Some(event_reference.as_str())
                 && record.get("generation").and_then(Value::as_i64) == Some(generation)
                 && record.get("attempt").and_then(Value::as_i64) == Some(attempt)
                 && record.get("phase").and_then(Value::as_str) == Some(phase)
@@ -1885,16 +1868,10 @@ async fn audit_outcomes(
 
 async fn assert_webhook_audits_are_closed_and_value_free(database: &TestDatabase) {
     let audits = database
-        .admin
-        .query(
-            "SELECT convert_from(envelope, 'UTF8') FROM registry_internal.registry_audit",
-            &[],
-        )
-        .await
-        .expect("administrator can inspect minimized audit envelopes")
+        .audit_entries()
         .into_iter()
-        .map(|row| row.get::<_, String>(0))
-        .filter(|envelope| envelope.contains("breg-webhook-audit/v1"))
+        .filter(|entry| entry["schema"] == WEBHOOK_AUDIT_SCHEMA)
+        .map(|entry| entry.to_string())
         .collect::<Vec<_>>();
     assert!(!audits.is_empty());
     let joined = audits.join("\n");
@@ -2205,6 +2182,12 @@ impl DestinationFixture {
     }
 
     fn runtime_config(&self, event_destinations: &str) -> String {
+        let audit_path = self
+            .secret_root
+            .with_file_name("audit")
+            .join("audit.jsonl")
+            .display()
+            .to_string();
         format!(
             r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
 kind: BRegRuntimeConfig
@@ -2259,6 +2242,7 @@ authentication:
     purpose: registry_purpose
 audit:
   hashKeyRef: secret:file/audit-key
+  path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
   maxAgeSeconds: 300

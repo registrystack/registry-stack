@@ -1,22 +1,95 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Database-owned Base Registry Engine audit chain and pre-I/O release gate.
+//! Base Registry Engine audit entries and the pre-I/O release gate.
+//!
+//! Every audited request writes a `request` entry before protected I/O and a
+//! `response` entry with its outcome, both through the one platform
+//! [`AuditWriter`] the process opened at startup and both correlated by the
+//! request id Base Registry Engine minted. A refusal is one `response` entry.
+//! Entries carry keyed references and closed-vocabulary terms, never a raw
+//! principal, record id, selector, token, or free text.
 
-use std::time::Duration;
-
-use deadpool_postgres::Client;
-use registry_platform_audit::{AuditChainHasher, AuditEnvelope, AuditKeyHasher, AuditProfile};
-use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_audit::{AuditEntry, AuditKeyHasher, AuditProfile, AuditWriter};
 use serde_json::{json, Value};
-use tokio_postgres::{types::Type, Transaction};
 use uuid::Uuid;
 
 use crate::correlation::RequestCorrelation;
 use crate::model::HttpMethod;
-use crate::postgres::{
-    begin_action_transaction, begin_record_transaction, ActionClaimContext, ClaimContext,
-    ExpectedRegistryIdentity, RegistryLockKey,
-};
+use crate::postgres::{ActionClaimContext, ClaimContext, ExpectedRegistryIdentity};
+
+/// Schema of request, read, mutation, action, and refusal entries.
+pub const AUDIT_SCHEMA: &str = "breg-audit/v2";
+/// Schema of event delivery entries.
+pub const WEBHOOK_AUDIT_SCHEMA: &str = "breg-webhook-audit/v2";
+/// The process role operator commands append under, beside the runtime's
+/// destination.
+pub const COMPANION_PROCESS_ROLE: &str = "bregctl";
+
+/// The keyed reference profile and the audit writer one process audits with.
+///
+/// The profile derives every keyed reference an entry carries; the writer is
+/// the single destination this process appends to. Clones share the writer.
+#[derive(Clone)]
+pub struct RegistryAudit {
+    profile: AuditProfile,
+    writer: AuditWriter,
+}
+
+impl std::fmt::Debug for RegistryAudit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegistryAudit")
+            .field("profile", &"<redacted>")
+            .field("writer", &self.writer)
+            .finish()
+    }
+}
+
+impl RegistryAudit {
+    #[must_use]
+    pub fn new(profile: AuditProfile, writer: AuditWriter) -> Self {
+        Self { profile, writer }
+    }
+
+    #[must_use]
+    pub fn profile(&self) -> &AuditProfile {
+        &self.profile
+    }
+
+    #[must_use]
+    pub fn writer(&self) -> &AuditWriter {
+        &self.writer
+    }
+
+    /// Open the audit handle an operator command appends to while the runtime
+    /// may hold the configured destination. A file destination becomes its
+    /// `bregctl` sibling (`audit.jsonl` becomes `audit.bregctl.jsonl`) under
+    /// its own single-writer lock; `stdout` stays `stdout`.
+    pub async fn open_companion(
+        config: &crate::runtime_config::RuntimeConfig,
+    ) -> Result<Self, RegistryAuditError> {
+        let profile = config
+            .audit_profile()
+            .map_err(|_| RegistryAuditError::Unavailable)?;
+        let destination = config
+            .audit()
+            .destination()
+            .for_process(COMPANION_PROCESS_ROLE)
+            .map_err(|_| RegistryAuditError::Unavailable)?;
+        let writer = AuditWriter::open(destination)
+            .await
+            .map_err(|_| RegistryAuditError::Unavailable)?;
+        Ok(Self::new(profile, writer))
+    }
+
+    /// Append one entry. A refused append is the audit-unavailable refusal:
+    /// the caller performs no protected I/O and releases no disclosure.
+    pub async fn append(&self, entry: AuditEntry) -> Result<(), RegistryAuditError> {
+        self.writer
+            .append(entry)
+            .await
+            .map_err(|_| RegistryAuditError::Unavailable)
+    }
+}
 
 /// Verified grant context retained only for minimized, keyed audit projection.
 #[derive(Clone, Eq, PartialEq)]
@@ -118,7 +191,7 @@ pub(crate) struct HttpRefusalAudit<'a> {
 pub enum RegistryAuditError {
     #[error("audit context is invalid")]
     InvalidContext,
-    #[error("audit journal is unavailable")]
+    #[error("audit destination is unavailable")]
     Unavailable,
 }
 
@@ -207,23 +280,24 @@ pub(crate) struct WebhookAudit<'a> {
     pub disposition: WebhookAuditDisposition,
 }
 
-/// Persist one minimized attempt or refusal before protected record I/O.
+/// Append one minimized attempt or refusal before protected record I/O.
 ///
-/// This deliberately owns and commits a transaction separate from any later
-/// mutation. A successful return is therefore durable evidence even when the
-/// protected operation subsequently fails or rolls back.
+/// An attempt is the `request` entry of the request it names and must be
+/// accepted before any protected read or write starts. A refusal is the single
+/// `response` entry of a request that performs no protected I/O.
 pub async fn record_pre_io_audit(
-    client: &mut Client,
-    lock_key: RegistryLockKey,
-    lock_timeout: Duration,
+    audit: &RegistryAudit,
     expected: &ExpectedRegistryIdentity,
     claims: &ClaimContext,
-    profile: &AuditProfile,
     event: PreIoAudit<'_>,
 ) -> Result<(), RegistryAuditError> {
+    let profile = audit.profile();
     if event.operation_id.is_empty() || !profile_is_keyed(profile) {
         return Err(RegistryAuditError::InvalidContext);
     }
+    expected
+        .validate()
+        .map_err(|_| RegistryAuditError::InvalidContext)?;
     let key_hasher = profile.key_hasher();
     let principal_reference = claims
         .principal()
@@ -243,15 +317,8 @@ pub async fn record_pre_io_audit(
         })
         .transpose()
         .map_err(|_| RegistryAuditError::InvalidContext)?;
-    let transaction = begin_record_transaction(client, lock_key, lock_timeout, expected, claims)
-        .await
-        .map_err(|_| RegistryAuditError::Unavailable)?;
     let mut record = json!({
-        "schema": "breg-audit/v1",
-        "phase": match event.kind {
-            PreIoAuditKind::Attempt => "attempt",
-            PreIoAuditKind::Refusal => "refusal",
-        },
+        "phase": pre_io_phase_name(event.kind),
         "method": method_name(event.method),
         "operationId": event.operation_id,
         "requestId": event.correlation.request_id().to_string(),
@@ -273,22 +340,18 @@ pub async fn record_pre_io_audit(
         }
     }
     insert_refusal_reason(&mut record, event.refusal_reason);
-    append_envelope(transaction.transaction(), profile, record).await?;
-    transaction
-        .commit()
+    audit
+        .append(pre_io_entry(event.kind, event.correlation, record))
         .await
-        .map_err(|_| RegistryAuditError::Unavailable)
 }
 
 pub(crate) async fn record_action_pre_io_audit(
-    client: &mut Client,
-    lock_key: RegistryLockKey,
-    lock_timeout: Duration,
+    audit: &RegistryAudit,
     expected: &ExpectedRegistryIdentity,
     claims: &ActionClaimContext,
-    profile: &AuditProfile,
     event: PreIoAudit<'_>,
 ) -> Result<(), RegistryAuditError> {
+    let profile = audit.profile();
     if event.operation_id.is_empty()
         || event.target_record.is_some()
         || event.method != HttpMethod::Post
@@ -296,6 +359,9 @@ pub(crate) async fn record_action_pre_io_audit(
     {
         return Err(RegistryAuditError::InvalidContext);
     }
+    expected
+        .validate()
+        .map_err(|_| RegistryAuditError::InvalidContext)?;
     let key_hasher = profile.key_hasher();
     let principal_reference = key_hasher
         .audit_reference_hash(
@@ -304,15 +370,8 @@ pub(crate) async fn record_action_pre_io_audit(
             claims.principal(),
         )
         .map_err(|_| RegistryAuditError::InvalidContext)?;
-    let transaction = begin_action_transaction(client, lock_key, lock_timeout, expected, claims)
-        .await
-        .map_err(|_| RegistryAuditError::Unavailable)?;
     let mut record = json!({
-        "schema": "breg-audit/v1",
-        "phase": match event.kind {
-            PreIoAuditKind::Attempt => "attempt",
-            PreIoAuditKind::Refusal => "refusal",
-        },
+        "phase": pre_io_phase_name(event.kind),
         "method": method_name(event.method),
         "operationId": event.operation_id,
         "requestId": event.correlation.request_id().to_string(),
@@ -324,119 +383,66 @@ pub(crate) async fn record_action_pre_io_audit(
         "actionId": claims.action_id(),
     });
     insert_refusal_reason(&mut record, event.refusal_reason);
-    append_envelope(transaction.transaction(), profile, record).await?;
-    transaction
-        .commit()
+    audit
+        .append(pre_io_entry(event.kind, event.correlation, record))
         .await
-        .map_err(|_| RegistryAuditError::Unavailable)
 }
 
-/// Persist a minimized HTTP-layer mutation refusal when authorization failed
-/// before a forged `ClaimContext` would be safe to construct.
+fn pre_io_phase_name(kind: PreIoAuditKind) -> &'static str {
+    match kind {
+        PreIoAuditKind::Attempt => "attempt",
+        PreIoAuditKind::Refusal => "refusal",
+    }
+}
+
+fn pre_io_entry(
+    kind: PreIoAuditKind,
+    correlation: &RequestCorrelation,
+    record: Value,
+) -> AuditEntry {
+    let correlation = correlation.request_id().to_string();
+    match kind {
+        PreIoAuditKind::Attempt => AuditEntry::request(AUDIT_SCHEMA, correlation, record),
+        PreIoAuditKind::Refusal => AuditEntry::response(AUDIT_SCHEMA, correlation, record),
+    }
+}
+
+/// Append a minimized HTTP-layer mutation refusal when authorization failed
+/// before a forged `ClaimContext` would be safe to construct. It is the single
+/// `response` entry of a request that performs no protected I/O.
 pub(crate) async fn record_http_refusal_audit(
-    client: &mut Client,
-    lock_key: RegistryLockKey,
-    lock_timeout: Duration,
+    audit: &RegistryAudit,
     expected: &ExpectedRegistryIdentity,
-    profile: &AuditProfile,
     event: HttpRefusalAudit<'_>,
 ) -> Result<(), RegistryAuditError> {
-    record_http_refusal_audit_inner(
-        client,
-        lock_key,
-        lock_timeout,
-        expected,
-        profile,
-        event,
-        None,
-    )
-    .await
+    record_http_refusal_audit_inner(audit, expected, event, None).await
 }
 
 pub(crate) async fn record_attachment_http_refusal_audit(
-    client: &mut Client,
-    lock_key: RegistryLockKey,
-    lock_timeout: Duration,
+    audit: &RegistryAudit,
     expected: &ExpectedRegistryIdentity,
-    profile: &AuditProfile,
     event: HttpRefusalAudit<'_>,
     slot_id: &str,
 ) -> Result<(), RegistryAuditError> {
-    record_http_refusal_audit_inner(
-        client,
-        lock_key,
-        lock_timeout,
-        expected,
-        profile,
-        event,
-        Some(slot_id),
-    )
-    .await
+    record_http_refusal_audit_inner(audit, expected, event, Some(slot_id)).await
 }
 
 async fn record_http_refusal_audit_inner(
-    client: &mut Client,
-    lock_key: RegistryLockKey,
-    lock_timeout: Duration,
+    audit: &RegistryAudit,
     expected: &ExpectedRegistryIdentity,
-    profile: &AuditProfile,
     event: HttpRefusalAudit<'_>,
     attachment_slot: Option<&str>,
 ) -> Result<(), RegistryAuditError> {
+    let profile = audit.profile();
     if event.operation_id.is_empty()
         || event.action_id.is_some_and(str::is_empty)
         || !profile_is_keyed(profile)
-        || lock_timeout.is_zero()
-        || lock_timeout > Duration::from_secs(30)
     {
         return Err(RegistryAuditError::InvalidContext);
     }
     expected
         .validate()
         .map_err(|_| RegistryAuditError::InvalidContext)?;
-    let transaction = client
-        .transaction()
-        .await
-        .map_err(|_| RegistryAuditError::Unavailable)?;
-    let timeout_millis =
-        i32::try_from(lock_timeout.as_millis()).map_err(|_| RegistryAuditError::InvalidContext)?;
-    transaction
-        .execute(
-            "SELECT set_config('lock_timeout', $1::text, true)",
-            &[&format!("{timeout_millis}ms")],
-        )
-        .await
-        .map_err(|_| RegistryAuditError::Unavailable)?;
-    transaction
-        .execute(
-            "SELECT pg_advisory_xact_lock_shared($1)",
-            &[&lock_key.get()],
-        )
-        .await
-        .map_err(|_| RegistryAuditError::Unavailable)?;
-    let state = transaction
-        .query_opt(
-            "SELECT package_id, environment, instance_id, database_id,
-                    active_package_revision, schema_fingerprint, package_sequence,
-                    maintenance_status
-             FROM registry_internal.registry_state
-             WHERE singleton",
-            &[],
-        )
-        .await
-        .map_err(|_| RegistryAuditError::Unavailable)?
-        .ok_or(RegistryAuditError::Unavailable)?;
-    let ready = state.get::<_, String>(7) == "ready"
-        && state.get::<_, String>(0) == expected.package_id
-        && state.get::<_, String>(1) == expected.environment
-        && state.get::<_, String>(2) == expected.instance_id
-        && state.get::<_, String>(3) == expected.database_id
-        && state.get::<_, String>(4) == expected.package_revision
-        && state.get::<_, String>(5) == expected.schema_fingerprint
-        && state.get::<_, i64>(6) == expected.package_sequence;
-    if !ready {
-        return Err(RegistryAuditError::Unavailable);
-    }
     let key_hasher = profile.key_hasher();
     let principal_reference = event
         .principal
@@ -457,10 +463,6 @@ async fn record_http_refusal_audit_inner(
         .transpose()
         .map_err(|_| RegistryAuditError::InvalidContext)?;
     let mut record = serde_json::Map::from_iter([
-        (
-            "schema".to_owned(),
-            Value::String("breg-audit/v1".to_owned()),
-        ),
         ("phase".to_owned(), Value::String("refusal".to_owned())),
         (
             "method".to_owned(),
@@ -525,23 +527,31 @@ async fn record_http_refusal_audit_inner(
     if let Some(action_id) = event.action_id {
         record.insert("actionId".to_owned(), Value::String(action_id.to_owned()));
     }
-    append_envelope(&transaction, profile, Value::Object(record)).await?;
-    transaction
-        .commit()
+    audit
+        .append(response_entry(
+            event.correlation.request_id().to_string(),
+            record,
+        ))
         .await
-        .map_err(|_| RegistryAuditError::Unavailable)
 }
 
+/// Whether the profile derives keyed references. Base Registry Engine refuses
+/// to audit, and therefore to serve, under an unkeyed development profile.
 pub(crate) fn profile_is_keyed(profile: &AuditProfile) -> bool {
-    matches!(profile.chain_hasher(), AuditChainHasher::Keyed(_))
-        && matches!(profile.key_hasher(), AuditKeyHasher::Keyed(_))
+    matches!(profile.key_hasher(), AuditKeyHasher::Keyed(_))
 }
 
-pub(crate) async fn append_terminal_audit(
-    transaction: &Transaction<'_>,
+fn response_entry(correlation: String, record: serde_json::Map<String, Value>) -> AuditEntry {
+    AuditEntry::response(AUDIT_SCHEMA, correlation, Value::Object(record))
+}
+
+/// The `response` entry of an entity or action outcome. A mutation builds it
+/// inside its transaction and appends it after the commit; a read builds it
+/// once the result is held and appends it before the result is returned.
+pub(crate) fn terminal_entry(
     profile: &AuditProfile,
     terminal: TerminalAudit,
-) -> Result<(), RegistryAuditError> {
+) -> Result<AuditEntry, RegistryAuditError> {
     if !matches!(
         (&terminal.entity_id, &terminal.action_id),
         (Some(_), None) | (None, Some(_))
@@ -550,23 +560,21 @@ pub(crate) async fn append_terminal_audit(
     {
         return Err(RegistryAuditError::InvalidContext);
     }
-    append_envelope(
-        transaction,
-        profile,
-        Value::Object(terminal_record(terminal, profile)?),
-    )
-    .await
+    let correlation = terminal.correlation.request_id().to_string();
+    Ok(response_entry(
+        correlation,
+        terminal_record(terminal, profile)?,
+    ))
 }
 
 /// Bind an attachment outcome to its exact request proposal without treating
 /// the slot as an independently declared action.
-pub(crate) async fn append_attachment_terminal_audit(
-    transaction: &Transaction<'_>,
+pub(crate) fn attachment_terminal_entry(
     profile: &AuditProfile,
     terminal: TerminalAudit,
     slot: &str,
     proposal_version: i64,
-) -> Result<(), RegistryAuditError> {
+) -> Result<AuditEntry, RegistryAuditError> {
     if terminal.entity_id.as_deref().is_none_or(str::is_empty)
         || terminal.action_id.is_some()
         || slot.is_empty()
@@ -574,24 +582,25 @@ pub(crate) async fn append_attachment_terminal_audit(
     {
         return Err(RegistryAuditError::InvalidContext);
     }
+    let correlation = terminal.correlation.request_id().to_string();
     let mut record = terminal_record(terminal, profile)?;
     record.insert(
         "attachment".to_owned(),
         serde_json::json!({"slotId": slot, "proposalVersion": proposal_version}),
     );
-    append_envelope(transaction, profile, Value::Object(record)).await
+    Ok(response_entry(correlation, record))
 }
 
 /// Link an action commit or replay to its retained application provenance.
 /// The reference is derived by the server, never copied from an HTTP input.
-pub(crate) async fn append_action_terminal_audit(
-    transaction: &Transaction<'_>,
+pub(crate) fn action_terminal_entry(
     profile: &AuditProfile,
     terminal: TerminalAudit,
     application_reference: &str,
-) -> Result<(), RegistryAuditError> {
+) -> Result<AuditEntry, RegistryAuditError> {
+    let correlation = terminal.correlation.request_id().to_string();
     let record = action_terminal_record(terminal, application_reference, profile)?;
-    append_envelope(transaction, profile, Value::Object(record)).await
+    Ok(response_entry(correlation, record))
 }
 
 fn action_terminal_record(
@@ -618,11 +627,14 @@ fn action_terminal_record(
     Ok(record)
 }
 
-pub(crate) async fn append_webhook_audit(
-    transaction: &Transaction<'_>,
+/// The entry of one delivery transition. The attempt is the `request` entry of
+/// one delivery attempt; its terminal outcome and an operator replay are
+/// `response` entries. The correlation is the attempt identity: the keyed
+/// event and delivery references, the generation, and the attempt number.
+pub(crate) fn webhook_entry(
     profile: &AuditProfile,
     event: WebhookAudit<'_>,
-) -> Result<(), RegistryAuditError> {
+) -> Result<AuditEntry, RegistryAuditError> {
     let shape_is_valid = match (event.phase, event.outcome, event.disposition) {
         (
             WebhookAuditPhase::Attempt,
@@ -696,22 +708,28 @@ pub(crate) async fn append_webhook_audit(
             event.compiled_delivery_id,
         )
         .map_err(|_| RegistryAuditError::InvalidContext)?;
-    append_envelope(
-        transaction,
-        profile,
-        json!({
-            "schema": "breg-webhook-audit/v1",
-            "phase": webhook_phase_name(event.phase),
-            "outcome": webhook_outcome_name(event.outcome),
-            "disposition": webhook_disposition_name(event.disposition),
-            "packageRevision": event.package_revision,
-            "eventReference": event_reference,
-            "deliveryReference": delivery_reference,
-            "generation": event.generation,
-            "attempt": event.attempt,
-        }),
-    )
-    .await
+    let correlation = format!(
+        "{event_reference}.{delivery_reference}.{}.{}",
+        event.generation, event.attempt
+    );
+    let record = json!({
+        "phase": webhook_phase_name(event.phase),
+        "outcome": webhook_outcome_name(event.outcome),
+        "disposition": webhook_disposition_name(event.disposition),
+        "packageRevision": event.package_revision,
+        "eventReference": event_reference,
+        "deliveryReference": delivery_reference,
+        "generation": event.generation,
+        "attempt": event.attempt,
+    });
+    Ok(match event.phase {
+        WebhookAuditPhase::Attempt => {
+            AuditEntry::request(WEBHOOK_AUDIT_SCHEMA, correlation, record)
+        }
+        WebhookAuditPhase::Terminal | WebhookAuditPhase::Replay => {
+            AuditEntry::response(WEBHOOK_AUDIT_SCHEMA, correlation, record)
+        }
+    })
 }
 
 fn webhook_phase_name(phase: WebhookAuditPhase) -> &'static str {
@@ -773,10 +791,6 @@ fn terminal_record(
         })
         .transpose()?;
     let mut record = serde_json::Map::from_iter([
-        (
-            "schema".to_owned(),
-            Value::String("breg-audit/v1".to_owned()),
-        ),
         ("phase".to_owned(), Value::String("terminal".to_owned())),
         (
             "outcome".to_owned(),
@@ -863,11 +877,11 @@ pub(crate) struct ReadTerminalAudit {
     pub row_boundary_reference: Option<String>,
 }
 
-pub(crate) async fn append_read_terminal_audit(
-    transaction: &Transaction<'_>,
+pub(crate) fn read_terminal_entry(
     profile: &AuditProfile,
     read_terminal: ReadTerminalAudit,
-) -> Result<(), RegistryAuditError> {
+) -> Result<AuditEntry, RegistryAuditError> {
+    let correlation = read_terminal.terminal.correlation.request_id().to_string();
     let mut terminal = terminal_record(read_terminal.terminal, profile)?;
     if let Some(query_reference) = read_terminal.query_reference {
         terminal.insert("queryReference".to_owned(), Value::String(query_reference));
@@ -878,13 +892,11 @@ pub(crate) async fn append_read_terminal_audit(
             Value::String(row_boundary_reference),
         );
     }
-    append_envelope(transaction, profile, Value::Object(terminal)).await
+    Ok(response_entry(correlation, terminal))
 }
 
-/// Appends one canonical record to the chained Registry audit journal, linking
-/// it to the durable head under the same transaction as the change it records.
 /// Name why a refusal happened, when the caller has a closed-vocabulary term
-/// for it. The audit journal stays minimized: the term is fixed by the code
+/// for it. The audit entry stays minimized: the term is fixed by the code
 /// that raised the refusal and carries no request or record value.
 fn insert_refusal_reason(record: &mut Value, reason: Option<&str>) {
     let Some(reason) = reason else {
@@ -895,79 +907,130 @@ fn insert_refusal_reason(record: &mut Value, reason: Option<&str>) {
     }
 }
 
-pub(crate) async fn append_envelope(
-    transaction: &Transaction<'_>,
-    profile: &AuditProfile,
-    record: Value,
-) -> Result<(), RegistryAuditError> {
-    // Keep the same serialized chain transaction while sending each fixed
-    // statement with its known parameter types in one protocol exchange.
-    transaction
-        .execute_typed(
-            "INSERT INTO registry_internal.registry_audit_head (singleton, last_hash)
-             VALUES (true, NULL)
-             ON CONFLICT (singleton) DO NOTHING",
-            &[],
-        )
-        .await
-        .map_err(|_| RegistryAuditError::Unavailable)?;
-    let row = transaction
-        .query_typed_one(
-            "SELECT last_hash
-             FROM registry_internal.registry_audit_head
-             WHERE singleton
-             FOR UPDATE",
-            &[],
-        )
-        .await
-        .map_err(|_| RegistryAuditError::Unavailable)?;
-    let previous = row
-        .get::<_, Option<Vec<u8>>>(0)
-        .map(|bytes| <[u8; 32]>::try_from(bytes).map_err(|_| RegistryAuditError::Unavailable))
-        .transpose()?;
-    let envelope = AuditEnvelope::new_with_hasher(record, previous, &profile.chain_hasher())
-        .map_err(|_| RegistryAuditError::Unavailable)?;
-    let envelope_value =
-        serde_json::to_value(&envelope).map_err(|_| RegistryAuditError::Unavailable)?;
-    let envelope_bytes =
-        canonicalize_json(&envelope_value).map_err(|_| RegistryAuditError::Unavailable)?;
-    let changed = transaction
-        .execute_typed(
-            "INSERT INTO registry_internal.registry_audit
-                 (envelope_id, record_hash, envelope)
-             VALUES ($1, $2, $3)",
-            &[
-                (&envelope.envelope_id, Type::TEXT),
-                (&envelope.record_hash.as_slice(), Type::BYTEA),
-                (&envelope_bytes, Type::BYTEA),
-            ],
-        )
-        .await
-        .map_err(|_| RegistryAuditError::Unavailable)?;
-    if changed != 1 {
-        return Err(RegistryAuditError::Unavailable);
-    }
-    let changed = transaction
-        .execute_typed(
-            "UPDATE registry_internal.registry_audit_head
-             SET last_hash = $1
-             WHERE singleton",
-            &[(&envelope.record_hash.as_slice(), Type::BYTEA)],
-        )
-        .await
-        .map_err(|_| RegistryAuditError::Unavailable)?;
-    if changed != 1 {
-        return Err(RegistryAuditError::Unavailable);
-    }
-    Ok(())
-}
-
 fn method_name(method: HttpMethod) -> &'static str {
     match method {
         HttpMethod::Delete => "DELETE",
         HttpMethod::Get => "GET",
         HttpMethod::Patch => "PATCH",
         HttpMethod::Post => "POST",
+    }
+}
+
+/// In-memory audit destinations for tests: a capture that records every
+/// accepted entry and can be told to refuse appends from a chosen point.
+#[cfg(any(test, feature = "postgres-test"))]
+#[doc(hidden)]
+pub mod test_support {
+    use std::io::{self, Write};
+    use std::sync::{Arc, Mutex};
+
+    use registry_platform_audit::{AuditProfile, AuditWriter};
+    use serde_json::Value;
+
+    use super::RegistryAudit;
+
+    #[derive(Default)]
+    struct CaptureState {
+        bytes: Vec<u8>,
+        /// Entries still accepted before every later append fails. `None`
+        /// accepts every entry.
+        remaining: Option<usize>,
+        /// The envelope schema and record phase of the first entry refused
+        /// regardless of `remaining`.
+        refuse: Option<(String, String)>,
+    }
+
+    /// The entries one [`RegistryAudit`] accepted, in append order.
+    #[derive(Clone, Default)]
+    pub struct AuditCapture(Arc<Mutex<CaptureState>>);
+
+    struct CaptureSink(Arc<Mutex<CaptureState>>);
+
+    impl Write for CaptureSink {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let mut state = self.0.lock().expect("audit capture lock");
+            let lines = bytes.iter().filter(|byte| **byte == b'\n').count();
+            if let Some((schema, phase)) = &state.refuse {
+                let refused = bytes
+                    .split(|byte| *byte == b'\n')
+                    .filter_map(|line| serde_json::from_slice::<Value>(line).ok())
+                    .any(|entry| entry["schema"] == *schema && entry["record"]["phase"] == *phase);
+                if refused {
+                    state.refuse = None;
+                    state.remaining = Some(0);
+                    return Err(io::Error::other("audit capture refuses this entry"));
+                }
+            }
+            match state.remaining {
+                Some(remaining) if remaining < lines.max(1) => {
+                    state.remaining = Some(0);
+                    Err(io::Error::other("audit capture refuses this entry"))
+                }
+                Some(remaining) => {
+                    state.remaining = Some(remaining - lines);
+                    state.bytes.extend_from_slice(bytes);
+                    Ok(bytes.len())
+                }
+                None => {
+                    state.bytes.extend_from_slice(bytes);
+                    Ok(bytes.len())
+                }
+            }
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl AuditCapture {
+        /// Every accepted entry, parsed.
+        #[must_use]
+        pub fn entries(&self) -> Vec<Value> {
+            let state = self.0.lock().expect("audit capture lock");
+            String::from_utf8(state.bytes.clone())
+                .expect("audit lines are UTF-8")
+                .lines()
+                .map(|line| serde_json::from_str(line).expect("audit line is JSON"))
+                .collect()
+        }
+
+        /// Accept `accepted` more entries, then refuse every later append.
+        /// The writer stops at its first refused append, as it does when a
+        /// real destination fails.
+        pub fn fail_after(&self, accepted: usize) {
+            self.0.lock().expect("audit capture lock").remaining = Some(accepted);
+        }
+
+        /// Accept every later entry again. A writer that already refused an
+        /// append stays failed; only a writer opened afterwards appends.
+        pub fn restore(&self) {
+            let mut state = self.0.lock().expect("audit capture lock");
+            state.remaining = None;
+            state.refuse = None;
+        }
+
+        /// Accept entries until the first one carrying envelope `schema` and
+        /// record `phase`, then refuse it and every later append.
+        pub fn fail_on(&self, schema: &str, phase: &str) {
+            self.0.lock().expect("audit capture lock").refuse =
+                Some((schema.to_owned(), phase.to_owned()));
+        }
+
+        /// Another [`RegistryAudit`] recording into this capture, as a second
+        /// process appending to the same destination would.
+        #[must_use]
+        pub fn audit(&self, profile: AuditProfile) -> RegistryAudit {
+            let writer = AuditWriter::from_line_sink(Box::new(CaptureSink(Arc::clone(&self.0))));
+            RegistryAudit::new(profile, writer)
+        }
+    }
+
+    /// A [`RegistryAudit`] whose writer records to memory.
+    #[must_use]
+    pub fn capturing(profile: AuditProfile) -> (RegistryAudit, AuditCapture) {
+        let capture = AuditCapture::default();
+        (capture.audit(profile), capture)
     }
 }
 
@@ -1037,5 +1100,93 @@ mod action_terminal_tests {
             action_terminal_record(terminal(TerminalAuditOutcome::Committed), "", &profile()),
             Err(RegistryAuditError::InvalidContext)
         );
+    }
+
+    #[test]
+    fn terminal_entry_is_a_response_correlated_by_the_request_id_without_a_record_schema() {
+        let outcome = terminal(TerminalAuditOutcome::Committed);
+        let request_id = outcome.correlation.request_id().to_string();
+        let entry = action_terminal_entry(&profile(), outcome, "protected-application")
+            .expect("action terminal entry");
+        assert_eq!(entry.schema(), AUDIT_SCHEMA);
+        assert_eq!(entry.phase(), registry_platform_audit::AuditPhase::Response);
+        assert_eq!(entry.correlation(), request_id);
+        assert!(entry.record().get("schema").is_none());
+        assert_eq!(entry.record()["phase"], "terminal");
+        assert_eq!(entry.record()["outcome"], "committed");
+    }
+
+    #[test]
+    fn webhook_attempt_and_terminal_share_the_attempt_identity() {
+        let event_id = Uuid::new_v4();
+        let event = |phase, outcome, disposition| WebhookAudit {
+            event_id,
+            compiled_delivery_id: "delivery",
+            package_revision: "package-revision",
+            generation: 1,
+            attempt: 2,
+            phase,
+            outcome,
+            disposition,
+        };
+        let attempt = webhook_entry(
+            &profile(),
+            event(
+                WebhookAuditPhase::Attempt,
+                WebhookAuditOutcome::AttemptStarted,
+                WebhookAuditDisposition::Leased,
+            ),
+        )
+        .expect("attempt entry");
+        let terminal = webhook_entry(
+            &profile(),
+            event(
+                WebhookAuditPhase::Terminal,
+                WebhookAuditOutcome::Delivered,
+                WebhookAuditDisposition::Delivered,
+            ),
+        )
+        .expect("terminal entry");
+        assert_eq!(
+            attempt.phase(),
+            registry_platform_audit::AuditPhase::Request
+        );
+        assert_eq!(
+            terminal.phase(),
+            registry_platform_audit::AuditPhase::Response
+        );
+        assert_eq!(attempt.correlation(), terminal.correlation());
+        assert_eq!(attempt.schema(), WEBHOOK_AUDIT_SCHEMA);
+        assert!(!attempt.correlation().contains(&event_id.to_string()));
+        assert!(!attempt.correlation().contains("delivery."));
+    }
+
+    #[test]
+    fn unkeyed_profile_is_refused_by_the_key_hasher_check_alone() {
+        assert!(profile_is_keyed(&profile()));
+        assert!(!profile_is_keyed(&AuditProfile::unkeyed_dev_only()));
+    }
+
+    #[tokio::test]
+    async fn capture_refuses_appends_after_its_budget_and_the_writer_stays_stopped() {
+        let (audit, capture) = test_support::capturing(profile());
+        capture.fail_after(1);
+        let entry = || {
+            registry_platform_audit::AuditEntry::request(
+                AUDIT_SCHEMA,
+                "c",
+                json!({"phase": "attempt"}),
+            )
+        };
+        assert_eq!(audit.append(entry()).await, Ok(()));
+        assert_eq!(
+            audit.append(entry()).await,
+            Err(RegistryAuditError::Unavailable)
+        );
+        assert_eq!(
+            audit.append(entry()).await,
+            Err(RegistryAuditError::Unavailable)
+        );
+        assert_eq!(capture.entries().len(), 1);
     }
 }

@@ -17,6 +17,7 @@ use registry_breg::api::{
     router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
     VerifiedRequestClaims,
 };
+use registry_breg::audit::RegistryAudit;
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_project_json, Operation};
 use registry_breg::cursor::CursorCodec;
@@ -30,7 +31,7 @@ use registry_breg::postgres::{
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
     RegistryStateTestIdentity, RowBoundaryContext,
 };
-use registry_platform_audit::{verify_jsonl_lines_with_hasher, AuditEnvelope, AuditProfile};
+use registry_platform_audit::AuditProfile;
 use serde_json::{json, Map, Value};
 use tower::Service as _;
 use uuid::Uuid;
@@ -193,8 +194,10 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
         .runtime_config
         .build_pool()
         .expect("bounded runtime pool builds");
-    let profile = AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into())
-        .expect("test owns a strong keyed audit profile");
+    let profile = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into())
+            .expect("test owns a strong keyed audit profile"),
+    );
     let coordinator = MutationCoordinator::new(
         RegistryLockKey::derive("mutation-registry").expect("lock id is bounded"),
         Duration::from_secs(2),
@@ -916,7 +919,239 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
     )
     .await;
 
-    assert_journals_are_minimized_and_chained(&database, &profile).await;
+    assert_journals_are_minimized_and_paired(&database).await;
+    database.cleanup().await;
+}
+
+async fn prepared_mutation_registry(
+    database: &TestDatabase,
+) -> (
+    registry_breg::CompiledRegistry,
+    registry_breg::postgres::ExpectedRegistryIdentity,
+    registry_breg::postgres::RuntimePool,
+) {
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = compiled_registry();
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("migration installs the complete compiler-owned PostgreSQL schema");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        RegistryStateTestIdentity {
+            package_id: PACKAGE_ID,
+            environment: "local",
+            instance_id: INSTANCE_ID,
+            database_id: DATABASE_ID,
+            package_revision: "package-mutation-1",
+            package_sequence: 1,
+        },
+    )
+    .await
+    .expect("migration initializes the active package after exact schema install");
+    migration_task.abort();
+    let pool = database
+        .runtime_config
+        .build_pool()
+        .expect("bounded runtime pool builds");
+    (compiled, identity, pool)
+}
+
+fn audited_coordinator(
+    database: &TestDatabase,
+    identity: &registry_breg::postgres::ExpectedRegistryIdentity,
+) -> MutationCoordinator {
+    MutationCoordinator::new(
+        RegistryLockKey::derive("mutation-registry").expect("lock id is bounded"),
+        Duration::from_secs(2),
+        identity.clone(),
+        database.audit(
+            AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into())
+                .expect("test owns a strong keyed audit profile"),
+        ),
+    )
+}
+
+/// A refused request entry stops the mutation before any protected I/O. A
+/// refused response entry comes after the commit, so the effect is durable
+/// while the caller receives the audit-unavailable refusal; a restarted
+/// process then releases that committed result only as an audited replay.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_mutation_audit_refusals_fail_closed_around_the_commit() {
+    let database = TestDatabase::create(4).await;
+    let (compiled, identity, pool) = prepared_mutation_registry(&database).await;
+    let create_plan = MutationPlan::from_compiled(&compiled, "records.widget.create")
+        .expect("create plan comes from the compiled inventory");
+    let claims = mutation_claims(&compiled, PRINCIPAL_CANARY, "zone-a");
+    let table = &compiled.entities()["widget"].physical_table;
+    let mut client = pool
+        .get_for_test()
+        .await
+        .expect("runtime connection is available");
+
+    let before = durable_counts(&database, table).await;
+    database.audit_capture().fail_after(0);
+    let refused = audited_coordinator(&database, &identity)
+        .execute(
+            &mut client,
+            create_request(
+                &create_plan,
+                "refused-request-entry",
+                &claims,
+                RECORD_RECOVERY,
+                "refused-request-label",
+                Some(3),
+            ),
+        )
+        .await;
+    assert_eq!(refused, Err(MutationError::Unavailable));
+    assert_eq!(
+        durable_counts(&database, table).await,
+        before,
+        "a refused request entry leaves no record, revision, outbox, receipt, or entry"
+    );
+    database.audit_capture().restore();
+
+    database
+        .audit_capture()
+        .fail_on(registry_breg::audit::AUDIT_SCHEMA, "terminal");
+    let crash_gap = audited_coordinator(&database, &identity)
+        .execute(
+            &mut client,
+            create_request(
+                &create_plan,
+                "refused-response-entry",
+                &claims,
+                RECORD_RECOVERY,
+                "committed-label",
+                Some(4),
+            ),
+        )
+        .await;
+    assert_eq!(crash_gap, Err(MutationError::Unavailable));
+    let after_gap = durable_counts(&database, table).await;
+    assert_eq!(
+        after_gap,
+        DurableCounts {
+            current: before.current + 1,
+            revisions: before.revisions + 1,
+            outbox: before.outbox + 1,
+            audit: before.audit + 1,
+            idempotency: before.idempotency + 1,
+            commits: before.commits + 1,
+            commit_members: before.commit_members + 1,
+        },
+        "the effect commits before its response entry, which the destination refused"
+    );
+    let entries = database.audit_entries();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[0]["record"]["phase"], "attempt");
+    database.audit_capture().restore();
+
+    let replay = audited_coordinator(&database, &identity)
+        .execute(
+            &mut client,
+            create_request(
+                &create_plan,
+                "refused-response-entry",
+                &claims,
+                RECORD_RECOVERY,
+                "committed-label",
+                Some(4),
+            ),
+        )
+        .await
+        .expect("a restarted process replays the committed result");
+    assert!(replay.replayed());
+    assert_audited_replay_only(after_gap, durable_counts(&database, table).await);
+    let entries = database.audit_entries();
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[1]["phase"], "request");
+    assert_eq!(entries[2]["phase"], "response");
+    assert_eq!(entries[2]["record"]["outcome"], "replayed");
+    assert_eq!(entries[1]["correlation"], entries[2]["correlation"]);
+
+    drop(client);
+    drop(pool);
+    database.cleanup().await;
+}
+
+/// Two runtimes over one database each own their audit writer. Their
+/// concurrent mutations commit independently, and every request entry is
+/// answered by exactly one response entry carrying its correlation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_runtimes_audit_concurrent_mutations_through_their_own_writers() {
+    const PER_RUNTIME: usize = 6;
+    let database = TestDatabase::create(8).await;
+    let (compiled, identity, pool) = prepared_mutation_registry(&database).await;
+    let create_plan = MutationPlan::from_compiled(&compiled, "records.widget.create")
+        .expect("create plan comes from the compiled inventory");
+    let claims = mutation_claims(&compiled, PRINCIPAL_CANARY, "zone-a");
+    let table = &compiled.entities()["widget"].physical_table;
+    let before = durable_counts(&database, table).await;
+
+    let run = |runtime: usize, coordinator: MutationCoordinator| {
+        let pool = pool.clone();
+        let create_plan = &create_plan;
+        let claims = &claims;
+        async move {
+            let mut client = pool
+                .get_for_test()
+                .await
+                .expect("runtime connection is available");
+            for index in 0..PER_RUNTIME {
+                let key = format!("runtime-{runtime}-create-{index}");
+                let label = format!("concurrent-label-{runtime}-{index}");
+                let outcome = coordinator
+                    .execute(
+                        &mut client,
+                        create_request(
+                            create_plan,
+                            &key,
+                            claims,
+                            RECORD_CONCURRENT,
+                            &label,
+                            Some(1),
+                        ),
+                    )
+                    .await
+                    .expect("each runtime commits its own mutation");
+                assert!(!outcome.replayed());
+            }
+        }
+    };
+    tokio::join!(
+        run(0, audited_coordinator(&database, &identity)),
+        run(1, audited_coordinator(&database, &identity)),
+    );
+
+    let created = i64::try_from(2 * PER_RUNTIME).expect("count fits i64");
+    let after = durable_counts(&database, table).await;
+    assert_eq!(after.current, before.current + created);
+    assert_eq!(after.revisions, before.revisions + created);
+    assert_eq!(after.idempotency, before.idempotency + created);
+    assert_eq!(after.audit, before.audit + 2 * created);
+    let entries = database.audit_entries();
+    let mut correlations = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for entry in &entries {
+        correlations
+            .entry(
+                entry["correlation"]
+                    .as_str()
+                    .expect("correlation")
+                    .to_owned(),
+            )
+            .or_default()
+            .push(entry["phase"].as_str().expect("phase").to_owned());
+    }
+    assert_eq!(correlations.len(), 2 * PER_RUNTIME);
+    for phases in correlations.values() {
+        assert_eq!(phases, &["request".to_owned(), "response".to_owned()]);
+    }
+
+    drop(pool);
     database.cleanup().await;
 }
 
@@ -946,8 +1181,10 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     migration_task.abort();
 
     let pool = database.runtime_config.build_pool().expect("pool builds");
-    let profile = AuditProfile::production_from_secret_bytes(vec![0x6b; 32].into())
-        .expect("test owns keyed audit");
+    let profile = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x6b; 32].into())
+            .expect("test owns keyed audit"),
+    );
     let lock_key = RegistryLockKey::derive("mutation-registry").expect("lock id is bounded");
     let app = mutation_router(
         pool.clone(),
@@ -2026,7 +2263,7 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         "terminal audit failure releases no success bytes and commits no mutation packet"
     );
 
-    assert_journals_are_minimized_and_chained(&database, &profile).await;
+    assert_journals_are_minimized_and_paired(&database).await;
     database.cleanup().await;
 }
 
@@ -2056,8 +2293,10 @@ async fn refusal_audit_records_only_compiled_access_profiles() {
     migration_task.abort();
 
     let pool = database.runtime_config.build_pool().expect("pool builds");
-    let profile = AuditProfile::production_from_secret_bytes(vec![0x6b; 32].into())
-        .expect("test owns keyed audit");
+    let profile = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x6b; 32].into())
+            .expect("test owns keyed audit"),
+    );
     let lock_key = RegistryLockKey::derive("mutation-registry").expect("lock id is bounded");
     let app = mutation_router(
         pool.clone(),
@@ -2147,7 +2386,7 @@ fn mutation_refusal_audit_fault_router(
     registry: Arc<registry_breg::CompiledRegistry>,
     identity: registry_breg::postgres::ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
-    profile: AuditProfile,
+    profile: RegistryAudit,
 ) -> axum::Router {
     let cursors = test_cursor_codec();
     let records = Arc::new(PostgresRecordReadService::new(
@@ -2189,7 +2428,7 @@ fn mutation_router(
     registry: Arc<registry_breg::CompiledRegistry>,
     identity: registry_breg::postgres::ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
-    profile: AuditProfile,
+    profile: RegistryAudit,
     fault: Option<MutationFaultPoint>,
 ) -> axum::Router {
     let cursors = test_cursor_codec();
@@ -2778,7 +3017,6 @@ async fn durable_counts(database: &TestDatabase, table: &str) -> DurableCounts {
                    (SELECT count(*) FROM registry_data.\"{table}\"),
                    (SELECT count(*) FROM registry_internal.registry_revisions),
                    (SELECT count(*) FROM registry_internal.registry_outbox),
-                   (SELECT count(*) FROM registry_internal.registry_audit),
                    (SELECT count(*) FROM registry_internal.registry_idempotency),
                    (SELECT count(*) FROM registry_internal.registry_revision_commits),
                    (SELECT count(*) FROM registry_internal.registry_revision_commit_members)"
@@ -2791,45 +3029,23 @@ async fn durable_counts(database: &TestDatabase, table: &str) -> DurableCounts {
         current: row.get(0),
         revisions: row.get(1),
         outbox: row.get(2),
-        audit: row.get(3),
-        idempotency: row.get(4),
-        commits: row.get(5),
-        commit_members: row.get(6),
+        audit: i64::try_from(database.audit_entries().len()).expect("audit count fits i64"),
+        idempotency: row.get(3),
+        commits: row.get(4),
+        commit_members: row.get(5),
     }
 }
 
 async fn refusal_audit_envelopes(database: &TestDatabase) -> Vec<Value> {
     database
-        .admin
-        .query(
-            "SELECT convert_from(envelope, 'UTF8')
-             FROM registry_internal.registry_audit
-             WHERE convert_from(envelope, 'UTF8') LIKE '%\"phase\":\"refusal\"%'",
-            &[],
-        )
-        .await
-        .expect("administrator can inspect minimized refusal audit events")
-        .iter()
-        .map(|row| {
-            serde_json::from_str::<Value>(row.get(0)).expect("audit envelope is platform JSON")
-                ["record"]
-                .clone()
-        })
+        .audit_records()
+        .into_iter()
+        .filter(|record| record["phase"] == "refusal")
         .collect()
 }
 
 async fn refusal_audit_count(database: &TestDatabase) -> i64 {
-    database
-        .admin
-        .query_one(
-            "SELECT count(*)
-             FROM registry_internal.registry_audit
-             WHERE convert_from(envelope, 'UTF8') LIKE '%\"phase\":\"refusal\"%'",
-            &[],
-        )
-        .await
-        .expect("administrator can inspect minimized refusal audit events")
-        .get(0)
+    i64::try_from(refusal_audit_envelopes(database).await.len()).expect("refusal count fits i64")
 }
 
 async fn assert_patch_preserved_omitted_field(
@@ -2894,40 +3110,21 @@ async fn assert_patch_preserved_omitted_field(
     assert_eq!(quantity, 41);
 }
 
-async fn assert_journals_are_minimized_and_chained(
-    database: &TestDatabase,
-    profile: &AuditProfile,
-) {
-    let audit_rows = database
-        .admin
-        .query("SELECT envelope FROM registry_internal.registry_audit", &[])
-        .await
-        .expect("administrator can inspect audit envelopes");
-    let mut envelopes = audit_rows
-        .iter()
-        .map(|row| {
-            serde_json::from_slice::<AuditEnvelope>(&row.get::<_, Vec<u8>>(0))
-                .expect("audit envelope is canonical platform JSON")
-        })
-        .collect::<Vec<_>>();
-    let mut ordered = Vec::with_capacity(envelopes.len());
-    let mut predecessor = None;
-    while !envelopes.is_empty() {
-        let position = envelopes
-            .iter()
-            .position(|envelope| envelope.prev_hash == predecessor)
-            .expect("database audit chain has one next envelope");
-        let envelope = envelopes.remove(position);
-        predecessor = Some(envelope.record_hash);
-        ordered.push(envelope);
+async fn assert_journals_are_minimized_and_paired(database: &TestDatabase) {
+    let ordered = database.audit_entries();
+    for entry in &ordered {
+        let expected = if entry["record"]["phase"] == "attempt" {
+            "request"
+        } else {
+            "response"
+        };
+        assert_eq!(entry["phase"], expected, "{entry}");
     }
-    let audit_lines = ordered
+    let audit_text = ordered
         .iter()
-        .map(|envelope| serde_json::to_string(envelope).expect("audit envelope serializes"))
-        .collect::<Vec<_>>();
-    verify_jsonl_lines_with_hasher(audit_lines.iter(), &profile.chain_hasher())
-        .expect("database audit envelopes form one keyed platform chain");
-    let audit_text = audit_lines.join("\n");
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(!audit_text.contains(PRINCIPAL_CANARY));
     assert!(!audit_text.contains(BREG_SEC_13_PRINCIPAL_CANARY));
     assert!(!audit_text.contains(BREG_SEC_13_TOKEN_CANARY));
@@ -2945,26 +3142,32 @@ async fn assert_journals_are_minimized_and_chained(
     assert!(audit_text.contains("principalReference"));
     assert!(audit_text.contains("recordReference"));
 
-    for (position, envelope) in ordered.iter().enumerate() {
-        if envelope.record["schema"] != "breg-audit/v1" {
+    for (position, entry) in ordered.iter().enumerate() {
+        if entry["schema"] != registry_breg::audit::AUDIT_SCHEMA {
             continue;
         }
-        let request_id = envelope.record["requestId"]
+        let record = &entry["record"];
+        let request_id = record["requestId"]
             .as_str()
             .expect("HTTP audit carries requestId");
         uuid::Uuid::parse_str(request_id).expect("requestId is a server UUID");
-        let trace_id = envelope.record["traceId"]
+        let trace_id = record["traceId"]
             .as_str()
             .expect("HTTP audit carries traceId");
         assert_eq!(trace_id.len(), 32);
-        if envelope.record["phase"] == "terminal" {
-            let operation_id = &envelope.record["operationId"];
-            assert!(ordered[..position].iter().any(|candidate| {
-                candidate.record["phase"] == "attempt"
-                    && candidate.record["operationId"] == *operation_id
-                    && candidate.record["requestId"] == request_id
-                    && candidate.record["traceId"] == trace_id
-            }));
+        if record["phase"] == "terminal" {
+            let operation_id = &record["operationId"];
+            assert!(
+                ordered[..position].iter().any(|candidate| {
+                    candidate["phase"] == "request"
+                        && candidate["correlation"] == entry["correlation"]
+                        && candidate["record"]["phase"] == "attempt"
+                        && candidate["record"]["operationId"] == *operation_id
+                        && candidate["record"]["requestId"] == request_id
+                        && candidate["record"]["traceId"] == trace_id
+                }),
+                "a terminal response shares its attempt request's correlation"
+            );
         }
     }
 

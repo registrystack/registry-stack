@@ -4729,8 +4729,8 @@ fn method_name(method: crate::model::HttpMethod) -> &'static str {
 ///
 /// A caller with no principal names nobody the journal could hold
 /// accountable, and an unauthenticated caller that could append would grow
-/// the hash chain without bound and serialize every audited write behind its
-/// head lock. The refusal keeps its operational signal as a bounded counter
+/// the journal without bound. The refusal keeps its operational signal as a
+/// bounded counter
 /// and a debug line; refusals of an authenticated principal are unaffected
 /// and still append.
 fn anonymous_refusal(mut response: Response, reason: AnonymousRefusalReason) -> Response {

@@ -119,6 +119,12 @@ impl StartupFixture {
 
     fn write_config(&self, package: &PackageFixture) -> PathBuf {
         let path = self.root.join("runtime.yaml");
+        let audit_path = self
+            .root
+            .join("audit")
+            .join("audit.jsonl")
+            .display()
+            .to_string();
         fs::write(
             &path,
             format!(
@@ -173,6 +179,7 @@ authentication:
     principal: principal
 audit:
   hashKeyRef: secret:file/missing-audit-key
+  path: {audit_path}
 cursor:
   secretRef: secret:file/missing-cursor-key
   maxAgeSeconds: 300

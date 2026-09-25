@@ -3792,8 +3792,10 @@ async fn reconcile(
     current_registry: &CompiledRegistry,
     execute: bool,
 ) -> Result<ReconcileReport, ReconcileError> {
-    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x63; 32].into())
-        .expect("test owns a keyed audit profile");
+    let audit = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x63; 32].into())
+            .expect("test owns a keyed audit profile"),
+    );
     reconcile_failed_migration(ReconcileRequest {
         config: &database.migration_config,
         target_package: package,
@@ -3803,7 +3805,7 @@ async fn reconcile(
         runtime_role: &database.runtime_role,
         timeouts: ReconcileTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
             .expect("test timeouts are bounded"),
-        audit_profile: &audit_profile,
+        audit: &audit,
         operator_reference: RECONCILE_OPERATOR_CANARY,
         execute,
     })
@@ -3824,13 +3826,13 @@ fn target_identity(package: &VerifiedPackage) -> ExpectedRegistryIdentity {
 }
 
 /// The whole durable maintenance record an assessment must leave untouched:
-/// the state row, every ledger row and step, and the audit journal.
+/// the state row, every ledger row and step, and the audit entries.
 async fn durable_snapshot(
     database: &TestDatabase,
 ) -> (
     Vec<(String, String, String)>,
     Vec<(String, Option<Uuid>, i64)>,
-    Vec<Vec<u8>>,
+    Vec<String>,
     (String, String, Option<String>),
 ) {
     let steps = database
@@ -3847,15 +3849,9 @@ async fn durable_snapshot(
         .map(|row| (row.get(0), row.get(1), row.get(2)))
         .collect();
     let audit = database
-        .admin
-        .query(
-            "SELECT record_hash FROM registry_internal.registry_audit ORDER BY record_hash",
-            &[],
-        )
-        .await
-        .expect("audit journal reads")
-        .into_iter()
-        .map(|row| row.get(0))
+        .audit_entries()
+        .iter()
+        .map(serde_json::Value::to_string)
         .collect();
     let state = database
         .admin
@@ -3877,17 +3873,12 @@ async fn durable_snapshot(
 /// The reconciliation audit record carries identities, the plan shape, and
 /// counts. The operator's own reference must reach it only as a keyed hash.
 async fn assert_reconcile_audit_is_minimized(database: &TestDatabase, action: &str) {
-    let envelopes = database
-        .admin
-        .query("SELECT envelope FROM registry_internal.registry_audit", &[])
-        .await
-        .expect("audit journal reads");
     let mut matched = 0;
-    for row in &envelopes {
-        let bytes: Vec<u8> = row.get(0);
-        let text = String::from_utf8(bytes).expect("audit envelopes are UTF-8");
+    for entry in database.audit_entries() {
+        let text = entry.to_string();
         assert!(!text.contains(RECONCILE_OPERATOR_CANARY));
-        if text.contains("breg-migration-reconcile-audit/v1") {
+        if entry["schema"] == "breg-migration-reconcile-audit/v2" {
+            assert_eq!(entry["phase"], "response");
             assert!(text.contains(&format!("\"action\":\"{action}\"")));
             matched += 1;
         }

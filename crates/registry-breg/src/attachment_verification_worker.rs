@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use registry_platform_audit::AuditProfile;
+use registry_platform_audit::AuditEntry;
 use serde_json::json;
 use tokio::sync::watch;
 use tokio_postgres::{Client, Transaction};
@@ -12,6 +12,7 @@ use tokio_postgres::{Client, Transaction};
 use crate::attachment_storage::AttachmentStorage;
 use crate::attachment_store::{self, VerificationJob};
 use crate::attachment_verification::{AttachmentVerification, AttachmentVerificationVerdict};
+use crate::audit::RegistryAudit;
 use crate::postgres::{ExpectedRegistryIdentity, RegistryLockKey, RuntimePool};
 
 #[derive(Clone)]
@@ -20,10 +21,14 @@ pub struct AttachmentVerificationWorker {
     expected: ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
     lock_timeout: Duration,
-    audit: AuditProfile,
+    audit: RegistryAudit,
     storage: AttachmentStorage,
     verification: AttachmentVerification,
 }
+
+/// The audit schema of the attachment-verification attempt and outcome
+/// entries.
+pub const ATTACHMENT_VERIFICATION_AUDIT_SCHEMA: &str = "breg-attachment-verification-audit/v1";
 
 #[derive(Debug, thiserror::Error)]
 #[error("attachment verification work is unavailable")]
@@ -39,7 +44,7 @@ impl AttachmentVerificationWorker {
         expected: ExpectedRegistryIdentity,
         lock_key: RegistryLockKey,
         lock_timeout: Duration,
-        audit: AuditProfile,
+        audit: RegistryAudit,
         storage: AttachmentStorage,
         verification: AttachmentVerification,
     ) -> Self {
@@ -78,9 +83,11 @@ impl AttachmentVerificationWorker {
         }
     }
 
-    /// Claim and process at most one job. The attempt commits before any
-    /// content read or verifier request; verdict and terminal audit commit
-    /// together. Cancellation leaves a lease which another worker can retry.
+    /// Claim and process at most one job. The lease commits and the attempt's
+    /// `request` entry is accepted before any content read or verifier
+    /// request; the verdict commits before its `response` entry is appended.
+    /// A refused entry or a cancellation leaves a lease which another worker
+    /// can retry.
     pub async fn run_once(&self) -> Result<bool> {
         // The durable lease is four minutes. A whole iteration, including
         // database waits and both external services, gets at most three, so a
@@ -104,10 +111,9 @@ impl AttachmentVerificationWorker {
             transaction.commit().await.map_err(unavailable)?;
             return Ok(false);
         };
-        self.audit_job(&transaction, &job, "attempt", "started")
-            .await?;
         transaction.commit().await.map_err(unavailable)?;
         drop(client);
+        self.audit_job(&job, "attempt", "started").await?;
 
         let verdict = match self.content(&job).await {
             Ok(bytes) => verifier
@@ -137,14 +143,13 @@ impl AttachmentVerificationWorker {
         };
         // Erasure or lease expiry can win while the external verifier runs.
         // A stale verdict never creates replacement work or references.
+        transaction.commit().await.map_err(unavailable)?;
         self.audit_job(
-            &transaction,
             &job,
             "terminal",
             if updated { outcome } else { "discarded" },
         )
         .await?;
-        transaction.commit().await.map_err(unavailable)?;
         if updated && verdict.is_none() {
             crate::startup::OperationalEvent::AttachmentVerificationRetryPending.emit();
         }
@@ -232,14 +237,11 @@ impl AttachmentVerificationWorker {
         Ok(transaction)
     }
 
-    async fn audit_job(
-        &self,
-        transaction: &Transaction<'_>,
-        job: &VerificationJob,
-        phase: &str,
-        outcome: &str,
-    ) -> Result<()> {
-        let hasher = self.audit.key_hasher();
+    /// Append one verification entry. The attempt is the `request` entry and
+    /// the terminal outcome is the `response` entry; both are correlated by
+    /// the keyed verification reference of the leased job.
+    async fn audit_job(&self, job: &VerificationJob, phase: &str, outcome: &str) -> Result<()> {
+        let hasher = self.audit.profile().key_hasher();
         let reference = hasher
             .audit_reference_hash(
                 "breg-attachment-verification-v1",
@@ -247,17 +249,17 @@ impl AttachmentVerificationWorker {
                 &format!("{}:{}:{}", job.sha256, job.content_type, job.lease_id),
             )
             .map_err(unavailable)?;
-        crate::audit::append_envelope(
-            transaction,
-            &self.audit,
-            json!({
-                "kind": "attachmentVerification", "phase": phase, "outcome": outcome,
-                "packageRevision": self.expected.package_revision,
-                "actor": "breg:attachment-verifier", "verificationReference": reference,
-            }),
-        )
-        .await
-        .map_err(unavailable)
+        let record = json!({
+            "kind": "attachmentVerification", "phase": phase, "outcome": outcome,
+            "packageRevision": self.expected.package_revision,
+            "actor": "breg:attachment-verifier", "verificationReference": reference,
+        });
+        let entry = if phase == "attempt" {
+            AuditEntry::request(ATTACHMENT_VERIFICATION_AUDIT_SCHEMA, reference, record)
+        } else {
+            AuditEntry::response(ATTACHMENT_VERIFICATION_AUDIT_SCHEMA, reference, record)
+        };
+        self.audit.append(entry).await.map_err(unavailable)
     }
 }
 
