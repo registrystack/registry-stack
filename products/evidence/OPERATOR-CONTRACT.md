@@ -1225,60 +1225,66 @@ create this event.
 
 ## Measured throughput
 
-One end-to-end measurement is kept in the repository so capacity planning
-starts from a number rather than an estimate. It drives the real router over
-real sockets, and every request in it runs token verification, rate limiting,
-Rhai request preparation, one outbound source call, Rhai extraction, evidence
-construction, in-process ES256 signing, and both durable audit appends for each
-successful request. It does not model the latency or availability of an
-external Transit deployment.
+This end-to-end measurement drives the real router over real sockets. Every
+request runs token verification, rate limiting, Rhai request preparation, one
+outbound source call, Rhai extraction, evidence construction, in-process ES256
+signing, and both durable file audit appends. It does not model an external
+Transit deployment's latency or availability.
+
+The test copies `products/evidence/fixtures/acceptance/all-definitions` into a
+temporary deployment and drives its adult-status request. It uses a local
+signer, a preconfigured test authenticator, and the actual file-backed audit
+writer with group commit, writing a temporary `audit.jsonl`. No audit sink is
+injected. The fixed upstream JSON and raised fixture limits below make this a
+controlled local journey, not a production workload.
+
+These figures come from a shared development machine and are directional,
+not deployment capacity claims. Unrelated compilation overlapped this run;
+they do not establish a performance change from earlier measurements.
 
 | Measurement | Value |
 |---|---|
-| Sustained rate | 7057 requests/second |
-| Audit appends | 14 115 appends/second (two per request) |
-| Latency p50 / p95 / p99 | 17.89 / 21.37 / 23.03 ms |
-| Non-2xx responses | 0 |
+| Sustained rate | 5,461 requests/second |
+| Audit appends | 10,923 appends/second (two per request, independently rounded) |
+| Latency p50 / p95 / p99 | 20.07 / 44.82 / 64.75 ms |
+| Non-2xx responses and failures | 0 |
 | Offered concurrency | 128 requests in flight, 128 principals |
 | Window | 10 s measured, after a 3 s unmeasured warm-up |
 | Host | Apple M5 Max, 18 logical cores, macOS 26.4.1, optimized build |
-| Date | 2026-08-03 |
+| Host load averages, start / end (1, 5, 15 min) | 31.11, 28.39, 23.68 / 45.46, 32.14, 25.17 |
+| Unrelated compiler processes, start / end | 1 Cargo and 17 rustc / 1 Cargo and 8 rustc |
+| Source revision | `8821b3a67` |
+| Date | 2026-09-25 |
 
 Reproduce with:
 
 ```bash
-cargo test --release -p registry-evidence --lib -- \
+cargo test --locked --release -p registry-evidence --lib -- \
   --ignored --nocapture sustained_load_holds_one_thousand_requests_per_second
 ```
 
-The row records one run. An independent repeat of it on the same host measured
-6976 requests/second at a p50 of 17.75 ms, so treat the rate as carrying about
-a percent of run-to-run variation rather than as an exact figure. The same
-check passes on an unoptimized build at 3183 requests/second with a p50 of
-40.11 ms.
+The release test was compiled before the timed window. The check passed and
+verified one access-attempt and one disclosure-release audit record for every
+released assertion. Absolute rate and latency on this shared host remain
+directional observations, not acceptance gates for the audit simplification.
 
-The measurement is only meaningful if the upstream source is not the thing
-being measured, so the harness serves it from a minimal in-process handler
-returning one constant JSON body and measures that handler's own standalone
-ceiling in the same run, under the same client, worker count, header set, and
-window. That ceiling was 145 273 requests/second, 20.6 times the Evidence
-rate. The check refuses to report a pass or a failure below 5 times, and
-reports the run as inconclusive instead.
+The harness serves the upstream source from a minimal in-process handler
+returning one constant JSON body. It measures that handler's standalone
+ceiling in the same run, with the same client, worker count, header set, and
+window. The source sustained 130,722 requests/second with no failures, 23.9
+times the Evidence rate. Below five times the Evidence rate, the check reports
+an inconclusive result because the source harness may be the bottleneck.
 
-Latency here is a closed-loop consequence of the offered concurrency: 128
-requests in flight at 7057 requests/second is about 18 ms each. A deployment
-offering less concurrency sees lower latency and a lower rate. The audit sink
-commits in groups, so its rate rises with the number of appends in flight and
-falls sharply when few are; a deployment that expects high throughput must let
-requests overlap.
+Latency is a closed-loop consequence of the offered concurrency. A deployment
+with fewer requests in flight sees a different latency and rate. The audit
+writer commits in groups, so concurrent appends can share a write and fsync;
+this measurement does not represent the per-record cost at low concurrency.
 
-The harness lifts four production-meaningful defaults that would otherwise
-become the thing measured, and lifts them only in its own temporary copy of
-the fixture bundle: the per-principal rate limits, `maximumConcurrentRequests`,
-each source's outbound `concurrencyLimit`, and the audit file's
-`rotateBytes`. Those raised values are measurement scaffolding, not a
-recommended deployment posture. Keep the shipped defaults and tune from
-observed traffic.
+The harness raises four defaults only in its temporary fixture bundle: the
+per-principal rate limits, `maximumConcurrentRequests`, each source's outbound
+`concurrencyLimit`, and the audit file's `rotateBytes`. Those values are
+measurement scaffolding, not a recommended deployment posture. Keep the
+shipped defaults and tune from observed traffic.
 
 ## Capacity planning
 
