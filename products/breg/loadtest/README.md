@@ -177,6 +177,64 @@ products/breg/loadtest/dbstats.sh analyze
 - macOS Docker figures are directional. Re-run candidate capacity claims on a
   representative Linux host before citing them.
 
+## Audit simplification measurement
+
+The 2026-09-25 comparison used release builds at `9a05d3688` (database audit)
+and `8821b3a67` (shared file writer), each with a 100,000-establishment seed,
+2,000 businesses, 5,000 assignments, the stock four-connection pool, and
+`RANDOM_SEED=20260902`. The before environment retained mutations from earlier
+measurement runs, while the after environment started from a fresh seed. The
+seeded identifier pools and nominal seed settings matched; historical state
+was not reset identically. Both cursor-smoke checks passed. Two steady pairs ran
+in before/after/before/after order at 50 operations/s for three minutes, then
+each pair was repeated once in the same order. The optional sweep was omitted.
+
+This was a shared Apple M5 Max development machine with 18 logical cores,
+macOS 26.4.1 and Docker PostgreSQL. All figures are directional, not capacity
+claims or absolute timing gates. The primary observations across the four
+pairs were:
+
+| Database observation | Before | After |
+|---|---|---|
+| Committed transactions per completed workload operation | 3.154–3.287 | 1.712–1.834 |
+| Sampled audit-lock waiters, peak | 3 in every run | 0 in every run |
+| Sampled audit-lock waiters, mean | 0.066–0.127 | 0 |
+| `registry_internal.registry_audit_head` exists | yes | no |
+| Database audit tables | `registry_audit`, `registry_audit_head` | none |
+
+Transactions per operation means the `pg_stat_database.xact_commit` delta
+divided by completed workload operations, including failed operations. It
+includes monitoring transactions and background work. An operation may issue
+multiple HTTP requests; neither the denominator nor the achieved rate counts
+only successful requests. The observed transaction ratio fell by 41.8–47.4%
+across the pairs, while failure counts and completed work differed.
+
+The raw steady observations make those failures explicit:
+
+| Run | Completed operations/s | HTTP 504 / all HTTP requests | p99 (ms) |
+|---|---:|---:|---:|
+| before-1 | 45.211 | 3,525 / 8,815 | 10,008.87 |
+| after-1 | 44.940 | 2,938 / 8,830 | 10,002.94 |
+| before-2 | 45.198 | 3,066 / 8,808 | 10,004.34 |
+| after-2 | 45.037 | 3,061 / 8,827 | 10,007.16 |
+| before-1-retry | 44.933 | 3,058 / 8,830 | 10,005.97 |
+| after-1-retry | 45.131 | 3,150 / 8,832 | 10,005.97 |
+| before-2-retry | 44.964 | 3,105 / 8,824 | 10,004.63 |
+| after-2-retry | 45.220 | 3,929 / 8,794 | 10,014.87 |
+
+Every steady run failed the harness SLO thresholds. Initial pairs 1 and 2
+had slightly lower after rates and overlapping builds, so their timing
+comparisons were discarded and each pair was rerun once. Unrelated builds
+also overlapped the retries. Timing remains inconclusive: this series does
+not establish successful throughput improvement or isolate the remaining
+saturation cause. No thresholds or runtime settings were tuned.
+
+Start/end one-minute host load averages ranged from 5.59 to 36.05. Every run
+retained start/end uptime, build activity, one-second lock samples, database
+counters, manifest, safety scan and raw k6 results. The build sampler counts
+command lines matching Cargo/rustc, including wrappers, so its peaks are
+conservative overlap indicators rather than exact compiler-process counts.
+
 ## Verification
 
 ```bash
