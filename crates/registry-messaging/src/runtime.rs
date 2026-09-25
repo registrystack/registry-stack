@@ -323,11 +323,10 @@ pub async fn assemble(
             .await
             .map_err(|error| RuntimeError::AuditJournal(describe_audit_failure(&error)))?,
     );
-    // The publisher reads the journal's last outbox record before anything
-    // else is appended, so a record a crash left unmarked is not appended
-    // twice.
-    let publisher = Publisher::new(store.clone(), Arc::clone(&audit))
-        .map_err(|error| RuntimeError::AuditJournal(describe_audit_failure(&error)))?;
+    // The publisher first confirms the last outbox record the journal held
+    // when it was opened, authenticated against the verified chain, so a
+    // record a crash left unmarked is not appended twice.
+    let publisher = Publisher::new(store.clone(), Arc::clone(&audit));
     let schema = store
         .current_schema()
         .await

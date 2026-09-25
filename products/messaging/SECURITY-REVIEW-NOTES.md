@@ -192,6 +192,14 @@ identifiers, classes, the principal pseudonym, and a keyed recipient
 reference; never a contact, a part, template data, or the provider's own
 message reference (MESSAGING-DEC-14).
 
+The publisher appends a record and then marks it published, so a crash
+between the two leaves one record appended and unmarked. At start the
+journal reads back from its newest record to its newest outbox record and
+the publisher marks that one first. Every record read back is held to the
+chain head the keyed bootstrap verified, record by record, so an outbox
+record altered in an older sealed segment, which bootstrap does not read,
+refuses the start rather than naming the wrong record.
+
 Reads are not journaled: the status route and `messagingctl messages list`
 and `show` leave no record (MESSAGING-DEC-15). Scheduling's appointment read
 and Casework's review request and task reads are not journaled either;

@@ -299,8 +299,7 @@ impl Harness {
 
     /// Append every pending outbox record to the journal.
     pub async fn publish(&self) {
-        let mut publisher =
-            Publisher::new(self.store.clone(), Arc::clone(&self.audit)).expect("a publisher");
+        let mut publisher = Publisher::new(self.store.clone(), Arc::clone(&self.audit));
         while publisher.publish_pass().await.expect("a publication pass") > 0 {}
     }
 

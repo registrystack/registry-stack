@@ -98,21 +98,16 @@ impl std::fmt::Debug for Publisher {
 }
 
 impl Publisher {
-    /// A publisher that first confirms the journal's last record.
-    ///
-    /// # Errors
-    ///
-    /// The journal's own error when its last record cannot be read.
-    pub fn new(
-        store: PostgresStore,
-        journal: std::sync::Arc<AuditJournal>,
-    ) -> Result<Self, registry_platform_audit::AuditError> {
-        let unconfirmed = journal.last_event_id()?;
-        Ok(Self {
+    /// A publisher that first confirms the last outbox record the journal
+    /// held when it was opened.
+    #[must_use]
+    pub fn new(store: PostgresStore, journal: std::sync::Arc<AuditJournal>) -> Self {
+        let unconfirmed = journal.last_event_id();
+        Self {
             store,
             journal,
             unconfirmed,
-        })
+        }
     }
 
     /// Append every pending record, up to one batch, and mark each

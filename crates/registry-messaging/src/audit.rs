@@ -8,13 +8,14 @@
 //! derives. The journal never carries the subject, a contact, message
 //! content, or template data.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use registry_messaging_core::{CallerIdentity, Recipient};
 use registry_platform_audit::{
-    segmented_audit_paths, AuditEnvelope, AuditError, AuditKeyHasher, AuditProfile,
-    AuditReferenceHashError, AuditSink, ChainState, DurableSegmentedJsonlSink,
+    segmented_audit_paths, verify_chain, AuditChainHasher, AuditEnvelope, AuditError,
+    AuditKeyHasher, AuditProfile, AuditReferenceHashError, AuditSink, ChainState,
+    DurableSegmentedJsonlSink,
 };
 use registry_platform_canonical_json::{canonicalize_json, JcsError};
 use serde::Serialize;
@@ -48,8 +49,9 @@ pub struct AuditJournal {
     sink: Arc<dyn AuditSink>,
     chain: ChainState,
     keys: AuditKeyHasher,
-    /// The journal file, when the journal is durable.
-    path: Option<PathBuf>,
+    /// The `eventId` of the newest outbox record the journal held when it
+    /// was opened.
+    recovered_event_id: Option<Uuid>,
 }
 
 impl std::fmt::Debug for AuditJournal {
@@ -62,15 +64,28 @@ impl std::fmt::Debug for AuditJournal {
 
 impl AuditJournal {
     /// Open the durable journal at `path`, recovering the chain it holds
-    /// under the profile's keyed chain hasher.
+    /// under the profile's keyed chain hasher, and the newest outbox record
+    /// it holds from records authenticated against that chain.
     pub async fn open(path: &Path, profile: &AuditProfile) -> Result<Self, AuditError> {
+        Self::open_segmented(path, profile, MAXIMUM_AUDIT_SEGMENT_BYTES).await
+    }
+
+    async fn open_segmented(
+        path: &Path,
+        profile: &AuditProfile,
+        maximum_segment_bytes: u64,
+    ) -> Result<Self, AuditError> {
         let sink = Arc::new(DurableSegmentedJsonlSink::open(
             path,
-            MAXIMUM_AUDIT_SEGMENT_BYTES,
+            maximum_segment_bytes,
         )?);
         let chain = profile.bootstrap_or_start_empty(sink.as_ref()).await?;
+        // The keyed bootstrap above verified the chain head; the records read
+        // back to the newest outbox record are held to that head.
+        let recovered_event_id =
+            verified_last_event_id(path, &profile.chain_hasher(), chain.last_hash().await)?;
         let mut journal = Self::new(sink, chain, profile.key_hasher());
-        journal.path = Some(path.to_path_buf());
+        journal.recovered_event_id = recovered_event_id;
         Ok(journal)
     }
 
@@ -80,41 +95,18 @@ impl AuditJournal {
             sink,
             chain,
             keys,
-            path: None,
+            recovered_event_id: None,
         }
     }
 
-    /// The `eventId` of the journal's most recent outbox record, when the
-    /// journal is durable and holds one. Records the runtime appends
-    /// directly carry no event id and are passed over. The outbox publisher
-    /// marks the id published before appending anything, so a crash between
-    /// an append and its mark never appends one record twice.
-    pub fn last_event_id(&self) -> Result<Option<Uuid>, AuditError> {
-        let Some(path) = &self.path else {
-            return Ok(None);
-        };
-        for candidate in segmented_audit_paths(path)?.into_iter().rev() {
-            let contents = match std::fs::read_to_string(&candidate) {
-                Ok(contents) => contents,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(AuditError::Io(error)),
-            };
-            for line in contents.lines().rev().filter(|line| !line.is_empty()) {
-                let envelope = serde_json::from_str::<AuditEnvelope>(line)
-                    .map_err(|error| AuditError::Io(std::io::Error::other(error)))?;
-                let Some(value) = envelope.record.get("eventId") else {
-                    continue;
-                };
-                let event_id = value
-                    .as_str()
-                    .and_then(|value| Uuid::parse_str(value).ok())
-                    .ok_or_else(|| {
-                        AuditError::Io(std::io::Error::other("audit record eventId is malformed"))
-                    })?;
-                return Ok(Some(event_id));
-            }
-        }
-        Ok(None)
+    /// The `eventId` of the most recent outbox record the journal held when
+    /// it was opened, when it is durable and holds one. Records the runtime
+    /// appends directly carry no event id and are passed over. The outbox
+    /// publisher marks the id published before appending anything, so a
+    /// crash between an append and its mark never appends one record twice.
+    #[must_use]
+    pub const fn last_event_id(&self) -> Option<Uuid> {
+        self.recovered_event_id
     }
 
     /// Append one record to the chain. The record is durable when this
@@ -157,6 +149,51 @@ impl AuditJournal {
     }
 }
 
+/// Read the journal at `path` back from its newest record to its newest
+/// outbox record, and return that record's `eventId` once every record read
+/// is proven to chain to `head`, the head the keyed bootstrap verified.
+/// Bootstrap verifies the active segment and only the newest sealed record,
+/// so a record read from an older sealed segment is trusted through this
+/// chain alone.
+fn verified_last_event_id(
+    path: &Path,
+    hasher: &AuditChainHasher,
+    head: Option<[u8; 32]>,
+) -> Result<Option<Uuid>, AuditError> {
+    let mut newest_first = Vec::new();
+    let mut event_id = None;
+    'segments: for candidate in segmented_audit_paths(path)?.into_iter().rev() {
+        let contents = match std::fs::read_to_string(&candidate) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(AuditError::Io(error)),
+        };
+        for line in contents.lines().rev().filter(|line| !line.is_empty()) {
+            let envelope = serde_json::from_str::<AuditEnvelope>(line).map_err(AuditError::Json)?;
+            let found = envelope.record.get("eventId").map(|value| {
+                value
+                    .as_str()
+                    .and_then(|value| Uuid::parse_str(value).ok())
+                    .ok_or_else(|| {
+                        AuditError::Io(std::io::Error::other("audit record eventId is malformed"))
+                    })
+            });
+            newest_first.push(envelope);
+            if let Some(found) = found {
+                event_id = Some(found?);
+                break 'segments;
+            }
+        }
+    }
+    newest_first.reverse();
+    let verification =
+        verify_chain(&newest_first, hasher).map_err(AuditError::ChainVerification)?;
+    if verification.last_hash != head {
+        return Err(AuditError::HashMismatch);
+    }
+    Ok(event_id)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -164,7 +201,6 @@ pub(crate) mod tests {
     use std::sync::Mutex;
 
     use async_trait::async_trait;
-    use registry_platform_audit::{AuditChainHasher, AuditEnvelope};
     use serde_json::Value;
 
     /// An in-memory sink that can be told to refuse writes.
@@ -216,25 +252,128 @@ pub(crate) mod tests {
         let profile =
             AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(vec![7u8; 32]))
                 .unwrap();
-        let journal = AuditJournal::open(&path, &profile).await.unwrap();
-        assert_eq!(journal.last_event_id().unwrap(), None);
-        journal
-            .append(serde_json::json!({"event": "direct"}))
-            .await
-            .unwrap();
-        assert_eq!(journal.last_event_id().unwrap(), None);
         let event_id = Uuid::from_u128(42);
-        journal
-            .append(serde_json::json!({"event": "outbox", "eventId": event_id.to_string()}))
-            .await
-            .unwrap();
-        journal
-            .append(serde_json::json!({"event": "direct"}))
-            .await
-            .unwrap();
-        assert_eq!(journal.last_event_id().unwrap(), Some(event_id));
+        {
+            let journal = AuditJournal::open(&path, &profile).await.unwrap();
+            assert_eq!(journal.last_event_id(), None);
+            journal
+                .append(serde_json::json!({"event": "direct"}))
+                .await
+                .unwrap();
+        }
+        {
+            let journal = AuditJournal::open(&path, &profile).await.unwrap();
+            assert_eq!(journal.last_event_id(), None);
+            journal
+                .append(serde_json::json!({"event": "outbox", "eventId": event_id.to_string()}))
+                .await
+                .unwrap();
+            journal
+                .append(serde_json::json!({"event": "direct"}))
+                .await
+                .unwrap();
+        }
+        let journal = AuditJournal::open(&path, &profile).await.unwrap();
+        assert_eq!(journal.last_event_id(), Some(event_id));
         let (_, memory) = memory_journal();
-        assert_eq!(memory.last_event_id().unwrap(), None);
+        assert_eq!(memory.last_event_id(), None);
+    }
+
+    /// Records read back across sealed segments are the ones the chain
+    /// verified, and the id is the newest outbox record's.
+    #[tokio::test]
+    async fn the_last_event_id_is_read_back_across_sealed_segments() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("audit").join("messaging.jsonl");
+        let profile =
+            AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(vec![7u8; 32]))
+                .unwrap();
+        {
+            let journal = AuditJournal::open_segmented(&path, &profile, 600)
+                .await
+                .unwrap();
+            for id in [41, 42] {
+                journal
+                    .append(
+                        serde_json::json!({"event": "outbox", "eventId": Uuid::from_u128(id).to_string()}),
+                    )
+                    .await
+                    .unwrap();
+            }
+            for _ in 0..6 {
+                journal
+                    .append(serde_json::json!({"event": "direct"}))
+                    .await
+                    .unwrap();
+            }
+        }
+        assert!(segmented_audit_paths(&path).unwrap().len() > 2);
+        let journal = AuditJournal::open_segmented(&path, &profile, 600)
+            .await
+            .unwrap();
+        assert_eq!(journal.last_event_id(), Some(Uuid::from_u128(42)));
+    }
+
+    /// Bootstrap verifies the active segment and the newest sealed record
+    /// only, so the walk back to the last outbox record must authenticate
+    /// every record it reads against the verified head.
+    #[tokio::test]
+    async fn an_outbox_record_altered_in_a_sealed_segment_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let audit = directory.path().join("audit");
+        let path = audit.join("messaging.jsonl");
+        let profile =
+            AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(vec![7u8; 32]))
+                .unwrap();
+        let event_id = Uuid::from_u128(42);
+        {
+            let journal = AuditJournal::open_segmented(&path, &profile, 600)
+                .await
+                .unwrap();
+            journal
+                .append(serde_json::json!({"event": "outbox", "eventId": event_id.to_string()}))
+                .await
+                .unwrap();
+            for _ in 0..6 {
+                journal
+                    .append(serde_json::json!({"event": "direct"}))
+                    .await
+                    .unwrap();
+            }
+        }
+        let holding = segmented_audit_paths(&path)
+            .unwrap()
+            .into_iter()
+            .find(|segment| {
+                segment != &path
+                    && std::fs::read_to_string(segment)
+                        .unwrap()
+                        .contains(&event_id.to_string())
+            })
+            .expect("the outbox record is sealed");
+        let contents = std::fs::read_to_string(&holding).unwrap();
+        assert!(
+            !contents
+                .lines()
+                .last()
+                .unwrap()
+                .contains(&event_id.to_string()),
+            "the altered record is not the newest sealed one"
+        );
+        let mode = std::fs::metadata(&holding).unwrap().permissions().mode();
+        std::fs::set_permissions(&holding, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(
+            &holding,
+            contents.replace(&event_id.to_string(), &Uuid::from_u128(43).to_string()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&holding, std::fs::Permissions::from_mode(mode)).unwrap();
+
+        assert!(AuditJournal::open_segmented(&path, &profile, 600)
+            .await
+            .is_err());
     }
 
     #[test]
