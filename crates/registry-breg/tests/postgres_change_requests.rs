@@ -345,6 +345,238 @@ async fn review_submissions_bind_the_subject_to_the_registrys_request_entity() {
     database.cleanup().await;
 }
 
+#[tokio::test]
+async fn an_operator_resubmits_or_closes_a_review_its_authority_lost() {
+    use registry_breg::review_recovery::{
+        ReviewRecoveryError, ReviewRecoveryOperatorService, ReviewRecoveryRefusal,
+        ReviewRecoveryScope,
+    };
+    let database = TestDatabase::create(8).await;
+    let mut source = serde_json::to_value(two_stage_project()).unwrap();
+    source["entities"][2]["changeRequest"]["review"] =
+        json!({"authority":"casework-a","policyId":"correction-review"});
+    let registry = Arc::new(
+        compile_project(
+            &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
+            &[],
+            CompileProfile::Authoring,
+        )
+        .unwrap(),
+    );
+    let identity = install_registry(&database, &registry, "review-recovery", false).await;
+    let (service, _) = change_request_service_with_evidence_options(
+        &database,
+        registry.clone(),
+        identity.clone(),
+        "review-recovery",
+        None,
+        None,
+        registry_breg::attachment_storage::AttachmentStorage::Database,
+        None,
+        registry_breg::attachment_verification::AttachmentVerification::Disabled,
+        None,
+        Some(review_authority_registry(
+            "http://127.0.0.1:9/"
+                .parse()
+                .expect("unroutable authority URL"),
+        )),
+    );
+    let app = router(service);
+    let (request, _digest) = submit_two_stage_correction(&app).await;
+    let request_id = Uuid::parse_str(&request.id).expect("request id");
+    let recovery = ReviewRecoveryOperatorService::over_retention_service_for_test(
+        registry_breg::request_retention::RequestRetentionOperatorService::new_for_test(
+            registry.as_ref().clone(),
+            identity,
+            registry_breg::postgres::ExpectedManagedCatalog::compiled(&registry),
+            RegistryLockKey::derive("review-recovery").unwrap(),
+            database.migration_config.clone(),
+            database.migration_role.clone(),
+            database.runtime_role.clone(),
+            database
+                .audit(AuditProfile::production_from_secret_bytes(vec![0x9b; 32].into()).unwrap()),
+        ),
+    );
+    let scope = || ReviewRecoveryScope {
+        request_entity_id: "correction-request",
+        request_id,
+        proposal_version: 1,
+    };
+    let lost_binding = json!({"requestId": Uuid::from_u128(0xf1)});
+    let submission = |columns: &'static str| {
+        let admin = &database.admin;
+        async move {
+            admin
+                .query_one(
+                    &format!(
+                        "SELECT {columns}
+                           FROM registry_internal.registry_request_review_submissions
+                          WHERE request_entity_id='correction-request' AND request_id=$1"
+                    ),
+                    &[&request_id],
+                )
+                .await
+                .expect("review submission")
+        }
+    };
+    let key_before: String = submission("idempotency_key").await.get(0);
+
+    // A pending submission was never accepted, so neither operation applies.
+    for refused in [
+        recovery.resubmit(scope()).await,
+        recovery.close(scope()).await,
+    ] {
+        assert_eq!(
+            refused,
+            Err(ReviewRecoveryError::Ineligible {
+                reason: ReviewRecoveryRefusal::SubmissionState,
+                state: "pending".to_owned(),
+                code: None,
+            })
+        );
+    }
+
+    // The restored review environment answers the accepted review as unknown.
+    let lose = || async {
+        database
+            .admin
+            .execute(
+                "UPDATE registry_internal.registry_request_review_submissions
+                    SET state='accepted',accepted_binding=$2,result_poll_attempts=40,
+                        attempt_count=3,last_error_code='result-unknown-to-authority',
+                        created_at=transaction_timestamp()-interval '40 days',
+                        recovery_deadline=transaction_timestamp()-interval '10 days'
+                  WHERE request_entity_id='correction-request' AND request_id=$1",
+                &[&request_id, &lost_binding],
+            )
+            .await
+            .expect("lose the accepted review")
+    };
+    lose().await;
+    let resubmitted = recovery.resubmit(scope()).await.expect("resubmit");
+    assert_eq!(resubmitted.previous_state, "accepted");
+    assert_eq!(
+        resubmitted.previous_code.as_deref(),
+        Some("result-unknown-to-authority")
+    );
+    assert_eq!(resubmitted.state, "pending");
+    let row = submission(
+        "state,accepted_binding IS NULL,attempt_count,result_poll_attempts,last_error_code,
+         idempotency_key,recovery_deadline > transaction_timestamp()+interval '29 days',
+         next_attempt_at <= transaction_timestamp()",
+    )
+    .await;
+    assert_eq!(row.get::<_, String>(0), "pending");
+    assert!(row.get::<_, bool>(1), "the lost binding is released");
+    assert_eq!(row.get::<_, i32>(2), 0);
+    assert_eq!(row.get::<_, i32>(3), 0);
+    assert_eq!(row.get::<_, Option<String>>(4), None);
+    assert_eq!(
+        row.get::<_, String>(5),
+        key_before,
+        "the exact retained request replays under its original idempotency key"
+    );
+    assert!(
+        row.get::<_, bool>(6),
+        "the configured recovery window restarts"
+    );
+    assert!(row.get::<_, bool>(7), "the submission is due at once");
+
+    // Closing records an operator decision and keeps the binding.
+    lose().await;
+    let closed = recovery.close(scope()).await.expect("close");
+    assert_eq!(
+        (closed.state, closed.code),
+        ("failed", Some("operator-closed"))
+    );
+    let row = submission("state,last_error_code,accepted_binding").await;
+    assert_eq!(row.get::<_, String>(0), "failed");
+    assert_eq!(
+        row.get::<_, Option<String>>(1).as_deref(),
+        Some("operator-closed")
+    );
+    assert_eq!(row.get::<_, Value>(2), lost_binding);
+    assert_eq!(
+        recovery.close(scope()).await,
+        Err(ReviewRecoveryError::Ineligible {
+            reason: ReviewRecoveryRefusal::SubmissionState,
+            state: "failed".to_owned(),
+            code: Some("operator-closed".to_owned()),
+        })
+    );
+    // A closed review may still be resubmitted if the operator changes course.
+    assert_eq!(
+        recovery
+            .resubmit(scope())
+            .await
+            .expect("resubmit closed")
+            .state,
+        "pending"
+    );
+
+    // A result already recorded settles the review for good.
+    lose().await;
+    database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_request_review_results
+             (request_entity_id,request_id,proposal_version,authority,result_id,result,status,
+              completed_at,available_until)
+             VALUES ('correction-request',$1,1,'casework-a',$2,'{}'::jsonb,'approved',
+                     now(),now()+interval '1 day')",
+            &[&request_id, &Uuid::from_u128(0xf2)],
+        )
+        .await
+        .expect("recorded result");
+    assert!(matches!(
+        recovery.resubmit(scope()).await,
+        Err(ReviewRecoveryError::Ineligible {
+            reason: ReviewRecoveryRefusal::ResultRecorded,
+            ..
+        })
+    ));
+    assert_eq!(
+        recovery
+            .close(ReviewRecoveryScope {
+                request_id: Uuid::from_u128(0xf3),
+                ..scope()
+            })
+            .await,
+        Err(ReviewRecoveryError::NotFound)
+    );
+
+    // Every recovery writes a request entry before its transaction and one
+    // response after it; a committed one names the request only by its keyed
+    // reference.
+    database.assert_every_audit_request_answered_once();
+    let recoveries: Vec<Value> = database
+        .audit_entries()
+        .into_iter()
+        .filter(|entry| entry["record"]["kind"] == "reviewRecovery")
+        .collect();
+    let mut committed: Vec<&Value> = recoveries
+        .iter()
+        .filter(|entry| entry["phase"] == "response" && entry["record"]["outcome"] == "committed")
+        .map(|entry| &entry["record"])
+        .collect();
+    committed.sort_by_key(|record| record["operation"].to_string());
+    let operations: Vec<String> = committed
+        .iter()
+        .map(|record| record["operation"].to_string())
+        .collect();
+    assert_eq!(operations, [r#""close""#, r#""resubmit""#, r#""resubmit""#]);
+    for record in committed {
+        assert_eq!(record["entityId"], "correction-request");
+        assert_eq!(record["authority"], "casework-a");
+    }
+    for entry in &recoveries {
+        assert_eq!(entry["schema"], "breg-audit/v2");
+        assert!(!entry.to_string().contains(&request.id));
+    }
+
+    database.cleanup().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn expired_online_review_blocks_final_automatic_attempt_until_authorized_recovery() {
     let (endpoint, authority_state, authority_server) = serve_review_result_authority().await;

@@ -56,6 +56,7 @@ mod project_migration;
 mod reconcile_lifecycle;
 mod report;
 mod request_retention;
+mod review_recovery;
 mod reviewed_migrations;
 mod safe_path;
 mod starters;
@@ -92,6 +93,7 @@ use request_retention::{
     RequestRetentionCliError, RequestRetentionDryRunOutcome, RequestRetentionEraseOutcome,
     RequestRetentionListOutcome,
 };
+use review_recovery::{ReviewRecoveryCliError, ReviewRecoveryOperation, ReviewRecoveryOutcome};
 use safe_path::{EntryStat, SafeDir, SafeEntry, SafePathError, MAX_REMOVE_TREE_DEPTH};
 use test_lifecycle::{remove_exact_file, TestLifecycleError, TestLifecycleRequest};
 use webhook_lifecycle::{
@@ -170,6 +172,8 @@ enum Command {
     Webhook(WebhookArgs),
     /// Inspect and erase eligible change-request retention detail.
     RequestRetention(RequestRetentionArgs),
+    /// Resubmit or close a change-request review its authority will not answer.
+    ReviewRecovery(ReviewRecoveryArgs),
     /// Erase expired protected action Evidence using configured migration authority.
     EvidenceRetention(EvidenceRetentionArgs),
     /// Maintain field-encryption key material.
@@ -672,6 +676,39 @@ struct RequestRetentionExactArgs {
     request_id: String,
 
     /// Exact proposal version to inspect or erase.
+    #[arg(long, value_name = "VERSION")]
+    proposal_version: i64,
+}
+
+#[derive(Debug, Args)]
+struct ReviewRecoveryArgs {
+    #[command(subcommand)]
+    command: ReviewRecoveryCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ReviewRecoveryCommand {
+    /// Submit the exact retained review request again under its original idempotency key.
+    Resubmit(ReviewRecoveryExactArgs),
+    /// Close an accepted review without a result so it stops waiting on its authority.
+    Close(ReviewRecoveryExactArgs),
+}
+
+#[derive(Debug, Args)]
+struct ReviewRecoveryExactArgs {
+    /// Absolute Base Registry Engine runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Compiled change-request entity identifier.
+    #[arg(long, value_name = "ENTITY")]
+    request_entity: String,
+
+    /// Exact request record UUID.
+    #[arg(long, value_name = "UUID")]
+    request_id: String,
+
+    /// Exact proposal version whose review submission to recover.
     #[arg(long, value_name = "VERSION")]
     proposal_version: i64,
 }
@@ -1185,6 +1222,7 @@ enum DiagnosticArtifact {
     WebhookSample,
     WebhookOperations,
     RequestRetentionOperation,
+    ReviewRecoveryOperation,
     EvidenceRetentionOperation,
     HistoryErasure,
     HistoryRebaseline,
@@ -1234,6 +1272,7 @@ enum SuggestedAction {
     SelectWebhookEvent,
     VerifyWebhookOperation,
     VerifyRequestRetentionOperation,
+    VerifyReviewRecoveryOperation,
     VerifyEvidenceRetentionOperation,
     PrepareHistoryErasureRequest,
     PrepareHistoryRebaselineRequest,
@@ -1493,6 +1532,15 @@ struct RequestRetentionEraseSuccessReport {
     command: &'static str,
     #[serde(flatten)]
     outcome: RequestRetentionEraseOutcome,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewRecoverySuccessReport {
+    ok: bool,
+    command: &'static str,
+    #[serde(flatten)]
+    outcome: ReviewRecoveryOutcome,
 }
 
 #[derive(Serialize)]
@@ -2018,6 +2066,44 @@ where
                     DiagnosticArtifact::EvidenceRetentionOperation, SuggestedAction::VerifyEvidenceRetentionOperation), format, stdout, stderr),
             };
         }
+        Command::ReviewRecovery(args) => {
+            let (command, operation, args) = match args.command {
+                ReviewRecoveryCommand::Resubmit(args) => (
+                    "review-recovery resubmit",
+                    ReviewRecoveryOperation::Resubmit,
+                    args,
+                ),
+                ReviewRecoveryCommand::Close(args) => (
+                    "review-recovery close",
+                    ReviewRecoveryOperation::Close,
+                    args,
+                ),
+            };
+            return match review_recovery::recover(
+                operation,
+                &args.runtime_config,
+                &args.request_entity,
+                &args.request_id,
+                args.proposal_version,
+            ) {
+                Ok(outcome) => write_review_recovery_success(
+                    &ReviewRecoverySuccessReport {
+                        ok: true,
+                        command,
+                        outcome,
+                    },
+                    format,
+                    stdout,
+                    stderr,
+                ),
+                Err(error) => write_failure(
+                    &review_recovery_failure(command, error),
+                    format,
+                    stdout,
+                    stderr,
+                ),
+            };
+        }
         Command::RequestRetention(args) => {
             return match args.command {
                 RequestRetentionCommand::List(args) => match request_retention_list(&args) {
@@ -2188,6 +2274,43 @@ fn request_retention_failure(
             diagnostic(code, "requestRetention", message),
             DiagnosticArtifact::RequestRetentionOperation,
             SuggestedAction::VerifyRequestRetentionOperation,
+        )],
+    }
+}
+
+fn review_recovery_failure(command: &'static str, error: ReviewRecoveryCliError) -> FailureReport {
+    let (code, message) = match error {
+        ReviewRecoveryCliError::Operator => (
+            "review_recovery.operation.refused",
+            "the review recovery operation was refused; verify the absolute runtime configuration, migration authority, request UUID and positive proposal version".to_owned(),
+        ),
+        ReviewRecoveryCliError::NotFound => (
+            "review_recovery.submission.not_found",
+            "no review submission exists for this exact request proposal version".to_owned(),
+        ),
+        ReviewRecoveryCliError::Ineligible {
+            reason,
+            state,
+            code,
+        } => (
+            "review_recovery.submission.ineligible",
+            format!(
+                "the review submission does not accept this operation: reason {reason}, state {state}, code {}",
+                code.as_deref().unwrap_or("none")
+            ),
+        ),
+        ReviewRecoveryCliError::RecoveryUnaudited => (
+            "review_recovery.recovery.unaudited",
+            "the review recovery committed but its audit entry was not recorded; restore the audit destination, then read the submission's state from the database before retrying".to_owned(),
+        ),
+    };
+    FailureReport {
+        ok: false,
+        command,
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(code, "reviewRecovery", &message),
+            DiagnosticArtifact::ReviewRecoveryOperation,
+            SuggestedAction::VerifyReviewRecoveryOperation,
         )],
     }
 }
@@ -11536,6 +11659,46 @@ fn write_request_retention_erase_success(
     write_result(result, stderr)
 }
 
+fn write_review_recovery_success(
+    report: &ReviewRecoverySuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        let recovery = &report.outcome.recovery;
+        render_report(
+            if recovery.state == "pending" {
+                "Queued the review for resubmission."
+            } else {
+                "Closed the review."
+            },
+            &[
+                ("request entity", recovery.request_entity_id.clone()),
+                ("request id", recovery.request_id.clone()),
+                ("proposal version", recovery.proposal_version.to_string()),
+                ("authority", recovery.authority.clone()),
+                ("previous state", recovery.previous_state.clone()),
+                (
+                    "previous code",
+                    recovery
+                        .previous_code
+                        .clone()
+                        .unwrap_or_else(|| "none".to_owned()),
+                ),
+                ("state", recovery.state.to_owned()),
+                ("code", recovery.code.unwrap_or("none").to_owned()),
+            ],
+            stdout,
+        )
+    };
+    write_result(result, stderr)
+}
+
 fn data_operation_name(operation: DataOperationArg) -> &'static str {
     match operation {
         DataOperationArg::Create => "create",
@@ -11952,6 +12115,22 @@ mod tests {
                 "pendingExternalDeletions":2, "externalDeletionTombstones":3,
             })
         );
+    }
+
+    #[test]
+    fn review_recovery_ineligible_diagnostic_names_reason_state_and_code() {
+        let report = review_recovery_failure(
+            "review-recovery resubmit",
+            ReviewRecoveryCliError::Ineligible {
+                reason: "request-erased",
+                state: "failed".to_owned(),
+                code: Some("result-poll-attempts-exhausted".to_owned()),
+            },
+        );
+        let encoded = serde_json::to_string(&report).expect("report encodes");
+        assert!(encoded.contains("review_recovery.submission.ineligible"));
+        assert!(encoded
+            .contains("reason request-erased, state failed, code result-poll-attempts-exhausted"));
     }
 
     #[test]
@@ -12817,6 +12996,7 @@ mod tests {
                 "data",
                 "webhook",
                 "request-retention",
+                "review-recovery",
                 "evidence-retention",
                 "field-encryption"
             ]

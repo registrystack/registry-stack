@@ -4371,9 +4371,161 @@ async fn a_404_result_lookup_clears_a_stale_token_outage_code() {
         attempts_before + 1,
         "a 404 still spends the give-up budget"
     );
-    assert_eq!(row.get::<_, Option<String>>(1), None);
+    assert_eq!(
+        row.get::<_, Option<String>>(1).as_deref(),
+        Some("result-unknown-to-authority"),
+        "a 404 replaces the stale outage code with its own, so an operator can tell a review the authority does not know from a slow one"
+    );
+
+    // The authority answers pending again, so the review is live after all
+    // and no longer asks for attention.
+    _script.answer(ScriptedLookup::Pending);
+    make_result_poll_due(&database.admin, request_id).await;
+    assert!(poll_scripted_result(&mut database, &endpoint)
+        .await
+        .expect("pending result lookup completes"));
+    let code: Option<String> = database
+        .admin
+        .query_one(
+            "SELECT last_error_code
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("row after pending lookup")
+        .get(0);
+    assert_eq!(code, None);
 
     drop(pool);
+    server.abort();
+    database.cleanup().await;
+}
+
+async fn result_poll_attempts(client: &tokio_postgres::Client, request_id: Uuid) -> i32 {
+    client
+        .query_one(
+            "SELECT result_poll_attempts
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("poll attempts")
+        .get(0)
+}
+
+#[tokio::test]
+async fn a_live_review_is_polled_before_one_its_authority_does_not_know() {
+    let mut database = prepare_review_database().await;
+    let unknown = Uuid::from_u128(0xd1);
+    let live = Uuid::from_u128(0xd3);
+    seed_accepted_submission(&database, unknown, Uuid::from_u128(0xd2)).await;
+    let live_accepted = seed_accepted_submission(&database, live, Uuid::from_u128(0xd4)).await;
+    // The unknown review has waited longest, so plain oldest-first ordering
+    // would claim it before the live one.
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET lease_until=NULL,next_result_poll_at=transaction_timestamp(),
+                    last_error_code=CASE WHEN request_id=$1
+                        THEN 'result-unknown-to-authority' END,
+                    updated_at=transaction_timestamp()-CASE WHEN request_id=$1
+                        THEN interval '1 hour' ELSE interval '0' END",
+            &[&unknown],
+        )
+        .await
+        .expect("make both result polls due");
+    let before = result_poll_attempts(&database.admin, unknown).await;
+
+    // The scripted authority only answers for the live review; claiming the
+    // unknown one first would fail the lookup.
+    let (endpoint, _script, server) =
+        serve_scripted_result_authority(live_accepted, ScriptedLookup::Pending).await;
+    assert!(poll_scripted_result(&mut database, &endpoint)
+        .await
+        .expect("the live review is claimed first"));
+    assert_eq!(result_poll_attempts(&database.admin, live).await, 1);
+    assert_eq!(result_poll_attempts(&database.admin, unknown).await, before);
+
+    server.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_webhook_completion_makes_its_review_due_and_first_in_the_poll_queue() {
+    let mut database = prepare_review_database().await;
+    let waiting = Uuid::from_u128(0xe1);
+    let completed = Uuid::from_u128(0xe3);
+    let completed_review = Uuid::from_u128(0xe4);
+    seed_accepted_submission(&database, waiting, Uuid::from_u128(0xe2)).await;
+    let completed_accepted = seed_accepted_submission(&database, completed, completed_review).await;
+    // The completed review is backed off for an hour, and the other review is
+    // due and older, so without the completion it would wait its turn.
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET lease_until=NULL,
+                    next_result_poll_at=transaction_timestamp()+CASE WHEN request_id=$1
+                        THEN interval '1 hour' ELSE interval '0' END,
+                    updated_at=transaction_timestamp()-CASE WHEN request_id=$1
+                        THEN interval '0' ELSE interval '1 hour' END",
+            &[&completed],
+        )
+        .await
+        .expect("back off the completed review");
+
+    let completion = ReviewCompletion {
+        event_type: ReviewCompletionType::ReviewCompleted,
+        event_id: Uuid::from_u128(0xe5),
+        request_id: completed_review,
+        result_id: Uuid::from_u128(0xb3),
+        completed_at: chrono::Utc::now(),
+    };
+    let transaction = database.admin.transaction().await.unwrap();
+    receive_completion(
+        &transaction,
+        "casework-a",
+        &completion,
+        chrono::Utc::now() + chrono::Duration::days(7),
+    )
+    .await
+    .expect("completion is stored");
+    transaction.commit().await.unwrap();
+    let due: bool = database
+        .admin
+        .query_one(
+            "SELECT next_result_poll_at <= transaction_timestamp()
+               FROM registry_internal.registry_request_review_submissions
+              WHERE request_id=$1",
+            &[&completed],
+        )
+        .await
+        .expect("completed review schedule")
+        .get(0);
+    assert!(due, "a matched completion makes its review due at once");
+
+    // The scripted authority only answers for the completed review.
+    let (endpoint, _script, server) =
+        serve_scripted_result_authority(completed_accepted, ScriptedLookup::Approved).await;
+    assert!(poll_scripted_result(&mut database, &endpoint)
+        .await
+        .expect("the completed review is claimed first"));
+    let state: String = database
+        .admin
+        .query_one(
+            "SELECT state FROM registry_internal.registry_request_review_completions
+              WHERE authority='casework-a' AND event_id=$1",
+            &[&completion.event_id],
+        )
+        .await
+        .expect("completion state")
+        .get(0);
+    assert_eq!(state, "correlated");
+    assert_eq!(result_poll_attempts(&database.admin, waiting).await, 0);
+
     server.abort();
     database.cleanup().await;
 }
