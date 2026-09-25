@@ -1,6 +1,6 @@
 ---
 title: Retain, erase, and settle
-description: What a Registry Casework deployment keeps and for how long, how to erase the local payload copies of one source request, how to settle a source attempt whose outcome Casework never observed, and who holds the audit file.
+description: What a Registry Casework deployment keeps and for how long, how to erase the local payload copies of one source request, how to settle a source attempt whose outcome Casework never observed, and what the audit file keeps.
 status: current
 owner: registry-docs
 source_repos:
@@ -35,7 +35,7 @@ erases it for one exact source request.
 | The request's producer and initiator identities | Raw until `terminalDays`, then a request-bound sha256 tombstone (not keyed with a secret) until the accountability deadline, so the same producer or initiator still learns the result expired | The runtime retention pass |
 | Review-create and mutation replay responses | Until request payload expiry, then a payload-free tombstone until the accountability deadline | The runtime retention pass, after which the key is free again |
 | Source-backed subjects, work items, private drafts, attempts, receipts, history, and durable events | No expiry; they stay for the life of the database | `caseworkctl retention erase --apply` |
-| The keyed audit JSONL file and its sealed segments | Your retention policy alone | No Casework command |
+| The audit file and its sealed files | Sealed files for `audit.retainDays` (90 by default); shipped copies for your retention policy | The runtime's audit writer; your own tooling for shipped copies |
 
 Each review kind declares `terminalDays` and `accountabilityDays` in the project, and the project
 is refused unless `terminalDays` is at least 1, `accountabilityDays` is at least `terminalDays`,
@@ -93,7 +93,17 @@ exits 0. A refusal puts `{"ok": false}` with a diagnostic on standard output and
 invalid project or configuration, or 3 for an operational failure. Without `--format json`,
 Casework prints a human-readable result and sends refusal diagnostics to standard error.
 
-{/* Evidence: crates/registry-caseworkctl/src/project.rs, load_runtime() and retention_erase();
+An `--apply` run writes audit entries the way the service does, to the `caseworkctl` companion of
+the configured destination: with `audit.path` set to `.../casework.ndjson`, that is
+`.../casework.caseworkctl.ndjson` in the same directory, on the host where you run the command,
+with its own lock, rotation, and retention. The service keeps its own file while the command runs.
+Run the command as a user the audit directory accepts, and ship the companion file with the
+service's. When the companion file cannot be opened, the apply run refuses before it changes
+anything. A `stdout` destination writes the entries to the command's standard output instead.
+
+{/* Evidence: crates/registry-caseworkctl/src/project.rs, load_runtime(), retention_erase(), and
+    with_operator_audit();
+    crates/registry-platform-audit/src/writer.rs, AuditDestination::for_process();
     crates/registry-caseworkctl/src/lib.rs, main_entry() and RetentionCommand;
     crates/registry-casework/src/config.rs, RuntimeConfig. */}
 
@@ -113,7 +123,7 @@ caseworkctl --format json retention erase /etc/registry-casework/package \
 
 The report is counts and the selector you passed, with no work item identifiers and no erased
 values: `items`, `drafts`, `correctionContexts`, `attemptPayloads`, `receiptPayloads`,
-`historyDetails`, `eventDetails`, `idempotencyResponses`, `auditRecords`, `clockOccurrences`, and
+`historyDetails`, `eventDetails`, `idempotencyResponses`, `clockOccurrences`, and
 `clockPreviews`, beside `blockedLiveAttempts` and `applied`. Read `blockedLiveAttempts` before
 anything else: a nonzero count means a pending or uncertain source attempt is still open on this
 request, and the apply run will refuse rather than erase, so that Casework never buries an action
@@ -139,21 +149,23 @@ caseworkctl --format json retention erase /etc/registry-casework/package \
 One transaction marks the local subject inactive and the items erased, deletes the private drafts
 and the correction context, strips the decision reason, flagged fields, displayed binding,
 recovery evidence, and receipt metadata from settled attempts, empties the detail of every history
-row and durable event row, drops the stored idempotency responses, clears the retained detail,
-reason, and source receipt from the audit outbox rows, and cancels the outstanding clock work for
-that request. It keeps the rows themselves as bounded tombstones, so the item lifecycle stays
-accountable while its values are gone, and it appends one `casework.source_retention_erased` audit
-record carrying the selector and the same counts. The apply report repeats the preview counts with
-`applied` set to `true`.
+row and durable event row, drops the stored idempotency responses, and cancels the outstanding
+clock work for that request. It keeps the rows themselves as bounded tombstones, so the item
+lifecycle stays accountable while its values are gone. The apply run writes a
+`casework.source_retention_erased` request entry under the profile `system:operator` before it
+opens the transaction, and a response entry naming the same event after it commits; neither entry
+carries the selector or the counts. The apply report repeats the preview counts with `applied` set
+to `true`.
 
 Erasure stays local to this deployment: the command reaches no Base Registry Engine (BReg)
-instance, sends no request to the source, and leaves the audit JSONL file as it is, so any detail
-already published to that file stays there until your own retention policy removes it.
+instance, sends no request to the source, and does not erase entries already written to the audit
+destination. Those entries name items only by keyed pseudonyms and carry no payload values.
 
 {/* Evidence: crates/registry-casework/src/source_retention.rs, erase_source_retention() and
     preview_source_retention();
     crates/registry-casework-core/src/source_retention.rs, SourceRetentionReport;
-    crates/registry-caseworkctl/src/project.rs, retention_erase();
+    crates/registry-caseworkctl/src/project.rs, retention_erase() and with_operator_audit();
+    crates/registry-casework/src/audit.rs, published_audit_record();
     products/casework/README.md. */}
 
 ### Verify and recover
@@ -306,27 +318,32 @@ means the item no longer awaits its source outcome, so nothing is stranded.
 
 ## Keep the audit file
 
-Casework appends every audited event to a keyed hash-chained JSONL file through a single-writer
-sink. Once the active file reaches 10 MiB, the sink seals it under an ascending numeric suffix
-(`casework.jsonl.00000001`, `casework.jsonl.00000002`, and so on) and opens a fresh active file at
-the configured path; no sealed segment is ever deleted. Every segment is yours to hold: its
-lifetime, its off-host copies, and its disposal are your retention policy alone, and no Casework
-command prunes, exports, or erases any of them, including the two here. Ship segments off host when
-completeness matters outside one machine's disk.
+Casework writes every audited operation through the shared audit writer: a request entry before the
+operation's transaction opens and a response entry after it commits, sharing one correlation, each
+carrying the schema `registry-casework-audit/v1`. Entries name work items, grants, teams, queues,
+and principals only by keyed pseudonyms, and carry no payload values. They are not chained or
+signed.
 
-Casework 0.33.0 and earlier rotated the file instead, to `.1` through `.49`, and deleted the
-oldest. This release neither reads nor continues that layout: before its first start, move the
-audit file and its numbered siblings into an archive directory, and keep that archive under the
-same policy and the same audit key. [Upgrade from a release that rotated the audit
-file](../casework/#upgrade-from-a-release-that-rotated-the-audit-file) gives the steps.
+With the default `file` destination, one process holds a lock beside `audit.path` and appends to
+it. When the next entry would take the file past `audit.rotateBytes` (100 MiB by default), the
+writer seals it under an ascending eight-digit suffix (`casework.ndjson.00000001`,
+`casework.ndjson.00000002`, and so on) and opens a fresh file at the configured path. At startup
+and on each rotation it deletes sealed files older than `audit.retainDays` (90 by default, at most
+36500). Nothing on the host makes the file tamper-evident and nothing keeps it past `retainDays`,
+so ship sealed files to append-only storage you operate before they age out, and apply your
+retention policy to the shipped copies. With `destination: stdout`, each entry is one line on
+standard output, and collection and retention belong to the platform that reads the stream.
 
-{/* Evidence: crates/registry-casework/src/runtime.rs, serve_from_path() and
-    MAXIMUM_AUDIT_SEGMENT_BYTES;
-    crates/registry-platform-audit/src/segmented_jsonl.rs, DurableSegmentedJsonlSink. */}
+{/* Evidence: crates/registry-casework/src/audit.rs, CASEWORK_AUDIT_SCHEMA and
+    published_audit_record();
+    crates/registry-casework/src/runtime.rs, open_audit();
+    crates/registry-platform-audit/src/writer.rs, FileDestination, AuditWriter, and
+    DEFAULT_AUDIT_RETAIN_DAYS. */}
 
-The chain is keyed with the audit secret named by the runtime file's `audit.hashKeyRef`, which
-authenticates the retained file against a writer that cannot read the deployment secret. Provide at
-least 32 bytes of NUL-free text through a secret provider, never in the runtime file:
+The pseudonyms are keyed with the audit secret named by the runtime file's `audit.hashKeyRef`, so
+a reader of the audit file who lacks the secret cannot turn a pseudonym back into the identifier
+it replaces by hashing candidates. Provide at least 32 bytes of NUL-free text through a secret
+provider, never in the runtime file:
 
 ```sh
 (umask 077 && openssl rand -hex 32 > /run/secrets/registry-casework/casework-audit-key)
@@ -335,27 +352,25 @@ chmod 0400 /run/secrets/registry-casework/casework-audit-key
 
 A file secret sits immediately below the configured secret root, belongs to the runtime user, and
 carries mode 0400 or 0600 with no symlink and no second hard link. Its exact bytes are the key,
-including a trailing newline, so rewriting the file with a different byte breaks the chain the
-retained file was written under. An empty value, a value over the provider's size limit, or one
-carrying a NUL byte is refused without echoing it. `caseworkctl doctor` resolves the reference as a
-readiness check and reports success without printing the bytes.
+including a trailing newline, so rewriting the file with a different byte changes every pseudonym
+written after it. An empty value, a value over the provider's size limit, or one carrying a NUL
+byte is refused without echoing it. `caseworkctl doctor` resolves the reference as a readiness
+check and reports success without printing the bytes.
 
 {/* Evidence: crates/registry-platform-config/src/secrets.rs, validate_secret(),
     validate_file_metadata(), and read_secret_file();
-    crates/registry-platform-audit/src/lib.rs, AuditChainHasher and MIN_AUDIT_SECRET_BYTES;
+    crates/registry-platform-audit/src/lib.rs, AuditKeyHasher and MIN_AUDIT_SECRET_BYTES;
     crates/registry-caseworkctl/src/project.rs, doctor(). */}
 
-Publication runs as its own loop, once a second, moving audited events from the database outbox to
-the file and marking each one published. A pass that cannot read the outbox, append to the file, or
-mark an event published makes `GET /ready` fail while the process keeps serving, and logs one
-warning naming the failed stage and nothing else. A later successful pass restores readiness and
-logs the recovery. Treat a `/ready` failure with that warning as a disk, permission, or lock
-problem at the audit path rather than a database outage, and check that no second writer holds the
-sentinel lock beside the file.
+A write the destination refuses fails the audited call with `service.unavailable` and stops the
+writer for the rest of the process's life, so `GET /ready` answers `503` and every later audited
+call is refused while the process keeps running. The runtime log carries `audit file write failed`
+with the cause. Treat it as a disk, permission, or lock problem at the audit path rather than a
+database outage, fix it, and restart the process.
 
-{/* Evidence: crates/registry-casework/src/runtime.rs, publish_audit_pass() and
-    update_audit_health();
-    crates/registry-casework/src/service.rs, AuditPublisherHealth;
+{/* Evidence: crates/registry-platform-audit/src/writer.rs, AuditWriter::append() and
+    AuditWriter::ready();
+    crates/registry-casework/src/service.rs, ready();
     crates/registry-casework/src/http.rs, ready(). */}
 
 ## Troubleshooting
@@ -372,7 +387,8 @@ sentinel lock beside the file.
 | `attempt settle` refuses with `only a work item awaiting its source outcome can be settled` | Recovery or source readback already moved the item out of synchronizing. No settlement is needed. |
 | A review request disappeared from producer polling and the result feed | Its `terminalDays` period closed. The accountability record may still exist; an authorized Supervisor can resolve one event until `accountabilityDays` closes too. |
 | An exact retry returns `idempotency.expired` with HTTP 410 | The item payload expired and only a payload-free tombstone remains. Reconcile the original operation before choosing a new key. |
-| `GET /ready` fails with an audit publication warning in the log | The audit path, its permissions, or its single-writer lock is the likely cause. Fix the path and let the next pass restore readiness. |
+| `GET /ready` fails with `audit file write failed` in the log | The audit path, its free space, its permissions, or its single-writer lock is the likely cause. Fix it, then restart the process. |
+| `retention erase --apply` or `attempt settle --apply` stops at `opening the Casework operator audit destination` | The `caseworkctl` companion file beside `audit.path` cannot be opened on this host, or another `caseworkctl` run holds its lock. Run the command as the runtime user on a host where the audit directory exists, and one at a time. |
 
 {/* Evidence: crates/registry-casework/src/review.rs, review_accountability();
     crates/registry-casework/src/http.rs, review_accountability();
