@@ -834,7 +834,7 @@ impl MessageService {
         let principal_pseudonym = self
             .audit
             .principal_pseudonym(&caller.identity)
-            .map_err(unavailable)?;
+            .map_err(|_| ProblemCode::ServiceUnavailable)?;
         let recipient_reference = self
             .audit
             .recipient_reference(&submission.request.to)

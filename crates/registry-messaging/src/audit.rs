@@ -16,7 +16,9 @@ use registry_platform_audit::{
     segmented_audit_paths, AuditEnvelope, AuditError, AuditKeyHasher, AuditProfile,
     AuditReferenceHashError, AuditSink, ChainState, DurableSegmentedJsonlSink,
 };
+use registry_platform_canonical_json::{canonicalize_json, JcsError};
 use serde::Serialize;
+use thiserror::Error;
 use uuid::Uuid;
 
 /// The largest active audit segment before the sink seals it and opens the
@@ -29,6 +31,18 @@ const PRINCIPAL_PSEUDONYM_CLASS: &str = "messaging-principal-v1";
 /// The reference class recipient references are hashed under, scoped by
 /// channel.
 const RECIPIENT_REFERENCE_CLASS: &str = "messaging-recipient-v1";
+
+/// Why a principal pseudonym could not be derived. No variant carries the
+/// identity it was derived from.
+#[derive(Debug, Error)]
+pub enum PseudonymError {
+    #[error("the principal could not be written canonically: {0}")]
+    Canonical(#[from] JcsError),
+    #[error("the canonical principal is not UTF-8")]
+    Encoding,
+    #[error(transparent)]
+    Hash(#[from] AuditReferenceHashError),
+}
 
 pub struct AuditJournal {
     sink: Arc<dyn AuditSink>,
@@ -111,17 +125,17 @@ impl AuditJournal {
     }
 
     /// The keyed pseudonym that names `identity` in the journal: a hash of
-    /// the JSON array `[issuer, subject]`, so no two identities share an
-    /// input.
-    pub fn principal_pseudonym(
-        &self,
-        identity: &CallerIdentity,
-    ) -> Result<String, AuditReferenceHashError> {
-        let canonical =
-            serde_json::Value::from(vec![identity.issuer.as_str(), identity.subject.as_str()])
-                .to_string();
-        self.keys
-            .audit_reference_hash(PRINCIPAL_PSEUDONYM_CLASS, "", &canonical)
+    /// the canonical JSON array `[issuer, subject]`, so no two identities
+    /// share an input.
+    pub fn principal_pseudonym(&self, identity: &CallerIdentity) -> Result<String, PseudonymError> {
+        let canonical = canonicalize_json(&serde_json::Value::from(vec![
+            identity.issuer.as_str(),
+            identity.subject.as_str(),
+        ]))?;
+        let canonical = std::str::from_utf8(&canonical).map_err(|_| PseudonymError::Encoding)?;
+        Ok(self
+            .keys
+            .audit_reference_hash(PRINCIPAL_PSEUDONYM_CLASS, "", canonical)?)
     }
 
     /// The keyed reference that names `recipient` in the journal, scoped by
@@ -259,5 +273,54 @@ pub(crate) mod tests {
             pseudonym,
             keyed.principal_pseudonym(&other_subject).unwrap()
         );
+    }
+
+    /// The pseudonym keys stored idempotency records and journal entries,
+    /// so its input bytes must never change: they are the JSON array
+    /// `[issuer, subject]` as written before the canonical form was used.
+    #[test]
+    fn a_pseudonym_hashes_the_same_bytes_for_every_identity() {
+        let profile =
+            AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(vec![7u8; 32]))
+                .unwrap();
+        let journal = AuditJournal::new(
+            Arc::new(MemorySink::default()),
+            ChainState::unkeyed_dev_only(),
+            profile.key_hasher(),
+        );
+        let identity = CallerIdentity {
+            issuer: "https://identity.example.test".to_owned(),
+            subject: "subject-1".to_owned(),
+        };
+        assert_eq!(
+            journal.principal_pseudonym(&identity).unwrap(),
+            "hmac-sha256:19a895369f72bc0bdbb87af912bc8ddbbb71e033f88db2703d3dd1d5dad58b9a"
+        );
+        for (issuer, subject) in [
+            ("https://identity.example.test/", "quote\" back\\slash"),
+            ("https://identity.example.test", "tab\t newline\n return\r"),
+            (
+                "https://identity.example.test",
+                "control\u{1}\u{8}\u{c}\u{1f}\u{7f}",
+            ),
+            (
+                "https://identity.example.test",
+                "\u{e9} \u{65e5}\u{672c} \u{1f600} \u{2028}",
+            ),
+            ("", "slash/</script>"),
+        ] {
+            let identity = CallerIdentity {
+                issuer: issuer.to_owned(),
+                subject: subject.to_owned(),
+            };
+            let written = serde_json::Value::from(vec![issuer, subject]).to_string();
+            assert_eq!(
+                journal.principal_pseudonym(&identity).unwrap(),
+                journal
+                    .keys
+                    .audit_reference_hash(PRINCIPAL_PSEUDONYM_CLASS, "", &written)
+                    .unwrap()
+            );
+        }
     }
 }
