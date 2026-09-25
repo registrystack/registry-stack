@@ -112,7 +112,7 @@ fn database_step(stage: &'static str) -> impl Fn(StoreError) -> RuntimeError {
 
 pub async fn migrate_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
     let config = RuntimeConfig::load(path)?;
-    let policy = config.load_policy()?;
+    let policy = config.load_policy()?.policy;
     let secrets = secret_resolver(&config)?;
     let store = PostgresStore::connect_migration(&config.database, &secrets)
         .map_err(database_step("migration database configuration"))?;
@@ -132,9 +132,10 @@ pub async fn migrate_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeErro
 
 pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
     let config = RuntimeConfig::load(path)?;
-    let package_digest = config.package_digest()?;
+    let loaded = config.load_policy()?;
+    let package_digest = loaded.package_digest;
     tracing::info!(package_digest = %package_digest, "verified Scheduling package");
-    let policy = config.load_policy()?;
+    let policy = loaded.policy;
     let scheduling_id = policy.scheduling.id.clone();
     let policy_digest = policy.policy_digest();
     let secrets = secret_resolver(&config)?;

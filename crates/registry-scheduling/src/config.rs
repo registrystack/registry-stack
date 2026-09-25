@@ -78,6 +78,13 @@ pub struct RuntimeConfig {
     pub retention: RetentionConfig,
 }
 
+/// The policy and package identity produced by one verified package load.
+#[derive(Clone, Debug)]
+pub struct LoadedSchedulingPolicy {
+    pub policy: SchedulingPolicy,
+    pub package_digest: String,
+}
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -304,7 +311,7 @@ impl RuntimeConfig {
     }
 
     /// Read and validate the packaged policy this deployment runs.
-    pub fn load_policy(&self) -> Result<SchedulingPolicy, RuntimeConfigError> {
+    pub fn load_policy(&self) -> Result<LoadedSchedulingPolicy, RuntimeConfigError> {
         let package = verify_scheduling_package(&self.package)?;
         let policy_text =
             std::fs::read_to_string(self.policy_path()).map_err(RuntimeConfigError::PolicyRead)?;
@@ -335,7 +342,10 @@ impl RuntimeConfig {
         {
             return Err(RuntimeConfigError::PolicyChanged);
         }
-        Ok(policy)
+        Ok(LoadedSchedulingPolicy {
+            policy,
+            package_digest: package.digest().to_owned(),
+        })
     }
 
     /// Return the digest of the verified package this deployment serves.
@@ -409,7 +419,7 @@ impl RuntimeConfig {
         }
         self.validate_secret_references()?;
 
-        let policy = self.load_policy()?;
+        let policy = self.load_policy()?.policy;
         let declared_hook_destinations = policy
             .hooks
             .iter()
@@ -835,7 +845,8 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
         assert_eq!(config.retention.hook_payload_days, 7);
         assert!(config.destinations.reminders.is_none());
         assert!(config.destinations.hooks.is_empty());
-        let policy = config.load_policy().expect("policy loads");
+        let loaded = config.load_policy().expect("policy loads");
+        let policy = loaded.policy;
         assert_eq!(policy.scheduling.id, "standalone-exact-time");
     }
 
@@ -899,6 +910,27 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
             let error = load(audit.clone()).expect_err("the audit block is refused");
             assert_eq!(error.path(), path, "{audit}: {error}");
         }
+    }
+
+    #[test]
+    fn one_verified_load_supplies_the_policy_and_its_package_identity() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        write_policy(&package);
+        let operator = write_operator(
+            root.path(),
+            operator_value(&package, "operator-controlled-upstream"),
+        );
+        let config = RuntimeConfig::load(&operator).expect("configuration is accepted");
+
+        let loaded = config
+            .load_policy()
+            .expect("policy and package load together");
+        assert_eq!(loaded.policy.scheduling.id, "standalone-exact-time");
+        assert_eq!(
+            loaded.package_digest,
+            sha256_uri(&std::fs::read(package.join(SUM_FILE)).unwrap())
+        );
     }
 
     #[test]
