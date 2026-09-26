@@ -140,9 +140,11 @@ impl From<&EvidenceAuditError> for AuditInitializationFault {
     fn from(error: &EvidenceAuditError) -> Self {
         match error {
             EvidenceAuditError::Configuration => Self::Configuration,
-            EvidenceAuditError::InvalidEvent | EvidenceAuditError::SegmentMissing { .. } => {
-                Self::Chain
-            }
+            // Only stopped local inspection reports `NoOperation`; startup
+            // never does, so it joins the chain-state class.
+            EvidenceAuditError::InvalidEvent
+            | EvidenceAuditError::SegmentMissing { .. }
+            | EvidenceAuditError::NoOperation => Self::Chain,
             EvidenceAuditError::Audit(audit) => match audit {
                 AuditError::Io(error) if error.kind() == std::io::ErrorKind::InvalidData => {
                     Self::Chain

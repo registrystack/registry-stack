@@ -857,6 +857,11 @@ pub enum EvidenceAuditError {
     /// break so an operator can tell deliberate archival from tampering.
     #[error("audit chain is missing sealed segment {sequence}")]
     SegmentMissing { sequence: u64 },
+    /// The whole stopped local chain verified and holds no operation, as
+    /// before a local service has answered its first request. Reported apart
+    /// from a verification failure because it is a verified answer.
+    #[error("verified local audit chain retains no operation")]
+    NoOperation,
 }
 
 /// The chain's on-disk footprint, sealed segments and the active segment
@@ -1226,7 +1231,7 @@ impl LocalAuditCollector {
         let last = self
             .last_operation
             .take()
-            .ok_or(EvidenceAuditError::InvalidEvent)?;
+            .ok_or(EvidenceAuditError::NoOperation)?;
         let view = if let Some(pending) = self.pending.remove(&last) {
             LocalAuditOperationView {
                 schema: LOCAL_AUDIT_OPERATION_VIEW_SCHEMA_V1,
@@ -2985,6 +2990,26 @@ mod tests {
         drop(log);
         let summary = verify_audit_chain(&path, &audit_secret()).expect("chain verifies");
         assert_eq!(summary.records, 1);
+    }
+
+    #[tokio::test]
+    async fn local_inspection_reports_a_verified_chain_that_retains_no_operation() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let log = EvidenceAuditLog::initialize(
+            &path,
+            64 * 1024,
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+            1,
+        )
+        .await
+        .expect("audit initializes");
+        drop(log);
+
+        assert!(matches!(
+            verified_last_local_audit_operation(&path, &audit_secret()),
+            Err(EvidenceAuditError::NoOperation)
+        ));
     }
 
     #[tokio::test]
