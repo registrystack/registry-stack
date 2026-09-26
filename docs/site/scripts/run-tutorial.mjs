@@ -28,7 +28,7 @@
 // command line (tutorial-runner/gate.mjs): every page under start/ or
 // tutorials/ that runs the toolset's commands is replayed, as the start of or
 // part of a journey, or names why it is skipped. Every journey replays, even
-// after one fails.
+// after one fails, unless the toolset itself cannot be prepared.
 //
 // Exit status: 0 when the journey and every expectation pass, 1 when either
 // fails, 2 for a usage, annotation, or toolset error, 130 when interrupted.
@@ -352,7 +352,8 @@ async function runGate(toolsetName, dryRun) {
       continue;
     }
     const status = await replay(pages, toolset, fromCheckout);
-    if (status === 130) return 130;
+    // A toolset that cannot be prepared fails every journey the same way.
+    if (status === 130 || status === 2) return status;
     if (status !== 0) failed.push(journey.at(-1));
   }
   if (dryRun) return 0;
