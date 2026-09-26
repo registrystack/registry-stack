@@ -60,7 +60,7 @@ async fn real_postgres_idempotency_response_bound_matches_clean_and_upgraded_sch
 
     let database = TestDatabase::create(1).await;
     let (migration, migration_task) = database.connect_migration().await;
-    install_mutation_schema(&migration, &database.runtime_role)
+    install_mutation_schema(&migration, &database.runtime_role, false)
         .await
         .expect("clean mutation schema installs");
     assert_idempotency_response_body_bound(&migration, "clean", EXPECTED_MAX_STORED_RESPONSE_BYTES)
@@ -89,7 +89,7 @@ async fn real_postgres_idempotency_response_bound_matches_clean_and_upgraded_sch
         "the legacy fixture must reject a response above 2 MiB"
     );
 
-    install_mutation_schema(&migration, &database.runtime_role)
+    install_mutation_schema(&migration, &database.runtime_role, false)
         .await
         .expect("mutation schema reconciles the legacy response constraint");
     assert_idempotency_response_body_bound(

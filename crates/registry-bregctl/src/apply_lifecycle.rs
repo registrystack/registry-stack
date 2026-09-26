@@ -38,6 +38,7 @@ pub(crate) struct ApplyLifecycleRequest<'a> {
     pub package: &'a Path,
     pub initial: bool,
     pub backups: &'a [String],
+    pub acknowledge_retired_audit_discard: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -175,7 +176,8 @@ pub(crate) fn run(
         timeouts,
     )
     .with_destructive_backup_evidence(&backup_evidence)
-    .with_event_destination_compatibility_inventory(&event_destination_compatibility);
+    .with_event_destination_compatibility_inventory(&event_destination_compatibility)
+    .with_acknowledge_retired_audit_discard(request.acknowledge_retired_audit_discard);
     if let Some(package) = current_package.as_ref() {
         apply = apply.with_predecessor_migration_baseline(package.migration_baseline());
     }

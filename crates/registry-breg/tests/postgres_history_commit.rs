@@ -49,7 +49,7 @@ use registry_breg::postgres::{
 async fn history_schema_installs_append_only_runtime_privileges() {
     let database = TestDatabase::create(4).await;
     let (migration, migration_task) = database.connect_migration().await;
-    install_mutation_schema(&migration, &database.runtime_role)
+    install_mutation_schema(&migration, &database.runtime_role, false)
         .await
         .expect("mutation schema installs first");
     install_history_commit_schema(&migration, &database.runtime_role)
@@ -194,7 +194,7 @@ async fn history_schema_store_is_runtime_select_only_and_retains_exact_bytes() {
 async fn empty_baseline_has_position_zero_reference_and_refuses_existing_rows() {
     let database = TestDatabase::create(4).await;
     let (mut migration, migration_task) = database.connect_migration().await;
-    install_mutation_schema(&migration, &database.runtime_role)
+    install_mutation_schema(&migration, &database.runtime_role, false)
         .await
         .expect("mutation schema installs first");
     install_history_commit_schema(&migration, &database.runtime_role)
@@ -643,7 +643,7 @@ async fn reference_resolution_refuses_unknown_future_and_unavailable_history() {
 }
 
 async fn install_foundation(database: &TestDatabase, migration: &mut tokio_postgres::Client) {
-    install_mutation_schema(migration, &database.runtime_role)
+    install_mutation_schema(migration, &database.runtime_role, false)
         .await
         .expect("mutation schema installs");
     install_history_commit_schema(migration, &database.runtime_role)
