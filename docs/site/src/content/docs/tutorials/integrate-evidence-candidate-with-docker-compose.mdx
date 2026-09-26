@@ -21,7 +21,7 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 Start with the approved candidate created in
 [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/). This guide runs that
 candidate in an existing Docker Compose application. Compose is an operator-owned deployment
-adapter, not output from `evidencectl package`. The candidate bundle stays unchanged across host and
+adapter, not output from `evidencectl package`. The package stays unchanged across host and
 container deployments.
 
 <QuickstartMeta
@@ -37,7 +37,7 @@ You need an approved candidate, a container image whose provenance and digest yo
 an owner-only secret mount, a workload-local Transit proxy, and persistent storage for the audit
 chain. Do not use repository development images as released production artifacts.
 
-Prepare a container-specific runtime document. It names the same bundle content but container paths,
+Prepare a container-specific runtime document. It names the same package but container paths,
 a private Compose-network listener, secret root, audit path, and any required private CA files.
 
 ## Add the Transit proxy boundary
@@ -65,14 +65,14 @@ bind with a dedicated named volume shared only by the proxy and Evidence Gateway
 The Evidence Gateway service mounts five independently owned paths:
 
 ```text
-candidate/bundle          -> /etc/registry-evidence/bundle       read-only
+candidate                 -> /etc/registry-evidence/package      read-only
 runtime.docker.yaml       -> /etc/registry-evidence/runtime.yaml read-only
 Evidence secret root      -> /run/secrets/registry-evidence      read-only
 Evidence audit volume     -> /var/lib/registry-evidence          writable
 Transit socket directory  -> /run/registry-evidence              socket access
 ```
 
-Keep the bundle and runtime read-only. A read-only mount establishes their immutability, but does
+Keep the package and runtime read-only. A read-only mount establishes their immutability, but does
 not waive secret ownership or mode validation. The maintained Evidence Gateway image runs as UID and GID
 `65532`; pin that identity in the Compose file and make every secret file acceptable to it with the
 required owner-only permissions. A different reviewed image requires an explicitly reviewed UID
@@ -89,7 +89,7 @@ services:
     user: "65532:65532"
     read_only: true
     volumes:
-      - <candidate>/bundle:/etc/registry-evidence/bundle:ro
+      - <candidate>:/etc/registry-evidence/package:ro
       - ./runtime.docker.yaml:/etc/registry-evidence/runtime.yaml:ro
       - <evidence-secret-root>:/run/secrets/registry-evidence:ro
       - evidence-audit:/var/lib/registry-evidence
@@ -118,13 +118,13 @@ docker compose run --rm evidence \
 It prints one line and exits zero:
 
 ```text
-Evidence deployment <bundle-revision> / <runtime-revision> passed check (<count> requirements)
+Evidence package <package-digest> passed check (<count> requirements)
 ```
 
-Both revisions are your own candidate's, and the count is the number of requirements in your
-bundle, so the line will not match anyone else's.
+The digest is your own package's, and the count is the number of requirements in that package, so
+the line will not match anyone else's.
 
-Both forms of the command compile the bundle, compile the source plans, refuse a mounted extract
+Both forms of the command compile the verified package, compile the source plans, refuse a mounted extract
 already older than its source allows, validate the mounted secret material, and initialize the
 configured signer, which signs a self-test message through the Transit proxy and verifies it
 against the governed public JWK. That is why the proxy starts first: without a reachable socket
@@ -146,8 +146,8 @@ audit hash key is still checked, and the audit directory and files are still che
 ownership, mode, write access, and a complete final entry. The lock stays with the running
 instance.
 
-Changing only the container runtime does not change the governed bundle, so it does not require the
-fixture suite to run again. Run fixtures again when the bundle changes.
+Changing only the container runtime does not change the governed package, so it does not require the
+fixture suite to run again. Run fixtures again when the package changes.
 
 ## Start the service
 
@@ -167,7 +167,7 @@ listener is bound, so the announcement means the port is this deployment's and n
 docker compose logs evidence | grep 'evidence service listening'
 ```
 
-That record carries the bundle revision, the runtime revision, the bind host, and the port. If no
+That record carries the package digest, the bind host, and the port. If no
 such line appears, read the whole log: startup failures are reported there, and the container will
 have exited.
 
@@ -175,14 +175,14 @@ The runtime in this guide binds a Compose-network address with no published port
 reachable from another service on the same Compose network and not from your host. Publish a port
 only behind the TLS-terminating service you control.
 
-## Keep revisions distinct
+## Keep package and requirement digests distinct
 
-The bundle revision covers exact bundle bytes and remains the same in host and Compose deployments.
-The runtime revision covers exact runtime bytes and bound private CA files, so it changes with
-container paths, listener bindings, or trust files. A configuration revision is narrower than either:
-it covers one requirement's own configuration and artifacts. Signed assertions carry the revision of
-the requirement they answer as `configurationRevision`, never the runtime or bundle revision. No
-revision contains secret values or audit contents.
+The package digest covers the exact `SHA256SUMS` bytes and remains the same in host and Compose
+deployments. Runtime paths, listener bindings, trust files, secrets, and audit contents remain
+outside that package identity. A configuration revision is narrower than the package digest: it
+covers one requirement's own configuration and artifacts. Signed assertions carry the revision of
+the requirement they answer as `configurationRevision`, never the whole-package digest. Neither
+digest contains secret values or audit contents.
 
 ## Stop without deleting the audit history
 

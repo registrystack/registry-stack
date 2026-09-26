@@ -316,10 +316,10 @@ serve, and a startup that fails rather than degrades.
   deliberately rather than accepting whatever the starter contract produced, because they decide
   what an unauthenticated reader can learn about the registry's shape.
 - Evidence Gateway has no equivalent declaration and no posture route either. Its posture is the exact
-  bytes it loaded: one governed bundle and one closed runtime file, each with its own content
-  digest, mounted read-only, with no reload, merge, mutation, governed-field override, or fallback
-  path. Record the bundle revision you deployed, because that identifier plus the digests is the
-  only description of what the process is enforcing.
+  bytes it loaded: one verified package and one closed runtime file, mounted read-only, with no
+  reload, merge, mutation, governed-field override, or fallback path. Record and pin the package
+  digest you deployed. Keep the runtime file with the deployment record because it binds the
+  package path and environment-specific resources without becoming part of the package.
 
 {/* Evidence: RelayRuntime is a closed deny_unknown_fields schema over apiVersion, kind, listener,
      package, secretProviders, sources, authentication, audit, cursor, limits, quotas, and shutdown

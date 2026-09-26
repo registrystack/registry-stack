@@ -101,6 +101,7 @@ impl std::error::Error for CliError {}
 enum CommandError {
     Cli(CliError),
     Deployment(&'static str, ArtifactFault),
+    Package(registry_platform_config::PackageError),
     /// One or more governed extract sources cannot answer at check time.
     ///
     /// Source identifiers come from the reviewed bundle. Publisher metadata
@@ -131,6 +132,7 @@ impl fmt::Display for CommandError {
         match self {
             Self::Cli(error) => fmt::Display::fmt(error, formatter),
             Self::Deployment(message, fault) => write!(formatter, "{message}: {fault}"),
+            Self::Package(error) => fmt::Display::fmt(error, formatter),
             Self::StaleExtracts(sources) => write!(
                 formatter,
                 "bound extract is stale for source{} {}",
@@ -250,9 +252,8 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                 }
             }
             println!(
-                "Evidence deployment {} / {} passed check ({} requirements)",
-                bundle.revision(),
-                runtime.revision(),
+                "Evidence package {} passed check ({} requirements)",
+                bundle.package_digest(),
                 bundle.config.requirements.len()
             );
             Ok(ExitCode::SUCCESS)
@@ -331,11 +332,11 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                 .map_err(|error| kernel_compile_error("bundle compilation failed", error))?;
             let _source_plans = compile_bundle_source_plans(&bundle)?;
             if json {
-                println!("{}", bundle_revision_report(&bundle)?);
+                println!("{}", package_digest_report(&bundle)?);
             } else {
                 println!(
-                    "Evidence bundle {} passed check ({} requirements)",
-                    bundle.revision(),
+                    "Evidence package {} passed check ({} requirements)",
+                    bundle.package_digest(),
                     bundle.config.requirements.len()
                 );
             }
@@ -514,6 +515,9 @@ fn discovery_config_invalid(error: ConfigError) -> CommandError {
 /// `evidence check` names a file, a schema path, and a text location instead
 /// of only a class. Public HTTP problems are unaffected and stay generic.
 fn deployment_load_error(error: BundleError) -> CommandError {
+    if let BundleError::Package(error) = error {
+        return CommandError::Package(error);
+    }
     let message = match &error {
         BundleError::Unavailable => "deployment input is unavailable",
         BundleError::NotImmutable(_) => "deployment input is not immutable",
@@ -524,6 +528,7 @@ fn deployment_load_error(error: BundleError) -> CommandError {
         BundleError::Config(_) => "deployment configuration is invalid",
         BundleError::InvalidArtifact(_) => "deployment artifact is invalid",
         BundleError::InvalidScript(_) => "deployment script is invalid",
+        BundleError::Package(_) => unreachable!("package errors returned above"),
     };
     match error.artifact_fault() {
         Some(fault) => CommandError::Deployment(message, fault.clone()),
@@ -653,7 +658,7 @@ fn compile_source_plans_with_runtime(
     Ok(plans)
 }
 
-fn bundle_revision_report(bundle: &Bundle) -> Result<Value, CliError> {
+fn package_digest_report(bundle: &Bundle) -> Result<Value, CliError> {
     let requirements = bundle
         .config
         .requirements
@@ -667,7 +672,7 @@ fn bundle_revision_report(bundle: &Bundle) -> Result<Value, CliError> {
             Ok(serde_json::json!({"id": requirement.id, "configurationRevision": revision}))
         })
         .collect::<Result<Vec<_>, CliError>>()?;
-    Ok(serde_json::json!({"bundleRevision": bundle.revision(), "requirements": requirements}))
+    Ok(serde_json::json!({"packageDigest": bundle.package_digest(), "requirements": requirements}))
 }
 
 fn compile_bundle_source_plans(
@@ -5296,15 +5301,15 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn bundle_check_json_uses_exact_runtime_requirement_revisions() {
+    fn bundle_check_json_uses_the_package_digest_and_exact_requirement_revisions() {
         let directory = tempfile::tempdir().expect("temporary bundle");
         let source = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../products/evidence/fixtures/acceptance/all-definitions");
         copy_tree(&source, directory.path());
         set_tree_mode(directory.path(), 0o555, 0o444);
         let bundle = Bundle::load(directory.path()).expect("fixture bundle loads");
-        let report = bundle_revision_report(&bundle).expect("revision report");
-        assert_eq!(report["bundleRevision"], bundle.revision());
+        let report = package_digest_report(&bundle).expect("package report");
+        assert_eq!(report["packageDigest"], bundle.package_digest());
         let requirements = report["requirements"].as_array().unwrap();
         assert_eq!(requirements.len(), bundle.config.requirements.len());
         for (entry, requirement) in requirements.iter().zip(&bundle.config.requirements) {

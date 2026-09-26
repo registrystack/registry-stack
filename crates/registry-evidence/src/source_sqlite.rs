@@ -307,7 +307,7 @@ impl SqliteExtractSource {
 
     /// Open the exact snapshot already validated and digest-bound by the
     /// runtime document. Re-capturing by path here could accept a replacement
-    /// under the old runtime revision.
+    /// after startup validation.
     pub(crate) fn open_captured(
         source: &SourceConfig,
         statement_sql: &str,

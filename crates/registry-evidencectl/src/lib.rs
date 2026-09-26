@@ -81,7 +81,8 @@ enum Command {
     Jwks(jwks::JwksArgs),
     /// Start an editable Evidence Gateway project from OpenAPI, a starter, or a SQLite extract.
     New(scaffold::NewArgs),
-    /// Compile an editable project into a reviewed deployment candidate.
+    /// Retired spelling of `package`.
+    #[command(hide = true)]
     Build(build::BuildArgs),
     /// Drive the evidence binary across a project's bundle fixtures.
     #[command(subcommand)]
@@ -178,6 +179,9 @@ struct PackageArgs {
     /// New candidate directory to create.
     #[arg(long)]
     output: PathBuf,
+    /// Optional source or review revision recorded in `REVISION`.
+    #[arg(long)]
+    revision: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -441,6 +445,7 @@ pub fn main_entry() -> ExitCode {
                         project: args.project,
                         target: args.target,
                         output: args.output,
+                        revision: args.revision,
                     },
                     format,
                 ),
@@ -455,7 +460,18 @@ pub fn main_entry() -> ExitCode {
         Command::Keygen(command) => keygen::run(command, format),
         Command::Jwks(args) => jwks::run(args, format),
         Command::New(args) => scaffold::run_with_format(args, format),
-        Command::Build(args) => build::run_with_format(args, format),
+        Command::Build(args) => Err(SafeCliFailure {
+            operational: false,
+            code: "evidence.build.retired".to_owned(),
+            artifact: args.project.display().to_string(),
+            path: "$".to_owned(),
+            message: "The evidencectl build command was removed.".to_owned(),
+            suggested_action:
+                "Run evidencectl package with the same project, target, and new output directory."
+                    .to_owned(),
+            cause: None,
+        }
+        .into()),
         Command::Fixtures(fixtures::FixturesCommand::Run(mut args)) => {
             args.json |= format == OutputFormat::Json;
             fixtures::run(fixtures::FixturesCommand::Run(args))
@@ -1664,7 +1680,7 @@ mod tests {
                 .map(|(path, _)| path.as_str())
                 .collect::<std::collections::BTreeSet<_>>(),
             std::collections::BTreeSet::from([
-                "evidencectl build",
+                "evidencectl package",
                 "evidencectl fixtures run",
                 "evidencectl source add",
                 "evidencectl source suggest",

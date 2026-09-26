@@ -192,25 +192,23 @@ ordinary files or choose another directory.
 ```sh
 evidencectl package ./evidence --target ./evidence/targets/production \
   --output ./candidate-operated-001
-evidence check --runtime-config ./candidate-operated-001/runtime.yaml
+evidence check --runtime-config ./evidence/targets/production/runtime.yaml
 ```
 
-Build uses the matching Evidence runtime to validate the bundle and required
-fixtures before publishing. A refused build reports which check objected
-(`Evidence rejected the generated deployment bundle` or `Evidence rejected a
-deployment fixture`) and names the exact `evidencectl test` command to
-rerun for the full diagnosis; it publishes nothing at `--output` until every
-check passes. The check then validates and compiles the complete
-immutable bundle and validates the mounted secret material exactly as startup
-does, and reports the bundle revision, the runtime revision and the number of
-requirements it compiled. Run it in a context where the runtime file's absolute
-`package.root` and secret root already resolve: a build host that does not
-carry those paths fails the check until the candidate is placed. Neither command
+Package uses the matching Evidence runtime to validate the generated package and required
+fixtures before publishing. A refused package publishes nothing at `--output`; rerun the exact
+`evidencectl test` command for the complete fixture diagnosis. The check then verifies and compiles
+the installed immutable package and validates mounted secret material exactly as startup does. It
+reports the package digest and the number of requirements it compiled. Run it in a context where
+the target runtime file's absolute `package.root` and secret root already resolve: a packaging host
+that does not carry those paths cannot run the target-host check until the package is installed.
+Neither command
 contacts the source, caller issuer or Transit service.
 
 Hand over the authored revision, operated source-export baseline, complete target,
-exact candidate and revisions, required secret references, and the approved
-synthetic verification case. The candidate contains `runtime.yaml` and `bundle/`.
+exact package digest and candidate, the separate target runtime, required secret references, and
+the approved synthetic verification case. The package contains `SHA256SUMS` and governed Evidence
+artifacts. It contains no `runtime.yaml`.
 Development services, credentials, tokens and live responses stay outside it.
 
 Named connections share an HTTP client, eligible OAuth token cache and bounded

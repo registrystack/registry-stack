@@ -433,11 +433,10 @@ impl std::fmt::Debug for ReleasedEvidence {
     }
 }
 
-/// All runtime state is derived from one captured immutable bundle revision.
+/// All runtime state is derived from one captured immutable package.
 pub struct EvidenceRuntime {
     kernel: OfflineKernel,
     runtime_config: RuntimeConfig,
-    runtime_revision: String,
     authenticator: Arc<dyn RuntimeAuthenticator>,
     sources: BTreeMap<String, SourceExecutor>,
     audit: Arc<EvidenceAuditLog>,
@@ -487,7 +486,7 @@ impl std::fmt::Debug for EvidenceRuntime {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("EvidenceRuntime")
-            .field("bundle_revision", &self.kernel.bundle().revision())
+            .field("package_digest", &self.kernel.bundle().package_digest())
             .field("source_count", &self.sources.len())
             .field("signing_key_id", &self.signer.key_id())
             .finish_non_exhaustive()
@@ -581,7 +580,6 @@ fn rate_limiter(bundle: &Bundle) -> Result<EvidenceRateLimiter, RuntimeInitializ
 struct Startup<A> {
     kernel: OfflineKernel,
     runtime_config: RuntimeConfig,
-    runtime_revision: String,
     authenticator: Arc<dyn RuntimeAuthenticator>,
     sources: BTreeMap<String, SourceExecutor>,
     audit: A,
@@ -605,7 +603,6 @@ async fn assemble<A>(
 ) -> Result<Startup<A>, RuntimeInitializationError> {
     let (bundle, runtime_document) = deployment.into_parts();
     let runtime_config = runtime_document.config.clone();
-    let runtime_revision = runtime_document.revision().to_owned();
     let bundle = Arc::new(bundle);
     let kernel = OfflineKernel::compile(Arc::clone(&bundle))
         .map_err(|_| RuntimeInitializationError::Bundle)?;
@@ -645,7 +642,6 @@ async fn assemble<A>(
     Ok(Startup {
         kernel,
         runtime_config,
-        runtime_revision,
         authenticator,
         sources,
         audit,
@@ -735,7 +731,6 @@ impl EvidenceRuntime {
         Ok(Self {
             kernel: startup.kernel,
             runtime_config: startup.runtime_config,
-            runtime_revision: startup.runtime_revision,
             authenticator: startup.authenticator,
             sources: startup.sources,
             audit: Arc::new(startup.audit),
@@ -752,10 +747,6 @@ impl EvidenceRuntime {
 
     pub fn runtime_config(&self) -> &RuntimeConfig {
         &self.runtime_config
-    }
-
-    pub fn runtime_revision(&self) -> &str {
-        &self.runtime_revision
     }
 
     pub fn jwks(&self) -> &JwksDocument {
@@ -1416,7 +1407,7 @@ impl EvidenceRuntime {
         let audit_material = RequestBatchAuditMaterial {
             assurance_profile: self.bundle().config.assurance_profile,
             requirement: batch.requirement.clone(),
-            bundle_revision: self.bundle().revision().to_owned(),
+            bundle_revision: self.bundle().package_digest().to_owned(),
             purpose: batch.purpose.clone(),
             requester_pseudonym,
             actor_pseudonym,
@@ -3449,7 +3440,7 @@ impl EvidenceRuntime {
         Ok(AuditMaterial {
             assurance_profile: self.bundle().config.assurance_profile,
             requirement: resolved.requirement.clone(),
-            bundle_revision: self.bundle().revision().to_owned(),
+            bundle_revision: self.bundle().package_digest().to_owned(),
             purpose: resolved.purpose.clone(),
             requester_pseudonym,
             actor_pseudonym,
@@ -3498,7 +3489,7 @@ impl EvidenceRuntime {
         let mut event = EvidenceAuthorizationRefusalAuditEvent::new(
             self.bundle().config.assurance_profile,
             operation.to_owned(),
-            self.bundle().revision().to_owned(),
+            self.bundle().package_digest().to_owned(),
             requester_pseudonym,
             elapsed_millis(started),
         );

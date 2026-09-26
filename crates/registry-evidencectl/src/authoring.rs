@@ -431,12 +431,32 @@ pub(crate) fn compile_production_project(
 }
 
 /// Compile the target's complete governance under its declared assurance profile.
+#[cfg(test)]
 pub(crate) fn compile_target_project(
     project_root: &Path,
     deployment_target_root: &Path,
     staging_root: &Path,
     governed_bundle: Value,
     evidence_bin: &Path,
+) -> Result<CompiledProductionProject> {
+    compile_target_project_with_revision(
+        project_root,
+        deployment_target_root,
+        staging_root,
+        governed_bundle,
+        evidence_bin,
+        None,
+    )
+}
+
+/// Compile a target package with optional operator revision metadata.
+pub(crate) fn compile_target_project_with_revision(
+    project_root: &Path,
+    deployment_target_root: &Path,
+    staging_root: &Path,
+    governed_bundle: Value,
+    evidence_bin: &Path,
+    revision: Option<&str>,
 ) -> Result<CompiledProductionProject> {
     validate_plain_path_components(project_root, "authoring project")?;
     let project_root = validate_project_root(project_root)?;
@@ -482,6 +502,7 @@ pub(crate) fn compile_target_project(
         staging_root,
         &plan,
         evidence_bin,
+        revision,
     )?;
     let fixture_paths = plan
         .questions
@@ -537,7 +558,7 @@ pub(crate) fn compile_check_project(
     )?;
     expand_check_signing_validity(&mut plan.bundle);
     validate_compiled_bundle_shape(&plan.bundle)?;
-    let bundle_path = write_bundle(&project_root, None, staging_root, &plan, evidence_bin)?;
+    let bundle_path = write_bundle(&project_root, None, staging_root, &plan, evidence_bin, None)?;
     let fixture_paths = plan
         .questions
         .iter()
@@ -628,7 +649,7 @@ pub(crate) fn compile_fixture_project_with_connections(
         },
         source_connections,
     )?;
-    let bundle_path = write_bundle(&project_root, None, staging_root, &plan, evidence_bin)?;
+    let bundle_path = write_bundle(&project_root, None, staging_root, &plan, evidence_bin, None)?;
     let fixture_paths = plan
         .questions
         .iter()
@@ -4108,7 +4129,7 @@ fn write_plan(
     evidence_bin: &Path,
     outbound_tls: Value,
 ) -> Result<CompiledProject> {
-    write_bundle(project_root, None, staging_root, plan, evidence_bin)?;
+    write_bundle(project_root, None, staging_root, plan, evidence_bin, None)?;
     create_private_directory(&staging_root.join("audit"))?;
 
     let canonical_staging = fs::canonicalize(staging_root)
@@ -4204,6 +4225,7 @@ fn write_bundle(
     staging_root: &Path,
     plan: &CompilePlan,
     evidence_bin: &Path,
+    revision: Option<&str>,
 ) -> Result<PathBuf> {
     let bundle = staging_root.join("bundle");
     create_private_directory(&bundle)?;
@@ -4366,8 +4388,24 @@ fn write_bundle(
             write_private_file(&bundle.join(path), &bytes)?;
         }
     }
+    registry_platform_config::write_sum_file(
+        &bundle,
+        revision,
+        &package_limits(),
+        "evidencectl package",
+    )?;
     set_bundle_modes(&bundle, 0o500, 0o400)?;
     Ok(bundle)
+}
+
+pub(crate) fn package_limits() -> registry_platform_config::PackageLimits {
+    registry_platform_config::PackageLimits {
+        max_files: 1_024,
+        max_file_bytes: MAX_SOURCE_ARTIFACT_BYTES,
+        max_total_bytes: 16 * 1024 * 1024,
+        max_depth: 3,
+        max_path_bytes: 128,
+    }
 }
 
 /// Refuse a missing governed public key as a field-addressed diagnostic.
@@ -5993,6 +6031,14 @@ properties:
         let fixture = Fixture::new(OPENAPI, AGE_BRACKET_QUESTION, AGE_BRACKET_ANSWER, true);
         let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
             .expect("controlled category compiles");
+
+        let package = registry_platform_config::verify_package(
+            &fixture.staging.join("bundle"),
+            &package_limits(),
+            "evidencectl package",
+        )
+        .expect("local development compilation produces a package");
+        assert!(package.digest().starts_with("sha256:"));
 
         assert_eq!(
             compiled.questions[0].concepts[0].concept_form,

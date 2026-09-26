@@ -1434,9 +1434,20 @@ fn state_matches_sealed_bundle(
     access_policies: &[AccessPolicyState],
     dev_root: &Path,
 ) -> Result<bool> {
-    let path = dev_root.join("bundle/evidence.yaml");
+    let package_root = dev_root.join("bundle");
+    let verified = registry_platform_config::verify_package(
+        &package_root,
+        &crate::authoring::package_limits(),
+        "evidencectl dev start",
+    )?;
+    let path = package_root.join("evidence.yaml");
     require_owned_regular_file(&path, 0o400)?;
     let bytes = fs::read(&path).context("failed to read the sealed local bundle")?;
+    if verified.file_digest("evidence.yaml").as_deref()
+        != Some(registry_platform_config::sha256_uri(&bytes).as_str())
+    {
+        bail!("the sealed local package changed after package verification");
+    }
     if bytes.len() > 1024 * 1024 {
         return Ok(false);
     }
@@ -3749,8 +3760,20 @@ requirements:
 "#,
         )
         .expect("bundle config");
+        registry_platform_config::write_sum_file(
+            &bundle,
+            None,
+            &crate::authoring::package_limits(),
+            "evidencectl dev start",
+        )
+        .expect("seal local test package");
         fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o400))
             .expect("seal bundle config");
+        fs::set_permissions(
+            bundle.join(registry_platform_config::SUM_FILE),
+            fs::Permissions::from_mode(0o400),
+        )
+        .expect("seal package sum file");
         fs::set_permissions(&bundle, fs::Permissions::from_mode(0o500)).expect("seal bundle");
         let mut state = DevState {
             schema: STATE_SCHEMA.to_owned(),
@@ -3833,8 +3856,26 @@ requirements:
             serde_norway::to_string(&explicit_bundle).expect("explicit bundle YAML"),
         )
         .expect("write explicit bundle");
+        fs::set_permissions(&bundle, fs::Permissions::from_mode(PRIVATE_DIR_MODE))
+            .expect("unseal package directory for test update");
+        fs::remove_file(bundle.join(registry_platform_config::SUM_FILE))
+            .expect("remove stale package sum file");
+        registry_platform_config::write_sum_file(
+            &bundle,
+            None,
+            &crate::authoring::package_limits(),
+            "evidencectl dev start",
+        )
+        .expect("reseal local test package");
         fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o400))
             .expect("reseal bundle config");
+        fs::set_permissions(
+            bundle.join(registry_platform_config::SUM_FILE),
+            fs::Permissions::from_mode(0o400),
+        )
+        .expect("reseal package sum file");
+        fs::set_permissions(&bundle, fs::Permissions::from_mode(0o500))
+            .expect("reseal package directory");
         state.caller = None;
         state.access_policies = vec![AccessPolicyState {
             id: "age-checks".to_owned(),

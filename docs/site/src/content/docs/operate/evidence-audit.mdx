@@ -61,7 +61,8 @@ Authentication, malformed-request, and invalid-selector failures happen before E
 enough privacy-safe context and do not fabricate an audit entry. Do not expect every HTTP request
 to produce two entries.
 
-Authorized-material records can carry the governed requirement, purpose, bundle revision,
+Authorized-material records can carry the governed requirement, purpose, package digest
+(in the frozen `bundleRevision` field),
 requester pseudonym, subject role and selector-profile pseudonym, source and adapter identifiers,
 response protection, decision, safe failure class, disclosed concept IDs, evidence ID, and signing
 key ID. A standalone authorization-refusal record instead carries a requester pseudonym and closed

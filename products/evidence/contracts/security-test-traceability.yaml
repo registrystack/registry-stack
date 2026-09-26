@@ -141,9 +141,9 @@ entries:
     tests: [{file: crates/registry-evidence/src/binding.rs, name: every_subject_binding_scope_component_is_cryptographically_bound}]
   - id: sec-runtime-bundle-mutation-absent
     tests:
-      - {file: crates/registry-evidence/src/bundle.rs, name: revision_binds_paths_and_exact_bytes_deterministically}
+      - {file: crates/registry-evidence/src/bundle.rs, name: package_digest_binds_paths_and_exact_bytes_deterministically}
       - {file: crates/registry-evidence/src/bundle.rs, name: requirement_projection_prunes_unreached_connections_and_covers_selected_behavior}
-      - {file: crates/registry-evidence/src/runtime_tests.rs, name: serving_runtime_never_reloads_merges_or_falls_back_after_bundle_capture}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: serving_runtime_never_reloads_merges_or_falls_back_after_package_capture}
   - id: sec-mutually-distrustful-configuration
     tests: [{file: crates/registry-evidence/src/config.rs, name: one_trust_domain_and_native_token_identity_are_closed_configuration}]
   - id: sec-rate-limit-does-not-legalize-ladder
@@ -238,7 +238,7 @@ entries:
   - id: sec-runtime-cannot-override-governed-bundle
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: runtime_document_is_closed_and_contains_no_governed_override_surface}
-      - {file: crates/registry-evidence/src/bundle.rs, name: runtime_and_ca_bytes_are_captured_under_an_independent_read_only_revision}
+      - {file: crates/registry-evidence/src/bundle.rs, name: runtime_and_ca_bytes_are_captured_from_independent_read_only_inputs}
   - id: sec-tls-and-proxy-authority-fixed
     tests:
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: private_ca_tls_handshake_succeeds_and_hostname_mismatch_fails}
@@ -427,7 +427,7 @@ entries:
       - {file: crates/registry-evidence/src/config.rs, name: a_prepared_statement_parameter_name_is_held_to_the_preparation_abi}
       - {file: crates/registry-evidence/tests/statement_source.rs, name: a_parameter_is_filled_from_its_one_declared_origin}
       - {file: crates/registry-evidence/src/bundle.rs, name: every_unusable_extract_is_refused_by_its_own_name_and_cause}
-      - {file: crates/registry-evidence/src/bundle.rs, name: an_extract_reaches_the_runtime_revision_as_a_digest_of_its_bytes}
+      - {file: crates/registry-evidence/src/bundle.rs, name: an_extract_is_bound_as_a_digest_of_its_bytes}
       - {file: crates/registry-evidence/src/bundle.rs, name: a_bound_extract_refuses_a_path_replaced_before_it_was_opened}
       - {file: crates/registry-evidence/src/bundle.rs, name: a_source_extract_binding_must_be_exact_in_both_directions}
   - id: sec-holder-bound-binding-derivation

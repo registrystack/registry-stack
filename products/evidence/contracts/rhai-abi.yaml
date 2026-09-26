@@ -171,7 +171,7 @@ capabilities:
 lifecycle:
   compilation: Startup only; each ordinary script must expose exactly one public entry point at the required arity before readiness; extraction alone permits either arity two or three, never both. Each batch block names distinct preparation and extraction scripts exposing exactly prepare_batch/2 and extract_batch/2 respectively.
   state: 'Fresh invocation state and fresh input copies; only the immutable schema-validated search FactSet crosses into a fetch stage, whole or projected onto the allowlist that stage declares, with no cross-request or cross-definition mutable state. One fetch stage never observes another fetch stage: facts flow forward from the search into each member and forward again into derivation, never sideways.'
-  identity: Script path and exact bytes are covered by the governed bundle revision.
+  identity: Script path and exact bytes are listed in the governed package's SHA256SUMS file.
 failure:
   preparation: adapter_input_error
   extraction: source_protocol_error
