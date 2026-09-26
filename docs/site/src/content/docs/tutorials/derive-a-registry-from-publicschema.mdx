@@ -13,7 +13,6 @@ locale: en
 standards_referenced: []
 tutorial_test:
   toolset: breg
-  skip: derives a project from the embedded PublicSchema snapshot and edits a selection file; replayable, not yet annotated
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
@@ -28,7 +27,11 @@ start the project, then edit the selection and derive it again.
   outcome="A project derived from PublicSchema with a starter selection, checked and started, then derived again from an edited selection."
   time="About 20 minutes"
   level="Local authoring with synthetic data"
-  prerequisites={['The binaries from Create and query your first registry', 'Running Docker', 'An editor']}
+  prerequisites={[
+    { label: 'The binaries from Create and query your first registry', href: '/tutorials/first-breg/#install-base-registry-engine' },
+    { label: 'Running Docker', href: 'https://docs.docker.com/get-started/get-docker/' },
+    'An editor',
+  ]}
 />
 
 ## Before you start
@@ -56,7 +59,7 @@ Derive a project from the household starter:
 bregctl init household-registry --from publicschema --starter household
 ```
 
-```text
+```text test-expect
 Initialized a registry project. 6 artifacts written.
   revision  sha256:<digest>
 
@@ -68,9 +71,20 @@ Initialized a registry project. 6 artifacts written.
   tests/journeys.yaml
 
   finding  access.profile.higher_classification  2 paths
+           this field is more sensitive than its entity's classification; verify the
+           profile's scope and purpose before disclosing it
+             entities[id=group-membership].accessProfiles[id=operator].readableFields[field=person]
              entities[id=person].accessProfiles[id=operator].readableFields[field=marital-status]
   finding  access.profile.unrestricted_collection  6 paths
+           this profile can list all rows, subject only to query bounds; caller filters
+           are not authorization. Add a claim-bound row restriction or review this
+           registry-wide access
+             entities[id=group-membership].accessProfiles[id=operator].rowBoundaries
+             entities[id=group-membership].accessProfiles[id=reader].rowBoundaries
+             entities[id=household].accessProfiles[id=operator].rowBoundaries
+             entities[id=household].accessProfiles[id=reader].rowBoundaries
              entities[id=person].accessProfiles[id=operator].rowBoundaries
+             entities[id=person].accessProfiles[id=reader].rowBoundaries
 
 0 errors, 8 findings.
 
@@ -88,8 +102,7 @@ Next:
      it back with --selection to derive a fresh project
 ```
 
-Each finding prints a sentence of its own and one path per place it fires; one path per finding is
-kept, the rest omitted. `init` compiled the project before printing its `revision`, the digest of
+Each finding prints a sentence of its own and one path per place it fires. `init` compiled the project before printing its `revision`, the digest of
 the compiled model, and `check` and `dev` repeat that revision and every finding until you change
 something. Unlike the domain-neutral example, a derived project has no `modules/` directory: every
 entity lives in `registry.yaml`. The rest of this tutorial follows the numbered steps in order.
@@ -215,15 +228,17 @@ every record you created is gone and the next start begins on an empty database.
 fresh project from the change. Open `household-registry/model/selection.yaml` and remove
 `marital_status` from `Person`'s properties:
 
-```yaml
-- concept: Person
-  properties:
-  - name: given_name
-  - name: family_name
-  - name: date_of_birth
-  - name: sex
-  - name: preferred_language
-  - name: phone_number
+```diff lang="yaml" title="household-registry/model/selection.yaml" test-edit
+ - concept: Person
+   properties:
+   - name: given_name
+   - name: family_name
+   - name: date_of_birth
+   - name: sex
+   - name: preferred_language
+   - name: phone_number
+-  - name: marital_status
+ - concept: Household
 ```
 
 Derive a second project from the edited file, into a new directory:
@@ -234,7 +249,15 @@ bregctl init household-registry-2 --from publicschema --selection household-regi
 
 The report has a new revision, the same six `access.profile.unrestricted_collection` findings, and
 one `access.profile.higher_classification` finding left, for `group-membership.person`; removing
-`marital_status` removed the other one. The `person` field table in `household-registry-2/README.md`
+`marital_status` removed the other one:
+
+```text test-excerpt
+finding  access.profile.higher_classification  entities[id=group-membership].accessProfiles[id=operator].readableFields[field=person]
+         this field is more sensitive than its entity's classification; verify the
+         profile's scope and purpose before disclosing it
+```
+
+The `person` field table in `household-registry-2/README.md`
 no longer lists `marital-status`, and that README's "Access profiles" section now reads in the
 singular. Any other edit, adding a property or removing one, follows the same cycle: change
 `model/selection.yaml`, derive into a new directory, and read the new README.
@@ -247,7 +270,7 @@ singular. Any other edit, adding a property or removing one, follows the same cy
 Without `--starter` or `--selection`, `init --from publicschema` asks its questions at a terminal
 instead of reading a file:
 
-```sh
+```sh test-exit="1"
 bregctl init household-registry-3 --from publicschema
 ```
 
@@ -262,7 +285,7 @@ question, what it lists, and what starts ticked.
 Without a terminal at all, for example in a script or in CI, the wizard cannot run, and
 `init --from publicschema` alone refuses immediately:
 
-```text
+```text test-expect
 bregctl init refused.
 
   error    init.selection.missing  arguments
