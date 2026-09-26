@@ -1084,6 +1084,20 @@ mod tests {
     use registry_platform_oidc::is_access_token_typ_pair;
     use registry_scheduling_core::{SCHEDULING_POLICY_API_VERSION, SCHEDULING_POLICY_KIND};
 
+    #[test]
+    fn a_stdout_destination_accepts_an_explicit_null_path() {
+        let audit: AuditConfig = serde_json::from_value(serde_json::json!({
+            "hashKeyRef": "secret:env/AUDIT_HASH_KEY",
+            "destination": "stdout",
+            "path": null
+        }))
+        .expect("an explicit null is the same absence as an omitted field");
+        assert_eq!(
+            audit.destination().expect("stdout takes no file settings"),
+            AuditDestination::Stdout
+        );
+    }
+
     const POLICY: &str = r#"apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
 kind: SchedulingPolicyPackage
 scheduling: {id: standalone-exact-time, version: 1}

@@ -71,16 +71,37 @@
         "not": {
           "anyOf": [
             {
+              "properties": {
+                "path": {
+                  "not": {
+                    "type": "null"
+                  }
+                }
+              },
               "required": [
                 "path"
               ]
             },
             {
+              "properties": {
+                "rotateBytes": {
+                  "not": {
+                    "type": "null"
+                  }
+                }
+              },
               "required": [
                 "rotateBytes"
               ]
             },
             {
+              "properties": {
+                "retainDays": {
+                  "not": {
+                    "type": "null"
+                  }
+                }
+              },
               "required": [
                 "retainDays"
               ]
