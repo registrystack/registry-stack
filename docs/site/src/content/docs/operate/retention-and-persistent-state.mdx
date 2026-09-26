@@ -80,6 +80,14 @@ Never truncate, rewrite, or reserialize the active audit file as part of cleanup
 treats any external change to it as a fault and stops, and audited requests fail closed until a
 restart. Copy sealed files to append-only storage before `audit.retainDays` deletes them.
 
+A crash or a killed process can leave the active file's final line incomplete (any byte other than
+a newline at end of file). The writer refuses to open a destination that ends this way, so the next
+start of that process, and any `doctor` or companion command checking the same destination, is
+refused instead of appending after the torn entry. Recover the way the writer's own refusal says to:
+archive the file and restart with a fresh `audit.path`. Do not edit the active file to repair it;
+editing it while a writer holds it, or before restarting one, is the same external-change fault
+described above.
+
 ## Evidence Gateway retention
 
 Evidence Gateway has no application database and persists no selector, source, evidence, or response

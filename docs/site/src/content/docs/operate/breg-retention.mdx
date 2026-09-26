@@ -314,6 +314,14 @@ entry. The file destination acknowledges an append after fsync; `stdout` flushes
 provides best-effort delivery. A failed request entry blocks protected I/O, and a failed response
 entry blocks disclosure. A crash can leave a request entry without a response.
 
+A crash or a killed process can also tear the file's final line itself, leaving it without its
+closing newline. The writer refuses to open a destination in that state, so the next start of the
+runtime, and any `doctor` or `bregctl` companion command checking the same destination (including
+its own sibling audit file), is refused rather than appending after the torn entry. Archive the file
+and restart on a fresh `audit.path`; do not edit the active file to repair it, since that is the same
+external change the writer already treats as a fault (see
+[Audit retention](../retention-and-persistent-state/#audit-retention)).
+
 A mutation can already be committed when its response entry fails. Use the operation's idempotent
 retry where one exists. Ingestion-run creation has none, and it returns no run id when this
 happens: once the runtime serves again, list the open ingestion runs for the input's digest and
