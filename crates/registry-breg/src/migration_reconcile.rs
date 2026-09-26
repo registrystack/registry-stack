@@ -358,8 +358,13 @@ async fn reconcile_under_lock(
                 )
                 .await;
             if let Err(error) = transition {
-                respond_failed(&mut attempt, request, target, ledger, "completed").await;
-                return Err(error.into());
+                let landed =
+                    transition_landed(connection, |snapshot| snapshot.identity == *target).await;
+                if landed != Some(true) {
+                    respond_unlanded(&mut attempt, request, target, ledger, "completed", landed)
+                        .await;
+                    return Err(error.into());
+                }
             }
             append_after_commit(request.audit, entry).await?;
         }
@@ -379,8 +384,14 @@ async fn reconcile_under_lock(
                 )
                 .await;
             if let Err(error) = transition {
-                respond_failed(&mut attempt, request, target, ledger, "reverted").await;
-                return Err(error.into());
+                let landed =
+                    transition_landed(connection, |snapshot| snapshot.identity == *request.current)
+                        .await;
+                if landed != Some(true) {
+                    respond_unlanded(&mut attempt, request, target, ledger, "reverted", landed)
+                        .await;
+                    return Err(error.into());
+                }
             }
             append_after_commit(request.audit, entry).await?;
         }
@@ -448,17 +459,37 @@ async fn begin_request(
         .map_err(|_| ReconcileError::Unavailable)
 }
 
-/// Answer the request entry of a transition that did not commit. The
-/// reconciliation already failed, so a refused entry is only logged; the
-/// held request then writes its `unfinished` outcome instead.
-async fn respond_failed(
+/// Whether a transition that returned an error nonetheless landed: the
+/// maintenance target is cleared and the active identity is the one
+/// `landed` expects. An error does not prove the transaction rolled back, so
+/// the durable state decides; `None` when it cannot be read.
+async fn transition_landed(
+    connection: &mut VerifiedPackageApplyConnection,
+    landed: impl FnOnce(&MaintenanceSnapshot) -> bool,
+) -> Option<bool> {
+    let snapshot = connection.maintenance_snapshot().await.ok()?;
+    Some(snapshot.maintenance_target_revision.is_none() && landed(&snapshot))
+}
+
+/// Answer the request entry of a transition that did not land: `failed`
+/// when the durable state shows it did not, `unfinished` when that state
+/// could not be read. The reconciliation already failed, so a refused entry
+/// is only logged; the held request then writes its `unfinished` outcome
+/// instead.
+async fn respond_unlanded(
     attempt: &mut AuditRequest,
     request: &ReconcileRequest<'_>,
     target: &ExpectedRegistryIdentity,
     ledger: &MigrationLedgerEntry,
     action: &'static str,
+    landed: Option<bool>,
 ) {
-    let recorded = match outcome_record(request, target, ledger, action, "failed") {
+    let outcome = if landed == Some(false) {
+        "failed"
+    } else {
+        "unfinished"
+    };
+    let recorded = match outcome_record(request, target, ledger, action, outcome) {
         Ok(record) => attempt.respond(record).await.is_ok(),
         Err(_) => false,
     };

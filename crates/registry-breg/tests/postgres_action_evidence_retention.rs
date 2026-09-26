@@ -10,6 +10,7 @@ use registry_breg::{
     action_evidence_maintenance::ActionEvidenceRetentionOperatorService,
     compiler::{compile_project_with_assets, CompileProfile},
     contract::{parse_project_yaml, ModuleAssetSource},
+    mutation::MutationError,
     postgres::{
         initialize_registry_state_for_catalog_test, install_compiled_schema, ConnectionConfig,
         ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
@@ -185,6 +186,35 @@ async fn expired_request_evidence_erases_only_retained_uses() {
         &expected,
         database.migration_config.clone(),
     );
+    // The erasure's commit is refused after every statement succeeded, so
+    // its outcome is read back from the database: nothing was erased.
+    database
+        .admin
+        .batch_execute(
+            "CREATE OR REPLACE FUNCTION public.test_refuse_evidence_commit()
+               RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RAISE EXCEPTION 'test refuses this erasure commit'; END $$;
+             GRANT EXECUTE ON FUNCTION public.test_refuse_evidence_commit() TO PUBLIC;
+             CREATE CONSTRAINT TRIGGER test_refuse_evidence_commit
+               AFTER DELETE ON registry_internal.registry_request_evidence_uses
+               DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+               EXECUTE FUNCTION public.test_refuse_evidence_commit();",
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        operator.erase_expired(cutoff()).await,
+        Err(MutationError::Unavailable)
+    ));
+    database
+        .admin
+        .batch_execute(
+            "DROP TRIGGER test_refuse_evidence_commit
+               ON registry_internal.registry_request_evidence_uses;
+             DROP FUNCTION public.test_refuse_evidence_commit();",
+        )
+        .await
+        .unwrap();
     assert_eq!(operator.erase_expired(cutoff()).await.unwrap(), 1);
     let remaining = database
         .admin
@@ -199,7 +229,10 @@ async fn expired_request_evidence_erases_only_retained_uses() {
     assert_eq!(remaining.get::<_, i64>(0), 1);
     assert_eq!(remaining.get::<_, i64>(1), 1);
     assert_eq!(operator.erase_expired(cutoff()).await.unwrap(), 0);
-    assert_retention_audited(&database, &[("erased", Some(1)), ("erased", Some(0))]);
+    assert_retention_audited(
+        &database,
+        &[("failed", None), ("erased", Some(1)), ("erased", Some(0))],
+    );
     drop(operator);
     database.cleanup().await;
 }
