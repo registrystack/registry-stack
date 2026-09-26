@@ -1109,6 +1109,9 @@ struct LocalAuditCollector {
     completed: BTreeSet<String>,
     last_operation: Option<String>,
     last_completed: Option<LocalAuditOperationView>,
+    /// Whether the entries read come from the oldest retained file, where a
+    /// terminal entry may follow an access entry retention deleted.
+    oldest_file: bool,
 }
 
 impl LocalAuditCollector {
@@ -1159,7 +1162,7 @@ impl LocalAuditCollector {
             .validate_phase_fields()
             .map_err(|_| invalid_audit_data())?;
         let operation = event.operation.clone();
-        self.last_operation = Some(operation.clone());
+        let previous_operation = self.last_operation.replace(operation.clone());
         let view = LocalAuditOperationEvent::from(&event);
 
         if event.phase == AuditPhase::AccessAttempt {
@@ -1180,10 +1183,18 @@ impl LocalAuditCollector {
             return Ok(());
         }
 
-        let stages = self
-            .pending
-            .remove(&operation)
-            .ok_or_else(invalid_audit_data)?;
+        let Some(stages) = self.pending.remove(&operation) else {
+            // Retention deletes whole sealed files, so the oldest retained
+            // file may open with terminal entries whose access entries were
+            // deleted. Such an operation is no longer inspectable and is not
+            // the last operation; anywhere later, a terminal entry without
+            // its access entry is corrupt.
+            if !self.oldest_file || !self.completed.insert(operation) {
+                return Err(invalid_audit_data());
+            }
+            self.last_operation = previous_operation;
+            return Ok(());
+        };
         // The terminal entry names the source of the last stage that ran.
         let last = stages.last().ok_or_else(invalid_audit_data)?;
         if !coherent_operation_pair(&last.event, &event)
@@ -1363,7 +1374,8 @@ fn last_local_audit_operation_with_bounds(
     let _writer_lock = lock_stopped_audit_file(path)?;
     let files = local_audit_files(path, bounds.maximum_segments)?;
     let mut collector = LocalAuditCollector::new(bounds);
-    for file in &files {
+    for (index, file) in files.iter().enumerate() {
+        collector.oldest_file = index == 0;
         read_local_audit_file(file, &mut collector)?;
     }
     collector.finish()
@@ -2961,6 +2973,39 @@ mod tests {
         let release = local_release(&access);
         log.append(access).await.expect("access event appends");
         log.append(release).await.expect("release event appends");
+    }
+
+    #[tokio::test]
+    async fn local_inspection_skips_a_terminal_whose_access_retention_removed() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let log = file_log(&path).await;
+        append_local_operation(&log, "local-operation-0000000000000001").await;
+        append_local_operation(&log, "local-operation-0000000000000002").await;
+        drop(log);
+        let written = std::fs::read_to_string(&path).expect("audit file reads");
+        let lines: Vec<&str> = written.lines().collect();
+        assert_eq!(lines.len(), 4);
+
+        // Retention deleted the older file holding the first access entry.
+        std::fs::write(&path, format!("{}\n{}\n{}\n", lines[1], lines[2], lines[3]))
+            .expect("oldest retained file");
+        let value = serde_json::to_value(
+            last_local_audit_operation(&path).expect("a cut stream still reads"),
+        )
+        .expect("view serializes");
+        assert_eq!(
+            value["operation"],
+            serde_json::json!("local-operation-0000000000000002")
+        );
+
+        // Only the oldest retained file can begin inside an operation.
+        let sealed = path.with_file_name("audit.jsonl.00000001");
+        std::fs::write(&sealed, format!("{}\n{}\n", lines[2], lines[3])).expect("sealed file");
+        std::fs::set_permissions(&sealed, std::os::unix::fs::PermissionsExt::from_mode(0o600))
+            .expect("mode");
+        std::fs::write(&path, format!("{}\n", lines[1])).expect("active file");
+        assert!(last_local_audit_operation(&path).is_err());
     }
 
     #[tokio::test]
