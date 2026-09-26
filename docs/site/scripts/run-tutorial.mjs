@@ -21,8 +21,15 @@
 // tutorial_test.checkout, the reader directory starts as a copy of this
 // checkout instead (tutorial-runner/checkout.mjs).
 //
+// A test-file block writes its file from the shell's current directory. A
+// test-background fence runs beside the journey until its ready URL answers,
+// and stays running until the next background fence starts or its page ends
+// (tutorial-runner/background.mjs). test-cwd moves the shell to a directory
+// under the reader directory before its fence runs.
+//
 // The toolset puts the product binaries under test on PATH and stops any
-// service the journey left running, whether it passed or failed.
+// service the journey left running, whether it passed or failed. Any process
+// the journey started and left behind is stopped when it ends.
 //
 // With --gate, the pages come from their own frontmatter instead of the
 // command line (tutorial-runner/gate.mjs): every page under start/ or
@@ -40,6 +47,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { stopGroup } from './tutorial-runner/background.mjs';
 import { checkExcerpt } from './tutorial-runner/excerpt.mjs';
 import { checkExpectation } from './tutorial-runner/expect.mjs';
 import { copyCheckout } from './tutorial-runner/checkout.mjs';
@@ -51,6 +59,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const USAGE = 'usage: run-tutorial.mjs [--dry-run] [--toolset breg|casework|none] <page.mdx>...\n       run-tutorial.mjs [--dry-run] --gate breg|casework';
 const DOCS_ROOT = process.env.TUTORIAL_DOCS_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '../src/content/docs');
 const APPLY_EDIT = join(dirname(fileURLToPath(import.meta.url)), 'tutorial-runner/apply-edit.mjs');
+const BACKGROUND = join(dirname(fileURLToPath(import.meta.url)), 'tutorial-runner/background.mjs');
 
 function usageError(message) {
   console.error(`${message}\n${USAGE}`);
@@ -78,7 +87,7 @@ function parseArgs(argv) {
 
 const at = (step) => `${step.page ? `${step.page} ` : ''}line ${step.line}`;
 const where = (step) => `${at(step)}${step.heading ? ` (${step.heading})` : ''}`;
-const BLOCK_NAMES = { edit: 'the edit', excerpt: 'the excerpt' };
+const BLOCK_NAMES = { edit: 'the edit', excerpt: 'the excerpt', file: 'the file' };
 const blockName = (step) => BLOCK_NAMES[step.kind] ?? 'the sh fence';
 const quote = (text) => `'${text.replaceAll("'", "'\\''")}'`;
 const outName = (index) => `${String(index).padStart(3, '0')}.out`;
@@ -86,10 +95,15 @@ const outName = (index) => `${String(index).padStart(3, '0')}.out`;
 function printPlan(steps, checkout) {
   if (checkout) console.log('start in a copy of the checkout');
   for (const step of steps) {
-    const exit = step.exit === undefined ? '' : ` (expects exit ${step.exit})`;
-    if (step.kind === 'run') console.log(`run   ${where(step)}: ${step.code.split('\n')[0]}${exit}`);
+    const notes = [];
+    if (step.cwd) notes.push(`in ${step.cwd}`);
+    if (step.exit !== undefined) notes.push(`expects exit ${step.exit}`);
+    if (step.background) notes.push(`in the background until ${step.background} answers`);
+    const note = notes.length > 0 ? ` (${notes.join(', ')})` : '';
+    if (step.kind === 'run') console.log(`run   ${where(step)}: ${step.code.split('\n')[0]}${note}`);
     else if (step.kind === 'skip') console.log(`skip  ${where(step)}: ${step.reason}`);
     else if (step.kind === 'edit') console.log(`edit  ${where(step)}: ${step.path}`);
+    else if (step.kind === 'file') console.log(`file  ${where(step)}: ${step.path}`);
     else if (step.kind === 'excerpt' && step.path) console.log(`excerpt ${at(step)}: ${step.path}`);
     else if (step.kind === 'excerpt') console.log(`excerpt ${at(step)}: checks line ${steps[step.runIndex].line}`);
     else console.log(`expect ${at(step)}: checks line ${steps[step.runIndex].line}`);
@@ -110,10 +124,17 @@ function printPlan(steps, checkout) {
 // reaches its end leaves `page-N.done`; one whose fence ran `exit` does not,
 // and the journey stops there.
 //
+// A background fence starts with job control on, which gives it a process
+// group of its own that can be stopped whole. The file `background` holds the
+// group and output file of the one running now; `backgrounds` lists every
+// group started, for the cleanup after a journey that stopped early.
+//
 // The script names every harness file by its literal path and sets no shell
 // variable, so a page's own variables neither see nor clobber the harness.
-async function journeyScript(pages, outDir) {
+async function journeyScript(pages, outDir, readerDir) {
   const file = (name) => quote(join(outDir, name));
+  const node = quote(process.execPath);
+  const stopBackground = `${node} ${quote(BACKGROUND)} stop ${file('background')}`;
   const lines = ['set -euo pipefail', "trap 'exit 130' HUP INT TERM"];
   let index = 0;
   for (const [pageIndex, steps] of pages.entries()) {
@@ -121,6 +142,8 @@ async function journeyScript(pages, outDir) {
     for (const step of steps) {
       const out = file(outName(index));
       lines.push(`printf '%s\n' ${index} >${file('current')}`);
+      const cd = step.cwd ? `cd -- ${quote(join(readerDir, step.cwd))}` : undefined;
+      if (cd && !step.background) lines.push(cd);
       if (step.kind === 'skip') {
         lines.push(`printf '%s\\n' ${quote(`skip  ${where(step)}: ${step.reason}`)}`);
       } else if (step.kind === 'edit') {
@@ -133,6 +156,23 @@ async function journeyScript(pages, outDir) {
         lines.push(`printf '\\n%s\\n' ${quote(`==> ${where(step)}`)}`);
         lines.push(`cat -- ${quote(step.path)} >${out} 2>&1 </dev/null`);
         lines.push(`printf 'read %s\\n' ${quote(step.path)}`);
+      } else if (step.kind === 'file') {
+        const staged = join(outDir, `${String(index).padStart(3, '0')}.file`);
+        await writeFile(staged, step.text);
+        lines.push(`printf '\\n%s\\n' ${quote(`==> ${where(step)}`)}`);
+        lines.push(`cp -- ${quote(staged)} ${quote(step.path)} >${out} 2>&1 </dev/null`);
+        lines.push(`printf 'wrote %s\\n' ${quote(step.path)}`);
+      } else if (step.kind === 'run' && step.background) {
+        lines.push(stopBackground);
+        lines.push(`printf '\\n%s\\n' ${quote(`==> ${where(step)} (background)`)}`);
+        lines.push(`: >${out}`, 'set -m');
+        // The other terminal's directory is its own, so a test-cwd here leaves
+        // the reader's shell where it stands.
+        lines.push(`{\n${cd ? `${cd}\n` : ''}${step.code}\n} >>${out} 2>&1 </dev/null &`);
+        lines.push(`printf '%s\\t%s\\n' "$!" ${out} >${file('background')}`);
+        lines.push(`printf '%s\\n' "$!" >>${file('backgrounds')}`, 'set +m');
+        lines.push(`${node} ${quote(BACKGROUND)} ready ${quote(step.background)} ${file('background')} >>${out} 2>&1`);
+        lines.push(`printf 'ready: %s\\n' ${quote(step.background)}`);
       } else if (step.kind === 'run' && step.exit === undefined) {
         lines.push(`printf '\\n%s\\n' ${quote(`==> ${where(step)}`)}`);
         lines.push(`{\n${step.code}\n} >${out} 2>&1 </dev/null`);
@@ -153,7 +193,7 @@ async function journeyScript(pages, outDir) {
       index += 1;
     }
     const done = file(`page-${pageIndex}.done`);
-    lines.push(`: >${done}`, ')', `[[ -e ${done} ]] || exit 0`);
+    lines.push(stopBackground, `: >${done}`, ')', `[[ -e ${done} ]] || exit 0`);
   }
   lines.push(`printf "\\n" >${file('complete')}`);
   return `${lines.join('\n')}\n`;
@@ -173,7 +213,10 @@ function runScript(scriptPath, readerDir, binDir, onSpawn) {
       if (child.exitCode === null && child.signalCode === null) process.kill(-child.pid, signal);
     });
     child.on('error', reject);
-    child.on('close', (code, signal) => resolvePromise(signal ? 130 : code));
+    child.on('close', (code, signal) => {
+      // Whatever the journey started and left behind is stopped with it.
+      stopGroup(child.pid).then(() => resolvePromise(signal ? 130 : code), reject);
+    });
   });
 }
 
@@ -233,6 +276,18 @@ async function checkBlocks(steps, outDir) {
   return failures;
 }
 
+// Stop every background fence a journey that ended early left running.
+async function stopBackgrounds(outDir) {
+  let text;
+  try {
+    text = await readFile(join(outDir, 'backgrounds'), 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return;
+    throw error;
+  }
+  for (const group of text.trim().split('\n').filter(Boolean)) await stopGroup(Number(group));
+}
+
 async function replay(pages, toolset, checkout) {
   const steps = pages.flat();
   const workRoot = await realpath(await mkdtemp(join(tmpdir(), 'tutorial-run.')));
@@ -257,7 +312,7 @@ async function replay(pages, toolset, checkout) {
     prepared = true;
     if (checkout) await copyCheckout(REPO_ROOT, readerDir);
     const scriptPath = join(workRoot, 'journey.sh');
-    await writeFile(scriptPath, await journeyScript(pages, outDir));
+    await writeFile(scriptPath, await journeyScript(pages, outDir, readerDir));
     const code = await runScript(scriptPath, readerDir, binDir, (send) => {
       signalJourney = send;
     });
@@ -288,6 +343,7 @@ async function replay(pages, toolset, checkout) {
   } finally {
     for (const signal of signals) process.off(signal, onSignal);
     try {
+      await stopBackgrounds(outDir);
       unlock(workRoot);
       const stoppedAll = prepared ? await toolset.teardown({ readerDir, binDir }) : true;
       if (stoppedAll) {
