@@ -143,13 +143,16 @@ impl AttachmentVerificationWorker {
         };
         // Erasure or lease expiry can win while the external verifier runs.
         // A stale verdict never creates replacement work or references.
-        transaction.commit().await.map_err(unavailable)?;
+        // The terminal entry is accepted before the verdict commits, so a
+        // refused entry rolls the verdict back and the job is retried after
+        // its lease expires.
         self.audit_job(
             &job,
             "terminal",
             if updated { outcome } else { "discarded" },
         )
         .await?;
+        transaction.commit().await.map_err(unavailable)?;
         if updated && verdict.is_none() {
             crate::startup::OperationalEvent::AttachmentVerificationRetryPending.emit();
         }
