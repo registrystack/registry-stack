@@ -599,25 +599,6 @@ impl<S: DeliverySeams> DeliveryService<S> {
         } else {
             None
         };
-        self.seams
-            .record_audit(
-                transaction,
-                DeliveryAuditRecord {
-                    event_id,
-                    compiled_delivery_id: &compiled_delivery_id,
-                    package_revision: &package_revision,
-                    generation,
-                    attempt,
-                    phase: DeliveryAuditPhase::Terminal,
-                    outcome: DeliveryAuditOutcome::WorkerInterrupted,
-                    disposition: if dead_lettered {
-                        DeliveryAuditDisposition::DeadLettered
-                    } else {
-                        DeliveryAuditDisposition::RetryPending
-                    },
-                },
-            )
-            .await?;
         let changed = if dead_lettered {
             let columns = proposal_columns("dead_lettered", proposal.as_ref())?;
             transaction
@@ -691,6 +672,25 @@ impl<S: DeliverySeams> DeliveryService<S> {
         if changed != 1 {
             return Err(DeliveryError::Unavailable);
         }
+        self.seams
+            .record_audit(
+                transaction,
+                DeliveryAuditRecord {
+                    event_id,
+                    compiled_delivery_id: &compiled_delivery_id,
+                    package_revision: &package_revision,
+                    generation,
+                    attempt,
+                    phase: DeliveryAuditPhase::Terminal,
+                    outcome: DeliveryAuditOutcome::WorkerInterrupted,
+                    disposition: if dead_lettered {
+                        DeliveryAuditDisposition::DeadLettered
+                    } else {
+                        DeliveryAuditDisposition::RetryPending
+                    },
+                },
+            )
+            .await?;
         Ok(())
     }
 
@@ -728,21 +728,6 @@ impl<S: DeliverySeams> DeliveryService<S> {
         let generation = row.try_get::<_, i64>(2)?;
         let attempt = row.try_get::<_, i16>(3)?;
         let package_revision = bounded_text(&row, 4, 256)?;
-        self.seams
-            .record_audit(
-                transaction,
-                DeliveryAuditRecord {
-                    event_id,
-                    compiled_delivery_id: &compiled_delivery_id,
-                    package_revision: &package_revision,
-                    generation,
-                    attempt,
-                    phase: DeliveryAuditPhase::Terminal,
-                    outcome: DeliveryAuditOutcome::PayloadExpired,
-                    disposition: DeliveryAuditDisposition::Expired,
-                },
-            )
-            .await?;
         let state_changed = transaction
             .execute(
                 &self.sql(
@@ -777,6 +762,21 @@ impl<S: DeliverySeams> DeliveryService<S> {
         if state_changed != 1 || payload_changed != 1 {
             return Err(DeliveryError::Unavailable);
         }
+        self.seams
+            .record_audit(
+                transaction,
+                DeliveryAuditRecord {
+                    event_id,
+                    compiled_delivery_id: &compiled_delivery_id,
+                    package_revision: &package_revision,
+                    generation,
+                    attempt,
+                    phase: DeliveryAuditPhase::Terminal,
+                    outcome: DeliveryAuditOutcome::PayloadExpired,
+                    disposition: DeliveryAuditDisposition::Expired,
+                },
+            )
+            .await?;
         Ok(())
     }
 
