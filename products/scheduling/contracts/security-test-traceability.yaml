@@ -125,6 +125,11 @@ entries:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_replayed_receipt_is_released_only_after_its_response_entry_is_accepted}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_replayed_refusal_is_recorded_as_the_refusal_it_replays}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_racing_replay_is_not_released_when_its_response_entry_is_refused}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_failed_capacity_transaction_pairs_its_request_entry}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: an_idempotency_key_refusal_pairs_its_request_entry}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_records_swap_under_a_commitment_pairs_its_request_entry}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_refusal_whose_response_entry_is_refused_answers_service_unavailable}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_permission_refusal_the_destination_refuses_answers_service_unavailable}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_concurrent_identical_request_replays_the_winning_receipt}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: concurrent_identical_admissible_requests_replay_one_winning_success}
       - {path: crates/registry-scheduling/src/service.rs, name: a_replayed_receipt_records_the_decision_it_carries}

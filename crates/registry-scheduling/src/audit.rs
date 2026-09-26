@@ -5,10 +5,15 @@
 //! opens and one `response` entry once the decision is known: after commit
 //! for an allowed commitment, after rollback for a refused one. Both share a
 //! correlation, which is also the `eventId` the response record carries.
+//! A commitment nothing decided, because its transaction failed, the
+//! environment records moved under it, or its idempotency key was refused,
+//! still answers its request entry with an `unfinished` response naming the
+//! reason; one that returns or is canceled without answering writes the
+//! `commitment.unfinished` response when its request handle is dropped.
 //! Entries carry only pseudonymized references and closed codes, never a raw
 //! principal, grant, claim identifier, or free-text reason.
 
-use registry_platform_audit::{AuditEntry, AuditUnavailable, AuditWriter};
+use registry_platform_audit::{AuditEntry, AuditRequest, AuditUnavailable, AuditWriter};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -50,6 +55,25 @@ impl SchedulingAudit {
             .await
     }
 
+    /// Append the `request` entry of one audited operation and return the
+    /// handle that owes its `response`. Dropped unanswered, the handle writes
+    /// `unfinished` as the response under the same correlation.
+    pub async fn begin(
+        &self,
+        correlation: Uuid,
+        record: Value,
+        unfinished: Value,
+    ) -> Result<AuditRequest, AuditUnavailable> {
+        self.writer
+            .begin(
+                SCHEDULING_AUDIT_SCHEMA,
+                correlation.to_string(),
+                record,
+                unfinished,
+            )
+            .await
+    }
+
     /// Append the `response` entry of one audited operation.
     pub async fn response(&self, correlation: Uuid, record: Value) -> Result<(), AuditUnavailable> {
         self.writer
@@ -69,6 +93,18 @@ pub fn request_record(mut record: Value) -> Value {
     if let Some(fields) = record.as_object_mut() {
         fields.remove("outcome");
         fields.remove("reason");
+    }
+    record
+}
+
+/// The `response` form of a commitment nothing decided: the request's fields
+/// with the `unfinished` outcome and the closed `reason` it did not finish.
+#[must_use]
+pub fn unfinished_record(record: Value, reason: &str) -> Value {
+    let mut record = request_record(record);
+    if let Some(fields) = record.as_object_mut() {
+        fields.insert("outcome".to_owned(), Value::String("unfinished".to_owned()));
+        fields.insert("reason".to_owned(), Value::String(reason.to_owned()));
     }
     record
 }
