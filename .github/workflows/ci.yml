@@ -768,6 +768,8 @@ jobs:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
         run: docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_task_approval
       - name: Casework task approval through stock issuer to Evidence, BReg, and Scheduling
+        # An inexact name filter that selects nothing still exits 0, so the
+        # step names each test exactly and fails unless it reports one pass.
         shell: bash
         env:
           CASEWORK_ASSIGNMENT_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_task_approval
@@ -779,15 +781,15 @@ jobs:
           SCHEDULING_AUTH_PROBE_BIN="${GITHUB_WORKSPACE}/target/debug/examples/scheduling-auth-probe" \
             cargo test --locked -p registry-casework \
               --features postgres-test --lib \
-              approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid \
-              -- --ignored \
+              -- --ignored --exact \
+              task_grants::native_exchange_tests::approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid \
               | tee "${RUNNER_TEMP}/casework-task-approval.log"
           grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/casework-task-approval.log"
           cargo build --locked -p registry-casework -p registry-caseworkctl
           cargo test --locked -p registry-casework \
             --features postgres-test --lib \
-            source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer \
-            -- --ignored \
+            -- --ignored --exact \
+            task_grants::local_session_tests::source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer \
             | tee "${RUNNER_TEMP}/casework-local-session.log"
           grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/casework-local-session.log"
 
