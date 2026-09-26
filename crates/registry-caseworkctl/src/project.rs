@@ -1313,9 +1313,10 @@ fn with_operator_audit(
 /// and `attempt_mark_uncertain` each open via `with_operator_audit` is currently
 /// available. `check_writable` deliberately never takes the writer lock, so it
 /// cannot see a lock another process already holds; opening the companion for
-/// real and releasing it immediately is the only way to prove that, and it
-/// costs nothing this check does not already accept, since a stuck operator
-/// command would hold the same lock indefinitely.
+/// real and releasing it immediately is the only way to prove that. Opening
+/// the writer also applies the destination's declared retention to sealed
+/// companion segments, exactly as the next operator command would; a probe
+/// that takes only the lock is tracked in #1598.
 fn check_operator_audit_companion(
     config: &RuntimeConfig,
     resolver: &SecretResolver,
