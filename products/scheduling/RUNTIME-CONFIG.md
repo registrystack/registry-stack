@@ -89,7 +89,8 @@ MiB, at least 1 MiB, at most 4294967295) and rotated files are removed after
 three and leaves collection and retention to the platform that reads the
 stream. `schedulingctl records apply`
 writes beside the runtime, to `<stem>.schedulingctl.<ext>` next to
-`audit.path`, so the two processes never share a file.
+`audit.path`, so the two processes never share a file, or to standard error
+with a `stdout` destination, so its own report keeps standard output.
 
 Every entry carries the schema `registry-scheduling-audit/v1`, a `request` or
 `response` phase, and a correlation shared by one decision's entries. A
