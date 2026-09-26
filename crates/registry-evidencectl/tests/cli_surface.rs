@@ -11,7 +11,7 @@ use std::process::Command;
 /// The complete top-level subcommand set. Adding a command means adding it
 /// here; the point of the list is that an omission fails rather than passes.
 const TOP_LEVEL_COMMANDS: [&str; 13] = [
-    "client", "access", "keygen", "jwks", "new", "build", "fixtures", "source", "dev", "request",
+    "client", "access", "keygen", "jwks", "new", "package", "fixtures", "source", "dev", "request",
     "verify", "audit", "tooling",
 ];
 

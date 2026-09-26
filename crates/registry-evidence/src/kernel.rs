@@ -2235,6 +2235,7 @@ fn extract_batch(response, context) {
             "$schema: https://json-schema.org/draft/2020-12/schema\ntype: object\nadditionalProperties: false\nrequired: [kind]\nproperties:\n  kind:\n    type: string\n    enum: [wrong-outer, wrong-member, extra-key, invalid-facts, missing, duplicate, extra, out-of-range, negative]\n",
         )
         .expect("batch response schema writes");
+        refresh_package_envelope(temporary.path());
         make_read_only(temporary.path());
         let bundle = Arc::new(Bundle::load(temporary.path()).expect("batch bundle loads"));
         OfflineKernel::compile(bundle).expect("batch kernel compiles")
@@ -3743,6 +3744,7 @@ fn extract_batch(response, context) {
         let mut text = fs::read_to_string(&path).expect("reads copied artifact");
         text.push_str(appended);
         fs::write(&path, text).expect("writes copied artifact");
+        refresh_package_envelope(temporary.path());
         make_read_only(temporary.path());
         temporary
     }
@@ -3754,6 +3756,7 @@ fn extract_batch(response, context) {
         copy_tree(&source, temporary.path());
         fs::write(temporary.path().join("adapters/source-a.rhai"), extraction)
             .expect("replacement extraction writes");
+        refresh_package_envelope(temporary.path());
         make_read_only(temporary.path());
         let bundle = Arc::new(Bundle::load(temporary.path()).expect("bundle loads"));
         OfflineKernel::compile(bundle).expect("kernel compiles")
@@ -3780,6 +3783,20 @@ fn extract_batch(response, context) {
                 fs::copy(entry.path(), destination).expect("copies fixture");
             }
         }
+    }
+
+    /// Republish a copied test package after its intended authored inputs change.
+    /// Tests that deliberately corrupt a package do not use this helper.
+    fn refresh_package_envelope(root: &Path) {
+        fs::remove_file(root.join(registry_platform_config::SUM_FILE))
+            .expect("prior package sum file is removed");
+        registry_platform_config::write_sum_file(
+            root,
+            None,
+            &crate::bundle::evidence_package_limits(),
+            "evidencectl package",
+        )
+        .expect("mutated test package is republished");
     }
 
     #[cfg(unix)]

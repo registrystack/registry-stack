@@ -1222,6 +1222,9 @@ fn write_sealed_bundle(root: &Path, state: &Value) {
     let bundle_directory = root.join(".evidence/dev/bundle");
     if !bundle_directory.exists() {
         private_directory(&bundle_directory);
+    } else {
+        fs::set_permissions(&bundle_directory, fs::Permissions::from_mode(0o700))
+            .expect("unseal bundle fixture directory");
     }
     let questions = state["questions"].as_array().expect("state questions");
     let mut selector_profiles = serde_json::Map::new();
@@ -1346,6 +1349,27 @@ fn write_sealed_bundle(root: &Path, state: &Value) {
             .as_bytes(),
         0o400,
     );
+    let sum_file = bundle_directory.join(registry_platform_config::SUM_FILE);
+    if sum_file.exists() {
+        fs::remove_file(&sum_file).expect("remove stale package sum file");
+    }
+    registry_platform_config::write_sum_file(
+        &bundle_directory,
+        None,
+        &registry_platform_config::PackageLimits {
+            max_files: 1_024,
+            max_file_bytes: 1024 * 1024,
+            max_total_bytes: 16 * 1024 * 1024,
+            max_depth: 3,
+            max_path_bytes: 128,
+        },
+        "evidencectl package",
+    )
+    .expect("publish local test package");
+    fs::set_permissions(sum_file, fs::Permissions::from_mode(0o400))
+        .expect("seal package sum file");
+    fs::set_permissions(bundle_directory, fs::Permissions::from_mode(0o500))
+        .expect("seal package directory");
 }
 
 fn executable(path: &Path, contents: &[u8]) {

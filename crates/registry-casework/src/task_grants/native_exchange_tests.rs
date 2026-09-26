@@ -338,6 +338,7 @@ outboundTls:
     )
     .unwrap();
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444)).unwrap();
+    refresh_package_envelope(&bundle_root);
     seal(&bundle_root);
     PreparedEvidence {
         bundle_root,
@@ -440,6 +441,27 @@ fn copy_tree(source: &Path, target: &Path) {
             fs::copy(entry.path(), destination).unwrap();
         }
     }
+}
+
+/// Republish the staged Evidence package after its intended authored changes.
+fn refresh_package_envelope(root: &Path) {
+    let sum_file = root.join(registry_platform_config::SUM_FILE);
+    if sum_file.exists() {
+        fs::remove_file(&sum_file).unwrap();
+    }
+    registry_platform_config::write_sum_file(
+        root,
+        None,
+        &registry_platform_config::PackageLimits {
+            max_files: registry_evidence::bundle::MAX_BUNDLE_FILES,
+            max_file_bytes: registry_evidence::bundle::MAX_ARTIFACT_BYTES,
+            max_total_bytes: registry_evidence::bundle::MAX_BUNDLE_BYTES,
+            max_depth: 3,
+            max_path_bytes: 128,
+        },
+        "evidencectl package",
+    )
+    .unwrap();
 }
 
 fn seal(root: &Path) {
