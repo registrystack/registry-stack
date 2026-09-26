@@ -239,10 +239,12 @@ BREG_TUTORIAL_INPUTS = (
     "products/breg/scripts/test-request-attachments.py",
 )
 
-# Every input the Registry Casework tutorial gate replays or is built from. The
-# gate starts the all-in-one local runtime the page tells a reader to run, and
-# that runtime starts stock ThunderID from the project's own client declarations,
-# so the page and the gate are inputs to the replay exactly as the toolset is.
+# Every input the Registry Casework tutorial gate replays or is built from: the
+# page runner, the pages whose frontmatter it replays, and the build inputs of
+# the binaries it runs. The gate starts the all-in-one local runtime the page
+# tells a reader to run, and that runtime starts stock ThunderID from the
+# project's own client declarations, so the page and the runner are inputs to
+# the replay exactly as the toolset is.
 # The project template the page initializes is written by registry-caseworkctl,
 # so package routing already carries it.
 CASEWORK_TUTORIAL_INPUTS = (
@@ -250,10 +252,9 @@ CASEWORK_TUTORIAL_INPUTS = (
     "Cargo.toml",
     "docs/site/package-lock.json",
     "docs/site/package.json",
-    "docs/site/scripts/check-casework-tutorial.sh",
-    "docs/site/scripts/check-casework-tutorial.test.mjs",
+    "docs/site/scripts/run-tutorial.mjs",
+    "docs/site/scripts/tutorial-runner/**",
     "docs/site/src/content/docs/tutorials/first-casework.mdx",
-    "docs/site/src/content/docs/tutorials/review-breg-changes-in-casework.mdx",
 )
 
 # This guide explains the authoring form across three intentionally separate

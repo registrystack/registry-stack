@@ -11,6 +11,8 @@ persona:
   - operator
 locale: en
 standards_referenced: []
+tutorial_test:
+  toolset: casework
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
@@ -34,7 +36,7 @@ producer.
 
 Install both binaries:
 
-```sh
+```sh test-skip="installs a release from the network; the runner serves the binaries under test"
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/casework-install.sh | bash
 ```
 
@@ -101,8 +103,14 @@ curl --silent --show-error \
   "$casework_url/v1/review-requests"
 ```
 
-A successful create returns HTTP `201`. Extract the request identifier. Repeating the exact body and
-key recovers the same accepted request; changing the body under that key is refused.
+A successful create returns HTTP `201`:
+
+```text test-expect
+HTTP 201
+```
+
+Extract the request identifier. Repeating the exact body and key recovers the same accepted request;
+changing the body under that key is refused.
 
 ```sh
 request_id="$(python3 -c 'import json; print(json.load(open("tutorial-work/requested.json"))["requestId"])')"
@@ -150,8 +158,14 @@ curl --silent --show-error --request POST \
   "$casework_url/v1/review-tasks/$task_id/decisions"
 ```
 
-A successful terminal decision returns HTTP `204`. If another actor changed the task revision,
-Casework returns a conflict. List the task again before deciding whether to retry.
+A successful terminal decision returns HTTP `204`:
+
+```text test-expect
+HTTP 204
+```
+
+If another actor changed the task revision, Casework returns a conflict. List the task again before
+deciding whether to retry.
 
 {/* Evidence: crates/registry-casework/src/http.rs, review_tasks, claim_review_task, and
     decide_review_task; crates/registry-casework-core/src/review.rs, ReviewerDecisionKind. */}
@@ -169,7 +183,16 @@ curl --silent --show-error \
 python3 -m json.tool tutorial-work/result.json
 ```
 
-The result status is `answered` and its outcome is `confirmed`. The producer response contains no
+The result status is `answered` and its outcome is `confirmed`:
+
+```json test-excerpt
+{
+    "status": "answered",
+    "outcome": "confirmed"
+}
+```
+
+The producer response contains no
 raw reviewer identity, private reason, or draft. Before settlement this endpoint returns HTTP `202`;
 after retention erasure it returns HTTP `410`.
 
