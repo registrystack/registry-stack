@@ -318,11 +318,13 @@ means the item no longer awaits its source outcome, so nothing is stranded.
 
 ## Keep the audit file
 
-Casework writes every audited operation through the shared audit writer: a request entry before the
-operation's transaction opens and a response entry after it commits, sharing one correlation, each
-carrying the schema `registry-casework-audit/v1`. Entries name work items, grants, teams, queues,
-and principals only by keyed pseudonyms, and carry no payload values. They are not chained or
-signed.
+Casework writes each audited operation a caller requests through the shared audit writer: a request
+entry before the operation's transaction opens and, after it commits, one response entry per
+recorded event, or a single response entry recording a replay or a no-op. They share one
+correlation and carry the schema `registry-casework-audit/v1`. Background work that no caller
+requested, such as a reconciliation pass, writes only response entries and starts only while the
+writer is ready. Entries name work items, grants, teams, queues, and principals only by keyed
+pseudonyms, and carry no payload values. They are not chained or signed.
 
 With the default `file` destination, one process holds a lock beside `audit.path` and appends to
 it. When the next entry would take the file past `audit.rotateBytes` (100 MiB by default), the

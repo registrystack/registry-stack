@@ -307,14 +307,19 @@ version, this erasure works from the time boundary alone.
 
 ## Keep the audit journal
 
-Each audited request writes a `request` entry before protected I/O and a `response` entry
-before disclosure or after a mutation commits. The entries share a correlation and contain keyed
-references and closed vocabulary, not raw record values. A refusal can have only a response entry.
-The file destination acknowledges an append after fsync; `stdout` flushes each line and provides
-best-effort delivery. A failed request entry blocks protected I/O, and a failed response entry
-blocks disclosure. A mutation can already be committed when its response entry fails: use the
-operation's idempotent retry where available and inspect domain history before retrying operator
-maintenance. A crash can leave a request entry without a response.
+Each audited request writes one `request` entry before protected I/O and at least one `response`
+entry before disclosure or after a mutation commits. The entries share a correlation and contain
+keyed references and closed vocabulary, not raw record values. A refusal can have only a response
+entry. The file destination acknowledges an append after fsync; `stdout` flushes each line and
+provides best-effort delivery. A failed request entry blocks protected I/O, and a failed response
+entry blocks disclosure. A crash can leave a request entry without a response.
+
+A mutation can already be committed when its response entry fails. Use the operation's idempotent
+retry where one exists. Ingestion-run creation has none, and it returns no run id when this
+happens: once the runtime serves again, list the open ingestion runs for the input's digest and
+resume or cancel the one you find. An operator rerun of `history erase`, `history rebaseline`, or
+`migration reconcile` finds the state the first run committed instead of replaying its result, so
+read what that rerun reports before doing anything else.
 
 Configure the stream in the runtime file:
 
