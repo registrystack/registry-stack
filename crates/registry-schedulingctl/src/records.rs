@@ -9,8 +9,9 @@
 //! the database until the whole document holds together, and the swap itself
 //! lands through the store's single replace transaction. The command writes
 //! its `request` audit entry before that transaction opens and a paired
-//! `response` entry after it either commits or the store refuses it, to the
-//! `schedulingctl` sibling of the runtime's audit destination.
+//! `response` entry after it either commits, the store refuses it, or its
+//! commit's outcome cannot be read back, to the `schedulingctl` sibling of
+//! the runtime's audit destination.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -21,7 +22,7 @@ use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_scheduling::audit::{with_event_id, SchedulingAudit};
 use registry_scheduling::config::RuntimeConfig;
 use registry_scheduling::runtime::open_audit;
-use registry_scheduling::store::PostgresStore;
+use registry_scheduling::store::{PostgresStore, StoreError};
 use registry_scheduling_core::{location_open_intervals, SchedulingFacts};
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -69,13 +70,15 @@ pub fn apply(config_path: &Path, records_path: &Path) -> Result<Value> {
     match runtime.block_on(store.replace_facts(&policy.scheduling.id, &facts)) {
         Ok(()) => {}
         Err(store_error) => {
+            let answer = unanswered_swap(&store_error);
             let error =
                 anyhow::Error::new(store_error).context("replacing the environment records");
-            return Err(record_refused(
+            return Err(record_unanswered(
                 &runtime,
                 &audit,
                 correlation,
                 &counts,
+                answer,
                 error,
             ));
         }
@@ -117,16 +120,27 @@ fn record_applied(
         )
 }
 
-/// Write the `response` entry of a swap the store refused. The `request`
-/// entry was already written, so a refusal here would otherwise leave it
-/// orphaned. The store's own refusal is always what `apply` returns; a
-/// response entry that also fails to write says so too, rather than hiding
+/// The outcome and reason of the `response` entry of a swap the store did
+/// not confirm. A swap whose commit was not acknowledged and could not be
+/// read back may have taken effect, so it is `unfinished`, never `refused`.
+fn unanswered_swap(error: &StoreError) -> (&'static str, &'static str) {
+    match error {
+        StoreError::Unacknowledged => ("unfinished", "records.replace-unacknowledged"),
+        _ => ("refused", "records.replace-failed"),
+    }
+}
+
+/// Write the `response` entry of a swap the store did not confirm. The
+/// `request` entry was already written, so a failure here would otherwise
+/// leave it orphaned. The store's own error is always what `apply` returns;
+/// a response entry that also fails to write says so too, rather than hiding
 /// behind the store's message.
-fn record_refused(
+fn record_unanswered(
     runtime: &tokio::runtime::Runtime,
     audit: &SchedulingAudit,
     correlation: Uuid,
     counts: &Value,
+    (outcome, reason): (&str, &str),
     error: anyhow::Error,
 ) -> anyhow::Error {
     let record = with_event_id(
@@ -134,8 +148,8 @@ fn record_refused(
         json!({
             "actorKind": "operator",
             "operation": "records.apply",
-            "outcome": "refused",
-            "reason": "records.replace-failed",
+            "outcome": outcome,
+            "reason": reason,
             "counts": counts,
         }),
     );
@@ -360,6 +374,18 @@ mod tests {
 
     fn facts_from(text: &str) -> SchedulingFacts {
         serde_norway::from_str(text).unwrap()
+    }
+
+    #[test]
+    fn a_swap_of_unknown_outcome_is_answered_as_unfinished() {
+        assert_eq!(
+            unanswered_swap(&StoreError::Unacknowledged),
+            ("unfinished", "records.replace-unacknowledged")
+        );
+        assert_eq!(
+            unanswered_swap(&StoreError::DeploymentIdentity),
+            ("refused", "records.replace-failed")
+        );
     }
 
     #[test]

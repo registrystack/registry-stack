@@ -128,6 +128,12 @@ pub enum StoreError {
     Corrupt,
     #[error("the Scheduling database belongs to another deployment")]
     DeploymentIdentity,
+    /// A commit whose acknowledgment never arrived and whose outcome could
+    /// not be read back: it may have taken effect.
+    #[error(
+        "a Scheduling commit was not acknowledged and its outcome could not be read back; it may have taken effect"
+    )]
+    Unacknowledged,
     #[error(
         "the Scheduling database holds {rows} audit record(s) that schema migration {version} would drop before they reach the audit journal; nothing was changed. Run the release that wrote them until its audit publisher has published every record, then migrate again"
     )]
@@ -1198,8 +1204,17 @@ impl PostgresStore {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         replace_facts_in_transaction(&transaction, scheduling_id, facts).await?;
-        transaction.commit().await?;
-        Ok(())
+        // The swap takes every supply anchor, so its commit is read back
+        // like a capacity commit when its acknowledgment is lost.
+        match self.commit_capacity(transaction).await {
+            Ok(()) => Ok(()),
+            Err(CommitError::Store(error)) => Err(error),
+            Err(CommitError::Query(error)) => Err(error.into()),
+            Err(CommitError::Unacknowledged) => Err(StoreError::Unacknowledged),
+            Err(other) => unreachable!(
+                "a capacity commit only fails as a query or unacknowledged, not {other}"
+            ),
+        }
     }
 
     /// Mint a listing cursor.

@@ -3158,6 +3158,44 @@ async fn a_records_swap_refuses_to_move_an_occupied_resource_between_pools() {
 }
 
 #[tokio::test]
+async fn a_records_swap_whose_acknowledgment_was_lost_is_read_back() {
+    let fx = fixture().await;
+
+    // A swap that took effect is answered as committed once read back.
+    fx.store.lose_next_commit_acknowledgment();
+    fx.store
+        .replace_facts(SCHEDULING_ID, &records_without(&["station-2"]))
+        .await
+        .expect("a swap read back as committed commits");
+    let (standing, _) = fx.store.facts().await.expect("the records are readable");
+    assert_eq!(
+        standing.pool("two-counter").map(|pool| pool.members.len()),
+        Some(0),
+        "the swap took effect"
+    );
+
+    // A swap whose outcome cannot be read back is reported as such, never
+    // as a refusal, since it may have taken effect.
+    fx.store.lose_next_commit_acknowledgment();
+    fx.store.fail_next_read_back();
+    let error = fx
+        .store
+        .replace_facts(SCHEDULING_ID, &records_without(&[]))
+        .await
+        .expect_err("a swap of unknown outcome fails");
+    assert!(
+        matches!(error, StoreError::Unacknowledged),
+        "the unknown outcome is reported as unacknowledged: {error}"
+    );
+    let (standing, _) = fx.store.facts().await.expect("the records are readable");
+    assert_eq!(
+        standing.pool("two-counter").map(|pool| pool.members.len()),
+        Some(1),
+        "the unacknowledged swap took effect"
+    );
+}
+
+#[tokio::test]
 async fn a_records_swap_waits_for_the_capacity_transaction_holding_the_pool() {
     let fx = fixture().await;
     let mut admin = fx.admin;
