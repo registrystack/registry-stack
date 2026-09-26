@@ -94,7 +94,7 @@ existing configuration, not an overlay. Review every environment-dependent field
 | Question governance | The requirement owner approves requirement, concept, framework, Evidence Type and disclosure-family identifiers. Replace example identifiers consistently when using institutional meaning. |
 | Source connection | The registry administrator supplies the HTTPS BReg origin, token endpoint, source scope, applicable resource audience and dedicated credential references. |
 | Signing | The signing operator supplies the public JWK and exact non-exportable Transit key version and workload-local proxy binding. |
-| Runtime | The deployment operator supplies the absolute candidate, secret and audit paths, private listener, HTTPS reverse proxy and any private CA files. |
+| Runtime | The deployment operator supplies the absolute installed package, secret and audit paths, private listener, HTTPS reverse proxy and any private CA files. |
 
 Use a compatible OpenID Connect issuer for an operated deployment. Its source registration and Evidence caller
 registration have different audiences and grants. A source credential must not
@@ -168,7 +168,7 @@ signer:
 
 Use the operator's exact selected version, which may differ from this example.
 Set `runtime.package.root` to the final deployment location, such as
-`/srv/evidence/candidates/operated-001/bundle`. The local build output may live
+`/srv/evidence/packages/operated-001`. The local package output may live
 elsewhere before transport. Bind production secret and audit paths separately.
 
 ```sh
@@ -206,7 +206,7 @@ Neither command
 contacts the source, caller issuer or Transit service.
 
 Hand over the authored revision, operated source-export baseline, complete target,
-exact package digest and candidate, the separate target runtime, required secret references, and
+exact package digest and package, the separate target runtime, required secret references, and
 the approved synthetic verification case. The package contains `SHA256SUMS` and governed Evidence
 artifacts. It contains no `runtime.yaml`.
 Development services, credentials, tokens and live responses stay outside it.
@@ -225,8 +225,8 @@ identity uses the [source credential rotation procedure](../../products/registry
 
 ## Provision and check the target host
 
-The operator places the exact candidate at the configured location and makes its
-runtime and bundle non-writable to the service identity. Provision owner-only
+The operator places the exact package at the configured `package.root` and makes the
+package and separately supplied runtime non-writable to the service identity. Provision owner-only
 source client files, independent audit and subject-binding HMAC secrets, durable
 audit storage, private CA files when needed, and the workload-local Transit
 proxy.
@@ -241,12 +241,12 @@ as disclosed and replaced through the operator's own provisioning.
 Under the intended service identity, after those dependencies exist:
 
 ```sh
-evidencectl doctor --runtime-config /srv/evidence/candidates/operated-001/runtime.yaml
-evidence check --runtime-config /srv/evidence/candidates/operated-001/runtime.yaml --require-runtime-dependencies
-evidence serve --runtime-config /srv/evidence/candidates/operated-001/runtime.yaml
+evidencectl doctor --runtime-config '<deployment-target>/runtime.yaml'
+evidence check --runtime-config '<deployment-target>/runtime.yaml' --require-runtime-dependencies
+evidence serve --runtime-config '<deployment-target>/runtime.yaml'
 ```
 
-Use your configured candidate path. `evidencectl doctor` reports every artifact
+Use your configured deployment target. `evidencectl doctor` reports every artifact
 the runtime would otherwise refuse at startup for wrong permissions, ownership
 or secret exposure, all in one pass instead of one restart at a time; fix each
 named artifact and rerun it until it exits zero. If `check

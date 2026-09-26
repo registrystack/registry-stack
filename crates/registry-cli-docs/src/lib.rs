@@ -106,7 +106,7 @@ mod tests {
             "registry-render init",
             "registry-render check",
             "registry-render validate",
-            "registry-render seal",
+            "registry-render package",
             "registry-render compile",
             "registry-render serve",
             "registry-render healthcheck",

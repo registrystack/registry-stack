@@ -596,7 +596,7 @@ export default defineConfig({
           items: [
             { label: 'How the index works', slug: 'explanation/discovery-as-an-index' },
             { label: 'Publish and consume an index', slug: 'tutorials/publish-and-consume-discovery-index' },
-            { label: 'Build and run an index', slug: 'configure/discovery' },
+            { label: 'Package and run an index', slug: 'configure/discovery' },
           ],
         },
         {

@@ -348,8 +348,8 @@ properties:
             caBundleFile:
               description: >-
                 Absolute path to one bounded PEM file of trust anchors, loaded and validated
-                at startup; changing its bytes requires a restart and changes the computed
-                runtime digest.
+                at startup; changing its bytes requires a restart before the new trust anchors
+                can be used.
               $ref: '#/$defs/absolute-path'
   sourceExtracts:
     description: >-
@@ -375,8 +375,8 @@ properties:
           description: >-
             Absolute path to one read-only regular file, validated at startup and digested
             without being read into memory; it must be neither a symbolic link nor writable,
-            because the statement executor opens it as immutable, and its digest changes the
-            computed runtime digest.
+            because the statement executor opens it as immutable. Startup binds the exact file
+            identity and content digest for the process lifetime.
           $ref: '#/$defs/absolute-path'
   acquisitionCapabilities:
     description: >-

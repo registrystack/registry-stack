@@ -90,7 +90,7 @@ invariants:
   - id: V1-I18
     rule: Configuration is immutable for the serving process lifetime.
     threat: Unreviewed hot mutation, partial revisions, rollback, or inconsistent audit provenance.
-    enforcement: One read-only atomic governed bundle and one separately digested closed runtime file at startup; runtime overrides, reload, merge, fallback, and mutation paths do not exist.
+    enforcement: One read-only package verified from its SHA256SUMS and one closed runtime file captured at startup; runtime overrides, reload, merge, fallback, and mutation paths do not exist.
     negative_test: sec-runtime-bundle-mutation-absent
   - id: V1-I19
     rule: One process serves one operator-controlled trust domain.
@@ -330,7 +330,7 @@ cross_cutting:
     negative_test: sec-request-preparation-closed
   runtime_ownership_split:
     threat: An environment-specific runtime file silently changes governed authorization, disclosure, source authority, signing, or audit policy.
-    enforcement: Closed runtime.yaml accepts only process-local listener, optional metrics-listener, path, secret-root, audit destination, signer transport and pinned version, logical private-CA bindings, and logical source-extract file bindings; a bound extract file no source names and a source extract profile the runtime did not bind are both refused, and the signer must exactly match the governed active public JWK and the runtime has an independent immutable digest.
+    enforcement: Closed runtime.yaml accepts only process-local listener, optional metrics-listener, path, secret-root, audit destination, signer transport and pinned version, logical private-CA bindings, and logical source-extract file bindings; a bound extract file no source names and a source extract profile the runtime did not bind are both refused, and the signer must exactly match the governed active public JWK, and runtime-owned bytes are captured once and held read-only for the process lifetime without a separate public runtime revision.
     negative_test: sec-runtime-cannot-override-governed-bundle
   outbound_tls_and_proxy:
     threat: A mutable or untrusted CA or ambient proxy redirects credentials and protected source queries to another authority.

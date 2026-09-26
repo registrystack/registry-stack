@@ -53,6 +53,9 @@ mod tests {
     #[test]
     #[should_panic]
     fn an_authored_file_refuses_substitution() {}
+
+    #[test]
+    fn a_package_digest_mismatch_uses_the_shared_shape() {}
 }
 """
 
@@ -68,6 +71,9 @@ def row(**changes: object) -> object:
         ),
         authored_refusal=gate.TestRef(
             "crates/sample/src/lib.rs", "an_authored_file_refuses_substitution"
+        ),
+        digest_mismatch=gate.TestRef(
+            "crates/sample/src/lib.rs", "a_package_digest_mismatch_uses_the_shared_shape"
         ),
     )
     return dataclasses.replace(base, **changes)
@@ -253,6 +259,25 @@ class ConfigConformanceFixtureTest(unittest.TestCase):
                     "crates/sample/src/missing.rs", "a_reference_refuses_substitution"
                 )
             ),
+        )
+
+    def test_a_missing_digest_mismatch_test_is_refused(self) -> None:
+        self.write_text(
+            "crates/sample/src/lib.rs",
+            LOADER_SOURCE.replace(
+                "a_package_digest_mismatch_uses_the_shared_shape", "renamed"
+            ),
+        )
+        self.assert_one_problem(
+            "sample: crates/sample/src/lib.rs has no test named "
+            "a_package_digest_mismatch_uses_the_shared_shape "
+            "(a package digest mismatch must report the shared expected-and-found shape)"
+        )
+
+    def test_the_inventory_refuses_a_missing_product_row(self) -> None:
+        rows = tuple(row for row in gate.ROWS if row.product != "evidence")
+        self.assertEqual(
+            ["missing conformance rows: evidence"], gate.check_inventory(rows)
         )
 
     def test_an_exemption_needs_a_reason(self) -> None:
