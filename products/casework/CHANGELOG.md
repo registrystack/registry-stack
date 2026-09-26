@@ -2,10 +2,14 @@
 
 ## Unreleased
 
-- Answer every audited request entry. An operation that ends after its
-  request entry without committing, a refusal, a failure, or a canceled
-  request, writes `{event, outcome: "unfinished"}` as its response under the
-  same correlation. Adding a review note is audited as
+- Answer every audited request entry. An operation whose change is not
+  known to have committed (a refusal, a failure, a canceled request, or a
+  commit whose acknowledgment was lost and whose outcome could not be read
+  back) writes `{event, outcome: "unfinished"}` as its response under the
+  same correlation. A commit whose acknowledgment was lost is read back
+  first, and one that took effect is answered and recorded like any other.
+  A committed operation writes all of its response entries even when its
+  caller disconnects while they are written. Adding a review note is audited as
   `casework.review_note_added`, naming the note's history event but never its
   text or audience.
 

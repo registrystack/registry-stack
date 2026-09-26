@@ -7,9 +7,13 @@
 //! operation that recorded no domain event, such as an idempotent replay,
 //! appends one `response` entry naming its terminal outcome instead, so no
 //! caller-requested result is released without an accepted `response` entry.
-//! One that returns without committing, a refusal, a failure, or a canceled
-//! request, appends `{event, outcome: "unfinished"}` as its `response` entry
-//! when its operation is dropped, so no `request` entry stays unpaired.
+//! One whose change is not known to have committed, a refusal, a failure, a
+//! canceled request, or a commit whose acknowledgment never arrived and whose
+//! outcome could not be read back as committed, appends
+//! `{event, outcome: "unfinished"}` as its `response` entry when its
+//! operation is dropped, so no `request` entry stays unpaired. A commit whose
+//! acknowledgment never arrived is read back first: one that took effect is
+//! recorded by its domain events like any other.
 //! Entries carry only event metadata and keyed references, never source
 //! selectors, free-text reasons, receipts, or issuer and subject identities.
 
@@ -31,6 +35,10 @@ const TASK_GRANT_SYSTEM_PROFILE: &str = "system:task-grants";
 pub struct CaseworkAudit {
     writer: AuditWriter,
     identifiers: AuditKeyHasher,
+    /// A test switch that reports the next commit that took effect as one
+    /// whose acknowledgment never arrived.
+    #[cfg(any(test, feature = "postgres-test"))]
+    lose_acknowledgment: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl std::fmt::Debug for CaseworkAudit {
@@ -48,6 +56,8 @@ impl CaseworkAudit {
         Self {
             writer,
             identifiers,
+            #[cfg(any(test, feature = "postgres-test"))]
+            lose_acknowledgment: std::sync::Arc::default(),
         }
     }
 
@@ -81,6 +91,7 @@ impl CaseworkAudit {
             pairing: Pairing::Requested { request, event },
             outcome: None,
             responses: Vec::new(),
+            read_back: None,
         })
     }
 
@@ -99,6 +110,7 @@ impl CaseworkAudit {
             },
             outcome: None,
             responses: Vec::new(),
+            read_back: None,
         })
     }
 
@@ -110,6 +122,19 @@ impl CaseworkAudit {
 
     fn minimized(&self, record: Value) -> Result<Value, StoreError> {
         published_audit_record(record, &self.identifiers).map_err(|()| StoreError::Corrupt)
+    }
+
+    /// Fail a commit that took effect, as a connection lost before its
+    /// acknowledgment arrived does, when the test switch asks for it.
+    #[cfg(any(test, feature = "postgres-test"))]
+    fn acknowledged(&self) -> Result<(), StoreError> {
+        if self
+            .lose_acknowledgment
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(StoreError::Unavailable);
+        }
+        Ok(())
     }
 }
 
@@ -174,6 +199,17 @@ pub(crate) struct AuditOperation {
     pairing: Pairing,
     outcome: Option<AuditOutcome>,
     responses: Vec<(Uuid, Value)>,
+    /// The pool a commit whose acknowledgment never arrived reads its
+    /// transaction's status back through.
+    read_back: Option<deadpool_postgres::Pool>,
+}
+
+/// What reading back an unacknowledged commit found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReadBack {
+    Committed,
+    RolledBack,
+    Unknown,
 }
 
 /// How an operation's `response` entries are correlated.
@@ -189,6 +225,13 @@ enum Pairing {
 }
 
 impl AuditOperation {
+    /// Read the outcome of a commit whose acknowledgment never arrived
+    /// through `pool`, on a connection of its own.
+    pub(crate) fn with_read_back(mut self, pool: deadpool_postgres::Pool) -> Self {
+        self.read_back = Some(pool);
+        self
+    }
+
     /// Name the terminal outcome of a caller-requested operation that may
     /// record no domain event. It is appended as the operation's `response`
     /// entry only when no domain event was recorded; background work ignores
@@ -267,14 +310,62 @@ impl AuditOperation {
     /// append one `response` entry per recorded event, or the terminal
     /// outcome when none was recorded. A caller-requested operation with
     /// neither is refused before `transaction` commits.
+    ///
+    /// A commit that fails may still have taken effect, as when the
+    /// connection is lost after `COMMIT` reached the database. The
+    /// transaction's status is then read back on another connection: a
+    /// committed change is answered and appended like any other, and one
+    /// that rolled back or whose status cannot be read returns the commit
+    /// error, so the dropped operation appends its unfinished response.
     pub(crate) async fn commit(
         mut self,
         transaction: deadpool_postgres::Transaction<'_>,
     ) -> Result<(), StoreError> {
         self.collect_task_invalidations(&transaction).await?;
         self.ensure_terminal()?;
-        transaction.commit().await?;
+        let transaction_id: String = transaction
+            .query_one("SELECT pg_current_xact_id()::text", &[])
+            .await?
+            .get(0);
+        let committed = transaction.commit().await.map_err(StoreError::from);
+        #[cfg(any(test, feature = "postgres-test"))]
+        let committed = committed.and_then(|()| self.audit.acknowledged());
+        if let Err(error) = committed {
+            match self.read_back(&transaction_id).await {
+                ReadBack::Committed => tracing::warn!(
+                    "a Casework commit was not acknowledged but took effect; its response entries are appended"
+                ),
+                ReadBack::RolledBack => return Err(error),
+                ReadBack::Unknown => {
+                    tracing::error!(
+                        "a Casework commit was not acknowledged and its outcome could not be read back; its response entry is unfinished"
+                    );
+                    return Err(error);
+                }
+            }
+        }
         self.complete().await
+    }
+
+    /// Read whether the transaction `transaction_id` committed, on a
+    /// connection outside any transaction. It writes nothing.
+    async fn read_back(&self, transaction_id: &str) -> ReadBack {
+        let Some(pool) = &self.read_back else {
+            return ReadBack::Unknown;
+        };
+        let Ok(client) = pool.get().await else {
+            return ReadBack::Unknown;
+        };
+        let status = client
+            .query_one("SELECT pg_xact_status($1::text::xid8)", &[&transaction_id])
+            .await
+            .map(|row| row.get::<_, Option<String>>(0));
+        match status.as_ref().map(|status| status.as_deref()) {
+            Ok(Some("committed")) => ReadBack::Committed,
+            Ok(Some("aborted")) => ReadBack::RolledBack,
+            // Still in progress, too old to report, or unreadable.
+            _ => ReadBack::Unknown,
+        }
     }
 
     /// Append one `response` entry per recorded event, or one naming the
@@ -290,6 +381,7 @@ impl AuditOperation {
             mut pairing,
             outcome,
             responses,
+            ..
         } = self;
         let mut records: Vec<Value> = responses.into_iter().map(|(_, record)| record).collect();
         if records.is_empty() {
@@ -416,6 +508,9 @@ mod capture {
         /// The writer recording here, so a read can wait for the entries it
         /// writes when a request handle is dropped.
         writer: Option<AuditWriter>,
+        /// The switch the audit recording here reads before it treats a
+        /// commit as acknowledged.
+        lose_acknowledgment: Arc<std::sync::atomic::AtomicBool>,
     }
 
     /// A switch that holds the write of one line until it is released, kept
@@ -507,6 +602,16 @@ mod capture {
             state.holding
         }
 
+        /// Report the next commit of an audited operation as unacknowledged
+        /// after it took effect, as a connection lost during `COMMIT` does.
+        pub fn lose_next_commit_acknowledgment(&self) {
+            self.0
+                .lock()
+                .expect("audit capture")
+                .lose_acknowledgment
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+
         /// Let a held write proceed.
         pub fn release(&self) {
             let mut state = self.1.state.lock().expect("audit gate");
@@ -558,11 +663,13 @@ mod capture {
         pub fn capture() -> (Self, AuditCapture) {
             let capture = AuditCapture::default();
             let writer = AuditWriter::from_line_sink(Box::new(capture.clone()));
-            capture.0.lock().expect("audit capture").writer = Some(writer.clone());
-            (
-                Self::new(writer, AuditKeyHasher::unkeyed_dev_only()),
-                capture,
-            )
+            let audit = Self::new(writer.clone(), AuditKeyHasher::unkeyed_dev_only());
+            {
+                let mut state = capture.0.lock().expect("audit capture");
+                state.writer = Some(writer);
+                state.lose_acknowledgment = Arc::clone(&audit.lose_acknowledgment);
+            }
+            (audit, capture)
         }
     }
 }

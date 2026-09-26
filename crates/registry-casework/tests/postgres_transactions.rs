@@ -1783,8 +1783,20 @@ struct SettlementFixture {
     binding_reference: String,
 }
 
-async fn settlement_fixture(prefix: &str, mark_uncertain: bool) -> SettlementFixture {
-    let (store, client, _schema) = isolated_schema(prefix).await;
+/// One open item in a schema of its own, audited into a capture, and the
+/// staff member who may claim it.
+struct OpenItemFixture {
+    store: PostgresStore,
+    audit: registry_casework::AuditCapture,
+    client: tokio_postgres::Client,
+    schema: String,
+    holder: ActorContext,
+    item_id: uuid::Uuid,
+    revision: i64,
+}
+
+async fn open_item_fixture(prefix: &str) -> OpenItemFixture {
+    let (store, client, schema) = isolated_schema(prefix).await;
     let (audit, audit_capture) = registry_casework::CaseworkAudit::capture();
     let store = store.with_audit(audit);
     store.migrate().await.expect("migrate");
@@ -1827,8 +1839,29 @@ async fn settlement_fixture(prefix: &str, mark_uncertain: bool) -> SettlementFix
         .await
         .expect("initial observation")
         .expect("item opened");
+    OpenItemFixture {
+        store,
+        audit: audit_capture,
+        client,
+        schema,
+        holder,
+        item_id: item.item_id,
+        revision: item.revision,
+    }
+}
+
+async fn settlement_fixture(prefix: &str, mark_uncertain: bool) -> SettlementFixture {
+    let OpenItemFixture {
+        store,
+        audit,
+        client,
+        holder,
+        item_id,
+        revision,
+        ..
+    } = open_item_fixture(prefix).await;
     let claimed = store
-        .claim(&holder, item.item_id, item.revision, "claim-settlement")
+        .claim(&holder, item_id, revision, "claim-settlement")
         .await
         .expect("holder claims the item");
     let prepared = PreparedSourceAttempt {
@@ -1859,7 +1892,7 @@ async fn settlement_fixture(prefix: &str, mark_uncertain: bool) -> SettlementFix
     }
     SettlementFixture {
         store,
-        audit: audit_capture,
+        audit,
         client,
         holder,
         item_id: claimed.item_id,
@@ -1921,7 +1954,12 @@ impl SettlementFixture {
                 entry["phase"] == "response" && entry["record"]["outcome"] != "unfinished"
             })
             .count());
-        snapshot["unpairedRequests"] = serde_json::json!(unpaired_requests(&self.audit.entries()));
+        let unpaired = unpaired_requests(&self.audit.entries());
+        assert!(
+            unpaired.is_empty(),
+            "unpaired request entries: {unpaired:?}"
+        );
+        snapshot["unpairedRequests"] = serde_json::json!(unpaired);
         snapshot
     }
 
@@ -2212,6 +2250,157 @@ async fn a_refusal_after_the_request_entry_pairs_it_with_an_unfinished_response(
             serde_json::json!({"event": "casework.claimed", "outcome": "unfinished"})
         );
     }
+}
+
+/// A claim whose `COMMIT` took effect but whose acknowledgment never arrived
+/// is read back as committed: the caller gets the claim, and its response
+/// entry records the claim rather than an unfinished outcome.
+#[tokio::test]
+async fn a_claim_whose_commit_acknowledgment_is_lost_is_read_back_as_committed() {
+    let fixture = open_item_fixture("claim_lost_ack").await;
+    let written = fixture.audit.entries().len();
+    fixture.audit.lose_next_commit_acknowledgment();
+    let claimed = fixture
+        .store
+        .claim(
+            &fixture.holder,
+            fixture.item_id,
+            fixture.revision,
+            "claim-lost-ack",
+        )
+        .await
+        .expect("the committed claim is answered");
+    assert_eq!(claimed.revision, fixture.revision + 1);
+    let current = fixture.store.item(fixture.item_id).await.expect("item");
+    assert_eq!(current.revision, claimed.revision);
+
+    let entries = fixture.audit.entries()[written..].to_vec();
+    assert_eq!(entries.len(), 2, "{entries:#?}");
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[1]["correlation"], entries[0]["correlation"]);
+    assert_eq!(entries[1]["record"]["event"], "casework.claimed");
+    assert!(
+        entries[1]["record"].get("outcome").is_none(),
+        "{entries:#?}"
+    );
+    assert!(unpaired_requests(&fixture.audit.entries()).is_empty());
+}
+
+/// A claim whose `COMMIT` itself is refused rolls back, and the read-back
+/// finds it rolled back: the caller gets the error and the request entry is
+/// paired with an unfinished response, never with the claim.
+#[tokio::test]
+async fn a_claim_refused_at_commit_is_read_back_as_not_committed() {
+    let fixture = open_item_fixture("claim_refused_at_commit").await;
+    fixture
+        .client
+        .batch_execute(
+            "CREATE FUNCTION refuse_at_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RAISE EXCEPTION 'refused at commit'; END $$;
+             CREATE CONSTRAINT TRIGGER refuse_claim_at_commit AFTER UPDATE ON casework_items
+             DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION refuse_at_commit();",
+        )
+        .await
+        .expect("install a trigger that refuses the claim at COMMIT");
+    let written = fixture.audit.entries().len();
+    let refused = fixture
+        .store
+        .claim(
+            &fixture.holder,
+            fixture.item_id,
+            fixture.revision,
+            "claim-refused-at-commit",
+        )
+        .await;
+    assert!(
+        matches!(refused, Err(StoreError::Postgres(_))),
+        "{refused:?}"
+    );
+    let current = fixture.store.item(fixture.item_id).await.expect("item");
+    assert_eq!(current.revision, fixture.revision, "the claim rolled back");
+
+    let entries = fixture.audit.entries()[written..].to_vec();
+    assert_eq!(entries.len(), 2, "{entries:#?}");
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[1]["correlation"], entries[0]["correlation"]);
+    assert_eq!(
+        entries[1]["record"],
+        serde_json::json!({"event": "casework.claimed", "outcome": "unfinished"})
+    );
+}
+
+/// A claim whose future is dropped while it waits inside its transaction
+/// pairs its request entry with exactly one unfinished response and changes
+/// nothing.
+#[tokio::test]
+async fn a_claim_dropped_inside_its_transaction_writes_one_unfinished_response() {
+    let fixture = open_item_fixture("claim_dropped").await;
+    let written = fixture.audit.entries().len();
+    let mut locker = connect_scoped(&fixture.schema).await;
+    let lock = locker.transaction().await.expect("lock transaction");
+    lock.execute(
+        "SELECT 1 FROM casework_items WHERE item_id=$1 FOR UPDATE",
+        &[&fixture.item_id],
+    )
+    .await
+    .expect("hold the item row");
+    let locker_pid: i32 = lock
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .expect("lock holder pid")
+        .get(0);
+
+    let store = fixture.store.clone();
+    let holder = fixture.holder.clone();
+    let (item_id, revision) = (fixture.item_id, fixture.revision);
+    let claim = tokio::spawn(async move {
+        store
+            .claim(&holder, item_id, revision, "claim-dropped")
+            .await
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let waiting: i64 = fixture
+            .client
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))",
+                &[&locker_pid],
+            )
+            .await
+            .expect("read lock waits")
+            .get(0);
+        if waiting > 0 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the claim never waited on the item row"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    claim.abort();
+    assert!(claim
+        .await
+        .expect_err("the claim was dropped")
+        .is_cancelled());
+    lock.rollback().await.expect("release the item row");
+
+    let entries = fixture.audit.entries()[written..].to_vec();
+    assert_eq!(entries.len(), 2, "{entries:#?}");
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[1]["correlation"], entries[0]["correlation"]);
+    assert_eq!(
+        entries[1]["record"],
+        serde_json::json!({"event": "casework.claimed", "outcome": "unfinished"})
+    );
+    let current = fixture.store.item(fixture.item_id).await.expect("item");
+    assert_eq!(
+        current.revision, fixture.revision,
+        "the dropped claim changed nothing"
+    );
 }
 
 #[tokio::test]
