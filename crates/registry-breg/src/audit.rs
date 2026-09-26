@@ -287,6 +287,7 @@ pub(crate) enum WebhookAuditOutcome {
     ReplayRequested,
     ReplayCommitted,
     ReplayRefused,
+    ReplayUnfinished,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -808,7 +809,9 @@ pub(crate) fn webhook_entry(
         ) => event.attempt >= 0,
         (
             WebhookAuditPhase::Replay,
-            WebhookAuditOutcome::ReplayRequested | WebhookAuditOutcome::ReplayCommitted,
+            WebhookAuditOutcome::ReplayRequested
+            | WebhookAuditOutcome::ReplayCommitted
+            | WebhookAuditOutcome::ReplayUnfinished,
             WebhookAuditDisposition::ReplayPending,
         )
         | (
@@ -900,6 +903,7 @@ fn webhook_outcome_name(outcome: WebhookAuditOutcome) -> &'static str {
         WebhookAuditOutcome::ReplayRequested => "replay_requested",
         WebhookAuditOutcome::ReplayCommitted => "replay_committed",
         WebhookAuditOutcome::ReplayRefused => "replay_refused",
+        WebhookAuditOutcome::ReplayUnfinished => "replay_unfinished",
     }
 }
 

@@ -34,7 +34,8 @@
     the delivery state commits. An attempt whose lease commit fails is
     answered with `worker_interrupted`. An operator replay writes a
     `replay_requested` request before the reset and a `replay_committed` or
-    `replay_refused` response after it.
+    `replay_refused` response after it, or `replay_unfinished` when the
+    reset's commit failed and its fate cannot be read back.
 
 - BREAKING: write audit through the platform audit writer instead of a
   hash-chained journal in PostgreSQL. Each process opens one writer at

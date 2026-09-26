@@ -330,7 +330,8 @@ event delivery's attempt is recorded inside the transaction that leases it, befo
 leaves. If that lease transaction does not commit, no request leaves and the attempt is answered
 `worker_interrupted`, so an attempt entry does not prove a request was sent. An attempt's terminal
 outcome is recorded only once the delivery's state has committed; an operator replay is recorded as a request before the reset and a response once it commits or is
-refused.
+refused, or `replay_unfinished` when its commit failed and whether the reset committed cannot be
+read back; read the delivery's state before replaying it again.
 
 A crash or a killed process can also tear the file's final line itself, leaving it without its
 closing newline. The writer refuses to open a destination in that state, so the next start of the
