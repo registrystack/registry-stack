@@ -99,13 +99,16 @@ and its `response` entry after the transaction commits or rolls back; a
 permission refused before the transaction is one `response` entry. Audit fails
 closed: a refused `request` entry opens no transaction, and a refused `response`
 entry for a committed change answers `service.unavailable` with the change
-committed. One case is best effort instead: a refusal the ledger itself
-decides (an admission refusal, the hold ceiling, a lapsed grant, a stale
-observed revision, or a cancellation past its cutoff), and a permission
-mismatch refused before the transaction opens, still reach the caller when
-their `response` entry cannot be written; the write failure is only logged,
-and the journal is left holding a `request` entry with no paired `response`,
-or, for a permission mismatch, no entry at all. `/readyz` reports unavailable
+committed. A refusal, whether the ledger decided it (an admission refusal,
+the hold ceiling, a lapsed grant, a stale observed revision, or a cancellation
+past its cutoff) or the permission check refused it before the transaction
+opened, reaches the caller only once its `response` entry is accepted, and
+answers `service.unavailable` otherwise. A commitment nothing decided still
+answers its `request` entry: a failed transaction, records replaced under it,
+or a reused or expired idempotency key writes a `response` with the outcome
+`unfinished` and the reason `commitment.failed`, `commitment.facts-stale`,
+`idempotency.key-reused`, or `idempotency.expired`, and one that returns or is
+canceled before answering writes `commitment.unfinished`. `/readyz` reports unavailable
 while the destination refuses writes. An expired hold writes its history entry
 as `system` and no audit entry.
 

@@ -16,7 +16,9 @@
 //! a replayed idempotency key answers as it first did.
 
 use chrono::{DateTime, TimeDelta, Utc};
-use registry_platform_audit::{AuditKeyHasher, AuthorizationAuditEvent, AuthorizationOutcome};
+use registry_platform_audit::{
+    AuditKeyHasher, AuditRequest, AuthorizationAuditEvent, AuthorizationOutcome,
+};
 use registry_platform_calendar::CalendarInterval;
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_oidc::GrantClaims;
@@ -36,7 +38,7 @@ use sha2::{Digest as _, Sha256};
 use std::borrow::Cow;
 use uuid::Uuid;
 
-use crate::audit::{request_record, with_event_id, SchedulingAudit};
+use crate::audit::{request_record, unfinished_record, with_event_id, SchedulingAudit};
 use crate::cursors::{
     bind_stored, cursor_expiry, decode_cursor, encode_cursor, CursorError, ListingPosition,
     StoredCursor,
@@ -595,7 +597,7 @@ impl SchedulingService {
             now,
             facts_revision,
         )?;
-        let correlation = self
+        let (correlation, _request) = self
             .audit_request(caller, &grant, HOLD_CREATE_ACTION)
             .await?;
         let outcome = self
@@ -655,7 +657,7 @@ impl SchedulingService {
         // closing a hold cannot name a resource.
         let commitment =
             self.commitment(caller, &actor, &grant, &release_key, &request_hash, now, 0)?;
-        let correlation = self
+        let (correlation, _request) = self
             .audit_request(caller, &grant, HOLD_RELEASE_ACTION)
             .await?;
         let outcome = self.store.release_hold(hold_id, commitment).await;
@@ -736,7 +738,7 @@ impl SchedulingService {
             now,
             facts_revision,
         )?;
-        let correlation = self
+        let (correlation, _request) = self
             .audit_request(caller, &grant, APPOINTMENT_CREATE_ACTION)
             .await?;
         let outcome = self
@@ -782,7 +784,7 @@ impl SchedulingService {
             now,
             facts_revision,
         )?;
-        let correlation = self
+        let (correlation, _request) = self
             .audit_request(caller, &grant, APPOINTMENT_CREATE_ACTION)
             .await?;
         let outcome = self
@@ -862,7 +864,7 @@ impl SchedulingService {
             now,
             facts_revision,
         )?;
-        let correlation = self
+        let (correlation, _request) = self
             .audit_request(caller, &grant, APPOINTMENT_RESCHEDULE_ACTION)
             .await?;
         let outcome = self
@@ -928,7 +930,7 @@ impl SchedulingService {
             now,
             0,
         )?;
-        let correlation = self
+        let (correlation, _request) = self
             .audit_request(caller, &grant, APPOINTMENT_CANCEL_ACTION)
             .await?;
         let outcome = self
@@ -1141,7 +1143,8 @@ impl SchedulingService {
     /// the refusal. Readable availability is not authority to book: the
     /// permission must name all three.
     ///
-    /// Both refusals are audited. A refusal decided here never opens the
+    /// Both refusals are audited, and answered only once their entry is
+    /// accepted. A refusal decided here never opens the
     /// capacity transaction, so nothing further in the request would record
     /// that it happened, and a caller probing which services and locations its
     /// grant reaches would leave no audit entry. Each refusal is one `response`
@@ -1159,7 +1162,7 @@ impl SchedulingService {
                 Uuid::new_v4(),
                 grantless_refusal_record(&self.hasher, &self.scheduling_id, caller, action),
             )
-            .await;
+            .await?;
             return Err(ServiceError::Problem(ProblemCode::OperationNotAuthorized));
         };
         let allowed = grant
@@ -1190,43 +1193,47 @@ impl SchedulingService {
                     "authorization.refused",
                 ),
             )
-            .await;
+            .await?;
             Err(ServiceError::Problem(ProblemCode::OperationNotAuthorized))
         }
     }
 
-    /// Write one authorization refusal as the `response` entry of
-    /// `correlation`, whose identity it also carries as `eventId`. A
-    /// destination that refuses it must not change the caller's answer: the
-    /// decision is already made and the caller is refused either way, so the
-    /// failure is logged loudly and the refusal stands.
-    async fn record_refusal(&self, correlation: Uuid, record: Result<Value, ServiceError>) {
-        match record.map(|record| with_event_id(correlation, record)) {
-            Ok(Some(record)) => {
-                if let Err(failure) = self.audit.response(correlation, record).await {
-                    tracing::error!(%failure, "the refusal audit entry could not be recorded");
-                }
-            }
-            Ok(None) => {
-                tracing::error!("the refusal audit entry carries another identity");
-            }
-            Err(refused) => {
-                tracing::error!(error = %refused, "the refusal audit entry could not be built");
-            }
-        }
+    /// Write one refusal, or one commitment nothing decided, as the
+    /// `response` entry of `correlation`, whose identity it also carries as
+    /// `eventId`. It fails closed like an allowed response: a refusal whose
+    /// entry the destination does not accept is answered
+    /// `service.unavailable`, so no refusal is answered without its audit.
+    async fn record_refusal(
+        &self,
+        correlation: Uuid,
+        record: Result<Value, ServiceError>,
+    ) -> Result<(), ServiceError> {
+        let record = with_event_id(correlation, record?).ok_or_else(|| {
+            ServiceError::internal("the refusal audit record carries another identity")
+        })?;
+        self.audit
+            .response(correlation, record)
+            .await
+            .map_err(|failure| {
+                tracing::error!(%failure, "the refusal audit entry was refused");
+                ServiceError::Problem(ProblemCode::ServiceUnavailable)
+            })
     }
 
     /// Append the `request` entry of one commitment and return the
-    /// correlation its `response` entry will carry. It names the caller, the
-    /// grant, and the operation the capacity transaction will decide, and no
-    /// outcome. A destination that refuses it refuses the commitment: the
-    /// capacity transaction does not open.
+    /// correlation its `response` entry will carry, with the handle that owes
+    /// it. It names the caller, the grant, and the operation the capacity
+    /// transaction will decide, and no outcome. A destination that refuses it
+    /// refuses the commitment: the capacity transaction does not open. The
+    /// caller holds the handle until it answers: the response written under
+    /// the correlation answers it, and a commitment that returns or is
+    /// canceled before then writes the `commitment.unfinished` response.
     async fn audit_request(
         &self,
         caller: &Caller,
         grant: &GrantClaims,
         operation: &str,
-    ) -> Result<Uuid, ServiceError> {
+    ) -> Result<(Uuid, AuditRequest), ServiceError> {
         let record = audit_record(
             &self.hasher,
             &self.scheduling_id,
@@ -1237,14 +1244,20 @@ impl SchedulingService {
             "authorization.allowed",
         )?;
         let correlation = Uuid::new_v4();
-        self.audit
-            .request(correlation, request_record(record))
+        let unfinished = with_event_id(
+            correlation,
+            unfinished_record(record.clone(), "commitment.unfinished"),
+        )
+        .ok_or_else(|| ServiceError::internal("the commitment audit record carries an identity"))?;
+        let request = self
+            .audit
+            .begin(correlation, request_record(record), unfinished)
             .await
             .map_err(|failure| {
                 tracing::error!(%failure, "the commitment request audit entry was refused");
                 ServiceError::Problem(ProblemCode::ServiceUnavailable)
             })?;
-        Ok(correlation)
+        Ok((correlation, request))
     }
 
     /// Append the `response` entry that gates an answer: the allowed entry
@@ -1398,9 +1411,11 @@ impl SchedulingService {
     /// accepted, and a replayed receipt, including one a concurrent identical
     /// request won, only once the `response` entry recording its decision
     /// is. A refusal writes its receipt under the caller's idempotency key so
-    /// a replay of that key answers the same, and writes its denied
-    /// `response` entry when the refusal was an authorization decision. Both
-    /// entries carry the `correlation` of the commitment's `request` entry.
+    /// a replay of that key answers the same, and is answered only once its
+    /// `response` entry is accepted: denied for a decision the ledger took,
+    /// `unfinished` with its reason for a failed transaction, a replaced
+    /// environment, or a refused idempotency key. Every entry carries the
+    /// `correlation` of the commitment's `request` entry.
     #[allow(clippy::too_many_arguments)]
     async fn commitment_outcome<T>(
         &self,
@@ -1439,32 +1454,54 @@ impl SchedulingService {
                 Ok(CommitmentAnswer::Minted(T::from_minted(minted)))
             }
             Err(error) => {
-                if matches!(
+                let mut problem = problem_of(&error);
+                // Every commitment answers its request entry, refused as much
+                // as allowed, and one nothing decided as well. The match is
+                // exhaustive on purpose: a new variant must state which side
+                // it falls on rather than inherit silence from a wildcard.
+                let mut response = match &error {
+                    // The transaction failed and the caller sees no detail.
+                    CommitError::Store(_) | CommitError::Query(_) | CommitError::Hooks(_) => {
+                        tracing::error!(%error, "the Scheduling store failed mid-commitment");
+                        Unanswered::Unfinished("commitment.failed")
+                    }
+                    // A records replacement moved under this request, and the
+                    // caller retries; the swap is an expected operator act, so
+                    // this is a warning, not a failure.
+                    CommitError::FactsStale => {
+                        tracing::warn!(
+                            %error,
+                            "the environment records were replaced while a commitment was in flight"
+                        );
+                        Unanswered::Unfinished("commitment.facts-stale")
+                    }
+                    // The idempotency layer refused the key, not the
+                    // commitment, and the key says nothing about what a grant
+                    // reaches, so this is no authorization decision.
+                    CommitError::KeyReused | CommitError::KeyExpired => {
+                        Unanswered::Unfinished(key_refusal_reason(&error))
+                    }
+                    CommitError::Unauthorized => Unanswered::Denied("authorization.refused"),
+                    CommitError::Refused(_)
+                    | CommitError::HoldCeiling
+                    | CommitError::RevisionMismatch
+                    | CommitError::CutoffPassed => Unanswered::Denied("authorization.profile"),
+                };
+                // A refusal writes its receipt so a replay of the key answers
+                // the same. A failed transaction and a replaced environment
+                // decided nothing, and an expired receipt cannot be
+                // recreated. A reused key still passes through the
+                // insert-or-replay path: a concurrent identical winner is
+                // replayed, while a different request hash remains key-reused.
+                let receipted = !matches!(
                     error,
-                    CommitError::Store(_) | CommitError::Query(_) | CommitError::Hooks(_)
-                ) {
-                    // Nothing was decided: no receipt, no response entry, and
-                    // the caller sees no detail.
-                    tracing::error!(%error, "the Scheduling store failed mid-commitment");
-                    return Err(ServiceError::Problem(ProblemCode::ServiceUnavailable));
-                }
-                if matches!(error, CommitError::FactsStale) {
-                    // A records replacement moved under this request. Nothing
-                    // was decided and the caller retries; the swap is an
-                    // expected operator act, so this is a warning, not a
-                    // failure.
-                    tracing::warn!(
-                        %error,
-                        "the environment records were replaced while a commitment was in flight"
-                    );
-                    return Err(ServiceError::Problem(ProblemCode::ServiceUnavailable));
-                }
-                let problem = problem_of(&error);
-                // An expired receipt cannot be recreated. A reused key still
-                // passes through the insert-or-replay path: a concurrent
-                // identical winner is replayed, while a different request
-                // hash remains key-reused.
-                if !matches!(error, CommitError::KeyExpired) {
+                    CommitError::Store(_)
+                        | CommitError::Query(_)
+                        | CommitError::Hooks(_)
+                        | CommitError::FactsStale
+                        | CommitError::KeyExpired
+                );
+                if receipted {
                     let receipt = self.commitment(
                         caller,
                         actor,
@@ -1506,7 +1543,8 @@ impl SchedulingService {
                                 Err(
                                     failure @ (CommitError::KeyReused | CommitError::KeyExpired),
                                 ) => {
-                                    return Err(ServiceError::Problem(problem_of(&failure)));
+                                    problem = problem_of(&failure);
+                                    response = Unanswered::Unfinished(key_refusal_reason(&failure));
                                 }
                                 Err(failure) => {
                                     tracing::error!(%failure, "the refused attempt receipt could not be recorded");
@@ -1518,43 +1556,28 @@ impl SchedulingService {
                         }
                     }
                 }
-                // Every commitment the ledger decides is attributable, refused
-                // as much as allowed. The match is exhaustive on purpose: a
-                // new variant must state which side it falls on rather than
-                // inherit silence from a wildcard.
-                let audited = match error {
-                    // Nothing was decided. The transaction failed, or the
-                    // environment moved and the caller retries against the
-                    // current records, so there is no verdict to attribute.
-                    CommitError::Store(_)
-                    | CommitError::Query(_)
-                    | CommitError::Hooks(_)
-                    | CommitError::FactsStale => None,
-                    // The idempotency layer refused the key, not the
-                    // commitment. The attempt receipt above already records
-                    // it, and the key says nothing about what a grant reaches.
-                    CommitError::KeyReused | CommitError::KeyExpired => None,
-                    CommitError::Unauthorized => Some("authorization.refused"),
-                    CommitError::Refused(_)
-                    | CommitError::HoldCeiling
-                    | CommitError::RevisionMismatch
-                    | CommitError::CutoffPassed => Some("authorization.profile"),
-                };
-                if let Some(reason) = audited {
-                    self.record_refusal(
-                        correlation,
-                        audit_record(
-                            &self.hasher,
-                            &self.scheduling_id,
-                            caller,
-                            grant,
-                            operation,
-                            AuthorizationOutcome::Denied,
-                            reason,
-                        ),
+                let record = match response {
+                    Unanswered::Denied(reason) => audit_record(
+                        &self.hasher,
+                        &self.scheduling_id,
+                        caller,
+                        grant,
+                        operation,
+                        AuthorizationOutcome::Denied,
+                        reason,
+                    ),
+                    Unanswered::Unfinished(reason) => audit_record(
+                        &self.hasher,
+                        &self.scheduling_id,
+                        caller,
+                        grant,
+                        operation,
+                        AuthorizationOutcome::Allowed,
+                        "authorization.allowed",
                     )
-                    .await;
-                }
+                    .map(|record| unfinished_record(record, reason)),
+                };
+                self.record_refusal(correlation, record).await?;
                 Err(ServiceError::Problem(problem))
             }
         }
@@ -2110,6 +2133,24 @@ impl ClaimRow {
     }
 }
 
+/// The `response` a commitment that is not answered by a success or a replay
+/// writes: a refusal the ledger or the permission check decided, or the
+/// closed reason a commitment nothing decided did not finish.
+#[derive(Clone, Copy)]
+enum Unanswered {
+    Denied(&'static str),
+    Unfinished(&'static str),
+}
+
+/// The closed reason an idempotency key refusal records.
+fn key_refusal_reason(error: &CommitError) -> &'static str {
+    if matches!(error, CommitError::KeyExpired) {
+        "idempotency.expired"
+    } else {
+        "idempotency.key-reused"
+    }
+}
+
 fn problem_of(error: &CommitError) -> ProblemCode {
     match error {
         CommitError::Store(_) | CommitError::Query(_) | CommitError::Hooks(_) => {
@@ -2122,8 +2163,7 @@ fn problem_of(error: &CommitError) -> ProblemCode {
         CommitError::Unauthorized => ProblemCode::OperationNotAuthorized,
         CommitError::RevisionMismatch => ProblemCode::RevisionMismatch,
         CommitError::CutoffPassed => ProblemCode::CancellationCutoffPassed,
-        // Never reached: the outcome handler intercepts a stale-facts
-        // refusal before it projects, because nothing was decided.
+        // Nothing was decided: the caller retries against the current records.
         CommitError::FactsStale => ProblemCode::ServiceUnavailable,
     }
 }
