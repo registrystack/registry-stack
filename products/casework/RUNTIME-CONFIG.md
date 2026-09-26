@@ -65,7 +65,8 @@ file and accepts `audit.rotateBytes` (default 104857600, at least 1048576) and
 `caseworkctl` command that writes audit, such as an applied erasure or
 settlement, writes to a sibling file named for its process role beside
 `audit.path`, `audit.caseworkctl.ndjson` for `audit.ndjson`, or to standard
-output with a `stdout` destination. Every entry carries the schema
+error with a `stdout` destination, so the command's own report keeps standard
+output. Every entry carries the schema
 `registry-casework-audit/v1`, a phase, and a correlation shared by an
 operation's request entry and its response entries. A requested operation
 writes one request entry before it opens the operation's transaction, and one
