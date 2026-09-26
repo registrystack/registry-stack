@@ -2020,16 +2020,38 @@ impl PostgresRecordMutationService {
         if chunk_index < 0 {
             return Err(IngestionServiceError::RequestInvalid);
         }
-        let client = self.client().await?;
-        let run = self
-            .visible_run(&**client, context, entity_id, run_id)
-            .await?;
+        if !crate::audit::profile_is_keyed(self.audit.profile()) {
+            return Err(IngestionServiceError::Unavailable);
+        }
         let claims = strict_claim_context(&self.registry, context, entity_id)
             .map_err(|_| IngestionServiceError::RequestInvalid)?;
         let Some(principal) = claims.principal() else {
             return Err(IngestionServiceError::RequestInvalid);
         };
         let principal_reference = self.ingestion_principal_reference(principal)?;
+        let request_correlation = correlation.request_id().to_string();
+        // The request entry is accepted before the run or the stored chunk is
+        // read: an audit outage refuses the recovery instead of releasing a
+        // receipt nobody recorded asking for.
+        ingestion_store::append_run_request(
+            &self.audit,
+            ingestion_store::RunRequest {
+                transition: "chunkReceipt",
+                run_id: Some(run_id),
+                chunk_index: Some(chunk_index),
+                package_revision: &self.expected.package_revision,
+                entity_id,
+                profile_id: claims.access_profile(),
+                principal_reference: &principal_reference,
+                correlation: &request_correlation,
+            },
+        )
+        .await
+        .map_err(|_| IngestionServiceError::Unavailable)?;
+        let client = self.client().await?;
+        let run = self
+            .visible_run(&**client, context, entity_id, run_id)
+            .await?;
         if run.profile_id != claims.access_profile() {
             return Err(IngestionServiceError::ProfileMismatch);
         }
@@ -2049,9 +2071,6 @@ impl PostgresRecordMutationService {
         // through an erasure re-reads the row after the erasure committed and
         // answers receipt_erased instead of serving the erased values, and
         // writes no disclosure record for them.
-        if !crate::audit::profile_is_keyed(self.audit.profile()) {
-            return Err(IngestionServiceError::Unavailable);
-        }
         let mut writer = self.client().await?;
         let transaction = begin_record_transaction(
             &mut writer,
@@ -2108,7 +2127,7 @@ impl PostgresRecordMutationService {
             &run,
             stored.chunk_index,
             &principal_reference,
-            Some(&correlation.request_id().to_string()),
+            Some(&request_correlation),
         );
         transaction
             .commit()
