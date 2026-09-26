@@ -758,7 +758,7 @@ fn json_mode_embeds_the_validated_core_view_and_keeps_failures_value_free() {
 #[test]
 fn a_project_without_a_local_session_names_the_missing_session() {
     let fixture = Fixture::new();
-    fs::remove_file(fixture.root.join(".evidence/dev/state.json")).expect("remove state");
+    fs::remove_dir_all(fixture.root.join(".evidence/dev")).expect("remove session");
     fixture.write_core_json(&successful_view());
 
     let output = fixture.show();
@@ -780,6 +780,28 @@ fn a_project_without_a_local_session_names_the_missing_session() {
         "evidence.audit.no-stopped-session"
     );
     assert!(report["diagnostics"][0].get("cause").is_none());
+    assert!(
+        !fixture.evidence.with_extension("args").exists(),
+        "the core was consulted without a stopped session"
+    );
+}
+
+/// Retained session state that lost its state file, or a stopped session
+/// set aside by an interrupted restart, is damaged history rather than a
+/// project that never ran, so it takes the closed inspection failure.
+#[test]
+fn damaged_retained_session_state_is_not_reported_as_no_session() {
+    let fixture = Fixture::new();
+    fixture.write_core_json(&successful_view());
+    fs::remove_file(fixture.root.join(".evidence/dev/state.json")).expect("remove state");
+    assert_closed_failure(&fixture.show(), "session without state");
+
+    fs::rename(
+        fixture.root.join(".evidence/dev"),
+        fixture.root.join(".evidence/dev-stopped-before-restart"),
+    )
+    .expect("set the session aside");
+    assert_closed_failure(&fixture.show(), "session set aside by a restart");
     assert!(
         !fixture.evidence.with_extension("args").exists(),
         "the core was consulted without a stopped session"
