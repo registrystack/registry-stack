@@ -140,7 +140,8 @@ impl CaseworkAudit {
 
 /// `identifiers` is a JSON object of the identifiers the request names, keyed
 /// by the record field that carries them (`itemId`, `grantId`, `teamId`,
-/// `queueId`); minimization keeps only their keyed pseudonyms.
+/// `queueId`, `reviewRequestId`); minimization keeps only their keyed
+/// pseudonyms.
 ///
 /// The `request` fields an audited operation names before it opens its
 /// transaction: the event it performs, the caller's profile and pseudonymized
@@ -438,6 +439,7 @@ fn published_audit_record(record: Value, identifiers: &AuditKeyHasher) -> Result
         ("grantId", "grantPseudonym"),
         ("teamId", "teamPseudonym"),
         ("queueId", "queuePseudonym"),
+        ("reviewRequestId", "reviewRequestPseudonym"),
     ] {
         if let Some(value) = raw.get(field) {
             let value = value.as_str().ok_or(())?;

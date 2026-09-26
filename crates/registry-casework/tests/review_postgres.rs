@@ -3352,10 +3352,23 @@ async fn review_notes_are_audited_without_their_text() {
         "eventId",
         &added.event_id.to_string(),
     );
-    assert!(!serde_json::to_string(&audit.entries())
-        .expect("audit JSON")
-        .contains("stays out of the audit"));
+    let audit_text = serde_json::to_string(&audit.entries()).expect("audit JSON");
+    assert!(!audit_text.contains("stays out of the audit"));
+    assert!(!audit_text.contains(&request_id.to_string()));
     assert!(record.get("principalPseudonym").is_some());
+    // The request entry names the review request only by its pseudonym.
+    let requested: Vec<_> = audit
+        .entries()
+        .into_iter()
+        .filter(|entry| {
+            entry["phase"] == "request" && entry["record"]["event"] == "casework.review_note_added"
+        })
+        .collect();
+    assert_eq!(requested.len(), 1, "{requested:?}");
+    assert_eq!(
+        requested[0]["record"]["reviewRequestPseudonym"],
+        audit.reference("reviewRequestId", &request_id.to_string())
+    );
 
     let (replay_service, replay_audit) = service_with_audit(&fixture, project("1"));
     replay_service

@@ -3747,7 +3747,7 @@ impl PostgresStore {
                 "review_note_added",
                 Some(actor),
                 &actor.profile_id,
-                json!({}),
+                json!({"reviewRequestId": request_id}),
             ))
             .await?;
         if request.note.trim().is_empty()
