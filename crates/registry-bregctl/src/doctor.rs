@@ -123,7 +123,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         StartupError::Audit => (
             "startup.audit.refused",
             "audit",
-            "the audit profile or destination was refused: the hash key must resolve, and a file destination's directory must be creatable or owned by this user and not group- or world-writable",
+            "the audit profile or destination was refused: the hash key must resolve, a file destination's directory must be creatable or owned by this user and not group- or world-writable, and neither it nor its bregctl companion destination may end in an incomplete final entry; archive a torn file and restart on a fresh path",
         ),
         StartupError::Cursor => (
             "startup.cursor.refused",
