@@ -5,11 +5,12 @@ use std::path::Path;
 use std::time::Duration;
 
 use registry_discovery::{
-    canonical_index_bytes, catalog_revision, mapping_revision, package_limits, validate_index,
+    canonical_index_bytes, catalog_revision, mapping_revision, validate_index,
     CompiledEvidenceMapping, DiscoveryIndex, EvidenceTypeAlternative, OriginSummary, ServiceRecord,
-    INDEX_FILE, INDEX_SCHEMA, MAXIMUM_INDEX_BYTES, PACKAGE_COMMAND,
+    INDEX_FILE, INDEX_SCHEMA, MAXIMUM_INDEX_BYTES, MAXIMUM_PACKAGE_BYTES, MAXIMUM_PACKAGE_DEPTH,
+    MAXIMUM_PACKAGE_FILES, PACKAGE_COMMAND,
 };
-use registry_platform_config::{write_package, PackageError, VerifiedPackage};
+use registry_platform_config::{write_package, PackageError, PackageLimits, VerifiedPackage};
 use registry_platform_httputil::{read_bounded, validate_response_headers, FetchUrlPolicy};
 use reqwest::header::{ACCEPT, CONTENT_ENCODING, CONTENT_TYPE};
 use sha2::{Digest as _, Sha256};
@@ -21,6 +22,17 @@ use crate::project::{check_project, AuthoredEvidenceMapping, CheckedProject, Pro
 
 const DNS_TIMEOUT: Duration = Duration::from_secs(5);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
+
+fn package_limits() -> PackageLimits {
+    PackageLimits {
+        max_files: MAXIMUM_PACKAGE_FILES,
+        max_file_bytes: MAXIMUM_INDEX_BYTES,
+        max_total_bytes: MAXIMUM_PACKAGE_BYTES,
+        max_depth: MAXIMUM_PACKAGE_DEPTH,
+        ..PackageLimits::default()
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum BuildError {
     #[error("the Discovery authoring project is invalid")]

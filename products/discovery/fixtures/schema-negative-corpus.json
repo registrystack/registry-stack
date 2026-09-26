@@ -110,6 +110,12 @@
       "value": "../package"
     },
     {
+      "name": "runtime-refuses-non-normal-package-root",
+      "contract": "runtime",
+      "pointer": "/package/root",
+      "value": "/srv/current/../package"
+    },
+    {
       "name": "index-refuses-unknown-root-member",
       "contract": "index",
       "pointer": "/unexpected",

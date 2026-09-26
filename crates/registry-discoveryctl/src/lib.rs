@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Finite Registry Discovery authoring and immutable index packages.
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -48,12 +49,31 @@ enum Command {
         #[arg(long)]
         revision: Option<String>,
     },
+    /// Removed. Use `discoveryctl package`.
+    #[command(hide = true, trailing_var_arg = true)]
+    Build {
+        #[arg(allow_hyphen_values = true)]
+        _legacy_arguments: Vec<OsString>,
+    },
 }
+
+const RETIRED_BUILD_ERROR: &str =
+    "discoveryctl build was removed; use discoveryctl package with a new output directory";
 
 #[must_use]
 pub fn main_entry() -> ExitCode {
     let arguments = Arguments::parse();
-    let result = match arguments.command {
+    match run(arguments) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn run(arguments: Arguments) -> Result<(), String> {
+    match arguments.command {
         Command::Check {
             project,
             allow_loopback,
@@ -93,13 +113,7 @@ pub fn main_entry() -> ExitCode {
                     })
                     .map_err(|error| error.to_string())
             }),
-    };
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("{error}");
-            ExitCode::from(1)
-        }
+        Command::Build { .. } => Err(RETIRED_BUILD_ERROR.to_owned()),
     }
 }
 
@@ -108,8 +122,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn package_is_the_only_online_compilation_verb() {
-        assert!(Arguments::try_parse_from(["discoveryctl", "build"]).is_err());
+    fn retired_build_refusal_names_discoveryctl_package() {
+        let arguments = Arguments::try_parse_from([
+            "discoveryctl",
+            "build",
+            "--project",
+            "project",
+            "--output",
+            "discovery-index.json",
+        ])
+        .expect("the retired command reaches its migration refusal");
+        let message = run(arguments).unwrap_err();
+        assert!(message.contains("discoveryctl package"), "{message}");
+
         assert!(Arguments::try_parse_from([
             "discoveryctl",
             "package",

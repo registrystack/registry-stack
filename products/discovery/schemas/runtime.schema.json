@@ -39,6 +39,7 @@
         "root": {
           "type": "string",
           "pattern": "^/",
+          "not": {"pattern": "(^|/)\\.{1,2}(/|$)"},
           "description": "Absolute path of the package directory."
         },
         "expectedDigest": {

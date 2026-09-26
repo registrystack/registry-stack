@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use std::fs;
 #[cfg(unix)]
 use std::future::Future;
+use std::io::Read as _;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -27,15 +28,15 @@ use crate::model::{
 };
 use crate::query::Directory;
 use crate::server::{router, DiscoveryService};
+use crate::{
+    INDEX_FILE, MAXIMUM_PACKAGE_BYTES, MAXIMUM_PACKAGE_DEPTH, MAXIMUM_PACKAGE_FILES,
+    PACKAGE_COMMAND,
+};
 
 pub use registry_platform_config::MAX_LISTENER_BIND_CHARACTERS as MAXIMUM_LISTENER_BIND_CHARACTERS;
 
 pub const RUNTIME_API_VERSION: &str = "registry.registrystack.org/discovery-runtime/v1alpha1";
 pub const RUNTIME_KIND: &str = "DiscoveryRuntimeConfig";
-/// The canonical index inside every Discovery package.
-pub const INDEX_FILE: &str = "discovery-index.json";
-/// The command that creates a Discovery package, named in package refusals.
-pub const PACKAGE_COMMAND: &str = "discoveryctl package";
 
 const RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
     api_version: RUNTIME_API_VERSION,
@@ -278,10 +279,10 @@ pub fn load_index(path: &Path) -> Result<DiscoveryIndex, StartupError> {
 #[must_use]
 pub fn package_limits() -> PackageLimits {
     PackageLimits {
-        max_files: 2,
+        max_files: MAXIMUM_PACKAGE_FILES,
         max_file_bytes: MAXIMUM_INDEX_BYTES,
-        max_total_bytes: MAXIMUM_INDEX_BYTES + 257,
-        max_depth: 1,
+        max_total_bytes: MAXIMUM_PACKAGE_BYTES,
+        max_depth: MAXIMUM_PACKAGE_DEPTH,
         ..PackageLimits::default()
     }
 }
@@ -326,11 +327,69 @@ pub fn load_verified_index(
 }
 
 fn bounded_regular_file(path: &Path, maximum: u64) -> Result<Vec<u8>, StartupError> {
-    let metadata = fs::symlink_metadata(path).map_err(|_| StartupError::IndexLoad)?;
-    if !metadata.file_type().is_file() || metadata.len() == 0 || metadata.len() > maximum {
+    let scanned = fs::symlink_metadata(path).map_err(|_| StartupError::IndexLoad)?;
+    if scanned.file_type().is_symlink()
+        || !scanned.is_file()
+        || scanned.len() == 0
+        || scanned.len() > maximum
+    {
         return Err(StartupError::IndexLoad);
     }
-    fs::read(path).map_err(|_| StartupError::IndexLoad)
+    let file = fs::File::open(path).map_err(|_| StartupError::IndexLoad)?;
+    let opened = file.metadata().map_err(|_| StartupError::IndexLoad)?;
+    let current = fs::symlink_metadata(path).map_err(|_| StartupError::IndexLoad)?;
+    if current.file_type().is_symlink()
+        || !current.is_file()
+        || !same_file(&scanned, &opened)
+        || !same_file(&opened, &current)
+    {
+        return Err(StartupError::IndexLoad);
+    }
+    read_opened_regular_file(file, &opened, maximum)
+}
+
+fn read_opened_regular_file(
+    file: fs::File,
+    opened: &fs::Metadata,
+    maximum: u64,
+) -> Result<Vec<u8>, StartupError> {
+    let capacity = usize::try_from(opened.len()).map_err(|_| StartupError::IndexLoad)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve(capacity)
+        .map_err(|_| StartupError::IndexLoad)?;
+    let mut reader = file.take(maximum.saturating_add(1));
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|_| StartupError::IndexLoad)?;
+    let after = reader
+        .get_ref()
+        .metadata()
+        .map_err(|_| StartupError::IndexLoad)?;
+    if bytes.is_empty()
+        || u64::try_from(bytes.len()).map_or(true, |length| length > maximum)
+        || !same_file(opened, &after)
+        || u64::try_from(bytes.len()).ok() != Some(after.len())
+    {
+        return Err(StartupError::IndexLoad);
+    }
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+}
+
+#[cfg(not(unix))]
+fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
 
 fn validate_runtime(runtime: &RuntimeConfig) -> Result<(), StartupError> {
@@ -650,6 +709,28 @@ logLevel: info
             Err(StartupError::PackageFileChanged {
                 path: INDEX_FILE.to_owned(),
             })
+        );
+    }
+
+    #[test]
+    fn index_capture_refuses_growth_beyond_the_read_limit() {
+        use std::io::Write as _;
+
+        let temporary = canonical_tempdir();
+        let path = temporary.path().join(INDEX_FILE);
+        fs::write(&path, b"12").unwrap();
+        let file = fs::File::open(&path).unwrap();
+        let opened = file.metadata().unwrap();
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"3")
+            .unwrap();
+
+        assert_eq!(
+            read_opened_regular_file(file, &opened, 2),
+            Err(StartupError::IndexLoad)
         );
     }
 
