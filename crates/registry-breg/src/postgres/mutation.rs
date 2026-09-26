@@ -1936,6 +1936,7 @@ impl PostgresRecordMutationService {
                     | MutationError::Unavailable
                     | MutationError::RetryableConflict
                     | MutationError::LegacyReviewDataPresent
+                    | MutationError::RetiredAuditRowsPresent
                     | MutationError::FieldEncryptionUnavailable
                     | MutationError::PlannerFailure(_)
                     | MutationError::ActionHandlerFailure(_)

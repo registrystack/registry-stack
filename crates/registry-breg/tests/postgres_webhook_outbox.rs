@@ -435,7 +435,7 @@ async fn real_postgres_empty_pre_v1_webhook_schema_upgrades_idempotently() {
     let (migration, migration_task) = database.connect_migration().await;
     install_pre_v1_webhook_schema(&migration).await;
 
-    install_mutation_schema(&migration, &database.runtime_role)
+    install_mutation_schema(&migration, &database.runtime_role, false)
         .await
         .expect("empty pre-V1 webhook schema upgrades");
     let answer_constraint_oid = migration
@@ -460,7 +460,7 @@ async fn real_postgres_empty_pre_v1_webhook_schema_upgrades_idempotently() {
         .await
         .expect("the delivery answer constraint is installed")
         .get::<_, i64>(0);
-    install_mutation_schema(&migration, &database.runtime_role)
+    install_mutation_schema(&migration, &database.runtime_role, false)
         .await
         .expect("the internal schema upgrade is idempotent");
     let reinstalled_answer_constraint_oid = migration
@@ -643,7 +643,7 @@ async fn real_postgres_answer_constraint_upgrade_erases_legacy_handler_message()
         .await
         .expect("legacy delivered answer installs");
 
-    install_mutation_schema(&migration, &database.runtime_role)
+    install_mutation_schema(&migration, &database.runtime_role, false)
         .await
         .expect("legacy answer schema upgrades");
 
@@ -728,7 +728,7 @@ async fn real_postgres_pre_v1_webhook_history_refuses_silent_v1_reinterpretation
         .expect("pre-V1 webhook history installs");
 
     assert_eq!(
-        install_mutation_schema(&migration, &database.runtime_role).await,
+        install_mutation_schema(&migration, &database.runtime_role, false).await,
         Err(MutationError::Unavailable),
         "a missing captured data-schema binding is never synthesized"
     );

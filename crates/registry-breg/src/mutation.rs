@@ -82,6 +82,47 @@ use crate::revision::{canonical_snapshot, insert_revision, RevisionError, Revisi
 const MAX_LOGICAL_ID_BYTES: usize = 256;
 const TOMBSTONE_CURSOR: &str = "registry_tombstone_current";
 
+/// A release before the audit-simplification migration kept its own audit
+/// journal in `registry_audit` and `registry_audit_head`. Installing the
+/// current schema drops both tables unconditionally, so upgrading over a
+/// database that still carries rows in either one would silently discard
+/// those retained audit entries. This locks each table that still exists
+/// against concurrent writes for the rest of the migration transaction, then
+/// refuses while it still carries rows unless the caller has already
+/// acknowledged discarding them.
+pub(crate) async fn reject_retired_audit_rows(
+    migration: &impl GenericClient,
+    acknowledge_discard: bool,
+) -> Result<(), MutationError> {
+    for table in ["registry_audit", "registry_audit_head"] {
+        let qualified = format!("registry_internal.{table}");
+        let exists = migration
+            .query_one("SELECT to_regclass($1) IS NOT NULL", &[&qualified])
+            .await
+            .map_err(|_| MutationError::Unavailable)?
+            .get::<_, bool>(0);
+        if !exists {
+            continue;
+        }
+        migration
+            .batch_execute(&format!("LOCK TABLE {qualified} IN ACCESS EXCLUSIVE MODE"))
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        if acknowledge_discard {
+            continue;
+        }
+        let has_rows = migration
+            .query_one(&format!("SELECT EXISTS(SELECT 1 FROM {qualified})"), &[])
+            .await
+            .map_err(|_| MutationError::Unavailable)?
+            .get::<_, bool>(0);
+        if has_rows {
+            return Err(MutationError::RetiredAuditRowsPresent);
+        }
+    }
+    Ok(())
+}
+
 /// Install the exact W3 mutation journal contract with the migration role.
 ///
 /// The schema is intentionally product-owned here. PostgreSQL catalog closure
@@ -89,7 +130,9 @@ const TOMBSTONE_CURSOR: &str = "registry_tombstone_current";
 pub async fn install_mutation_schema(
     migration: &impl GenericClient,
     runtime_role: &SqlIdentifier,
+    acknowledge_retired_audit_discard: bool,
 ) -> Result<(), MutationError> {
+    reject_retired_audit_rows(migration, acknowledge_retired_audit_discard).await?;
     migration
         .batch_execute(&format!(
             "CREATE TABLE IF NOT EXISTS registry_internal.registry_revisions (
@@ -2383,6 +2426,12 @@ pub enum MutationError {
     /// so install refuses instead of attempting either outcome.
     #[error("legacy review decisions or state values are still present")]
     LegacyReviewDataPresent,
+    /// A pre-simplification audit journal table is still present with rows in
+    /// it. Migrating over it would silently discard those retained audit
+    /// entries, so install refuses unless the operator explicitly
+    /// acknowledges discarding them.
+    #[error("a retired audit table still carries rows")]
+    RetiredAuditRowsPresent,
 }
 
 #[cfg(feature = "postgres-test")]
@@ -4431,5 +4480,151 @@ mod tests {
             },
         )
         .is_ok());
+    }
+
+    #[allow(dead_code)]
+    mod postgres_harness {
+        use crate as registry_breg;
+
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/support/postgres_harness.rs"
+        ));
+    }
+
+    use postgres_harness::TestDatabase;
+
+    #[tokio::test]
+    async fn retired_audit_rows_guard_permits_a_database_with_no_retired_tables() {
+        let database = TestDatabase::create(1).await;
+        let (mut migration, migration_task) = database.connect_migration().await;
+        let transaction = migration.transaction().await.expect("transaction opens");
+        assert_eq!(reject_retired_audit_rows(&transaction, false).await, Ok(()));
+        transaction.commit().await.expect("transaction commits");
+        migration_task.abort();
+        database.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn retired_audit_rows_guard_permits_a_retired_table_with_no_rows() {
+        let database = TestDatabase::create(1).await;
+        let (mut migration, migration_task) = database.connect_migration().await;
+        migration
+            .batch_execute("CREATE TABLE registry_internal.registry_audit (id integer)")
+            .await
+            .expect("empty retired audit fixture installs");
+        let transaction = migration.transaction().await.expect("transaction opens");
+        assert_eq!(reject_retired_audit_rows(&transaction, false).await, Ok(()));
+        transaction.commit().await.expect("transaction commits");
+        migration_task.abort();
+        database.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn retired_audit_rows_guard_refuses_retired_rows_without_acknowledgement() {
+        for table in ["registry_audit", "registry_audit_head"] {
+            let database = TestDatabase::create(1).await;
+            let (mut migration, migration_task) = database.connect_migration().await;
+            migration
+                .batch_execute(&format!(
+                    "CREATE TABLE registry_internal.{table} (id integer);
+                     INSERT INTO registry_internal.{table} (id) VALUES (1);"
+                ))
+                .await
+                .expect("retired audit fixture installs");
+            let transaction = migration.transaction().await.expect("transaction opens");
+            assert_eq!(
+                reject_retired_audit_rows(&transaction, false).await,
+                Err(MutationError::RetiredAuditRowsPresent),
+                "{table}"
+            );
+            transaction
+                .rollback()
+                .await
+                .expect("transaction rolls back");
+            migration_task.abort();
+            database.cleanup().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn retired_audit_rows_guard_permits_retired_rows_with_acknowledgement() {
+        let database = TestDatabase::create(1).await;
+        let (mut migration, migration_task) = database.connect_migration().await;
+        migration
+            .batch_execute(
+                "CREATE TABLE registry_internal.registry_audit (id integer);
+                 INSERT INTO registry_internal.registry_audit (id) VALUES (1);",
+            )
+            .await
+            .expect("retired audit fixture installs");
+        let transaction = migration.transaction().await.expect("transaction opens");
+        assert_eq!(reject_retired_audit_rows(&transaction, true).await, Ok(()));
+        transaction.commit().await.expect("transaction commits");
+        migration_task.abort();
+        database.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn install_mutation_schema_refuses_retired_audit_rows_without_acknowledgement() {
+        let database = TestDatabase::create(1).await;
+        let (mut migration, migration_task) = database.connect_migration().await;
+        migration
+            .batch_execute(
+                "CREATE TABLE registry_internal.registry_audit (id integer);
+                 INSERT INTO registry_internal.registry_audit (id) VALUES (1);",
+            )
+            .await
+            .expect("retired audit fixture installs");
+        let transaction = migration.transaction().await.expect("transaction opens");
+        assert_eq!(
+            install_mutation_schema(&transaction, &database.runtime_role, false).await,
+            Err(MutationError::RetiredAuditRowsPresent)
+        );
+        transaction
+            .rollback()
+            .await
+            .expect("transaction rolls back");
+        // The refusal must run before install drops the retired table, or the
+        // guard would have nothing left to protect on a second attempt.
+        let (mut verify, verify_task) = database.connect_migration().await;
+        let verify_transaction = verify.transaction().await.expect("transaction opens");
+        let still_present = verify_transaction
+            .query_one(
+                "SELECT to_regclass('registry_internal.registry_audit') IS NOT NULL",
+                &[],
+            )
+            .await
+            .expect("catalog lookup succeeds")
+            .get::<_, bool>(0);
+        assert!(still_present, "retired table survives a refused install");
+        verify_transaction
+            .rollback()
+            .await
+            .expect("transaction rolls back");
+        verify_task.abort();
+        migration_task.abort();
+        database.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn install_mutation_schema_drops_retired_audit_rows_with_acknowledgement() {
+        let database = TestDatabase::create(1).await;
+        let (mut migration, migration_task) = database.connect_migration().await;
+        migration
+            .batch_execute(
+                "CREATE TABLE registry_internal.registry_audit (id integer);
+                 INSERT INTO registry_internal.registry_audit (id) VALUES (1);",
+            )
+            .await
+            .expect("retired audit fixture installs");
+        let transaction = migration.transaction().await.expect("transaction opens");
+        assert_eq!(
+            install_mutation_schema(&transaction, &database.runtime_role, true).await,
+            Ok(())
+        );
+        transaction.commit().await.expect("transaction commits");
+        migration_task.abort();
+        database.cleanup().await;
     }
 }

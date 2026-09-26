@@ -69,7 +69,8 @@ impl From<PostgresKernelError> for HistoryMaintenanceError {
             | PostgresKernelError::PoolBuild
             | PostgresKernelError::CatalogInvariant(_)
             | PostgresKernelError::RegistryUnavailable
-            | PostgresKernelError::HistoryCoverageIncomplete => Self::Unavailable,
+            | PostgresKernelError::HistoryCoverageIncomplete
+            | PostgresKernelError::RetiredAuditRowsPresent => Self::Unavailable,
         }
     }
 }

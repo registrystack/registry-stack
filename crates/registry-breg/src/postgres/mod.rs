@@ -212,6 +212,10 @@ pub enum PostgresKernelError {
     /// Retained history coverage does not admit a successor package.
     #[error("retained history coverage does not admit a successor package")]
     HistoryCoverageIncomplete,
+    /// A retired pre-simplification audit table still carries rows the
+    /// caller has not acknowledged discarding.
+    #[error("a retired audit table still carries unacknowledged rows")]
+    RetiredAuditRowsPresent,
 }
 
 impl From<tokio_postgres::Error> for PostgresKernelError {

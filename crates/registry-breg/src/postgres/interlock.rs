@@ -28,7 +28,7 @@ use crate::migration_plan::{
     ValidatedReviewedMigrationStep,
 };
 use crate::model::{CompiledBlindIndex, CompiledEntity, CompiledField, CompiledRegistry};
-use crate::mutation::install_mutation_schema;
+use crate::mutation::{install_mutation_schema, MutationError};
 use crate::package::CompiledRegistryMigrationBaseline;
 
 use super::{
@@ -1365,6 +1365,7 @@ impl DedicatedApplyConnection {
         statements: &[PackageDdlStatement<'_>],
         runtime_role: &SqlIdentifier,
         statement_timeout: Duration,
+        acknowledge_retired_audit_discard: bool,
     ) -> Result<()> {
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
         validate_package_ddl(statements, statement_timeout)?;
@@ -1387,9 +1388,16 @@ impl DedicatedApplyConnection {
             runtime_role,
         )
         .await?;
-        install_mutation_schema(&transaction, runtime_role)
-            .await
-            .map_err(|_| PostgresKernelError::Connection)?;
+        install_mutation_schema(
+            &transaction,
+            runtime_role,
+            acknowledge_retired_audit_discard,
+        )
+        .await
+        .map_err(|error| match error {
+            MutationError::RetiredAuditRowsPresent => PostgresKernelError::RetiredAuditRowsPresent,
+            _ => PostgresKernelError::Connection,
+        })?;
         install_history_schema_store(&transaction, runtime_role)
             .await
             .map_err(|_| PostgresKernelError::Connection)?;
@@ -1541,12 +1549,20 @@ impl DedicatedApplyConnection {
         &mut self,
         registry: &CompiledRegistry,
         runtime_role: &SqlIdentifier,
+        acknowledge_retired_audit_discard: bool,
     ) -> Result<()> {
         validate_runtime_acl_reconciliation_request(self.locked)?;
         let transaction = self.client.transaction().await?;
-        install_mutation_schema(&transaction, runtime_role)
-            .await
-            .map_err(|_| PostgresKernelError::Connection)?;
+        install_mutation_schema(
+            &transaction,
+            runtime_role,
+            acknowledge_retired_audit_discard,
+        )
+        .await
+        .map_err(|error| match error {
+            MutationError::RetiredAuditRowsPresent => PostgresKernelError::RetiredAuditRowsPresent,
+            _ => PostgresKernelError::Connection,
+        })?;
         reconcile_compiled_runtime_acl(&transaction, registry, runtime_role).await?;
         transaction.commit().await?;
         Ok(())

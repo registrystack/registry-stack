@@ -1016,8 +1016,11 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
     dump_yaml(breg.project / "registry.yaml", registry)
     successor, successor_revision = breg.package(new, work / "build-2", baseline=breg.runtime)
     counts_before_successor = postgres.row_counts("registry")
+    # The retired tables are already archived and row-counted above, so this
+    # apply may acknowledge dropping them along with the rest of the old schema.
     new.run_json("bregctl", "--format", "json", "apply", "--runtime-config",
-                 str(breg.runtime), "--package", str(successor))
+                 str(breg.runtime), "--package", str(successor),
+                 "--acknowledge-retired-audit-discard")
     breg.write_runtime(breg.runtime, "registry", successor, successor_revision,
                        registry["package"]["sequence"], breg.port)
     new.run_json("bregctl", "--format", "json", "verify", "--runtime-config", str(breg.runtime))

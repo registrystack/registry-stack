@@ -36,8 +36,11 @@
     files replace pruning; ship or verify them with the log tooling that
     already reads your other JSON Lines files.
   - The `registry_internal.registry_audit` and `registry_audit_head` tables
-    leave the managed catalog, and the next `bregctl apply` drops them from
-    an existing database. The history-erasure coverage a successor
+    leave the managed catalog. The next `bregctl apply` against an existing
+    database refuses while either table still holds rows, naming them and
+    asking the operator to archive the rows first; passing
+    `--acknowledge-retired-audit-discard` acknowledges discarding them and lets
+    the apply drop the tables. The history-erasure coverage a successor
     package relies on, and field-encryption erase progress, are recorded in
     `registry_internal` state tables instead of being read back from audit.
     The managed catalog fingerprint changes, so every package must be rebuilt
@@ -47,4 +50,7 @@
     share one audit file: a second runtime needs its own `path`.
   - To migrate, export the old journal with the previous release's `bregctl
     audit export` if you must retain it, add `audit.path` to each runtime
-    configuration, then rebuild, sign and `bregctl apply` the package.
+    configuration, then rebuild, sign and `bregctl apply` the package. If the
+    database still carries rows in `registry_audit` or `registry_audit_head`,
+    archive them first (for example with `psql` or `pg_dump --table`), then
+    apply with `--acknowledge-retired-audit-discard`.
