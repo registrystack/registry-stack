@@ -453,7 +453,7 @@ test('a gate stops at the first toolset error instead of preparing it for every 
   await withGateDocs(pages, async (env) => {
     const { code, output } = await run(['--gate', 'breg'], { ...env, BREGCTL_BIN: '' });
     assert.equal(code, 2, output);
-    assert.equal(output.match(/set both BREG_BIN and BREGCTL_BIN/gu)?.length, 1, output);
+    assert.equal(output.match(/set BREG_BIN and BREGCTL_BIN, or neither/gu)?.length, 1, output);
     assert.doesNotMatch(output, /journey tutorials\/two/u);
     assert.doesNotMatch(output, /gate FAIL/u);
   });
