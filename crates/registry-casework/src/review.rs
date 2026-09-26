@@ -3742,6 +3742,14 @@ impl PostgresStore {
         request: ReviewNoteRequest,
         idempotency_key: &str,
     ) -> Result<ReviewHistoryEntry, ReviewRuntimeError> {
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                "review_note_added",
+                Some(actor),
+                &actor.profile_id,
+                json!({}),
+            ))
+            .await?;
         if request.note.trim().is_empty()
             || request.note.len() > 2_000
             || request.note.chars().any(char::is_control)
@@ -3775,7 +3783,8 @@ impl PostgresStore {
         )
         .await?
         {
-            transaction.commit().await?;
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
+            audit.commit(transaction).await?;
             return serde_json::from_value(response).map_err(ReviewRuntimeError::from);
         }
         let entry = ReviewHistoryEntry {
@@ -3819,7 +3828,21 @@ impl PostgresStore {
             &serde_json::to_value(&entry)?,
         )
         .await?;
-        transaction.commit().await?;
+        // The note's text and audience stay in the review history; the audit
+        // record names only who added a note and which history event it is.
+        audit.record(
+            entry.event_id,
+            json!({
+                "event": "casework.review_note_added",
+                "eventId": entry.event_id,
+                "actor": {
+                    "issuer": actor.principal.issuer,
+                    "subject": actor.principal.subject,
+                },
+                "profileId": actor.profile_id,
+            }),
+        )?;
+        audit.commit(transaction).await?;
         Ok(entry)
     }
 
