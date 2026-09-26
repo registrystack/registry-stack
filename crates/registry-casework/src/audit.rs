@@ -613,9 +613,17 @@ mod tests {
             operation.complete().await,
             Err(StoreError::AuditUnavailable)
         ));
+        // The result is withheld, and the request entry is still paired: the
+        // operation writes its unfinished outcome as the response.
         let entries = capture.entries();
-        assert_eq!(entries.len(), 1, "only the request entry was written");
+        assert_eq!(entries.len(), 2, "{entries:?}");
         assert_eq!(entries[0]["phase"], "request");
+        assert_eq!(entries[1]["phase"], "response");
+        assert_eq!(entries[1]["correlation"], entries[0]["correlation"]);
+        assert_eq!(
+            entries[1]["record"],
+            json!({"event": "casework.task_claimed", "outcome": "unfinished"})
+        );
     }
 
     #[tokio::test]
