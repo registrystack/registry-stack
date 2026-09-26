@@ -1558,6 +1558,10 @@ jobs:
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Install docs dependencies
+        working-directory: docs/site
+        run: npm ci
+
       - name: Test the tutorial runner
         working-directory: docs/site
         run: npm run test:tutorial:runner
