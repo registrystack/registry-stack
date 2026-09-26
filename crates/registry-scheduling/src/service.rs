@@ -639,13 +639,9 @@ impl SchedulingService {
         now: DateTime<Utc>,
     ) -> Result<CommitmentAnswer<()>, ServiceError> {
         let hold = self
-            .store
-            .claim(hold_id)
+            .hold(hold_id)
             .await?
-            .ok_or(ServiceError::Problem(ProblemCode::HoldReleased))?;
-        if hold.kind != LedgerKind::Hold {
-            return Err(ServiceError::Problem(ProblemCode::HoldReleased));
-        }
+            .ok_or(ServiceError::Problem(ProblemCode::OperationNotAuthorized))?;
         let offering = self.claim_offering(&hold, now).await?;
         let grant = self
             .require_permission(caller, &offering, HOLD_RELEASE_ACTION)
@@ -719,13 +715,9 @@ impl SchedulingService {
         now: DateTime<Utc>,
     ) -> Result<CommitmentAnswer<ClaimRow>, ServiceError> {
         let hold = self
-            .store
-            .claim(hold_id)
+            .hold(hold_id)
             .await?
-            .ok_or(ServiceError::Problem(ProblemCode::HoldReleased))?;
-        if hold.kind != LedgerKind::Hold {
-            return Err(ServiceError::Problem(ProblemCode::HoldReleased));
-        }
+            .ok_or(ServiceError::Problem(ProblemCode::OperationNotAuthorized))?;
         let offering = self.policy.offering(&hold.offering).ok_or_else(|| {
             ServiceError::internal("a committed hold names no offering in the policy")
         })?;
@@ -1028,6 +1020,22 @@ impl SchedulingService {
             return Ok(None);
         };
         if claim.kind != LedgerKind::Booking {
+            return Ok(None);
+        }
+        Ok(Some(claim))
+    }
+
+    /// The hold a claim names, when it is one. `None` covers a claim that
+    /// cannot answer a hold action pre-check: unknown, or not a hold.
+    /// Release and confirmation take this before checking permission, so an
+    /// id that names nothing and an id that names a hold the caller's grant
+    /// does not reach must answer alike; whether the hold is still active is
+    /// a decision the store makes instead, where it is auditable.
+    async fn hold(&self, hold_id: Uuid) -> Result<Option<ClaimRow>, ServiceError> {
+        let Some(claim) = self.store.claim(hold_id).await? else {
+            return Ok(None);
+        };
+        if claim.kind != LedgerKind::Hold {
             return Ok(None);
         }
         Ok(Some(claim))

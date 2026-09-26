@@ -2046,6 +2046,79 @@ async fn an_expired_hold_returns_capacity_and_refuses_confirmation() {
     assert_eq!(problem["code"], "hold.released");
 }
 
+/// A caller without a task grant learns nothing about whether a hold id
+/// names something by releasing it: a nonexistent id and an existing hold
+/// the caller has no grant for both answer the same way.
+#[tokio::test]
+async fn release_hold_refuses_indistinguishably_for_missing_and_unauthorized_holds() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "hold-leak",
+            admission(&fx, OFFERING, slot),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let hold_id = hold["holdId"].as_str().unwrap().to_owned();
+
+    let missing_id = Uuid::new_v4();
+    let (missing_status, missing_problem) = fx
+        .delete(&format!("/v1/holds/{missing_id}"), &fx.reader)
+        .await;
+    let (existing_status, existing_problem) =
+        fx.delete(&format!("/v1/holds/{hold_id}"), &fx.reader).await;
+
+    assert_eq!(missing_status, existing_status);
+    assert_eq!(missing_problem["code"], existing_problem["code"]);
+    assert_eq!(existing_status, StatusCode::FORBIDDEN);
+    assert_eq!(existing_problem["code"], "operation.not-authorized");
+}
+
+/// The same indistinguishability holds for confirming a hold into an
+/// appointment: a caller with no grant cannot tell a missing hold id from
+/// one that exists but that its grant does not reach.
+#[tokio::test]
+async fn confirm_appointment_refuses_indistinguishably_for_missing_and_unauthorized_holds() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "hold-leak-confirm",
+            admission(&fx, OFFERING, slot),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let hold_id = hold["holdId"].as_str().unwrap().to_owned();
+
+    let missing_id = Uuid::new_v4();
+    let (missing_status, missing_problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.reader,
+            "confirm-leak-missing",
+            json!({"hold": missing_id.to_string(), "admission": null}),
+        )
+        .await;
+    let (existing_status, existing_problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.reader,
+            "confirm-leak-existing",
+            json!({"hold": hold_id, "admission": null}),
+        )
+        .await;
+
+    assert_eq!(missing_status, existing_status);
+    assert_eq!(missing_problem["code"], existing_problem["code"]);
+    assert_eq!(existing_status, StatusCode::FORBIDDEN);
+    assert_eq!(existing_problem["code"], "operation.not-authorized");
+}
+
 /// Every closing writer advances the claim's revision, so the history event
 /// that closes a claim is distinguishable from the one that opened it. The
 /// expiry sweeper closes a hold exactly as release and cancellation do, and
