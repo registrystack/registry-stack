@@ -642,7 +642,7 @@ async fn render_route(
     );
     // The request entry is accepted before the render starts; a refused one
     // means the render never starts and no response entry follows.
-    if let Err(audit_problem) = service.audit.request(&envelope, started).await {
+    if let Err(audit_problem) = service.audit.request(&envelope, started.clone()).await {
         return problem_response(&audit_problem);
     }
     let outcome = run_render(&service, worker_request).await;
@@ -662,13 +662,7 @@ async fn render_route(
             renderer_version: crate::display_version(),
             typst_pin: crate::TYPST_PIN.to_owned(),
         },
-        Err(problem) => RenderAuditEvent::refused(
-            &document_type,
-            problem,
-            &service.caller_fingerprint,
-            correlation.as_deref(),
-            trace.as_deref(),
-        ),
+        Err(problem) => started.refused_after_start(problem),
     };
     // The response entry is accepted before anything leaves: audit failure
     // fails closed and withholds the document.
@@ -1104,6 +1098,34 @@ mod tests {
         assert_eq!(accepted[0]["correlation"], "effect-5678");
         assert_eq!(accepted[0]["record"]["outcome"], "refused");
         assert_eq!(accepted[0]["record"]["problem"], "issued-at-missing");
+    }
+
+    #[tokio::test]
+    async fn a_refusal_after_the_render_starts_keeps_the_render_identity() {
+        let lines = AuditLines::new(None);
+        let service = service(&lines, 1);
+        // A closed latch fails the render step after the request entry.
+        service.concurrency.close();
+        let response = router(Arc::clone(&service))
+            .oneshot(render_request(Some("effect-9012")))
+            .await
+            .expect("router");
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let accepted = lines.accepted();
+        assert_eq!(accepted.len(), 2, "{accepted:?}");
+        let entry = &accepted[1];
+        assert_eq!(entry["phase"], "response");
+        assert_eq!(entry["correlation"], "effect-9012");
+        let record = &entry["record"];
+        assert_eq!(record["outcome"], "refused");
+        assert_eq!(record["problem"], "internal");
+        assert_eq!(record["documentId"], "receipt");
+        assert_eq!(record["documentVersion"], 3);
+        assert_eq!(
+            record["bundleVersion"],
+            service.bundle.manifest.bundle_version
+        );
+        assert_eq!(record["bundleHash"], service.bundle.bundle_hash.as_str());
     }
 
     #[test]

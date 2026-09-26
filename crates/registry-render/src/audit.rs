@@ -24,7 +24,7 @@ pub struct RenderAudit {
 
 /// One value-free audit event. Field set is closed; adding a field is a
 /// reviewed change.
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RenderAuditEvent {
     pub document_id: String,
@@ -78,6 +78,16 @@ impl RenderAuditEvent {
             trace_id: trace_id.map(str::to_owned),
             renderer_version: crate::display_version(),
             typst_pin: crate::TYPST_PIN.to_owned(),
+        }
+    }
+
+    /// The response entry for a render that failed after it started: the
+    /// request entry's identity, refused with `problem`.
+    pub fn refused_after_start(self, problem: &RenderProblem) -> Self {
+        Self {
+            outcome: Some("refused"),
+            problem: Some(problem.kind.slug().to_owned()),
+            ..self
         }
     }
 
