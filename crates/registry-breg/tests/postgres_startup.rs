@@ -1424,7 +1424,10 @@ async fn assert_ready(prepared: &PreparedServer, expected: StatusCode) {
 /// that doctor runs only checks the destination is writable: it succeeds
 /// beside the lock holder and creates no audit file. The process WASM
 /// executor admits one prepared server at a time, so a directly opened writer
-/// stands in for the serving process here.
+/// stands in for the serving process here. The check also covers the
+/// `bregctl` sibling destination operator commands append to, not only the
+/// runtime's own destination: a torn final entry there must refuse doctor's
+/// check exactly as one in the runtime's own destination would.
 async fn assert_audit_destination_has_one_writer_and_checks_take_none(
     database: &TestDatabase,
     serving_config: &Path,
@@ -1461,6 +1464,44 @@ async fn assert_audit_destination_has_one_writer_and_checks_take_none(
         !audit_path.exists() && !audit_path.parent().expect("audit directory").exists(),
         "the startup check creates neither the audit directory nor its file"
     );
+
+    let registry_platform_audit::AuditDestination::File(companion) =
+        registry_platform_audit::AuditDestination::from_settings(
+            registry_platform_audit::AuditDestinationKind::File,
+            Some(audit_path),
+            None,
+            None,
+        )
+        .expect("the configured audit destination is valid")
+        .for_process(registry_breg::audit::COMPANION_PROCESS_ROLE)
+        .expect("bregctl is a valid process role")
+    else {
+        panic!("expected a file destination");
+    };
+    let companion_path = companion.path().to_path_buf();
+    let companion_directory = companion_path.parent().expect("audit directory");
+    fs::create_dir_all(companion_directory).expect("companion audit directory is created");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(companion_directory, fs::Permissions::from_mode(0o700))
+            .expect("companion audit directory mode is set");
+        fs::write(&companion_path, "{}\n{").expect("torn companion entry is written");
+        fs::set_permissions(&companion_path, fs::Permissions::from_mode(0o600))
+            .expect("companion audit file mode is set");
+        assert_eq!(
+            check_with_connection_config_for_test(unopened, database.runtime_config.clone())
+                .await
+                .err(),
+            Some(StartupError::Audit),
+            "a torn final entry in the bregctl companion destination refuses the startup check"
+        );
+        fs::write(&companion_path, "{}\n").expect("companion entry is completed");
+        check_with_connection_config_for_test(unopened, database.runtime_config.clone())
+            .await
+            .expect("the startup check accepts a completed companion destination");
+    }
+    fs::remove_dir_all(companion_directory).expect("companion audit directory cleanup");
 }
 
 fn configured_audit_path(config_path: &Path) -> PathBuf {
