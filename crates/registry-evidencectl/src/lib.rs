@@ -276,10 +276,10 @@ fn human_only_command(matches: &ArgMatches) -> Option<String> {
         .then(|| path.join(" "))
 }
 
-/// The human-only command named on a command line that did not parse,
+/// The subcommand path named on a command line that may not parse,
 /// following subcommand names through the command tree past a leading
-/// global `--format` value.
-fn human_only_command_named(arguments: &[OsString]) -> Option<String> {
+/// global `--format` value, with the index of the first argument after it.
+fn named_command(arguments: &[OsString]) -> (Vec<String>, usize) {
     let mut command = cli_command();
     let mut path = Vec::new();
     let mut index = 1;
@@ -299,10 +299,35 @@ fn human_only_command_named(arguments: &[OsString]) -> Option<String> {
         command = sub;
         index += 1;
     }
+    (path, index)
+}
+
+/// The human-only command named on a command line that did not parse.
+fn human_only_command_named(arguments: &[OsString]) -> Option<String> {
+    let (path, _) = named_command(arguments);
     HUMAN_ONLY_COMMANDS
         .iter()
         .any(|candidate| candidate.iter().eq(path.iter()))
         .then(|| path.join(" "))
+}
+
+/// Commands that define the legacy `--json` flag `legacy_json_requested`
+/// reads after parsing.
+const LEGACY_JSON_COMMANDS: &[&[&str]] =
+    &[&["fixtures", "run"], &["doctor"], &["target", "explain"]];
+
+/// Whether a command line that may not parse gives a legacy `--json` flag
+/// after the command that defines it, before any `--` separator.
+fn legacy_json_named(arguments: &[OsString]) -> bool {
+    let (path, index) = named_command(arguments);
+    LEGACY_JSON_COMMANDS
+        .iter()
+        .any(|candidate| candidate.iter().eq(path.iter()))
+        && arguments
+            .iter()
+            .skip(index)
+            .take_while(|argument| *argument != "--")
+            .any(|argument| argument == "--json")
 }
 
 /// Whether clap refused the value of a `--format` argument.
@@ -560,6 +585,9 @@ fn write_json_help() {
 }
 
 fn requested_output_format(arguments: &[OsString]) -> OutputFormat {
+    if legacy_json_named(arguments) {
+        return OutputFormat::Json;
+    }
     if arguments.iter().enumerate().any(|(index, argument)| {
         argument == "--format=json"
             || (argument == "--format"
@@ -1084,6 +1112,32 @@ mod tests {
             leaf_paths(sub, prefix, leaves);
             prefix.pop();
         }
+    }
+
+    /// The pre-parse legacy `--json` list names exactly the commands that
+    /// define the flag.
+    #[test]
+    fn legacy_json_commands_are_the_ones_defining_the_flag() {
+        fn defining(command: &clap::Command, prefix: &mut Vec<String>, found: &mut Vec<String>) {
+            if command
+                .get_arguments()
+                .any(|argument| argument.get_id() == "json")
+            {
+                found.push(prefix.join(" "));
+            }
+            for sub in command.get_subcommands() {
+                prefix.push(sub.get_name().to_owned());
+                defining(sub, prefix, found);
+                prefix.pop();
+            }
+        }
+        let mut found = Vec::new();
+        defining(&command(), &mut Vec::new(), &mut found);
+        let listed: Vec<String> = LEGACY_JSON_COMMANDS
+            .iter()
+            .map(|path| path.join(" "))
+            .collect();
+        assert_eq!(found, listed);
     }
 
     /// Every command either reports JSON or is listed as human-only, so a

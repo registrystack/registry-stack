@@ -367,3 +367,40 @@ fn legacy_json_flags_fail_with_one_json_document() {
         );
     }
 }
+
+/// A command line that does not parse still honors a legacy `--json` flag
+/// named after its command, so the usage error is one JSON document too.
+#[test]
+fn legacy_json_flags_render_usage_errors_as_json() {
+    let cases: &[&[&str]] = &[
+        &["target", "explain", "--json", "--bogus"],
+        &["fixtures", "run", "--json", "--bogus"],
+        &["doctor", "--json", "--bogus"],
+    ];
+    let directory = tempfile::tempdir().expect("temporary working directory");
+    for arguments in cases {
+        let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+            .args(*arguments)
+            .current_dir(directory.path())
+            .output()
+            .expect("run evidencectl");
+        assert_eq!(output.status.code(), Some(2), "arguments: {arguments:?}");
+        assert!(
+            output.stderr.is_empty(),
+            "--json wrote human diagnostics for {arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|error| panic!("invalid JSON for {arguments:?}: {error}"));
+        assert_eq!(report["status"], "usage-error", "arguments: {arguments:?}");
+    }
+
+    // The flag only counts for the commands that define it.
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["check", "--json"])
+        .current_dir(directory.path())
+        .output()
+        .expect("run evidencectl");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty(), "check has no legacy --json flag");
+}
