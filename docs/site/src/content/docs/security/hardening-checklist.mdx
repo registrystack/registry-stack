@@ -130,10 +130,10 @@ bundle, or the sealed Relay package. It assumes you have already configured your
     TransitDataKeyClient; crates/registry-breg/src/startup.rs, FieldEncryptionCustody;
     crates/registry-bregctl/src/doctor.rs, startup_diagnostic() and CHECKED_DEPENDENCIES. */}
 
-## Freeze the Evidence Gateway deployment project
+## Freeze the Evidence Gateway package and target
 
-- Mount the governed `bundle/` directory and every artifact inside it, `runtime.yaml`, and each
-  named CA bundle file read-only and non-writable to the service process, and keep the secret root
+- Mount the installed package and every artifact inside it, the deployment target's `runtime.yaml`,
+  and each named CA bundle file read-only and non-writable to the service process, and keep the secret root
   at mode `0700` or tighter. Evidence Gateway reports a non-immutable-input error and refuses to
   start rather than serving from an input it could write to, and applies the same refusal to the
   secret root when it is reachable by group or other even if it is not itself writable. Keep every
@@ -150,12 +150,13 @@ bundle, or the sealed Relay package. It assumes you have already configured your
      writable bound source extract as BundleError::InvalidArtifact rather than NotImmutable,
      crates/registry-evidence/src/bundle.rs:852-864, :80-81, :863-864. */}
 
-- Freeze the project before validating or serving it, then validate the frozen bytes:
+- Freeze the package and target before validating or serving them, then validate the frozen bytes:
 
   ```sh
-  chmod -R a-w bundle && chmod 444 runtime.yaml
-  evidence check --runtime-config runtime.yaml
-  evidence evaluate --runtime-config runtime.yaml --fixture "bundle/fixtures/<cases>.yaml"
+  chmod -R a-w "<installed-package>" && chmod 444 "<deployment-target>/runtime.yaml"
+  evidence check --runtime-config "<deployment-target>/runtime.yaml"
+  evidence evaluate --runtime-config "<deployment-target>/runtime.yaml" \
+    --fixture "<installed-package>/fixtures/<cases>.yaml"
   ```
 
 - Review the complete simultaneously enabled bundle as one disclosure surface before deployment,
@@ -398,7 +399,7 @@ serve, and a startup that fails rather than degrades.
 | Relay refuses to start on a contract it served before | The contract now has protected access with no configured issuer, a lookup with no quotas, or a list with no cursor key | Add the missing runtime block; none of the three is waivable |
 | Relay refuses to start and names the source | The snapshot sits on writable storage, is a symlink, or has a `-wal` or `-journal` sidecar beside it | Place the file on a read-only filesystem or make it non-writable, resolve the symlink, and remove the sidecar by checkpointing the database before you stage it |
 | Relay returns `503 audit.unavailable` and then fails readiness | The audit sink is unwritable, or the file it was bound to was replaced | Restore writable durable storage at `audit.sink` and restart; the failed requests returned no data |
-| Evidence Gateway refuses to start on a non-immutable input | The bundle directory, `runtime.yaml`, a captured artifact, or a named CA bundle file is writable by the service process, or the secret root is reachable by group or other | Re-freeze the project (`chmod -R a-w bundle && chmod 444 runtime.yaml`), tighten the secret root to `0700`, and restart |
+| Evidence Gateway refuses to start on a non-immutable input | The installed package, target `runtime.yaml`, a captured artifact, or a named CA bundle file is writable by the service process, or the secret root is reachable by group or other | Re-freeze the package and target (`chmod -R a-w "<installed-package>" && chmod 444 "<deployment-target>/runtime.yaml"`), tighten the secret root to `0700`, and restart |
 | Evidence Gateway refuses to start on an invalid bound source extract | The source extract the runtime file names is writable; a distinct refusal from the non-immutable-input row above | Make the extract file non-writable and restart |
 | A second Evidence Gateway process fails at startup with a sink-locked error | Two processes point at the same `auditStorage.path` | Run one writer per audit path; use active/passive with restart-on-failure rather than a second replica |
 | Evidence Gateway returns `403 evidence.denied` for a request you expected to work | Any one of the audience, grant, authority, or response-format checks failed; the response never says which | Work through the ordered checks in [Incident response](#incident-response) against local configuration, then read the refusal phase from the audit chain |
