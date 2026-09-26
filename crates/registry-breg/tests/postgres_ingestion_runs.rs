@@ -761,6 +761,94 @@ async fn a_refusal_after_the_ingestion_request_is_answered_in_the_ingestion_sche
     assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
 }
 
+/// A run transition whose commit returns an error may still have committed,
+/// so its request entry is answered unfinished rather than refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_transition_whose_commit_fails_is_answered_unfinished() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("unacknowledged-commit", 4);
+    let chunks = plan_chunks(&items, 2);
+
+    refuse_run_commits(&harness).await;
+    let before = harness.database.audit_entries().len();
+    let refused = harness
+        .post_json(
+            "/v1/records/widgets/ingestion-runs",
+            &claims,
+            harness.run_body("create", &chunks),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    allow_run_commits(&harness).await;
+    assert_unfinished_in_the_ingestion_schema(
+        &harness.database.audit_entries()[before..],
+        "create",
+    );
+
+    let run_id = harness.create_run(&claims, &chunks).await;
+    refuse_run_commits(&harness).await;
+    let before = harness.database.audit_entries().len();
+    let refused = harness
+        .post_empty(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/cancel"),
+            &claims,
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    allow_run_commits(&harness).await;
+    assert_unfinished_in_the_ingestion_schema(
+        &harness.database.audit_entries()[before..],
+        "cancel",
+    );
+    harness.database.assert_every_audit_request_answered_once();
+}
+
+fn assert_unfinished_in_the_ingestion_schema(entries: &[Value], transition: &str) {
+    let ingestion = entries
+        .iter()
+        .filter(|entry| entry["record"]["transition"] == transition)
+        .collect::<Vec<_>>();
+    assert_eq!(ingestion.len(), 2, "{entries:?}");
+    assert_eq!(ingestion[0]["phase"], "request");
+    assert_eq!(ingestion[1]["phase"], "response");
+    assert_eq!(
+        ingestion[1]["record"]["outcome"], "unfinished",
+        "{entries:?}"
+    );
+    assert_eq!(ingestion[0]["correlation"], ingestion[1]["correlation"]);
+}
+
+/// Refuse every commit that wrote a run row, after all its statements ran.
+async fn refuse_run_commits(harness: &IngestionHarness) {
+    harness
+        .database
+        .admin
+        .batch_execute(
+            "CREATE OR REPLACE FUNCTION public.test_refuse_run_commit() RETURNS trigger
+               LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'test refuses this commit'; END $$;
+             GRANT EXECUTE ON FUNCTION public.test_refuse_run_commit() TO PUBLIC;
+             CREATE CONSTRAINT TRIGGER test_refuse_run_commit
+               AFTER INSERT OR UPDATE ON registry_internal.registry_ingestion_runs
+               DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+               EXECUTE FUNCTION public.test_refuse_run_commit();",
+        )
+        .await
+        .expect("administrator installs the commit refusal");
+}
+
+async fn allow_run_commits(harness: &IngestionHarness) {
+    harness
+        .database
+        .admin
+        .batch_execute(
+            "DROP TRIGGER test_refuse_run_commit ON registry_internal.registry_ingestion_runs;
+             DROP FUNCTION public.test_refuse_run_commit();",
+        )
+        .await
+        .expect("administrator removes the commit refusal");
+}
+
 /// The refused call wrote one ingestion request entry and one response
 /// entry answering it, both in the ingestion schema, and nothing else.
 fn assert_answered_in_the_ingestion_schema(entries: &[Value], transition: &str) {
