@@ -375,7 +375,10 @@ outside the new writer's retention directory.
 
 {/* Evidence: crates/registry-breg/src/audit.rs;
     crates/registry-breg/src/runtime_config.rs, AuditConfig;
-    crates/registry-platform-audit/src/writer.rs;
+    crates/registry-platform-audit/src/writer.rs, AuditRequest;
+    crates/registry-breg/src/request_retention.rs, ErasureUnaudited;
+    crates/registry-breg/src/action_evidence_maintenance.rs, EVIDENCE_RETENTION_AUDIT_SCHEMA;
+    crates/registry-platform-hooks/src/delivery/seams.rs, record_audit;
     crates/registry-breg/src/postgres/schema.rs;
     crates/registry-bregctl/src/dev/mod.rs. */}
 
