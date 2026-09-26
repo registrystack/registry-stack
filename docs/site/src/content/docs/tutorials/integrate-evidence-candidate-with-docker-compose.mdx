@@ -128,9 +128,11 @@ against the governed public JWK. That is why the proxy starts first: without a r
 either form stops at `evidence: runtime signing initialization failed`.
 
 `--require-runtime-dependencies` adds the dependencies a served request would need. It opens the
-configured audit path, fetches the access-token issuer key set fail-closed, and resolves every
-configured source credential. It appends no audit event in either form, so a check that fails
-leaves the audit log exactly as it found it.
+configured audit writer exactly as `serve` would: creating the audit file and its lock if they are
+not already there, and deleting any sealed file already past `audit.retainDays`. It fetches the
+access-token issuer key set fail-closed and resolves every configured source credential. It appends
+no audit event of its own, but run beside a running service it refuses instead, because the writer
+is a single-writer destination and the running service already holds its lock.
 
 Changing only the container runtime does not change the governed bundle, so it does not require the
 fixture suite to run again. Run fixtures again when the bundle changes.
