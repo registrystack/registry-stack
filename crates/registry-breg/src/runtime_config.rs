@@ -2990,6 +2990,39 @@ fn install_schema_constraints(schema: &mut Value) {
         1,
         u64::from(registry_platform_audit::MAX_AUDIT_RETAIN_DAYS),
     );
+    // `AuditDestination::from_settings`: the `stdout` destination refuses
+    // every file setting, and the `file` destination needs an absolute path.
+    if let Some(audit) = schema
+        .pointer_mut("/$defs/RawAuditConfig")
+        .and_then(Value::as_object_mut)
+    {
+        let set = |name: &str| {
+            serde_json::json!({
+                "required": [name],
+                "properties": {name: {"not": {"type": "null"}}}
+            })
+        };
+        audit.insert(
+            "if".to_owned(),
+            serde_json::json!({
+                "required": ["destination"],
+                "properties": {"destination": {"const": "stdout"}}
+            }),
+        );
+        audit.insert(
+            "then".to_owned(),
+            serde_json::json!({
+                "not": {"anyOf": [set("path"), set("rotateBytes"), set("retainDays")]}
+            }),
+        );
+        audit.insert(
+            "else".to_owned(),
+            serde_json::json!({
+                "required": ["path"],
+                "properties": {"path": {"type": "string", "pattern": "^/"}}
+            }),
+        );
+    }
     for (pointer, minimum, maximum) in [
         (
             "/$defs/RawPoolBounds/properties/maxSize",
@@ -3769,4 +3802,39 @@ fn seconds_bounded(value: u64, min: u64, max: u64) -> Result<Duration> {
         return Err(RuntimeConfigError::InvalidBounds);
     }
     Ok(Duration::from_secs(value))
+}
+
+#[cfg(all(test, feature = "schema"))]
+mod schema_tests {
+    use serde_json::json;
+
+    #[test]
+    fn audit_schema_states_the_destination_rules_the_runtime_enforces() {
+        let schema = super::runtime_config_schema().unwrap();
+        let audit = json!({
+            "$defs": schema["$defs"],
+            "$ref": "#/$defs/RawAuditConfig"
+        });
+        let validator = jsonschema::JSONSchema::compile(&audit).unwrap();
+        let key = "secret:env/AUDIT_HASH_KEY";
+        for accepted in [
+            json!({"hashKeyRef": key, "path": "/var/lib/breg/audit.jsonl"}),
+            json!({"hashKeyRef": key, "destination": "file", "path": "/audit.jsonl",
+                "rotateBytes": 1_048_576, "retainDays": 1}),
+            json!({"hashKeyRef": key, "destination": "stdout"}),
+            json!({"hashKeyRef": key, "destination": "stdout", "path": null}),
+        ] {
+            assert!(validator.is_valid(&accepted), "{accepted}");
+        }
+        for refused in [
+            json!({"hashKeyRef": key}),
+            json!({"hashKeyRef": key, "path": null}),
+            json!({"hashKeyRef": key, "path": "audit.jsonl"}),
+            json!({"hashKeyRef": key, "destination": "stdout", "path": "/audit.jsonl"}),
+            json!({"hashKeyRef": key, "destination": "stdout", "rotateBytes": 1_048_576}),
+            json!({"hashKeyRef": key, "destination": "stdout", "retainDays": 1}),
+        ] {
+            assert!(!validator.is_valid(&refused), "{refused}");
+        }
+    }
 }
