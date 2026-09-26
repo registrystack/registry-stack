@@ -433,10 +433,12 @@ this release:
    the new process refuses to start with `another process holds the single-writer lock`.
 3. Move the audit file and every numbered file beside it, such as `casework.ndjson.1` or
    `casework.ndjson.00000001`, into append-only storage or an archive directory outside the audit
-   directory. This release does not read or verify the chain. It appends its own entries to
-   whatever file sits at the configured path, and at startup and on each rotation it deletes any
-   file named with an eight-digit suffix beside it that is older than `audit.retainDays`, which
-   includes files Casework 0.34.0 sealed.
+   directory. This release refuses to start if the file at the configured path still begins with a
+   chained entry, so this move is required, not optional. Once a fresh file is in place, this
+   release does not read or verify the chain; it appends its own entries to whatever file sits at
+   the configured path, and at startup and on each rotation it deletes any file named with an
+   eight-digit suffix beside it that is older than `audit.retainDays`, which includes files
+   Casework 0.34.0 sealed.
 
    ```sh
    install -d -m 0700 /var/lib/registry-casework/audit-archive
