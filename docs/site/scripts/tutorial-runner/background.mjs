@@ -90,7 +90,7 @@ async function stop(stateFile) {
   return 0;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [command, ...args] = process.argv.slice(2);
   if (command === 'ready' && args.length === 2) process.exit(await ready(...args));
   if (command === 'stop' && args.length === 1) process.exit(await stop(...args));
