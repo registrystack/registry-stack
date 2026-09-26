@@ -5416,6 +5416,7 @@ dependencies = [
  "p256",
  "registry-evidence",
  "registry-evidence-verifier",
+ "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-httpsec",
  "registry-platform-httputil",
