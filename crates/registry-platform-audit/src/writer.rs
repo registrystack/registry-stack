@@ -309,24 +309,39 @@ impl FileDestination {
     }
 
     /// Check, without taking the writer lock or writing an entry, that a
-    /// writer could open this destination: the directory exists or can be
-    /// created, is owned by this user and not group- or world-writable, and
-    /// any existing lock companion and active file are owner-only regular
-    /// files the writer can open, and the active file's final entry is
-    /// complete.
+    /// writer could open this destination: the directory exists and the
+    /// writer can list, write, and search it, or the nearest existing
+    /// ancestor is a directory it can create it in; the directory is owned by
+    /// this user and not group- or world-writable; and any existing lock
+    /// companion and active file are owner-only regular files the writer can
+    /// open, and the active file's final entry is complete.
     pub fn check_writable(&self) -> Result<(), AuditError> {
         let parent = parent(&self.path)?;
         match fs::symlink_metadata(parent) {
             Ok(_) => validate_directory(parent)?,
             Err(error) if error.kind() == ErrorKind::NotFound => {
+                // `symlink_metadata` sees a dangling link that `exists()`
+                // reports as absent; the writer's recursive create follows
+                // the nearest existing ancestor, so it must be a directory.
                 let mut ancestor = parent;
-                while !ancestor.exists() {
+                loop {
+                    match fs::symlink_metadata(ancestor) {
+                        Ok(_) => break,
+                        Err(error) if error.kind() == ErrorKind::NotFound => {}
+                        Err(error) => return Err(AuditError::Io(error)),
+                    }
                     ancestor = ancestor.parent().ok_or_else(|| {
                         AuditError::Io(io::Error::new(
                             ErrorKind::NotFound,
                             "audit directory has no existing ancestor",
                         ))
                     })?;
+                }
+                if !fs::metadata(ancestor).is_ok_and(|metadata| metadata.is_dir()) {
+                    return Err(AuditError::Io(io::Error::new(
+                        ErrorKind::NotADirectory,
+                        "audit directory cannot be created",
+                    )));
                 }
                 if rustix::fs::access(ancestor, rustix::fs::Access::WRITE_OK).is_err() {
                     return Err(AuditError::Io(io::Error::new(
@@ -338,15 +353,24 @@ impl FileDestination {
             }
             Err(error) => return Err(AuditError::Io(error)),
         }
-        if rustix::fs::access(parent, rustix::fs::Access::WRITE_OK).is_err() {
+        // The writer creates, renames, and deletes files in the directory,
+        // lists it to apply retention, and opens it to sync it.
+        if rustix::fs::access(
+            parent,
+            rustix::fs::Access::READ_OK
+                | rustix::fs::Access::WRITE_OK
+                | rustix::fs::Access::EXEC_OK,
+        )
+        .is_err()
+        {
             return Err(AuditError::Io(io::Error::new(
                 ErrorKind::PermissionDenied,
-                "audit directory is not writable",
+                "audit directory is not readable, writable, and searchable",
             )));
         }
-        // The writer opens the lock companion for write, on the same terms
-        // as the active file, before it opens the active file, and reopens it
-        // for read on every append to check it is still pinned.
+        // The writer opens the lock companion for read and write, on the
+        // same terms as the active file, before it opens the active file, and
+        // reopens it for read on every append to check it is still pinned.
         let lock = lock_path(&self.path);
         match fs::symlink_metadata(&lock) {
             Ok(metadata) if metadata.file_type().is_symlink() => return Err(symlink_error()),
@@ -1098,6 +1122,7 @@ fn open_lock(path: &Path) -> Result<File, AuditError> {
     reject_symlink(path)?;
     OpenOptions::new()
         .create(true)
+        .read(true)
         .write(true)
         .truncate(false)
         .mode(0o600)
@@ -2104,6 +2129,24 @@ mod tests {
         refused.expect_err("unsearchable audit directory");
     }
 
+    #[tokio::test]
+    async fn check_writable_refuses_a_directory_the_writer_cannot_list() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let parent = destination.path().parent().expect("parent").to_path_buf();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&parent)
+            .expect("audit directory");
+        // Opening applies retention, which lists the directory.
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o300)).expect("mode");
+        let refused = destination.check_writable();
+        let opened = AuditWriter::open(AuditDestination::File(destination)).await;
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).expect("restore");
+        opened.expect_err("the writer cannot list the directory");
+        refused.expect_err("unlistable audit directory");
+    }
+
     #[test]
     fn check_writable_refuses_a_lock_companion_the_writer_refuses() {
         let directory = directory();
@@ -2167,6 +2210,32 @@ mod tests {
             .check_writable();
         fs::set_permissions(&unsearchable, fs::Permissions::from_mode(0o700)).expect("mode");
         refused.expect_err("ancestor cannot be searched");
+
+        let dangling = directory.path().join("dangling");
+        std::os::unix::fs::symlink(directory.path().join("absent"), &dangling).expect("symlink");
+        FileDestination::new(dangling.join("audit").join("audit.jsonl"))
+            .expect("absolute")
+            .check_writable()
+            .expect_err("ancestor is a dangling symlink");
+
+        let linked_file = directory.path().join("linked-file");
+        std::os::unix::fs::symlink(&file, &linked_file).expect("symlink");
+        FileDestination::new(linked_file.join("audit").join("audit.jsonl"))
+            .expect("absolute")
+            .check_writable()
+            .expect_err("ancestor links to a regular file");
+
+        let real = directory.path().join("real");
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&real)
+            .expect("dir");
+        let linked_directory = directory.path().join("linked-directory");
+        std::os::unix::fs::symlink(&real, &linked_directory).expect("symlink");
+        FileDestination::new(linked_directory.join("audit").join("audit.jsonl"))
+            .expect("absolute")
+            .check_writable()
+            .expect("the writer creates the directory through a linked ancestor");
     }
 
     #[tokio::test]
@@ -2184,5 +2253,24 @@ mod tests {
         AuditWriter::open(AuditDestination::File(destination))
             .await
             .expect_err("symlinked active file");
+    }
+
+    #[tokio::test]
+    async fn open_refuses_a_lock_companion_it_cannot_reopen_for_read() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path.parent().expect("parent"))
+            .expect("audit directory");
+        let lock = lock_path(&path);
+        fs::write(&lock, "").expect("lock");
+        // Every append reopens the lock for read to check it is still pinned,
+        // so a write-only lock would stop the writer on its first entry.
+        fs::set_permissions(&lock, fs::Permissions::from_mode(0o200)).expect("mode");
+        AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect_err("write-only lock");
     }
 }
