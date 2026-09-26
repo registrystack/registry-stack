@@ -28,15 +28,23 @@ decisions:
     alsoTrue: >-
       A release carries no caller-chosen idempotency key: the hold's own
       identifier is the key, so a retried release replays the first answer. A
-      hold that does not exist, or one no longer in the active state, answers
-      hold.released rather than a not-found, which keeps the answer the same
-      whether the identifier was never valid or was merely finished. A hold
-      belonging to another caller is refused inside the transaction, where the
-      refusal is audited.
+      hold that is still a hold but no longer in the active state answers
+      hold.released rather than a not-found, so a caller watching one id
+      across its lifetime sees a released outcome, not a new refusal, whether
+      a background sweep has already run. An id that never named a hold at
+      all, or that names something else, answers operation.not-authorized
+      before the transaction opens and before any permission is checked,
+      the same answer a hold the caller's grant does not reach would give, so
+      a caller cannot learn the id's existence from its own authorization.
+      Confirmation resolves a hold by the same rule, for the same reason. A
+      hold belonging to another caller is refused inside the transaction,
+      where the refusal is audited.
     evidence:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: an_expired_hold_returns_capacity_and_refuses_confirmation}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_release_returns_capacity_answers_replay_and_blocks_confirmation}
       - {path: crates/registry-scheduling-core/src/admission.rs, name: an_expired_hold_consumes_nothing_and_cannot_be_confirmed}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: release_hold_refuses_indistinguishably_for_missing_and_unauthorized_holds}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: confirm_appointment_refuses_indistinguishably_for_missing_and_unauthorized_holds}
   - id: SCHEDULING-DEC-02
     subject: Cancellation never answers policy.changed
     decision: >-
