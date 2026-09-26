@@ -1520,6 +1520,20 @@ reviewProducers:
         assert_eq!(oidc.scope_claim, "registry_scopes");
     }
 
+    #[test]
+    fn a_stdout_destination_accepts_an_explicit_null_path() {
+        let audit: AuditConfig = serde_json::from_value(serde_json::json!({
+            "hashKeyRef": "secret:env/AUDIT_HASH_KEY",
+            "destination": "stdout",
+            "path": null
+        }))
+        .expect("an explicit null is the same absence as an omitted field");
+        assert_eq!(
+            audit.destination().expect("stdout takes no file settings"),
+            AuditDestination::Stdout
+        );
+    }
+
     /// Build a runtime configuration with a static JWKS source (so building the
     /// verifier never performs a real discovery fetch) and return the verifier
     /// configuration it produces, optionally with an authored assertionIssuers

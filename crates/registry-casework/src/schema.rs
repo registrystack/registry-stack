@@ -113,7 +113,8 @@ fn install_runtime_constraints(schema: &mut Value) {
 
 /// State the shape `AuditConfig::destination` requires: a `file`
 /// destination, the default, names an absolute `path`, and `stdout` takes
-/// none of the file-only settings. The rotation and retention bounds are the
+/// none of the file-only settings. An explicit null reads as absent, as
+/// serde reads it at load. The rotation and retention bounds are the
 /// platform writer's.
 fn set_audit_destination_constraints(schema: &mut Value) {
     set_definition_property(
@@ -159,9 +160,9 @@ fn set_audit_destination_constraints(schema: &mut Value) {
             "then".to_owned(),
             serde_json::json!({
                 "not": {"anyOf": [
-                    {"required": ["path"]},
-                    {"required": ["rotateBytes"]},
-                    {"required": ["retainDays"]}
+                    {"required": ["path"], "properties": {"path": {"not": {"type": "null"}}}},
+                    {"required": ["rotateBytes"], "properties": {"rotateBytes": {"not": {"type": "null"}}}},
+                    {"required": ["retainDays"], "properties": {"retainDays": {"not": {"type": "null"}}}}
                 ]}
             }),
         );
@@ -698,6 +699,39 @@ mod tests {
                 !schema.is_valid(&with(&digest)),
                 "{digest}: the schema accepted a digest the runtime refuses"
             );
+        }
+    }
+
+    #[test]
+    fn audit_destination_schema_matches_runtime_validation() {
+        let schema = runtime_schema();
+        let with = |audit: Value| {
+            let mut instance = runtime_instance("secret:env/CASEWORK_JWKS", "environment");
+            instance["audit"] = audit;
+            instance
+        };
+        let key = "secret:env/CASEWORK_AUDIT_KEY";
+        for accepted in [
+            serde_json::json!({"hashKeyRef": key, "path": "/var/log/casework/audit.jsonl"}),
+            serde_json::json!({"hashKeyRef": key, "destination": "file",
+                "path": "/audit.jsonl", "rotateBytes": 1_048_576, "retainDays": 1}),
+            serde_json::json!({"hashKeyRef": key, "destination": "stdout"}),
+            // An explicit null reads as absent, as it does at load.
+            serde_json::json!({"hashKeyRef": key, "destination": "stdout", "path": null}),
+            serde_json::json!({"hashKeyRef": key, "destination": "stdout",
+                "path": null, "rotateBytes": null, "retainDays": null}),
+        ] {
+            assert!(schema.is_valid(&with(accepted.clone())), "{accepted}");
+        }
+        for refused in [
+            serde_json::json!({"hashKeyRef": key}),
+            serde_json::json!({"hashKeyRef": key, "path": null}),
+            serde_json::json!({"hashKeyRef": key, "path": "audit.jsonl"}),
+            serde_json::json!({"hashKeyRef": key, "destination": "stdout", "path": "/audit.jsonl"}),
+            serde_json::json!({"hashKeyRef": key, "destination": "stdout", "rotateBytes": 1_048_576}),
+            serde_json::json!({"hashKeyRef": key, "destination": "stdout", "retainDays": 1}),
+        ] {
+            assert!(!schema.is_valid(&with(refused.clone())), "{refused}");
         }
     }
 
