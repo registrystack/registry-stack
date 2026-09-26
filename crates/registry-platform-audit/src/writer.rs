@@ -14,7 +14,7 @@
 use std::{
     fs::{self, File, OpenOptions, TryLockError},
     io::{self, ErrorKind, Write},
-    os::unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt},
+    os::unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -1120,28 +1120,29 @@ fn require_complete_final_entry(active: &File) -> Result<(), AuditError> {
 }
 
 fn open_append(path: &Path) -> Result<File, AuditError> {
-    reject_symlink(path)?;
-    OpenOptions::new()
-        .create(true)
-        .read(true)
-        .append(true)
-        .mode(0o600)
-        .custom_flags(open_flags())
-        .open(path)
-        .map_err(AuditError::Io)
+    open_owned(path, OpenOptions::new().read(true).append(true))
 }
 
 fn open_lock(path: &Path) -> Result<File, AuditError> {
+    open_owned(path, OpenOptions::new().read(true).write(true))
+}
+
+/// Open `path`, creating it when absent. A created file is set to owner read
+/// and write explicitly, since the process umask can mask the requested mode.
+fn open_owned(path: &Path, options: &mut OpenOptions) -> Result<File, AuditError> {
     reject_symlink(path)?;
-    OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .mode(0o600)
-        .custom_flags(open_flags())
-        .open(path)
-        .map_err(AuditError::Io)
+    options.mode(0o600).custom_flags(open_flags());
+    match options.clone().create_new(true).open(path) {
+        Ok(file) => {
+            file.set_permissions(fs::Permissions::from_mode(0o600))
+                .map_err(AuditError::Io)?;
+            Ok(file)
+        }
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            options.open(path).map_err(AuditError::Io)
+        }
+        Err(error) => Err(AuditError::Io(error)),
+    }
 }
 
 fn open_read(path: &Path) -> Result<File, AuditError> {
@@ -1646,6 +1647,49 @@ mod tests {
         let second = writer.append(request("req-2")).await.expect_err("refused");
         assert_eq!(second.reason(), AuditUnavailableReason::Stopped);
         assert!(!writer.ready().await);
+    }
+
+    #[test]
+    fn an_owner_masking_umask_still_creates_usable_audit_files() {
+        const CHILD: &str = "REGISTRY_AUDIT_UMASK_CHILD";
+        // The umask is process wide, so the check runs in a child process
+        // rather than beside the other tests.
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().expect("test binary"))
+                .args([
+                    "--exact",
+                    "writer::tests::an_owner_masking_umask_still_creates_usable_audit_files",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .status()
+                .expect("child test");
+            assert!(status.success(), "child test failed");
+            return;
+        }
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        fs::create_dir(path.parent().expect("parent")).expect("audit directory");
+        fs::set_permissions(
+            path.parent().expect("parent"),
+            fs::Permissions::from_mode(0o700),
+        )
+        .expect("owner-only audit directory");
+        rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o777));
+
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(async {
+                let writer = AuditWriter::open(AuditDestination::File(destination))
+                    .await
+                    .expect("open");
+                writer.append(request("req-1")).await.expect("append");
+                assert!(writer.ready().await);
+            });
+        assert_eq!(lines(&path).len(), 1);
     }
 
     #[tokio::test]
