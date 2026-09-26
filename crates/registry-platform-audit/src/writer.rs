@@ -1036,6 +1036,15 @@ impl AppendRequest {
             sealed = segment_path(&self.path, sequence);
         }
         fs::rename(&self.path, &sealed).map_err(AuditError::Io)?;
+        // The rename seals whatever file is at the path, so confirm it is the
+        // one this writer holds before starting a fresh file.
+        let held = self.active.metadata().map_err(AuditError::Io)?;
+        let sealed_metadata = fs::symlink_metadata(&sealed).map_err(AuditError::Io)?;
+        if (sealed_metadata.dev(), sealed_metadata.ino()) != (held.dev(), held.ino()) {
+            return Err(AuditError::Io(io::Error::other(
+                "audit file changed outside the writer",
+            )));
+        }
         let fresh = open_append(&self.path)?;
         validate_active_file(&fresh)?;
         if fresh.metadata().map_err(AuditError::Io)?.len() != 0 {
@@ -1896,6 +1905,41 @@ mod tests {
             total += lines(segment).len();
         }
         assert_eq!(total, appends);
+    }
+
+    #[tokio::test]
+    async fn rotation_refuses_to_seal_a_replaced_active_file() {
+        let directory = directory();
+        let destination = file_destination(&directory)
+            .with_rotate_bytes(MIN_AUDIT_ROTATE_BYTES)
+            .expect("rotation");
+        let path = destination.path().to_path_buf();
+        let hook_path = path.clone();
+        let syncs = Arc::new(AtomicUsize::new(0));
+        let hook_syncs = Arc::clone(&syncs);
+        // The second sync is the one rotation takes before sealing; replace
+        // the active path there, while the writer still holds the original.
+        let hook: SyncHook = Arc::new(move || {
+            if hook_syncs.fetch_add(1, Ordering::SeqCst) == 1 {
+                fs::rename(&hook_path, hook_path.with_file_name("displaced.jsonl"))?;
+                fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&hook_path)?;
+            }
+            Ok(())
+        });
+        let writer = open_with_hook(destination, hook).await;
+        let padding = "x".repeat(700 * 1024);
+        let entry = |correlation: &str| {
+            AuditEntry::request("schema/v2", correlation, json!({"padding": padding}))
+        };
+
+        writer.append(entry("req-1")).await.expect("first append");
+        let refused = writer.append(entry("req-2")).await.expect_err("refused");
+        assert_eq!(refused.reason(), AuditUnavailableReason::WriteFailed);
+        assert!(!writer.ready().await);
     }
 
     #[tokio::test]
