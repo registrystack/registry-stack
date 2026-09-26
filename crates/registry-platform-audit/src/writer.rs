@@ -311,8 +311,9 @@ impl FileDestination {
     /// Check, without taking the writer lock or writing an entry, that a
     /// writer could open this destination: the directory exists or can be
     /// created, is owned by this user and not group- or world-writable, and
-    /// any existing active file is an owner-only regular file whose final
-    /// entry is complete.
+    /// any existing lock companion and active file are owner-only regular
+    /// files the writer can open, and the active file's final entry is
+    /// complete.
     pub fn check_writable(&self) -> Result<(), AuditError> {
         let parent = parent(&self.path)?;
         match fs::symlink_metadata(parent) {
@@ -342,6 +343,23 @@ impl FileDestination {
                 ErrorKind::PermissionDenied,
                 "audit directory is not writable",
             )));
+        }
+        // The writer opens the lock companion for write, on the same terms
+        // as the active file, before it opens the active file.
+        let lock = lock_path(&self.path);
+        match fs::symlink_metadata(&lock) {
+            Ok(metadata) if metadata.file_type().is_symlink() => return Err(symlink_error()),
+            Ok(metadata) => {
+                validate_active_metadata(&metadata)?;
+                rustix::fs::access(&lock, rustix::fs::Access::WRITE_OK).map_err(|_| {
+                    AuditError::Io(io::Error::new(
+                        ErrorKind::PermissionDenied,
+                        "audit lock file is not writable",
+                    ))
+                })?;
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(AuditError::Io(error)),
         }
         match fs::symlink_metadata(&self.path) {
             Ok(metadata) if metadata.file_type().is_symlink() => Err(symlink_error()),
@@ -2064,6 +2082,45 @@ mod tests {
         destination
             .check_writable()
             .expect_err("read-only audit file");
+    }
+
+    #[test]
+    fn check_writable_refuses_a_directory_the_writer_cannot_search() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let parent = destination.path().parent().expect("parent").to_path_buf();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&parent)
+            .expect("audit directory");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o600)).expect("mode");
+        let refused = destination.check_writable();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).expect("restore");
+        refused.expect_err("unsearchable audit directory");
+    }
+
+    #[test]
+    fn check_writable_refuses_a_lock_companion_the_writer_refuses() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path.parent().expect("parent"))
+            .expect("audit directory");
+        let lock = lock_path(&path);
+        fs::write(&lock, "").expect("lock");
+        fs::set_permissions(&lock, fs::Permissions::from_mode(0o600)).expect("mode");
+        destination.check_writable().expect("owner-only lock");
+        fs::set_permissions(&lock, fs::Permissions::from_mode(0o644)).expect("mode");
+        destination
+            .check_writable()
+            .expect_err("group-readable lock");
+        fs::set_permissions(&lock, fs::Permissions::from_mode(0o400)).expect("mode");
+        destination.check_writable().expect_err("read-only lock");
+        fs::remove_file(&lock).expect("remove lock");
+        std::os::unix::fs::symlink(directory.path().join("elsewhere"), &lock).expect("symlink");
+        destination.check_writable().expect_err("symlinked lock");
     }
 
     #[test]
