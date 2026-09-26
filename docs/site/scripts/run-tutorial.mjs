@@ -109,14 +109,18 @@ function printPlan(steps, checkout) {
 // the block that was running, or on a page bash could not parse. A page that
 // reaches its end leaves `page-N.done`; one whose fence ran `exit` does not,
 // and the journey stops there.
+//
+// The script names every harness file by its literal path and sets no shell
+// variable, so a page's own variables neither see nor clobber the harness.
 async function journeyScript(pages, outDir) {
-  const lines = ['set -euo pipefail', "trap 'exit 130' HUP INT TERM", `OUT=${quote(outDir)}`];
+  const file = (name) => quote(join(outDir, name));
+  const lines = ['set -euo pipefail', "trap 'exit 130' HUP INT TERM"];
   let index = 0;
   for (const [pageIndex, steps] of pages.entries()) {
-    lines.push(`printf 'page %s\n' ${pageIndex} >"$OUT/current"`, '(');
+    lines.push(`printf 'page %s\n' ${pageIndex} >${file('current')}`, '(');
     for (const step of steps) {
-      const out = `"$OUT/${outName(index)}"`;
-      lines.push(`printf '%s\n' ${index} >"$OUT/current"`);
+      const out = file(outName(index));
+      lines.push(`printf '%s\n' ${index} >${file('current')}`);
       if (step.kind === 'skip') {
         lines.push(`printf '%s\\n' ${quote(`skip  ${where(step)}: ${step.reason}`)}`);
       } else if (step.kind === 'edit') {
@@ -138,18 +142,20 @@ async function journeyScript(pages, outDir) {
         // promises, and any other status, success included, stops the journey.
         lines.push(`printf '\\n%s\\n' ${quote(`==> ${where(step)}`)}`);
         lines.push('set +e');
+        const status = file('status');
         lines.push(`{\n${step.code}\n} >${out} 2>&1 </dev/null`);
-        lines.push('status=$?', 'set -e');
-        lines.push(`if [[ $status -ne ${step.exit} ]]; then`);
-        lines.push(`  printf '%s exited %s; the page expects ${step.exit}\\n' ${quote(`the sh fence at ${where(step)}`)} "$status" >>${out}`);
+        lines.push(`printf '%s\\n' "$?" >${status}`, 'set -e');
+        lines.push(`if [[ "$(<${status})" -ne ${step.exit} ]]; then`);
+        lines.push(`  printf '%s exited %s; the page expects ${step.exit}\\n' ${quote(`the sh fence at ${where(step)}`)} "$(<${status})" >>${out}`);
         lines.push('  exit 1', 'fi');
         lines.push(`cat ${out}`);
       }
       index += 1;
     }
-    lines.push(`: >"$OUT/page-${pageIndex}.done"`, ')', `[[ -e "$OUT/page-${pageIndex}.done" ]] || exit 0`);
+    const done = file(`page-${pageIndex}.done`);
+    lines.push(`: >${done}`, ')', `[[ -e ${done} ]] || exit 0`);
   }
-  lines.push('printf "\\n" >"$OUT/complete"');
+  lines.push(`printf "\\n" >${file('complete')}`);
   return `${lines.join('\n')}\n`;
 }
 

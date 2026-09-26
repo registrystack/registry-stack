@@ -16,6 +16,9 @@
 // Coverage is derived from the commands, not from a list: every page under
 // start/ or tutorials/ whose sh fences run the toolset's commands must declare
 // tutorial_test, and a page that declares the toolset must run its commands.
+// A page that runs them under another toolset, or replays none of them, is an
+// error too, so neither the declaration nor test-skip can take a page out of
+// the gate that owns its commands.
 // A new tutorial therefore fails the gate on the commit that adds it, until it
 // is replayed or says why not.
 
@@ -55,7 +58,8 @@ async function readPages(docsRoot) {
       }
       const { steps, errors } = readJourney(text);
       const commands = steps.filter((step) => step.code !== undefined).map((step) => step.code);
-      pages.push({ slug, declaration, commands, annotationErrors: errors });
+      const replayedCommands = steps.filter((step) => step.kind === 'run').map((step) => step.code);
+      pages.push({ slug, declaration, commands, replayedCommands, annotationErrors: errors });
     }
   }
   return pages;
@@ -74,7 +78,7 @@ export async function planGate(docsRoot, toolset, commandPattern, knownToolsets)
   const replayed = new Map();
   const skippedSlugs = new Set();
   const checkout = new Set();
-  for (const { slug, unreadable, declaration, commands, annotationErrors } of await readPages(docsRoot)) {
+  for (const { slug, unreadable, declaration, commands, replayedCommands, annotationErrors } of await readPages(docsRoot)) {
     if (unreadable !== undefined) {
       errors.push(`${slug}.mdx: its frontmatter is not YAML: ${unreadable}`);
       continue;
@@ -102,7 +106,15 @@ export async function planGate(docsRoot, toolset, commandPattern, knownToolsets)
       errors.push(`${slug}.mdx: unknown tutorial_test toolset ${declaration.toolset} (expected ${knownToolsets.join(' or ')})`);
       continue;
     }
-    if (declaration.toolset !== toolset || unknown.length > 0) continue;
+    if (declaration.toolset !== toolset) {
+      if (runs) {
+        errors.push(
+          `${slug}.mdx runs ${toolset} commands but declares toolset ${declaration.toolset}, which does not serve them; declare toolset ${toolset}`,
+        );
+      }
+      continue;
+    }
+    if (unknown.length > 0) continue;
     for (const error of annotationErrors) errors.push(`${slug}.mdx: ${error}`);
     if (annotationErrors.length > 0) continue;
     if (!runs) {
@@ -114,6 +126,10 @@ export async function planGate(docsRoot, toolset, commandPattern, knownToolsets)
       continue;
     }
     if (declaration.checkout) checkout.add(slug);
+    if (declaration.skip === undefined && !replayedCommands.some((code) => commandPattern.test(code))) {
+      errors.push(`${slug}.mdx: every ${toolset} command on the page is test-skip; replay one, or give tutorial_test a skip reason`);
+      continue;
+    }
     if (declaration.skip !== undefined) {
       skipped.push({ slug, reason: String(declaration.skip) });
       skippedSlugs.add(slug);
