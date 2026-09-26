@@ -7,6 +7,7 @@ Write a newline to stdin (or close it) to stop the service and its source.
 import argparse
 import base64
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,17 @@ from urllib.request import ProxyHandler, Request, build_opener
 urlopen = build_opener(ProxyHandler({})).open
 
 import yaml
+
+
+sys.dont_write_bytecode = True
+PACKAGE_SUMS_PATH = (
+    Path(__file__).resolve().parents[5]
+    / "products/evidence/scripts/generate-package-sums.py"
+)
+PACKAGE_SUMS_SPEC = importlib.util.spec_from_file_location("evidence_package_sums", PACKAGE_SUMS_PATH)
+assert PACKAGE_SUMS_SPEC is not None and PACKAGE_SUMS_SPEC.loader is not None
+PACKAGE_SUMS = importlib.util.module_from_spec(PACKAGE_SUMS_SPEC)
+PACKAGE_SUMS_SPEC.loader.exec_module(PACKAGE_SUMS)
 
 
 def b64(data):
@@ -165,6 +177,8 @@ def main():
     write_json(bundle / public_path, signing_public)
     config["signing"]["activePublicJwkFile"] = public_path
     (bundle / "evidence.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
+    # Publish the dynamically authored package through the maintained checksum renderer.
+    (bundle / "SHA256SUMS").write_bytes(PACKAGE_SUMS.rendered_sum(bundle))
     runtime = {"apiVersion": "registry.registrystack.org/evidence-runtime/v1alpha1", "kind": "EvidenceRuntimeConfig",
         "package": {"root": str(bundle)}, "listener": {
         "bind": "127.0.0.1:" + str(port), "tlsTermination": "operator-controlled-upstream", "trustProxyIdentityHeaders": False,
