@@ -47,7 +47,9 @@ outside the allowed project directories. A failed package publishes no candidate
 An ordinary `check` can succeed with `status: incomplete` and visible findings. Add
 `--deny-findings` when any finding must refuse the command. All findings carry `severity`, `code`,
 `artifact`, `path`, `message`, and `suggestedAction`. Human output is the default. Add the global
-`--format json` option for the same result as structured JSON.
+`--format json` option for the same result as structured JSON. A command that provides no JSON
+report accepts only `--format human`, and the CLI reference shows which commands those are;
+`--format json` on one of them is the usage error `evidencectl.format.unsupported`.
 
 The workflow exit classes are `0` for success, `1` for a domain refusal or denied finding, `2` for
 command-line usage, and `3` for an operational failure. These classes belong to adopter tooling;

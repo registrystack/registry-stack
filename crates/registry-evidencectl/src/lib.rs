@@ -5,7 +5,10 @@
 
 use std::{ffi::OsString, io::Write as _, path::PathBuf, process::ExitCode};
 
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{
+    builder::{PossibleValuesParser, TypedValueParser as _},
+    ArgMatches, Args, CommandFactory, FromArgMatches as _, Parser, Subcommand, ValueEnum,
+};
 
 mod access;
 mod audit_view;
@@ -213,9 +216,102 @@ struct ArtifactInspectArgs {
 
 /// Return the complete command tree without running Evidence adopter tooling.
 pub fn command() -> clap::Command {
-    let mut command = Cli::command();
+    let mut command = cli_command();
     command.build();
     command
+}
+
+/// Commands whose renderers write only human prose, by subcommand path. Their
+/// `--format` accepts only `human`, and a `--format json` given before the
+/// command is refused before dispatch, so none of their handlers can write
+/// files, bind listeners, or emit prose for a caller expecting JSON.
+const HUMAN_ONLY_COMMANDS: &[&[&str]] = &[
+    &["client", "profile", "create"],
+    &["client", "contracts", "fetch"],
+    &["source", "mock", "serve"],
+    &["source", "mock", "generate"],
+    &["source", "mock", "check"],
+    &["source", "detach"],
+    &["target", "new"],
+    &["request", "prepare"],
+    &["request", "verify"],
+    &["verify"],
+    &["tooling", "language-server"],
+    &["__dev-supervisor"],
+];
+
+/// The command tree with each human-only command's `--format` narrowed to the
+/// output it renders. A subcommand that defines the `output_format` argument
+/// itself does not receive the global one.
+fn cli_command() -> clap::Command {
+    HUMAN_ONLY_COMMANDS
+        .iter()
+        .fold(Cli::command(), |command, path| narrow_format(command, path))
+}
+
+fn narrow_format(command: clap::Command, path: &[&str]) -> clap::Command {
+    match path.split_first() {
+        None => command.arg(
+            clap::Arg::new("output_format")
+                .long("format")
+                .value_name("output_format")
+                .default_value("human")
+                .help("Select human-readable output; this command provides no JSON report")
+                .value_parser(PossibleValuesParser::new(["human"]).map(|_| OutputFormat::Human)),
+        ),
+        Some((name, rest)) => command.mut_subcommand(*name, |sub| narrow_format(sub, rest)),
+    }
+}
+
+/// The human-only command a parsed invocation selected, as its full path.
+fn human_only_command(matches: &ArgMatches) -> Option<String> {
+    let mut path = Vec::new();
+    let mut matches = matches;
+    while let Some((name, sub)) = matches.subcommand() {
+        path.push(name);
+        matches = sub;
+    }
+    HUMAN_ONLY_COMMANDS
+        .contains(&path.as_slice())
+        .then(|| path.join(" "))
+}
+
+/// The human-only command named on a command line that did not parse,
+/// following subcommand names through the command tree past a leading
+/// global `--format` value.
+fn human_only_command_named(arguments: &[OsString]) -> Option<String> {
+    let mut command = cli_command();
+    let mut path = Vec::new();
+    let mut index = 1;
+    while let Some(argument) = arguments.get(index).and_then(|value| value.to_str()) {
+        if argument == "--format" {
+            index += 2;
+            continue;
+        }
+        if argument.starts_with("--format=") {
+            index += 1;
+            continue;
+        }
+        let Some(sub) = command.find_subcommand(argument).cloned() else {
+            break;
+        };
+        path.push(sub.get_name().to_owned());
+        command = sub;
+        index += 1;
+    }
+    HUMAN_ONLY_COMMANDS
+        .iter()
+        .any(|candidate| candidate.iter().eq(path.iter()))
+        .then(|| path.join(" "))
+}
+
+/// Whether clap refused the value of a `--format` argument.
+fn format_value_refused(error: &clap::Error) -> bool {
+    error.kind() == clap::error::ErrorKind::InvalidValue
+        && matches!(
+            error.get(clap::error::ContextKind::InvalidArg),
+            Some(clap::error::ContextValue::String(argument)) if argument.starts_with("--format")
+        )
 }
 
 /// Parse process arguments and run one adopter-tooling operation.
@@ -226,8 +322,11 @@ pub fn main_entry() -> ExitCode {
         write_json_help();
         return ExitCode::SUCCESS;
     }
-    let cli = match Cli::try_parse_from(arguments) {
-        Ok(cli) => cli,
+    let parsed = cli_command()
+        .try_get_matches_from(&arguments)
+        .and_then(|matches| Cli::from_arg_matches(&matches).map(|cli| (cli, matches)));
+    let (cli, matches) = match parsed {
+        Ok(parsed) => parsed,
         Err(error)
             if matches!(
                 error.kind(),
@@ -237,7 +336,13 @@ pub fn main_entry() -> ExitCode {
             let _ = error.print();
             return ExitCode::SUCCESS;
         }
-        Err(_) => {
+        Err(error) => {
+            if requested_format == OutputFormat::Json && format_value_refused(&error) {
+                if let Some(command) = human_only_command_named(&arguments) {
+                    println!("{}", unsupported_json_format_failure(&command));
+                    return ExitCode::from(2);
+                }
+            }
             write_usage_failure(requested_format);
             return ExitCode::from(2);
         }
@@ -248,8 +353,8 @@ pub fn main_entry() -> ExitCode {
         cli.output_format
     };
     if format == OutputFormat::Json {
-        if let Some(command) = unsupported_json_command(&cli.command) {
-            println!("{}", unsupported_json_format_failure(command));
+        if let Some(command) = human_only_command(&matches) {
+            println!("{}", unsupported_json_format_failure(&command));
             return ExitCode::from(2);
         }
     }
@@ -476,49 +581,6 @@ fn legacy_json_requested(command: &Command) -> bool {
         Command::Fixtures(fixtures::FixturesCommand::Run(args)) => args.json,
         Command::Doctor(args) => args.json(),
         _ => false,
-    }
-}
-
-/// Name a command whose legacy renderer cannot fulfil the global JSON output
-/// contract. Refuse these commands before their handlers can write files,
-/// bind listeners, or emit human prose.
-fn unsupported_json_command(command: &Command) -> Option<&'static str> {
-    match command {
-        Command::Client(_) => Some("client"),
-        Command::Source(
-            source_cli::SourceCommand::Mock(_) | source_cli::SourceCommand::Detach(_),
-        ) => Some("source"),
-        Command::Target(target::TargetCommand::New(_)) => Some("target new"),
-        Command::Request(_) => Some("request"),
-        Command::Verify(_) => Some("verify"),
-        Command::Tooling(tooling::ToolingCommand::LanguageServer) => {
-            Some("tooling language-server")
-        }
-        Command::DevSupervisor(_) => Some("__dev-supervisor"),
-        Command::Init(_)
-        | Command::Check(_)
-        | Command::Explain(_)
-        | Command::Test(_)
-        | Command::Package(_)
-        | Command::Access(_)
-        | Command::Keygen(_)
-        | Command::Jwks(_)
-        | Command::New(_)
-        | Command::Build(_)
-        | Command::Fixtures(_)
-        | Command::Source(
-            source_cli::SourceCommand::Add(_)
-            | source_cli::SourceCommand::Suggest(_)
-            | source_cli::SourceCommand::Diff(_)
-            | source_cli::SourceCommand::Import(_)
-            | source_cli::SourceCommand::Update(_),
-        )
-        | Command::Target(target::TargetCommand::Explain(_))
-        | Command::Doctor(_)
-        | Command::Artifact(_)
-        | Command::Dev(_)
-        | Command::Audit(_)
-        | Command::Tooling(tooling::ToolingCommand::Editor(_)) => None,
     }
 }
 
@@ -969,6 +1031,80 @@ mod tests {
         assert!(command
             .find_subcommand("__dev-supervisor")
             .is_some_and(clap::Command::is_hide_set));
+    }
+
+    /// Commands that answer `--format json` with a JSON report.
+    const JSON_REPORTING_COMMANDS: &[&str] = &[
+        "init",
+        "check",
+        "explain",
+        "test",
+        "package",
+        "access policy add",
+        "access policy list",
+        "access client add",
+        "access client list",
+        "access client revoke",
+        "keygen signing",
+        "keygen secret",
+        "keygen token",
+        "keygen holder",
+        "keygen client-assertion",
+        "jwks",
+        "new",
+        "build",
+        "fixtures run",
+        "doctor",
+        "artifact inspect",
+        "dev start",
+        "dev stop",
+        "dev clean",
+        "dev token",
+        "dev grant",
+        "audit show",
+        "source add",
+        "source suggest",
+        "source diff",
+        "source import",
+        "source update",
+        "target explain",
+        "tooling editor",
+    ];
+
+    fn leaf_paths(command: &clap::Command, prefix: &mut Vec<String>, leaves: &mut Vec<String>) {
+        let subcommands: Vec<_> = command
+            .get_subcommands()
+            .filter(|sub| sub.get_name() != "help")
+            .collect();
+        if subcommands.is_empty() {
+            leaves.push(prefix.join(" "));
+        }
+        for sub in subcommands {
+            prefix.push(sub.get_name().to_owned());
+            leaf_paths(sub, prefix, leaves);
+            prefix.pop();
+        }
+    }
+
+    /// Every command either reports JSON or is listed as human-only, so a
+    /// command added later cannot silently answer `--format json` with prose.
+    #[test]
+    fn every_command_declares_whether_it_reports_json() {
+        let mut leaves = Vec::new();
+        leaf_paths(&command(), &mut Vec::new(), &mut leaves);
+        let unclassified: Vec<_> = leaves
+            .iter()
+            .filter(|leaf| {
+                !JSON_REPORTING_COMMANDS.contains(&leaf.as_str())
+                    && !HUMAN_ONLY_COMMANDS
+                        .iter()
+                        .any(|path| path.join(" ") == **leaf)
+            })
+            .collect();
+        assert!(
+            unclassified.is_empty(),
+            "unclassified commands: {unclassified:#?}"
+        );
     }
 
     #[test]
