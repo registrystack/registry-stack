@@ -60,6 +60,18 @@ const registryLegendFrontmatter = z.object({
   // The cast only tells Zod the imported list is non-empty, which a plain JS
   // array cannot state; the values it validates against are the list itself.
   persona: z.array(z.enum(DOC_PERSONAS as [string, ...string[]])).optional(),
+  // How the page's journey is replayed: the toolset it runs against, the page
+  // a reader finishes first, or why it is not replayed. The product's tutorial
+  // gate (scripts/tutorial-runner/gate.mjs) requires it on every page under
+  // start/ or tutorials/ that runs the toolset's commands.
+  tutorial_test: z
+    .object({
+      toolset: z.string().min(1),
+      after: z.string().min(1).optional(),
+      skip: z.string().min(1).optional(),
+    })
+    .strict()
+    .optional(),
 });
 
 export const collections = {

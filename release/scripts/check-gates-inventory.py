@@ -513,7 +513,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ("Production-shaped docs build check", "run: npm run check:production"),
     (
         "Base Registry Engine tutorial replay",
-        "bash docs/site/scripts/check-breg-tutorial.sh",
+        "node docs/site/scripts/run-tutorial.mjs --gate breg\n",
     ),
     (
         "Base Registry Engine tutorial command drift",
@@ -521,7 +521,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Base Registry Engine tutorial path filter",
-        '"docs/site/scripts/check-breg-tutorial.sh",',
+        '"docs/site/scripts/run-tutorial.mjs",',
     ),
     (
         "Registry Casework tutorial replay",

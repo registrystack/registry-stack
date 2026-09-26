@@ -1444,7 +1444,7 @@ class GateInventoryTest(unittest.TestCase):
     def test_missing_breg_tutorial_gates_are_reported(self) -> None:
         for snippet, replacement, gate in (
             (
-                "bash docs/site/scripts/check-breg-tutorial.sh",
+                "node docs/site/scripts/run-tutorial.mjs --gate breg\n",
                 "true # Base Registry Engine tutorial replay disabled",
                 "Base Registry Engine tutorial replay",
             ),
@@ -1460,8 +1460,8 @@ class GateInventoryTest(unittest.TestCase):
 
     def test_missing_breg_tutorial_path_filter_is_reported(self) -> None:
         classifier = self.classifier.replace(
-            '"docs/site/scripts/check-breg-tutorial.sh",',
-            '"docs/site/scripts/unrouted-breg-tutorial.sh",',
+            '"docs/site/scripts/run-tutorial.mjs",',
+            '"docs/site/scripts/unrouted-tutorial-runner.mjs",',
         )
         self.assertIn(
             "Base Registry Engine tutorial path filter",

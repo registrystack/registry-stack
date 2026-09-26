@@ -1455,7 +1455,11 @@ jobs:
         with:
           version: "0.11.16"
 
-      - name: Test the tutorial gate helpers
+      - name: Install docs dependencies
+        working-directory: docs/site
+        run: npm ci
+
+      - name: Test the tutorial runner
         working-directory: docs/site
         run: npm run test:tutorial:breg
 
@@ -1499,7 +1503,7 @@ jobs:
             dev::examples::tests::native_create_and_apply_recover_after_process_exit_without_duplicate_revisions \
             -- --ignored --exact
 
-      - name: Execute the Base Registry Engine tutorial from a reader directory
+      - name: Execute the Base Registry Engine tutorials from a reader directory
         shell: bash
         env:
           BREG_BIN: ${{ github.workspace }}/target/debug/breg
@@ -1507,11 +1511,9 @@ jobs:
         run: |
           set -euo pipefail
           # This replay does not run in a clean read-only container the way the
-          # Evidence one does: the quickstart launcher the tutorial starts runs
-          # PostgreSQL in a disposable container of its own and owns a run
-          # directory inside the checkout it was started from. The gate stages
-          # a writable copy of that checkout for the reader instead.
-          bash docs/site/scripts/check-breg-tutorial.sh
+          # Evidence one does: `bregctl dev` runs PostgreSQL in a disposable
+          # container of its own, which the runner stops when the journey ends.
+          node docs/site/scripts/run-tutorial.mjs --gate breg
 
   casework-tutorial:
     name: Registry Casework tutorial from source
