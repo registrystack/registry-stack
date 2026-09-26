@@ -410,6 +410,43 @@ fn package_refuses_a_local_target_without_publishing_or_exposing_values() {
     }
 }
 
+/// The assurance profile is a property of the target alone, so a local
+/// target is named as such whatever the output location, instead of the
+/// generic package failure an output inside the project, an existing output,
+/// or a missing output parent would otherwise produce first.
+#[test]
+fn package_names_a_local_target_before_judging_the_output_location() {
+    let fixture = Fixture::new();
+    fs::write(
+        &fixture.governance,
+        GOVERNANCE.replace("assuranceProfile: production", "assuranceProfile: local"),
+    )
+    .expect("local target governance");
+    let existing = fixture.output.with_file_name("existing-candidate");
+    fs::create_dir(&existing).expect("existing output");
+    let outputs = [
+        fixture.project.join("dist"),
+        existing,
+        fixture.output.with_file_name("missing").join("candidate"),
+    ];
+
+    for output in &outputs {
+        let result = fixture.package_to("json", output);
+
+        assert_eq!(result.status.code(), Some(1), "{}", output.display());
+        let report: serde_json::Value =
+            serde_json::from_slice(&result.stdout).expect("JSON refusal report");
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "evidence.package.production-profile-required",
+            "{}: {report}",
+            output.display()
+        );
+        assert!(fixture.invocations().is_empty());
+    }
+    assert!(!fixture.project.join("dist").exists());
+}
+
 #[test]
 fn package_refuses_a_bundle_directory_that_does_not_resolve_to_the_output() {
     for format in ["human", "json"] {
@@ -1021,13 +1058,17 @@ impl Fixture {
     }
 
     fn package(&self, format: &str) -> Output {
+        self.package_to(format, &self.output)
+    }
+
+    fn package_to(&self, format: &str, output: &Path) -> Output {
         Command::new(env!("CARGO_BIN_EXE_evidencectl"))
             .args(["--format", format, "package"])
             .arg(&self.project)
             .arg("--target")
             .arg(&self.target)
             .arg("--output")
-            .arg(&self.output)
+            .arg(output)
             .env("EVIDENCE_BIN", &self.evidence)
             .env("FAKE_EVIDENCE_LOG", &self.log)
             .env(

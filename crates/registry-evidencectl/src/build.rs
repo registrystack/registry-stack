@@ -165,19 +165,11 @@ fn run_inner(
     require_deployable_assurance: bool,
 ) -> Result<ExitCode> {
     interruption.check()?;
-    reject_existing_output(&args.output)?;
     let _project_lock = ProjectLock::acquire(&args.project)
         .with_context(|| format!("locking editable project {}", args.project.display()))?;
-    let project = plain_directory(&args.project, "authoring project")?;
-    let output_parent = plain_parent(&args.output)?;
-    let candidate = output_parent.join(
-        args.output
-            .file_name()
-            .ok_or_else(|| anyhow!("candidate output must name one new directory"))?,
-    );
-    if candidate.starts_with(&project) {
-        bail!("candidate output must remain outside the editable project");
-    }
+    // The assurance profile belongs to the target alone, so it is judged
+    // before the output location: a local target is named as such rather
+    // than hidden behind an output refusal.
     let target = read_target_documents(&args.target)?;
     if require_deployable_assurance
         && target
@@ -194,6 +186,17 @@ fn run_inner(
                     .to_owned(),
         }
         .into());
+    }
+    reject_existing_output(&args.output)?;
+    let project = plain_directory(&args.project, "authoring project")?;
+    let output_parent = plain_parent(&args.output)?;
+    let candidate = output_parent.join(
+        args.output
+            .file_name()
+            .ok_or_else(|| anyhow!("candidate output must name one new directory"))?,
+    );
+    if candidate.starts_with(&project) {
+        bail!("candidate output must remain outside the editable project");
     }
     if require_deployable_assurance {
         verify_bundle_directory_matches_candidate(&target.runtime, &candidate)?;
