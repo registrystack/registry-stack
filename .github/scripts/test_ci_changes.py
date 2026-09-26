@@ -949,12 +949,22 @@ class CiChangesTest(unittest.TestCase):
         breg_job = workflow.split("\n  breg-tutorial:\n", 1)[1].split(
             "\n  breg-evidence-composition:\n", 1
         )[0]
-        self.assertIn(
+        test = (
             "dev::examples::tests::"
-            "native_create_and_apply_recover_after_process_exit_without_duplicate_revisions",
+            "native_create_recovers_after_process_exit_without_duplicate_records"
+        )
+        self.assertIn(test, breg_job)
+        self.assertIn("-- --ignored --exact", breg_job)
+        # A renamed test would otherwise leave the step running zero tests.
+        self.assertIn(
+            "grep -q 'test result: ok\\. 1 passed' "
+            '"${RUNNER_TEMP}/breg-example-recovery.log"',
             breg_job,
         )
-        self.assertIn("-- --ignored --exact", breg_job)
+        source = (
+            Path("crates/registry-bregctl/src/dev/examples.rs").read_text()
+        )
+        self.assertIn(f"fn {test.rsplit('::', 1)[1]}()", source)
 
     def test_breg_tutorial_inputs_cover_every_replayed_tutorial(self) -> None:
         # Each page's tutorial_test frontmatter is the source of truth for
