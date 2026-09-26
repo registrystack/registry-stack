@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
@@ -290,4 +290,112 @@ test('a journey whose page asks for the checkout starts at the root of a copy of
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('an interrupt stops the whole journey and shows what the running fence printed', async () => {
+  const body = '## Wait\n\n' + fence('sh', 'echo started\nsleep 30\necho never');
+  await withPage(body, async ({ page }) => {
+    const child = spawn(process.execPath, [runner, page], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    const seen = new Promise((resolvePromise) => {
+      child.stdout.on('data', (chunk) => {
+        output += chunk;
+        if (output.includes('==>')) resolvePromise();
+      });
+    });
+    child.stderr.on('data', (chunk) => {
+      output += chunk;
+    });
+    const closed = new Promise((resolvePromise) => child.on('close', resolvePromise));
+    await seen;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 300));
+    const sent = Date.now();
+    child.kill('SIGINT');
+    const code = await closed;
+    assert.equal(code, 130, output);
+    assert.ok(Date.now() - sent < 10000, 'the fence must be stopped, not waited for');
+    assert.match(output, /tutorial interrupted during the sh fence at line 7 \(Wait\)/u);
+    assert.match(output, /^started$/mu);
+    assert.doesNotMatch(output, /^never$/mu);
+  });
+});
+
+test('a fence that exits its shell stops the journey, on any page', async () => {
+  await withPage('## First\n\n' + fence('sh', 'echo one\nexit 0') + fence('sh', 'echo never'), async ({ dir, page }) => {
+    const second = join(dir, 'second.mdx');
+    await writeFile(second, '---\ntitle: s\n---\n\n## Second\n\n' + fence('sh', 'echo second'));
+    const { code, output } = await run([page, second]);
+    assert.equal(code, 1, output);
+    assert.match(output, /the sh fence at page\.mdx line 7 \(First\) ended the shell early/u);
+    assert.doesNotMatch(output, /^(never|second)$/mu);
+  });
+});
+
+test('a page the shell cannot parse is blamed, not the fence before it', async () => {
+  await withPage('## First\n\n' + fence('sh', 'echo one'), async ({ dir, page }) => {
+    const second = join(dir, 'second.mdx');
+    await writeFile(second, '---\ntitle: s\n---\n\n## Second\n\n' + fence('sh', "echo 'unclosed"));
+    const { code, output } = await run([page, second]);
+    assert.equal(code, 1, output);
+    assert.match(output, /second\.mdx failed with exit status 2 before its first block ran/u);
+    assert.doesNotMatch(output, /the sh fence at page\.mdx/u);
+  });
+});
+
+test('the work directory is removed after a journey, even where it made a directory read-only', async () => {
+  const body = '## Lock\n\n' + fence('sh', 'mkdir -p locked/inner\ntouch locked/inner/file\nchmod 500 locked/inner\nchmod 000 locked');
+  await withPage(body, async ({ dir, page }) => {
+    const temp = join(dir, 'tmp');
+    await mkdir(temp);
+    const { code, output } = await run([page], { TMPDIR: temp });
+    assert.equal(code, 0, output);
+    assert.deepEqual(await readdir(temp), []);
+  });
+});
+
+test('a session that cannot be stopped keeps the work directory and fails the journey', async () => {
+  const body = '## Start\n\n' + fence('sh', 'mkdir -p project/.breg/dev\necho {} >project/.breg/dev/state.json');
+  await withPage(body, async ({ dir, page }) => {
+    const temp = join(dir, 'tmp');
+    await mkdir(temp);
+    await writeFile(join(dir, 'breg'), '#!/bin/sh\n');
+    await writeFile(join(dir, 'bregctl'), '#!/bin/sh\necho "stop refused" >&2\nexit 1\n');
+    await chmod(join(dir, 'breg'), 0o755);
+    await chmod(join(dir, 'bregctl'), 0o755);
+    const { code, output } = await run(['--toolset', 'breg', page], {
+      TMPDIR: temp,
+      BREG_BIN: join(dir, 'breg'),
+      BREGCTL_BIN: join(dir, 'bregctl'),
+    });
+    assert.equal(code, 1, output);
+    assert.match(output, /tutorial PASS/u);
+    assert.match(output, /stop refused/u);
+    assert.match(output, /keeping \/\S+: stop the sessions it holds, then remove it/u);
+    assert.equal((await readdir(temp)).length, 1);
+  });
+});
+
+test('a gate of many journeys replays them all without warnings', async () => {
+  const pages = {};
+  for (let n = 0; n < 12; n += 1) pages[`tutorials/page-${n}`] = 'tutorial_test:\n  toolset: breg\n---\n\n```sh\nbregctl check\n```\n';
+  await withGateDocs(pages, async (env) => {
+    const { code, output } = await run(['--gate', 'breg'], env);
+    assert.equal(code, 0, output);
+    assert.match(output, /gate PASS: 12 journeys replayed/u);
+    assert.doesNotMatch(output, /Warning/u);
+  });
+});
+
+test('a gate dry run builds nothing and starts nothing', async () => {
+  await withGateDocs(GATE_PAGES, async (env) => {
+    const bin = join(dirname(env.BREG_BIN), 'fake-bin');
+    await mkdir(bin);
+    for (const name of ['cargo', 'docker']) {
+      await writeFile(join(bin, name), `#!/bin/sh\necho ran >>'${join(bin, 'calls')}'\n`);
+      await chmod(join(bin, name), 0o755);
+    }
+    const { code, output } = await run(['--gate', 'breg', '--dry-run'], { ...env, BREG_BIN: '', BREGCTL_BIN: '', PATH: `${bin}:${process.env.PATH}` });
+    assert.equal(code, 0, output);
+    assert.equal(existsSync(join(bin, 'calls')), false, output);
+  });
 });
