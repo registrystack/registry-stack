@@ -68,7 +68,32 @@ test('declarations that cannot hold are refused', async () => {
       'tutorials/no-toolset.mdx: tutorial_test needs a toolset',
       'tutorials/orphan.mdx: tutorial_test.after names tutorials/missing, which no page under start/ or tutorials/ replays with breg',
       'tutorials/quiet.mdx declares toolset breg but runs no breg commands; remove its tutorial_test',
-      'tutorials/typo.mdx: unknown tutorial_test key aftr (expected toolset, after, or skip)',
+      'tutorials/typo.mdx: unknown tutorial_test key aftr (expected toolset, after, skip, or checkout)',
+    ]);
+  });
+});
+
+test('a journey starts in a copy of the checkout only when its first page asks', async () => {
+  const pages = {
+    'tutorials/first': { frontmatter: 'tutorial_test:\n  toolset: breg\n  checkout: true\n', body: runsBreg },
+    'tutorials/second': { frontmatter: 'tutorial_test:\n  toolset: breg\n  after: tutorials/first\n', body: runsBreg },
+    'tutorials/alone': { frontmatter: 'tutorial_test:\n  toolset: breg\n', body: runsBreg },
+  };
+  await withDocs(pages, async (root) => {
+    const plan = await planGate(root, 'breg', BREG);
+    assert.deepEqual(plan.errors, []);
+    assert.deepEqual(plan.checkout, ['tutorials/first']);
+  });
+  const refused = {
+    'tutorials/first': { frontmatter: 'tutorial_test:\n  toolset: breg\n', body: runsBreg },
+    'tutorials/second': { frontmatter: 'tutorial_test:\n  toolset: breg\n  after: tutorials/first\n  checkout: true\n', body: runsBreg },
+    'tutorials/odd': { frontmatter: 'tutorial_test:\n  toolset: breg\n  checkout: yes please\n', body: runsBreg },
+  };
+  await withDocs(refused, async (root) => {
+    const { errors } = await planGate(root, 'breg', BREG);
+    assert.deepEqual(errors, [
+      'tutorials/odd.mdx: tutorial_test.checkout is true or absent',
+      'tutorials/second.mdx: tutorial_test.checkout belongs on tutorials/first, where the journey starts',
     ]);
   });
 });
