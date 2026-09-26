@@ -124,7 +124,7 @@ in_list() {
 # tutorial fails coverage on the commit that adds it.
 page_runs_breg_commands() {
 	awk '
-		in_fence == 0 && /^```sh$/ { in_fence = 1; next }
+		in_fence == 0 && /^```sh( |$)/ { in_fence = 1; next }
 		in_fence && /^```$/ { in_fence = 0; next }
 		in_fence && /(^|[^[:alnum:]_-])(bregctl|breg)([^[:alnum:]_-]|$)/ { found = 1; exit }
 		END { exit found ? 0 : 1 }
@@ -503,9 +503,9 @@ for slug in "${BREG_TUTORIALS[@]}"; do
 			sub(/[ \t]+$/, "", heading)
 			next
 		}
-		in_fence == 0 && /^```[A-Za-z0-9_-]+$/ {
+		in_fence == 0 && /^```[A-Za-z0-9_-]+( |$)/ {
 			in_fence = 1
-			capture = ($0 == "```sh")
+			capture = ($0 ~ /^```sh( |$)/)
 			if (capture) {
 				count += 1
 				occurrence[heading] += 1
