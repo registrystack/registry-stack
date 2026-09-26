@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- Answer every audited request entry. A read, mutation, action, or request
+  action that ends after its attempt without a terminal or refusal entry,
+  because it failed, timed out, or its caller went away, writes a response
+  with the phase `unfinished` under the same correlation. A read that fails
+  after its rows were read writes the Refused terminal, and a terminal the
+  destination refuses is logged instead of discarded.
+  - A reviewed change-request apply records its attempt before the receipt
+    preflight's reads and the review authority, and holds it through the
+    action.
+  - `migration reconcile` answers a transition that fails after its request
+    entry with a `failed` response.
+  - `request-retention erase` answers a refused or failed erasure with a
+    `refused` or `failed` response, deletes the external attachment objects
+    before it records a committed erasure, and records how many objects still
+    wait for deletion. An erasure that committed without its response entry
+    reports `request_retention.erasure.unaudited`. `request-retention
+    cleanup-attachments` answers a failed cleanup with a `failed` response.
+  - `evidence-retention erase-expired` is audited under
+    `breg-evidence-retention-audit/v1`: a request entry naming the cutoff
+    before the erasure, and a response with the erased count or `failed`.
+  - An ingestion run creation, cancellation, chunk replay, or receipt
+    recovery refused after its `breg-ingestion-audit/v1` request entry is
+    answered in that schema with a `refused` response, and not recorded again
+    as a general refusal.
+  - Event delivery records a terminal outcome and a payload expiry only after
+    the delivery state commits. An attempt whose lease commit fails is
+    answered with `worker_interrupted`. An operator replay writes a
+    `replay_requested` request before the reset and a `replay_committed` or
+    `replay_refused` response after it.
+
 - BREAKING: write audit through the platform audit writer instead of a
   hash-chained journal in PostgreSQL. Each process opens one writer at
   startup and writes JSON Lines entries `{schema, correlation, phase, time,

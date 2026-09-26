@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Answer every audited request entry. An operation that ends after its
+  request entry without committing, a refusal, a failure, or a canceled
+  request, writes `{event, outcome: "unfinished"}` as its response under the
+  same correlation. Adding a review note is audited as
+  `casework.review_note_added`, naming the note's history event but never its
+  text or audience.
+
 - BREAKING: write audit through the shared platform audit writer instead of
   a hash-chained journal published from a PostgreSQL outbox.
   - The `audit` block takes `hashKeyRef`, `destination` (`file`, the
