@@ -1807,7 +1807,7 @@ mod tests {
     /// An optional structured field exercises untyped nested reference refusal.
     fn prepare_native_fixture(project: &Path) {
         let path = project.join("registry.yaml");
-        let mut source: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let mut source: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
         let entity = source["entities"]
             .as_array_mut()
             .unwrap()
@@ -1861,6 +1861,20 @@ mod tests {
             grant[fields].as_array_mut().unwrap().push(json!("notes"));
         }
         fs::write(path, serde_json::to_vec_pretty(&source).unwrap()).unwrap();
+        // The starter's change requests name the `casework` review authority,
+        // which a start activates. No scenario here submits a request, so the
+        // binding needs only a declared client and an unused loopback endpoint.
+        let path = project.join("dev-clients.yaml");
+        let mut clients: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
+        clients["clients"].as_array_mut().unwrap().push(json!({
+            "id":"casework-producer", "accessProfiles":[],
+            "scopes":["casework:reviews:request"], "claims":{}
+        }));
+        clients["reviewAuthorities"] = json!({"casework":{
+            "endpoint":"http://127.0.0.1:9/", "profile":"integration-requester",
+            "producerId":"registry-breg", "recoveryDays":7, "client":"casework-producer"
+        }});
+        fs::write(path, serde_norway::to_string(&clients).unwrap()).unwrap();
     }
 
     fn preflight_refuses_before_writes(project: &Path, first: &Value) {
