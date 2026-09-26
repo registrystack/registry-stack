@@ -128,6 +128,21 @@ test('the breg toolset refuses a relative binary path', async () => {
   });
 });
 
+test('the harness sets no shell variable a page could use or clobber', async () => {
+  const body =
+    '## Work\n\n' +
+    fence('sh', 'echo "harness:${OUT-}"\nOUT=dist\nstatus=kept') +
+    fence('sh test-exit="3"', 'bash -c "exit 3"') +
+    fence('sh', 'echo "$OUT $status"') +
+    fence('text test-expect', 'dist kept');
+  await withPage(body, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 0, output);
+    assert.match(output, /^harness:$/mu);
+    assert.match(output, /tutorial PASS/u);
+  });
+});
+
 test('a test-edit block changes the file it names, relative to where the reader stands', async () => {
   const body =
     '## Setup\n\n' +

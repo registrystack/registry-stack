@@ -113,3 +113,20 @@ test('a page is refused, not ignored, when it names no known toolset or cannot b
     assert.equal(errors[2], 'tutorials/typo.mdx: unknown tutorial_test toolset bregg (expected breg or none)');
   });
 });
+
+test('a page running the toolset under another toolset, or skipping every one of its commands, is refused', async () => {
+  const pages = {
+    'tutorials/escape': { frontmatter: 'tutorial_test:\n  toolset: none\n', body: runsBreg },
+    'tutorials/all-skipped': {
+      frontmatter: 'tutorial_test:\n  toolset: breg\n',
+      body: '```sh test-skip="reaches the network"\nbregctl --version\n```\n\n```sh\necho hi\n```\n',
+    },
+  };
+  await withDocs(pages, async (root) => {
+    const { errors } = await planGate(root, 'breg', BREG, KNOWN);
+    assert.deepEqual(errors, [
+      'tutorials/all-skipped.mdx: every breg command on the page is test-skip; replay one, or give tutorial_test a skip reason',
+      'tutorials/escape.mdx runs breg commands but declares toolset none, which does not serve them; declare toolset breg',
+    ]);
+  });
+});
