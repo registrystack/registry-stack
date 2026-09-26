@@ -13,8 +13,10 @@ now the envelope every Registry Stack product writes:
 
 The `record` is abbreviated above. The attempt written before source access is
 a `request` entry, and the refusal or terminal outcome is a `response` entry.
-Both carry the operation id as `correlation`. The record keeps every field it
-had except `schema`, which moved to the envelope. The package artifact
+Both carry the operation id as `correlation`. A request dropped after its
+attempt, such as by a client disconnecting during source execution, is answered
+by a terminal record with the added `unfinished` outcome. The record keeps every
+field it had except `schema`, which moved to the envelope. The package artifact
 `generated/artifacts/audit-event.schema.json` now describes one line, and its
 `$id` is
 `https://id.registrystack.org/schemas/registry-relay/audit-event/v2alpha2`.

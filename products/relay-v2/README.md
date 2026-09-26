@@ -93,8 +93,10 @@ Relay writes audit through the shared Registry Stack audit writer. Each line is
 one envelope, `{schema, eventId, time, phase, correlation, record}`, with schema
 `registry.relay.audit/v2alpha2`. The attempt written before source access is a
 `request` entry; the refusal or terminal outcome is a `response` entry; both
-carry the operation id as `correlation`. The `record` is Relay's closed,
-value-free event. The log carries no hash chain or signature, so it is not
+carry the operation id as `correlation`. A request dropped after its attempt,
+such as by a client disconnecting during source execution, is answered by a
+terminal `unfinished` outcome. The `record` is Relay's closed, value-free
+event. The log carries no hash chain or signature, so it is not
 tamper-evident on the host; ship it to append-only storage when that matters.
 The package artifact `generated/artifacts/audit-event.schema.json` describes
 one line.

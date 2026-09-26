@@ -2799,7 +2799,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "60455b8f63171c1799cb62bfd96b1251d7bd8340e23e1e0d16864a48ecb71f3f",
+        "sha256": "6d527a06f2db5377b611ee5613a47a01414bf289338d14f411351c8edb9b2831",
         "mediaType": "application/schema+json"
       }
     },
@@ -2813,11 +2813,11 @@
       "description": "Registry Casework runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-casework/src/schema.rs",
-        "sha256": "bcf6e53c4e1be205bec1b8a2ed59839f0c0e09eaf394ca5ae49bfecee8a3e647"
+        "sha256": "d0f25762e9c7259afcc4f1b21259f3bce94f82958fd3c56d8c33f02fe4c37a3f"
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "99e5a7edf483bf571a2043723d3efd3fdd7b3428e1386bd21cdaf9ae1b8ebee1",
+        "sha256": "3eb913e1529098a2fcf2a34a53285055470bcb03d6b8ed77a621e863a9bd9470",
         "mediaType": "application/schema+json"
       }
     },
@@ -2867,11 +2867,11 @@
       "description": "Relay V2 generated public JSON Schema.",
       "source": {
         "path": "crates/registry-relay-v2/src/artifacts.rs",
-        "sha256": "6ef5d788f9e2f8bdf03a7f002094aa037b1ab2c94b810b0e16c41205ff53d3d7"
+        "sha256": "5f9d6394417be55723166817453b88cee86d91451a85a8ade8ed0f43c2d6342b"
       },
       "artifact": {
         "path": "products/identifiers/generated/artifacts/registry-relay/audit-event/v2alpha2.json",
-        "sha256": "1da61c9cea7ebaa96a0b5c0fdd5dc797080a7bd435cdf265d3f6b293ce6c7590",
+        "sha256": "9d0415eb366a78ceb109b26b9204f139ecdddfa114de66bd13fd98a1b7a5f62a",
         "mediaType": "application/schema+json"
       }
     },
@@ -2903,11 +2903,11 @@
       "description": "Relay V2 authoring JSON Schema.",
       "source": {
         "path": "crates/registry-relayctl/schemas/authoring/runtime.schema.json",
-        "sha256": "fe03e4bd463fc48bad5c6fc3ddd1161dfe37d2a06f74cfa350539b20ca900b2b"
+        "sha256": "71d36fb0cbda780aed077e113169691b27b31f2876bb3724dabb9efa6046a2e8"
       },
       "artifact": {
         "path": "crates/registry-relayctl/schemas/authoring/runtime.schema.json",
-        "sha256": "fe03e4bd463fc48bad5c6fc3ddd1161dfe37d2a06f74cfa350539b20ca900b2b",
+        "sha256": "71d36fb0cbda780aed077e113169691b27b31f2876bb3724dabb9efa6046a2e8",
         "mediaType": "application/schema+json"
       }
     },
@@ -2921,11 +2921,11 @@
       "description": "Registry Scheduling runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-scheduling/src/schema.rs",
-        "sha256": "d5b25e3328e1c60a4224f5f4b411d17090152a8aaf0ae3510f21c8620286007b"
+        "sha256": "1cbcdc86074891a5ef5c9237b43e492967b1cc23eb917438a953905613327bc6"
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "be9422ec5c6e554917fae519b17827acdaf54c7d2347db43505ab0937d349599",
+        "sha256": "b394c77d974a6a414afe3762a7d125ba74ddf78c3a651c1df33ec5d26e7ef399",
         "mediaType": "application/schema+json"
       }
     },
