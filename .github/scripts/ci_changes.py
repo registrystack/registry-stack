@@ -235,7 +235,6 @@ BREG_TUTORIAL_INPUTS = (
     "docs/site/src/content/docs/tutorials/extend-a-registry-with-a-module.mdx",
     "docs/site/src/content/docs/tutorials/first-breg.mdx",
     "docs/site/src/content/docs/tutorials/review-registry-changes.mdx",
-    "products/breg/quickstart/**",
     "products/breg/acceptance/request-attachments/**",
     "products/breg/scripts/test-request-attachments.py",
 )
