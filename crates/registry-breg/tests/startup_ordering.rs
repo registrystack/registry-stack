@@ -22,6 +22,9 @@ use serde::Serialize;
 const INSTANCE: &str = "instance-under-test";
 const DATABASE: &str = "database-under-test";
 const SOURCE_REVISION: &str = "compiler-source-revision";
+const SHARED_PACKAGE_TAMPER: &str = "the package at package.root does not match its SHA256SUMS; \
+changed: openapi/openapi.json; rebuild the package with `bregctl package` and deploy the whole \
+directory";
 const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
 journeys:
   - id: neutral-record-list
@@ -51,7 +54,10 @@ async fn tampered_package_refuses_before_database_audit_oidc_or_listener_access(
         Err(error) => error,
     };
 
-    assert_eq!(error, StartupError::PackageRefused(PackageError::Integrity));
+    assert_eq!(
+        error,
+        StartupError::PackageEnvelopeRefused(SHARED_PACKAGE_TAMPER.to_owned())
+    );
 }
 
 #[tokio::test]
@@ -81,7 +87,7 @@ async fn a_refused_package_keeps_the_cause_that_refused_it() {
 
     assert_eq!(
         tampered,
-        StartupError::PackageRefused(PackageError::Integrity)
+        StartupError::PackageEnvelopeRefused(SHARED_PACKAGE_TAMPER.to_owned())
     );
     assert_eq!(
         mismatched,
