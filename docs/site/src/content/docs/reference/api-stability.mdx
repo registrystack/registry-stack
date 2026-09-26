@@ -212,7 +212,7 @@ The promise is machine-checked where a checker exists:
   describes, and writes records, review work, and audit entries with them against disposable
   PostgreSQL. It then runs the upgrade steps with the binaries built from the pull request and
   fails when captured domain data or stored revisions change, other captured views differ, or
-  retained tables lose rows. BReg rebuilds and applies a successor before serving; its
+  retained tables lose rows. Base Registry Engine rebuilds and applies a successor before serving; its
   package-bound ETags may change. Audit
   tables retired by this breaking upgrade must first be preserved in an archive whose row counts
   are checked. Old audit files are preserved separately from the new entry stream. It refuses to
