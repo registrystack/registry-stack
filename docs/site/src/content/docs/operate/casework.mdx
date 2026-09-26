@@ -210,7 +210,7 @@ sources:
 | `secretProviders` | The explicitly enabled file and environment secret providers. |
 | `database` | Secret references for the runtime and migration connection URLs, and an optional trusted root certificate for the PostgreSQL connection. |
 | `authentication` | The OpenID Connect issuer, audience, claim names, human-identity assertion, and the source of the issuer's keys. |
-| `audit` | Where audit entries go, `file` (the default) at an absolute `path` or `stdout`, the optional `rotateBytes` (100 MiB by default, at least 1 MiB) and `retainDays` (90 by default, at most 36500) of a `file` destination, and the reference to the key that pseudonymizes the identifiers entries name. |
+| `audit` | Where audit entries go, `file` (the default) at an absolute `path` or `stdout`, the optional `rotateBytes` (100 MiB by default, at least 1 MiB, at most 4294967295) and `retainDays` (90 by default, at most 36500) of a `file` destination, and the reference to the key that pseudonymizes the identifiers entries name. |
 | `sources` | One BReg binding per source the package declares: base URL, reader profile, token endpoint, and references to the client identifier, client assertion key, and webhook secret. The set of keys must equal the set of declared source ids exactly, and a package with no source needs no block. |
 
 The package root, file secret root, and audit path must be absolute. A `stdout` destination
