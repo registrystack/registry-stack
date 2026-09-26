@@ -2023,7 +2023,11 @@ fn serve_stops_on_sigterm_and_restarts_on_the_same_audit_file() {
     let port = free_port();
     let deployment = Deployment::stage_on_port("all-definitions", port);
     deployment.stage_acceptance_secrets();
-    let earlier = "{\"written\":\"by an earlier process\"}\n";
+    // A real entry shape: the writer now refuses to open a file whose first
+    // entry is not in its current envelope format (eventId/schema/time/
+    // correlation/phase), so this stub must satisfy that shape to stand in
+    // for content an earlier process wrote.
+    let earlier = "{\"eventId\":\"5b1b5b8e-6f2b-4c1a-9b7a-6b1b5b8e6f2b\",\"schema\":\"registry.test.audit/v1\",\"time\":\"2024-01-01T00:00:00Z\",\"correlation\":\"by-an-earlier-process\",\"phase\":\"request\",\"record\":{\"written\":\"by an earlier process\"}}\n";
     deployment.stage_audit_file(earlier);
     deployment.seal();
     let path = deployment.path("audit.jsonl");
