@@ -1222,8 +1222,20 @@ impl GroupCommitFile {
             std::thread::yield_now();
         }
         let Some(runtime) = runtime else {
-            if line.is_some() {
-                tracing::error!("audit file state is busy outside a runtime; an unfinished response entry was not written");
+            // Outside a runtime nothing can flush the line later, so it is
+            // queued under a blocking wait for the lock, which no holder
+            // keeps across an await; the file's drop or the next group
+            // commit writes it.
+            if let Some(line) = line {
+                let mut state = self.state.blocking_lock();
+                if state.stopped {
+                    tracing::error!(
+                        "audit writer stopped; an unfinished response entry was not written"
+                    );
+                    return;
+                }
+                state.pending.push(line);
+                state.enqueued = state.enqueued.saturating_add(1);
             }
             return;
         };
@@ -3573,6 +3585,50 @@ mod tests {
         });
         assert_eq!(result, Err("database unavailable"));
         drop(runtime);
+        assert_paired(&lines(&path), "unfinished");
+    }
+
+    #[test]
+    fn a_request_dropped_outside_a_runtime_while_the_file_is_busy_still_pairs() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let (writer, request) = runtime.block_on(async move {
+            let writer = AuditWriter::open(AuditDestination::File(destination))
+                .await
+                .expect("open");
+            let request = writer
+                .begin(
+                    SCHEMA,
+                    "req-1",
+                    json!({"operationId": "erase"}),
+                    unfinished(),
+                )
+                .await
+                .expect("request");
+            (writer, request)
+        });
+        drop(runtime);
+        let WriterInner::File(file) = writer.inner.as_ref() else {
+            panic!("a file destination");
+        };
+        let file = Arc::clone(file);
+        let (held, holding) = std::sync::mpsc::channel();
+        // Another thread holds the file state for longer than any bounded
+        // wait while the handle is dropped outside a runtime.
+        let holder = std::thread::spawn(move || {
+            let _state = file.state.blocking_lock();
+            held.send(()).expect("signal");
+            std::thread::sleep(Duration::from_millis(200));
+        });
+        holding.recv().expect("the state is held");
+        drop(request);
+        holder.join().expect("holder");
+        drop(writer);
         assert_paired(&lines(&path), "unfinished");
     }
 
