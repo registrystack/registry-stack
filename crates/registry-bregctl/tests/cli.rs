@@ -598,6 +598,9 @@ const PACKAGE_INSTANCE: &str = "verify-instance";
 const PACKAGE_DATABASE: &str = "verify-database";
 const PACKAGE_SOURCE_REVISION: &str = "verify-compiler-source";
 const PACKAGE_VALUE_CANARY: &str = "verify-path-trust-secret-sql-canary";
+const VERIFY_RUNTIME_DATABASE_SECRET_CANARY: &str = "VERIFY_RUNTIME_DATABASE_SECRET_IS_NOT_OPENED";
+const VERIFY_MIGRATION_DATABASE_SECRET_CANARY: &str =
+    "VERIFY_MIGRATION_DATABASE_SECRET_IS_NOT_OPENED";
 const SCHEMA_TEST_AUTHORED_SOURCE_CEILING_BYTES: usize = 1024 * 1024;
 const PACKAGE_FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
 journeys:
@@ -5226,7 +5229,8 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
         fixture.package_revision.as_str(),
         other.package_revision.as_str(),
         PACKAGE_VALUE_CANARY,
-        "VERIFY_DATABASE_SECRET_IS_NOT_OPENED",
+        VERIFY_RUNTIME_DATABASE_SECRET_CANARY,
+        VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
     ] {
         assert!(!rendered.contains(forbidden));
     }
@@ -5248,8 +5252,9 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
         json_stdout(&already_active)["diagnostics"][0]["code"],
         "apply.database_configuration.refused"
     );
-    assert!(!String::from_utf8_lossy(&already_active.stdout)
-        .contains("VERIFY_DATABASE_SECRET_IS_NOT_OPENED"));
+    let rendered = String::from_utf8_lossy(&already_active.stdout);
+    assert!(!rendered.contains(VERIFY_RUNTIME_DATABASE_SECRET_CANARY));
+    assert!(!rendered.contains(VERIFY_MIGRATION_DATABASE_SECRET_CANARY));
 
     let database_refusal = bregctl(&[
         "--format",
@@ -5270,8 +5275,9 @@ fn apply_verifies_package_intent_before_database_authority_and_stays_value_free(
         json_stdout(&database_refusal)["diagnostics"][0]["code"],
         "apply.database_configuration.refused"
     );
-    assert!(!String::from_utf8_lossy(&database_refusal.stdout)
-        .contains("VERIFY_DATABASE_SECRET_IS_NOT_OPENED"));
+    let rendered = String::from_utf8_lossy(&database_refusal.stdout);
+    assert!(!rendered.contains(VERIFY_RUNTIME_DATABASE_SECRET_CANARY));
+    assert!(!rendered.contains(VERIFY_MIGRATION_DATABASE_SECRET_CANARY));
 }
 
 #[test]
@@ -5295,7 +5301,8 @@ fn apply_refuses_a_stale_shared_envelope_before_database_authority() {
         "apply.package.refused"
     );
     let rendered = String::from_utf8(refused.stdout).expect("diagnostic is UTF-8");
-    assert!(!rendered.contains("VERIFY_DATABASE_SECRET_IS_NOT_OPENED"));
+    assert!(!rendered.contains(VERIFY_RUNTIME_DATABASE_SECRET_CANARY));
+    assert!(!rendered.contains(VERIFY_MIGRATION_DATABASE_SECRET_CANARY));
 }
 
 #[test]
@@ -5452,7 +5459,8 @@ fn migration_reconcile_verifies_intent_before_database_authority_and_stays_value
         path(&fixture.package),
         path(&fixture.anchor),
         PACKAGE_VALUE_CANARY,
-        "VERIFY_DATABASE_SECRET_IS_NOT_OPENED",
+        VERIFY_RUNTIME_DATABASE_SECRET_CANARY,
+        VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
     ] {
         assert!(!rendered.contains(forbidden));
     }
@@ -5513,7 +5521,8 @@ fn verify_is_runtime_bound_deterministic_and_listener_free() {
         path(&fixture.package),
         path(&fixture.anchor),
         "oidc-is-not-opened.invalid",
-        "VERIFY_DATABASE_SECRET_IS_NOT_OPENED",
+        VERIFY_RUNTIME_DATABASE_SECRET_CANARY,
+        VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
     ] {
         assert!(!rendered.contains(forbidden));
     }
@@ -6231,8 +6240,8 @@ secretProviders:
   file:
     root: {secret_root}
 database:
-  runtimeUrlRef: secret:env/VERIFY_RUNTIME_DATABASE_SECRET_IS_NOT_OPENED
-  migrationUrlRef: secret:env/VERIFY_MIGRATION_DATABASE_SECRET_IS_NOT_OPENED
+  runtimeUrlRef: secret:env/{VERIFY_RUNTIME_DATABASE_SECRET_CANARY}
+  migrationUrlRef: secret:env/{VERIFY_MIGRATION_DATABASE_SECRET_CANARY}
   pool:
     maxSize: 1
     waitTimeoutMilliseconds: 1000
