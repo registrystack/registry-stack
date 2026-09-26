@@ -1240,6 +1240,14 @@ impl RunAttempt {
         let record = outcome_record(&self.record, "refused");
         self.request.respond(record).await.is_ok()
     }
+
+    /// Answer the request as unfinished: the transition's commit returned
+    /// an error, which does not prove it rolled back, so its outcome is
+    /// unknown. Reports whether the destination accepted the answer.
+    pub(crate) async fn abandon(mut self) -> bool {
+        let record = outcome_record(&self.record, "unfinished");
+        self.request.respond(record).await.is_ok()
+    }
 }
 
 fn outcome_record(request: &Value, outcome: &str) -> Value {
