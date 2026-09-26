@@ -2,18 +2,19 @@
 // A compact Outcome / Time / Prerequisites strip for tutorial pages, set in
 // the ledger key/value style (reuses .card-meta + .inline-chip). Place it after
 // the lead paragraph, never directly under H1. Data is passed as props, so no
-// new enforced frontmatter is introduced.
+// new enforced frontmatter is introduced. A prerequisite may name the page
+// that covers it as `{ label, href }` (see lib/quickstart-prerequisites.mjs).
+import { prerequisiteItems } from '../lib/quickstart-prerequisites.mjs';
+
 interface Props {
   outcome: string;
   time?: string;
   level?: string;
-  prerequisites?: string[];
+  prerequisites?: (string | { label: string; href: string })[];
 }
 
 const { outcome, time, level, prerequisites } = Astro.props;
-// Normalize defensively: an MDX author can pass null or a non-array by mistake,
-// and the default only guards the omitted (undefined) case.
-const items = Array.isArray(prerequisites) ? prerequisites : [];
+const items = prerequisiteItems(prerequisites, import.meta.env.BASE_URL);
 ---
 
 <dl class="card-meta quickstart-meta">
@@ -36,7 +37,11 @@ const items = Array.isArray(prerequisites) ? prerequisites : [];
       <dt>Prerequisites</dt>
       <dd class="meta-chips">
         {items.map((item) => (
-          <span class="inline-chip">{item}</span>
+          item.href ? (
+            <a class="inline-chip" href={item.href}>{item.label}</a>
+          ) : (
+            <span class="inline-chip">{item.label}</span>
+          )
         ))}
       </dd>
     </>

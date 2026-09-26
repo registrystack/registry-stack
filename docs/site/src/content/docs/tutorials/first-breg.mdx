@@ -26,7 +26,14 @@ Everything you keep goes into one directory, `tutorial-work`.
   outcome="A record created and updated over HTTP, with refused requests showing authentication, field permissions, version checks, and required fields at work."
   time="About 15 minutes, plus the image download"
   level="Local evaluation only"
-  prerequisites={['Linux amd64 or arm64, or macOS on Apple Silicon', 'A Bash or zsh shell', 'Running Docker', 'curl 7.76 or later', 'Python 3, to format JSON responses', 'An editor']}
+  prerequisites={[
+    'Linux amd64 or arm64, or macOS on Apple Silicon',
+    'A Bash or zsh shell',
+    { label: 'Running Docker', href: 'https://docs.docker.com/get-started/get-docker/' },
+    { label: 'curl 7.76 or later', href: 'https://curl.se/download.html' },
+    { label: 'Python 3, to format JSON responses', href: 'https://www.python.org/downloads/' },
+    'An editor',
+  ]}
 />
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init_files();
