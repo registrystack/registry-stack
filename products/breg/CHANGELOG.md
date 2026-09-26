@@ -19,6 +19,10 @@
     wait for deletion. An erasure that committed without its response entry
     reports `request_retention.erasure.unaudited`. `request-retention
     cleanup-attachments` answers a failed cleanup with a `failed` response.
+  - `history rebaseline`, a standalone `history erase`, and a
+    field-encryption erase-and-rebaseline run answer their request entry with
+    an `unfinished` response when they are refused or fail before their
+    terminal entry, as does an attachment verification job that stops early.
   - `evidence-retention erase-expired` is audited under
     `breg-evidence-retention-audit/v1`: a request entry naming the cutoff
     before the erasure, and a response with the erased count or `failed`.

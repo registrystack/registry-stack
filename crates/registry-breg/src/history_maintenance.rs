@@ -15,7 +15,7 @@
 
 use std::time::Duration;
 
-use registry_platform_audit::{AuditEntry, AuditKeyHasher, AuditProfile};
+use registry_platform_audit::{AuditEntry, AuditKeyHasher, AuditProfile, AuditRequest};
 
 use crate::audit::RegistryAudit;
 use crate::postgres::{ExpectedRegistryIdentity, PostgresKernelError};
@@ -134,6 +134,26 @@ pub(crate) async fn verify_ready_identity(
 
 pub(crate) fn profile_is_keyed(profile: &AuditProfile) -> bool {
     matches!(profile.key_hasher(), AuditKeyHasher::Keyed(_))
+}
+
+/// Append a maintenance `request` entry before its transaction opens and
+/// return the handle that owes its response. The terminal entry appended
+/// after commit, under the same schema and correlation, answers it; a
+/// maintenance run that returns first writes the request's fields with the
+/// `unfinished` outcome when the handle is dropped.
+pub(crate) async fn begin_maintenance_request(
+    audit: &RegistryAudit,
+    entry: AuditEntry,
+) -> Result<AuditRequest, HistoryMaintenanceError> {
+    let mut unfinished = entry.record().clone();
+    if let Some(fields) = unfinished.as_object_mut() {
+        fields.insert("phase".to_owned(), "terminal".into());
+        fields.insert("outcome".to_owned(), "unfinished".into());
+    }
+    audit
+        .begin(entry, unfinished)
+        .await
+        .map_err(|_| HistoryMaintenanceError::Unavailable)
 }
 
 /// Append maintenance entries after the transaction that made their change

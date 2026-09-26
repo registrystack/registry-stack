@@ -23,8 +23,8 @@ use uuid::Uuid;
 use crate::audit::RegistryAudit;
 use crate::history_commit::{lock_history_head, HistoryCommitError};
 use crate::history_maintenance::{
-    append_maintenance_entries, profile_is_keyed, set_local_timeouts, verify_ready_identity,
-    HistoryMaintenanceError,
+    append_maintenance_entries, begin_maintenance_request, profile_is_keyed, set_local_timeouts,
+    verify_ready_identity, HistoryMaintenanceError,
 };
 use crate::idempotency::{tombstone_erased_cached_responses, IdempotencyError};
 use crate::postgres::{
@@ -203,13 +203,13 @@ async fn erase_record_history_scoped(
     // A standalone erasure's request entry is accepted before its
     // transaction opens, so an audit outage erases nothing. A lifecycle
     // erasure runs under the request entry its parent lifecycle appended.
-    if lifecycle_reference.is_none() {
-        append_maintenance_entries(
-            request.audit,
-            vec![history_erasure_request_entry(&request)?],
-        )
-        .await?;
-    }
+    let _attempt = match lifecycle_reference {
+        None => Some(
+            begin_maintenance_request(request.audit, history_erasure_request_entry(&request)?)
+                .await?,
+        ),
+        Some(_) => None,
+    };
 
     let transaction = client
         .transaction()
