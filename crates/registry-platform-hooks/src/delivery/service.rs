@@ -275,6 +275,29 @@ impl<S: DeliverySeams> DeliveryService<S> {
         event_id: Uuid,
         compiled_delivery_id: &str,
         expected_generation: i64,
+    ) -> Result<i64, DeliveryError>
+    where
+        S: Clone,
+    {
+        // The replay runs to its response in a task of its own: once its
+        // request entry is accepted, a caller that stops waiting (a timeout
+        // or a disconnect) cannot leave that request unanswered.
+        let service = self.clone();
+        let compiled_delivery_id = compiled_delivery_id.to_owned();
+        tokio::spawn(async move {
+            service
+                .replay_in(event_id, &compiled_delivery_id, expected_generation)
+                .await
+        })
+        .await
+        .map_err(|_| DeliveryError::Unavailable)?
+    }
+
+    async fn replay_in(
+        &self,
+        event_id: Uuid,
+        compiled_delivery_id: &str,
+        expected_generation: i64,
     ) -> Result<i64, DeliveryError> {
         if compiled_delivery_id.is_empty()
             || compiled_delivery_id.len() > 256
@@ -1453,30 +1476,17 @@ impl<S: DeliverySeams> DeliveryService<S> {
             ) else {
                 return None;
             };
-            let current = generation == event.generation;
-            let at_attempt = current && attempt == event.attempt;
-            return Some(match (event.phase, event.disposition) {
-                (DeliveryAuditPhase::Attempt, _) => {
-                    at_attempt && state == "leased" && token.is_some() && token == lease_token
-                }
-                (DeliveryAuditPhase::Replay, _) => current && state == "pending",
-                (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::Expired) => {
-                    current && expired
-                }
-                (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::Delivered) => {
-                    at_attempt && state == "delivered"
-                }
-                (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::DeadLettered) => {
-                    at_attempt && state == "dead_lettered"
-                }
-                (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::RetryPending) => {
-                    at_attempt && state == "pending" && token.is_none()
-                }
-                (
-                    DeliveryAuditPhase::Terminal,
-                    DeliveryAuditDisposition::Leased | DeliveryAuditDisposition::ReplayPending,
-                ) => false,
-            });
+            return Some(transition_holds(
+                event,
+                &ObservedDelivery {
+                    state: &state,
+                    generation,
+                    attempt,
+                    lease_token: token,
+                    expired,
+                },
+                lease_token,
+            ));
         }
         None
     }
@@ -1562,6 +1572,55 @@ impl<S: DeliverySeams> DeliveryService<S> {
     /// interpolation is safe.
     fn sql(&self, template: &str) -> String {
         delivery_schema::render(&self.schema, template)
+    }
+}
+
+/// One delivery row as read back after a commit returned an error.
+struct ObservedDelivery<'a> {
+    state: &'a str,
+    generation: i64,
+    attempt: i16,
+    lease_token: Option<Uuid>,
+    expired: bool,
+}
+
+/// Whether `observed` shows the transition `event` records as durable. An
+/// attempt's lease is matched on the token this worker wrote.
+fn transition_holds(
+    event: &PendingAudit,
+    observed: &ObservedDelivery<'_>,
+    lease_token: Option<Uuid>,
+) -> bool {
+    let current = observed.generation == event.generation;
+    let at_attempt = current && observed.attempt == event.attempt;
+    let state = observed.state;
+    match (event.phase, event.disposition) {
+        (DeliveryAuditPhase::Attempt, _) => {
+            at_attempt
+                && state == "leased"
+                && observed.lease_token.is_some()
+                && observed.lease_token == lease_token
+        }
+        // Only a replay's reset writes a generation, so the replacement
+        // generation proves the reset committed whatever state the worker
+        // has since moved it to.
+        (DeliveryAuditPhase::Replay, _) => current,
+        (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::Expired) => {
+            current && observed.expired
+        }
+        (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::Delivered) => {
+            at_attempt && state == "delivered"
+        }
+        (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::DeadLettered) => {
+            at_attempt && state == "dead_lettered"
+        }
+        (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::RetryPending) => {
+            at_attempt && state == "pending" && observed.lease_token.is_none()
+        }
+        (
+            DeliveryAuditPhase::Terminal,
+            DeliveryAuditDisposition::Leased | DeliveryAuditDisposition::ReplayPending,
+        ) => false,
     }
 }
 
@@ -2183,6 +2242,44 @@ mod tests {
             maximum_payload_bytes: i64::try_from(body.len()).expect("bound"),
             payload_digest: digest,
         }
+    }
+
+    fn replay_of(generation: i64) -> PendingAudit {
+        PendingAudit {
+            event_id: Uuid::nil(),
+            compiled_delivery_id: "delivery".to_owned(),
+            package_revision: "revision".to_owned(),
+            generation,
+            attempt: 0,
+            phase: DeliveryAuditPhase::Replay,
+            outcome: DeliveryAuditOutcome::ReplayCommitted,
+            disposition: DeliveryAuditDisposition::ReplayPending,
+        }
+    }
+
+    fn observed(state: &str, generation: i64, attempt: i16) -> ObservedDelivery<'_> {
+        ObservedDelivery {
+            state,
+            generation,
+            attempt,
+            lease_token: None,
+            expired: false,
+        }
+    }
+
+    #[test]
+    fn a_replay_whose_reset_committed_holds_after_the_worker_moves_it() {
+        let replay = replay_of(2);
+        for state in ["pending", "leased", "delivered", "dead_lettered"] {
+            assert!(
+                transition_holds(&replay, &observed(state, 2, 1), None),
+                "the replacement generation proves the reset in state {state}"
+            );
+        }
+        assert!(
+            !transition_holds(&replay, &observed("dead_lettered", 1, 2), None),
+            "the prior generation proves the reset rolled back"
+        );
     }
 
     #[test]

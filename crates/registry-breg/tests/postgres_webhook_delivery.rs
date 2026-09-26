@@ -353,14 +353,38 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     )
     .await;
 
-    service
-        .replay(
-            timeout_event.event_id,
-            &timeout_event.compiled_delivery_id,
-            1,
+    // The operator stops waiting while the reset's commit is in flight:
+    // the replay still runs to its response, so its accepted request is
+    // answered once the reset commits.
+    slow_delivery_state_commit(&database, "pending").await;
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(300),
+            service.replay(
+                timeout_event.event_id,
+                &timeout_event.compiled_delivery_id,
+                1,
+            ),
         )
         .await
-        .expect("compiled operator replay resets one terminal generation");
+        .is_err(),
+        "the caller leaves before the reset commits"
+    );
+    allow_delivery_state_commit(&database).await;
+    let mut answered = Vec::new();
+    for _ in 0..50 {
+        answered = audit_outcomes(&database, &audit_profile, &timeout_event, 2, 0, "replay").await;
+        if answered.len() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        answered,
+        ["replay_requested", "replay_committed"],
+        "a replay whose caller left is still answered"
+    );
+    assert_eq!(delivery_state(&database, &timeout_event).await.0, 2);
     assert_eq!(
         service
             .replay(
@@ -968,6 +992,30 @@ async fn refuse_delivery_state_commit(database: &TestDatabase, state: &str) {
         ))
         .await
         .expect("administrator installs the commit refusal");
+}
+
+/// Hold the commit of any delivery transition into `state` for a second,
+/// after every statement in its transaction succeeded.
+async fn slow_delivery_state_commit(database: &TestDatabase, state: &str) {
+    database
+        .admin
+        .batch_execute(&format!(
+            "CREATE OR REPLACE FUNCTION public.test_refuse_delivery_commit()
+               RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN
+               IF NEW.state = '{state}' THEN
+                 PERFORM pg_sleep(1);
+               END IF;
+               RETURN NEW;
+             END $$;
+             GRANT EXECUTE ON FUNCTION public.test_refuse_delivery_commit() TO PUBLIC;
+             CREATE CONSTRAINT TRIGGER test_refuse_delivery_commit
+               AFTER UPDATE ON registry_internal.registry_webhook_delivery_state
+               DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+               EXECUTE FUNCTION public.test_refuse_delivery_commit();"
+        ))
+        .await
+        .expect("administrator installs the commit delay");
 }
 
 async fn allow_delivery_state_commit(database: &TestDatabase) {
