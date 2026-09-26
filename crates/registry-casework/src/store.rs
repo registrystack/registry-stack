@@ -100,20 +100,14 @@ const HOSTED_WORK_TABLES: [&str; 9] = [
 
 /// Refuse a migration that would drop hosted work rows. The hosted tables have
 /// no successor in the unified review schema, so any row they still hold is
-/// named to the operator instead of being dropped.
+/// named to the operator instead of being dropped. The caller runs this from
+/// inside the same migration transaction that would perform the drop, after
+/// it has already confirmed this version is unapplied, so the exclusive lock
+/// taken here on each table holds for the rest of that transaction and no
+/// concurrent writer can insert a row between this count and that drop.
 async fn refuse_to_drop_hosted_work(
     transaction: &tokio_postgres::Transaction<'_>,
 ) -> Result<(), StoreError> {
-    let replaced: bool = transaction
-        .query_one(
-            "SELECT EXISTS(SELECT 1 FROM casework_schema_migrations WHERE version=$1)",
-            &[&HOSTED_WORK_DROP_VERSION],
-        )
-        .await?
-        .get(0);
-    if replaced {
-        return Ok(());
-    }
     let mut tables = Vec::new();
     for table in HOSTED_WORK_TABLES {
         let exists: bool = transaction
@@ -123,6 +117,9 @@ async fn refuse_to_drop_hosted_work(
         if !exists {
             continue;
         }
+        transaction
+            .batch_execute(&format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE"))
+            .await?;
         let rows: i64 = transaction
             .query_one(&format!("SELECT count(*) FROM {table}"), &[])
             .await?
@@ -393,7 +390,6 @@ impl PostgresStore {
             .await?
             .get(0);
         refuse_newer_schema(newest_applied)?;
-        refuse_to_drop_hosted_work(&transaction).await?;
         transaction.commit().await?;
 
         for (version, migration) in MIGRATIONS {
@@ -406,6 +402,12 @@ impl PostgresStore {
                 .await?
                 .get(0);
             if !applied {
+                if version == HOSTED_WORK_DROP_VERSION {
+                    // Checked here, inside the same transaction that runs this
+                    // version's SQL, so nothing can add a hosted-work row
+                    // between the check and the drop below.
+                    refuse_to_drop_hosted_work(&transaction).await?;
+                }
                 if version == AUDIT_OUTBOX_DROP_VERSION {
                     // Checked here, inside the same transaction that runs this
                     // version's SQL, so nothing can add an unpublished row
