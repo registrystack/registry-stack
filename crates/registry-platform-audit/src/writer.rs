@@ -532,33 +532,40 @@ pub struct AuditWriter {
 /// The schema and correlation a request entry and its responses share.
 type RequestKey = (String, String);
 
+/// One request entry still owed a response: whether one was accepted, and
+/// the state its handle shares with the responses being written.
+#[derive(Clone)]
+struct OpenRequest {
+    answered: Arc<AtomicBool>,
+    state: Arc<StdMutex<RequestState>>,
+}
+
 /// The request entries whose [`AuditRequest`] still owes a response, by
 /// schema and correlation, oldest first.
 #[derive(Default)]
-struct OpenRequests(StdMutex<std::collections::HashMap<RequestKey, Vec<Arc<AtomicBool>>>>);
+struct OpenRequests(StdMutex<std::collections::HashMap<RequestKey, Vec<OpenRequest>>>);
 
 impl OpenRequests {
-    fn open(&self, key: RequestKey) -> Arc<AtomicBool> {
-        let answered = Arc::new(AtomicBool::new(false));
+    fn open(&self, key: RequestKey, request: OpenRequest) {
         if let Ok(mut open) = self.0.lock() {
-            open.entry(key).or_default().push(Arc::clone(&answered));
+            open.entry(key).or_default().push(request);
         }
-        answered
     }
 
-    /// Mark the oldest open request under `key` answered.
-    fn answer(&self, key: &RequestKey) {
-        let Ok(mut open) = self.0.lock() else {
-            return;
-        };
-        if let Some(waiting) = open.get_mut(key) {
-            if !waiting.is_empty() {
-                waiting.remove(0).store(true, Ordering::Release);
+    /// Claim the oldest open request under `key` that no appended response
+    /// has claimed yet, counting that response as in flight on it, so its
+    /// handle dropped meanwhile leaves the request to that response.
+    fn claim(&self, key: &RequestKey) -> Option<OpenRequest> {
+        let open = self.0.lock().ok()?;
+        open.get(key)?.iter().find_map(|request| {
+            let mut state = request.state.lock().ok()?;
+            if state.claimed {
+                return None;
             }
-            if waiting.is_empty() {
-                open.remove(key);
-            }
-        }
+            state.claimed = true;
+            state.in_flight += 1;
+            Some(request.clone())
+        })
     }
 
     /// Close `answered` under `key`, reporting whether it is still owed a
@@ -572,7 +579,7 @@ impl OpenRequests {
             return false;
         }
         if let Some(waiting) = open.get_mut(key) {
-            waiting.retain(|candidate| !Arc::ptr_eq(candidate, answered));
+            waiting.retain(|candidate| !Arc::ptr_eq(&candidate.answered, answered));
             if waiting.is_empty() {
                 open.remove(key);
             }
@@ -638,14 +645,33 @@ impl AuditWriter {
     pub async fn append(&self, entry: AuditEntry) -> Result<(), AuditUnavailable> {
         // The write and the bookkeeping it implies run in one task that
         // outlives a canceled caller, so an accepted response always answers
-        // its request, whether or not the caller is still waiting.
+        // its request, whether or not the caller is still waiting. The
+        // request is claimed before that task starts, so a handle dropped
+        // while the response is written leaves the request to it.
+        let claimed = if entry.phase == AuditPhase::Response {
+            let key = (entry.schema.clone(), entry.correlation.clone());
+            self.open.claim(&key).map(|request| (key, request))
+        } else {
+            None
+        };
         let writer = self.clone();
         tokio::spawn(async move {
-            writer.write(&entry).await?;
-            if entry.phase == AuditPhase::Response {
-                writer.open.answer(&(entry.schema, entry.correlation));
+            let result = writer.write(&entry).await;
+            if let Some((key, request)) = claimed {
+                if result.is_ok() {
+                    writer.open.close(&key, &request.answered);
+                    request.answered.store(true, Ordering::Release);
+                }
+                let owes_unfinished = request.state.lock().is_ok_and(|mut state| {
+                    state.claimed = false;
+                    state.in_flight -= 1;
+                    state.in_flight == 0 && state.dropped
+                });
+                if owes_unfinished {
+                    settle_unanswered(&writer, key, &request.answered, &request.state);
+                }
             }
-            Ok(())
+            result
         })
         .await
         .map_err(|_| AuditUnavailable::new(AuditUnavailableReason::Stopped))?
@@ -706,17 +732,26 @@ impl AuditWriter {
                     request,
                 ))
                 .await?;
-            let answered = writer.open.open((schema.clone(), correlation.clone()));
+            let answered = Arc::new(AtomicBool::new(false));
+            let state = Arc::new(StdMutex::new(RequestState {
+                unfinished: Some(unfinished),
+                in_flight: 0,
+                claimed: false,
+                dropped: false,
+            }));
+            writer.open.open(
+                (schema.clone(), correlation.clone()),
+                OpenRequest {
+                    answered: Arc::clone(&answered),
+                    state: Arc::clone(&state),
+                },
+            );
             Ok(AuditRequest {
                 writer,
                 schema,
                 correlation,
                 answered,
-                state: Arc::new(StdMutex::new(RequestState {
-                    unfinished: Some(unfinished),
-                    in_flight: 0,
-                    dropped: false,
-                })),
+                state,
             })
         })
         .await
@@ -816,6 +851,9 @@ struct RequestState {
     unfinished: Option<Value>,
     /// Responses whose write has started and not yet settled.
     in_flight: usize,
+    /// A response appended through [`AuditWriter::append`] claimed this
+    /// request and has not settled.
+    claimed: bool,
     /// The handle was dropped while a response was in flight.
     dropped: bool,
 }
@@ -3709,6 +3747,48 @@ mod tests {
         drop(request);
         writer.wait_for_detached_entries();
         assert_paired(&buffered_lines(&sink.buffer), "returned");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_request_dropped_while_an_appended_response_is_written_is_answered_once() {
+        let sink = GatedSink::new();
+        sink.release();
+        let writer = AuditWriter::from_line_sink(Box::new(sink.clone()));
+        let request = writer
+            .begin(
+                SCHEMA,
+                "req-1",
+                json!({"operationId": "read"}),
+                unfinished(),
+            )
+            .await
+            .expect("request");
+        *sink.open.0.lock().expect("gate") = false;
+        let appending = tokio::spawn({
+            let writer = writer.clone();
+            async move {
+                writer
+                    .append(AuditEntry::response(
+                        SCHEMA,
+                        "req-1",
+                        json!({"outcome": "returned"}),
+                    ))
+                    .await
+            }
+        });
+        sink.wait_entered(2).await;
+        // The caller and its handle go away while the appended response is
+        // written: that response answers the request, and the drop writes
+        // nothing more.
+        appending.abort();
+        drop(request);
+        sink.release();
+        lines_eventually(&sink.buffer, 2).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        writer.wait_for_detached_entries();
+        let lines = buffered_lines(&sink.buffer);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_paired(&lines, "returned");
     }
 
     #[tokio::test]
