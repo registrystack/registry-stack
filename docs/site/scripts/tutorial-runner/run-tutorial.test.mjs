@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { chmod, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
@@ -217,4 +217,58 @@ test('an excerpt that is not there fails after the journey, and a missing file s
     assert.match(output, /nowhere\.yaml/u);
     assert.doesNotMatch(output, /^never$/mu);
   });
+});
+
+async function withGateDocs(pages, fn) {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'tutorial-runner-gate.')));
+  try {
+    for (const [slug, text] of Object.entries(pages)) {
+      await mkdir(dirname(join(dir, 'docs', slug)), { recursive: true });
+      await writeFile(join(dir, 'docs', `${slug}.mdx`), `---\ntitle: t\n${text}`);
+    }
+    for (const name of ['breg', 'bregctl']) {
+      await writeFile(join(dir, name), `#!/bin/sh\nprintf '%s %s\\n' ${name} "$*"\n`);
+      await chmod(join(dir, name), 0o755);
+    }
+    const env = { TUTORIAL_DOCS_ROOT: join(dir, 'docs'), BREG_BIN: join(dir, 'breg'), BREGCTL_BIN: join(dir, 'bregctl') };
+    return await fn(env);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+const GATE_PAGES = {
+  'tutorials/first': 'tutorial_test:\n  toolset: breg\n---\n\n## One\n\n```sh\nbregctl init work\nmkdir work\n```\n',
+  'tutorials/second':
+    'tutorial_test:\n  toolset: breg\n  after: tutorials/first\n---\n\n## Two\n\n```sh\nls\nbregctl check work\n```\n\n```text test-expect\nwork\nbregctl check work\n```\n',
+  'tutorials/later': 'tutorial_test:\n  toolset: breg\n  skip: needs a production database\n---\n\n```sh\nbregctl deploy\n```\n',
+};
+
+test('a gate replays every declared journey and names the skipped pages', async () => {
+  await withGateDocs(GATE_PAGES, async (env) => {
+    const plan = await run(['--gate', 'breg', '--dry-run'], env);
+    assert.equal(plan.code, 0, plan.output);
+    assert.match(plan.output, /skip  page tutorials\/later: needs a production database/u);
+    assert.match(plan.output, /journey tutorials\/first -> tutorials\/second/u);
+    assert.match(plan.output, /run {3}first\.mdx line 9 \(One\): bregctl init work/u);
+    const { code, output } = await run(['--gate', 'breg'], env);
+    assert.equal(code, 0, output);
+    assert.match(output, /expect second\.mdx line 15: ok/u);
+    assert.match(output, /gate PASS: 1 journey replayed, 1 page skipped/u);
+  });
+});
+
+test('a gate with a coverage gap runs nothing and names the page', async () => {
+  const pages = { ...GATE_PAGES, 'start/new': '---\n\n```sh\nbreg --version\n```\n' };
+  await withGateDocs(pages, async (env) => {
+    const { code, output } = await run(['--gate', 'breg'], env);
+    assert.equal(code, 2, output);
+    assert.match(output, /start\/new\.mdx runs breg commands but declares no tutorial_test/u);
+    assert.doesNotMatch(output, /==>/u);
+  });
+});
+
+test('a gate needs a toolset that names its commands, and no pages beside it', async () => {
+  assert.match((await run(['--gate', 'none'])).output, /toolset none has no commands to gate/u);
+  assert.match((await run(['--gate', 'breg', 'page.mdx'])).output, /--gate takes no pages/u);
 });

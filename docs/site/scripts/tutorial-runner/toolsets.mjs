@@ -25,6 +25,10 @@ function checkBinary(variable, path) {
 // BREG_BIN and BREGCTL_BIN name exact candidate or released binaries.
 // `bregctl dev` resolves `breg` from PATH, so both are served by name.
 const breg = {
+  // A page whose sh fences match this runs the toolset, so its gate must
+  // cover it (tutorial-runner/gate.mjs).
+  commands: /(^|[^\w-])(bregctl|breg)([^\w-]|$)/mu,
+
   async prepare({ repoRoot, binDir }) {
     let bregBin = process.env.BREG_BIN;
     let bregctlBin = process.env.BREGCTL_BIN;
@@ -36,8 +40,6 @@ const breg = {
       if (!['ci', 'release'].includes(profile)) {
         throw new ToolsetError(`unsupported tutorial Cargo profile: ${profile} (expected ci or release)`);
       }
-      // The same target directory as check-breg-tutorial.sh, so the two gates
-      // share one build while they run side by side.
       const targetDir = join(repoRoot, 'target/breg-tutorial-source');
       const build = spawnSync(
         'cargo',

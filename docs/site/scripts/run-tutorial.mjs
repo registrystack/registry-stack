@@ -2,6 +2,7 @@
 // Replay a tutorial page the way a reader follows it.
 //
 //   node scripts/run-tutorial.mjs [--dry-run] [--toolset breg|none] <page.mdx>...
+//   node scripts/run-tutorial.mjs [--dry-run] --gate breg
 //
 // The page is the specification (see tutorial-runner/page.mjs): its sh fences
 // run in document order in one bash shell, from an empty reader directory
@@ -21,6 +22,12 @@
 // The toolset puts the product binaries under test on PATH and stops any
 // service the journey left running, whether it passed or failed.
 //
+// With --gate, the pages come from their own frontmatter instead of the
+// command line (tutorial-runner/gate.mjs): every page under start/ or
+// tutorials/ that runs the toolset's commands is replayed, as the start of or
+// part of a journey, or names why it is skipped. Every journey replays, even
+// after one fails.
+//
 // Exit status: 0 when the journey and every expectation pass, 1 when either
 // fails, 2 for a usage, annotation, or toolset error, 130 when interrupted.
 
@@ -33,11 +40,13 @@ import { fileURLToPath } from 'node:url';
 
 import { checkExcerpt } from './tutorial-runner/excerpt.mjs';
 import { checkExpectation } from './tutorial-runner/expect.mjs';
+import { planGate } from './tutorial-runner/gate.mjs';
 import { readJourney } from './tutorial-runner/page.mjs';
 import { TOOLSETS, ToolsetError } from './tutorial-runner/toolsets.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
-const USAGE = 'usage: run-tutorial.mjs [--dry-run] [--toolset breg|none] <page.mdx>...';
+const USAGE = 'usage: run-tutorial.mjs [--dry-run] [--toolset breg|none] <page.mdx>...\n       run-tutorial.mjs [--dry-run] --gate breg';
+const DOCS_ROOT = process.env.TUTORIAL_DOCS_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '../src/content/docs');
 const APPLY_EDIT = join(dirname(fileURLToPath(import.meta.url)), 'tutorial-runner/apply-edit.mjs');
 
 function usageError(message) {
@@ -51,13 +60,16 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === '--dry-run') options.dryRun = true;
     else if (arg === '--toolset') options.toolset = argv[++i];
+    else if (arg === '--gate') options.gate = options.toolset = argv[++i];
     else if (arg.startsWith('-')) usageError(`unknown option: ${arg}`);
     else options.pages.push(arg);
   }
-  if (options.pages.length === 0) usageError('missing page');
+  if (options.gate !== undefined && options.pages.length > 0) usageError('--gate takes no pages; they come from frontmatter');
+  if (options.gate === undefined && options.pages.length === 0) usageError('missing page');
   if (!Object.hasOwn(TOOLSETS, options.toolset ?? '')) {
     usageError(`unknown toolset: ${options.toolset} (expected ${Object.keys(TOOLSETS).join(' or ')})`);
   }
+  if (options.gate !== undefined && !TOOLSETS[options.gate].commands) usageError(`toolset ${options.gate} has no commands to gate`);
   return options;
 }
 
@@ -232,26 +244,67 @@ async function replay(pages, toolset) {
 
 // Read every page before anything runs. With more than one page, each step is
 // named with its page, and the runIndex of an expectation or excerpt points
-// into the whole journey rather than its own page.
-const options = parseArgs(process.argv.slice(2));
-const pages = [];
-let offset = 0;
-let annotationErrors = 0;
-for (const page of options.pages) {
-  const { steps, errors } = readJourney(await readFile(page, 'utf8'));
-  for (const error of errors) console.error(`${page}: ${error}`);
-  annotationErrors += errors.length;
-  const name = options.pages.length > 1 ? basename(page) : undefined;
-  pages.push(
-    steps.map((step) => ({
-      ...step,
-      ...(name ? { page: name } : {}),
-      ...(step.runIndex === undefined ? {} : { runIndex: step.runIndex + offset }),
-    })),
-  );
-  offset += steps.length;
+// into the whole journey rather than its own page. Returns null after printing
+// any annotation error.
+async function readPages(paths) {
+  const pages = [];
+  let offset = 0;
+  let annotationErrors = 0;
+  for (const page of paths) {
+    const { steps, errors } = readJourney(await readFile(page, 'utf8'));
+    for (const error of errors) console.error(`${page}: ${error}`);
+    annotationErrors += errors.length;
+    const name = paths.length > 1 ? basename(page) : undefined;
+    pages.push(
+      steps.map((step) => ({
+        ...step,
+        ...(name ? { page: name } : {}),
+        ...(step.runIndex === undefined ? {} : { runIndex: step.runIndex + offset }),
+      })),
+    );
+    offset += steps.length;
+  }
+  return annotationErrors > 0 ? null : pages;
 }
-if (annotationErrors > 0) process.exit(2);
+
+async function runGate(toolsetName, dryRun) {
+  const toolset = TOOLSETS[toolsetName];
+  const { journeys, skipped, errors } = await planGate(DOCS_ROOT, toolsetName, toolset.commands);
+  for (const error of errors) console.error(error);
+  if (errors.length > 0) return 2;
+  const planned = [];
+  for (const journey of journeys) {
+    const pages = await readPages(journey.map((slug) => join(DOCS_ROOT, `${slug}.mdx`)));
+    if (!pages) return 2;
+    planned.push({ journey, pages });
+  }
+  for (const { slug, reason } of skipped) console.log(`skip  page ${slug}: ${reason}`);
+  const failed = [];
+  for (const { journey, pages } of planned) {
+    console.log(`\njourney ${journey.join(' -> ')}`);
+    if (dryRun) {
+      printPlan(pages.flat());
+      continue;
+    }
+    const status = await replay(pages, toolset);
+    if (status === 130) return 130;
+    if (status !== 0) failed.push(journey.at(-1));
+  }
+  if (dryRun) return 0;
+  const count = (n, noun) => `${n} ${noun}${n === 1 ? '' : 's'}`;
+  const summary = `${count(planned.length, 'journey')} replayed, ${count(skipped.length, 'page')} skipped`;
+  if (failed.length === 0) {
+    console.log(`\ngate PASS: ${summary}`);
+    return 0;
+  }
+  console.log(`\ngate FAIL: ${summary}; failed: ${failed.join(', ')}`);
+  return 1;
+}
+
+const options = parseArgs(process.argv.slice(2));
+if (options.gate !== undefined) process.exit(await runGate(options.gate, options.dryRun));
+const pages = await readPages(options.pages);
+if (!pages) process.exit(2);
 if (options.dryRun) {
   printPlan(pages.flat());
   process.exit(0);

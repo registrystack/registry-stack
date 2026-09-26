@@ -153,7 +153,7 @@ Quickstart or tutorial change:
 ```sh
 products/breg/quickstart/run.sh --smoke
 products/breg/quickstart/run.sh --spatial --smoke
-bash docs/site/scripts/check-breg-tutorial.sh
+node docs/site/scripts/run-tutorial.mjs --gate breg
 ```
 
 ## Generated outputs
