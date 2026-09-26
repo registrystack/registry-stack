@@ -1,7 +1,6 @@
 //! Scaffold and CLI regression tests: the first-hour path, exercised as a
 //! user drives it — `registry-render init`, first compile, validate without a
-//! clock, the unsealed notice, edit-after-seal recovery, and verify-then-
-//! seal ordering.
+//! clock, package creation, repeatability, and verify-before-write ordering.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -224,42 +223,111 @@ fn validate_is_a_dry_run_and_needs_no_clock() {
 }
 
 #[test]
-fn compile_prints_the_unsealed_notice() {
+fn retired_seal_command_names_the_package_replacement() {
     let dir = tempdir();
     run(&["init", dir.to_str().unwrap()]);
-    let compiled = compile(&dir);
-    let stderr = String::from_utf8_lossy(&compiled.stderr);
+    let refused = run(&["seal", "--bundle", dir.to_str().unwrap()]);
+    assert_eq!(
+        refused.status.code(),
+        Some(registry_render::ProblemKind::InvalidArgument.exit_code())
+    );
+    let stderr = String::from_utf8_lossy(&refused.stderr);
     assert!(
-        stderr.contains("unsealed"),
-        "compile must say when a bundle is unsealed: {stderr}"
+        stderr.contains("registry-render package") && stderr.contains("--output"),
+        "retired command must name its replacement: {stderr}"
     );
 }
 
 #[test]
-fn edit_after_seal_names_the_recovery_path() {
+fn package_command_writes_repeatable_verified_envelopes_and_revision() {
     let dir = tempdir();
     run(&["init", dir.to_str().unwrap()]);
-    let sealed = run(&["seal", "--bundle", dir.to_str().unwrap()]);
-    assert!(sealed.status.success());
-    // An intentional edit after sealing…
-    let template = dir.join("templates/letter.typ");
-    let mut text = std::fs::read_to_string(&template).unwrap();
-    text.push_str("// edited\n");
-    std::fs::write(&template, text).unwrap();
-    let compiled = compile(&dir);
+    let packages = tempdir();
+    let first = packages.join("letter-package-a");
+    let second = packages.join("letter-package-b");
+    for output in [&first, &second] {
+        let packaged = run(&[
+            "package",
+            "--bundle",
+            dir.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+            "--revision",
+            "revision-1",
+        ]);
+        assert!(
+            packaged.status.success(),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&packaged.stdout),
+            String::from_utf8_lossy(&packaged.stderr)
+        );
+    }
     assert_eq!(
-        compiled.status.code(),
-        Some(registry_render::ProblemKind::BundleTampered.exit_code())
+        std::fs::read(first.join("SHA256SUMS")).unwrap(),
+        std::fs::read(second.join("SHA256SUMS")).unwrap(),
+        "the same authored bytes and revision produce the same package digest"
     );
-    let stderr = String::from_utf8_lossy(&compiled.stderr);
+    assert_eq!(
+        std::fs::read_to_string(first.join("REVISION")).unwrap(),
+        "revision-1\n"
+    );
+    let verified = registry_platform_config::package::verify_package(
+        &first,
+        &registry_render::runtime::package_limits(),
+        "registry-render package",
+    )
+    .expect("written package verifies");
+    assert_eq!(verified.revision(), Some("revision-1"));
+
+    let checked = run(&["check", "--bundle", first.to_str().unwrap()]);
     assert!(
-        stderr.contains("registry-render seal"),
-        "the drift message must point at recovery: {stderr}"
+        checked.status.success(),
+        "a deployment package remains inspectable: {}",
+        String::from_utf8_lossy(&checked.stderr)
     );
-    // …and recovery actually works.
-    let resealed = run(&["seal", "--bundle", dir.to_str().unwrap()]);
-    assert!(resealed.status.success());
-    assert!(compile(&dir).status.success());
+    let validated = run(&[
+        "validate",
+        "--bundle",
+        first.to_str().unwrap(),
+        "--type",
+        "letter",
+        "--data",
+        dir.join("fixtures/data.json").to_str().unwrap(),
+    ]);
+    assert!(
+        validated.status.success(),
+        "a deployment package remains validatable: {}",
+        String::from_utf8_lossy(&validated.stderr)
+    );
+    let rendered = run(&[
+        "compile",
+        "--bundle",
+        first.to_str().unwrap(),
+        "--type",
+        "letter",
+        "--data",
+        dir.join("fixtures/data.json").to_str().unwrap(),
+        "--issued-at",
+        "2026-01-01T00:00:00Z",
+        "--out",
+        packages.join("letter.pdf").to_str().unwrap(),
+    ]);
+    assert!(
+        rendered.status.success(),
+        "the CLI consumes the package it produced: {}",
+        String::from_utf8_lossy(&rendered.stderr)
+    );
+    assert!(String::from_utf8_lossy(
+        &run(&[
+            "package",
+            "--bundle",
+            dir.to_str().unwrap(),
+            "--output",
+            first.to_str().unwrap(),
+        ])
+        .stderr
+    )
+    .contains("new directory"));
 }
 
 #[test]
@@ -440,27 +508,33 @@ fn check_names_a_locale_missing_a_label_key() {
 }
 
 #[test]
-fn check_seal_refuses_to_seal_a_broken_bundle() {
+fn package_refuses_a_broken_bundle_before_writing_output() {
     let dir = tempdir();
     run(&["init", dir.to_str().unwrap()]);
     // Break script coverage: a label value in a script no font covers,
     // without adding any font to the bundle.
     std::fs::write(dir.join("labels/en.yaml"), "title: 你好\n").unwrap();
-    let out = run(&["check", "--bundle", dir.to_str().unwrap(), "--seal"]);
+    let output = tempdir().join("broken-package");
+    let out = run(&[
+        "package",
+        "--bundle",
+        dir.to_str().unwrap(),
+        "--output",
+        output.to_str().unwrap(),
+    ]);
     assert_eq!(
         out.status.code(),
         Some(registry_render::ProblemKind::FontInvalid.exit_code()),
-        "verify must run before sealing"
+        "authoring validation must run before package output"
     );
-    let manifest = std::fs::read_to_string(dir.join("manifest.yaml")).unwrap();
     assert!(
-        !manifest.contains("hashes:"),
-        "a failed check must not leave a seal behind"
+        !output.exists(),
+        "a failed package leaves no output directory"
     );
 }
 
 #[test]
-fn bundle_with_symlink_cannot_be_sealed() {
+fn bundle_with_symlink_cannot_be_packaged() {
     let dir = tempdir();
     run(&["init", dir.to_str().unwrap()]);
     let outside = tempfile::tempdir().unwrap();
@@ -468,7 +542,14 @@ fn bundle_with_symlink_cannot_be_sealed() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(outside.path().join("x.txt"), dir.join("templates/link.typ"))
         .unwrap();
-    let out = run(&["seal", "--bundle", dir.to_str().unwrap()]);
+    let output = tempdir().join("symlink-package");
+    let out = run(&[
+        "package",
+        "--bundle",
+        dir.to_str().unwrap(),
+        "--output",
+        output.to_str().unwrap(),
+    ]);
     #[cfg(unix)]
     assert_eq!(
         out.status.code(),

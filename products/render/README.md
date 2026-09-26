@@ -5,7 +5,7 @@ receipts, notices, certificates, letters, ID/member cards (photo, QR,
 duplex), tags and labels — using [Typst](https://typst.app) embedded as a
 library.
 
-> Give Render a sealed template bundle and validated record data. Render
+> Give Render a verified template package and validated record data. Render
 > returns the identical PDF every time, with the hashes and audit events an
 > institution needs to stand behind the printed artifact.
 
@@ -28,7 +28,8 @@ cargo run -p registry-render -- init ./my-bundle
 # write data.json with {reference, body, footer-note}
 cargo run -p registry-render -- compile --bundle ./my-bundle --type letter \
   --data data.json --issued-at 2026-01-01T00:00:00Z --out letter.pdf
-cargo run -p registry-render -- seal --bundle ./my-bundle     # when ready
+cargo run -p registry-render -- package --bundle ./my-bundle \
+  --output ./my-package --revision "$(git rev-parse HEAD)"
 ```
 
 The scaffold compiles offline out of the box: the binary embeds a baseline
@@ -59,8 +60,8 @@ exits 101):
 |---|---|---|
 | 2 | `invalid-argument` | malformed CLI or request argument |
 | 3 | `manifest-invalid` | bundle manifest missing or structurally invalid |
-| 4 | `bundle-tampered` | sealed bundle hashes do not match the manifest |
-| 5 | `bundle-unsealed` | operation requires a sealed bundle |
+| 4 | `bundle-tampered` | package files do not match the shared `SHA256SUMS` envelope |
+| 5 | `bundle-unsealed` | runtime package lacks `SHA256SUMS` |
 | 6 | `unknown-document` | requested document type or locale not in the bundle |
 | 7 | `labels-invalid` | label table missing, invalid, or key sets diverge across locales |
 | 8 | `font-invalid` | bundle font cannot be loaded, or label script uncovered |
@@ -81,7 +82,7 @@ exits 101):
 
 ## Guarantees, mechanistically
 
-- **Byte-stable**: for fixed (bundle hash, type, locale, canonical data,
+- **Byte-stable**: for fixed (package hash, type, locale, canonical data,
   `issuedAt`) the PDF bytes are fixed — fresh Typst world and library per
   render, deterministic font order, the RFC 8785 canonical envelope is
   exactly the string injected into the template and exactly the bytes
@@ -90,8 +91,9 @@ exits 101):
 - **Path-safe**: a template's world contains exactly the bundle, the
   request's decoded assets (`assets/<name>`), and vendored packages —
   enforced by lexical checks and exact lookups in an immutable bundle
-  snapshot, not by template discipline. Sealed loads verify that snapshot
-  once, and Typst consumes those exact verified bytes.
+  snapshot, not by template discipline. Package loads bind the shared
+  checksum envelope to that snapshot, and Typst consumes those exact
+  verified bytes.
 - **Resource-bounded**: serves render in a supervised worker process,
   killed at the timeout, memory-capped on Linux, recycled on panic.
 - **Auditable**: one value-free event per service render (hashes, versions,

@@ -1,7 +1,7 @@
 //! `registry-render` — governed, byte-stable PDF documents from registry
 //! data, rendered with Typst in library mode.
 //!
-//! The crate is a pure function at heart: a sealed template bundle plus a
+//! The crate is a pure function at heart: a verified template package plus a
 //! validated request in, an identical PDF plus hashes out, every time. The
 //! world a template sees contains exactly the bundle, the request's decoded
 //! assets, and the vendored packages — no host fonts, no network, no clock
@@ -19,8 +19,8 @@
 //!   bundle fonts sorted by path — mirroring the Typst CLI's book so
 //!   library and CLI renders agree byte for byte. Never filesystem
 //!   iteration order.
-//! - **Verified bytes are consumed bytes**: bundle files are captured once,
-//!   seals are verified over that immutable snapshot, and the same bytes feed
+//! - **Verified bytes are consumed bytes**: package files are captured once,
+//!   shared checksums are bound to that immutable snapshot, and the same bytes feed
 //!   label/schema parsing, font loading, and every Typst source/file lookup.
 //! - **Path safety is world-enforced**: every resolution rejects `..` and
 //!   absolute components, then must name an exact immutable snapshot key.

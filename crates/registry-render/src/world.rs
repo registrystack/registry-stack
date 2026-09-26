@@ -113,7 +113,7 @@ impl RenderWorld {
     }
 
     /// Normalize a Typst virtual path into the slash-separated spelling used
-    /// by the sealed snapshot. No resolution ever consults the filesystem.
+    /// by the verified package snapshot. No resolution ever consults the filesystem.
     fn normalize_virtual_path(vpath: &str) -> FileResult<String> {
         let mut clean = PathBuf::new();
         for component in Path::new(vpath).components() {

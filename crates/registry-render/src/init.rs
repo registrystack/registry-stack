@@ -85,11 +85,9 @@ const FIXTURE_DATA: &str =
 
 const README: &str = r#"# Render bundle
 
-- `manifest.yaml` — document types, versions, labels, and (after
-  `registry-render seal`) per-file hashes.
+- `manifest.yaml` — document types, versions, labels, and PDF constraints.
 - `templates/` — Typst entry points. Author them with any upstream Typst
-  tooling; `registry-render compile` (and `--watch`) run unsealed bundles with a
-  notice.
+  tooling; `registry-render compile` (and `--watch`) run the authored bundle.
 - `schemas/` — the JSON Schema each request's `data` must satisfy.
 - `labels/` — one flat YAML string map per locale; seeded in English,
   localize at will. A script beyond Latin needs a font in `fonts/` (for
@@ -105,7 +103,8 @@ const README: &str = r#"# Render bundle
 
 Workflow: edit → `registry-render compile --bundle . --type letter
 --data fixtures/data.json --issued-at … --out letter.pdf` (or `--watch`) →
-`registry-render seal` when ready → `registry-render serve` requires the sealed bundle.
+`registry-render check` → `registry-render package --bundle . --output ../letter-package`.
+Point `package.root` at the new package directory before serving.
 
 Before writing a template that prints registry data, agree the field list
 (the disclosure gate): what appears on paper leaves every access profile

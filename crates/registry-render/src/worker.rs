@@ -33,11 +33,10 @@ pub struct WorkerRequest {
     pub issued_at: String,
     #[serde(default)]
     pub strict: bool,
-    /// Serve mode pins the seal per request, not just at startup: the
-    /// worker must load sealed and the response must carry the startup
-    /// bundle hash.
+    /// Serve mode pins the package per request, not just at startup: the
+    /// worker must verify it and the response must carry the package digest.
     #[serde(default)]
-    pub require_sealed: bool,
+    pub require_package: bool,
     #[serde(default = "default_max_output")]
     pub max_output_bytes: usize,
     #[serde(default = "default_memory_limit")]
@@ -218,7 +217,7 @@ fn cap_address_space(limit: u64) {
 }
 
 /// Bundle-load problems format host paths (the manifest it cannot read, a
-/// symlink the seal walk refuses), and in serve mode they cross the pipe to
+/// symlink the package walk refuses), and in serve mode they cross the pipe to
 /// the caller. The bundle root is replaced with `<bundle>` the way render
 /// diagnostics already are, in both its given and its canonical spelling.
 fn redact_bundle_root(mut problem: RenderProblem, root: &Path) -> RenderProblem {
@@ -244,14 +243,27 @@ fn redact_bundle_root(mut problem: RenderProblem, root: &Path) -> RenderProblem 
 }
 
 fn render_in_worker(request: &WorkerRequest) -> WorkerResponse {
-    // Serve pins the seal per request: the worker loads one immutable bundle
-    // snapshot every time, verifies the seal over those exact bytes, and
-    // renders only from that snapshot. Drift present before capture is
-    // refused here; later path changes cannot affect this render.
-    let bundle = if request.require_sealed {
-        crate::bundle::Bundle::load_sealed(&request.bundle)
+    // Serve pins the package per request: the worker verifies the common
+    // envelope, captures one immutable product snapshot, binds those consumed
+    // bytes to the verified digests, and renders only from that snapshot.
+    let bundle = if request.require_package {
+        registry_platform_config::package::verify_package(
+            &request.bundle,
+            &crate::runtime::package_limits(),
+            "registry-render package",
+        )
+        .map_err(|error| {
+            let kind = match error.kind() {
+                registry_platform_config::package::PackageErrorKind::SumFileMissing => {
+                    ProblemKind::BundleUnsealed
+                }
+                _ => ProblemKind::BundleTampered,
+            };
+            RenderProblem::new(kind, error.to_string())
+        })
+        .and_then(|verified| crate::bundle::Bundle::load_package(&request.bundle, &verified))
     } else {
-        crate::bundle::Bundle::load(&request.bundle)
+        crate::bundle::Bundle::load_for_preview(&request.bundle)
     };
     let bundle = match bundle {
         Ok(bundle) => bundle,

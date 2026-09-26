@@ -8,7 +8,7 @@ dead-letter replay.
 
 Deployment shape:
 
-1. Run the binary with a runtime file (sealed bundle, loopback bind, API
+1. Run the binary with a runtime file (verified package, loopback bind, API
    key and audit key in owner-only files):
    `registry-render serve --runtime-config /etc/registry-render/runtime.yaml`
 2. Put the API key *value* in the job's private configuration (kit

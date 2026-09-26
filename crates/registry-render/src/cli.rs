@@ -1,4 +1,4 @@
-//! The `registry-render` CLI: init, check, validate, seal, compile,
+//! The `registry-render` CLI: init, check, validate, package, compile,
 //! serve, healthcheck, audit-verify. Exit codes come from the problem
 //! model.
 
@@ -46,14 +46,13 @@ pub enum Command {
         #[arg(long = "labels", value_delimiter = ',')]
         labels: Vec<String>,
     },
-    /// Verify a bundle (structure, hashes, label coverage), optionally
-    /// sealing it only after verification passes.
+    /// Verify source or package structure, labels, fonts, and schemas.
     Check {
-        /// Bundle directory (default: current directory).
+        /// Authored bundle or package directory (default: current directory).
         #[arg(long, default_value = ".")]
         bundle: PathBuf,
-        /// Rewrite the manifest hashes, sealing the bundle.
-        #[arg(long)]
+        /// Retired. Use `registry-render package` after check succeeds.
+        #[arg(long, hide = true)]
         seal: bool,
         /// Runtime file whose audit directory is proven to resolve under
         /// the given root (the container preflight proof).
@@ -66,7 +65,7 @@ pub enum Command {
     },
     /// Dry-run request data against a document's schema, without rendering.
     Validate {
-        /// Bundle directory.
+        /// Authored bundle or package directory.
         #[arg(long)]
         bundle: PathBuf,
         /// Document type id, as declared in the manifest.
@@ -85,15 +84,28 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Write per-file hashes into the manifest, sealing the bundle.
+    /// Build a new deployment package with the shared checksum envelope.
+    Package {
+        /// Authored bundle directory.
+        #[arg(long)]
+        bundle: PathBuf,
+        /// New package directory; it must not exist yet.
+        #[arg(long)]
+        output: PathBuf,
+        /// One printable line recorded in REVISION and covered by the digest.
+        #[arg(long, value_name = "TEXT")]
+        revision: Option<String>,
+    },
+    /// Retired spelling. Use `registry-render package`.
+    #[command(hide = true)]
     Seal {
-        /// Bundle directory (default: current directory).
-        #[arg(long, default_value = ".")]
+        /// Authored bundle directory.
+        #[arg(long, default_value = ".", hide = true)]
         bundle: PathBuf,
     },
     /// Render one document offline.
     Compile {
-        /// Bundle directory.
+        /// Authored bundle or package directory.
         #[arg(long)]
         bundle: PathBuf,
         /// Document type id, as declared in the manifest.
@@ -125,8 +137,8 @@ pub enum Command {
         /// uses).
         #[arg(long = "timeout")]
         timeout: Option<u64>,
-        /// Keep rendering on bundle changes (authoring loop; unsealed
-        /// bundles are fine, poll-based). Never returns, so it refuses
+        /// Keep rendering on bundle changes (authoring loop; raw source
+        /// directories are fine, poll-based). Never returns, so it refuses
         /// `--emit-envelope` rather than ignoring it.
         #[arg(long, conflicts_with = "emit_envelope")]
         watch: bool,
@@ -230,11 +242,42 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             runtime.as_deref(),
             require_audit_under.as_deref(),
         ),
-        Command::Seal { bundle } => {
-            Bundle::seal(&bundle)?;
-            println!("sealed {}", bundle.display());
+        Command::Package {
+            bundle,
+            output,
+            revision,
+        } => {
+            let loaded = Bundle::load(&bundle)?;
+            crate::check::check_script_coverage(&loaded)?;
+            crate::check::check_label_key_sets(&loaded)?;
+            let written = registry_platform_config::package::write_package(
+                &output,
+                &loaded.package_inputs(),
+                revision.as_deref(),
+                &crate::runtime::package_limits(),
+                "registry-render package",
+            )
+            .map_err(|error| {
+                RenderProblem::new(
+                    crate::problem::ProblemKind::InvalidArgument,
+                    error.to_string(),
+                )
+            })?;
+            println!(
+                "packaged {} as {}",
+                output.display(),
+                written.digest()
+            );
             Ok(0)
         }
+        Command::Seal { bundle } => Err(RenderProblem::new(
+            crate::problem::ProblemKind::InvalidArgument,
+            format!(
+                "`registry-render seal --bundle {}` is no longer accepted; build a new directory with `registry-render package --bundle {} --output <directory>`",
+                bundle.display(),
+                bundle.display()
+            ),
+        )),
         Command::Validate {
             bundle,
             document,
@@ -242,7 +285,7 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             locale,
             json,
         } => {
-            let bundle = Bundle::load(&bundle)?;
+            let bundle = Bundle::load_for_preview(&bundle)?;
             let document = bundle.document(&document)?;
             // Validate is a schema dry-run; it needs no issuance time and
             // renders nothing.
@@ -287,15 +330,9 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             if watch {
                 return watch_loop(&bundle, &document, &request, strict, timeout, &out);
             }
-            let loaded = Bundle::load(&bundle).map_err(recovery_hint)?;
-            if !loaded.manifest.is_sealed() && !json {
-                eprintln!(
-                    "note: bundle is unsealed; compile is fine, serve is not (run `registry-render seal` when ready)"
-                );
-            }
+            let loaded = Bundle::load_for_preview(&bundle)?;
             let document_spec = loaded.document(&document)?.clone();
-            let rendered = compile_once(&bundle, &document, &request, strict, timeout)
-                .map_err(recovery_hint)?;
+            let rendered = compile_once(&bundle, &document, &request, strict, timeout)?;
             let pdf = base64::Engine::decode(
                 &base64::engine::general_purpose::STANDARD,
                 &rendered.pdf_base64,
@@ -493,7 +530,7 @@ fn compile_once(
         assets: request.assets.clone(),
         issued_at: request.issued_at.to_rfc3339(),
         strict,
-        require_sealed: false,
+        require_package: false,
         max_output_bytes: crate::render::DEFAULT_MAX_OUTPUT_BYTES,
         memory_limit_bytes: 512 * 1024 * 1024,
     };
@@ -514,21 +551,6 @@ pub fn flush() {
     let _ = std::io::stdout().flush();
 }
 
-/// Compile-time wrapper that keeps the authoring loop actionable: a
-/// drifted seal after an intentional edit should tell the author how to
-/// recover, not accuse them of tampering.
-fn recovery_hint(problem: RenderProblem) -> RenderProblem {
-    if problem.kind == crate::ProblemKind::BundleTampered {
-        let mut problem = problem;
-        problem.detail.push_str(
-            "; if these edits are yours, run `registry-render seal` to re-seal the bundle",
-        );
-        problem
-    } else {
-        problem
-    }
-}
-
 /// The authoring loop: render now, then re-render whenever the bundle's
 /// files change. Poll-based on purpose — no filesystem-event dependency,
 /// works everywhere the CLI works, and the loop is for humans, not CI.
@@ -543,7 +565,7 @@ fn watch_loop(
     out: &Path,
 ) -> Result<i32, RenderProblem> {
     eprintln!(
-        "watching {} (ctrl-c to stop); unsealed bundles are fine while authoring",
+        "watching {} (ctrl-c to stop); package after authoring is complete",
         bundle_dir.display()
     );
     let mut last_fingerprint: Option<Vec<(String, std::time::SystemTime, u64)>> = None;

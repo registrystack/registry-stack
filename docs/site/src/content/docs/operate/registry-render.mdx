@@ -5,14 +5,14 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-17"
+last_reviewed: "2026-09-26"
 doc_type: how-to
 locale: en
 standards_referenced: []
 ---
 
-You have a sealed template bundle and callers that need PDFs, and you want `registry-render serve`
-answering them. At the end of this page one `registry-render` process serves your bundle on a private
+You have a verified template package and callers that need PDFs, and you want `registry-render serve`
+answering them. At the end of this page one `registry-render` process serves your package on a private
 address behind your TLS proxy, answers `GET /health` and `GET /ready`, renders under API-key
 authentication with a per-render audit trail, and shuts down within a bounded window.
 
@@ -24,14 +24,15 @@ checklist.
     products/render/DEFINITION-OF-DONE.md. */}
 
 [Rendering your first document](../../tutorials/first-render-document/) covers the bundle side:
-scaffolding, authoring, and sealing. This page starts from a sealed bundle directory.
+scaffolding, authoring, and packaging. This page starts from a package directory.
 
 ## What you provide
 
-- **One sealed bundle directory, mounted read-only.** `registry-render seal` writes per-file
-  sha256 hashes into the bundle's `manifest.yaml`, and serve verifies the seal at startup and
-  again in the worker on every request, so a bundle that drifts while the service runs is
-  refused, not rendered. Treat the directory as content the deployment does not write.
+- **One package directory, mounted read-only.** `registry-render package` validates authoring
+  source and writes a new directory with the shared `SHA256SUMS` envelope plus optional
+  `REVISION`. Serve verifies the envelope at startup and again in the worker on every request,
+  then binds the exact captured files to the recorded digests before any validation or render.
+  A package that drifts while the service runs is refused, not rendered.
 - **Two secrets in owner-only files: a caller API key and an audit chain key.** The API key is at
   least 32 bytes of ASCII material; serve trims exactly one trailing line ending from the file
   and refuses to start if the key carries any other whitespace, because a silently mis-armed key
@@ -50,7 +51,7 @@ scaffolding, authoring, and sealing. This page starts from a sealed bundle direc
     crates/registry-render/src/server.rs, normalize_api_key;
     crates/registry-render/src/worker.rs, supervise and cap_address_space;
     crates/registry-render/src/audit.rs, RenderAudit;
-    crates/registry-render/src/bundle.rs, load_sealed. */}
+    crates/registry-render/src/bundle.rs, load_package and bind_verified_snapshot. */}
 
 ## Build the binary
 
@@ -64,7 +65,7 @@ target/release/registry-render --version
 
 The version line names the release and the Typst pin, for example `registry-render <version> (typst
 0.15.1)`. Record it: every audit event carries the same string, and a stored PDF's provenance is
-this binary plus the bundle hash.
+this binary plus the package hash.
 
 {/* Evidence: crates/registry-render/src/lib.rs, display_version and TYPST_PIN. */}
 
@@ -80,10 +81,10 @@ listener:
   bind: 127.0.0.1:8080
   shutdownGraceSeconds: 30
 package:
-  # The sealed bundle directory.
-  root: /var/lib/registry-render/bundle
-  # Optional: refuse to start on any other bundle.
-  # expectedDigest: sha256:<bundle hash>
+  # The directory written by `registry-render package`.
+  root: /var/lib/registry-render/package
+  # Optional: refuse to start on any other package digest.
+  # expectedDigest: sha256:<64 lowercase hex digits>
 secretProviders:
   file:
     root: /run/secrets/registry-render
@@ -109,8 +110,10 @@ reference resolves under `secretProviders.file.root`, and a `secret:env/NAME` re
 startup. String values may take a deployment value from the environment with `${VAR}`,
 `${VAR:-default}`, or `${VAR:?message}`, except in a `*Ref` field, which must be written as a
 literal secret reference, and under `secretProviders`, which must be written as it is meant.
-`package.expectedDigest`, when set, is compared with
-`sha256:` followed by the bundle hash `GET /health` reports.
+`package.expectedDigest`, when set, is compared with the package digest. A mismatch uses the
+same expected/found message as every other Registry Stack runtime. `GET /health` reports the
+same digest without the `sha256:` label as `bundleHash` for compatibility with Render's response
+and audit fields.
 The limits carry hard ceilings the runtime refuses to exceed: the output cap cannot exceed 8 MiB
 and the request body cap 64 MiB, so a configuration mistake cannot unbound the process. On
 shutdown the process drains in-flight renders for one grace period, gives open connections a
@@ -131,7 +134,7 @@ curl -s http://127.0.0.1:8080/health
 curl -s http://127.0.0.1:8080/ready
 ```
 
-`GET /health` answers with the bundle version and hash and the renderer version, so you can
+`GET /health` answers with the bundle version and package hash and the renderer version, so you can
 reconcile the running service against what you deployed. `GET /ready` includes the audit ledger:
 if the sink cannot answer, readiness fails. Both are value-free.
 `registry-render healthcheck --runtime-config <file>` performs the same probe for a supervisor script.
@@ -202,8 +205,9 @@ image bytes.
 A Render binary is exact source plus the Typst pin plus the lockfile, and any change to the Typst
 pin, the compression stack, or a template changes output bytes by design. Treat every upgrade as
 a golden-hash review: the two-OS job in CI fails on any byte difference and the diff is the
-review. Never overwrite a deployment's bundle content without resealing, because the seal, not
-the directory listing, is what serve trusts.
+review. Build every intentional change into a new output directory and switch the deployment to
+that immutable package. The package writer refuses an existing output directory, so a published
+digest never gains different bytes.
 
 {/* Evidence: .github/workflows/render-golden.yml;
     products/render/EVIDENCE.md. */}
