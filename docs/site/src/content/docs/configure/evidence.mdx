@@ -384,26 +384,29 @@ Version 1 permits no reload, merge, mutation, governed-field override, or fallba
 runtime file: a project is either the exact bytes Evidence Gateway loaded at startup, or it is a different
 revision that requires a restart.
 
-Freeze the project before validating or serving it:
+Freeze the installed package and deployment target before validating or serving them:
 
 ```sh
-chmod -R a-w bundle && chmod 444 runtime.yaml
+chmod -R a-w "<installed-package>" && chmod 444 "<deployment-target>/runtime.yaml"
 ```
 
-The bundle directory and every file beneath it carry no write bits, `runtime.yaml` is mode `444`,
+The package directory and every file beneath it carry no write bits, the target's `runtime.yaml`
+is mode `444`,
 and the secret root stays owner-only at mode `0700` with mode `0600` secret files. Evidence Gateway
 Version 1 supports Unix targets only because these invariants rely on owner, mode, no-follow,
 link-count, and open-file-identity checks the platform provides
 (`products/evidence/contracts/runtime.schema.yaml`, `platform`). To edit the project again,
-restore write permission, make the change, and freeze it again before the next `evidence check`.
+make the change in the editable project, publish a new package, and freeze the new package before
+the next `evidence check`.
 
 ## Validating a project
 
 Two offline commands prove a project before it ever binds a port:
 
 ```sh
-evidence check --runtime-config runtime.yaml
-evidence evaluate --runtime-config runtime.yaml --fixture "bundle/fixtures/<cases>.yaml"
+evidence check --runtime-config "<deployment-target>/runtime.yaml"
+evidence evaluate --runtime-config "<deployment-target>/runtime.yaml" \
+  --fixture "fixtures/<cases>.yaml"
 ```
 
 `evidence check` loads, compiles, and validates the complete bundle and runtime file together:
@@ -421,16 +424,13 @@ never a response, fact, derived, or selector value, and each fixture's own
 `diagnostics_exclude` canaries are checked against it before it is printed. The flag is offline
 only: `evidence serve` has no equivalent.
 
-`evidencectl test <dir>` accepts an editable or deployment project. For a
-deployment project, it runs `check`, then `evaluate` against every fixture path
-the bundle's requirements reference, and reports `PASS` or `FAIL` per step
+`evidencectl test <editable-project> [--target <deployment-target>]` privately compiles the
+editable project, runs the runtime-owned bundle checks, then evaluates every fixture the
+questions reference and reports `PASS` or `FAIL` per step
 (`crates/registry-evidencectl/src/fixtures.rs`). Add `--explain` to relay each fixture's trace with
-its step, or as that fixture's `trace` field under `--format json`. The incomplete workspace created by
-the OpenAPI form of `evidencectl init` has no fixture cases, so it cannot pass
-this gate until the author adds them. For an editable project with fixtures,
-Evidencectl privately compiles a bundle before invoking the same runtime-owned
-bundle checks. Both `check` and `test` must pass before `evidence serve` runs
-the revision.
+its step, or as that fixture's `trace` field under `--format json`. The incomplete workspace created
+by the OpenAPI form of `evidencectl init` has no fixture cases, so it cannot pass this gate until
+the author adds them. Both `check` and `test` must pass before `evidence serve` runs the revision.
 
 ## Build a production candidate
 
