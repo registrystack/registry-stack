@@ -1104,10 +1104,14 @@ struct PendingLocalOperation {
 struct LocalAuditCollector {
     bounds: Option<LocalAuditInspectionBounds>,
     records: usize,
-    pending: BTreeMap<String, PendingLocalOperation>,
+    /// Each open operation's access entries, one per source stage, in order.
+    pending: BTreeMap<String, Vec<PendingLocalOperation>>,
     completed: BTreeSet<String>,
     last_operation: Option<String>,
     last_completed: Option<LocalAuditOperationView>,
+    /// Whether the entries read come from the oldest retained file, where a
+    /// terminal entry may follow an access entry retention deleted.
+    oldest_file: bool,
 }
 
 impl LocalAuditCollector {
@@ -1158,35 +1162,54 @@ impl LocalAuditCollector {
             .validate_phase_fields()
             .map_err(|_| invalid_audit_data())?;
         let operation = event.operation.clone();
-        self.last_operation = Some(operation.clone());
+        let previous_operation = self.last_operation.replace(operation.clone());
         let view = LocalAuditOperationEvent::from(&event);
 
         if event.phase == AuditPhase::AccessAttempt {
-            if self.completed.contains(&operation)
-                || self
-                    .pending
-                    .insert(operation, PendingLocalOperation { event, view })
-                    .is_some()
-            {
+            if self.completed.contains(&operation) {
                 return Err(invalid_audit_data());
             }
+            let stages = self.pending.entry(operation).or_default();
+            // A multi-stage acquisition writes one access entry per source
+            // call; each later stage shares the operation's context.
+            if let Some(previous) = stages.last() {
+                if !occurred_in_order(&previous.event, &event)
+                    || !same_operation_context(&previous.event, &event)
+                {
+                    return Err(invalid_audit_data());
+                }
+            }
+            stages.push(PendingLocalOperation { event, view });
             return Ok(());
         }
 
-        let access = self
-            .pending
-            .remove(&operation)
-            .ok_or_else(invalid_audit_data)?;
-        if !coherent_operation_pair(&access.event, &event)
+        let Some(stages) = self.pending.remove(&operation) else {
+            // Retention deletes whole sealed files, so the oldest retained
+            // file may open with terminal entries whose access entries were
+            // deleted. Such an operation is no longer inspectable and is not
+            // the last operation; anywhere later, a terminal entry without
+            // its access entry is corrupt.
+            if !self.oldest_file || !self.completed.insert(operation) {
+                return Err(invalid_audit_data());
+            }
+            self.last_operation = previous_operation;
+            return Ok(());
+        };
+        // The terminal entry names the source of the last stage that ran.
+        let last = stages.last().ok_or_else(invalid_audit_data)?;
+        if !coherent_operation_pair(&last.event, &event)
             || !self.completed.insert(operation.clone())
         {
             return Err(invalid_audit_data());
         }
+        let assurance_profile = last.event.assurance_profile;
+        let mut events: Vec<_> = stages.into_iter().map(|stage| stage.view).collect();
+        events.push(view);
         self.last_completed = Some(LocalAuditOperationView {
             schema: LOCAL_AUDIT_OPERATION_VIEW_SCHEMA_V1,
             operation,
-            events: vec![access.view, view],
-            assurance_profile: access.event.assurance_profile,
+            events,
+            assurance_profile,
         });
         Ok(())
     }
@@ -1218,12 +1241,17 @@ impl LocalAuditCollector {
             .last_operation
             .take()
             .ok_or(EvidenceAuditError::NoOperation)?;
-        let view = if let Some(pending) = self.pending.remove(&last) {
+        let view = if let Some(stages) = self.pending.remove(&last) {
+            let assurance_profile = stages
+                .first()
+                .ok_or(EvidenceAuditError::InvalidEvent)?
+                .event
+                .assurance_profile;
             LocalAuditOperationView {
                 schema: LOCAL_AUDIT_OPERATION_VIEW_SCHEMA_V1,
                 operation: last,
-                events: vec![pending.view],
-                assurance_profile: pending.event.assurance_profile,
+                events: stages.into_iter().map(|stage| stage.view).collect(),
+                assurance_profile,
             }
         } else {
             self.last_completed
@@ -1287,12 +1315,23 @@ impl From<&EvidenceAuthorizationRefusalAuditEvent> for LocalAuditOperationEvent 
 }
 
 fn coherent_operation_pair(access: &EvidenceAuditEvent, terminal: &EvidenceAuditEvent) -> bool {
-    let occurred_in_order = chrono::DateTime::parse_from_rfc3339(&access.occurred_at)
+    occurred_in_order(access, terminal)
+        && same_operation_context(access, terminal)
+        && access.source_id == terminal.source_id
+        && access.adapter_id == terminal.adapter_id
+}
+
+fn occurred_in_order(earlier: &EvidenceAuditEvent, later: &EvidenceAuditEvent) -> bool {
+    chrono::DateTime::parse_from_rfc3339(&earlier.occurred_at)
         .ok()
-        .zip(chrono::DateTime::parse_from_rfc3339(&terminal.occurred_at).ok())
-        .is_some_and(|(access, terminal)| access <= terminal);
-    occurred_in_order
-        && access.operation == terminal.operation
+        .zip(chrono::DateTime::parse_from_rfc3339(&later.occurred_at).ok())
+        .is_some_and(|(earlier, later)| earlier <= later)
+}
+
+/// Everything two entries of one operation share, whichever source stage
+/// each names.
+fn same_operation_context(access: &EvidenceAuditEvent, terminal: &EvidenceAuditEvent) -> bool {
+    access.operation == terminal.operation
         && access.assurance_profile == terminal.assurance_profile
         && access.requirement == terminal.requirement
         && access.bundle_revision == terminal.bundle_revision
@@ -1305,8 +1344,6 @@ fn coherent_operation_pair(access: &EvidenceAuditEvent, terminal: &EvidenceAudit
         && access.authority == terminal.authority
         && access.subjects == terminal.subjects
         && access.response_protection == terminal.response_protection
-        && access.source_id == terminal.source_id
-        && access.adapter_id == terminal.adapter_id
 }
 
 /// Read the stopped local audit file and its retained sealed files in order,
@@ -1337,7 +1374,8 @@ fn last_local_audit_operation_with_bounds(
     let _writer_lock = lock_stopped_audit_file(path)?;
     let files = local_audit_files(path, bounds.maximum_segments)?;
     let mut collector = LocalAuditCollector::new(bounds);
-    for file in &files {
+    for (index, file) in files.iter().enumerate() {
+        collector.oldest_file = index == 0;
         read_local_audit_file(file, &mut collector)?;
     }
     collector.finish()
@@ -2938,6 +2976,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_inspection_skips_a_terminal_whose_access_retention_removed() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("audit.jsonl");
+        let log = file_log(&path).await;
+        append_local_operation(&log, "local-operation-0000000000000001").await;
+        append_local_operation(&log, "local-operation-0000000000000002").await;
+        drop(log);
+        let written = std::fs::read_to_string(&path).expect("audit file reads");
+        let lines: Vec<&str> = written.lines().collect();
+        assert_eq!(lines.len(), 4);
+
+        // Retention deleted the older file holding the first access entry.
+        std::fs::write(&path, format!("{}\n{}\n{}\n", lines[1], lines[2], lines[3]))
+            .expect("oldest retained file");
+        let value = serde_json::to_value(
+            last_local_audit_operation(&path).expect("a cut stream still reads"),
+        )
+        .expect("view serializes");
+        assert_eq!(
+            value["operation"],
+            serde_json::json!("local-operation-0000000000000002")
+        );
+
+        // Only the oldest retained file can begin inside an operation.
+        let sealed = path.with_file_name("audit.jsonl.00000001");
+        std::fs::write(&sealed, format!("{}\n{}\n", lines[2], lines[3])).expect("sealed file");
+        std::fs::set_permissions(&sealed, std::os::unix::fs::PermissionsExt::from_mode(0o600))
+            .expect("mode");
+        std::fs::write(&path, format!("{}\n", lines[1])).expect("active file");
+        assert!(last_local_audit_operation(&path).is_err());
+    }
+
+    #[tokio::test]
     async fn authorization_refusal_is_a_distinct_minimal_native_event() {
         let (log, captured) = captured_log();
         let operation = "local-refusal-000000000000000001";
@@ -3456,6 +3527,89 @@ mod tests {
         ] {
             assert!(!rendered.contains(forbidden), "view disclosed {forbidden}");
         }
+    }
+
+    #[tokio::test]
+    async fn local_inspection_returns_every_source_stage_of_a_multi_stage_operation() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let operation = "local-multi-stage-operation-00000001";
+        let stages = |log: &EvidenceAuditLog| {
+            let search = local_access(log, operation);
+            let mut fetch = search.clone();
+            fetch.event_id = format!("urn:ulid:{}", ulid::Ulid::new());
+            fetch.occurred_at =
+                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            fetch.source_id = Some("fetch-source-private-canary".to_owned());
+            fetch.adapter_id = Some("fetch-adapter-private-canary".to_owned());
+            (search, fetch)
+        };
+
+        let path = directory.path().join("closed.jsonl");
+        let log = file_log(&path).await;
+        let (search, fetch) = stages(&log);
+        let release = local_release(&fetch);
+        for event in [search, fetch, release] {
+            log.append(event).await.expect("stage appends");
+        }
+        drop(log);
+        let value = serde_json::to_value(
+            last_local_audit_operation(&path).expect("multi-stage operation reads"),
+        )
+        .expect("view serializes");
+        assert_eq!(value["operation"], serde_json::json!(operation));
+        let phases: Vec<_> = value["events"]
+            .as_array()
+            .expect("events are an array")
+            .iter()
+            .map(|event| event["phase"].clone())
+            .collect();
+        assert_eq!(
+            phases,
+            [
+                serde_json::json!("access-attempt"),
+                serde_json::json!("access-attempt"),
+                serde_json::json!("disclosure-release"),
+            ]
+        );
+
+        let path = directory.path().join("pending.jsonl");
+        let log = file_log(&path).await;
+        let (search, fetch) = stages(&log);
+        log.append(search).await.expect("search appends");
+        log.append(fetch).await.expect("fetch appends");
+        drop(log);
+        let value = serde_json::to_value(
+            last_local_audit_operation(&path).expect("pending multi-stage operation reads"),
+        )
+        .expect("view serializes");
+        assert_eq!(value["events"].as_array().map(Vec::len), Some(2));
+
+        let path = directory.path().join("foreign-stage.jsonl");
+        let log = file_log(&path).await;
+        let (search, mut fetch) = stages(&log);
+        fetch.purpose = "other:purpose".to_owned();
+        log.append(search).await.expect("search appends");
+        log.append(fetch).await.expect("foreign stage appends");
+        drop(log);
+        assert!(
+            last_local_audit_operation(&path).is_err(),
+            "a later stage must share the operation's context"
+        );
+
+        let path = directory.path().join("terminal-names-earlier-stage.jsonl");
+        let log = file_log(&path).await;
+        let (search, fetch) = stages(&log);
+        let mut release = local_release(&fetch);
+        release.source_id.clone_from(&search.source_id);
+        release.adapter_id.clone_from(&search.adapter_id);
+        for event in [search, fetch, release] {
+            log.append(event).await.expect("stage appends");
+        }
+        drop(log);
+        assert!(
+            last_local_audit_operation(&path).is_err(),
+            "the terminal entry names the last stage that ran"
+        );
     }
 
     #[tokio::test]

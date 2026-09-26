@@ -143,13 +143,26 @@ fn render(view: &CoreAuditOperation, questions: &[dev::ReadyQuestionState]) -> R
         return Err(failed());
     }
 
-    match view.events.as_slice() {
-        [CoreAuditEvent::Refusal(refusal)] => render_refusal(refusal),
-        [CoreAuditEvent::Authorized(access)] => render_authorized(access, None, questions),
-        [CoreAuditEvent::Authorized(access), CoreAuditEvent::Authorized(release)] => {
-            render_authorized(access, Some(release), questions)
+    if let [CoreAuditEvent::Refusal(refusal)] = view.events.as_slice() {
+        return render_refusal(refusal);
+    }
+    let authorized = view
+        .events
+        .iter()
+        .map(|event| match event {
+            CoreAuditEvent::Authorized(event) => Ok(event),
+            CoreAuditEvent::Refusal(_) => Err(failed()),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    // One access entry per source call, then the release when one occurred.
+    match authorized.split_last() {
+        Some((release, accesses))
+            if release.phase == Phase::DisclosureRelease && !accesses.is_empty() =>
+        {
+            render_authorized(accesses, Some(release), questions)
         }
-        _ => Err(failed()),
+        Some(_) => render_authorized(&authorized, None, questions),
+        None => Err(failed()),
     }
 }
 
@@ -169,10 +182,11 @@ fn render_refusal(refusal: &CoreRefusalAuditEvent) -> Result<String> {
 }
 
 fn render_authorized(
-    access: &CoreAuthorizedAuditEvent,
+    accesses: &[&CoreAuthorizedAuditEvent],
     release: Option<&CoreAuthorizedAuditEvent>,
     questions: &[dev::ReadyQuestionState],
 ) -> Result<String> {
+    let (access, _) = accesses.split_first().ok_or_else(failed)?;
     let question = questions
         .iter()
         .find(|question| {
@@ -199,19 +213,31 @@ fn render_authorized(
         return Err(failed());
     }
 
-    validate_common(access, question)?;
-    if access.phase != Phase::AccessAttempt
-        || access.decision != Decision::Authorized
-        || access.disclosed_concepts != Presence::Absent
-        || access.evidence_id != Presence::Absent
-    {
-        return Err(failed());
+    let mut rendered = String::new();
+    let mut previous: Option<&CoreAuthorizedAuditEvent> = None;
+    for stage in accesses {
+        validate_common(stage, question)?;
+        if stage.phase != Phase::AccessAttempt
+            || stage.decision != Decision::Authorized
+            || stage.requester_pseudonym != access.requester_pseudonym
+            || stage.response_protection != access.response_protection
+            || stage.disclosed_concepts != Presence::Absent
+            || stage.evidence_id != Presence::Absent
+        {
+            return Err(failed());
+        }
+        if let Some(previous) = previous {
+            if parse_time(&stage.occurred_at)? < parse_time(&previous.occurred_at)? {
+                return Err(failed());
+            }
+        }
+        previous = Some(stage);
+        rendered.push_str(&format!(
+            "ACCESS AUTHORIZED {} {} requester={}\n",
+            question.alias, question.purpose, stage.requester_pseudonym
+        ));
     }
-
-    let mut rendered = format!(
-        "ACCESS AUTHORIZED {} {} requester={}\n",
-        question.alias, question.purpose, access.requester_pseudonym
-    );
+    let access = previous.ok_or_else(failed)?;
     let Some(release) = release else {
         return Ok(rendered);
     };
