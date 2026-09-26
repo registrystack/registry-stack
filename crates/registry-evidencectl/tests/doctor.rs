@@ -205,6 +205,46 @@ fn doctor_passes_a_stdout_audit_destination_without_inspecting_a_file() {
 }
 
 #[test]
+fn doctor_refuses_audit_settings_the_service_refuses() {
+    let file = "audit:\n  path: audit/evidence.jsonl\n";
+    for audit in [
+        "audit:\n  destination: stdout\n  path: audit/evidence.jsonl\n",
+        "audit:\n  destination: stdout\n  rotateBytes: 1048576\n",
+        "audit:\n  destination: stdout\n  retainDays: 1\n",
+        "audit:\n  destination: file\n",
+        "audit:\n  destination: syslog\n  path: audit/evidence.jsonl\n",
+        "audit:\n  path: audit/evidence.jsonl\n  rotateBytes: 1024\n",
+        "audit:\n  path: audit/evidence.jsonl\n  rotateBytes: 4294967296\n",
+        "audit:\n  path: audit/evidence.jsonl\n  retainDays: 0\n",
+        "audit:\n  path: audit/evidence.jsonl\n  retainDays: 36501\n",
+    ] {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let project = workspace.path().join("project");
+        provision(&project);
+        provision_bearer_token(&project);
+        fs::write(
+            project.join("runtime.yaml"),
+            runtime_document(LOCAL_SIGNER).replace(file, audit),
+        )
+        .expect("runtime fixture");
+
+        freeze(&project);
+        let output = doctor(&project, &[]);
+        unfreeze(&project);
+
+        let stdout = stdout_of(&output);
+        assert!(
+            !output.status.success(),
+            "doctor passed audit settings the service refuses:\n{audit}\n{stdout}"
+        );
+        assert!(
+            stdout.contains("audit"),
+            "doctor did not name the audit check:\n{stdout}"
+        );
+    }
+}
+
+#[test]
 fn doctor_accepts_only_the_runtime_owner_only_secret_modes() {
     let workspace = tempfile::tempdir().expect("tempdir");
     let project = workspace.path().join("project");
