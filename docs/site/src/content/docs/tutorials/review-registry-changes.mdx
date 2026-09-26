@@ -13,7 +13,7 @@ locale: en
 standards_referenced: []
 tutorial_test:
   toolset: breg
-  skip: needs psql against the quickstart database and an editor step on change-control configuration; replayable, not yet annotated
+  checkout: true
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
@@ -27,7 +27,11 @@ checks the BReg half of that boundary before you connect the two services.
   outcome="A checked BReg request type with a frozen external-review binding and separately authorized application."
   time="About 15 minutes"
   level="Local authoring"
-  prerequisites={['bregctl from the same Registry Stack release as your project', 'A shell and an editor']}
+  prerequisites={[
+    { label: 'bregctl', href: '/tutorials/first-breg/#install-base-registry-engine' },
+    { label: 'A Registry Stack checkout at the same release as your bregctl', href: 'https://github.com/registrystack/registry-stack' },
+    'A shell and an editor',
+  ]}
 />
 
 ## Copy the maintained example
@@ -41,11 +45,13 @@ cp -R products/breg/acceptance/asset-site-placement-change-requests \
 bregctl check tutorial-work/asset-corrections
 ```
 
-The request entity declares the effect BReg will freeze and the logical review authority and
-policy Casework will evaluate:
+Open `tutorial-work/asset-corrections/registry.yaml`. The request entity declares the effect BReg
+will freeze and the logical review authority and policy Casework will evaluate:
 
-```yaml
+```yaml test-excerpt="tutorial-work/asset-corrections/registry.yaml"
 changeRequest:
+  retention:
+    mode: operator_erase
   effects:
     - target: {fromField: placement}
       operation: patch
@@ -56,8 +62,6 @@ changeRequest:
     policyId: asset-placement-correction
   onApproved:
     mode: manual
-  retention:
-    mode: operator_erase
 ```
 
 `review` is part of the immutable proposal binding. It is not a local BReg stage declaration.
@@ -78,7 +82,21 @@ bregctl --format json explain change-requests tutorial-work/asset-corrections \
 Inspect `tutorial-work/change-requests.json`. The request has only four source lifecycle actions:
 `submit_request`, `revise_request`, `cancel_request`, and `apply_request`. It also carries the
 frozen review requirement, approved-application mode, effects, target entities, and application
-grants. It has no BReg reviewer action or stage route.
+grants. It has no BReg reviewer action or stage route. The request's entry names the review
+authority and how an approved result is applied:
+
+```json test-excerpt="tutorial-work/change-requests.json"
+{
+  "requestEntity": "placement-correction-request",
+  "review": {
+    "authority": "casework",
+    "policyId": "asset-placement-correction"
+  },
+  "onApproved": {
+    "mode": "manual"
+  }
+}
+```
 
 Submission freezes request values, target identities and revisions, the effect digest, the review
 requirement, and application preconditions. A later package cannot silently change that proposal.
