@@ -63,6 +63,7 @@ pub struct DeliveryConfig {
 
 /// A delivery-audit event held by the worker until it is recorded, such as
 /// one whose transition must commit first.
+#[derive(Clone)]
 struct PendingAudit {
     event_id: Uuid,
     compiled_delivery_id: String,
@@ -367,9 +368,24 @@ impl<S: DeliverySeams> DeliveryService<S> {
             disposition: DeliveryAuditDisposition::ReplayPending,
         };
         self.seams.record_audit(replay.record()).await?;
-        let reset = self
+        let mut reset = self
             .reset_for_replay(transaction, event_id, compiled_delivery_id, generation)
             .await;
+        if reset.is_err()
+            && self
+                .transition_committed(
+                    &PendingAudit {
+                        outcome: DeliveryAuditOutcome::ReplayCommitted,
+                        ..replay.clone()
+                    },
+                    None,
+                )
+                .await
+                == Some(true)
+        {
+            // The reset committed although its acknowledgement was lost.
+            reset = Ok(());
+        }
         let (outcome, disposition) = if reset.is_ok() {
             (
                 DeliveryAuditOutcome::ReplayCommitted,
@@ -497,7 +513,10 @@ impl<S: DeliverySeams> DeliveryService<S> {
                 DeliveryError::Unavailable
             })?;
         let Some(row) = row else {
-            transaction.commit().await?;
+            if let Err(error) = transaction.commit().await {
+                self.record_resolved(committed).await;
+                return Err(error.into());
+            }
             self.record_committed(committed).await?;
             return Ok(None);
         };
@@ -591,15 +610,24 @@ impl<S: DeliverySeams> DeliveryService<S> {
         }
         if transaction.commit().await.is_err() {
             self.refused(DeliveryTransitionCode::ClaimCommitFailed);
-            // The attempt's request is on record but its lease rolled back:
-            // answer it, so the journal shows the attempt never ran.
-            let interrupted = PendingAudit {
-                phase: DeliveryAuditPhase::Terminal,
-                outcome: DeliveryAuditOutcome::WorkerInterrupted,
-                disposition: DeliveryAuditDisposition::RetryPending,
-                ..started
-            };
-            let _ = self.seams.record_audit(interrupted.record()).await;
+            // A failed commit acknowledgement does not prove a rollback, so
+            // read what the database holds. A lease that did commit sends
+            // nothing from here and is answered when it expires; one that
+            // rolled back, or one whose fate cannot be read, is answered now,
+            // since a second interrupted answer is harmless and none is not.
+            if self.transition_committed(&started, Some(lease_token)).await == Some(true) {
+                self.record_resolved(committed).await;
+            } else {
+                let interrupted = PendingAudit {
+                    phase: DeliveryAuditPhase::Terminal,
+                    outcome: DeliveryAuditOutcome::WorkerInterrupted,
+                    disposition: DeliveryAuditDisposition::RetryPending,
+                    ..started
+                };
+                // A refused entry has already stopped the product's writer,
+                // which reports it; the claim fails either way.
+                let _ = self.seams.record_audit(interrupted.record()).await;
+            }
             return Err(DeliveryError::Unavailable);
         }
         self.record_committed(committed).await?;
@@ -1349,22 +1377,108 @@ impl<S: DeliverySeams> DeliveryService<S> {
                 return Err(DeliveryError::Unavailable);
             }
         }
-        transaction.commit().await?;
+        let terminal = PendingAudit {
+            event_id: claim.event_id,
+            compiled_delivery_id: claim.compiled_delivery_id.clone(),
+            package_revision: claim.package_revision.clone(),
+            generation: claim.generation,
+            attempt: claim.attempt,
+            phase: DeliveryAuditPhase::Terminal,
+            outcome,
+            disposition,
+        };
+        if let Err(error) = transaction.commit().await {
+            // A lost acknowledgement does not prove a rollback, and a
+            // terminal row is never reaped, so a disposition that did commit
+            // is recorded here or never. One that rolled back leaves the
+            // lease for expiry recovery, which answers the attempt.
+            if self.transition_committed(&terminal, None).await != Some(true) {
+                return Err(error.into());
+            }
+        }
         // Recorded once the disposition committed, so the journal never
         // names a disposition the database does not hold.
-        self.seams
-            .record_audit(DeliveryAuditRecord {
-                event_id: claim.event_id,
-                compiled_delivery_id: &claim.compiled_delivery_id,
-                package_revision: &claim.package_revision,
-                generation: claim.generation,
-                attempt: claim.attempt,
-                phase: DeliveryAuditPhase::Terminal,
-                outcome,
-                disposition,
-            })
-            .await?;
+        self.seams.record_audit(terminal.record()).await?;
         Ok(work_outcome)
+    }
+
+    /// Record the events of a transaction whose commit returned an error,
+    /// each only if the transition it names is durable.
+    async fn record_resolved(&self, events: Vec<PendingAudit>) {
+        for event in events {
+            // A refused entry has already stopped the product's writer,
+            // which reports it; the caller is failing either way.
+            if self.transition_committed(&event, None).await == Some(true) {
+                let _ = self.seams.record_audit(event.record()).await;
+            }
+        }
+    }
+
+    /// Whether the transition `event` records is durable, read on a fresh
+    /// connection after its commit returned an error, since a failed commit
+    /// acknowledgement does not prove the transaction rolled back. `None`
+    /// when the state cannot be read. An attempt's lease is matched on the
+    /// token this worker wrote.
+    async fn transition_committed(
+        &self,
+        event: &PendingAudit,
+        lease_token: Option<Uuid>,
+    ) -> Option<bool> {
+        for _ in 0..3 {
+            let Ok(client) = self.seams.connection().await else {
+                continue;
+            };
+            let Ok(row) = client
+                .query_opt(
+                    &self.sql(
+                        "SELECT state, generation, attempt, lease_token, expired_at IS NOT NULL
+                           FROM {schema}.registry_webhook_delivery_state
+                          WHERE event_id = $1 AND compiled_delivery_id = $2",
+                    ),
+                    &[&event.event_id, &event.compiled_delivery_id],
+                )
+                .await
+            else {
+                continue;
+            };
+            let Some(row) = row else {
+                return Some(false);
+            };
+            let (Ok(state), Ok(generation), Ok(attempt), Ok(token), Ok(expired)) = (
+                row.try_get::<_, String>(0),
+                row.try_get::<_, i64>(1),
+                row.try_get::<_, i16>(2),
+                row.try_get::<_, Option<Uuid>>(3),
+                row.try_get::<_, bool>(4),
+            ) else {
+                return None;
+            };
+            let current = generation == event.generation;
+            let at_attempt = current && attempt == event.attempt;
+            return Some(match (event.phase, event.disposition) {
+                (DeliveryAuditPhase::Attempt, _) => {
+                    at_attempt && state == "leased" && token.is_some() && token == lease_token
+                }
+                (DeliveryAuditPhase::Replay, _) => current && state == "pending",
+                (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::Expired) => {
+                    current && expired
+                }
+                (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::Delivered) => {
+                    at_attempt && state == "delivered"
+                }
+                (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::DeadLettered) => {
+                    at_attempt && state == "dead_lettered"
+                }
+                (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::RetryPending) => {
+                    at_attempt && state == "pending" && token.is_none()
+                }
+                (
+                    DeliveryAuditPhase::Terminal,
+                    DeliveryAuditDisposition::Leased | DeliveryAuditDisposition::ReplayPending,
+                ) => false,
+            });
+        }
+        None
     }
 
     /// Record the events of a transaction that has committed.
