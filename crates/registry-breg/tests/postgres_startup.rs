@@ -1486,7 +1486,11 @@ async fn assert_audit_destination_has_one_writer_and_checks_take_none(
         use std::os::unix::fs::PermissionsExt as _;
         fs::set_permissions(companion_directory, fs::Permissions::from_mode(0o700))
             .expect("companion audit directory mode is set");
-        fs::write(&companion_path, "{}\n{").expect("torn companion entry is written");
+        // The first entry must be in the writer's current envelope format, so
+        // the only defect the check can find is the torn final entry.
+        let complete_entry = "{\"eventId\":\"5b1b5b8e-6f2b-4c1a-9b7a-6b1b5b8e6f2b\",\"schema\":\"registry.test.audit/v1\",\"time\":\"2024-01-01T00:00:00Z\",\"correlation\":\"bregctl-companion\",\"phase\":\"request\",\"record\":{}}\n";
+        fs::write(&companion_path, format!("{complete_entry}{{"))
+            .expect("torn companion entry is written");
         fs::set_permissions(&companion_path, fs::Permissions::from_mode(0o600))
             .expect("companion audit file mode is set");
         assert_eq!(
@@ -1496,7 +1500,7 @@ async fn assert_audit_destination_has_one_writer_and_checks_take_none(
             Some(StartupError::Audit),
             "a torn final entry in the bregctl companion destination refuses the startup check"
         );
-        fs::write(&companion_path, "{}\n").expect("companion entry is completed");
+        fs::write(&companion_path, complete_entry).expect("companion entry is completed");
         check_with_connection_config_for_test(unopened, database.runtime_config.clone())
             .await
             .expect("the startup check accepts a completed companion destination");
