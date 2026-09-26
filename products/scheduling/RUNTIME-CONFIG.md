@@ -84,9 +84,10 @@ grant instead, which [TASK_GRANTS.md](TASK_GRANTS.md) documents.
 audit entries. `audit.destination` is `file`, the default, or `stdout`. A `file`
 destination requires `audit.path`, the absolute active audit file, which one
 process writes at a time; the file rotates at `audit.rotateBytes` (default 100
-MiB, at least 1 MiB) and rotated files are removed after `audit.retainDays`
-(default 90). `stdout` takes none of the three and leaves collection and
-retention to the platform that reads the stream. `schedulingctl records apply`
+MiB, at least 1 MiB, at most 4294967295) and rotated files are removed after
+`audit.retainDays` (default 90, at most 36500). `stdout` takes none of the
+three and leaves collection and retention to the platform that reads the
+stream. `schedulingctl records apply`
 writes beside the runtime, to `<stem>.schedulingctl.<ext>` next to
 `audit.path`, so the two processes never share a file, or to standard error
 with a `stdout` destination, so its own report keeps standard output.
