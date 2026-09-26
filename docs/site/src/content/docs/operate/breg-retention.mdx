@@ -312,7 +312,21 @@ entry before disclosure or after a mutation commits. The entries share a correla
 keyed references and closed vocabulary, not raw record values. A refusal can have only a response
 entry. The file destination acknowledges an append after fsync; `stdout` flushes each line and
 provides best-effort delivery. A failed request entry blocks protected I/O, and a failed response
-entry blocks disclosure. A crash can leave a request entry without a response.
+entry blocks disclosure. A request that ends before its outcome is known, because it failed, timed
+out, or its caller went away, or an operator command that exits early, still answers its request
+entry with a response whose outcome is `unfinished`. Only a crash, or a destination that already
+stopped accepting entries, can leave a request entry without a response.
+
+Operator commands follow the same rule. `evidence-retention erase-expired` records the cutoff it
+was given in its request entry and the number of assertions it erased in its response.
+`request-retention erase` deletes the external attachment objects before it records its response,
+which states how many objects still wait for deletion. If the erasure committed but its response
+entry could not be written, the command reports `request_retention.erasure.unaudited`: the detail is
+gone, so restore the audit destination and reconcile the erased request against the database. An
+event delivery's attempt is recorded before its request leaves, and its outcome only once the
+delivery's state has committed, so the journal never records a delivery that rolled back; an
+operator replay is recorded as a request before the reset and a response once it commits or is
+refused.
 
 A crash or a killed process can also tear the file's final line itself, leaving it without its
 closing newline. The writer refuses to open a destination in that state, so the next start of the
