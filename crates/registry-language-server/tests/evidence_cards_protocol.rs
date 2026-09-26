@@ -16,7 +16,7 @@ use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
     path::Path,
-    process::{Child, ChildStdin, Command, Stdio},
+    process::{Child, ChildStdin, Command, ExitStatus, Stdio},
     sync::{
         mpsc::{self, Receiver, RecvTimeoutError},
         Arc, Mutex,
@@ -727,10 +727,25 @@ fn shut_down(stdin: &mut ChildStdin, stdout: &Receiver<Value>, mut child: Child,
         stdin,
         json!({"jsonrpc": "2.0", "method": "exit", "params": null}),
     );
-    assert!(child
-        .wait()
-        .expect("the server process is waitable")
-        .success());
+    assert!(wait_for_exit(&mut child).success());
+}
+
+/// Waits for the process to exit within [`RESPONSE_DEADLINE`], killing it and panicking with a
+/// clear message otherwise. A server that answers `shutdown` but never acts on `exit` would
+/// otherwise hang the test suite on an unbounded [`Child::wait`].
+fn wait_for_exit(child: &mut Child) -> ExitStatus {
+    let deadline = Instant::now() + RESPONSE_DEADLINE;
+    loop {
+        if let Some(status) = child.try_wait().expect("the server process is waitable") {
+            return status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("language server did not exit within {RESPONSE_DEADLINE:?} after `exit`");
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
 }
 
 /// The handshake declares exactly what completion and hover implement, and a client that asks the
