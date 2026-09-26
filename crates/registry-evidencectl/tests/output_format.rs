@@ -6,7 +6,6 @@ use sha2::{Digest as _, Sha256};
 fn assert_json_format_refusal(arguments: &[&str], expected_command: &str) {
     let directory = tempfile::tempdir().expect("temporary working directory");
     let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
-        .args(["--format", "json"])
         .args(arguments)
         .current_dir(directory.path())
         .output()
@@ -29,59 +28,129 @@ fn assert_json_format_refusal(arguments: &[&str], expected_command: &str) {
     assert_eq!(report["diagnostics"][0]["path"], "$.format");
 }
 
+/// Every command that renders only human prose, with arguments that parse.
+const HUMAN_ONLY_COMMANDS: &[(&str, &[&str])] = &[
+    ("target new", &["target", "new", "target", "--local"]),
+    ("source mock generate", &["source", "mock", "generate"]),
+    ("source mock check", &["source", "mock", "check"]),
+    ("source mock serve", &["source", "mock", "serve"]),
+    ("source detach", &["source", "detach", "records"]),
+    (
+        "request prepare",
+        &["request", "prepare", "question", "--name", "request"],
+    ),
+    (
+        "request verify",
+        &[
+            "request",
+            "verify",
+            "response.jwt",
+            "--context",
+            "verification.json",
+            "--output",
+            "verified.json",
+        ],
+    ),
+    (
+        "verify",
+        &[
+            "verify",
+            "response.jwt",
+            "--context",
+            "verification.json",
+            "--output",
+            "verified.json",
+        ],
+    ),
+    (
+        "client profile create",
+        &[
+            "client",
+            "profile",
+            "create",
+            "--base-url",
+            "https://evidence.example",
+            "--client-id",
+            "client",
+            "--output",
+            "client.json",
+            "--private-key-file",
+            "client.jwk",
+        ],
+    ),
+    (
+        "client contracts fetch",
+        &[
+            "client",
+            "contracts",
+            "fetch",
+            "--profile",
+            "client.json",
+            "--output",
+            "contracts.json",
+        ],
+    ),
+    ("tooling language-server", &["tooling", "language-server"]),
+    (
+        "__dev-supervisor",
+        &[
+            "__dev-supervisor",
+            "--dev-root",
+            "dev",
+            "--evidence-bin",
+            "evidence",
+            "--docker-bin",
+            "docker",
+            "--ready-timeout-seconds",
+            "1",
+        ],
+    ),
+];
+
 #[test]
 fn global_json_refuses_every_legacy_human_renderer_before_dispatch() {
-    let cases: &[(&[&str], &str)] = &[
-        (
-            &[
-                "client",
-                "contracts",
-                "fetch",
-                "--profile",
-                "client.json",
-                "--output",
-                "contracts.json",
-            ],
-            "client",
-        ),
-        (&["source", "mock", "check"], "source"),
-        (&["source", "detach", "records"], "source"),
-        (&["target", "new", "target", "--local"], "target new"),
-        (
-            &["request", "prepare", "question", "--name", "request"],
-            "request",
-        ),
-        (
-            &[
-                "verify",
-                "response.jwt",
-                "--context",
-                "verification.json",
-                "--output",
-                "verified.json",
-            ],
-            "verify",
-        ),
-        (&["tooling", "language-server"], "tooling language-server"),
-        (
-            &[
-                "__dev-supervisor",
-                "--dev-root",
-                "dev",
-                "--evidence-bin",
-                "evidence",
-                "--docker-bin",
-                "docker",
-                "--ready-timeout-seconds",
-                "1",
-            ],
-            "__dev-supervisor",
-        ),
-    ];
-
-    for (arguments, command) in cases {
-        assert_json_format_refusal(arguments, command);
+    for (command, arguments) in HUMAN_ONLY_COMMANDS {
+        assert_json_format_refusal(&[&["--format", "json"], *arguments].concat(), command);
     }
+}
+
+#[test]
+fn a_json_format_after_a_human_only_command_is_the_same_refusal() {
+    for (command, arguments) in HUMAN_ONLY_COMMANDS {
+        assert_json_format_refusal(&[*arguments, &["--format", "json"]].concat(), command);
+        assert_json_format_refusal(&[*arguments, &["--format=json"]].concat(), command);
+    }
+}
+
+/// A human-only command's help advertises only the output it renders.
+#[test]
+fn human_only_command_help_offers_only_human_output() {
+    for (command, _) in HUMAN_ONLY_COMMANDS {
+        let path: Vec<&str> = command.split(' ').collect();
+        let help = help_text(&[path.as_slice(), &["--help"]].concat());
+        assert!(
+            help.contains("[possible values: human]"),
+            "{command} help does not offer human output alone: {help}"
+        );
+        assert!(
+            !help.contains("json]"),
+            "{command} help offers JSON: {help}"
+        );
+    }
+    let help = help_text(&["source", "suggest", "--help"]);
+    assert!(
+        help.contains("[possible values: human, json]"),
+        "a migrated command lost its JSON output: {help}"
+    );
+}
+
+fn help_text(arguments: &[&str]) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(arguments)
+        .output()
+        .expect("run evidencectl");
+    assert!(output.status.success(), "arguments: {arguments:?}");
+    String::from_utf8(output.stdout).expect("help is UTF-8")
 }
 
 /// The commands whose JSON reports this crate migrated answer the shared
