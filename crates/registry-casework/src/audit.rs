@@ -281,6 +281,8 @@ impl AuditOperation {
     /// terminal outcome of a caller-requested operation that recorded none.
     /// The caller's transaction has committed, so a refusal here reports the
     /// destination unavailable while the committed change stays in place.
+    /// The entries are written in one task that outlives a canceled caller,
+    /// so a caller that stops waiting cannot leave part of them unwritten.
     pub(crate) async fn complete(self) -> Result<(), StoreError> {
         self.ensure_terminal()?;
         let Self {
@@ -296,23 +298,27 @@ impl AuditOperation {
                     .push(audit.minimized(json!({"event": event, "outcome": outcome.as_str()}))?);
             }
         }
-        for record in records {
-            match &mut pairing {
-                Pairing::Requested { request, .. } => request.respond(record).await,
-                Pairing::Background { correlation } => {
-                    audit
-                        .writer
-                        .append(AuditEntry::response(
-                            CASEWORK_AUDIT_SCHEMA,
-                            correlation.clone(),
-                            record,
-                        ))
-                        .await
+        let writer = audit.writer;
+        tokio::spawn(async move {
+            for record in records {
+                match &mut pairing {
+                    Pairing::Requested { request, .. } => request.respond(record).await,
+                    Pairing::Background { correlation } => {
+                        writer
+                            .append(AuditEntry::response(
+                                CASEWORK_AUDIT_SCHEMA,
+                                correlation.clone(),
+                                record,
+                            ))
+                            .await
+                    }
                 }
+                .map_err(|_| StoreError::AuditUnavailable)?;
             }
-            .map_err(|_| StoreError::AuditUnavailable)?;
-        }
-        Ok(())
+            Ok(())
+        })
+        .await
+        .map_err(|_| StoreError::AuditUnavailable)?
     }
 }
 
@@ -395,7 +401,8 @@ fn audit_record_with_event_id(event_id: Uuid, mut record: Value) -> Result<Value
 #[cfg(any(test, feature = "postgres-test"))]
 mod capture {
     use std::io::{self, Write};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::time::Duration;
 
     use registry_platform_audit::{AuditKeyHasher, AuditWriter};
     use serde_json::Value;
@@ -411,10 +418,26 @@ mod capture {
         writer: Option<AuditWriter>,
     }
 
-    /// The lines a test audit destination accepted, and a switch that makes
-    /// it refuse every line past a count.
+    /// A switch that holds the write of one line until it is released, kept
+    /// apart from the accepted lines so a held write blocks no reader.
+    #[derive(Default)]
+    struct Gate {
+        state: Mutex<GateState>,
+        changed: Condvar,
+    }
+
+    #[derive(Default)]
+    struct GateState {
+        /// The index of the line whose write is held.
+        hold_at: Option<usize>,
+        /// Whether that write has started and is waiting.
+        holding: bool,
+    }
+
+    /// The lines a test audit destination accepted, a switch that makes it
+    /// refuse every line past a count, and one that holds a line's write.
     #[derive(Clone, Default)]
-    pub struct AuditCapture(Arc<Mutex<CaptureState>>);
+    pub struct AuditCapture(Arc<Mutex<CaptureState>>, Arc<Gate>);
 
     impl AuditCapture {
         /// Every accepted entry, parsed, in write order.
@@ -465,10 +488,56 @@ mod capture {
         pub fn refuse_after(&self, lines: usize) {
             self.0.lock().expect("audit capture").accepted_lines = Some(lines);
         }
+
+        /// Hold the write of the line at index `line` until [`Self::release`].
+        pub fn hold_line(&self, line: usize) {
+            self.1.state.lock().expect("audit gate").hold_at = Some(line);
+        }
+
+        /// Wait until the held line's write has started, and report whether
+        /// it did within `timeout`.
+        #[must_use]
+        pub fn wait_until_held(&self, timeout: Duration) -> bool {
+            let state = self.1.state.lock().expect("audit gate");
+            let (state, _) = self
+                .1
+                .changed
+                .wait_timeout_while(state, timeout, |state| !state.holding)
+                .expect("audit gate");
+            state.holding
+        }
+
+        /// Let a held write proceed.
+        pub fn release(&self) {
+            let mut state = self.1.state.lock().expect("audit gate");
+            state.hold_at = None;
+            state.holding = false;
+            self.1.changed.notify_all();
+        }
+
+        /// Wait while a gate holds the write of line `index`.
+        fn pass_gate(&self, index: usize) {
+            let mut state = self.1.state.lock().expect("audit gate");
+            if state.hold_at != Some(index) {
+                return;
+            }
+            state.holding = true;
+            self.1.changed.notify_all();
+            let _released = self
+                .1
+                .changed
+                .wait_while(state, |state| state.hold_at == Some(index))
+                .expect("audit gate");
+        }
     }
 
     impl Write for AuditCapture {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let index = {
+                let state = self.0.lock().expect("audit capture");
+                state.bytes.iter().filter(|byte| **byte == b'\n').count()
+            };
+            self.pass_gate(index);
             let mut state = self.0.lock().expect("audit capture");
             let written = state.bytes.iter().filter(|byte| **byte == b'\n').count();
             if state.accepted_lines.is_some_and(|limit| written >= limit) {
@@ -503,6 +572,8 @@ pub use capture::AuditCapture;
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use registry_casework_core::{ActorContext, CaseworkRole, IssuerPrincipal};
 
     use super::*;
@@ -574,6 +645,55 @@ mod tests {
                 "an entry repeats {raw} in the clear"
             );
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_canceled_completion_still_writes_every_response_entry() {
+        let (audit, capture) = CaseworkAudit::capture();
+        let mut operation = audit
+            .begin(request_record("claimed", None, "officer", json!({})))
+            .await
+            .unwrap();
+        for event in [
+            "casework.claimed",
+            "casework.task_invalidated",
+            "casework.task_invalidated",
+        ] {
+            operation
+                .record(
+                    Uuid::new_v4(),
+                    json!({"event": event, "profileId": "officer"}),
+                )
+                .unwrap();
+        }
+        // Hold the first response entry's write, then cancel the caller
+        // while it waits.
+        capture.hold_line(1);
+        let completion = tokio::spawn(operation.complete());
+        assert!(capture.wait_until_held(Duration::from_secs(10)));
+        completion.abort();
+        assert!(completion.await.unwrap_err().is_cancelled());
+        capture.release();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut entries = capture.entries();
+        while entries.len() < 4 && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            entries = capture.entries();
+        }
+        let phases: Vec<_> = entries.iter().map(|entry| entry["phase"].clone()).collect();
+        assert_eq!(
+            phases,
+            ["request", "response", "response", "response"],
+            "{entries:?}"
+        );
+        let correlation = &entries[0]["correlation"];
+        assert!(entries
+            .iter()
+            .all(|entry| &entry["correlation"] == correlation));
+        assert!(entries
+            .iter()
+            .all(|entry| entry["record"].get("outcome").is_none()));
     }
 
     #[tokio::test]
