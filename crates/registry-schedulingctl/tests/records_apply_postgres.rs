@@ -414,10 +414,42 @@ async fn records_apply_rejects_a_different_deployment_identity_without_writing()
         "the refused apply changed the existing facts"
     );
     // The request entry was written before the transaction the store
-    // refused; a refused swap writes no response.
+    // refused; the refusal still writes a paired response so the request is
+    // never left orphaned.
     let refused = audit_entries(&root.path().join("other-audit.schedulingctl.ndjson"));
-    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_eq!(refused.len(), 2, "{refused:?}");
     assert_eq!(refused[0]["phase"], "request");
+    assert_eq!(refused[1]["phase"], "response");
+    assert_eq!(refused[0]["correlation"], refused[1]["correlation"]);
+    assert_eq!(refused[1]["record"]["outcome"], "refused");
+    assert_eq!(refused[1]["record"]["reason"], "records.replace-failed");
+    assert_eq!(refused[1]["record"]["eventId"], refused[1]["correlation"]);
+    // The store's refusal can name records and carry driver diagnostics, so
+    // it reaches the command's error, never the closed audit record.
+    let mut keys: Vec<&str> = refused[1]["record"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "actorKind",
+            "counts",
+            "eventId",
+            "operation",
+            "outcome",
+            "reason"
+        ]
+    );
+    let text =
+        std::fs::read_to_string(root.path().join("other-audit.schedulingctl.ndjson")).unwrap();
+    assert!(
+        !text.contains("belongs to another deployment"),
+        "the store's refusal leaked into the audit stream: {text}"
+    );
 
     // An audit destination that cannot be opened refuses the apply before
     // the database is written.
