@@ -81,7 +81,7 @@ expected_output=(
 	'[provider] evidence.jsonld sha256=fc96f3a8cb0d82239425ea5712dceca975a5899e5528616648174da661fae905'
 	'[provider] relay.jsonld sha256=5a34fa469803b7c28b3d5e7134a42398e326a2f173aacae9090d29787bc8f4d7'
 	'[operator] offline check: valid origins=2 mappings=1'
-	'[operator] explicit build: built catalogRevision=sha256:b4b7195f36691c245bf49a88a248049ed899c0c41dbf1a87a386571c0dbfba0f mappingRevision=sha256:332004ca3920c498539180946e8f2637e9998ba7e49cd98f31e19d6f818857ac'
+	'[operator] explicit package: packaged packageDigest=sha256:'
 	'[consumer] resolved evidenceType=urn:example:evidence-type:adult-status alternatives=1'
 	'[consumer] selected evidence recordId=urn:registrystack:discovery:record:sha256:676659c10ce5cc9d353f4fd2816673c7947e612151efbbe1cc4d42372d9be9d5'
 	'[consumer] selected relay recordId=urn:registrystack:discovery:record:sha256:aa220c11f493c266bc22adf5dc7ca82fb7a83842e6e887dc0e8e5680f4f84244'

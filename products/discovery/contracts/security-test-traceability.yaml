@@ -70,9 +70,9 @@
       ]
     },
     {
-      "id": "sec-atomic-index-build",
-      "negativeTest": "failed-build-leaves-no-new-visible-index",
-      "testId": "discoveryctl::atomic_index_build",
+      "id": "sec-atomic-index-package",
+      "negativeTest": "failed-package-leaves-no-new-visible-package",
+      "testId": "discoveryctl::atomic_index_package",
       "tests": [
         {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "failed_origin_fetch_leaves_the_previous_output_untouched"},
         {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "wrong_profile_media_type_is_refused_without_replacing_the_output"},
@@ -82,7 +82,19 @@
         {"path": "crates/registry-discoveryctl/src/build.rs", "name": "origin_fetch_timeout_leaves_the_previous_output_untouched"},
         {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "compiled_service_bound_leaves_the_previous_output_untouched"},
         {"path": "crates/registry-discoveryctl/src/build.rs", "name": "compiled_index_byte_overflow_preserves_the_previous_output"},
-        {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "write_failure_preserves_previous_output_and_leaves_no_visible_temporary_file"}
+        {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "package_refuses_an_existing_output_without_changing_it"}
+      ]
+    },
+    {
+      "id": "sec-package-integrity",
+      "negativeTest": "package-envelope-pin-and-consumed-index-bytes-are-bound",
+      "testId": "discovery_runtime::package_integrity",
+      "tests": [
+        {"path": "crates/registry-discovery/src/startup.rs", "name": "startup_verifies_package_and_refuses_expected_digest_mismatch_with_common_shape"},
+        {"path": "crates/registry-discovery/src/startup.rs", "name": "startup_refuses_changed_missing_and_extra_package_files_by_name"},
+        {"path": "crates/registry-discovery/src/startup.rs", "name": "startup_refuses_a_hash_covered_non_index_file_by_name"},
+        {"path": "crates/registry-discovery/src/startup.rs", "name": "exact_consumed_index_bytes_remain_bound_to_the_verified_package"},
+        {"path": "crates/registry-discovery/tests/http_journey.rs", "name": "verified_package_startup_serves_the_packaged_index_through_the_real_router"}
       ]
     },
     {

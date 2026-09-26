@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Finite Registry Discovery authoring and immutable index builds.
+//! Finite Registry Discovery authoring and immutable index packages.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 mod build;
 mod project;
 
-pub use build::{build_project, build_project_at, BuildError};
+pub use build::{package_project, package_project_at, BuildError, PackagedDiscovery};
 pub use project::{
     check_project, ApprovedOrigin, AuthoredEvidenceMapping, AuthoredEvidenceTypeAlternative,
     CheckedProject, OriginsFile, ProjectError, MAPPING_SCHEMA, MAX_MAPPING_FILE_BYTES,
@@ -19,7 +19,7 @@ pub use project::{
 #[derive(Debug, Parser)]
 #[command(
     name = "discoveryctl",
-    about = "Check and build one immutable Registry Discovery index",
+    about = "Check and package one immutable Registry Discovery index",
     version = registry_platform_buildinfo::DISPLAY_VERSION
 )]
 struct Arguments {
@@ -36,14 +36,17 @@ enum Command {
         #[arg(long)]
         allow_loopback: bool,
     },
-    /// Fetch every enabled approved origin once and atomically build one index.
-    Build {
+    /// Fetch every enabled approved origin once and write one immutable package.
+    Package {
         #[arg(long)]
         project: PathBuf,
         #[arg(long)]
         output: PathBuf,
         #[arg(long)]
         allow_loopback: bool,
+        /// Optional operator revision recorded in the package envelope.
+        #[arg(long)]
+        revision: Option<String>,
     },
 }
 
@@ -63,21 +66,29 @@ pub fn main_entry() -> ExitCode {
                 );
             })
             .map_err(|error| error.to_string()),
-        Command::Build {
+        Command::Package {
             project,
             output,
             allow_loopback,
+            revision,
         } => tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .map_err(|_| "the Discovery build runtime could not start".to_owned())
+            .map_err(|_| "the Discovery package runtime could not start".to_owned())
             .and_then(|runtime| {
                 runtime
-                    .block_on(build_project(&project, &output, allow_loopback))
-                    .map(|index| {
+                    .block_on(package_project(
+                        &project,
+                        &output,
+                        allow_loopback,
+                        revision.as_deref(),
+                    ))
+                    .map(|package| {
                         println!(
-                            "built catalogRevision={} mappingRevision={}",
-                            index.catalog_revision, index.mapping_revision
+                            "packaged packageDigest={} catalogRevision={} mappingRevision={}",
+                            package.package_digest,
+                            package.index.catalog_revision,
+                            package.index.mapping_revision
                         );
                     })
                     .map_err(|error| error.to_string())
@@ -89,5 +100,24 @@ pub fn main_entry() -> ExitCode {
             eprintln!("{error}");
             ExitCode::from(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn package_is_the_only_online_compilation_verb() {
+        assert!(Arguments::try_parse_from(["discoveryctl", "build"]).is_err());
+        assert!(Arguments::try_parse_from([
+            "discoveryctl",
+            "package",
+            "--project",
+            "project",
+            "--output",
+            "package",
+        ])
+        .is_ok());
     }
 }

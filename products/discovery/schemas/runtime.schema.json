@@ -4,7 +4,7 @@
   "title": "Registry Discovery runtime configuration",
   "type": "object",
   "additionalProperties": false,
-  "required": ["apiVersion", "kind", "listener", "indexPath", "limits", "logLevel"],
+  "required": ["apiVersion", "kind", "listener", "package", "limits", "logLevel"],
   "properties": {
     "apiVersion": {"const": "registry.registrystack.org/discovery-runtime/v1alpha1"},
     "kind": {"const": "DiscoveryRuntimeConfig"},
@@ -31,13 +31,22 @@
         }
       }
     },
-    "indexPath": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 4096,
-      "pattern": "^(?:[^/]+/)*[^/]+$",
-      "not": {"pattern": "(^|/)\\.{1,2}(/|$)"},
-      "description": "Relative normal path resolved beside this runtime file."
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root"],
+      "properties": {
+        "root": {
+          "type": "string",
+          "pattern": "^/",
+          "description": "Absolute path of the package directory."
+        },
+        "expectedDigest": {
+          "type": ["string", "null"],
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "Optional digest of the package SHA256SUMS file."
+        }
+      }
     },
     "limits": {
       "type": "object",

@@ -5,12 +5,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use jsonschema::{Draft, JSONSchema};
-use registry_discovery::{parse_index, prepare};
+use registry_discovery::{package_limits, parse_index, prepare, INDEX_FILE, PACKAGE_COMMAND};
 use registry_discovery_profile::{
     parse_description, render_description, DiscoveryDescription, ServiceDescription,
 };
 use registry_discoveryctl::{check_project, MAX_MAPPING_FILE_BYTES};
 use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_config::write_package;
 use serde_json::Value;
 
 const PRODUCT_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../products/discovery");
@@ -183,18 +184,36 @@ fn accepted_by_rust(contract: &str, document: &Value) -> bool {
                     .expect("temporary root resolves"),
             )
             .expect("temporary runtime");
+            let mut runtime = document.clone();
+            let package_root = temporary.path().join("package");
+            if runtime.pointer("/package/root")
+                == positive_document("runtime").pointer("/package/root")
+            {
+                let index = positive_document("index");
+                let files = BTreeMap::from([(
+                    INDEX_FILE.to_owned(),
+                    canonicalize_json(&index).expect("positive index canonicalizes"),
+                )]);
+                write_package(
+                    &package_root,
+                    &files,
+                    None,
+                    &package_limits(),
+                    PACKAGE_COMMAND,
+                )
+                .expect("positive package writes");
+                set_pointer(
+                    &mut runtime,
+                    "/package/root",
+                    Value::String(package_root.display().to_string()),
+                );
+            }
             let path = temporary.path().join("runtime.yaml");
             fs::write(
                 &path,
-                serde_yaml_ng::to_string(document).expect("runtime serializes"),
+                serde_yaml_ng::to_string(&runtime).expect("runtime serializes"),
             )
             .expect("runtime write");
-            let index = positive_document("index");
-            fs::write(
-                temporary.path().join("discovery-index.json"),
-                canonicalize_json(&index).expect("positive index canonicalizes"),
-            )
-            .expect("index write");
             prepare(&path).is_ok()
         }
         "index" => canonicalize_json(document).is_ok_and(|bytes| parse_index(&bytes).is_ok()),

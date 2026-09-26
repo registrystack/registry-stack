@@ -30,4 +30,6 @@ deployment. The Python distribution imports as `registry_client`.
 
 Run `scripts/check-contracts.sh` to validate the resources and their
 traceability. The normal operator flow, owned by `discoveryctl`, is offline
-`check`, one explicit `build`, deployment of an immutable index, then restart.
+`check`, one explicit `package`, deployment of the immutable package directory,
+then restart. The runtime verifies `SHA256SUMS` and an optional
+`package.expectedDigest` pin before consuming the exact packaged index bytes.

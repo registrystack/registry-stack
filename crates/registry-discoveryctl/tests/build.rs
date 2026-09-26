@@ -9,14 +9,35 @@ use axum::http::header::CONTENT_TYPE;
 use axum::http::{Response, StatusCode};
 use axum::routing::get;
 use axum::Router;
-use registry_discovery::parse_index;
+use registry_discovery::{parse_index, INDEX_FILE};
 use registry_discovery_profile::{
     render_description, DiscoveryDescription, ServiceDescription, ServiceKind, ServiceRoles,
     MEDIA_TYPE,
 };
-use registry_discoveryctl::{build_project, build_project_at, BuildError};
+use registry_discoveryctl::{package_project, package_project_at, BuildError};
 use tempfile::TempDir;
 use time::{macros::datetime, OffsetDateTime};
+
+async fn build_project(
+    project: &std::path::Path,
+    output: &std::path::Path,
+    allow_loopback: bool,
+) -> Result<registry_discovery::DiscoveryIndex, BuildError> {
+    package_project(project, output, allow_loopback, None)
+        .await
+        .map(|package| package.index)
+}
+
+async fn build_project_at(
+    project: &std::path::Path,
+    output: &std::path::Path,
+    allow_loopback: bool,
+    built_at: OffsetDateTime,
+) -> Result<registry_discovery::DiscoveryIndex, BuildError> {
+    package_project_at(project, output, allow_loopback, None, built_at)
+        .await
+        .map(|package| package.index)
+}
 
 fn description() -> Vec<u8> {
     let service = ServiceDescription::new(
@@ -213,11 +234,11 @@ fn authoring_project(catalog_url: &str) -> TempDir {
 }
 
 #[tokio::test]
-async fn build_fetches_each_origin_once_and_preserves_semantic_revisions() {
+async fn package_fetches_each_origin_once_and_preserves_semantic_revisions() {
     let counter = Arc::new(AtomicUsize::new(0));
     let (catalog_url, task) = provider(description(), StatusCode::OK, Arc::clone(&counter)).await;
     let project = authoring_project(&catalog_url);
-    let first_output = project.path().join("first.json");
+    let first_output = project.path().join("first-package");
     let first = build_project_at(
         project.path(),
         &first_output,
@@ -236,11 +257,11 @@ async fn build_fetches_each_origin_once_and_preserves_semantic_revisions() {
         first.services[0].origin_fetched_at
     );
     assert_eq!(
-        parse_index(&fs::read(&first_output).expect("index")).expect("valid index"),
+        parse_index(&fs::read(first_output.join(INDEX_FILE)).expect("index")).expect("valid index"),
         first
     );
 
-    let second_output = project.path().join("second.json");
+    let second_output = project.path().join("second-package");
     let second = build_project_at(
         project.path(),
         &second_output,
@@ -257,11 +278,11 @@ async fn build_fetches_each_origin_once_and_preserves_semantic_revisions() {
 }
 
 #[tokio::test]
-async fn production_build_time_is_captured_after_origin_collection() {
+async fn production_package_time_is_captured_after_origin_collection() {
     let counter = Arc::new(AtomicUsize::new(0));
     let (catalog_url, task) = provider(description(), StatusCode::OK, Arc::clone(&counter)).await;
     let project = authoring_project(&catalog_url);
-    let output = project.path().join("index.json");
+    let output = project.path().join("package");
 
     let index = build_project(project.path(), &output, true)
         .await
@@ -284,13 +305,13 @@ async fn production_build_time_is_captured_after_origin_collection() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn successful_builds_publish_a_stable_runtime_readable_file_mode() {
+async fn successful_packages_publish_a_stable_runtime_readable_file_mode() {
     use std::os::unix::fs::PermissionsExt as _;
 
     let counter = Arc::new(AtomicUsize::new(0));
     let (catalog_url, task) = provider(description(), StatusCode::OK, Arc::clone(&counter)).await;
     let project = authoring_project(&catalog_url);
-    let output = project.path().join("index.json");
+    let output = project.path().join("first-package");
 
     build_project_at(
         project.path(),
@@ -301,7 +322,7 @@ async fn successful_builds_publish_a_stable_runtime_readable_file_mode() {
     .await
     .expect("initial build");
     assert_eq!(
-        fs::metadata(&output)
+        fs::metadata(output.join(INDEX_FILE))
             .expect("metadata")
             .permissions()
             .mode()
@@ -309,8 +330,7 @@ async fn successful_builds_publish_a_stable_runtime_readable_file_mode() {
         0o644
     );
 
-    fs::set_permissions(&output, fs::Permissions::from_mode(0o600))
-        .expect("restrict previous output");
+    let output = project.path().join("second-package");
     build_project_at(
         project.path(),
         &output,
@@ -320,7 +340,7 @@ async fn successful_builds_publish_a_stable_runtime_readable_file_mode() {
     .await
     .expect("replacement build");
     assert_eq!(
-        fs::metadata(&output)
+        fs::metadata(output.join(INDEX_FILE))
             .expect("metadata")
             .permissions()
             .mode()
@@ -596,7 +616,7 @@ async fn compiled_service_bound_leaves_the_previous_output_untouched() {
 }
 
 #[tokio::test]
-async fn write_failure_preserves_previous_output_and_leaves_no_visible_temporary_file() {
+async fn package_refuses_an_existing_output_without_changing_it() {
     let counter = Arc::new(AtomicUsize::new(0));
     let (catalog_url, task) = provider(description(), StatusCode::OK, Arc::clone(&counter)).await;
     let project = authoring_project(&catalog_url);
@@ -609,7 +629,9 @@ async fn write_failure_preserves_previous_output_and_leaves_no_visible_temporary
 
     let result = build_project_at(project.path(), &output, true, OffsetDateTime::UNIX_EPOCH).await;
 
-    assert!(matches!(result, Err(BuildError::Write)));
+    let message = result.unwrap_err().to_string();
+    assert!(message.contains("already exists"), "{message}");
+    assert!(message.contains("discoveryctl package"), "{message}");
     assert_eq!(counter.load(Ordering::SeqCst), 1);
     assert_eq!(
         fs::read(&canary).expect("previous target canary"),

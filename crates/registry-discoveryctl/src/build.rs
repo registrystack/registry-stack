@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeSet;
-use std::io::Write as _;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Duration;
 
 use registry_discovery::{
-    canonical_index_bytes, catalog_revision, mapping_revision, validate_index,
+    canonical_index_bytes, catalog_revision, mapping_revision, package_limits, validate_index,
     CompiledEvidenceMapping, DiscoveryIndex, EvidenceTypeAlternative, OriginSummary, ServiceRecord,
-    INDEX_SCHEMA, MAXIMUM_INDEX_BYTES,
+    INDEX_FILE, INDEX_SCHEMA, MAXIMUM_INDEX_BYTES, PACKAGE_COMMAND,
 };
+use registry_platform_config::{write_package, PackageError, VerifiedPackage};
 use registry_platform_httputil::{read_bounded, validate_response_headers, FetchUrlPolicy};
 use reqwest::header::{ACCEPT, CONTENT_ENCODING, CONTENT_TYPE};
 use sha2::{Digest as _, Sha256};
-use tempfile::NamedTempFile;
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use url::Url;
@@ -22,9 +21,6 @@ use crate::project::{check_project, AuthoredEvidenceMapping, CheckedProject, Pro
 
 const DNS_TIMEOUT: Duration = Duration::from_secs(5);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
-#[cfg(unix)]
-const OUTPUT_FILE_MODE: u32 = 0o644;
-
 #[derive(Debug, Error)]
 pub enum BuildError {
     #[error("the Discovery authoring project is invalid")]
@@ -35,19 +31,28 @@ pub enum BuildError {
     Description,
     #[error("the Discovery index could not be compiled")]
     Compile,
-    #[error("the Discovery index could not be written atomically")]
-    Write,
+    #[error("{0}")]
+    Package(#[from] PackageError),
 }
 
-pub async fn build_project(
+/// The index and shared package identity produced from one collection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PackagedDiscovery {
+    pub index: DiscoveryIndex,
+    pub package_digest: String,
+}
+
+pub async fn package_project(
     project_root: &Path,
     output: &Path,
     allow_loopback: bool,
-) -> Result<DiscoveryIndex, BuildError> {
-    build_project_with_timeouts(
+    revision: Option<&str>,
+) -> Result<PackagedDiscovery, BuildError> {
+    package_project_with_timeouts(
         project_root,
         output,
         allow_loopback,
+        revision,
         None,
         DNS_TIMEOUT,
         FETCH_TIMEOUT,
@@ -55,16 +60,18 @@ pub async fn build_project(
     .await
 }
 
-pub async fn build_project_at(
+pub async fn package_project_at(
     project_root: &Path,
     output: &Path,
     allow_loopback: bool,
+    revision: Option<&str>,
     built_at: OffsetDateTime,
-) -> Result<DiscoveryIndex, BuildError> {
-    build_project_with_timeouts(
+) -> Result<PackagedDiscovery, BuildError> {
+    package_project_with_timeouts(
         project_root,
         output,
         allow_loopback,
+        revision,
         Some(built_at),
         DNS_TIMEOUT,
         FETCH_TIMEOUT,
@@ -72,14 +79,15 @@ pub async fn build_project_at(
     .await
 }
 
-async fn build_project_with_timeouts(
+async fn package_project_with_timeouts(
     project_root: &Path,
     output: &Path,
     allow_loopback: bool,
+    revision: Option<&str>,
     fixed_built_at: Option<OffsetDateTime>,
     dns_timeout: Duration,
     fetch_timeout: Duration,
-) -> Result<DiscoveryIndex, BuildError> {
+) -> Result<PackagedDiscovery, BuildError> {
     let checked = check_project(project_root, allow_loopback)?;
     let (mut origins, mut services) =
         fetch_origins(&checked, allow_loopback, dns_timeout, fetch_timeout).await?;
@@ -108,21 +116,27 @@ async fn build_project_with_timeouts(
         services,
         mappings,
     };
-    compile_and_activate(&index, output, MAXIMUM_INDEX_BYTES)?;
-    Ok(index)
+    let package = write_index_package(&index, output, revision, MAXIMUM_INDEX_BYTES)?;
+    Ok(PackagedDiscovery {
+        index,
+        package_digest: package.digest().to_owned(),
+    })
 }
 
-fn compile_and_activate(
+fn write_index_package(
     index: &DiscoveryIndex,
     output: &Path,
+    revision: Option<&str>,
     maximum_index_bytes: u64,
-) -> Result<(), BuildError> {
+) -> Result<VerifiedPackage, BuildError> {
     validate_index(index).map_err(|_| BuildError::Compile)?;
     let bytes = canonical_index_bytes(index).map_err(|_| BuildError::Compile)?;
     if u64::try_from(bytes.len()).map_or(true, |length| length > maximum_index_bytes) {
         return Err(BuildError::Compile);
     }
-    atomic_replace(output, &bytes)
+    let files = BTreeMap::from([(INDEX_FILE.to_owned(), bytes)]);
+    write_package(output, &files, revision, &package_limits(), PACKAGE_COMMAND)
+        .map_err(BuildError::from)
 }
 
 async fn fetch_origins(
@@ -264,54 +278,6 @@ fn sha256_digest(bytes: &[u8]) -> String {
     format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
-fn atomic_replace(output: &Path, bytes: &[u8]) -> Result<(), BuildError> {
-    let parent = effective_parent(output);
-    if !parent.is_dir() {
-        return Err(BuildError::Write);
-    }
-    let mut temporary = NamedTempFile::new_in(parent).map_err(|_| BuildError::Write)?;
-    temporary.write_all(bytes).map_err(|_| BuildError::Write)?;
-    set_output_permissions(temporary.as_file())?;
-    temporary
-        .as_file()
-        .sync_all()
-        .map_err(|_| BuildError::Write)?;
-    temporary.persist(output).map_err(|_| BuildError::Write)?;
-    sync_parent_directory(parent)?;
-    Ok(())
-}
-
-fn effective_parent(path: &Path) -> &Path {
-    path.parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."))
-}
-
-#[cfg(unix)]
-fn set_output_permissions(file: &std::fs::File) -> Result<(), BuildError> {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    file.set_permissions(std::fs::Permissions::from_mode(OUTPUT_FILE_MODE))
-        .map_err(|_| BuildError::Write)
-}
-
-#[cfg(not(unix))]
-fn set_output_permissions(_file: &std::fs::File) -> Result<(), BuildError> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn sync_parent_directory(parent: &Path) -> Result<(), BuildError> {
-    std::fs::File::open(parent)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|_| BuildError::Write)
-}
-
-#[cfg(not(unix))]
-fn sync_parent_directory(_parent: &Path) -> Result<(), BuildError> {
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -333,15 +299,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_bare_output_filename_uses_the_current_directory() {
-        assert_eq!(effective_parent(Path::new("index.json")), Path::new("."));
-        assert_eq!(
-            effective_parent(Path::new("output/index.json")),
-            Path::new("output")
-        );
-    }
-
-    #[test]
     fn compiled_index_byte_overflow_preserves_the_previous_output() {
         let services = Vec::new();
         let mappings = Vec::new();
@@ -359,12 +316,55 @@ mod tests {
         fs::write(&output, b"previous-index-canary").expect("previous index");
 
         assert!(matches!(
-            compile_and_activate(&index, &output, 1),
+            write_index_package(&index, &output, None, 1),
             Err(BuildError::Compile)
         ));
         assert_eq!(
             fs::read(&output).expect("previous output"),
             b"previous-index-canary"
+        );
+    }
+
+    #[test]
+    fn packaging_the_same_compiled_index_twice_is_repeatable() {
+        let services = Vec::new();
+        let mappings = Vec::new();
+        let index = DiscoveryIndex {
+            schema_version: INDEX_SCHEMA.into(),
+            catalog_revision: catalog_revision(&services).expect("catalog revision"),
+            mapping_revision: mapping_revision(&mappings).expect("mapping revision"),
+            built_at: "2026-08-14T00:00:00Z".into(),
+            origins: Vec::new(),
+            services,
+            mappings,
+        };
+        let directory = TempDir::new().expect("temporary directory");
+        let first = directory.path().join("first-package");
+        let second = directory.path().join("second-package");
+
+        let first_package = write_index_package(
+            &index,
+            &first,
+            Some("example-revision"),
+            MAXIMUM_INDEX_BYTES,
+        )
+        .expect("first package");
+        let second_package = write_index_package(
+            &index,
+            &second,
+            Some("example-revision"),
+            MAXIMUM_INDEX_BYTES,
+        )
+        .expect("second package");
+
+        assert_eq!(first_package.digest(), second_package.digest());
+        assert_eq!(
+            fs::read(first.join("SHA256SUMS")).unwrap(),
+            fs::read(second.join("SHA256SUMS")).unwrap()
+        );
+        assert_eq!(
+            fs::read(first.join(INDEX_FILE)).unwrap(),
+            fs::read(second.join(INDEX_FILE)).unwrap()
         );
     }
 
@@ -428,16 +428,17 @@ mod tests {
         )
         .expect("origins");
         fs::create_dir(project.path().join("mappings")).expect("mappings");
-        let output = project.path().join("index.json");
+        let output = project.path().join("package");
         fs::write(&output, b"previous-index-canary").expect("previous index");
 
         let project_path = project.path().to_path_buf();
-        let build_output = output.clone();
-        let mut build = tokio::spawn(async move {
-            build_project_with_timeouts(
+        let package_output = output.clone();
+        let mut package = tokio::spawn(async move {
+            package_project_with_timeouts(
                 &project_path,
-                &build_output,
+                &package_output,
                 true,
+                None,
                 Some(OffsetDateTime::UNIX_EPOCH),
                 DNS_TIMEOUT,
                 Duration::from_millis(500),
@@ -446,13 +447,13 @@ mod tests {
         });
         tokio::select! {
             () = entered.notified() => {}
-            result = &mut build => panic!("fetch ended before the provider received it: {result:?}"),
+            result = &mut package => panic!("fetch ended before the provider received it: {result:?}"),
             () = tokio::time::sleep(Duration::from_secs(5)) => panic!("provider was not reached"),
         }
-        let result = tokio::time::timeout(Duration::from_secs(5), build)
+        let result = tokio::time::timeout(Duration::from_secs(5), package)
             .await
             .expect("fetch timeout elapsed")
-            .expect("build task");
+            .expect("package task");
 
         assert!(matches!(result, Err(BuildError::Fetch)));
         assert_eq!(counter.load(Ordering::SeqCst), 1);

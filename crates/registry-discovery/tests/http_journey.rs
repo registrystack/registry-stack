@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Product-owned acceptance entry point through the real Discovery router.
 
+use std::collections::BTreeMap;
+use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,10 +10,12 @@ use axum::body::{to_bytes, Body};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{Request, StatusCode};
 use registry_discovery::{
-    catalog_revision, mapping_revision, router, CompiledEvidenceMapping, Directory, DiscoveryIndex,
-    DiscoveryService, EvidenceTypeAlternative, EvidenceTypeResolveResponse, OriginSummary,
-    ServiceKind, ServiceRecord, ServiceSearchResponse, INDEX_SCHEMA,
+    canonical_index_bytes, catalog_revision, mapping_revision, package_limits, prepare, router,
+    CompiledEvidenceMapping, Directory, DiscoveryIndex, DiscoveryService, EvidenceTypeAlternative,
+    EvidenceTypeResolveResponse, OriginSummary, ServiceKind, ServiceRecord, ServiceSearchResponse,
+    INDEX_FILE, INDEX_SCHEMA, PACKAGE_COMMAND,
 };
+use registry_platform_config::write_package;
 use tower::ServiceExt as _;
 
 fn index() -> DiscoveryIndex {
@@ -69,6 +73,66 @@ fn app() -> axum::Router {
     let directory = Directory::new(index(), 100, 100).unwrap();
     let service = Arc::new(DiscoveryService::new(directory, 1024 * 1024).unwrap());
     router(service, 64 * 1024, Duration::from_secs(5)).unwrap()
+}
+
+#[tokio::test]
+async fn verified_package_startup_serves_the_packaged_index_through_the_real_router() {
+    let temporary = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let package_root = temporary.path().join("package");
+    let files = BTreeMap::from([(
+        INDEX_FILE.to_owned(),
+        canonical_index_bytes(&index()).unwrap(),
+    )]);
+    let package = write_package(
+        &package_root,
+        &files,
+        Some("http-journey"),
+        &package_limits(),
+        PACKAGE_COMMAND,
+    )
+    .unwrap();
+    let runtime = temporary.path().join("runtime.yaml");
+    fs::write(
+        &runtime,
+        format!(
+            r#"apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1
+kind: DiscoveryRuntimeConfig
+listener: {{ bind: 127.0.0.1:0 }}
+package:
+  root: {}
+  expectedDigest: {}
+limits:
+  maximumRequestBytes: 65536
+  maximumResponseBytes: 1048576
+  maximumResultRecords: 100
+  maximumResultAlternatives: 100
+  requestTimeoutSeconds: 10
+  shutdownTimeoutSeconds: 10
+logLevel: info
+"#,
+            package_root.display(),
+            package.digest()
+        ),
+    )
+    .unwrap();
+
+    let response = prepare(&runtime)
+        .unwrap()
+        .app()
+        .oneshot(
+            Request::get(
+                "/v1/services?serviceKind=evidence&evidenceType=urn%3Aexample%3Aevidence-type",
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let search: ServiceSearchResponse = serde_json::from_slice(&body).unwrap();
+    assert_eq!(search.items.len(), 1);
+    assert_eq!(search.items[0].record_id, "acceptance-record");
 }
 
 #[tokio::test]

@@ -2,7 +2,8 @@ apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1
 kind: DiscoveryRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
-indexPath: discovery-index.json
+package:
+  root: /srv/registry-discovery/package
 limits:
   maximumRequestBytes: 65536
   maximumResponseBytes: 1048576
