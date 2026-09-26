@@ -1078,6 +1078,9 @@ pub mod test_support {
         /// The envelope schema and record phase of the first entry refused
         /// regardless of `remaining`.
         refuse: Option<(String, String)>,
+        /// Every writer recording here, so a read can wait for the entries
+        /// they write when a request handle is dropped.
+        writers: Vec<AuditWriter>,
     }
 
     /// The entries one [`RegistryAudit`] accepted, in append order.
@@ -1127,6 +1130,10 @@ pub mod test_support {
         /// Every accepted entry, parsed.
         #[must_use]
         pub fn entries(&self) -> Vec<Value> {
+            let writers = self.0.lock().expect("audit capture lock").writers.clone();
+            for writer in &writers {
+                writer.wait_for_detached_entries();
+            }
             let state = self.0.lock().expect("audit capture lock");
             String::from_utf8(state.bytes.clone())
                 .expect("audit lines are UTF-8")
@@ -1162,6 +1169,11 @@ pub mod test_support {
         #[must_use]
         pub fn audit(&self, profile: AuditProfile) -> RegistryAudit {
             let writer = AuditWriter::from_line_sink(Box::new(CaptureSink(Arc::clone(&self.0))));
+            self.0
+                .lock()
+                .expect("audit capture lock")
+                .writers
+                .push(writer.clone());
             RegistryAudit::new(profile, writer)
         }
     }
