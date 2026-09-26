@@ -1034,6 +1034,7 @@ mod tests {
             pending.is_err(),
             "with no render slot free the request must be waiting at the render step"
         );
+        service.audit.wait_for_detached_entries();
         let accepted = lines.accepted();
         // The call dropped while it waited for a render slot, as a canceled
         // request is: its request entry is paired with an unfinished

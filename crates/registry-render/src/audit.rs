@@ -188,6 +188,13 @@ impl RenderAudit {
         })
     }
 
+    /// Wait for the unfinished response entries dropped calls handed to a
+    /// stream destination.
+    #[cfg(test)]
+    pub(crate) fn wait_for_detached_entries(&self) {
+        self.writer.wait_for_detached_entries();
+    }
+
     /// Readiness: the destination still accepts entries.
     pub async fn ready(&self) -> bool {
         self.writer.ready().await
