@@ -966,6 +966,46 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertIn(f"fn {test.rsplit('::', 1)[1]}()", source)
 
+    def test_casework_postgres_runs_task_approval_and_local_session_exactly(
+        self,
+    ) -> None:
+        workflow = Path(".github/workflows/ci.yml").read_text()
+        casework_job = workflow.split("\n  casework-postgres:\n", 1)[1].split(
+            "\n  scheduling-contracts:\n", 1
+        )[0]
+        cases = (
+            (
+                "task_grants::native_exchange_tests::"
+                "approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid",
+                "casework-task-approval.log",
+            ),
+            (
+                "task_grants::local_session_tests::"
+                "source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer",
+                "casework-local-session.log",
+            ),
+        )
+        source_dir = Path("crates/registry-casework/src/task_grants")
+        for test, log in cases:
+            with self.subTest(test=test):
+                self.assertIn(test, casework_job)
+                # A renamed test would otherwise leave the step running zero
+                # tests, and an inexact filter could silently match more than
+                # one, so the step names each test exactly and fails unless
+                # it reports one pass.
+                self.assertRegex(
+                    casework_job,
+                    rf"-- --ignored --exact \\\s*\n\s*{re.escape(test)} \\",
+                )
+                self.assertIn(
+                    "grep -q 'test result: ok\\. 1 passed' "
+                    f'"${{RUNNER_TEMP}}/{log}"',
+                    casework_job,
+                )
+                module, name = test.rsplit("::", 2)[1:]
+                module_source = (source_dir / f"{module}.rs").read_text()
+                self.assertIn(f"fn {name}()", module_source)
+
     def test_breg_tutorial_inputs_cover_every_replayed_tutorial(self) -> None:
         # Each page's tutorial_test frontmatter is the source of truth for
         # which tutorials the gate replays. A replayed page missing here would
