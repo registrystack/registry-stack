@@ -153,7 +153,18 @@ pub trait DeliverySeams: Send + Sync + 'static {
     ///   for a transition that rolled back.
     /// - An operator replay is a request, `ReplayRequested`, recorded before
     ///   the reset, and a response recorded after it: `ReplayCommitted` once
-    ///   the reset commits, `ReplayRefused` when it does not.
+    ///   the reset commits, `ReplayRefused` when it does not, and
+    ///   `ReplayUnfinished` when its commit failed and its fate cannot be
+    ///   read back.
+    ///
+    /// While the process runs, every accepted request entry, an attempt's
+    /// start or a replay's request, gets at least one answer: the outcome of
+    /// the transition that committed, or an interrupted or unfinished answer
+    /// when that outcome cannot be read. A second answer can follow, such as
+    /// an interrupted answer to an attempt that expiry recovery also
+    /// answers; a request with no answer, or an answer naming a transition
+    /// that did not commit, is a defect. A process that exits between a
+    /// request and its answer leaves that request unanswered.
     ///
     /// A refused append after a commit leaves that committed transition
     /// without its entry; the writer then refuses every later entry until
@@ -435,6 +446,10 @@ pub enum DeliveryAuditOutcome {
     ReplayCommitted,
     /// The replay's reset did not commit; the delivery stays dead-lettered.
     ReplayRefused,
+    /// The replay's commit failed and whether its reset committed cannot be
+    /// read back, so the delivery may be pending again or still
+    /// dead-lettered.
+    ReplayUnfinished,
 }
 
 impl DeliveryAuditOutcome {
@@ -469,8 +484,10 @@ pub enum DeliveryAuditDisposition {
 /// One neutral delivery-audit event.
 ///
 /// This is the complete audit surface of the worker: every occurrence the
-/// moved worker audited arrives here once, with exactly these fields, and
-/// the product maps it 1:1 onto its own audit vocabulary and journal.
+/// moved worker audited arrives here, with exactly these fields, and the
+/// product maps it 1:1 onto its own audit vocabulary and journal. An
+/// attempt may be answered more than once, as
+/// [`DeliverySeams::record_audit`] describes.
 #[derive(Clone, Copy, Debug)]
 pub struct DeliveryAuditRecord<'a> {
     pub event_id: Uuid,

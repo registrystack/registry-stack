@@ -1089,6 +1089,7 @@ fn audit_outcome(value: DeliveryAuditOutcome) -> &'static str {
         DeliveryAuditOutcome::ReplayRequested => "replay_requested",
         DeliveryAuditOutcome::ReplayCommitted => "replay_committed",
         DeliveryAuditOutcome::ReplayRefused => "replay_refused",
+        DeliveryAuditOutcome::ReplayUnfinished => "replay_unfinished",
     }
 }
 

@@ -693,6 +693,7 @@ fn audit_outcome(outcome: DeliveryAuditOutcome) -> WebhookAuditOutcome {
         DeliveryAuditOutcome::ReplayRequested => WebhookAuditOutcome::ReplayRequested,
         DeliveryAuditOutcome::ReplayCommitted => WebhookAuditOutcome::ReplayCommitted,
         DeliveryAuditOutcome::ReplayRefused => WebhookAuditOutcome::ReplayRefused,
+        DeliveryAuditOutcome::ReplayUnfinished => WebhookAuditOutcome::ReplayUnfinished,
         DeliveryAuditOutcome::HandlerBindingRefused => WebhookAuditOutcome::HandlerBindingRefused,
         DeliveryAuditOutcome::HandlerDeadline => WebhookAuditOutcome::HandlerDeadline,
         DeliveryAuditOutcome::HandlerResource => WebhookAuditOutcome::HandlerResource,

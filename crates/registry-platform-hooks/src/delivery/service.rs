@@ -395,17 +395,25 @@ impl<S: DeliverySeams> DeliveryService<S> {
             disposition: DeliveryAuditDisposition::ReplayPending,
         };
         self.seams.record_audit(replay.record()).await?;
-        let reset = match self
+        let refused = (
+            DeliveryAuditOutcome::ReplayRefused,
+            DeliveryAuditDisposition::DeadLettered,
+        );
+        let committed = (
+            DeliveryAuditOutcome::ReplayCommitted,
+            DeliveryAuditDisposition::ReplayPending,
+        );
+        let (reset, (outcome, disposition)) = match self
             .reset_for_replay(&transaction, event_id, compiled_delivery_id, generation)
             .await
         {
             // A reset that failed or changed no row did not commit.
-            Err(error) => Err(error),
+            Err(error) => (Err(error), refused),
             Ok(()) => match transaction.commit().await {
-                Ok(()) => Ok(()),
+                Ok(()) => (Ok(()), committed),
                 Err(error) => {
                     // The commit's acknowledgement may be all that was lost.
-                    if self
+                    match self
                         .transition_committed(
                             &PendingAudit {
                                 outcome: DeliveryAuditOutcome::ReplayCommitted,
@@ -414,25 +422,21 @@ impl<S: DeliverySeams> DeliveryService<S> {
                             None,
                         )
                         .await
-                        == Some(true)
                     {
-                        Ok(())
-                    } else {
-                        Err(error.into())
+                        Some(true) => (Ok(()), committed),
+                        Some(false) => (Err(error.into()), refused),
+                        // A reset of unknown fate may have committed, so it
+                        // is answered as unfinished rather than refused.
+                        None => (
+                            Err(error.into()),
+                            (
+                                DeliveryAuditOutcome::ReplayUnfinished,
+                                DeliveryAuditDisposition::ReplayPending,
+                            ),
+                        ),
                     }
                 }
             },
-        };
-        let (outcome, disposition) = if reset.is_ok() {
-            (
-                DeliveryAuditOutcome::ReplayCommitted,
-                DeliveryAuditDisposition::ReplayPending,
-            )
-        } else {
-            (
-                DeliveryAuditOutcome::ReplayRefused,
-                DeliveryAuditDisposition::DeadLettered,
-            )
         };
         let recorded = self
             .seams
@@ -3579,6 +3583,70 @@ mod tests {
                     DeliveryAuditPhase::Replay,
                     DeliveryAuditOutcome::ReplayRefused,
                     DeliveryAuditDisposition::DeadLettered,
+                ),
+            ]
+        );
+    }
+
+    /// A replay whose commit failed and whose fate cannot be read back is
+    /// answered as unfinished, never as refused, since the reset may have
+    /// committed.
+    #[tokio::test]
+    #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
+    async fn a_replay_whose_commit_cannot_be_read_back_is_unfinished() {
+        let url = real_database_url();
+        let schema = "hooks_delivery_replay_unknown_test";
+        let mut client = fresh_delivery_schema(&url, schema).await;
+        let event_id = Uuid::parse_str(STORED_EVENT_ID).expect("event id");
+        insert_real_delivery(&mut client, schema, event_id, "1 day", true).await;
+        client
+            .batch_execute(&format!(
+                "UPDATE {schema}.registry_webhook_delivery_state
+                    SET state = 'dead_lettered', attempt = 3, next_attempt_at = NULL,
+                        dead_lettered_at = transaction_timestamp();
+                 CREATE FUNCTION {schema}.refuse_reset() RETURNS trigger
+                 LANGUAGE plpgsql AS $$
+                 BEGIN
+                     RAISE EXCEPTION 'replay commit refused';
+                 END $$;
+                 CREATE CONSTRAINT TRIGGER refuse_reset
+                     AFTER UPDATE ON {schema}.registry_webhook_delivery_state
+                     DEFERRABLE INITIALLY DEFERRED
+                     FOR EACH ROW WHEN (NEW.generation > OLD.generation)
+                     EXECUTE FUNCTION {schema}.refuse_reset();"
+            ))
+            .await
+            .expect("make the replay commit fail");
+
+        let audit = Arc::new(Mutex::new(Vec::new()));
+        let service = real_service(
+            RealDbSeams {
+                handler_digest: Some(REAL_HANDLER_DIGEST.to_owned()),
+                // Every read-back of the reset fails, so its fate is unknown.
+                refused_connections: vec![2, 3, 4],
+                ..RealDbSeams::new(&url, &audit)
+            },
+            schema,
+        );
+
+        let result = service.replay_in(event_id, REAL_DELIVERY_ID, 1).await;
+
+        assert!(
+            matches!(result, Err(DeliveryError::Unavailable)),
+            "a replay whose commit failed fails: {result:?}"
+        );
+        assert_eq!(
+            *audit.lock().expect("audit lock"),
+            vec![
+                (
+                    DeliveryAuditPhase::Replay,
+                    DeliveryAuditOutcome::ReplayRequested,
+                    DeliveryAuditDisposition::ReplayPending,
+                ),
+                (
+                    DeliveryAuditPhase::Replay,
+                    DeliveryAuditOutcome::ReplayUnfinished,
+                    DeliveryAuditDisposition::ReplayPending,
                 ),
             ]
         );
