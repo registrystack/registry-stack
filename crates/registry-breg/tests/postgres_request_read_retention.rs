@@ -849,6 +849,52 @@ async fn request_detail_erasure_pairs_its_request_entry_on_every_outcome() {
         "the failed erasure erased nothing"
     );
 
+    // The erasure's commit is refused after every statement succeeded, so
+    // the outcome is read back from the database: nothing was erased.
+    database
+        .admin
+        .batch_execute(
+            "CREATE OR REPLACE FUNCTION public.test_refuse_erasure_commit()
+               RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RAISE EXCEPTION 'test refuses this erasure commit'; END $$;
+             GRANT EXECUTE ON FUNCTION public.test_refuse_erasure_commit() TO PUBLIC;
+             CREATE CONSTRAINT TRIGGER test_refuse_erasure_commit
+               AFTER UPDATE ON registry_internal.registry_request_proposals
+               DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+               EXECUTE FUNCTION public.test_refuse_erasure_commit();",
+        )
+        .await
+        .expect("administrator installs the erasure commit refusal");
+    assert_eq!(
+        retained.erase(scope.clone()).await,
+        Err(RequestRetentionError::Unavailable)
+    );
+    database
+        .admin
+        .batch_execute(
+            "DROP TRIGGER test_refuse_erasure_commit
+               ON registry_internal.registry_request_proposals;
+             DROP FUNCTION public.test_refuse_erasure_commit();",
+        )
+        .await
+        .expect("administrator removes the erasure commit refusal");
+    let unacknowledged = &capture.entries()[failed.len()..];
+    assert_eq!(unacknowledged.len(), 2, "{unacknowledged:?}");
+    assert_eq!(unacknowledged[1]["record"]["outcome"], "failed");
+    assert_eq!(
+        unacknowledged[0]["correlation"],
+        unacknowledged[1]["correlation"]
+    );
+    assert!(
+        !retention_with(capture.audit(profile()))
+            .dry_run(scope.clone())
+            .await
+            .expect("the detail still plans")
+            .detail_erased,
+        "the refused commit erased nothing"
+    );
+    let failed = capture.entries();
+
     // The destination accepts the request entry and refuses the response.
     capture.fail_after(1);
     assert_eq!(

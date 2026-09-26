@@ -1755,6 +1755,25 @@ impl PostgresRecordMutationService {
                 &principal_reference,
                 Some(&request_correlation),
             );
+            // The attempt row above moved the run's last-attempt marker, so
+            // the answer describes the run as it now stands, not as this
+            // request found it. It is read inside the release transaction,
+            // which sees that row, and the answer is built before the
+            // disclosure entry: once that entry is accepted, nothing fallible
+            // stands between it and the caller. The guarded transaction
+            // proved the durable binding equals this process's identity, so
+            // the replayed run renders under it.
+            let current = ingestion_store::load_run(tx, run.run_id)
+                .await
+                .map_err(|_| IngestionServiceError::Unavailable)?
+                .ok_or(IngestionServiceError::Unavailable)?;
+            let answer = json!({
+                "run": Self::run_response(
+                    &current,
+                    (&self.expected.package_revision, &self.expected.schema_fingerprint),
+                ),
+                "receipt": receipt_json(input.chunk_index, &input.digest, true, false, batch),
+            });
             disclosure_transaction
                 .commit()
                 .await
@@ -1762,22 +1781,7 @@ impl PostgresRecordMutationService {
             ingestion_store::append_run_audit(&self.audit, disclosure_record)
                 .await
                 .map_err(|_| IngestionServiceError::Unavailable)?;
-            // The attempt row above moved the run's last-attempt marker, so
-            // the answer describes the run as it now stands, not as this
-            // request found it. The guarded transaction proved the durable
-            // binding equals this process's identity, so the replayed run
-            // renders under it.
-            let run = ingestion_store::load_run(&**client, run.run_id)
-                .await
-                .map_err(|_| IngestionServiceError::Unavailable)?
-                .ok_or(IngestionServiceError::Unavailable)?;
-            return Ok(json!({
-                "run": Self::run_response(
-                    &run,
-                    (&self.expected.package_revision, &self.expected.schema_fingerprint),
-                ),
-                "receipt": receipt_json(input.chunk_index, &input.digest, true, false, batch),
-            }));
+            return Ok(answer);
         }
         // A terminal run stays terminal when the active package later
         // changes: the blocking transition belongs to open runs alone, so a
