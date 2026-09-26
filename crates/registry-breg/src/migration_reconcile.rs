@@ -25,8 +25,8 @@
 
 use std::time::Duration;
 
-use registry_platform_audit::AuditEntry;
-use serde_json::json;
+use registry_platform_audit::{AuditEntry, AuditRequest};
+use serde_json::{json, Value};
 
 use crate::audit::RegistryAudit;
 use crate::history_maintenance::profile_is_keyed;
@@ -344,12 +344,8 @@ async fn reconcile_under_lock(
     match report.outcome {
         ReconcileOutcome::Completable => {
             let entry = audit_entry(request, target, ledger, "completed", &report)?;
-            append_request(
-                request.audit,
-                request_entry(request, target, ledger, "completed")?,
-            )
-            .await?;
-            connection
+            let mut attempt = begin_request(request, target, ledger, "completed").await?;
+            let transition = connection
                 .activate_verified_package(
                     Some(request.current),
                     target,
@@ -360,17 +356,17 @@ async fn reconcile_under_lock(
                         runtime_role: request.runtime_role,
                     },
                 )
-                .await?;
+                .await;
+            if let Err(error) = transition {
+                respond_failed(&mut attempt, request, target, ledger, "completed").await;
+                return Err(error.into());
+            }
             append_after_commit(request.audit, entry).await?;
         }
         ReconcileOutcome::Revertible => {
             let entry = audit_entry(request, target, ledger, "reverted", &report)?;
-            append_request(
-                request.audit,
-                request_entry(request, target, ledger, "reverted")?,
-            )
-            .await?;
-            connection
+            let mut attempt = begin_request(request, target, ledger, "reverted").await?;
+            let transition = connection
                 .revert_failed_package(
                     request.current,
                     &target.package_revision,
@@ -381,7 +377,11 @@ async fn reconcile_under_lock(
                         runtime_role: request.runtime_role,
                     },
                 )
-                .await?;
+                .await;
+            if let Err(error) = transition {
+                respond_failed(&mut attempt, request, target, ledger, "reverted").await;
+                return Err(error.into());
+            }
             append_after_commit(request.audit, entry).await?;
         }
         outcome @ (ReconcileOutcome::Ready
@@ -427,14 +427,66 @@ fn unresolvable_reason(progress: Option<ReviewedMigrationProgress>) -> &'static 
     }
 }
 
-/// Append the reconciliation's request entry before its transition runs. A
-/// refused entry reports the reconciliation unavailable and leaves the pinned
-/// target exactly as the assessment found it.
-async fn append_request(audit: &RegistryAudit, entry: AuditEntry) -> Result<(), ReconcileError> {
-    audit
-        .append(entry)
+/// Append the reconciliation's request entry before its transition runs and
+/// return the handle that owes its response. A refused entry reports the
+/// reconciliation unavailable and leaves the pinned target exactly as the
+/// assessment found it. A reconciliation that ends without a response
+/// writes the `unfinished` outcome when the handle is dropped.
+async fn begin_request(
+    request: &ReconcileRequest<'_>,
+    target: &ExpectedRegistryIdentity,
+    ledger: &MigrationLedgerEntry,
+    action: &'static str,
+) -> Result<AuditRequest, ReconcileError> {
+    request
+        .audit
+        .begin(
+            request_entry(request, target, ledger, action)?,
+            outcome_record(request, target, ledger, action, "unfinished")?,
+        )
         .await
         .map_err(|_| ReconcileError::Unavailable)
+}
+
+/// Answer the request entry of a transition that did not commit. The
+/// reconciliation already failed, so a refused entry is only logged; the
+/// held request then writes its `unfinished` outcome instead.
+async fn respond_failed(
+    attempt: &mut AuditRequest,
+    request: &ReconcileRequest<'_>,
+    target: &ExpectedRegistryIdentity,
+    ledger: &MigrationLedgerEntry,
+    action: &'static str,
+) {
+    let recorded = match outcome_record(request, target, ledger, action, "failed") {
+        Ok(record) => attempt.respond(record).await.is_ok(),
+        Err(_) => false,
+    };
+    if !recorded {
+        tracing::error!("the failed reconciliation's response audit entry was not recorded");
+    }
+}
+
+/// The `response` of a transition that did not commit: the request's
+/// identities and plan shape with the outcome, and no count or finding.
+fn outcome_record(
+    request: &ReconcileRequest<'_>,
+    target: &ExpectedRegistryIdentity,
+    ledger: &MigrationLedgerEntry,
+    action: &'static str,
+    outcome: &'static str,
+) -> Result<Value, ReconcileError> {
+    Ok(json!({
+        "phase": "terminal",
+        "outcome": outcome,
+        "operationId": AUDIT_OPERATION_ID,
+        "action": action,
+        "packageRevision": request.current.package_revision,
+        "targetPackageRevision": target.package_revision,
+        "packageSequence": target.package_sequence,
+        "planKind": ledger.plan_kind.as_str(),
+        "operatorReference": operator_reference(request)?,
+    }))
 }
 
 /// Append the reconciliation's response entry after its transition committed.

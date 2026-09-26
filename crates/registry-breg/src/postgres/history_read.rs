@@ -20,8 +20,8 @@ use crate::api::{
     SnapshotReadRequest, SnapshotReadService,
 };
 use crate::audit::{
-    profile_is_keyed, read_terminal_entry, record_pre_io_audit, PreIoAudit, PreIoAuditKind,
-    ReadTerminalAudit, RegistryAudit, TerminalAudit, TerminalAuditOutcome,
+    begin_pre_io_audit, profile_is_keyed, read_terminal_entry, record_pre_io_audit, PreIoAudit,
+    PreIoAuditKind, ReadTerminalAudit, RegistryAudit, TerminalAudit, TerminalAuditOutcome,
 };
 use crate::contract::{FieldTypeSource, Operation};
 use crate::cursor::{
@@ -154,7 +154,7 @@ impl PostgresSnapshotReadService {
             }
         };
 
-        record_pre_io_audit(
+        let _attempt = begin_pre_io_audit(
             &self.audit,
             &self.expected,
             &claims,
@@ -174,25 +174,18 @@ impl PostgresSnapshotReadService {
         let materialized = match materialized {
             Ok(materialized) => materialized,
             Err(error) => {
-                let _ = self
-                    .record_terminal(
-                        &claims,
-                        &request,
-                        &plan,
-                        None,
-                        TerminalAuditOutcome::Refused,
-                        0,
-                    )
-                    .await;
-                return Err(error);
+                return Err(self.refused(&claims, &request, &plan, error).await);
             }
         };
-        let held = SnapshotReadResult::from_materialized(
+        let held = match SnapshotReadResult::from_materialized(
             &self.registry,
             &plan.entity,
             request.plan.cursor_binding.representation,
             materialized,
-        )?;
+        ) {
+            Ok(held) => held,
+            Err(error) => return Err(self.refused(&claims, &request, &plan, error).await),
+        };
         self.fault
             .fail_at(SnapshotReadFaultPoint::BeforeTerminalAudit)?;
         let outcome = if held.result_count == 0 {
@@ -211,6 +204,34 @@ impl PostgresSnapshotReadService {
         .await
         .map_err(|_| ReadServiceError::Unavailable)?;
         Ok(held)
+    }
+
+    /// Record the Refused terminal of a read that failed after its attempt,
+    /// then hand back the failure. A terminal the destination refuses is
+    /// logged: the read already fails, and its held attempt then writes the
+    /// unfinished response instead.
+    async fn refused(
+        &self,
+        claims: &ClaimContext,
+        request: &SnapshotReadRequest,
+        plan: &SnapshotReadPlan,
+        error: ReadServiceError,
+    ) -> ReadServiceError {
+        if self
+            .record_terminal(
+                claims,
+                request,
+                plan,
+                None,
+                TerminalAuditOutcome::Refused,
+                0,
+            )
+            .await
+            .is_err()
+        {
+            tracing::error!("the refused history read's terminal audit entry was not recorded");
+        }
+        error
     }
 
     async fn read_rows(

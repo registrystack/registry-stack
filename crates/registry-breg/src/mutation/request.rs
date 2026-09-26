@@ -285,6 +285,38 @@ impl MutationCoordinator {
         })
     }
 
+    /// Append the attempt of one request action and return the handle that
+    /// owes its response. An orchestrating caller that runs protected reads
+    /// before the action itself, such as a reviewed apply's receipt
+    /// preflight, holds it across all of them.
+    pub(crate) async fn begin_request_action_audit(
+        &self,
+        registry: &CompiledRegistry,
+        input: &RequestActionInput<'_>,
+        claims: &ClaimContext,
+    ) -> Result<AuditRequest, MutationError> {
+        let route = registry
+            .routes()
+            .routes
+            .iter()
+            .find(|route| route.id == input.route_id)
+            .ok_or(MutationError::InvalidRequest)?;
+        Ok(begin_pre_io_audit(
+            &self.audit,
+            &self.expected,
+            claims,
+            PreIoAudit {
+                kind: PreIoAuditKind::Attempt,
+                method: route.method,
+                operation_id: &route.id,
+                target_record: Some(input.record_id),
+                refusal_reason: None,
+                correlation: input.correlation,
+            },
+        )
+        .await?)
+    }
+
     pub(crate) async fn record_request_boundary_refusal(
         &self,
         registry: &CompiledRegistry,
@@ -321,6 +353,7 @@ impl MutationCoordinator {
         input: &RequestActionInput<'_>,
         claims: &ClaimContext,
         deadline: tokio::time::Instant,
+        attempt: &mut Option<AuditRequest>,
     ) -> Result<RequestEvidencePreflight, MutationError> {
         let route = registry
             .routes()
@@ -365,20 +398,26 @@ impl MutationCoordinator {
         {
             return Err(MutationError::InvalidRequest);
         }
-        record_pre_io_audit(
-            &self.audit,
-            &self.expected,
-            claims,
-            PreIoAudit {
-                kind: PreIoAuditKind::Attempt,
-                method: route.method,
-                operation_id: &route.id,
-                target_record: Some(input.record_id),
-                refusal_reason: None,
-                correlation: input.correlation,
-            },
-        )
-        .await?;
+        // The caller holds the attempt across the remote Evidence I/O and the
+        // action transaction that follow this preflight.
+        if attempt.is_none() {
+            *attempt = Some(
+                begin_pre_io_audit(
+                    &self.audit,
+                    &self.expected,
+                    claims,
+                    PreIoAudit {
+                        kind: PreIoAuditKind::Attempt,
+                        method: route.method,
+                        operation_id: &route.id,
+                        target_record: Some(input.record_id),
+                        refusal_reason: None,
+                        correlation: input.correlation,
+                    },
+                )
+                .await?,
+            );
+        }
         let binding = resolve_binding(
             self.audit.profile(),
             &IdempotencyBinding {
@@ -668,15 +707,20 @@ impl MutationCoordinator {
             refusal_reason,
             correlation: input.correlation,
         };
-        if !attempt_recorded {
-            record_pre_io_audit(
-                &self.audit,
-                &self.expected,
-                claims,
-                audit(PreIoAuditKind::Attempt, None),
+        // A caller that recorded the attempt holds it until this returns.
+        let _attempt = if attempt_recorded {
+            None
+        } else {
+            Some(
+                begin_pre_io_audit(
+                    &self.audit,
+                    &self.expected,
+                    claims,
+                    audit(PreIoAuditKind::Attempt, None),
+                )
+                .await?,
             )
-            .await?;
-        }
+        };
         let deadline = tokio::time::Instant::now() + REQUEST_ACTION_TIMEOUT;
         // Capture the exact intake under request RLS, close that transaction,
         // then run the bounded planner exactly once outside retry and target

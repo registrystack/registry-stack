@@ -3,12 +3,21 @@
 
 use std::{path::Path, time::Duration};
 
+use registry_platform_audit::AuditEntry;
+use serde_json::{json, Value};
+use uuid::Uuid;
+
+use crate::audit::RegistryAudit;
 use crate::mutation::{erase_expired_action_evidence, MutationError};
 use crate::postgres::{
     verify_catalog_identity_for_catalog, verify_migration_role, ConnectionConfig,
     ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey, SqlIdentifier,
 };
 use crate::runtime_config::load_runtime_config;
+
+/// Schema of the request and response entries of one expired-Evidence
+/// erasure.
+pub const EVIDENCE_RETENTION_AUDIT_SCHEMA: &str = "breg-evidence-retention-audit/v1";
 
 /// Package-bound authority for erasing expired protected Evidence material.
 /// The migration identity, actual target catalog and registry interlock are
@@ -22,6 +31,7 @@ pub struct ActionEvidenceRetentionOperatorService {
     runtime_role: SqlIdentifier,
     lock_timeout: Duration,
     statement_timeout: Duration,
+    audit: RegistryAudit,
 }
 
 impl ActionEvidenceRetentionOperatorService {
@@ -56,6 +66,9 @@ impl ActionEvidenceRetentionOperatorService {
             runtime_role: config.database().roles().runtime().clone(),
             lock_timeout: config.operational_timeouts().migration_lock,
             statement_timeout: config.operational_timeouts().migration_statement,
+            audit: RegistryAudit::open_companion(&config)
+                .await
+                .map_err(|_| MutationError::Unavailable)?,
         })
     }
 
@@ -68,6 +81,7 @@ impl ActionEvidenceRetentionOperatorService {
         migration_connection: ConnectionConfig,
         migration_role: SqlIdentifier,
         runtime_role: SqlIdentifier,
+        audit: RegistryAudit,
     ) -> Self {
         Self {
             expected,
@@ -78,9 +92,16 @@ impl ActionEvidenceRetentionOperatorService {
             runtime_role,
             lock_timeout: Duration::from_secs(5),
             statement_timeout: Duration::from_secs(10),
+            audit,
         }
     }
 
+    /// Erase the retained Evidence material whose expiry is before `before`.
+    ///
+    /// The request entry, naming the threshold, is accepted before the
+    /// erasure transaction opens, so an audit outage erases nothing. Its
+    /// response records the erased count once the transaction commits, or
+    /// the failure when it does not.
     pub async fn erase_expired(
         &self,
         before: chrono::DateTime<chrono::Utc>,
@@ -88,6 +109,57 @@ impl ActionEvidenceRetentionOperatorService {
         if before > chrono::Utc::now() {
             return Err(MutationError::InvalidRequest);
         }
+        let correlation = Uuid::new_v4().to_string();
+        let record = |phase: &str, outcome: &str| -> Value {
+            json!({
+                "kind": "evidenceRetention",
+                "phase": phase,
+                "outcome": outcome,
+                "packageRevision": self.expected.package_revision,
+                "actor": "breg:evidence-retention-operator",
+                "before": before.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                "correlation": correlation,
+            })
+        };
+        let mut attempt = self
+            .audit
+            .begin(
+                AuditEntry::request(
+                    EVIDENCE_RETENTION_AUDIT_SCHEMA,
+                    correlation.clone(),
+                    record("attempt", "started"),
+                ),
+                record("terminal", "unfinished"),
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        match self.erase_in_transaction(before).await {
+            Ok(erased) => {
+                let mut response = record("terminal", "erased");
+                response["erased"] = json!(erased);
+                // The erasure committed; a refused entry reports the command
+                // unavailable, and the writer then refuses every later entry.
+                attempt
+                    .respond(response)
+                    .await
+                    .map_err(|_| MutationError::Unavailable)?;
+                Ok(erased)
+            }
+            Err(error) => {
+                if attempt.respond(record("terminal", "failed")).await.is_err() {
+                    tracing::error!(
+                        "the failed Evidence retention's response audit entry was not recorded"
+                    );
+                }
+                Err(error)
+            }
+        }
+    }
+
+    async fn erase_in_transaction(
+        &self,
+        before: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64, MutationError> {
         let pool = self
             .migration_connection
             .build_pool()

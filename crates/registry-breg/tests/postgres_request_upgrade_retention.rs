@@ -1426,8 +1426,8 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
     let audit_entries = database.audit_entries();
     assert_eq!(
         audit_entries.len(),
-        5,
-        "the refused erasure records its request, and cleanup appends a request and a \
+        6,
+        "the refused erasure answers its request, and cleanup appends a request and a \
          response entry independently of erasure eligibility"
     );
     assert_eq!(audit_entries[2]["phase"], "request");
@@ -1435,14 +1435,20 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
         audit_entries[2]["correlation"], audit_entries[1]["correlation"],
         "each erasure invocation has its own correlation"
     );
-    assert_eq!(audit_entries[3]["phase"], "request");
-    assert_eq!(audit_entries[4]["phase"], "response");
+    assert_eq!(audit_entries[3]["phase"], "response");
+    assert_eq!(audit_entries[3]["record"]["outcome"], "refused");
     assert_eq!(
-        audit_entries[3]["correlation"], audit_entries[4]["correlation"],
+        audit_entries[2]["correlation"], audit_entries[3]["correlation"],
+        "the refusal answers the erasure's request"
+    );
+    assert_eq!(audit_entries[4]["phase"], "request");
+    assert_eq!(audit_entries[5]["phase"], "response");
+    assert_eq!(
+        audit_entries[4]["correlation"], audit_entries[5]["correlation"],
         "the cleanup response shares its request's correlation"
     );
     assert_eq!(
-        audit_entries[3]["schema"],
+        audit_entries[4]["schema"],
         "breg-attachment-cleanup-audit/v1"
     );
 

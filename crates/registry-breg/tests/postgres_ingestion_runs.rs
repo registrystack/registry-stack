@@ -710,6 +710,108 @@ async fn cancel_closes_the_run_and_preserves_the_committed_prefix() {
     assert_eq!(body_json(second).await["code"], "ingestion.run_not_open");
 }
 
+/// A run creation refused after its ingestion request entry is answered in
+/// the ingestion schema under the same correlation, and a chunk the batch
+/// mutation refuses is answered by that mutation's own refusal; neither is
+/// recorded a second time as a general refusal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_refusal_after_the_ingestion_request_is_answered_in_the_ingestion_schema() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("refused-after-request", 4);
+    let chunks = plan_chunks(&items, 2);
+
+    refuse_inserts(&harness, "registry_ingestion_runs").await;
+    let before = harness.database.audit_entries().len();
+    let refused = harness
+        .post_json(
+            "/v1/records/widgets/ingestion-runs",
+            &claims,
+            harness.run_body("create", &chunks),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    allow_inserts(&harness, "registry_ingestion_runs").await;
+    assert_answered_in_the_ingestion_schema(&harness.database.audit_entries()[before..], "create");
+
+    let run_id = harness.create_run(&claims, &chunks).await;
+    refuse_inserts(&harness, "registry_ingestion_run_chunks").await;
+    let before = harness.database.audit_entries().len();
+    let refused = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    allow_inserts(&harness, "registry_ingestion_run_chunks").await;
+    let entries = &harness.database.audit_entries()[before..];
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| (
+                entry["schema"].as_str().expect("schema"),
+                entry["phase"].as_str().expect("phase")
+            ))
+            .collect::<Vec<_>>(),
+        [("breg-audit/v2", "request"), ("breg-audit/v2", "response")],
+        "{entries:?}"
+    );
+    assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
+}
+
+/// The refused call wrote one ingestion request entry and one response
+/// entry answering it, both in the ingestion schema, and nothing else.
+fn assert_answered_in_the_ingestion_schema(entries: &[Value], transition: &str) {
+    let ingestion = entries
+        .iter()
+        .filter(|entry| entry["record"]["transition"] == transition)
+        .collect::<Vec<_>>();
+    assert_eq!(ingestion.len(), 2, "{entries:?}");
+    for entry in &ingestion {
+        assert_eq!(entry["schema"], "breg-ingestion-audit/v1");
+    }
+    assert_eq!(ingestion[0]["phase"], "request");
+    assert_eq!(ingestion[1]["phase"], "response");
+    assert_eq!(ingestion[1]["record"]["outcome"], "refused");
+    assert_eq!(ingestion[0]["correlation"], ingestion[1]["correlation"]);
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry["correlation"] != ingestion[0]["correlation"]
+                || entry["schema"] == "breg-ingestion-audit/v1"),
+        "the refusal is not recorded again in another schema: {entries:?}"
+    );
+}
+
+async fn refuse_inserts(harness: &IngestionHarness, table: &str) {
+    harness
+        .database
+        .admin
+        .batch_execute(&format!(
+            "CREATE OR REPLACE FUNCTION public.test_refuse_insert() RETURNS trigger
+               LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'test refuses this insert'; END $$;
+             GRANT EXECUTE ON FUNCTION public.test_refuse_insert() TO PUBLIC;
+             CREATE TRIGGER test_refuse_insert BEFORE INSERT ON registry_internal.{table}
+               FOR EACH ROW EXECUTE FUNCTION public.test_refuse_insert();"
+        ))
+        .await
+        .expect("administrator installs the insert refusal");
+}
+
+async fn allow_inserts(harness: &IngestionHarness, table: &str) {
+    harness
+        .database
+        .admin
+        .batch_execute(&format!(
+            "DROP TRIGGER test_refuse_insert ON registry_internal.{table};
+             DROP FUNCTION public.test_refuse_insert();"
+        ))
+        .await
+        .expect("administrator removes the insert refusal");
+}
+
 /// Cancellation is itself the run's last attempt, and it is not a chunk
 /// attempt: the metadata renders the refused outcome with no chunk index,
 /// so a cancelled run never reports an earlier chunk's index as its last.

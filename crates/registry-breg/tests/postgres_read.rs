@@ -570,9 +570,34 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     assert!(!faulted_body.to_string().contains("label-001"));
     assert_eq!(
         audit_count(&database).await,
-        before_fault + 1,
-        "a terminal audit fault releases no protected data and commits only the prior attempt"
+        before_fault + 2,
+        "a read ended before its terminal releases no protected data and answers its attempt \
+         as unfinished"
     );
+
+    // A failure after the rows were read, binding the strong entity tag,
+    // answers the attempt with the Refused terminal and releases nothing.
+    let before_etag_fault = audit_count(&database).await;
+    let etag_faulting_app = read_router(
+        pool.clone(),
+        compiled.clone(),
+        identity.clone(),
+        lock_key,
+        profile.clone(),
+        Some(ReadFaultPoint::StrongEtag),
+    );
+    let etag_faulted = send(
+        &etag_faulting_app,
+        &format!("/v1/records/widgets/{VISIBLE_RECORD}?$select=label"),
+        Some(read_claims(["zone-a"])),
+    )
+    .await;
+    assert_eq!(etag_faulted.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(!body_json(etag_faulted)
+        .await
+        .to_string()
+        .contains("label-001"));
+    assert_eq!(audit_count(&database).await, before_etag_fault + 2);
 
     assert_read_audit_is_ordered_paired_and_minimized(&database, &compiled);
     // A restarted process over the recovered destination. A writer that
@@ -1642,7 +1667,10 @@ fn assert_read_audit_is_ordered_paired_and_minimized(
         assert_eq!(entry["schema"], registry_breg::audit::AUDIT_SCHEMA);
     }
     for pair in entries.windows(2) {
-        if pair[0]["phase"] == "request" && pair[1]["record"]["phase"] == "terminal" {
+        if pair[0]["phase"] == "request"
+            && (pair[1]["record"]["phase"] == "terminal"
+                || pair[1]["record"]["phase"] == "unfinished")
+        {
             assert_eq!(pair[0]["correlation"], pair[1]["correlation"]);
         }
     }
@@ -1688,6 +1716,9 @@ fn assert_read_audit_is_ordered_paired_and_minimized(
             ("terminal", Some("empty")),
             ("refusal", None),
             ("attempt", None),
+            ("unfinished", None),
+            ("attempt", None),
+            ("terminal", Some("refused")),
         ],
         "durable read audit records bracket release in order"
     );

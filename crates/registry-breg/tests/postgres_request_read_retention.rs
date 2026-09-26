@@ -762,6 +762,11 @@ async fn request_detail_erasure_changes_nothing_when_the_audit_writer_refuses_it
     assert_eq!(phases, ["request", "response"]);
     assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
     assert_eq!(entries[0]["record"]["phase"], "attempt");
+    // The response is recorded after the external deletions ran, and states
+    // how many objects still wait for deletion.
+    assert_eq!(entries[1]["record"]["outcome"], "committed");
+    assert_eq!(entries[1]["record"]["pendingExternalDeletions"], 0);
+    assert_eq!(entries[1]["record"]["externalDeletionTombstones"], 0);
     assert_eq!(
         entries[0]["record"]["recordReference"],
         entries[1]["record"]["recordReference"]
@@ -769,6 +774,97 @@ async fn request_detail_erasure_changes_nothing_when_the_audit_writer_refuses_it
     assert!(!serde_json::Value::Array(entries)
         .to_string()
         .contains(&request_id));
+
+    database.cleanup().await;
+}
+
+/// An erasure whose transaction fails after its request entry answers that
+/// entry with a failed response and erases nothing. One whose committed
+/// erasure the destination refuses to record reports that distinctly: the
+/// detail is gone, and the journal holds only the request. A recorded
+/// erasure states the external objects still pending deletion.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn request_detail_erasure_pairs_its_request_entry_on_every_outcome() {
+    let database = TestDatabase::create(6).await;
+    let registry = Arc::new(compiled_registry());
+    let identity = install_registry(&database, &registry).await;
+    let app = request_router(&database, registry.clone(), identity.clone());
+    let operator = claims("operator", "operator-principal");
+    let request_id = applied_correction_request(&app, operator, "paired-erasure").await;
+    let request_uuid = Uuid::parse_str(&request_id).expect("request id parses");
+    let scope = RequestDetailErasureScope {
+        request_entity_id: "correction-request",
+        request_id: request_uuid,
+        proposal_version: 1,
+    };
+    let profile = || {
+        AuditProfile::production_from_secret_bytes(vec![0x8d; 32].into())
+            .expect("test audit profile is keyed")
+    };
+    let retention_with = |audit| {
+        RequestRetentionOperatorService::new_for_test(
+            registry.as_ref().clone(),
+            identity.clone(),
+            ExpectedManagedCatalog::compiled(&registry),
+            RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives"),
+            database.migration_config.clone(),
+            database.migration_role.clone(),
+            database.runtime_role.clone(),
+            audit,
+        )
+    };
+    let (audit, capture) = registry_breg::audit::test_support::capturing(profile());
+
+    // The request row is held, so the erasure transaction cannot lock it.
+    database
+        .admin
+        .batch_execute(&format!(
+            "BEGIN; SELECT 1 FROM registry_internal.registry_request_state
+              WHERE request_id = '{request_uuid}' FOR UPDATE"
+        ))
+        .await
+        .expect("administrator holds the request row");
+    retention_with(audit)
+        .erase(scope.clone())
+        .await
+        .expect_err("the erasure cannot lock the held request");
+    database
+        .admin
+        .batch_execute("ROLLBACK")
+        .await
+        .expect("administrator releases the request row");
+    let failed = capture.entries();
+    assert_eq!(failed.len(), 2, "{failed:?}");
+    assert_eq!(failed[0]["phase"], "request");
+    assert_eq!(failed[1]["phase"], "response");
+    assert_eq!(failed[1]["record"]["outcome"], "failed");
+    assert_eq!(failed[0]["correlation"], failed[1]["correlation"]);
+    let retained = retention_with(capture.audit(profile()));
+    assert!(
+        !retained
+            .dry_run(scope.clone())
+            .await
+            .expect("the detail still plans")
+            .detail_erased,
+        "the failed erasure erased nothing"
+    );
+
+    // The destination accepts the request entry and refuses the response.
+    capture.fail_after(1);
+    assert_eq!(
+        retained.erase(scope.clone()).await,
+        Err(RequestRetentionError::ErasureUnaudited)
+    );
+    capture.restore();
+    assert!(
+        retention_with(capture.audit(profile()))
+            .dry_run(scope.clone())
+            .await
+            .expect("the erased detail still plans")
+            .detail_erased,
+        "the unaudited erasure committed"
+    );
+    assert_eq!(capture.entries().len(), failed.len() + 1);
 
     database.cleanup().await;
 }

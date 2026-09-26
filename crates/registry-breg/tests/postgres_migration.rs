@@ -1091,6 +1091,39 @@ async fn reconciliation_completes_a_target_the_catalog_already_reached() {
     assert_eq!(durable_snapshot(&database).await, before_refusal);
     database.audit_capture().restore();
 
+    // A transition that fails after its request entry answers that entry
+    // with a failed response under the same correlation.
+    database
+        .admin
+        .batch_execute(
+            "BEGIN; SELECT 1 FROM registry_internal.registry_state WHERE singleton FOR UPDATE",
+        )
+        .await
+        .expect("administrator holds the Registry state row");
+    let entries_before = database.audit_entries().len();
+    reconcile(&database, &package, &active, &base, true)
+        .await
+        .expect_err("the activation cannot take the held Registry state row");
+    database
+        .admin
+        .batch_execute("ROLLBACK")
+        .await
+        .expect("administrator releases the Registry state row");
+    let failed = database.audit_entries().split_off(entries_before);
+    assert_eq!(
+        failed
+            .iter()
+            .map(|entry| (
+                entry["phase"].as_str().expect("phase"),
+                entry["record"]["outcome"].as_str().expect("outcome")
+            ))
+            .collect::<Vec<_>>(),
+        [("request", "started"), ("response", "failed")],
+        "{failed:?}"
+    );
+    assert_eq!(failed[0]["correlation"], failed[1]["correlation"]);
+    assert!(!failed[1].to_string().contains(RECONCILE_OPERATOR_CANARY));
+
     let completed = reconcile(&database, &package, &active, &base, true)
         .await
         .expect("the missing activation transition completes");
@@ -4061,14 +4094,15 @@ async fn assert_reconcile_audit_is_minimized(database: &TestDatabase, action: &s
             matched.push(entry);
         }
     }
-    assert_eq!(
-        matched
-            .iter()
-            .map(|entry| entry["phase"].as_str().expect("phase is a string"))
-            .collect::<Vec<_>>(),
-        ["request", "response"]
-    );
-    assert_eq!(matched[0]["correlation"], matched[1]["correlation"]);
+    // Every execution is a request answered by one response under its
+    // correlation; the last one committed.
+    assert!(!matched.is_empty() && matched.len() % 2 == 0, "{matched:?}");
+    for pair in matched.chunks(2) {
+        assert_eq!(pair[0]["phase"], "request");
+        assert_eq!(pair[1]["phase"], "response");
+        assert_eq!(pair[0]["correlation"], pair[1]["correlation"]);
+    }
+    assert_eq!(matched[matched.len() - 1]["record"]["outcome"], "committed");
 }
 
 fn assert_value_free(actual: Option<MigrationError>, expected: MigrationError) {

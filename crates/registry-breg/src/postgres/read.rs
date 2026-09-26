@@ -23,8 +23,8 @@ use crate::api::{
     RowBoundaryOperator as ApiRowBoundaryOperator, ServiceFuture,
 };
 use crate::audit::{
-    profile_is_keyed, read_terminal_entry, record_pre_io_audit, PreIoAudit, PreIoAuditKind,
-    ReadTerminalAudit, RegistryAudit, TerminalAudit, TerminalAuditOutcome,
+    begin_pre_io_audit, profile_is_keyed, read_terminal_entry, record_pre_io_audit, PreIoAudit,
+    PreIoAuditKind, ReadTerminalAudit, RegistryAudit, TerminalAudit, TerminalAuditOutcome,
 };
 use crate::contract::{FieldTypeSource, Operation};
 use crate::cursor::{
@@ -238,7 +238,7 @@ impl PostgresRecordReadService {
             return Ok(ReadResult::empty_get());
         }
 
-        record_pre_io_audit(
+        let _attempt = begin_pre_io_audit(
             &self.audit,
             &self.expected,
             &claims,
@@ -257,22 +257,7 @@ impl PostgresRecordReadService {
         let materialized = self.read_rows(&mut client, &request, &claims, &plan).await;
         let materialized = match materialized {
             Ok(materialized) => materialized,
-            Err(error) => {
-                let _ = self
-                    .record_read_terminal_audit(
-                        &request,
-                        self.terminal(
-                            &request,
-                            &claims,
-                            &plan,
-                            TerminalAuditOutcome::Refused,
-                            0,
-                            None,
-                        )?,
-                    )
-                    .await;
-                return Err(error);
-            }
+            Err(error) => return Err(self.refused_read(&request, &claims, &plan, error).await),
         };
         let attachment_verification = materialized.rows.first().and_then(|record| {
             crate::mutation::attachment_verification_etag_fields(&plan.entity, &record.data)
@@ -287,47 +272,21 @@ impl PostgresRecordReadService {
         .and_then(|result| result.enforce_spatial_response_budget(&request))
         {
             Ok(held) => held,
-            Err(error) => {
-                let _ = self
-                    .record_read_terminal_audit(
-                        &request,
-                        self.terminal(
-                            &request,
-                            &claims,
-                            &plan,
-                            TerminalAuditOutcome::Refused,
-                            0,
-                            None,
-                        )?,
-                    )
-                    .await;
-                return Err(error);
-            }
+            Err(error) => return Err(self.refused_read(&request, &claims, &plan, error).await),
         };
         if plan.operation == Operation::Get
             && request.representation != CursorRepresentation::GeoJson
             && held.response.is_some()
         {
-            let response = held.response.take().ok_or(ReadServiceError::Unavailable)?;
-            let record_id = target_record.ok_or(ReadServiceError::Unavailable)?;
-            let record_revision = held.record_revision.ok_or(ReadServiceError::Unavailable)?;
-            let representation = match request.representation {
-                CursorRepresentation::Json => RecordRepresentation::Json,
-                CursorRepresentation::JsonLd => RecordRepresentation::JsonLd,
-                CursorRepresentation::GeoJson => return Err(ReadServiceError::Unavailable),
-            };
-            let etag = strong_record_etag_for_representation(
-                self.audit.profile(),
+            if let Err(error) = self.attach_strong_etag(
+                &mut held,
+                &request,
                 &claims,
-                &self.expected.package_revision,
-                record_id,
-                record_revision,
-                &request.selected_fields,
-                representation,
+                target_record,
                 attachment_verification.as_ref(),
-            )
-            .map_err(|_| ReadServiceError::Unavailable)?;
-            held.response = Some(response.with_strong_etag(etag));
+            ) {
+                return Err(self.refused_read(&request, &claims, &plan, error).await);
+            }
         }
         self.fault.fail_at(ReadFaultPoint::BeforeTerminalAudit)?;
         let outcome = match (plan.operation, held.result_count) {
@@ -388,28 +347,27 @@ impl PostgresRecordReadService {
         let mut request = request;
         request.operation_id =
             crate::attachment::operation_id(&request.operation_id, &slot_id, request.method);
-        record_pre_io_audit(
-            &self.audit,
-            &self.expected,
-            &claims,
-            PreIoAudit {
-                kind: if valid {
-                    PreIoAuditKind::Attempt
-                } else {
-                    PreIoAuditKind::Refusal
-                },
-                method: request.method,
-                operation_id: &request.operation_id,
-                target_record: target_record(&request.kind),
-                refusal_reason: None,
-                correlation: &request.correlation,
+        let event = PreIoAudit {
+            kind: if valid {
+                PreIoAuditKind::Attempt
+            } else {
+                PreIoAuditKind::Refusal
             },
-        )
-        .await
-        .map_err(|_| ReadServiceError::Unavailable)?;
+            method: request.method,
+            operation_id: &request.operation_id,
+            target_record: target_record(&request.kind),
+            refusal_reason: None,
+            correlation: &request.correlation,
+        };
         if !valid {
+            record_pre_io_audit(&self.audit, &self.expected, &claims, event)
+                .await
+                .map_err(|_| ReadServiceError::Unavailable)?;
             return Ok(None);
         }
+        let _attempt = begin_pre_io_audit(&self.audit, &self.expected, &claims, event)
+            .await
+            .map_err(|_| ReadServiceError::Unavailable)?;
         let plan = plan.map_err(|_| ReadServiceError::Unavailable)?;
         let transaction = begin_record_transaction(
             &mut client,
@@ -590,6 +548,70 @@ impl PostgresRecordReadService {
 
     /// Append the read's `response` entry. The caller releases the result
     /// only after this returns `Ok`.
+    /// Record the Refused terminal of a read that failed after its attempt,
+    /// then hand back the failure. A terminal the destination refuses is
+    /// logged: the read already fails, and its held attempt then writes the
+    /// unfinished response instead.
+    async fn refused_read(
+        &self,
+        request: &RecordReadRequest,
+        claims: &ClaimContext,
+        plan: &ReadPlan,
+        error: ReadServiceError,
+    ) -> ReadServiceError {
+        let recorded = match self.terminal(
+            request,
+            claims,
+            plan,
+            TerminalAuditOutcome::Refused,
+            0,
+            None,
+        ) {
+            Ok(terminal) => self
+                .record_read_terminal_audit(request, terminal)
+                .await
+                .map_err(|_| ()),
+            Err(_) => Err(()),
+        };
+        if recorded.is_err() {
+            tracing::error!("the refused read's terminal audit entry was not recorded");
+        }
+        error
+    }
+
+    /// Bind the strong entity tag of a single-record read to its response.
+    fn attach_strong_etag(
+        &self,
+        held: &mut ReadResult,
+        request: &RecordReadRequest,
+        claims: &ClaimContext,
+        target_record: Option<&str>,
+        attachment_verification: Option<&Value>,
+    ) -> Result<(), ReadServiceError> {
+        self.fault.fail_at(ReadFaultPoint::StrongEtag)?;
+        let response = held.response.take().ok_or(ReadServiceError::Unavailable)?;
+        let record_id = target_record.ok_or(ReadServiceError::Unavailable)?;
+        let record_revision = held.record_revision.ok_or(ReadServiceError::Unavailable)?;
+        let representation = match request.representation {
+            CursorRepresentation::Json => RecordRepresentation::Json,
+            CursorRepresentation::JsonLd => RecordRepresentation::JsonLd,
+            CursorRepresentation::GeoJson => return Err(ReadServiceError::Unavailable),
+        };
+        let etag = strong_record_etag_for_representation(
+            self.audit.profile(),
+            claims,
+            &self.expected.package_revision,
+            record_id,
+            record_revision,
+            &request.selected_fields,
+            representation,
+            attachment_verification,
+        )
+        .map_err(|_| ReadServiceError::Unavailable)?;
+        held.response = Some(response.with_strong_etag(etag));
+        Ok(())
+    }
+
     async fn record_read_terminal_audit(
         &self,
         request: &RecordReadRequest,
@@ -4090,12 +4112,16 @@ mod tests {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReadFaultPoint {
     BeforeTerminalAudit,
+    /// The strong entity tag of a single-record read cannot be bound, after
+    /// the rows were read.
+    StrongEtag,
 }
 
 #[cfg(not(feature = "postgres-test"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReadFaultPoint {
     BeforeTerminalAudit,
+    StrongEtag,
 }
 
 #[derive(Clone, Copy)]

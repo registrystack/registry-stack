@@ -2160,6 +2160,10 @@ fn request_retention_failure(
             "request_retention.mode.retain",
             "the request retention policy does not permit operator erasure",
         ),
+        RequestRetentionCliError::ErasureUnaudited => (
+            "request_retention.erasure.unaudited",
+            "the erasure committed but its audit entry was not recorded; restore the audit destination, then reconcile the erased request against the database",
+        ),
         RequestRetentionCliError::AttachmentStorageBindingMismatch => (
             "request_retention.attachment_storage.binding_mismatch",
             "restore the original attachment storage binding and verification policy before retrying; the registry pin, retained content, or deletion tombstones still require them",

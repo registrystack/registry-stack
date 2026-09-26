@@ -19,8 +19,8 @@ use crate::api::{
     RevisionReadService, RowBoundaryOperator as ApiRowBoundaryOperator, ServiceFuture,
 };
 use crate::audit::{
-    profile_is_keyed, read_terminal_entry, record_pre_io_audit, PreIoAudit, PreIoAuditKind,
-    ReadTerminalAudit, RegistryAudit, TerminalAudit, TerminalAuditOutcome,
+    begin_pre_io_audit, profile_is_keyed, read_terminal_entry, record_pre_io_audit, PreIoAudit,
+    PreIoAuditKind, ReadTerminalAudit, RegistryAudit, TerminalAudit, TerminalAuditOutcome,
 };
 use crate::contract::{FieldTypeSource, Operation, ProvenanceFieldSource};
 use crate::cursor::CursorRepresentation;
@@ -135,7 +135,7 @@ impl PostgresRevisionReadService {
             }
         };
 
-        record_pre_io_audit(
+        let _attempt = begin_pre_io_audit(
             &self.audit,
             &self.expected,
             &claims,
@@ -155,26 +155,19 @@ impl PostgresRevisionReadService {
         let materialized = match materialized {
             Ok(materialized) => materialized,
             Err(error) => {
-                let _ = self
-                    .record_terminal(
-                        &claims,
-                        &request,
-                        &plan,
-                        TerminalAuditOutcome::Refused,
-                        0,
-                        &[],
-                    )
-                    .await;
-                return Err(error);
+                return Err(self.refused(&claims, &request, &plan, error).await);
             }
         };
-        let held = RevisionReadResult::from_rows(
+        let held = match RevisionReadResult::from_rows(
             &self.registry,
             &plan.entity,
             request.representation,
             plan.kind,
             materialized,
-        )?;
+        ) {
+            Ok(held) => held,
+            Err(error) => return Err(self.refused(&claims, &request, &plan, error).await),
+        };
         self.fault
             .fail_at(RevisionReadFaultPoint::BeforeTerminalAudit)?;
         let outcome = if held.result_count == 0 {
@@ -193,6 +186,27 @@ impl PostgresRevisionReadService {
         .await
         .map_err(|_| ReadServiceError::Unavailable)?;
         Ok(held)
+    }
+
+    /// Record the Refused terminal of a read that failed after its attempt,
+    /// then hand back the failure. A terminal the destination refuses is
+    /// logged: the read already fails, and its held attempt then writes the
+    /// unfinished response instead.
+    async fn refused(
+        &self,
+        claims: &ClaimContext,
+        request: &RevisionReadRequest,
+        plan: &RevisionReadPlan,
+        error: ReadServiceError,
+    ) -> ReadServiceError {
+        if self
+            .record_terminal(claims, request, plan, TerminalAuditOutcome::Refused, 0, &[])
+            .await
+            .is_err()
+        {
+            tracing::error!("the refused revision read's terminal audit entry was not recorded");
+        }
+        error
     }
 
     async fn read_rows(
