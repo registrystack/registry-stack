@@ -50,8 +50,10 @@ use registry_breg::postgres::{
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_breg::startup::{prepare_startup, StartupError};
 use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_config::package::verify_package as verify_shared_package;
-use registry_platform_config::package::PackageLimits as SharedPackageLimits;
+use registry_platform_config::package::{
+    verify_package as verify_shared_package, write_sum_file, PackageLimits as SharedPackageLimits,
+    REVISION_FILE, SUM_FILE,
+};
 use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm, PrivateJwk};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -504,14 +506,13 @@ fn derived_sql_asset_tampering_is_refused_before_activation() {
         b"SELECT r.id AS id, (r.code) AS summary FROM registry_source.neutral_record r",
     )
     .expect("asset tamper writes");
+    refresh_shared_package_envelope(root.path());
     assert_eq!(load_error(root.path(), &context), PackageError::Integrity);
     fs::write(&asset_path, original).expect("asset restores");
+    refresh_shared_package_envelope(root.path());
 
     fs::remove_file(&asset_path).expect("asset removes");
-    assert!(matches!(
-        load_error(root.path(), &context),
-        PackageError::Read | PackageError::Closure
-    ));
+    assert_eq!(load_error(root.path(), &context), PackageError::Envelope);
 }
 
 #[test]
@@ -531,9 +532,11 @@ fn derived_sql_asset_extra_path_swap_and_size_are_refused() {
         b"SELECT r.id AS id, r.code AS summary FROM registry_source.neutral_record r",
     )
     .expect("extra asset writes");
-    assert_eq!(load_error(root.path(), &context), PackageError::Closure);
+    refresh_shared_package_envelope(root.path());
+    assert_eq!(load_error(root.path(), &context), PackageError::Envelope);
     fs::remove_file(root.path().join("source/modules/core/sql/unlisted.sql"))
         .expect("extra asset removes");
+    refresh_shared_package_envelope(root.path());
 
     let original_path = root.path().join("source/modules/core/sql/summary.sql");
     let swapped_path = root.path().join("source/modules/core/sql/swapped.sql");
@@ -593,7 +596,7 @@ fn signed_package_refuses_missing_or_rehashed_substituted_fixture_journeys() {
             missing.root.path(),
             &missing.context(PackageIntent::InitialActivation),
         ),
-        PackageError::Read
+        PackageError::Envelope
     );
 
     let substituted = PackageFixture::build(
@@ -739,11 +742,13 @@ fn local_unsigned_package_rederives_every_artifact_and_refuses_filesystem_tamper
     let artifact_path = first_generated_path(fixture.root.path());
     let original = fs::read(&artifact_path).expect("artifact reads");
     fs::write(&artifact_path, b"tampered artifact").expect("artifact tamper writes");
+    refresh_shared_package_envelope(fixture.root.path());
     assert_eq!(
         load_error(fixture.root.path(), &context),
         PackageError::Integrity
     );
     fs::write(&artifact_path, original).expect("artifact restores");
+    refresh_shared_package_envelope(fixture.root.path());
 
     let manifest_projection_path = manifest_projection_path(fixture.root.path());
     let original_manifest_projection_bytes =
@@ -791,33 +796,39 @@ fn local_unsigned_package_rederives_every_artifact_and_refuses_filesystem_tamper
     let source = fixture.root.path().join("source/registry.yaml");
     let original = fs::read(&source).expect("source reads");
     fs::write(&source, b"tampered source").expect("source tamper writes");
+    refresh_shared_package_envelope(fixture.root.path());
     assert_eq!(
         load_error(fixture.root.path(), &context),
         PackageError::Integrity
     );
     fs::write(&source, original).expect("source restores");
+    refresh_shared_package_envelope(fixture.root.path());
 
     let module = fixture.root.path().join("source/modules/core/module.yaml");
     let original = fs::read(&module).expect("module reads");
     fs::write(&module, b"tampered module").expect("module tamper writes");
+    refresh_shared_package_envelope(fixture.root.path());
     assert_eq!(
         load_error(fixture.root.path(), &context),
         PackageError::Integrity
     );
     fs::write(&module, original).expect("module restores");
+    refresh_shared_package_envelope(fixture.root.path());
 
     fs::write(fixture.root.path().join("unlisted"), b"unlisted").expect("unlisted file writes");
+    refresh_shared_package_envelope(fixture.root.path());
     assert_eq!(
         load_error(fixture.root.path(), &context),
-        PackageError::Closure
+        PackageError::Envelope
     );
     fs::remove_file(fixture.root.path().join("unlisted")).expect("unlisted file removes");
+    refresh_shared_package_envelope(fixture.root.path());
 
     fs::remove_file(&artifact_path).expect("listed artifact removes");
-    assert!(matches!(
+    assert_eq!(
         load_error(fixture.root.path(), &context),
-        PackageError::Read | PackageError::Closure
-    ));
+        PackageError::Envelope
+    );
 }
 
 #[test]
@@ -892,7 +903,7 @@ fn package_manifest_refuses_ddl_checksum_path_and_canonical_json_tampering() {
     fs::create_dir(&path).expect("non-regular replacement creates");
     assert_eq!(
         load_error(nonregular.root.path(), &context),
-        PackageError::Closure
+        PackageError::Envelope
     );
 
     let noncanonical =
@@ -901,6 +912,7 @@ fn package_manifest_refuses_ddl_checksum_path_and_canonical_json_tampering() {
     let mut bytes = fs::read(&path).expect("manifest reads");
     bytes.push(b'\n');
     fs::write(&path, bytes).expect("noncanonical manifest writes");
+    refresh_shared_package_envelope(noncanonical.root.path());
     assert_eq!(
         load_error(noncanonical.root.path(), &context),
         PackageError::CanonicalJson
@@ -1006,7 +1018,7 @@ fn package_refuses_symlinks_and_production_writable_permissions() {
     let context = local_context(PackageIntent::InitialActivation);
     assert_eq!(
         load_error(local.root.path(), &context),
-        PackageError::UnsafePath
+        PackageError::Envelope
     );
 
     let signing = generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("test key generates");
@@ -1286,11 +1298,13 @@ fn predecessor_package_refuses_altered_or_forged_closure_bytes() {
     let original = fs::read(&model_path).expect("governed model reads");
 
     fs::write(&model_path, b"tampered governed model").expect("governed model tamper writes");
+    refresh_shared_package_envelope(altered.root.path());
     assert_eq!(
         predecessor_load_error(altered.root.path(), &context),
         PackageError::Integrity
     );
     fs::write(&model_path, original).expect("governed model restores");
+    refresh_shared_package_envelope(altered.root.path());
 
     let forged = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
     let active_revision = read_envelope(forged.root.path()).signed.package_revision;
@@ -2325,7 +2339,7 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     .await;
     assert!(matches!(
         no_listener_gate.err(),
-        Some(StartupError::PackageRefused(_))
+        Some(StartupError::PackageEnvelopeRefused(_))
     ));
     drop(runtime);
 
@@ -4388,6 +4402,7 @@ fn write_signed_files<const N: usize>(root: &Path, files: [(&str, Vec<u8>); N]) 
         derive_package_revision(&envelope.signed).expect("mutated revision derives");
     envelope.signatures.clear();
     write_json(&root.join("package.json"), &envelope);
+    refresh_shared_package_envelope(root);
 }
 
 fn rewrite_unsigned(root: &Path, mutate: impl FnOnce(&mut PackageManifest)) {
@@ -4415,12 +4430,36 @@ fn rewrite_unsigned(root: &Path, mutate: impl FnOnce(&mut PackageManifest)) {
         derive_package_revision(&envelope.signed).expect("mutated revision derives");
     envelope.signatures.clear();
     write_json(&root.join("package.json"), &envelope);
+    refresh_shared_package_envelope(root);
 }
 
 fn rewrite_envelope(root: &Path, mutate: impl FnOnce(&mut PackageEnvelope)) {
     let mut envelope = read_envelope(root);
     mutate(&mut envelope);
     write_json(&root.join("package.json"), &envelope);
+    refresh_shared_package_envelope(root);
+}
+
+fn refresh_shared_package_envelope(root: &Path) {
+    let revision_path = root.join(REVISION_FILE);
+    let revision = revision_path.exists().then(|| {
+        fs::read_to_string(&revision_path)
+            .expect("shared package revision reads")
+            .strip_suffix('\n')
+            .expect("shared package revision has one trailing newline")
+            .to_owned()
+    });
+    fs::remove_file(root.join(SUM_FILE)).expect("old shared package checksum file removes");
+    if revision.is_some() {
+        fs::remove_file(revision_path).expect("old shared package revision file removes");
+    }
+    write_sum_file(
+        root,
+        revision.as_deref(),
+        &SharedPackageLimits::default(),
+        "bregctl package",
+    )
+    .expect("test-authored shared package envelope republishes");
 }
 
 fn read_envelope(root: &Path) -> PackageEnvelope {
