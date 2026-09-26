@@ -86,6 +86,13 @@ rebaseline, or reconciliation finds the state the first run committed rather
 than replaying its terminal entry. Both recoveries are operational, not a
 second audit mechanism.
 
+The pairing of a request entry with its response is a property of a running
+process. A request whose operation is abandoned is answered `unfinished`, and
+so is an ingestion transition whose commit returned an error, since that error
+does not prove a rollback. A process that is killed, exits, or shuts its
+runtime down while a write is in flight may leave a request without its
+response, and `BREG-V1-27` claims no more than that.
+
 The HTTP record contract is also explicit: caller-filtered and generated
 OpenAPI artifacts assign every record-related route to the shared single or
 collection Registry Record profile, or to a named BReg-specific shape.
