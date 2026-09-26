@@ -99,7 +99,8 @@ the configured destination: with `audit.path` set to `.../casework.ndjson`, that
 with its own lock, rotation, and retention. The service keeps its own file while the command runs.
 Run the command as a user the audit directory accepts, and ship the companion file with the
 service's. When the companion file cannot be opened, the apply run refuses before it changes
-anything. A `stdout` destination writes the entries to the command's standard output instead.
+anything. A `stdout` destination writes the entries to the command's standard error instead, so
+the command's own report keeps standard output; collect standard error to ship them.
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, load_runtime(), retention_erase(), and
     with_operator_audit();
