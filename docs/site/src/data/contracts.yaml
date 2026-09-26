@@ -20,7 +20,7 @@
   surface: "Sealed directory in the shared Registry Stack package format: a `SHA256SUMS` file listing the digest of every other file, alongside the authored registry, the governed inputs, the compiled registry, and the generated artifacts a Relay process verifies and re-derives before it activates."
   source_of_truth:
     label: Relay V2 package
-    url: https://github.com/registrystack/registry-stack/blob/2573f77d0fb59cbdae10c3b554c1b2328eeb32be/crates/registry-relay-v2/src/package.rs
+    url: https://github.com/registrystack/registry-stack/blob/429fe3ed4ff6e6f76af8da61fa2da60c0135d889/crates/registry-relay-v2/src/package.rs
   consumer_note: >-
     `relayctl package` produces the directory and Relay verifies it before it
     opens the database, audit file, token issuer, or listener. Its package

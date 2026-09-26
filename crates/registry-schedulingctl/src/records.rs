@@ -34,7 +34,7 @@ pub fn apply(config_path: &Path, records_path: &Path) -> Result<Value> {
         .with_context(|| format!("loading {}", config.policy_path().display()))?;
     let text = crate::project::read_authoring_input(&records_path)?;
     let facts = parse_records(&text)?;
-    validate(&facts, &policy)?;
+    validate(&facts, &policy.policy)?;
     let counts = counts(&facts);
     let resolver = secret_resolver(&config)?;
     let store = PostgresStore::connect_migration(&config.database, &resolver)
@@ -57,7 +57,12 @@ pub fn apply(config_path: &Path, records_path: &Path) -> Result<Value> {
         "counts": counts,
     });
     runtime
-        .block_on(store.replace_facts(&policy.scheduling.id, &facts, audit_event, audit_record))
+        .block_on(store.replace_facts(
+            &policy.policy.scheduling.id,
+            &facts,
+            audit_event,
+            audit_record,
+        ))
         .context("replacing the environment records")?;
     Ok(json!({
         "ok": true,

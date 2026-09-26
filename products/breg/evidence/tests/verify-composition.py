@@ -7,6 +7,7 @@ adopter workflow uses the native commands directly, not this test harness.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -19,6 +20,37 @@ import yaml
 
 
 INPUTS = Path(__file__).resolve().parents[1]
+
+
+def production_settings(
+    local_settings: dict[str, object], *, project: Path
+) -> dict[str, object]:
+    """Turn a starter's loopback rehearsal target into an offline package target."""
+    settings = copy.deepcopy(local_settings)
+    governance = settings["governance"]
+    governance["assuranceProfile"] = "production"
+    governance["service"]["publicOrigin"] = "https://evidence.example.test"
+    oidc = governance["authentication"]["oidc"]
+    oidc["issuer"] = "https://issuer.example.test"
+    oidc["jwksSource"]["uri"] = "https://issuer.example.test/.well-known/jwks.json"
+    connection = governance["sourceConnections"]["registry"]
+    connection["baseUrl"] = "https://registry.example.test"
+    connection["authentication"]["tokenEndpoint"] = (
+        "https://issuer.example.test/oauth2/token"
+    )
+    runtime = settings["runtime"]
+    runtime["package"]["root"] = "/srv/registry-evidence/package"
+    runtime["secretProviders"]["file"]["root"] = str(project / "secrets")
+    runtime["signer"] = {
+        "kind": "transit",
+        "unixSocketPath": "/run/registry-evidence/transit-proxy.sock",
+        "mount": "transit",
+        "keyName": "evidence-signing",
+        "keyVersion": 1,
+        "timeoutMilliseconds": 2000,
+    }
+    runtime["auditStorage"]["path"] = str(project / "audit/evidence.jsonl")
+    return settings
 
 
 def run(binary: Path, *args: object, environment: dict[str, str]) -> str:
@@ -88,9 +120,10 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
     run(binaries["evidencectl"], "new", project, "--starter", INPUTS / "starter",
         "--profile", "local", environment=environment)
     assert not list((project / "sources").iterdir()), "starter must not hold a generated copy"
-    settings = yaml.safe_load((project / "targets/local/settings.yaml").read_text())
-    settings["runtime"]["package"]["root"] = str(candidate / "bundle")
-    settings["runtime"]["secretProviders"]["file"]["root"] = str(project / "secrets")
+    settings = production_settings(
+        yaml.safe_load((project / "targets/local/settings.yaml").read_text()),
+        project=project,
+    )
     settings["runtime"]["auditStorage"]["path"] = str(workspace / "audit/evidence.jsonl")
     settings_path = workspace / "resolved-settings.json"
     settings_path.write_text(json.dumps(settings))
@@ -106,9 +139,9 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
     assert len(fixtures["fixtures"]) == 2, "both questions need their own executed fixture"
     assert all(fixture["passed"] and fixture["evaluated_cases"] == 11
                for fixture in fixtures["fixtures"]), fixtures
-    run(binaries["evidencectl"], "build", "--project", project, "--target", target,
+    run(binaries["evidencectl"], "package", project, "--target", target,
         "--output", candidate, environment=environment)
-    bundle = yaml.safe_load((candidate / "bundle/evidence.yaml").read_text())
+    bundle = yaml.safe_load((candidate / "evidence.yaml").read_text())
     assert list(bundle["sources"]) == ["registry-status"], "questions must reuse one source"
     assert list(bundle["sourceConnections"]) == ["registry"]
     source = bundle["sources"]["registry-status"]
@@ -121,10 +154,10 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
     assert all(requirement["acquisition"]["source"] == "registry-status"
                for requirement in bundle["requirements"])
     assert source["behaviorRevision"] == manifest["provenance"]["behaviorRevision"]
-    fact_schema = yaml.safe_load((candidate / "bundle" / source["factSchema"]).read_text())
+    fact_schema = yaml.safe_load((candidate / source["factSchema"]).read_text())
     assert list(fact_schema["properties"]) == ["status"], "identity must not become a fact"
     report = json.loads(run(binaries["evidence"], "bundle-check", "--bundle",
-                            candidate / "bundle", "--json", environment=environment))
+                            candidate, "--json", environment=environment))
     assert len(report["requirements"]) == 2
     # Full package provenance can move without changing the consumed lookup.
     model_path = registry / "registry.yaml"
@@ -200,7 +233,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
         "exportArtifacts": len(manifest["artifacts"]),
         "fixtureCases": sum(item["evaluated_cases"] for item in fixtures["fixtures"]),
         "behaviorRevision": source["behaviorRevision"],
-        "bundleRevision": report["bundleRevision"],
+        "packageDigest": report["packageDigest"],
         "questions": len(report["requirements"]),
         "provenanceOnlyRevisions": "unchanged",
         "consumedChangeRevisions": "both changed",
@@ -232,10 +265,10 @@ def verify_default_init(workspace: Path, binaries: dict[str, Path]) -> dict[str,
     assert len({client["claims"]["registry_principal"] for client in clients}) == len(clients)
     run(binaries["evidencectl"], "new", project, "--starter", INPUTS / "default-starter",
         "--profile", "local", environment=environment)
-    settings = yaml.safe_load((project / "targets/local/settings.yaml").read_text())
-    settings["runtime"]["package"]["root"] = str(candidate / "bundle")
-    settings["runtime"]["secretProviders"]["file"]["root"] = str(project / "secrets")
-    settings["runtime"]["auditStorage"]["path"] = str(project / "audit/evidence.jsonl")
+    settings = production_settings(
+        yaml.safe_load((project / "targets/local/settings.yaml").read_text()),
+        project=project,
+    )
     settings_path = workspace / "resolved-settings.json"
     settings_path.write_text(json.dumps(settings))
     run(binaries["evidencectl"], "target", "new", target, "--settings", settings_path,
@@ -252,7 +285,7 @@ def verify_default_init(workspace: Path, binaries: dict[str, Path]) -> dict[str,
     assert len(fixtures["fixtures"]) == 1
     assert fixtures["fixtures"][0]["passed"]
     assert fixtures["fixtures"][0]["evaluated_cases"] == 11
-    run(binaries["evidencectl"], "build", "--project", project, "--target", target,
+    run(binaries["evidencectl"], "package", project, "--target", target,
         "--output", candidate, environment=environment)
     return {"questions": 1, "fixtureCases": 11, "defaultSourceClient": "dedicated"}
 
@@ -598,9 +631,9 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
             assert pair == [(project / "secrets" / name).read_bytes()
                             for name in ["registry-client-id", "registry-client-key"]]
             assert registrations == (state_root / "clients.json").read_bytes()
-            settings = yaml.safe_load((project / "targets/local/settings.yaml").read_text())
-            settings["governance"]["sourceConnections"]["registry"]["baseUrl"] = session["bregUrl"]
-            source_authentication = settings["governance"]["sourceConnections"]["registry"][
+            local_settings = yaml.safe_load((project / "targets/local/settings.yaml").read_text())
+            local_settings["governance"]["sourceConnections"]["registry"]["baseUrl"] = session["bregUrl"]
+            source_authentication = local_settings["governance"]["sourceConnections"]["registry"][
                 "authentication"
             ]
             source_authentication["tokenEndpoint"] = session["tokenEndpoint"]
@@ -608,18 +641,27 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
             source_authentication["audience"] = session["audience"]
             source_authentication["resource"] = session["resource"]
             source_authentication["scope"] = " ".join(source["scopes"])
-            settings["runtime"]["package"]["root"] = str(candidate / "bundle")
-            settings["runtime"]["secretProviders"]["file"]["root"] = str(project / "secrets")
-            settings["runtime"]["auditStorage"]["path"] = str(project / "audit/evidence.jsonl")
+            local_settings["runtime"]["package"]["root"] = str(candidate)
+            local_settings["runtime"]["secretProviders"]["file"]["root"] = str(project / "secrets")
+            local_settings["runtime"]["auditStorage"]["path"] = str(project / "audit/evidence.jsonl")
             settings_path = workspace / "settings.json"
-            settings_path.write_text(json.dumps(settings))
+            settings_path.write_text(json.dumps(local_settings))
             command("evidencectl", "target", "new", target, "--settings", settings_path,
                     "--signing-public-key", project / "secrets/signing-p256-public.jwk.json")
             command("evidencectl", "source", "import", exported, "--project", project, "--target", target)
             command("evidencectl", "fixtures", "run", "--project", project, "--target", target)
-            command("evidencectl", "build", "--project", project, "--target", target, "--output", candidate)
+            package_target = project / "targets/package"
+            package_settings_path = workspace / "package-settings.json"
+            package_settings_path.write_text(json.dumps(production_settings(
+                local_settings, project=project
+            )))
+            command("evidencectl", "target", "new", package_target, "--settings",
+                    package_settings_path, "--signing-public-key",
+                    project / "secrets/signing-p256-public.jwk.json")
+            command("evidencectl", "package", project, "--target", package_target,
+                    "--output", candidate)
             compiled_authentication = yaml.safe_load(
-                (candidate / "bundle/evidence.yaml").read_text()
+                (candidate / "evidence.yaml").read_text()
             )["sourceConnections"]["registry"]["authentication"]
             assert (
                 compiled_authentication["clientAssertionAudience"]

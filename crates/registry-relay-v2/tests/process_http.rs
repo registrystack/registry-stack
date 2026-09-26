@@ -248,7 +248,7 @@ fn built_relay_check_honors_a_package_digest_pin() {
     );
 
     let mut pinned = image.runtime.clone();
-    pinned.package.expected_digest = Some(digest);
+    pinned.package.expected_digest = Some(digest.clone());
     write_runtime(&image.runtime_path, &pinned);
     let output = relay_check(&image.runtime_path);
     assert!(
@@ -258,14 +258,15 @@ fn built_relay_check_honors_a_package_digest_pin() {
     );
 
     let wrong = format!("sha256:{}", "0".repeat(64));
-    pinned.package.expected_digest = Some(wrong);
+    pinned.package.expected_digest = Some(wrong.clone());
     write_runtime(&image.runtime_path, &pinned);
     let output = relay_check(&image.runtime_path);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("package.expectedDigest"), "{stderr}");
     assert!(
-        stderr.contains("deploy the pinned package or update package.expectedDigest"),
+        stderr.contains(&format!(
+            "package.expectedDigest is {wrong} but the package at package.root is {digest}"
+        )),
         "{stderr}"
     );
 }

@@ -579,6 +579,12 @@ class CiChangesTest(unittest.TestCase):
                 self.assertTrue(
                     classify(self.workspace, (path,))["config_conformance"]
                 )
+        digest_tests = {row.digest_mismatch.path for row in gate.ROWS}
+        for path in sorted(digest_tests):
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["config_conformance"]
+                )
 
     def test_shards_cover_every_workspace_package_once(self) -> None:
         assigned = [package for packages in SHARDS.values() for package in packages]

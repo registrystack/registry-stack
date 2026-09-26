@@ -12,14 +12,14 @@ Each row names one product runtime and the evidence that it conforms:
   keyword unchanged and narrows it only with `allOf`;
 - its non-test code reads `runtime.yaml` through `RuntimeConfigLoader` and no
   source calls the legacy `expand_config_env_vars` expansion;
-- a named test proves a `*Ref` field refuses `${VAR}` substitution, and a named
-  test proves an authored project file refuses an environment expression. The
-  Rust test jobs run those tests; this gate fails when one is renamed or
-  removed.
+- named tests prove a `*Ref` field refuses `${VAR}` substitution, an authored
+  project file refuses an environment expression, and a mismatched package pin
+  reports the shared expected-and-found digest shape. The Rust test jobs run
+  those tests; this gate fails when one is renamed or removed.
 
 A row may exempt one of these only with a stated reason. A product adopting the
-loader adds a row. Rows for the shared ctl verbs, `--format`, and exit classes,
-and for the shared digest-mismatch refusal, join when those surfaces land.
+loader adds a row. Rows for the shared ctl verbs, `--format`, and exit classes
+join when those surfaces land.
 
 With `--check-generated`, the gate also regenerates the canonical schema and
 fails when the committed copy differs.
@@ -101,6 +101,7 @@ class Row:
     shared_blocks: tuple[str, ...]
     reference_refusal: TestRef | Exemption
     authored_refusal: TestRef | Exemption
+    digest_mismatch: TestRef
     rust_blocks: tuple[RustBlock, ...] = ()
     hand_schemas: tuple[HandSchema, ...] = ()
 
@@ -127,6 +128,10 @@ ROWS: tuple[Row, ...] = (
             "crates/registry-relay-v2/src/contract.rs",
             "an_authored_contract_carrying_an_environment_expression_is_refused",
         ),
+        digest_mismatch=TestRef(
+            "crates/registry-relay-v2/tests/process_http.rs",
+            "built_relay_check_honors_a_package_digest_pin",
+        ),
     ),
     Row(
         product="render",
@@ -140,6 +145,10 @@ ROWS: tuple[Row, ...] = (
         authored_refusal=TestRef(
             "crates/registry-render/src/manifest.rs",
             "an_authored_manifest_carrying_an_environment_expression_is_refused",
+        ),
+        digest_mismatch=TestRef(
+            "crates/registry-render/tests/serve.rs",
+            "serve_startup_package_digest_mismatch_uses_common_expected_and_found_shape",
         ),
         rust_blocks=(
             RustBlock(
@@ -171,6 +180,10 @@ ROWS: tuple[Row, ...] = (
         authored_refusal=Exemption(
             "the Discovery runtime serves a built index and reads no authored "
             "project file"
+        ),
+        digest_mismatch=TestRef(
+            "crates/registry-discovery/src/startup.rs",
+            "startup_verifies_package_and_refuses_expected_digest_mismatch_with_common_shape",
         ),
         rust_blocks=(
             RustBlock(
@@ -204,6 +217,10 @@ ROWS: tuple[Row, ...] = (
         authored_refusal=TestRef(
             "crates/registry-evidence/src/config.rs",
             "an_authored_bundle_carrying_an_environment_expression_is_refused",
+        ),
+        digest_mismatch=TestRef(
+            "crates/registry-evidence/src/runtime_tests.rs",
+            "an_expected_package_digest_admits_only_the_bundle_it_names",
         ),
         rust_blocks=(
             RustBlock(
@@ -264,6 +281,10 @@ ROWS: tuple[Row, ...] = (
             "crates/registry-breg/tests/compiler_contract.rs",
             "an_authored_project_carrying_an_environment_expression_is_refused",
         ),
+        digest_mismatch=TestRef(
+            "crates/registry-breg/tests/runtime_config.rs",
+            "shared_package_envelope_and_pin_are_checked_before_startup",
+        ),
         rust_blocks=(
             RustBlock(
                 "crates/registry-breg/src/runtime_config.rs",
@@ -321,6 +342,10 @@ ROWS: tuple[Row, ...] = (
             "crates/registry-casework/src/config.rs",
             "an_authored_project_carrying_an_environment_expression_is_refused",
         ),
+        digest_mismatch=TestRef(
+            "crates/registry-casework/src/config.rs",
+            "a_package_digest_mismatch_is_refused_in_the_shared_shape",
+        ),
         rust_blocks=(
             RustBlock(
                 "crates/registry-casework/src/config.rs",
@@ -367,6 +392,10 @@ ROWS: tuple[Row, ...] = (
             "crates/registry-scheduling/src/config.rs",
             "an_authored_policy_carrying_an_environment_expression_is_refused",
         ),
+        digest_mismatch=TestRef(
+            "crates/registry-scheduling/src/config.rs",
+            "a_pinned_package_digest_must_match_the_verified_package",
+        ),
         rust_blocks=(
             RustBlock(
                 "crates/registry-scheduling/src/config.rs",
@@ -388,6 +417,10 @@ ROWS: tuple[Row, ...] = (
             ),
         ),
     ),
+)
+
+EXPECTED_PRODUCTS = frozenset(
+    {"relay", "render", "discovery", "evidence", "breg", "casework", "scheduling"}
 )
 
 
@@ -745,6 +778,27 @@ def check(root: Path, rows: tuple[Row, ...] = ROWS) -> list[str]:
             row.authored_refusal,
             "an authored project file must refuse ${VAR}",
         )
+        problems += check_test(
+            root,
+            row,
+            row.digest_mismatch,
+            "a package digest mismatch must report the shared expected-and-found shape",
+        )
+    return problems
+
+
+def check_inventory(rows: tuple[Row, ...] = ROWS) -> list[str]:
+    products = [row.product for row in rows]
+    problems = []
+    duplicates = sorted({product for product in products if products.count(product) > 1})
+    if duplicates:
+        problems.append(f"duplicate conformance rows: {', '.join(duplicates)}")
+    missing = sorted(EXPECTED_PRODUCTS - set(products))
+    extra = sorted(set(products) - EXPECTED_PRODUCTS)
+    if missing:
+        problems.append(f"missing conformance rows: {', '.join(missing)}")
+    if extra:
+        problems.append(f"unexpected conformance rows: {', '.join(extra)}")
     return problems
 
 
@@ -787,7 +841,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     arguments = parser.parse_args(argv)
     root = arguments.root.resolve()
-    problems = check(root)
+    problems = check_inventory() + check(root)
     if arguments.check_generated and not problems:
         problems = check_canonical_freshness(root)
     if problems:

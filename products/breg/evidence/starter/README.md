@@ -46,7 +46,7 @@ evidencectl target new ./targets/configured --settings ./targets/local/settings.
   --signing-public-key ./secrets/signing-p256-public.jwk.json
 evidencectl source import ../exports/registry-status --project . --target ./targets/configured
 evidencectl fixtures run --project . --target ./targets/configured
-evidencectl build --project . --target ./targets/configured --output ../candidate
+evidencectl test . --target ./targets/configured
 ```
 
 `evidencectl source add ./registry --project ./evidence` connects a stopped
@@ -64,9 +64,10 @@ This starts Evidence and a separate stock caller issuer using generated local au
 it reuses the target's source connections and outbound TLS settings. The target's
 caller authentication and service identity remain the explicit build settings.
 
-Fixtures and build replay recorded synthetic responses once the reviewed export is
+Fixtures and tests replay recorded synthetic responses once the reviewed export is
 imported, and then need neither a running BReg nor source credentials to be
 present; before that import they refuse on the missing `registry-status` source.
-Serving the candidate requires the separate caller issuer, BReg endpoint, source
-credentials, signing key and audit storage named in the reviewed target. A
-production deployment needs its own reviewed HTTPS target and transit signer.
+Serving the generated development package requires the separate caller issuer,
+BReg endpoint, source credentials, signing key and audit storage named in the
+reviewed target. A production deployment needs its own reviewed HTTPS target
+and transit signer before `evidencectl package` creates its immutable package.

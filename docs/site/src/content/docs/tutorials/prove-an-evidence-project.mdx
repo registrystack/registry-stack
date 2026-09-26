@@ -158,12 +158,12 @@ public problem and the audit chain instead.
 
 ## Check the deployable inputs
 
-An editable project has no runtime document to check. Once `evidencectl package` has produced a
-candidate, that candidate is what carries `runtime.yaml` beside `bundle/`, and `evidence check`
-runs against it:
+An editable project has no runtime document to check. Its deployment target keeps `runtime.yaml`
+outside the package and points `package.root` at the installed package. Run `evidence check`
+against that target runtime after installing the package:
 
 ```sh
-evidence check --runtime-config "<candidate>/runtime.yaml"
+evidence check --runtime-config "<deployment-target>/runtime.yaml"
 ```
 
 This validates the complete captured bundle, scripts, schemas, codelists, key references, and
@@ -183,13 +183,13 @@ from the editable project and one explicit production target.
 
 Build and hand off only when these facts are recorded together:
 
-1. The fixture suite passed against the editable inputs and the generated candidate.
-2. `evidence check` accepted the exact candidate runtime and bundle.
+1. The fixture suite passed against the editable inputs and generated package.
+2. `evidence check` accepted the exact installed package and target runtime.
 3. A reviewer approved the source projection, cardinality mapping, requirement, derivation,
    codelists, purposes, audiences, and privacy expectations.
 4. The environment supplies a governed public signing key and matching Transit binding, plus
    independent owner-only subject-binding and audit secrets.
-5. The deployed package digest matches the reviewed candidate and the runtime pins it with
+5. The deployed package digest matches the reviewed package and the runtime pins it with
    `package.expectedDigest`.
 6. Readiness passes, followed by one authorized HTTP-path check using synthetic data.
 

@@ -58,9 +58,8 @@ const GATED_ACQUISITION_CAPABILITIES: [&str; 2] = ["search-then-fetch-set", "sou
 pub struct DoctorArgs {
     /// Evidence project directory; defaults to the current directory.
     ///
-    /// This command needs a deployment project: one holding runtime.yaml
-    /// beside bundle/. `evidencectl package` compiles an editable project into
-    /// one.
+    /// This command needs a deployment target whose runtime.yaml names the
+    /// installed package. `evidencectl package` writes that package separately.
     #[arg(long, default_value = ".")]
     pub project: PathBuf,
 
@@ -185,12 +184,12 @@ fn missing_runtime_message(project: &Path, runtime_path: &Path) -> String {
     );
     if project_is_editable(runtime_path) {
         format!(
-            "runtime configuration not found at {}; artifact inspection walks a deployment project and {project} is an editable project. Compile a candidate with {build}, or check the editable project as it stands with `evidencectl check {project}` and `evidencectl test {project}`",
+            "runtime configuration not found at {}; artifact inspection walks a deployment target and {project} is an editable project. Build the package separately with {build}, or check the editable project as it stands with `evidencectl check {project}` and `evidencectl test {project}`",
             runtime_path.display()
         )
     } else {
         format!(
-            "runtime configuration not found at {}; doctor walks a deployment project, one holding runtime.yaml beside bundle/. Compile a candidate from an editable project with {build}",
+            "runtime configuration not found at {}; artifact inspection walks a deployment target whose runtime.yaml names the installed package. Build the package separately with {build}",
             runtime_path.display()
         )
     }
@@ -203,7 +202,7 @@ fn missing_runtime_diagnostic(project: &Path, runtime_path: &Path) -> DoctorDiag
         path: "runtime.yaml".to_owned(),
         message: missing_runtime_message(project, runtime_path),
         suggested_action:
-            "Select a deployment project, or use evidencectl package, check, and test to prepare and inspect an editable project."
+            "Select a deployment target whose runtime names the installed package, or use evidencectl package, check, and test to prepare and inspect an editable project."
                 .to_owned(),
     }
 }

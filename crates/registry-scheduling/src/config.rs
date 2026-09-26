@@ -1088,14 +1088,17 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
         assert_eq!(config.package_digest().unwrap(), digest);
 
         let mut document = operator_value(&package, "operator-controlled-upstream");
-        document["package"]["expectedDigest"] =
-            serde_json::json!(format!("sha256:{}", "0".repeat(64)));
+        let expected = format!("sha256:{}", "0".repeat(64));
+        document["package"]["expectedDigest"] = serde_json::json!(&expected);
         let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
-        assert!(matches!(error, RuntimeConfigError::PackageDigest(_)));
+        assert!(matches!(&error, RuntimeConfigError::PackageDigest(_)));
         assert_eq!(error.path(), "package.expectedDigest");
-        assert!(
-            error.to_string().contains("update package.expectedDigest"),
-            "{error}"
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "package.expectedDigest is {expected} but the package at package.root is \
+                 {digest}; deploy the pinned package or update package.expectedDigest"
+            )
         );
     }
 

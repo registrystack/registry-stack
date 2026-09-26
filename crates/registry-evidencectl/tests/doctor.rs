@@ -744,7 +744,7 @@ fn doctor_names_the_next_commands_when_the_project_is_still_editable() {
 
     assert!(
         !output.status.success(),
-        "doctor inspects a deployment project only"
+        "doctor inspects a deployment target only"
     );
     let message = stderr_of(&output);
     assert!(
@@ -762,7 +762,7 @@ fn doctor_names_the_next_commands_when_the_project_is_still_editable() {
 }
 
 #[test]
-fn doctor_names_the_build_command_for_a_directory_that_is_neither_shape() {
+fn doctor_names_the_package_command_for_a_directory_that_is_neither_shape() {
     let workspace = tempfile::tempdir().expect("tempdir");
 
     let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
@@ -774,7 +774,7 @@ fn doctor_names_the_build_command_for_a_directory_that_is_neither_shape() {
     assert!(!output.status.success());
     let message = stderr_of(&output);
     assert!(
-        message.contains("deployment project"),
+        message.contains("deployment target"),
         "the refusal must name the shape it needs: {message}"
     );
     assert!(
@@ -820,7 +820,7 @@ fn doctor_project_shape_refusal_is_one_value_safe_json_diagnostic() {
     assert!(diagnostic["message"]
         .as_str()
         .expect("message")
-        .contains("deployment project"));
+        .contains("deployment target"));
     assert!(diagnostic["suggestedAction"]
         .as_str()
         .expect("suggested action")

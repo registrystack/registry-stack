@@ -23,11 +23,11 @@ reference is absent or its captured suite is incomplete.
 
 For production compilation, each editable question names one regular,
 project-relative `fixtures/<name>.yaml` file. The build copies that file into
-the candidate bundle and delegates its execution to `evidence evaluate`; it
+the package and delegates its execution to `evidence evaluate`; it
 does not reinterpret fixture semantics or manufacture cases. Missing,
 symlinked, outside-project, duplicate, or incomplete fixture references stop
 the build before publication. The build's private validation secrets and
-runtime are not fixture inputs and never appear in the candidate.
+runtime are not fixture inputs and never appear in the package.
 
 ## File shape
 
@@ -452,12 +452,12 @@ arbitrary string remains only the shape `string`; the trace never substitutes
 raw category text or a concept identifier for an ordinal.
 
 ```sh
-evidence evaluate --runtime-config "<candidate>/runtime.yaml" \
+evidence evaluate --runtime-config "<deployment-target>/runtime.yaml" \
   --fixture "<path>" --explain --explain-format json \
   | jq -r '.cases[] | "\(.id)\t\(.failure // "passed")"'
 ```
 
-`evidencectl test <candidate> --explain` asks the same of
+`evidencectl test <editable-project> --target <deployment-target> --explain` asks the same of
 every fixture a project references using the JSON form. The human report
 pretty-prints each value-free document under its step line; `--format json` places the
 same document at that fixture's `trace` field. The driver totals

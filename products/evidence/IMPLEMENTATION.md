@@ -1057,8 +1057,8 @@ At minimum, pin these acceptance and negative cases:
     sanitized extract, the real router, both audit gates, signed JWS,
     explicitly authorized unsigned output, and strict verification on one
     revision.
-45. Governed bundle and runtime configuration have separate closed schemas,
-    independent startup digests, read-only lifetime enforcement, and negative
+45. Governed package and runtime configuration have separate closed schemas,
+    package-digest verification, one-time read-only runtime capture, and negative
     tests proving runtime fields cannot override sources, authorization,
     disclosure, limits, signing, or audit policy.
 46. Fixed paths and tagged selector or fetch prior-fact path templates pass exact encoding tests.

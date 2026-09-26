@@ -136,9 +136,9 @@ Run the following grouped handoff after provisioning and whenever candidate
 bytes, runtime bindings, trust files, or secrets change:
 
 ```sh
-evidencectl doctor --runtime-config '<candidate>/runtime.yaml'
-evidencectl test '<candidate>'
-evidence serve --runtime-config '<candidate>/runtime.yaml'
+evidencectl doctor --runtime-config '<deployment-target>/runtime.yaml'
+evidencectl test '<editable-project>' --target '<deployment-target>'
+evidence serve --runtime-config '<deployment-target>/runtime.yaml'
 ```
 
 `doctor` delegates the runtime-owned startup dependency preflight without
@@ -153,13 +153,13 @@ independently prepared `production` policy and trusted keys, and run
 Configure an HTTPS OIDC issuer independently of Evidence. Its client registration
 must bind the approved resource and scopes; the governed bundle pins issuer,
 JWKS URI, audience, allowed algorithms, token types, and claim mappings.
-Inspect the candidate with `evidencectl artifact inspect <candidate>` and verify
+Inspect the installed package and target with `evidencectl artifact inspect <deployment-target>` and verify
 an actual issuer-to-resource request at handoff. Inspection does not register a
 client, decide authority, or issue a token. Maintained local tooling uses pinned
 stock ThunderID.
 
 Docker Compose remains a documented deployment adapter, never build output.
-It mounts the approved candidate bundle unchanged and read-only, supplies a
+It mounts the approved package unchanged and read-only, supplies a
 separate container runtime file and owner-readable secret mounts, gives only
 the audit path persistent writable storage, binds Evidence privately, and
 keeps public TLS and routing operator-controlled. The OIDC issuer retains its

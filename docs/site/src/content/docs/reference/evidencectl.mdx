@@ -33,11 +33,11 @@ The canonical adopter commands do not change the numeric Evidence Gateway Versio
 | `evidencectl check <project> --target <target>` | Editable project and one explicit target | Adds the target's governance, runtime structure, public keys, source connections, and governed-bundle validation | Require target-host paths or secrets to exist, run fixtures, or contact a dependency |
 | `evidencectl check <project> --target <target> --production` | Editable project and one explicit production or evidence-grade target | Refuses incomplete deployment closure under that target's own assurance profile | Select a target, upgrade its profile, or prove live readiness |
 | `evidencectl explain <project> [--target <target>]` | Editable project and optional explicit target | Applies the same offline authoring validation, then reports status, findings, revision, and the authored inventory; includes target governance only when selected | Contact sources or expose secret and subject values |
-| `evidencectl package <project> --target <target> --output <new-candidate>` | Editable project and one explicit production target | Creates a new candidate with `runtime.yaml` and closed `bundle/` | Overwrite output, contact source services or OIDC, create production secrets, or start a listener |
+| `evidencectl package <project> --target <target> --output <new-package>` | Editable project and one explicit production target | Creates one closed package with `SHA256SUMS`; runtime remains in the target | Overwrite output, contact source services or OIDC, create production secrets, or start a listener |
 | `evidencectl test <project>` | A deployment project with `runtime.yaml`, or an editable project with `questions/` and `sources/`, plus referenced synthetic fixtures | Uses runtime `check` and `evaluate` for a deployment; privately compiles an editable project, then uses runtime `bundle-check` and `bundle-evaluate` | Start HTTP, call a source, or write a production audit entry |
 | `evidencectl test <candidate> --explain` | The same, and asks each evaluation to explain itself | Relays each fixture's stage trace beside its step, or as that fixture's `trace` field under `--format json` | Print a response, fact, derived, or selector value, or explain a served request |
 | `evidencectl doctor --runtime-config <absolute-file>` | Runtime file on its target host | Runs the runtime-owned startup dependency preflight without opening the public listener | Send an Evidence request or establish that a fixture passed |
-| `evidencectl artifact inspect <candidate>` | Completed candidate | Inspects artifact custody without contacting dependencies | Establish live dependency readiness |
+| `evidencectl artifact inspect <target>` | Deployment target whose runtime names the installed package | Inspects artifact custody without contacting dependencies | Establish live dependency readiness |
 
 `doctor --runtime-config` opens the configured audit sink as startup does, so it refuses while
 another Evidence instance holds that chain's single-writer lock. To check a candidate staged beside
@@ -53,8 +53,8 @@ production HTTP sources, source transports with no stated production conditions,
 metadata or fixtures, unresolved review markers, unknown fields, symlink traversal, and references
 outside the allowed project directories. A failed package publishes no candidate.
 
-`check`, `test`, `package`, `source diff`, and `source update`, and the compatibility spellings
-`fixtures run` and `build`, refuse a derivation whose `answer` reads a fact its question's source
+`check`, `test`, `package`, `source diff`, and `source update`, plus the compatibility spelling
+`fixtures run`, refuse a derivation whose `answer` reads a fact its question's source
 does not declare, with `evidence.authoring.derivation-fact-undeclared` against the derivation
 file. A source declares an inline operation's `source.facts[].name`, or the properties of a
 referenced source's closed `factSchema`. A registry field rename that a derivation still reads
@@ -88,10 +88,11 @@ they do not change the Evidence Gateway runtime verifier's frozen exit contract.
 
 ## Compatibility spellings
 
-The released `new`, `fixtures run`, and `build` spellings remain available during the command
-transition. New projects, examples, and current procedures use `init`, `test`, and `package`.
-The `doctor --project <candidate>` compatibility form retains artifact inspection;
-use `artifact inspect <candidate>` for that operation and reserve `doctor --runtime-config` for
+The released `new` and `fixtures run` spellings remain available during the command
+transition. The retired `build` spelling refuses the request and names `package` as its replacement.
+New projects, examples, and current procedures use `init`, `test`, and `package`.
+The `doctor --project <target>` compatibility form retains artifact inspection;
+use `artifact inspect <target>` for that operation and reserve `doctor --runtime-config` for
 live startup dependency checks. Do not combine a canonical positional project with its former
 `--project` flag; conflicting old and new forms are usage errors.
 Request preparation uses `--response-format signed-jws|sd-jwt-vc` so the
