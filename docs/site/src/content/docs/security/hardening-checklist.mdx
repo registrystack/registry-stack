@@ -196,17 +196,18 @@ bundle, or the sealed Relay package. It assumes you have already configured your
 
 ## Audit destination and retention
 
-- Evidence Gateway and Relay write audit through one shared writer, configured by the runtime
-  file's `audit` block: `destination` is `file` (the default) or `stdout`, and a file destination
-  takes `path`, `rotateBytes` (100 MiB by default), and `retainDays` (90 by default). Put `path` on
-  storage whose append durability, permissions, capacity, and backup you own, in a directory owned
-  by the service user and not writable by group or others.
+- Evidence Gateway, Relay, and Render write audit through one shared writer, configured by the
+  runtime file's `audit` block: `destination` is `file` (the default) or `stdout`, and a file
+  destination takes `path`, `rotateBytes` (100 MiB by default), and `retainDays` (90 by default).
+  Put `path` on storage whose append durability, permissions, capacity, and backup you own, in a
+  directory owned by the service user and not writable by group or others.
 - Audit is fail-closed by contract, with no write-policy setting. Evidence Gateway durably accepts
   an access-attempt entry before every source stage and the disclosure-release entry before the
   response is released; Relay writes its attempt entry before SQLite access and its terminal entry
-  before returning, and answers `503 audit.unavailable` otherwise (REQ-SEC-G-009). Do not plan
-  capacity on the assumption that a full or unwritable disk degrades to best-effort logging; it
-  stops the service answering.
+  before returning, and answers `503 audit.unavailable` otherwise (REQ-SEC-G-009); Render accepts a
+  `request` entry before a render's worker starts and a `response` entry before the document
+  leaves, and answers `503 audit-failed` otherwise. Do not plan capacity on the assumption that a
+  full or unwritable disk degrades to best-effort logging; it stops the service answering.
 - Run exactly one process per audit path. The writer takes an exclusive lock on `<path>.lock` for
   its whole life, and a second process pointed at the same path fails to start. Give each replica
   its own path, or use `stdout` and let the platform's log collector gather every stream.
@@ -221,15 +222,15 @@ bundle, or the sealed Relay package. It assumes you have already configured your
   undetected. Tamper evidence and completeness come only from shipping sealed files, or the
   `stdout` stream, to append-only storage that the service account cannot change: object storage
   with an object lock, a write-once archive, or a log pipeline with operator-independent
-  retention. Neither service has a shipping feature, acknowledgement cursor, or readiness gate that
-  proves remote receipt, so own that argument with your own tooling.
+  retention. None of Evidence Gateway, Relay, or Render has a shipping feature, acknowledgement
+  cursor, or readiness gate that proves remote receipt, so own that argument with your own tooling.
 - Before the first start on the shared writer, archive every earlier chained audit file and
   segment to append-only storage and point `path` at a fresh file in a directory that holds no old
   segments; retention deletes old `<path>.<sequence>` segments along with its own.
 - Evidence Gateway: every pseudonym carries the bundle's `audit.hashKeyVersion`. Rotate the audit
   master only through a bundle revision that raises that version, and retain the old master under
-  your audit retention controls for as long as older pseudonyms must remain recomputable. Relay
-  entries carry no keyed field and need no audit key.
+  your audit retention controls for as long as older pseudonyms must remain recomputable. Relay and
+  Render entries carry no keyed field and need no audit key.
 - Relay: `runtime.yaml`'s `cursor` block is pagination-cursor integrity, not audit shipping. It
   carries its own `integrityKeyRef` and a `maximumAgeSeconds` between 1 and 86400, and any contract
   that declares a list or a search operation, or that shows more than one resource in its resource
