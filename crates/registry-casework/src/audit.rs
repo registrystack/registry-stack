@@ -406,6 +406,9 @@ mod capture {
     struct CaptureState {
         bytes: Vec<u8>,
         accepted_lines: Option<usize>,
+        /// The writer recording here, so a read can wait for the entries it
+        /// writes when a request handle is dropped.
+        writer: Option<AuditWriter>,
     }
 
     /// The lines a test audit destination accepted, and a switch that makes
@@ -417,6 +420,10 @@ mod capture {
         /// Every accepted entry, parsed, in write order.
         #[must_use]
         pub fn entries(&self) -> Vec<Value> {
+            let writer = self.0.lock().expect("audit capture").writer.clone();
+            if let Some(writer) = writer {
+                writer.wait_for_detached_entries();
+            }
             let state = self.0.lock().expect("audit capture");
             String::from_utf8(state.bytes.clone())
                 .expect("audit lines are UTF-8")
@@ -482,6 +489,7 @@ mod capture {
         pub fn capture() -> (Self, AuditCapture) {
             let capture = AuditCapture::default();
             let writer = AuditWriter::from_line_sink(Box::new(capture.clone()));
+            capture.0.lock().expect("audit capture").writer = Some(writer.clone());
             (
                 Self::new(writer, AuditKeyHasher::unkeyed_dev_only()),
                 capture,
