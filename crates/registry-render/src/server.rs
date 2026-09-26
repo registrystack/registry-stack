@@ -265,7 +265,7 @@ async fn require_bearer(
             correlation.as_deref(),
             trace_id(request.headers()).as_deref(),
         );
-        let envelope = crate::audit::correlation(correlation.as_deref());
+        let envelope = crate::audit::correlation();
         if let Err(audit_problem) = service.audit.response(&envelope, event).await {
             tracing::error!(problem = %audit_problem, "401 audit append failed");
         }
@@ -322,7 +322,7 @@ async fn refuse_oversized_bodies(
         correlation.as_deref(),
         trace_id(request.headers()).as_deref(),
     );
-    let envelope = crate::audit::correlation(correlation.as_deref());
+    let envelope = crate::audit::correlation();
     if let Err(audit_problem) = service.audit.response(&envelope, event).await {
         tracing::error!(problem = %audit_problem, "413 audit append failed");
     }
@@ -582,8 +582,9 @@ async fn render_route(
     let document_type = sanitize_document_type(&document_type);
     let trace = trace_id(&headers);
     let correlation = correlation_id(&headers);
-    // One envelope correlation joins this call's request and response entries.
-    let envelope = crate::audit::correlation(correlation.as_deref());
+    // One server-drawn envelope correlation joins this call's request and
+    // response entries; the caller's key is only echoed in the record.
+    let envelope = crate::audit::correlation();
     let caller = service.caller_fingerprint.clone();
     if method != Method::POST {
         return refuse(
@@ -641,28 +642,37 @@ async fn render_route(
         trace.as_deref(),
     );
     // The request entry is accepted before the render starts; a refused one
-    // means the render never starts and no response entry follows.
-    if let Err(audit_problem) = service.audit.request(&envelope, started.clone()).await {
-        return problem_response(&audit_problem);
-    }
-    let outcome = run_render(&service, worker_request).await;
-    let event = match &outcome {
-        Ok(rendered) => RenderAuditEvent {
-            document_id: document_type.clone(),
-            document_version: rendered.document_version,
-            bundle_version: rendered.bundle_version,
-            bundle_hash: rendered.bundle_hash.clone(),
-            outcome: Some("rendered"),
-            problem: None,
-            pdf_sha256: Some(rendered.pdf_sha256.clone()),
-            data_sha256: Some(rendered.data_sha256.clone()),
-            caller,
-            correlation_id: correlation.clone(),
-            trace_id: trace.clone(),
-            renderer_version: crate::display_version(),
-            typst_pin: crate::TYPST_PIN.to_owned(),
-        },
-        Err(problem) => started.refused_after_start(problem),
+    // means the render never starts and no response entry follows. A call
+    // dropped from here on writes its unfinished response.
+    let _request = match service.audit.request(&envelope, started.clone()).await {
+        Ok(request) => request,
+        Err(audit_problem) => return problem_response(&audit_problem),
+    };
+    // The answer is built before its response entry, so the entry records
+    // the outcome the caller actually receives.
+    let outcome = run_render(&service, worker_request)
+        .await
+        .and_then(|rendered| {
+            let event = RenderAuditEvent {
+                document_id: document_type.clone(),
+                document_version: rendered.document_version,
+                bundle_version: rendered.bundle_version,
+                bundle_hash: rendered.bundle_hash.clone(),
+                outcome: Some("rendered"),
+                problem: None,
+                pdf_sha256: Some(rendered.pdf_sha256.clone()),
+                data_sha256: Some(rendered.data_sha256.clone()),
+                caller,
+                correlation_id: correlation.clone(),
+                trace_id: trace.clone(),
+                renderer_version: crate::display_version(),
+                typst_pin: crate::TYPST_PIN.to_owned(),
+            };
+            Ok((event, respond_rendered(&headers, rendered)?))
+        });
+    let (event, outcome) = match outcome {
+        Ok((event, response)) => (event, Ok(response)),
+        Err(problem) => (started.refused_after_start(&problem), Err(problem)),
     };
     // The response entry is accepted before anything leaves: audit failure
     // fails closed and withholds the document.
@@ -670,20 +680,17 @@ async fn render_route(
         return problem_response(&audit_problem);
     }
     match outcome {
-        Ok(rendered) => match respond_rendered(&headers, rendered) {
-            Ok(mut response) => {
-                if let Some(correlation) = correlation
-                    .as_ref()
-                    .and_then(|c| header::HeaderValue::from_str(c).ok())
-                {
-                    response
-                        .headers_mut()
-                        .insert("idempotency-key", correlation);
-                }
+        Ok(mut response) => {
+            if let Some(correlation) = correlation
+                .as_ref()
+                .and_then(|c| header::HeaderValue::from_str(c).ok())
+            {
                 response
+                    .headers_mut()
+                    .insert("idempotency-key", correlation);
             }
-            Err(problem) => problem_response(&problem),
-        },
+            response
+        }
         Err(problem) => problem_response(&problem),
     }
 }
@@ -1028,11 +1035,18 @@ mod tests {
             "with no render slot free the request must be waiting at the render step"
         );
         let accepted = lines.accepted();
-        assert_eq!(accepted.len(), 1, "only the request entry: {accepted:?}");
+        // The call dropped while it waited for a render slot, as a canceled
+        // request is: its request entry is paired with an unfinished
+        // response, and nothing else was written.
+        assert_eq!(accepted.len(), 2, "{accepted:?}");
         let entry = &accepted[0];
         assert_eq!(entry["schema"], crate::audit::AUDIT_SCHEMA);
         assert_eq!(entry["phase"], "request");
-        assert_eq!(entry["correlation"], "effect-1234");
+        let correlation = entry["correlation"].as_str().expect("correlation");
+        assert_eq!(correlation.len(), 36, "a drawn correlation: {correlation}");
+        assert_eq!(accepted[1]["phase"], "response");
+        assert_eq!(accepted[1]["correlation"], correlation);
+        assert_eq!(accepted[1]["record"]["outcome"], "unfinished");
         let record = &entry["record"];
         assert!(
             record.get("outcome").is_none(),
@@ -1095,7 +1109,8 @@ mod tests {
         let accepted = lines.accepted();
         assert_eq!(accepted.len(), 1, "{accepted:?}");
         assert_eq!(accepted[0]["phase"], "response");
-        assert_eq!(accepted[0]["correlation"], "effect-5678");
+        assert_ne!(accepted[0]["correlation"], "effect-5678");
+        assert_eq!(accepted[0]["record"]["correlationId"], "effect-5678");
         assert_eq!(accepted[0]["record"]["outcome"], "refused");
         assert_eq!(accepted[0]["record"]["problem"], "issued-at-missing");
     }
@@ -1115,8 +1130,9 @@ mod tests {
         assert_eq!(accepted.len(), 2, "{accepted:?}");
         let entry = &accepted[1];
         assert_eq!(entry["phase"], "response");
-        assert_eq!(entry["correlation"], "effect-9012");
+        assert_eq!(entry["correlation"], accepted[0]["correlation"]);
         let record = &entry["record"];
+        assert_eq!(record["correlationId"], "effect-9012");
         assert_eq!(record["outcome"], "refused");
         assert_eq!(record["problem"], "internal");
         assert_eq!(record["documentId"], "receipt");
@@ -1129,16 +1145,49 @@ mod tests {
     }
 
     #[test]
-    fn the_envelope_correlation_reuses_the_idempotency_key_or_draws_one() {
-        assert_eq!(
-            crate::audit::correlation(Some("effect-1234")),
-            "effect-1234"
-        );
-        let drawn = crate::audit::correlation(None);
+    fn the_envelope_correlation_is_always_drawn_by_the_server() {
+        let drawn = crate::audit::correlation();
         assert_eq!(drawn.len(), 36, "a random UUID: {drawn}");
-        assert_ne!(drawn, crate::audit::correlation(None));
-        // A key the envelope cannot carry verbatim gets a drawn value too;
-        // the record keeps the caller's key as before.
-        assert_eq!(crate::audit::correlation(Some("tab\there")).len(), 36);
+        assert_ne!(drawn, crate::audit::correlation());
+    }
+
+    /// Two calls that carry the same caller key still pair unambiguously:
+    /// the key is the caller's own reference, never the journal's join.
+    #[tokio::test]
+    async fn concurrent_calls_sharing_an_idempotency_key_pair_their_own_entries() {
+        let lines = AuditLines::new(None);
+        let service = service(&lines, 2);
+        let (first, second) = tokio::join!(
+            router(Arc::clone(&service)).oneshot(render_request(Some("shared-key"))),
+            router(Arc::clone(&service)).oneshot(render_request(Some("shared-key"))),
+        );
+        // Whatever each call's outcome, both reach the render step.
+        assert_eq!(
+            first.expect("router").status(),
+            second.expect("router").status()
+        );
+        let accepted = lines.accepted();
+        assert_eq!(accepted.len(), 4, "{accepted:?}");
+        let mut correlations = std::collections::BTreeMap::<String, Vec<String>>::new();
+        for entry in &accepted {
+            assert_eq!(entry["record"]["correlationId"], "shared-key");
+            correlations
+                .entry(
+                    entry["correlation"]
+                        .as_str()
+                        .expect("correlation")
+                        .to_owned(),
+                )
+                .or_default()
+                .push(entry["phase"].as_str().expect("phase").to_owned());
+        }
+        assert_eq!(
+            correlations.len(),
+            2,
+            "one correlation per call: {correlations:?}"
+        );
+        for phases in correlations.values() {
+            assert_eq!(phases, &["request", "response"]);
+        }
     }
 }

@@ -94,8 +94,9 @@ is the profile's, not the caller's.
 ## Audit ledger
 
 The walk predates the shared audit writer. Render now writes a `request`
-and a `response` entry per render, joined by `correlation` (the job's
-`eventEffectId` here), and has no `audit-verify` command or audit key; a
+and a `response` entry per render, joined by a `correlation` the server
+draws for each call, with the job's `eventEffectId` recorded as
+`correlationId`, and has no `audit-verify` command or audit key; a
 re-walk reads the audit file directly. What the walk recorded:
 
 `registry-render audit-verify` (after graceful shutdown; a live writer

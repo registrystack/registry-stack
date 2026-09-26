@@ -3,14 +3,18 @@
 //! and a `response` entry carrying the outcome before the document leaves;
 //! both fail closed. A refusal decided before any render (validation, 401,
 //! 413) is one `response` entry, so the log distinguishes "no attempt" from
-//! a refused one. The log carries no hash chain or signature.
+//! a refused one. A render whose call ends before its outcome is written, a
+//! caller that disconnects included, writes an `unfinished` response, so no
+//! request entry stays unpaired. The pairing correlation is drawn by the
+//! server for every call; the caller's `Idempotency-Key` is only echoed in
+//! the record as `correlationId`. The log carries no hash chain or signature.
 //!
 //! Events carry no data values and no asset bytes: identifiers, versions,
 //! hashes, outcomes, caller, trace and correlation ids only.
 
 use serde::Serialize;
 
-use registry_platform_audit::{AuditDestination, AuditEntry, AuditWriter};
+use registry_platform_audit::{AuditDestination, AuditEntry, AuditRequest, AuditWriter};
 
 use crate::problem::{ProblemKind, RenderProblem};
 
@@ -31,8 +35,9 @@ pub struct RenderAuditEvent {
     pub document_version: u32,
     pub bundle_version: u32,
     pub bundle_hash: String,
-    /// "rendered" or "refused"; absent on the request entry written before
-    /// the render starts.
+    /// "rendered", "refused", or "unfinished" for a call that ended before
+    /// its outcome; absent on the request entry written before the render
+    /// starts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<&'static str>,
     /// Problem slug for refusals.
@@ -116,15 +121,11 @@ impl RenderAuditEvent {
     }
 }
 
-/// The envelope correlation for one request: the caller's idempotency key
-/// when it is a usable correlation, otherwise a fresh random id. The key is
-/// already bounded to 128 characters; one carrying a control character is
-/// not a valid correlation, so it gets a drawn id instead.
-pub fn correlation(correlation_id: Option<&str>) -> String {
-    match correlation_id {
-        Some(id) if !id.is_empty() && !id.chars().any(char::is_control) => id.to_owned(),
-        _ => uuid::Uuid::new_v4().to_string(),
-    }
+/// The envelope correlation for one call: a fresh random id the server
+/// draws. The caller's `Idempotency-Key` is not unique to one call, so it is
+/// never the value that pairs a call's entries.
+pub fn correlation() -> String {
+    uuid::Uuid::new_v4().to_string()
 }
 
 impl RenderAudit {
@@ -144,16 +145,29 @@ impl RenderAudit {
         Self { writer }
     }
 
-    /// Append the request entry. It must be accepted before the render
-    /// starts.
+    /// Append the request entry and return the handle that owes its
+    /// response. It must be accepted before the render starts. A call that
+    /// ends before it responds writes `unfinished` as the response.
     pub async fn request(
         &self,
         correlation: &str,
         event: RenderAuditEvent,
-    ) -> Result<(), RenderProblem> {
+    ) -> Result<AuditRequest, RenderProblem> {
+        let mut unfinished = record(RenderAuditEvent {
+            outcome: Some("unfinished"),
+            ..event.clone()
+        })?;
+        if let Some(fields) = unfinished.as_object_mut() {
+            fields.remove("pdfSha256");
+            fields.remove("dataSha256");
+        }
         let record = record(event)?;
-        self.append(AuditEntry::request(AUDIT_SCHEMA, correlation, record))
+        self.writer
+            .begin(AUDIT_SCHEMA, correlation, record, unfinished)
             .await
+            .map_err(|err| {
+                RenderProblem::new(ProblemKind::AuditFailed, format!("audit append: {err}"))
+            })
     }
 
     /// Append the response entry. It must be accepted before the caller
