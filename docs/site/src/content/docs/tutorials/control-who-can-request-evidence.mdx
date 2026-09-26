@@ -11,6 +11,9 @@ persona:
   - assertion provider
 locale: en
 standards_referenced: []
+tutorial_test:
+  toolset: evidence
+  after: tutorials/return-a-governed-value
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
@@ -65,13 +68,13 @@ A client change affects the next local generation. Stopping that generation also
 In one terminal, return to the working directory from the first tutorial and serve the checked
 synthetic cases:
 
-```sh
+```sh test-cwd="first-evidence-assertion" test-background="http://127.0.0.1:4010/people/person-123"
 evidencectl source mock serve --config adult-status/mocks/source.yaml
 ```
 
 Leave the source mock running. In another terminal, enter the project containing both questions:
 
-```sh
+```sh test-cwd="first-evidence-assertion"
 cd adult-status
 ```
 
@@ -94,7 +97,7 @@ evidencectl access policy add age-checks --question adult-status
 evidencectl access policy add service-routing --question age-bracket
 ```
 
-```text
+```text test-expect
 Added access policy age-checks for adult-status.
 Added access policy service-routing for age-bracket.
 ```
@@ -125,7 +128,7 @@ evidencectl access client add age-checker \
   --generate-local-key
 ```
 
-```text
+```text test-expect
 Added client age-checker with policy age-checks.
 ```
 
@@ -143,7 +146,7 @@ Compile the questions and both access policies, then start Evidence Gateway and 
 evidencectl dev start .
 ```
 
-```text
+```text test-excerpt
 Evidence ready at http://127.0.0.1:8080
 Issuer ready at http://127.0.0.1:8081
 ```
@@ -182,7 +185,7 @@ curl --silent --show-error --fail-with-body \
   --write-out 'HTTP %{http_code}\n'
 ```
 
-```text
+```text test-expect
 HTTP 200
 ```
 
@@ -194,7 +197,7 @@ evidencectl verify age-checker-allowed.jws.json \
   --output age-checker-allowed.verified.json
 ```
 
-```text
+```text test-expect
 VERIFIED
 ```
 
@@ -213,7 +216,7 @@ evidencectl access client add service-router \
   --generate-local-key
 ```
 
-```text
+```text test-excerpt
 Added client service-router with policy service-routing.
 ```
 
@@ -264,7 +267,7 @@ evidencectl verify service-router-allowed.jws.json \
   --output service-router-allowed.verified.json
 ```
 
-```text
+```text test-expect
 HTTP 200
 VERIFIED
 ```
@@ -306,7 +309,7 @@ curl --silent --show-error \
   --write-out 'HTTP %{http_code}\n'
 ```
 
-```text
+```text test-expect
 HTTP 403
 ```
 
@@ -316,14 +319,14 @@ Inspect the safe problem response:
 python3 -m json.tool age-checker-refused.json
 ```
 
-```json
+```json test-expect
 {
   "type": "https://id.registrystack.org/problems/registry-evidence/evidence/denied",
   "title": "Evidence request is not permitted",
   "status": 403,
   "detail": "the Evidence request is not permitted",
   "code": "evidence.denied",
-  "traceId": "<32-lowercase-hex-trace-id>"
+  "traceId": "<trace-id>"
 }
 ```
 
@@ -342,7 +345,7 @@ evidencectl dev stop
 evidencectl audit show --last-operation
 ```
 
-```text
+```text test-expect
 Local Evidence stopped
 ACCESS REFUSED requester=<pseudonym> reason=not_authorized
 ```
@@ -358,8 +361,8 @@ evidencectl access client revoke age-checker
 evidencectl dev start .
 ```
 
-```text
-Revoked client age-checker.
+```text test-expect
+Revoked client age-checker (removed local private key .evidence/clients/age-checker).
 Evidence ready at http://127.0.0.1:8080
 Issuer ready at http://127.0.0.1:8081
 ```
@@ -369,7 +372,7 @@ revoked client.
 
 Try to prepare a fresh request as the revoked client:
 
-```sh
+```sh test-exit="1"
 evidencectl request prepare adult-status \
   --purpose age-check \
   --subject person_id=person-123 \
@@ -377,7 +380,7 @@ evidencectl request prepare adult-status \
   --name age-checker-revoked
 ```
 
-```text
+```text test-expect
 evidencectl: unknown or revoked active client age-checker
 ```
 
@@ -393,7 +396,7 @@ Stop the local services:
 evidencectl dev stop
 ```
 
-```text
+```text test-expect
 Local Evidence stopped
 ```
 
