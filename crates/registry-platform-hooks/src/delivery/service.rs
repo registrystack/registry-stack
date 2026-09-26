@@ -1611,11 +1611,17 @@ fn transition_holds(
         (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::Delivered) => {
             at_attempt && state == "delivered"
         }
+        // A dead letter leaves that state only through a replay, which
+        // writes a later generation.
         (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::DeadLettered) => {
-            at_attempt && state == "dead_lettered"
+            (at_attempt && state == "dead_lettered") || observed.generation > event.generation
         }
+        // A scheduled retry is claimed again under a later attempt of the
+        // same generation, which a rolled-back retry reaches only after its
+        // lease expires and the reaper answers the attempt itself.
         (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::RetryPending) => {
-            at_attempt && state == "pending" && observed.lease_token.is_none()
+            (at_attempt && state == "pending" && observed.lease_token.is_none())
+                || (current && observed.attempt > event.attempt)
         }
         (
             DeliveryAuditPhase::Terminal,
@@ -2265,6 +2271,56 @@ mod tests {
             lease_token: None,
             expired: false,
         }
+    }
+
+    fn terminal_of(disposition: DeliveryAuditDisposition) -> PendingAudit {
+        PendingAudit {
+            attempt: 1,
+            phase: DeliveryAuditPhase::Terminal,
+            outcome: DeliveryAuditOutcome::WorkerInterrupted,
+            disposition,
+            ..replay_of(1)
+        }
+    }
+
+    #[test]
+    fn a_committed_retry_holds_after_its_next_attempt_is_claimed() {
+        let retry = terminal_of(DeliveryAuditDisposition::RetryPending);
+        assert!(transition_holds(&retry, &observed("pending", 1, 1), None));
+        assert!(
+            transition_holds(&retry, &observed("leased", 1, 2), None),
+            "the next attempt proves the retry committed"
+        );
+        assert!(
+            !transition_holds(
+                &retry,
+                &ObservedDelivery {
+                    lease_token: Some(Uuid::nil()),
+                    ..observed("leased", 1, 1)
+                },
+                None
+            ),
+            "a lease still at the attempt proves the retry rolled back"
+        );
+    }
+
+    #[test]
+    fn a_committed_dead_letter_holds_after_it_is_replayed() {
+        let dead_letter = terminal_of(DeliveryAuditDisposition::DeadLettered);
+        assert!(transition_holds(
+            &dead_letter,
+            &observed("dead_lettered", 1, 1),
+            None
+        ));
+        assert!(
+            transition_holds(&dead_letter, &observed("pending", 2, 0), None),
+            "a replay generation proves the dead letter committed"
+        );
+        assert!(!transition_holds(
+            &dead_letter,
+            &observed("leased", 1, 1),
+            None
+        ));
     }
 
     #[test]
