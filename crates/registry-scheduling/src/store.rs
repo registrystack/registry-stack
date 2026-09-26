@@ -719,6 +719,12 @@ impl PostgresStore {
             .await?
             .get(0);
         if !applied {
+            // Hold the table exclusively for the rest of this transaction so no
+            // concurrent writer can insert an unpublished row between the count
+            // below and the drop the migration performs.
+            transaction
+                .batch_execute("LOCK TABLE scheduling_audit_outbox IN ACCESS EXCLUSIVE MODE")
+                .await?;
             let rows: i64 = transaction
                 .query_one(
                     "SELECT count(*) FROM scheduling_audit_outbox WHERE published_at IS NULL",
