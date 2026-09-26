@@ -98,8 +98,15 @@ and its `response` entry after the transaction commits or rolls back; a
 permission refused before the transaction is one `response` entry. Audit fails
 closed: a refused `request` entry opens no transaction, and a refused `response`
 entry for a committed change answers `service.unavailable` with the change
-committed. `/readyz` reports unavailable while the destination refuses writes.
-An expired hold writes its history entry as `system` and no audit entry.
+committed. One case is best effort instead: a refusal the ledger itself
+decides (an admission refusal, the hold ceiling, a lapsed grant, a stale
+observed revision, or a cancellation past its cutoff), and a permission
+mismatch refused before the transaction opens, still reach the caller when
+their `response` entry cannot be written; the write failure is only logged,
+and the journal is left holding a `request` entry with no paired `response`,
+or, for a permission mismatch, no entry at all. `/readyz` reports unavailable
+while the destination refuses writes. An expired hold writes its history entry
+as `system` and no audit entry.
 
 `destinations` is optional. `destinations.reminders` is the one place due
 reminder intents are delivered, as CloudEvents 1.0 events over HTTPS POST with

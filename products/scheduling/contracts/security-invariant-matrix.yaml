@@ -253,15 +253,19 @@ invariants:
       refuses. A permission mismatch the service refuses before that
       transaction opens is one response entry. A refused commitment is one
       the ledger decided: an admission refusal, the hold ceiling, a lapsed
-      grant, a stale observed revision, or a cancellation past its cutoff. A
-      failed transaction and a replaced environment decided nothing and write
-      no response, and an idempotency key refusal is carried by the attempt
-      receipt instead. The match that selects between them is exhaustive, so a
-      new outcome states its side. A replayed receipt, including one a
-      concurrent identical request won, is answered only after its own
-      response entry is accepted, and that entry records the decision the
-      receipt carries: allowed for a success, denied with the original reason
-      for a refusal.
+      grant, a stale observed revision, or a cancellation past its cutoff.
+      Both that refusal and a permission mismatch write their response entry
+      best effort: the failure is only logged, the caller still receives the
+      refusal already decided, and the journal is left holding a request
+      entry with no paired response, or, for a permission mismatch, no entry
+      at all. A failed transaction and a replaced environment decided nothing
+      and write no response, and an idempotency key refusal is carried by the
+      attempt receipt instead. The match that selects between them is
+      exhaustive, so a new outcome states its side. A replayed receipt,
+      including one a concurrent identical request won, is answered only
+      after its own response entry is accepted, and that entry records the
+      decision the receipt carries: allowed for a success, denied with the
+      original reason for a refusal.
     refusal: >-
       Record authorization.allowed or authorization.refused as an audit reason,
       never as a problem code, and never carry the caller's raw identifier. A
