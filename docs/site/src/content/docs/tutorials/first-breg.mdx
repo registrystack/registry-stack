@@ -516,7 +516,7 @@ If it fails, the registry is stopped: start it again with the command from
 | `bregctl dev` fails before it reports `ready` | Read the refusal: it names the check that failed, such as `test.step.failed` with the journey step's own message. Otherwise check that Docker is running. The private logs are under `tutorial-work/project/.breg/dev/logs/`; do not share the credential or secret files beside them. |
 | A create returns `409` with code `idempotency.conflict` | The key was already used with a different body. Reuse the exact body, or choose a new key for a new write. |
 | A create returns `409` with code `mutation.conflict` | The code is already taken; codes are unique in this project. Choose a new code and a new key. |
-| You opened a fresh terminal | Run the `registry_url` and `credentials` assignments from [Get a token](#get-a-token) again. The header file and `tutorial-work` directory are still there. |
+| You opened a fresh terminal | Run the `registry_url` and `authorization_header` assignments from [Get a token](#get-a-token) again. The header file and `tutorial-work` directory are still there. |
 
 ## Next
 
