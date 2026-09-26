@@ -12,6 +12,11 @@
 //! candidate-package inspection, still accepts it for predecessor inspection,
 //! and still runs its Rhai action handler.
 //!
+//! The frozen directory predates the shared package envelope and carries no
+//! `SHA256SUMS`. The loading tests publish an envelope over a temporary copy
+//! first, the step an operator takes for such a package; whether an
+//! envelope-less signed predecessor should load as is stays open in #1633.
+//!
 //! To deliberately re-freeze the fixture after an approved package-format
 //! change, delete the directory and run the ignored writer test:
 //!
@@ -34,6 +39,7 @@ use registry_breg::package::{
 };
 use registry_breg::CompiledRegistry;
 use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_config::package::{write_sum_file, PackageLimits as SharedPackageLimits};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
@@ -53,6 +59,45 @@ fn acceptance_root() -> PathBuf {
 
 fn frozen_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/person-registration-rhai-package")
+}
+
+/// A temporary copy of the frozen package with the shared envelope published
+/// over it, leaving the frozen bytes untouched.
+fn enveloped_frozen_copy() -> tempfile::TempDir {
+    let copy = tempfile::Builder::new()
+        .prefix("registry-frozen-package-")
+        .tempdir_in(
+            std::env::temp_dir()
+                .canonicalize()
+                .expect("canonical temporary root"),
+        )
+        .expect("temporary package directory");
+    copy_tree(&frozen_root(), copy.path());
+    write_sum_file(
+        copy.path(),
+        None,
+        &SharedPackageLimits::default(),
+        "bregctl package",
+    )
+    .expect("the shared envelope publishes over the frozen package copy");
+    copy
+}
+
+fn copy_tree(source: &Path, destination: &Path) {
+    for entry in fs::read_dir(source).expect("frozen package directory reads") {
+        let entry = entry.expect("frozen package entry reads");
+        let target = destination.join(entry.file_name());
+        if entry
+            .file_type()
+            .expect("frozen package entry type")
+            .is_dir()
+        {
+            fs::create_dir(&target).expect("package copy directory creates");
+            copy_tree(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), &target).expect("package file copies");
+        }
+    }
 }
 
 /// The acceptance project bound to the unsigned local deployment identity the
@@ -233,8 +278,9 @@ fn frozen_package_bytes_match_the_current_compiler() {
 
 #[test]
 fn frozen_package_loads_and_runs_its_rhai_handler() {
+    let package = enveloped_frozen_copy();
     let inspected =
-        inspect_package_integrity(&frozen_root()).expect("the frozen package still verifies");
+        inspect_package_integrity(package.path()).expect("the frozen package still verifies");
     let action = register_person(inspected.registry());
     let handler = action
         .handler
@@ -282,7 +328,8 @@ fn frozen_package_loads_and_runs_its_rhai_handler() {
 
 #[test]
 fn frozen_package_remains_a_readable_predecessor() {
-    let inspected = inspect_package_integrity(&frozen_root())
+    let package = enveloped_frozen_copy();
+    let inspected = inspect_package_integrity(package.path())
         .expect("the frozen package revision is derived before predecessor binding");
     let package_revision = inspected.package_revision().to_owned();
     let context = PredecessorPackageContext {
@@ -294,7 +341,7 @@ fn frozen_package_remains_a_readable_predecessor() {
         expected_package_revision: &package_revision,
         expected_sequence: 1,
     };
-    let predecessor = load_predecessor_package(&frozen_root(), &context)
+    let predecessor = load_predecessor_package(package.path(), &context)
         .expect("the frozen package is still accepted for predecessor inspection");
     let baseline = predecessor.migration_baseline();
     assert_eq!(baseline.package_revision, package_revision);
