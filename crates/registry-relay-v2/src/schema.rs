@@ -85,4 +85,36 @@ mod tests {
             assert_eq!(value["additionalProperties"], false);
         }
     }
+
+    #[test]
+    fn runtime_schema_states_the_audit_destination_rules_startup_enforces() {
+        let runtime: Value =
+            serde_json::from_str(&documents().unwrap()[RUNTIME_SCHEMA_FILE]).unwrap();
+        let audit = serde_json::json!({
+            "$defs": runtime["$defs"],
+            "$ref": "#/$defs/AuditRuntime"
+        });
+        let validator = jsonschema::JSONSchema::compile(&audit).unwrap();
+        for accepted in [
+            serde_json::json!({"path": "audit.jsonl"}),
+            serde_json::json!({"destination": "file", "path": "/audit.jsonl",
+                "rotateBytes": 1_048_576, "retainDays": 1}),
+            serde_json::json!({"destination": "stdout"}),
+            serde_json::json!({"destination": "stdout", "path": null}),
+        ] {
+            assert!(validator.is_valid(&accepted), "{accepted}");
+        }
+        for refused in [
+            serde_json::json!({}),
+            serde_json::json!({"path": null}),
+            serde_json::json!({"path": " "}),
+            serde_json::json!({"path": "audit.jsonl", "rotateBytes": 0}),
+            serde_json::json!({"path": "audit.jsonl", "retainDays": 0}),
+            serde_json::json!({"destination": "stdout", "path": "audit.jsonl"}),
+            serde_json::json!({"destination": "stdout", "rotateBytes": 1_048_576}),
+            serde_json::json!({"destination": "stdout", "retainDays": 1}),
+        ] {
+            assert!(!validator.is_valid(&refused), "{refused}");
+        }
+    }
 }

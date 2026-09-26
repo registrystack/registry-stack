@@ -1532,6 +1532,7 @@ fn canonical_trusted_issuer(raw: &str, allow_supervised_loopback: bool) -> Optio
 /// product shares. A relative `path` is resolved against the runtime file's
 /// directory at startup.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(transform = audit_runtime_schema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuditRuntime {
@@ -1561,6 +1562,65 @@ impl AuditRuntime {
         AuditDestination::from_settings(self.destination, path, self.rotate_bytes, self.retain_days)
             .map(|_| ())
     }
+}
+
+/// State the rules `AuditRuntime::check_shape` enforces: the `stdout`
+/// destination refuses every file setting, the `file` destination needs a
+/// non-blank path, and the rotation and retention settings stay in bounds.
+/// A relative path is accepted because startup resolves it.
+#[cfg(feature = "schema")]
+fn audit_runtime_schema(schema: &mut schemars::Schema) {
+    let set = |name: &str| {
+        serde_json::json!({
+            "required": [name],
+            "properties": {name: {"not": {"type": "null"}}}
+        })
+    };
+    if let Some(properties) = schema
+        .get_mut("properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for (name, minimum, maximum) in [
+            (
+                "rotateBytes",
+                registry_platform_audit::MIN_AUDIT_ROTATE_BYTES,
+                u64::from(u32::MAX),
+            ),
+            (
+                "retainDays",
+                1,
+                u64::from(registry_platform_audit::MAX_AUDIT_RETAIN_DAYS),
+            ),
+        ] {
+            if let Some(property) = properties
+                .get_mut(name)
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                property.insert("minimum".to_owned(), minimum.into());
+                property.insert("maximum".to_owned(), maximum.into());
+            }
+        }
+    }
+    schema.insert(
+        "if".to_owned(),
+        serde_json::json!({
+            "required": ["destination"],
+            "properties": {"destination": {"const": "stdout"}}
+        }),
+    );
+    schema.insert(
+        "then".to_owned(),
+        serde_json::json!({
+            "not": {"anyOf": [set("path"), set("rotateBytes"), set("retainDays")]}
+        }),
+    );
+    schema.insert(
+        "else".to_owned(),
+        serde_json::json!({
+            "required": ["path"],
+            "properties": {"path": {"type": "string", "pattern": "\\S"}}
+        }),
+    );
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
