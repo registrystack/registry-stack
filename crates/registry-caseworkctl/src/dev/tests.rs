@@ -44,8 +44,9 @@ fn standalone(root: &Path) -> PathBuf {
 }
 
 /// Only a hung child reaches this: each wait ends as soon as its event
-/// happens, so a starved runner makes a test slower, never wrong.
-const TEST_EVENT_BOUND: Duration = Duration::from_secs(60);
+/// happens, so a starved runner makes a test slower, never wrong. Matches
+/// the outer bound the language-server and evidencectl process tests use.
+const TEST_EVENT_BOUND: Duration = Duration::from_secs(120);
 
 /// Polls `condition` until it holds or [`TEST_EVENT_BOUND`] passes.
 fn eventually(mut condition: impl FnMut() -> bool) -> bool {
