@@ -3112,6 +3112,7 @@ async fn assert_patch_preserved_omitted_field(
 }
 
 async fn assert_journals_are_minimized_and_paired(database: &TestDatabase) {
+    database.assert_every_audit_request_answered_once();
     let ordered = database.audit_entries();
     for entry in &ordered {
         let expected = if entry["record"]["phase"] == "attempt" {
