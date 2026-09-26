@@ -977,6 +977,13 @@ impl AppendRequest {
             .map_err(AuditError::Io)?;
         self.sync_active()?;
         let fingerprint = file_fingerprint(&self.active)?;
+        // A length other than the bytes this writer holds means another
+        // process wrote to or truncated the file during the append.
+        if fingerprint.length != current {
+            return Err(AuditError::Io(io::Error::other(
+                "audit file changed outside the writer",
+            )));
+        }
         validate_pinned(&self.path, &self.active, fingerprint)?;
         validate_pinned(&self.lock_path, &self.writer_lock, self.lock_fingerprint)?;
         Ok(AppendResult {
@@ -1638,6 +1645,25 @@ mod tests {
         assert_eq!(first.to_string(), "audit destination is unavailable");
         let second = writer.append(request("req-2")).await.expect_err("refused");
         assert_eq!(second.reason(), AuditUnavailableReason::Stopped);
+        assert!(!writer.ready().await);
+    }
+
+    #[tokio::test]
+    async fn a_change_during_the_write_refuses_the_append() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        let hook_path = path.clone();
+        let hook: SyncHook = Arc::new(move || {
+            fs::OpenOptions::new()
+                .append(true)
+                .open(&hook_path)
+                .and_then(|mut file| file.write_all(b"{}\n"))
+        });
+        let writer = open_with_hook(destination, hook).await;
+
+        let refused = writer.append(request("req-1")).await.expect_err("refused");
+        assert_eq!(refused.reason(), AuditUnavailableReason::WriteFailed);
         assert!(!writer.ready().await);
     }
 
