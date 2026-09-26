@@ -33,9 +33,9 @@
 // Exit status: 0 when the journey and every expectation pass, 1 when either
 // fails, 2 for a usage, annotation, or toolset error, 130 when interrupted.
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -103,13 +103,20 @@ function printPlan(steps, checkout) {
 // terminal, so tools print no colour codes. An edit runs apply-edit.mjs from
 // the shell's current directory, where the reader would open the file, and a
 // file excerpt copies its file from there.
+//
+// The file `current` names what is running: `page N` before bash parses a
+// page, then the index of each block as it starts, so a failure is blamed on
+// the block that was running, or on a page bash could not parse. A page that
+// reaches its end leaves `page-N.done`; one whose fence ran `exit` does not,
+// and the journey stops there.
 async function journeyScript(pages, outDir) {
   const lines = ['set -euo pipefail', "trap 'exit 130' HUP INT TERM", `OUT=${quote(outDir)}`];
   let index = 0;
-  for (const steps of pages) {
-    lines.push('(');
+  for (const [pageIndex, steps] of pages.entries()) {
+    lines.push(`printf 'page %s\n' ${pageIndex} >"$OUT/current"`, '(');
     for (const step of steps) {
       const out = `"$OUT/${outName(index)}"`;
+      lines.push(`printf '%s\n' ${index} >"$OUT/current"`);
       if (step.kind === 'skip') {
         lines.push(`printf '%s\\n' ${quote(`skip  ${where(step)}: ${step.reason}`)}`);
       } else if (step.kind === 'edit') {
@@ -140,29 +147,57 @@ async function journeyScript(pages, outDir) {
       }
       index += 1;
     }
-    lines.push(')');
+    lines.push(`: >"$OUT/page-${pageIndex}.done"`, ')', `[[ -e "$OUT/page-${pageIndex}.done" ]] || exit 0`);
   }
   lines.push('printf "\\n" >"$OUT/complete"');
   return `${lines.join('\n')}\n`;
 }
 
-function runScript(scriptPath, readerDir, binDir) {
+// The journey runs in its own process group, so that an interrupt reaches the
+// command a fence is running and not only the shell waiting for it, which
+// would run its trap only once that command ended. onSpawn receives a
+// function that sends a signal to the whole group.
+function runScript(scriptPath, readerDir, binDir, onSpawn) {
   const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
   // A reader has no CARGO_TARGET_DIR pointing into this checkout.
   delete env.CARGO_TARGET_DIR;
   return new Promise((resolvePromise, reject) => {
-    const child = spawn('bash', [scriptPath], { cwd: readerDir, env, stdio: ['ignore', 'inherit', 'inherit'] });
+    const child = spawn('bash', [scriptPath], { cwd: readerDir, env, stdio: ['ignore', 'inherit', 'inherit'], detached: true });
+    onSpawn((signal) => {
+      if (child.exitCode === null && child.signalCode === null) process.kill(-child.pid, signal);
+    });
     child.on('error', reject);
     child.on('close', (code, signal) => resolvePromise(signal ? 130 : code));
   });
 }
 
-// The fence that stopped the journey is the last one whose output file exists.
-async function stoppedAt(steps, outDir) {
-  const names = (await readdir(outDir)).filter((name) => name.endsWith('.out')).sort();
-  if (names.length === 0) return undefined;
-  const last = names.at(-1);
-  return { step: steps[Number.parseInt(last, 10)], output: await readFile(join(outDir, last), 'utf8') };
+// What was running when the journey stopped: a block, with what its output
+// file holds so far, or a page bash never started because it could not parse
+// it. Undefined when nothing started.
+async function stoppedAt(pages, outDir) {
+  let current;
+  try {
+    current = (await readFile(join(outDir, 'current'), 'utf8')).trim();
+  } catch (error) {
+    if (error.code === 'ENOENT') return undefined;
+    throw error;
+  }
+  if (current.startsWith('page ')) {
+    const steps = pages[Number.parseInt(current.slice('page '.length), 10)];
+    return { what: steps[0]?.page ?? 'the page', before: true };
+  }
+  const index = Number.parseInt(current, 10);
+  const step = pages.flat()[index];
+  const out = join(outDir, outName(index));
+  return { what: `${blockName(step)} at ${where(step)}`, output: existsSync(out) ? await readFile(out, 'utf8') : '' };
+}
+
+// Make everything under root writable and readable, so that a directory the
+// journey locked cannot stop the teardown from finding sessions or the work
+// directory from being removed.
+function unlock(root) {
+  const result = spawnSync('chmod', ['-R', 'u+rwX', root], { encoding: 'utf8' });
+  if (result.status !== 0) console.error(`could not make ${root} writable:\n${result.stderr}`);
 }
 
 // Check every test-expect and test-excerpt block, in page order, against the
@@ -201,10 +236,13 @@ async function replay(pages, toolset, checkout) {
   await Promise.all([mkdir(readerDir), mkdir(outDir), mkdir(binDir)]);
 
   let interrupted = false;
-  const onSignal = () => {
+  let signalJourney = () => {};
+  const onSignal = (signal) => {
     interrupted = true;
+    signalJourney(signal);
   };
-  for (const signal of ['SIGHUP', 'SIGINT', 'SIGTERM']) process.on(signal, onSignal);
+  const signals = ['SIGHUP', 'SIGINT', 'SIGTERM'];
+  for (const signal of signals) process.on(signal, onSignal);
 
   let status = 1;
   let prepared = false;
@@ -214,16 +252,22 @@ async function replay(pages, toolset, checkout) {
     if (checkout) await copyCheckout(REPO_ROOT, readerDir);
     const scriptPath = join(workRoot, 'journey.sh');
     await writeFile(scriptPath, await journeyScript(pages, outDir));
-    const code = await runScript(scriptPath, readerDir, binDir);
+    const code = await runScript(scriptPath, readerDir, binDir, (send) => {
+      signalJourney = send;
+    });
     if (interrupted || code === 130) {
-      console.log('\ntutorial interrupted');
+      // The running fence never reached its `cat`, so what it printed is shown here.
+      const stop = await stoppedAt(pages, outDir);
+      if (stop?.output) process.stdout.write(stop.output);
+      console.log(`\ntutorial interrupted${stop ? ` during ${stop.what}` : ''}`);
       status = 130;
     } else if (code !== 0 || !existsSync(join(outDir, 'complete'))) {
-      const stop = await stoppedAt(steps, outDir);
+      const stop = await stoppedAt(pages, outDir);
       // The failing fence never reached its `cat`, so its output is shown here.
-      if (stop) process.stdout.write(stop.output);
-      const what = stop ? `${blockName(stop.step)} at ${where(stop.step)}` : 'the journey';
-      console.log(`\n${what} ${code !== 0 ? `failed with exit status ${code}` : 'ended the shell early'}`);
+      if (stop?.output) process.stdout.write(stop.output);
+      const what = stop?.what ?? 'the journey';
+      const how = code !== 0 ? `failed with exit status ${code}` : 'ended the shell early';
+      console.log(`\n${what} ${how}${stop?.before ? ' before its first block ran' : ''}`);
       console.log('tutorial FAIL');
     } else {
       console.log('');
@@ -236,11 +280,18 @@ async function replay(pages, toolset, checkout) {
     console.error(error.message);
     status = 2;
   } finally {
-    const stoppedAll = prepared ? await toolset.teardown({ readerDir, binDir }) : true;
-    if (stoppedAll) {
-      await rm(workRoot, { recursive: true, force: true });
-    } else {
-      console.error(`keeping ${workRoot}: stop the sessions it holds, then remove it`);
+    for (const signal of signals) process.off(signal, onSignal);
+    try {
+      unlock(workRoot);
+      const stoppedAll = prepared ? await toolset.teardown({ readerDir, binDir }) : true;
+      if (stoppedAll) {
+        await rm(workRoot, { recursive: true, force: true });
+      } else {
+        console.error(`keeping ${workRoot}: stop the sessions it holds, then remove it`);
+        if (status === 0) status = 1;
+      }
+    } catch (error) {
+      console.error(`cleaning up ${workRoot} failed: ${error.message}`);
       if (status === 0) status = 1;
     }
   }
@@ -277,7 +328,7 @@ async function readPages(paths) {
 
 async function runGate(toolsetName, dryRun) {
   const toolset = TOOLSETS[toolsetName];
-  const { journeys, checkout, skipped, errors } = await planGate(DOCS_ROOT, toolsetName, toolset.commands);
+  const { journeys, checkout, skipped, errors } = await planGate(DOCS_ROOT, toolsetName, toolset.commands, Object.keys(TOOLSETS));
   for (const error of errors) console.error(error);
   if (errors.length > 0) return 2;
   const planned = [];

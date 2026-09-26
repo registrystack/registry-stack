@@ -45,10 +45,17 @@ async function readPages(docsRoot) {
     }
     for (const name of names.filter((candidate) => candidate.endsWith('.mdx')).sort()) {
       const text = await readFile(join(docsRoot, section, name), 'utf8');
-      const commands = readJourney(text)
-        .steps.filter((step) => step.code !== undefined)
-        .map((step) => step.code);
-      pages.push({ slug: `${section}/${name.slice(0, -'.mdx'.length)}`, declaration: frontmatter(text).tutorial_test, commands });
+      const slug = `${section}/${name.slice(0, -'.mdx'.length)}`;
+      let declaration;
+      try {
+        declaration = frontmatter(text).tutorial_test;
+      } catch (error) {
+        pages.push({ slug, unreadable: error.message.split('\n')[0] });
+        continue;
+      }
+      const { steps, errors } = readJourney(text);
+      const commands = steps.filter((step) => step.code !== undefined).map((step) => step.code);
+      pages.push({ slug, declaration, commands, annotationErrors: errors });
     }
   }
   return pages;
@@ -58,14 +65,20 @@ async function readPages(docsRoot) {
 // slugs, each replayed in order in one reader directory; checkout names the
 // pages whose journey starts in a copy of the checkout; skipped pages carry
 // their reason; errors are sentences naming a page, and a gate with any runs
-// nothing.
-export async function planGate(docsRoot, toolset, commandPattern) {
+// nothing. A page that names a toolset outside knownToolsets is an error, so a
+// misspelt name cannot take a page out of every gate, and a page of this
+// toolset has its annotations checked even when it is skipped.
+export async function planGate(docsRoot, toolset, commandPattern, knownToolsets) {
   const errors = [];
   const skipped = [];
   const replayed = new Map();
   const skippedSlugs = new Set();
   const checkout = new Set();
-  for (const { slug, declaration, commands } of await readPages(docsRoot)) {
+  for (const { slug, unreadable, declaration, commands, annotationErrors } of await readPages(docsRoot)) {
+    if (unreadable !== undefined) {
+      errors.push(`${slug}.mdx: its frontmatter is not YAML: ${unreadable}`);
+      continue;
+    }
     const runs = commands.some((code) => commandPattern.test(code));
     if (declaration === undefined) {
       if (runs) {
@@ -85,7 +98,13 @@ export async function planGate(docsRoot, toolset, commandPattern) {
       errors.push(`${slug}.mdx: tutorial_test needs a toolset`);
       continue;
     }
+    if (!knownToolsets.includes(declaration.toolset)) {
+      errors.push(`${slug}.mdx: unknown tutorial_test toolset ${declaration.toolset} (expected ${knownToolsets.join(' or ')})`);
+      continue;
+    }
     if (declaration.toolset !== toolset || unknown.length > 0) continue;
+    for (const error of annotationErrors) errors.push(`${slug}.mdx: ${error}`);
+    if (annotationErrors.length > 0) continue;
     if (!runs) {
       errors.push(`${slug}.mdx declares toolset ${toolset} but runs no ${toolset} commands; remove its tutorial_test`);
       continue;
