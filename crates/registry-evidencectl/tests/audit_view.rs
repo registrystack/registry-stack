@@ -10,9 +10,9 @@ use serde_json::{json, Value};
 const PSEUDONYM: &str =
     "hmac-sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const FAILURE: &str = "error[evidence.audit.inspection-failed] local audit history $: \
-    Evidence could not verify the stopped local audit history.\n  \
+    Evidence could not read the stopped local audit history.\n  \
     next: Stop the local session with evidencectl dev stop and rerun audit show; \
-    if it is already stopped, its retained audit history did not verify.\n";
+    if it is already stopped, its retained audit history could not be read.\n";
 
 #[test]
 fn audit_help_is_nested_required_and_hides_test_seams() {
@@ -836,11 +836,11 @@ fn damaged_retained_session_state_is_not_reported_as_no_session() {
     );
 }
 
-/// A stopped session that answered no request leaves a verified chain with
-/// no operation. The core reports that with its own exit status, and the
-/// refusal names it instead of the closed inspection failure.
+/// A stopped session that answered no request leaves a read local audit
+/// history with no operation. The core reports that with its own exit
+/// status, and the refusal names it instead of the closed inspection failure.
 #[test]
-fn a_verified_history_without_an_operation_is_named() {
+fn a_read_history_without_an_operation_is_named() {
     let fixture = Fixture::new();
     fs::write(fixture.evidence.with_extension("empty"), b"").expect("empty marker");
 

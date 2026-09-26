@@ -16,8 +16,8 @@ use crate::{dev, OutputFormat};
 
 const CORE_VIEW_SCHEMA: &str = "registry.evidence.local-audit-operation/v1";
 const MAX_CORE_OUTPUT_BYTES: usize = 256 * 1024;
-/// The core's exit status, with nothing written, for a stopped chain that
-/// verified and retains no operation.
+/// The core's exit status, with nothing written, for a stopped local audit
+/// history that was read and retains no operation.
 const CORE_NO_OPERATION_EXIT_CODE: i32 = 3;
 
 #[derive(Debug, Subcommand)]
@@ -34,7 +34,7 @@ pub enum AuditCommand {
         .args(["last_operation"])
 ))]
 pub struct ShowArgs {
-    /// Show the last verified local operation after the service has stopped.
+    /// Show the last local operation recorded in the stopped local audit history.
     #[arg(long)]
     last_operation: bool,
 
@@ -373,7 +373,7 @@ fn no_operation() -> anyhow::Error {
     refusal(
         "evidence.audit.no-operation",
         "local audit history",
-        "The stopped local audit history verified and records no operation.",
+        "The stopped local audit history was read and records no operation.",
         "Send a request to a local session started with evidencectl dev start, run evidencectl dev stop, then rerun audit show.",
     )
 }
@@ -384,8 +384,8 @@ fn failed() -> anyhow::Error {
     refusal(
         "evidence.audit.inspection-failed",
         "local audit history",
-        "Evidence could not verify the stopped local audit history.",
-        "Stop the local session with evidencectl dev stop and rerun audit show; if it is already stopped, its retained audit history did not verify.",
+        "Evidence could not read the stopped local audit history.",
+        "Stop the local session with evidencectl dev stop and rerun audit show; if it is already stopped, its retained audit history could not be read.",
     )
 }
 
