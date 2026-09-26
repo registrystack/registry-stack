@@ -812,11 +812,21 @@ async fn open_registry_audit(config: &RuntimeConfig) -> Result<RegistryAudit> {
 /// Resolve the keyed reference profile and check, without opening it, that a
 /// writer could open the configured destination. The returned handle refuses
 /// every entry.
+///
+/// This also checks the `bregctl` companion destination operator commands
+/// append to beside the runtime (see [`crate::audit::RegistryAudit::open_companion`]):
+/// a torn final entry or an unwritable directory there blocks an operator
+/// command exactly as one in the runtime's own destination would, so doctor
+/// must refuse it too instead of reporting a clean audit dependency.
 fn check_registry_audit(config: &RuntimeConfig) -> Result<RegistryAudit> {
     let profile = config.audit_profile().map_err(|_| StartupError::Audit)?;
-    config
-        .audit()
-        .destination()
+    let destination = config.audit().destination();
+    destination
+        .check_writable()
+        .map_err(|_| StartupError::Audit)?;
+    destination
+        .for_process(crate::audit::COMPANION_PROCESS_ROLE)
+        .map_err(|_| StartupError::Audit)?
         .check_writable()
         .map_err(|_| StartupError::Audit)?;
     Ok(RegistryAudit::new(
