@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
@@ -140,6 +141,50 @@ test('the harness sets no shell variable a page could use or clobber', async () 
     assert.equal(code, 0, output);
     assert.match(output, /^harness:$/mu);
     assert.match(output, /tutorial PASS/u);
+  });
+});
+
+test('the casework toolset serves all four binaries and stops Casework sessions before BReg ones', async () => {
+  const body =
+    '## Start\n\n' +
+    fence(
+      'sh',
+      'casework --version\nbreg --version\ncaseworkctl dev work/casework\nbregctl dev work/registry\n' +
+        'mkdir -p work/casework/.casework/dev work/registry/.breg/dev\n' +
+        'echo {} >work/casework/.casework/dev/state.json\necho {} >work/registry/.breg/dev/state.json',
+    ) +
+    fence('sh', 'false');
+  await withPage(body, async ({ dir, page }) => {
+    const calls = join(dir, 'calls.log');
+    for (const name of ['casework', 'caseworkctl', 'breg', 'bregctl']) {
+      await writeFile(join(dir, name), `#!/bin/sh\nprintf '%s %s\\n' ${name} "$*" >>'${calls}'\n`);
+      await chmod(join(dir, name), 0o755);
+    }
+    const { code, output } = await run(['--toolset', 'casework', page], {
+      CASEWORK_BIN: join(dir, 'casework'),
+      CASEWORKCTL_BIN: join(dir, 'caseworkctl'),
+      BREG_BIN: join(dir, 'breg'),
+      BREGCTL_BIN: join(dir, 'bregctl'),
+    });
+    assert.equal(code, 1, output);
+    const log = (await readFile(calls, 'utf8')).trim().split('\n');
+    assert.deepEqual(log.slice(0, 4), ['casework --version', 'breg --version', 'caseworkctl dev work/casework', 'bregctl dev work/registry']);
+    assert.match(log[4], /^caseworkctl dev stop \/\S+\/work\/casework --remove$/u);
+    assert.match(log[5], /^bregctl dev stop \/\S+\/work\/registry --remove$/u);
+    assert.equal(log.length, 6);
+  });
+});
+
+test('the casework toolset takes all four binaries or none', async () => {
+  await withPage('## A\n\n' + fence('sh', 'true'), async ({ dir, page }) => {
+    const { code, output } = await run(['--toolset', 'casework', page], {
+      CASEWORK_BIN: join(dir, 'casework'),
+      CASEWORKCTL_BIN: '',
+      BREG_BIN: '',
+      BREGCTL_BIN: '',
+    });
+    assert.equal(code, 2, output);
+    assert.match(output, /set CASEWORK_BIN, CASEWORKCTL_BIN, BREG_BIN, and BREGCTL_BIN, or none of them to build from source/u);
   });
 });
 
@@ -409,7 +454,7 @@ test('a gate stops at the first toolset error instead of preparing it for every 
   await withGateDocs(pages, async (env) => {
     const { code, output } = await run(['--gate', 'breg'], { ...env, BREGCTL_BIN: '' });
     assert.equal(code, 2, output);
-    assert.equal(output.match(/set both BREG_BIN and BREGCTL_BIN/gu)?.length, 1, output);
+    assert.equal(output.match(/set BREG_BIN and BREGCTL_BIN, or neither/gu)?.length, 1, output);
     assert.doesNotMatch(output, /journey tutorials\/two/u);
     assert.doesNotMatch(output, /gate FAIL/u);
   });
@@ -426,5 +471,190 @@ test('a gate dry run builds nothing and starts nothing', async () => {
     const { code, output } = await run(['--gate', 'breg', '--dry-run'], { ...env, BREG_BIN: '', BREGCTL_BIN: '', PATH: `${bin}:${process.env.PATH}` });
     assert.equal(code, 0, output);
     assert.equal(existsSync(join(bin, 'calls')), false, output);
+  });
+});
+
+// A loopback port nothing listens on right now.
+async function freePort() {
+  const server = createServer();
+  await new Promise((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+  const { port } = server.address();
+  await new Promise((resolvePromise) => server.close(resolvePromise));
+  return port;
+}
+
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error.code === 'ESRCH') return false;
+    throw error;
+  }
+};
+
+test('a test-file block writes the whole file where the reader stands', async () => {
+  const body =
+    '## Write\n\n' +
+    fence('sh', 'mkdir -p work/questions\ncd work\necho stale >questions/q.yaml') +
+    'Open `questions/q.yaml` and add:\n\n' +
+    fence('yaml title="questions/q.yaml" test-file', 'id: q\npurpose: check') +
+    fence('sh', 'cat questions/q.yaml') +
+    fence('text test-expect', 'id: q\npurpose: check');
+  await withPage(body, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 0, output);
+    assert.match(output, /wrote questions\/q\.yaml/u);
+    assert.match(output, /tutorial PASS/u);
+    const plan = await run(['--dry-run', page]);
+    assert.match(plan.output, /file  line 15 \(Write\): questions\/q\.yaml/u);
+  });
+});
+
+test('a test-file block whose directory does not exist stops the journey', async () => {
+  const body = '## Write\n\n' + fence('yaml title="missing/q.yaml" test-file', 'id: q') + fence('sh', 'echo never');
+  await withPage(body, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 1, output);
+    assert.match(output, /the file at line 7 \(Write\) failed/u);
+    assert.doesNotMatch(output, /^never$/mu);
+  });
+});
+
+test('a background fence runs until the next one starts or the page ends, and test-cwd says where a fence runs', async () => {
+  const port = await freePort();
+  const url = `http://127.0.0.1:${port}/`;
+  const serve = `python3 -m http.server ${port} --bind 127.0.0.1`;
+  const body =
+    '## Serve\n\n' +
+    fence('sh', 'mkdir -p site/one site/two other\necho first >site/one/index.html\necho second >site/two/index.html\ncd other') +
+    fence(`sh test-background="${url}" test-cwd="site/one"`, serve) +
+    fence('sh', `curl -fsS ${url}\npwd | sed 's|.*/||'`) +
+    fence('text test-expect', 'first\nother') +
+    fence(`sh test-background="${url}" test-cwd="site/two"`, serve) +
+    fence('sh test-cwd="site"', `curl -fsS ${url}\npwd | sed 's|.*/||'`) +
+    fence('text test-expect', 'second\nsite');
+  await withPage(body, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 0, output);
+    assert.match(output, /tutorial PASS/u);
+    await assert.rejects(fetch(url), 'the page end must stop the background fence');
+    const plan = await run(['--dry-run', page]);
+    assert.match(plan.output, new RegExp(`run   line 14 \\(Serve\\): ${serve} \\(in site/one, in the background until ${url} answers\\)`, 'u'));
+  });
+});
+
+test('a background fence that ends before it is ready stops the journey and shows what it printed', async () => {
+  const port = await freePort();
+  const body = '## Serve\n\n' + fence(`sh test-background="http://127.0.0.1:${port}/"`, 'echo "port taken" >&2\nfalse') + fence('sh', 'echo never');
+  await withPage(body, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 1, output);
+    assert.match(output, /port taken/u);
+    assert.match(output, /the sh fence at line 7 \(Serve\) failed/u);
+    assert.doesNotMatch(output, /^never$/mu);
+  });
+});
+
+test('an expectation on a background fence checks what it printed while it ran', async () => {
+  const port = await freePort();
+  const url = `http://127.0.0.1:${port}/`;
+  const body =
+    '## Serve\n\n' +
+    fence(`sh test-background="${url}"`, `echo "ready on ${port}"\nexec python3 -m http.server ${port} --bind 127.0.0.1 2>/dev/null`) +
+    fence('text test-expect', 'ready on <port>') +
+    fence('sh', `curl -fsS -o /dev/null ${url}`);
+  await withPage(body, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 0, output);
+    assert.match(output, /expect line 12: ok/u);
+  });
+});
+
+test('a journey that ends, passing or failing, leaves no process it started running', async () => {
+  const port = await freePort();
+  const body = (pids, last) =>
+    '## Start\n\n' +
+    fence('sh', `sleep 300 &\necho "$!" >>'${pids}'`) +
+    fence(`sh test-background="http://127.0.0.1:${port}/"`, `echo "$BASHPID" >>'${pids}'\nexec python3 -m http.server ${port} --bind 127.0.0.1`) +
+    fence('sh', last);
+  for (const [last, expected] of [['true', 0], ['false', 1]]) {
+    await withPage('', async ({ dir, page }) => {
+      const pids = join(dir, 'pids');
+      await writeFile(page, `---\ntitle: t\n---\n\n${body(pids, last)}`);
+      const { code, output } = await run([page]);
+      assert.equal(code, expected, output);
+      const started = (await readFile(pids, 'utf8')).trim().split('\n').map(Number);
+      assert.equal(started.length, 2, output);
+      for (const pid of started) assert.equal(alive(pid), false, `process ${pid} outlived the journey\n${output}`);
+    });
+  }
+});
+
+// A wheel holding one package with no dependencies, as the assembled client is.
+async function fakeWheel(dir) {
+  const wheel = join(dir, 'client.whl');
+  await execFileAsync('python3', [
+    '-c',
+    'import sys, zipfile\nwith zipfile.ZipFile(sys.argv[1], "w") as z: z.writestr("tutorial_fake_client/__init__.py", "NAME = \\"unpacked\\"\\n")',
+    wheel,
+  ]);
+  return wheel;
+}
+
+async function fakeEvidenceBinaries(dir, calls) {
+  const env = {};
+  for (const [name, variable] of [
+    ['evidence', 'EVIDENCE_BIN'],
+    ['evidencectl', 'EVIDENCECTL_BIN'],
+    ['evidence-oid4vci', 'EVIDENCE_OID4VCI_BIN'],
+  ]) {
+    await writeFile(join(dir, name), `#!/bin/sh\nprintf '%s %s\\n' ${name} "$*" >>'${calls}'\n`);
+    await chmod(join(dir, name), 0o755);
+    env[variable] = join(dir, name);
+  }
+  return env;
+}
+
+test('the evidence toolset serves its binaries, the client package, and the FHIR mock, and stops dev sessions', async () => {
+  const body =
+    '## Start\n\n' +
+    fence(
+      'sh',
+      'evidence --version\nevidencectl dev\n"$EVIDENCE_OID4VCI_BIN" --version\n' +
+        'python3 -c "import tutorial_fake_client; print(tutorial_fake_client.NAME)"\n' +
+        'python3 -c "import os, urllib.request; print(urllib.request.urlopen(os.environ[\'FHIR_TUTORIAL_TEST_BASE_URL\'] + \'/healthz\').status)"\n' +
+        'mkdir -p work/project/.evidence/dev\ntouch work/project/.evidence/dev/control.sock',
+    ) +
+    fence('text test-expect', 'unpacked\n200') +
+    fence('sh', 'false');
+  await withPage(body, async ({ dir, page }) => {
+    const calls = join(dir, 'calls.log');
+    const env = await fakeEvidenceBinaries(dir, calls);
+    const { code, output } = await run(['--toolset', 'evidence', page], {
+      ...env,
+      REGISTRY_CLIENT_PY_WHEEL: await fakeWheel(dir),
+    });
+    assert.equal(code, 1, output);
+    const log = (await readFile(calls, 'utf8')).trim().split('\n');
+    assert.deepEqual(log.slice(0, 3), ['evidence --version', 'evidencectl dev', 'evidence-oid4vci --version']);
+    assert.match(log[3], /^evidencectl dev stop --project \/\S+\/work\/project$/u);
+    assert.equal(log.length, 4);
+    await assert.rejects(fetch('http://127.0.0.1:8003/healthz'), 'the FHIR mock must stop with the journey');
+  });
+});
+
+test('the evidence toolset needs the client wheel as an absolute path to a file', async () => {
+  await withPage('## A\n\n' + fence('sh', 'true'), async ({ dir, page }) => {
+    const env = await fakeEvidenceBinaries(dir, join(dir, 'calls.log'));
+    for (const [wheel, message] of [
+      ['', /REGISTRY_CLIENT_PY_WHEEL is unset: name a client wheel assembled with release\/scripts\/assemble-registry-client-packages\.py/u],
+      ['client.whl', /REGISTRY_CLIENT_PY_WHEEL must be an absolute path: client\.whl/u],
+      [join(dir, 'missing.whl'), /client wheel not found: \/\S+\/missing\.whl/u],
+    ]) {
+      const { code, output } = await run(['--toolset', 'evidence', page], { ...env, REGISTRY_CLIENT_PY_WHEEL: wheel });
+      assert.equal(code, 2, output);
+      assert.match(output, message);
+    }
   });
 });

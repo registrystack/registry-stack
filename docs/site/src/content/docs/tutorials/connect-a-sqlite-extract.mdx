@@ -12,6 +12,8 @@ persona:
   - operator
 locale: en
 standards_referenced: []
+tutorial_test:
+  toolset: evidence
 ---
 
 Use a SQLite extract when the authority can publish an immutable snapshot but cannot offer a
@@ -139,7 +141,7 @@ Create a complete governed target by following [Build and deploy an Evidence Gat
 project](../build-and-deploy-evidence-project/). Then build the editable project and run the checks
 against the exact candidate and mounted extract:
 
-```sh
+```sh test-skip="needs the complete governed deployment target from Build and deploy an Evidence Gateway project"
 evidencectl package registry-status \
   --target registry-status/deployment-targets/staging \
   --output candidate-staging

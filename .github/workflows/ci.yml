@@ -1334,9 +1334,13 @@ jobs:
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Test the tutorial gate helpers
+      - name: Install docs dependencies
         working-directory: docs/site
-        run: npm run test:tutorial:evidence
+        run: npm ci
+
+      - name: Test the tutorial runner
+        working-directory: docs/site
+        run: npm run test:tutorial:runner
 
       - name: Check tutorial command drift
         working-directory: docs/site
@@ -1371,8 +1375,6 @@ jobs:
           "${RUNNER_TEMP}/maturin/bin/pip" install --quiet \
             --require-hashes --only-binary=:all: \
             --requirement "${GITHUB_WORKSPACE}/release/requirements/maturin-1.9.6.txt"
-          # The output stays inside the workspace, because the container step
-          # below mounts the workspace and nothing else.
           out_dir="${GITHUB_WORKSPACE}/target/evidence-tutorial-client"
           python3 release/scripts/assemble-registry-client-packages.py \
             --artifacts python \
@@ -1389,15 +1391,13 @@ jobs:
             exit 1
           fi
           # Prove installer metadata and native facade loading from this exact
-          # wheel. The clean-container tutorials separately exercise requests.
+          # wheel. The application tutorial separately exercises requests.
           python3 -m venv "${RUNNER_TEMP}/client-install-smoke"
           "${RUNNER_TEMP}/client-install-smoke/bin/pip" install \
             --no-index --no-deps "${wheel}"
           "${RUNNER_TEMP}/client-install-smoke/bin/python" -I \
             release/scripts/smoke-registry-client-package.py
-          # The gate reads it inside the container, at the mounted path.
-          printf 'TUTORIAL_CLIENT_WHEEL=/work/%s\n' \
-            "${wheel#"${GITHUB_WORKSPACE}/"}" >>"${GITHUB_ENV}"
+          printf 'REGISTRY_CLIENT_PY_WHEEL=%s\n' "${wheel}" >>"${GITHUB_ENV}"
 
       - name: Test the exact local Evidence lifecycle
         shell: bash
@@ -1416,10 +1416,7 @@ jobs:
           EVIDENCECTL_BIN: ${{ github.workspace }}/target/debug/evidencectl
           EVIDENCE_OID4VCI_BIN: ${{ github.workspace }}/target/debug/evidence-oid4vci
           EVIDENCE_OID4VCI_INTEROP_TEST_BIN: ${{ github.workspace }}/target/debug/inji-oid4vci-interop-test
-        run: |
-          set -euo pipefail
-          REGISTRY_CLIENT_PY_WHEEL="${GITHUB_WORKSPACE}/${TUTORIAL_CLIENT_WHEEL#/work/}" \
-            bash docs/site/scripts/check-evidence-tutorials.sh
+        run: node docs/site/scripts/run-tutorial.mjs --gate evidence
 
   breg-tutorial:
     name: Base Registry Engine tutorial from source
@@ -1461,7 +1458,7 @@ jobs:
 
       - name: Test the tutorial runner
         working-directory: docs/site
-        run: npm run test:tutorial:breg
+        run: npm run test:tutorial:runner
 
       - name: Check tutorial command drift
         working-directory: docs/site
@@ -1558,9 +1555,13 @@ jobs:
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Test the tutorial gate helpers
+      - name: Install docs dependencies
         working-directory: docs/site
-        run: npm run test:tutorial:casework
+        run: npm ci
+
+      - name: Test the tutorial runner
+        working-directory: docs/site
+        run: npm run test:tutorial:runner
 
       - name: Check tutorial command drift
         working-directory: docs/site
@@ -1608,7 +1609,7 @@ jobs:
           # gets. The runtime the page starts runs PostgreSQL in a disposable
           # container of its own, which is why the replay stays on the Docker
           # runner rather than inside a clean read-only container.
-          bash docs/site/scripts/check-casework-tutorial.sh
+          node docs/site/scripts/run-tutorial.mjs --gate casework
 
   breg-evidence-composition:
     # The offline proof that a BReg evidence-source export composes into an

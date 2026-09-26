@@ -1471,7 +1471,7 @@ class GateInventoryTest(unittest.TestCase):
     def test_missing_casework_tutorial_gates_are_reported(self) -> None:
         for snippet, replacement, gate in (
             (
-                "bash docs/site/scripts/check-casework-tutorial.sh",
+                "node docs/site/scripts/run-tutorial.mjs --gate casework\n",
                 "true # Registry Casework tutorial replay disabled",
                 "Registry Casework tutorial replay",
             ),
@@ -1487,8 +1487,8 @@ class GateInventoryTest(unittest.TestCase):
 
     def test_missing_casework_tutorial_path_filter_is_reported(self) -> None:
         classifier = self.classifier.replace(
-            '"docs/site/scripts/check-casework-tutorial.sh",',
-            '"docs/site/scripts/unrouted-casework-tutorial.sh",',
+            '"docs/site/src/content/docs/tutorials/first-casework.mdx",',
+            '"docs/site/src/content/docs/tutorials/unrouted-casework.mdx",',
         )
         self.assertIn(
             "Registry Casework tutorial path filter",

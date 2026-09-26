@@ -11,6 +11,9 @@ persona:
   - assertion provider
 locale: en
 standards_referenced: []
+tutorial_test:
+  toolset: evidence
+  after: tutorials/first-evidence-assertion
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
@@ -52,7 +55,7 @@ age.
 
 In one terminal, return to the `first-evidence-assertion` directory and serve the same checked cases again:
 
-```sh
+```sh test-cwd="first-evidence-assertion" test-background="http://127.0.0.1:4010/people/person-123"
 evidencectl source mock serve --config adult-status/mocks/source.yaml
 ```
 
@@ -64,7 +67,7 @@ registry lookup from the first tutorial.
 
 In another terminal, enter the existing project:
 
-```sh
+```sh test-cwd="first-evidence-assertion"
 cd adult-status
 ```
 
@@ -72,7 +75,7 @@ cd adult-status
 
 Create a second question definition alongside `questions/adult-status.yaml`:
 
-```yaml
+```yaml title="questions/age-bracket.yaml" test-file
 id: age-bracket
 question: Which age bracket does this person belong to?
 purpose: service-path-selection
@@ -103,7 +106,7 @@ codelist enforced by the Evidence Gateway runtime.
 
 Create this new derivation alongside `derivations/adult-status.rhai`:
 
-```rhai
+```rhai title="derivations/age-bracket.rhai" test-file
 fn answer(facts, selectors, context) {
     let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
     if compare_dates(context.legal_local_date, add_calendar_years(born, 18)) < 0 {
@@ -129,7 +132,7 @@ Capture the edited project in a new immutable local generation:
 evidencectl dev start .
 ```
 
-```text
+```text test-excerpt
 Evidence ready at http://127.0.0.1:8080
 Issuer ready at http://127.0.0.1:8081
 ```
@@ -170,7 +173,7 @@ evidencectl verify age-bracket.jws.json \
   --output age-bracket.verified.json
 ```
 
-```text
+```text test-expect
 VERIFIED
 ```
 
@@ -182,7 +185,7 @@ python3 -m json.tool age-bracket.verified.json
 
 The relevant supported value has this shape:
 
-```json
+```json test-excerpt
 {
   "providesValueFor": "urn:registrystack:evidence:local:concept:age-bracket:age_bracket",
   "value": "under-18"
@@ -210,7 +213,7 @@ Inspect the last verified operation:
 evidencectl audit show --last-operation
 ```
 
-```text
+```text test-expect
 ACCESS AUTHORIZED age-bracket service-path-selection requester=<pseudonym>
 DISCLOSURE RELEASED age_bracket
 ```
@@ -232,7 +235,7 @@ Return to the registry terminal and press `Ctrl+C`.
 the first tutorial's services were left running. Stop and remove that session, then start the new
 generation:
 
-```sh
+```sh test-skip="recovers a session the first tutorial left running; the replay stopped it"
 evidencectl dev stop
 evidencectl dev clean
 ```

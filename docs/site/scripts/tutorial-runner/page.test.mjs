@@ -250,6 +250,61 @@ test('test-excerpt mistakes are errors that name the line', () => {
     'line 1: test-excerpt has no sh fence above it to check',
     'line 5: test-excerpt belongs on a block the page shows, not on an sh fence',
     'line 13: test-excerpt checks the output of the sh fence at line 9, which is skipped',
-    'line 17: a block is either test-expect or test-excerpt, not both',
+    'line 17: a block is one of test-file, test-edit, test-expect, or test-excerpt',
+  ]);
+});
+
+test('a titled block marked test-file is the whole file the page asks the reader to create', () => {
+  const { steps, errors } = readJourney(
+    '## Ask\n\nOpen `questions/q.yaml` and add:\n\n```yaml title="questions/q.yaml" test-file\nid: q\n```\n',
+  );
+  assert.deepEqual(errors, []);
+  assert.deepEqual(steps, [{ kind: 'file', line: 5, heading: 'Ask', path: 'questions/q.yaml', text: 'id: q\n' }]);
+});
+
+test('test-file mistakes are errors that name the line', () => {
+  const { errors } = readJourney(
+    '```yaml test-file\na: 1\n```\n\n```sh title="x.sh" test-file\ntrue\n```\n\n' +
+      '```diff title="a.yaml" test-file\n+a\n```\n\n```yaml title="a.yaml" test-file test-excerpt\na\n```\n',
+  );
+  assert.deepEqual(errors, [
+    'line 1: test-file needs the file path, as title="<path>"',
+    'line 5: test-file belongs on a block showing the file, not on an sh fence',
+    'line 9: test-file takes the whole file; a diff block is test-edit',
+    'line 13: a block is one of test-file, test-edit, test-expect, or test-excerpt',
+  ]);
+});
+
+test('test-background leaves an sh fence running until its ready URL answers, and test-cwd says where a fence runs', () => {
+  const { steps, errors } = readJourney(
+    '```sh test-background="http://127.0.0.1:4010/health" test-cwd="first"\nserve\n```\n\n' +
+      '```text test-expect\nready\n```\n\n```sh test-cwd="first/project"\nls\n```\n',
+  );
+  assert.deepEqual(errors, []);
+  assert.deepEqual(steps[0], {
+    kind: 'run',
+    line: 1,
+    heading: '',
+    code: 'serve',
+    background: 'http://127.0.0.1:4010/health',
+    cwd: 'first',
+  });
+  assert.equal(steps[1].runIndex, 0);
+  assert.equal(steps[2].cwd, 'first/project');
+});
+
+test('test-background and test-cwd mistakes are errors that name the line', () => {
+  const { errors } = readJourney(
+    '```sh test-background\nserve\n```\n\n```sh test-background="http://x/" test-exit="1"\nserve\n```\n\n' +
+      '```sh test-background="http://x/" test-skip="offline"\nserve\n```\n\n' +
+      '```sh test-cwd="/abs"\nls\n```\n\n```sh test-cwd="../up"\nls\n```\n\n```text test-cwd="a"\nx\n```\n',
+  );
+  assert.deepEqual(errors, [
+    'line 1: test-background takes the URL that answers once the command is ready, as test-background="http://127.0.0.1:4010/"',
+    'line 5: a test-background fence keeps running, so it cannot also be test-exit',
+    'line 9: a test-background fence is run, so it cannot also be test-skip',
+    'line 13: test-cwd takes a directory inside the reader directory, as test-cwd="first-project"',
+    'line 17: test-cwd takes a directory inside the reader directory, as test-cwd="first-project"',
+    'line 21: test-cwd applies only to sh fences',
   ]);
 });

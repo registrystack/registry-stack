@@ -16,9 +16,13 @@
 // Coverage is derived from the commands, not from a list: every page under
 // start/ or tutorials/ whose sh fences run the toolset's commands must declare
 // tutorial_test, and a page that declares the toolset must run its commands.
-// A page that runs them under another toolset, or replays none of them, is an
-// error too, so neither the declaration nor test-skip can take a page out of
-// the gate that owns its commands.
+// A toolset that includes another (casework serves breg too) covers pages that
+// run both, and those pages belong to its gate rather than to each. A page that
+// runs the commands under a toolset that does not serve them, or replays none
+// of them, is an error too, so neither the declaration nor test-skip can take a
+// page out of the gate that owns its commands. The one exception is a page no
+// toolset can replay because it runs the commands of two that neither serves
+// both: it declares either one, with a skip reason.
 // A new tutorial therefore fails the gate on the commit that adds it, until it
 // is replayed or says why not.
 
@@ -69,10 +73,15 @@ async function readPages(docsRoot) {
 // slugs, each replayed in order in one reader directory; checkout names the
 // pages whose journey starts in a copy of the checkout; skipped pages carry
 // their reason; errors are sentences naming a page, and a gate with any runs
-// nothing. A page that names a toolset outside knownToolsets is an error, so a
-// misspelt name cannot take a page out of every gate, and a page of this
+// nothing. toolsets maps each toolset name to its commands pattern and the
+// toolsets it includes. A page that names an unknown toolset, or one that does
+// not serve this toolset's commands, is an error, so neither a misspelt name
+// nor the wrong toolset can take a page out of every gate, and a page of this
 // toolset has its annotations checked even when it is skipped.
-export async function planGate(docsRoot, toolset, commandPattern, knownToolsets) {
+export async function planGate(docsRoot, toolset, toolsets) {
+  const commandPattern = toolsets[toolset].commands;
+  const knownToolsets = Object.keys(toolsets);
+  const serves = (name) => name === toolset || (toolsets[name].includes ?? []).includes(toolset);
   const errors = [];
   const skipped = [];
   const replayed = new Map();
@@ -103,18 +112,22 @@ export async function planGate(docsRoot, toolset, commandPattern, knownToolsets)
       continue;
     }
     if (!knownToolsets.includes(declaration.toolset)) {
-      errors.push(`${slug}.mdx: unknown tutorial_test toolset ${declaration.toolset} (expected ${knownToolsets.join(' or ')})`);
+      const names = knownToolsets.length > 2 ? `${knownToolsets.slice(0, -1).join(', ')}, or ${knownToolsets.at(-1)}` : knownToolsets.join(' or ');
+      errors.push(`${slug}.mdx: unknown tutorial_test toolset ${declaration.toolset} (expected ${names})`);
       continue;
     }
-    if (declaration.toolset !== toolset) {
-      if (runs) {
-        errors.push(
-          `${slug}.mdx runs ${toolset} commands but declares toolset ${declaration.toolset}, which does not serve them; declare toolset ${toolset}`,
-        );
-      }
+    if (runs && !serves(declaration.toolset)) {
+      // A page running the commands of two toolsets that neither serves both
+      // can only be replayed by neither, so it is skipped in the gate of the
+      // one it declares.
+      const runsDeclared = commands.some((code) => toolsets[declaration.toolset].commands?.test(code));
+      if (declaration.skip !== undefined && runsDeclared) continue;
+      errors.push(
+        `${slug}.mdx runs ${toolset} commands but declares toolset ${declaration.toolset}, which does not serve them; declare toolset ${toolset}`,
+      );
       continue;
     }
-    if (unknown.length > 0) continue;
+    if (declaration.toolset !== toolset || unknown.length > 0) continue;
     for (const error of annotationErrors) errors.push(`${slug}.mdx: ${error}`);
     if (annotationErrors.length > 0) continue;
     if (!runs) {
