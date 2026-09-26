@@ -20,7 +20,9 @@
 // run both, and those pages belong to its gate rather than to each. A page that
 // runs the commands under a toolset that does not serve them, or replays none
 // of them, is an error too, so neither the declaration nor test-skip can take a
-// page out of the gate that owns its commands.
+// page out of the gate that owns its commands. The one exception is a page no
+// toolset can replay because it runs the commands of two that neither serves
+// both: it declares either one, with a skip reason.
 // A new tutorial therefore fails the gate on the commit that adds it, until it
 // is replayed or says why not.
 
@@ -115,6 +117,11 @@ export async function planGate(docsRoot, toolset, toolsets) {
       continue;
     }
     if (runs && !serves(declaration.toolset)) {
+      // A page running the commands of two toolsets that neither serves both
+      // can only be replayed by neither, so it is skipped in the gate of the
+      // one it declares.
+      const runsDeclared = commands.some((code) => toolsets[declaration.toolset].commands?.test(code));
+      if (declaration.skip !== undefined && runsDeclared) continue;
       errors.push(
         `${slug}.mdx runs ${toolset} commands but declares toolset ${declaration.toolset}, which does not serve them; declare toolset ${toolset}`,
       );

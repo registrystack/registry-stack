@@ -206,8 +206,9 @@ async function startFhirMock(workRoot) {
 
 const evidenceProduct = productToolset({
   label: 'evidence, evidencectl, and evidence-oid4vci',
-  // Not a path such as .evidence/dev, which a page may name.
-  commands: /(^|[^\w./-])(evidencectl|evidence-oid4vci|evidence)([^\w-]|$)/mu,
+  // Not a path such as .evidence/dev, which a page may name; but a page that
+  // runs Evidence's own checks from a checkout runs Evidence.
+  commands: /(^|[^\w./-])(evidencectl|evidence-oid4vci|evidence)([^\w-]|$)|(^|\s)products\/evidence\/scripts\//mu,
   binaries: [
     ['evidence', 'EVIDENCE_BIN'],
     ['evidencectl', 'EVIDENCECTL_BIN'],
