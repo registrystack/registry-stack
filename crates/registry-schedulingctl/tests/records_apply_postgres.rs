@@ -414,10 +414,23 @@ async fn records_apply_rejects_a_different_deployment_identity_without_writing()
         "the refused apply changed the existing facts"
     );
     // The request entry was written before the transaction the store
-    // refused; a refused swap writes no response.
+    // refused; the refusal still writes a paired response so the request is
+    // never left orphaned.
     let refused = audit_entries(&root.path().join("other-audit.schedulingctl.ndjson"));
-    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_eq!(refused.len(), 2, "{refused:?}");
     assert_eq!(refused[0]["phase"], "request");
+    assert_eq!(refused[1]["phase"], "response");
+    assert_eq!(refused[0]["correlation"], refused[1]["correlation"]);
+    assert_eq!(refused[1]["record"]["outcome"], "refused");
+    assert_eq!(refused[1]["record"]["reason"], "records.replace-failed");
+    assert_eq!(refused[1]["record"]["eventId"], refused[1]["correlation"]);
+    assert!(
+        refused[1]["record"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("the Scheduling database belongs to another deployment"),
+        "{refused:?}"
+    );
 
     // An audit destination that cannot be opened refuses the apply before
     // the database is written.
