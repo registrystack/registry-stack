@@ -56,7 +56,7 @@ import { readJourney } from './tutorial-runner/page.mjs';
 import { TOOLSETS, ToolsetError } from './tutorial-runner/toolsets.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
-const USAGE = 'usage: run-tutorial.mjs [--dry-run] [--toolset breg|casework|none] <page.mdx>...\n       run-tutorial.mjs [--dry-run] --gate breg|casework';
+const USAGE = 'usage: run-tutorial.mjs [--dry-run] [--toolset breg|casework|evidence|none] <page.mdx>...\n       run-tutorial.mjs [--dry-run] --gate breg|casework|evidence';
 const DOCS_ROOT = process.env.TUTORIAL_DOCS_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '../src/content/docs');
 const APPLY_EDIT = join(dirname(fileURLToPath(import.meta.url)), 'tutorial-runner/apply-edit.mjs');
 const BACKGROUND = join(dirname(fileURLToPath(import.meta.url)), 'tutorial-runner/background.mjs');
@@ -203,8 +203,8 @@ async function journeyScript(pages, outDir, readerDir) {
 // command a fence is running and not only the shell waiting for it, which
 // would run its trap only once that command ended. onSpawn receives a
 // function that sends a signal to the whole group.
-function runScript(scriptPath, readerDir, binDir, onSpawn) {
-  const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}` };
+function runScript(scriptPath, readerDir, binDir, toolsetEnv, onSpawn) {
+  const env = { ...process.env, ...toolsetEnv, PATH: `${binDir}:${process.env.PATH}` };
   // A reader has no CARGO_TARGET_DIR pointing into this checkout.
   delete env.CARGO_TARGET_DIR;
   return new Promise((resolvePromise, reject) => {
@@ -308,12 +308,12 @@ async function replay(pages, toolset, checkout) {
   let status = 1;
   let prepared = false;
   try {
-    await toolset.prepare({ repoRoot: REPO_ROOT, binDir });
+    const toolsetEnv = await toolset.prepare({ repoRoot: REPO_ROOT, binDir, workRoot });
     prepared = true;
     if (checkout) await copyCheckout(REPO_ROOT, readerDir);
     const scriptPath = join(workRoot, 'journey.sh');
     await writeFile(scriptPath, await journeyScript(pages, outDir, readerDir));
-    const code = await runScript(scriptPath, readerDir, binDir, (send) => {
+    const code = await runScript(scriptPath, readerDir, binDir, toolsetEnv, (send) => {
       signalJourney = send;
     });
     if (interrupted || code === 130) {
