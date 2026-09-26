@@ -320,14 +320,18 @@ fn valid_uri(value: &str) -> bool {
     !value.is_empty() && value.len() <= 512 && url::Url::parse(value).is_ok()
 }
 
-/// Whether the project has never held a local session, so there is no
-/// stopped audit history to inspect. Any other state goes through the full
-/// stopped-state validation.
+/// Whether the project holds no local session directory at all, neither the
+/// session nor one set aside by an interrupted restart, so there is no
+/// stopped audit history to inspect. Any other state, including a session
+/// directory that lost its state file, goes through the full stopped-state
+/// validation.
 fn no_local_session(project: &Path) -> bool {
-    matches!(
-        std::fs::symlink_metadata(project.join(".evidence/dev/state.json")),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound
-    )
+    ["dev", dev::RETAINED_STOPPED_SESSION].iter().all(|name| {
+        matches!(
+            std::fs::symlink_metadata(project.join(".evidence").join(name)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound
+        )
+    })
 }
 
 fn no_stopped_session() -> anyhow::Error {
