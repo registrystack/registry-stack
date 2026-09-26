@@ -401,6 +401,20 @@ test('a gate of many journeys replays them all without warnings', async () => {
   });
 });
 
+test('a gate stops at the first toolset error instead of preparing it for every journey', async () => {
+  const pages = {
+    'tutorials/one': 'tutorial_test:\n  toolset: breg\n---\n\n```sh\nbregctl check\n```\n',
+    'tutorials/two': 'tutorial_test:\n  toolset: breg\n---\n\n```sh\nbregctl check\n```\n',
+  };
+  await withGateDocs(pages, async (env) => {
+    const { code, output } = await run(['--gate', 'breg'], { ...env, BREGCTL_BIN: '' });
+    assert.equal(code, 2, output);
+    assert.equal(output.match(/set both BREG_BIN and BREGCTL_BIN/gu)?.length, 1, output);
+    assert.doesNotMatch(output, /journey tutorials\/two/u);
+    assert.doesNotMatch(output, /gate FAIL/u);
+  });
+});
+
 test('a gate dry run builds nothing and starts nothing', async () => {
   await withGateDocs(GATE_PAGES, async (env) => {
     const bin = join(dirname(env.BREG_BIN), 'fake-bin');
