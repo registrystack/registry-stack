@@ -345,16 +345,21 @@ impl FileDestination {
             )));
         }
         // The writer opens the lock companion for write, on the same terms
-        // as the active file, before it opens the active file.
+        // as the active file, before it opens the active file, and reopens it
+        // for read on every append to check it is still pinned.
         let lock = lock_path(&self.path);
         match fs::symlink_metadata(&lock) {
             Ok(metadata) if metadata.file_type().is_symlink() => return Err(symlink_error()),
             Ok(metadata) => {
                 validate_active_metadata(&metadata)?;
-                rustix::fs::access(&lock, rustix::fs::Access::WRITE_OK).map_err(|_| {
+                rustix::fs::access(
+                    &lock,
+                    rustix::fs::Access::READ_OK | rustix::fs::Access::WRITE_OK,
+                )
+                .map_err(|_| {
                     AuditError::Io(io::Error::new(
                         ErrorKind::PermissionDenied,
-                        "audit lock file is not writable",
+                        "audit lock file is not readable and writable",
                     ))
                 })?;
             }
@@ -2118,6 +2123,9 @@ mod tests {
             .expect_err("group-readable lock");
         fs::set_permissions(&lock, fs::Permissions::from_mode(0o400)).expect("mode");
         destination.check_writable().expect_err("read-only lock");
+        // Every append reopens the lock for read to check it is still pinned.
+        fs::set_permissions(&lock, fs::Permissions::from_mode(0o200)).expect("mode");
+        destination.check_writable().expect_err("write-only lock");
         fs::remove_file(&lock).expect("remove lock");
         std::os::unix::fs::symlink(directory.path().join("elsewhere"), &lock).expect("symlink");
         destination.check_writable().expect_err("symlinked lock");
