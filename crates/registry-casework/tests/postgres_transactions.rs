@@ -950,6 +950,21 @@ async fn isolated_schema(prefix: &str) -> (PostgresStore, tokio_postgres::Client
     (store, client, schema)
 }
 
+/// A second connection into a schema `isolated_schema` already created, for a
+/// test's own concurrent session (a lock holder, a writer) alongside the
+/// store and the first connection it returns.
+async fn connect_scoped(schema: &str) -> tokio_postgres::Client {
+    let base = env::var("CASEWORK_TEST_DATABASE_URL")
+        .expect("CASEWORK_TEST_DATABASE_URL is required for the real PostgreSQL test");
+    let separator = if base.contains('?') { '&' } else { '?' };
+    let scoped = format!("{base}{separator}options=-csearch_path%3D{schema}");
+    let (client, connection) = tokio_postgres::connect(&scoped, tokio_postgres::NoTls)
+        .await
+        .expect("connect isolated schema");
+    tokio::spawn(async move { connection.await.expect("scoped schema connection") });
+    client
+}
+
 async fn occurrence_index(client: &tokio_postgres::Client, schema: &str) -> (u32, bool) {
     let row = client
         .query_one(
@@ -1394,6 +1409,63 @@ async fn migration_replaces_empty_hosted_tables_through_the_ledger_head() {
         .get(0);
     assert!(!hosted_tables_remaining);
     store.ready().await.expect("the migrated schema is current");
+}
+
+#[tokio::test]
+async fn migration_locks_hosted_work_before_counting_it_for_the_drop() {
+    let (store, client, schema) = isolated_schema("hosted_work_lock").await;
+    establish_v0_32_schema(&client).await;
+
+    // Hold the table a concurrent writer would insert into, so the migration
+    // must wait right where it takes its own lock on hosted work, if it takes
+    // one at all.
+    let mut blocker = connect_scoped(&schema).await;
+    let blocker_transaction = blocker.transaction().await.expect("blocker transaction");
+    blocker_transaction
+        .batch_execute("LOCK TABLE casework_hosted_items IN ACCESS EXCLUSIVE MODE")
+        .await
+        .expect("hold the hosted-items table ahead of the migration");
+
+    let migrated = tokio::spawn(async move { store.migrate().await });
+
+    // A plain read only ever waits for AccessShareLock; only a migration that
+    // takes its own exclusive lock before counting shows up here waiting in
+    // AccessExclusiveLock.
+    let mut waiting_for_exclusive = false;
+    for _ in 0..500 {
+        waiting_for_exclusive = client
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE relation='casework_hosted_items'::regclass \
+                 AND mode='AccessExclusiveLock' AND NOT granted)",
+                &[],
+            )
+            .await
+            .expect("inspect pending locks on hosted items")
+            .get(0);
+        if waiting_for_exclusive {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    blocker_transaction
+        .commit()
+        .await
+        .expect("release the hosted-items table");
+    assert!(
+        waiting_for_exclusive,
+        "the migration must take its own exclusive lock on hosted work before counting it, \
+         not rely on the shared lock a plain read takes, or a concurrent writer could insert a \
+         row between the count and the drop unseen"
+    );
+
+    migrated
+        .await
+        .expect("migration task")
+        .expect("migration completes once the blocker releases the table");
+    assert_eq!(
+        applied_versions(&client).await,
+        (1..=17).collect::<Vec<_>>()
+    );
 }
 
 #[tokio::test]
