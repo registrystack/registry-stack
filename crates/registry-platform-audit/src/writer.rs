@@ -547,8 +547,14 @@ struct OpenRequests(StdMutex<std::collections::HashMap<RequestKey, Vec<OpenReque
 
 impl OpenRequests {
     fn open(&self, key: RequestKey, request: OpenRequest) {
-        if let Ok(mut open) = self.0.lock() {
-            open.entry(key).or_default().push(request);
+        match self.0.lock() {
+            Ok(mut open) => open.entry(key).or_default().push(request),
+            // The request is still owed by its handle, which writes its
+            // unfinished response; only a response appended elsewhere can
+            // no longer answer it.
+            Err(_) => tracing::error!(
+                "the open audit requests are poisoned; a response appended elsewhere will not answer this request"
+            ),
         }
     }
 
@@ -568,23 +574,92 @@ impl OpenRequests {
         })
     }
 
-    /// Close `answered` under `key`, reporting whether it is still owed a
-    /// response. Checked and removed under one lock, so a response cannot be
-    /// counted after the owner decided it had none.
-    fn close(&self, key: &RequestKey, answered: &Arc<AtomicBool>) -> bool {
+    /// Close `answered` under `key` once a response to it was accepted.
+    fn answer(&self, key: &RequestKey, answered: &Arc<AtomicBool>) {
+        if let Ok(mut open) = self.0.lock() {
+            Self::remove(&mut open, key, answered);
+        }
+    }
+
+    /// Close `answered` under `key` for its unfinished response, reporting
+    /// whether it is still owed one: not when a response was accepted, and
+    /// not when one is in flight on it, since that response settles the
+    /// request itself. Checked and removed under the lock [`Self::claim`]
+    /// takes, so a response cannot be claimed after the owner decided it had
+    /// none.
+    fn close_unanswered(
+        &self,
+        key: &RequestKey,
+        answered: &Arc<AtomicBool>,
+        state: &StdMutex<RequestState>,
+    ) -> bool {
         let Ok(mut open) = self.0.lock() else {
             return !answered.load(Ordering::Acquire);
         };
         if answered.load(Ordering::Acquire) {
             return false;
         }
+        if state.lock().is_ok_and(|state| state.in_flight > 0) {
+            return false;
+        }
+        Self::remove(&mut open, key, answered);
+        true
+    }
+
+    fn remove(
+        open: &mut std::collections::HashMap<RequestKey, Vec<OpenRequest>>,
+        key: &RequestKey,
+        answered: &Arc<AtomicBool>,
+    ) {
         if let Some(waiting) = open.get_mut(key) {
             waiting.retain(|candidate| !Arc::ptr_eq(&candidate.answered, answered));
             if waiting.is_empty() {
                 open.remove(key);
             }
         }
-        true
+    }
+}
+
+/// One response counted in flight on the request it answers. Dropping it
+/// settles that count, whether its write finished or its task was dropped
+/// before it could, such as by a runtime shutting down, so the request's
+/// handle is never left waiting on a response that will not come.
+struct InFlightResponse {
+    writer: AuditWriter,
+    key: RequestKey,
+    answered: Arc<AtomicBool>,
+    state: Arc<StdMutex<RequestState>>,
+    /// The response was appended through [`AuditWriter::append`] and holds
+    /// the request's claim.
+    claimed: bool,
+}
+
+impl InFlightResponse {
+    /// Record that the response was accepted, answering this request and
+    /// not an older one open under its correlation.
+    fn accepted(&self) {
+        self.writer.open.answer(&self.key, &self.answered);
+        self.answered.store(true, Ordering::Release);
+    }
+}
+
+impl Drop for InFlightResponse {
+    fn drop(&mut self) {
+        let owes_unfinished = self.state.lock().is_ok_and(|mut state| {
+            if self.claimed {
+                state.claimed = false;
+            }
+            state.in_flight -= 1;
+            state.in_flight == 0 && state.dropped
+        });
+        if owes_unfinished {
+            settle_unanswered(
+                &self.writer,
+                std::mem::take(&mut self.key),
+                &self.answered,
+                &self.state,
+            );
+        }
     }
 }
 
@@ -650,25 +725,22 @@ impl AuditWriter {
         // while the response is written leaves the request to it.
         let claimed = if entry.phase == AuditPhase::Response {
             let key = (entry.schema.clone(), entry.correlation.clone());
-            self.open.claim(&key).map(|request| (key, request))
+            self.open.claim(&key).map(|request| InFlightResponse {
+                writer: self.clone(),
+                key,
+                answered: request.answered,
+                state: request.state,
+                claimed: true,
+            })
         } else {
             None
         };
         let writer = self.clone();
         tokio::spawn(async move {
             let result = writer.write(&entry).await;
-            if let Some((key, request)) = claimed {
+            if let Some(claimed) = claimed {
                 if result.is_ok() {
-                    writer.open.close(&key, &request.answered);
-                    request.answered.store(true, Ordering::Release);
-                }
-                let owes_unfinished = request.state.lock().is_ok_and(|mut state| {
-                    state.claimed = false;
-                    state.in_flight -= 1;
-                    state.in_flight == 0 && state.dropped
-                });
-                if owes_unfinished {
-                    settle_unanswered(&writer, key, &request.answered, &request.state);
+                    claimed.accepted();
                 }
             }
             result
@@ -706,6 +778,10 @@ impl AuditWriter {
     /// correlation. A response appended through [`Self::append`] under the
     /// same schema and correlation answers it too, so an operation whose
     /// outcome is written elsewhere only holds the handle until it returns.
+    ///
+    /// That pairing holds while the process runs. A process killed or
+    /// exited without unwinding, or a runtime shut down while an entry is
+    /// being written, can leave a request entry without its response.
     pub async fn begin(
         &self,
         schema: impl Into<String>,
@@ -891,26 +967,19 @@ impl AuditRequest {
         if let Ok(mut state) = self.state.lock() {
             state.in_flight += 1;
         }
-        let writer = self.writer.clone();
-        let key = (self.schema.clone(), self.correlation.clone());
-        let answered = Arc::clone(&self.answered);
-        let state = Arc::clone(&self.state);
+        // A poisoned state skips both the count and its release.
+        let in_flight = InFlightResponse {
+            writer: self.writer.clone(),
+            key: (self.schema.clone(), self.correlation.clone()),
+            answered: Arc::clone(&self.answered),
+            state: Arc::clone(&self.state),
+            claimed: false,
+        };
+        let entry = AuditEntry::response(self.schema.clone(), self.correlation.clone(), record);
         tokio::spawn(async move {
-            let result = writer
-                .write(&AuditEntry::response(key.0.clone(), key.1.clone(), record))
-                .await;
+            let result = in_flight.writer.write(&entry).await;
             if result.is_ok() {
-                // Answer this request, not an older one open under its
-                // correlation.
-                writer.open.close(&key, &answered);
-                answered.store(true, Ordering::Release);
-            }
-            let owes_unfinished = state.lock().is_ok_and(|mut state| {
-                state.in_flight -= 1;
-                state.in_flight == 0 && state.dropped
-            });
-            if owes_unfinished {
-                settle_unanswered(&writer, key, &answered, &state);
+                in_flight.accepted();
             }
             result
         })
@@ -931,7 +1000,7 @@ fn settle_unanswered(
     answered: &Arc<AtomicBool>,
     state: &StdMutex<RequestState>,
 ) {
-    if !writer.open.close(&key, answered) {
+    if !writer.open.close_unanswered(&key, answered, state) {
         return;
     }
     let unfinished = state
@@ -1154,6 +1223,12 @@ impl GroupCommitFile {
             state.enqueued = state.enqueued.saturating_add(1);
             state.enqueued
         };
+        self.wait_durable(position).await
+    }
+
+    /// Wait until the line queued at `position` is durable, flushing the
+    /// queue when no other append is.
+    async fn wait_durable(&self, position: u64) -> Result<(), AuditUnavailable> {
         loop {
             if self.durable.load(Ordering::Acquire) >= position {
                 return Ok(());
@@ -1240,9 +1315,27 @@ impl GroupCommitFile {
             return;
         };
         let file = Arc::clone(self);
+        // A line not queued yet is lost if the runtime drops this task
+        // before it runs, such as at shutdown; that loss is reported.
+        let unqueued = line.map(|line| UnqueuedLine(Some(line)));
         runtime.spawn(async move {
-            let result = match line {
-                Some(line) => file.append(line).await,
+            let result = match unqueued {
+                Some(mut unqueued) => {
+                    let position = {
+                        let mut state = file.state.lock().await;
+                        if state.stopped {
+                            Err(AuditUnavailable::new(AuditUnavailableReason::Stopped))
+                        } else {
+                            state.pending.extend(unqueued.0.take());
+                            state.enqueued = state.enqueued.saturating_add(1);
+                            Ok(state.enqueued)
+                        }
+                    };
+                    match position {
+                        Ok(position) => file.wait_durable(position).await,
+                        Err(error) => Err(error),
+                    }
+                }
                 None => {
                     let _writer = file.flush.lock().await;
                     file.flush_once().await
@@ -1252,6 +1345,18 @@ impl GroupCommitFile {
                 tracing::error!("an unfinished response entry was not accepted");
             }
         });
+    }
+}
+
+/// A detached line not yet handed to the group commit, which reports its
+/// loss if dropped still holding it.
+struct UnqueuedLine(Option<String>);
+
+impl Drop for UnqueuedLine {
+    fn drop(&mut self) {
+        if self.0.is_some() {
+            tracing::error!("an unfinished response entry was dropped before it was written");
+        }
     }
 }
 
@@ -3884,5 +3989,125 @@ mod tests {
         sink.release();
         writer.wait_for_detached_entries();
         assert_paired(&buffered_lines(&sink.buffer), "unfinished");
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_response_claimed_while_its_request_is_dropped_is_the_only_answer() {
+        let sink = GatedSink::new();
+        sink.release();
+        let writer = AuditWriter::from_line_sink(Box::new(sink.clone()));
+        let request = writer
+            .begin(
+                SCHEMA,
+                "req-1",
+                json!({"operationId": "read"}),
+                unfinished(),
+            )
+            .await
+            .expect("request");
+        // The drop's first half: it marks the handle dropped and finds no
+        // response in flight.
+        let in_flight = request.state.lock().is_ok_and(|mut state| {
+            state.dropped = true;
+            state.in_flight > 0
+        });
+        assert!(!in_flight);
+        // A response appended elsewhere claims the request before the drop
+        // settles it.
+        *sink.open.0.lock().expect("gate") = false;
+        let appending = tokio::spawn({
+            let writer = writer.clone();
+            async move {
+                writer
+                    .append(AuditEntry::response(
+                        SCHEMA,
+                        "req-1",
+                        json!({"outcome": "returned"}),
+                    ))
+                    .await
+            }
+        });
+        sink.wait_entered(2).await;
+        // The drop's second half.
+        settle_unanswered(
+            &writer,
+            (SCHEMA.to_owned(), "req-1".to_owned()),
+            &request.answered,
+            &request.state,
+        );
+        sink.release();
+        appending
+            .await
+            .expect("append task")
+            .expect("the claimed response");
+        drop(request);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        writer.wait_for_detached_entries();
+        let lines = buffered_lines(&sink.buffer);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_paired(&lines, "returned");
+    }
+
+    #[test]
+    fn a_response_task_dropped_at_runtime_shutdown_leaves_the_request_to_its_handle() {
+        let (writer, buffer) = buffered();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let mut request = runtime
+            .block_on(writer.begin(
+                SCHEMA,
+                "req-1",
+                json!({"operationId": "read"}),
+                unfinished(),
+            ))
+            .expect("request");
+        // The response's task is spawned and never runs: the runtime shuts
+        // down first and drops it.
+        runtime.block_on(async {
+            tokio::select! {
+                biased;
+                _ = request.respond(json!({"outcome": "returned"})) => {
+                    panic!("the response task never ran")
+                }
+                () = std::future::ready(()) => {}
+            }
+        });
+        drop(runtime);
+        drop(request);
+        assert_paired(&settled_lines(&writer, &buffer), "unfinished");
+    }
+
+    #[test]
+    fn an_append_task_dropped_at_runtime_shutdown_leaves_the_request_to_its_handle() {
+        let (writer, buffer) = buffered();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let request = runtime
+            .block_on(writer.begin(
+                SCHEMA,
+                "req-1",
+                json!({"operationId": "read"}),
+                unfinished(),
+            ))
+            .expect("request");
+        // The appended response claims the request, and its task is dropped
+        // by the runtime's shutdown before it runs.
+        runtime.block_on(async {
+            tokio::select! {
+                biased;
+                _ = writer.append(AuditEntry::response(
+                    SCHEMA,
+                    "req-1",
+                    json!({"outcome": "returned"}),
+                )) => panic!("the append task never ran"),
+                () = std::future::ready(()) => {}
+            }
+        });
+        drop(runtime);
+        drop(request);
+        assert_paired(&settled_lines(&writer, &buffer), "unfinished");
     }
 }
