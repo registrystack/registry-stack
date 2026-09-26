@@ -13,6 +13,9 @@ locale: en
 standards_referenced:
   - oid4vci
   - sd-jwt-vc
+tutorial_test:
+  toolset: evidence
+  checkout: true
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
@@ -55,7 +58,7 @@ mkdir -p .tutorial/oid4vci-adopter
 
 Copy this complete loopback configuration exactly:
 
-```yaml
+```yaml title=".tutorial/oid4vci-adopter/oid4vci.yaml" test-file
 version: 1
 validationMode: supervised-local-development
 credentialIssuer: http://127.0.0.1:18440
@@ -100,7 +103,7 @@ EVIDENCE_OID4VCI_ADOPTER_ROOT="$PWD/.tutorial/oid4vci-adopter" \
 
 The successful run ends with this exact receipt:
 
-```text
+```text test-excerpt
 PASS: sanitized Inji OID4VCI profile and Registry-side interoperability tests
 ```
 
@@ -121,12 +124,12 @@ Before those compatibility cases, the runner invokes the actual `evidence-oid4vc
 listener, completes an authorized wallet flow through the published metadata, and verifies the
 returned holder-bound presentation independently. Its safe milestones include:
 
-```text
-CONFIG COPIED: complete configuration has no untracked inputs
+```text test-excerpt
 CONFIG CHECKED: complete delivery configuration is valid
 METADATA INSPECTED: derived holder-bound batch ceiling is 4
 SERVICE READY: health and readiness are available on the delivery listener
 METRICS PRIVATE: metrics exist only on the separate loopback listener
+TASK GRANT REFUSED: deferred wallet state was not created
 PRESENTATION VERIFIED: public wallet flow returned holder-bound Evidence
 CLEANUP COMPLETE: generated private material was removed
 ```
@@ -168,7 +171,7 @@ Simulator. Before running it, install Java 17, Android SDK platform 34 with Buil
 full Xcode, and an iPhone 15 simulator. The runner requires `git`, `npm`, `java`, `xcodebuild`, and
 `xcrun` on `PATH`, plus network access.
 
-```sh
+```sh test-skip="the upstream runner needs macOS with Xcode and the iOS Simulator, Java, the Android SDK, and network access"
 EVIDENCE_INJI_OID4VCI=1 products/evidence/scripts/compat/inji-oid4vci-upstream.sh
 ```
 

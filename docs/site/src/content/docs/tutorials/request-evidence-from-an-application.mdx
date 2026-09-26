@@ -11,6 +11,9 @@ persona:
   - consumer or verifier
 locale: en
 standards_referenced: []
+tutorial_test:
+  toolset: evidence
+  after: tutorials/first-evidence-assertion
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
@@ -62,7 +65,7 @@ library refuses every response that does not match it.
 
 Enter the existing project:
 
-```sh
+```sh test-cwd="first-evidence-assertion"
 cd adult-status
 ```
 
@@ -76,7 +79,7 @@ evidencectl access client add age-check-app \
   --generate-local-key
 ```
 
-```text
+```text test-expect
 Added access policy app-age-checks for adult-status.
 Added client age-check-app with policy app-age-checks.
 ```
@@ -96,7 +99,7 @@ state for itself:
 grep evidenceAudience access/clients/age-check-app.yaml
 ```
 
-```text
+```text test-expect
 evidenceAudience: urn:registrystack:evidence:local:client:age-check-app
 ```
 
@@ -114,7 +117,7 @@ from the project's own retained public signing key:
 evidencectl jwks --output trusted-issuer-keys.json secrets/signing-p256-public.jwk.json
 ```
 
-```text
+```text test-expect
 wrote trusted-issuer-keys.json
 ```
 
@@ -130,7 +133,7 @@ The client is the `evidence` namespace of the maintained `registry-stack-client`
 version from the runtime you installed rather than typing one, and install the client at that exact
 version. From inside the project directory:
 
-```sh
+```sh test-skip="the gate provides the client package built from this checkout, which is not published yet"
 version="$(evidencectl --version | awk '{print $2}')"
 python3 -m venv .venv
 . .venv/bin/activate
@@ -157,11 +160,11 @@ Evidence reads the source record through the materialized source mock from the f
 cleanup told you to stop it. In another terminal, return to the `first-evidence-assertion` directory
 and serve the same checked cases again. Leave it running:
 
-```sh
+```sh test-cwd="first-evidence-assertion" test-background="http://127.0.0.1:4010/people/person-123"
 evidencectl source mock serve --config adult-status/mocks/source.yaml
 ```
 
-```text
+```text test-excerpt
 Source mock ready: mode=materialized origin=http://127.0.0.1:4010 served=3 skipped=0
 ```
 
@@ -172,7 +175,7 @@ start Evidence and the pinned local issuer:
 evidencectl dev start .
 ```
 
-```text
+```text test-excerpt
 Evidence ready at http://127.0.0.1:8080
 Issuer ready at http://127.0.0.1:8081
 ```
@@ -183,14 +186,14 @@ later, as a failed evidence request.
 The access policy is now part of the running generation, so a terminal request names a client too.
 Confirm that the project no longer accepts an unnamed one:
 
-```sh
+```sh test-exit="1"
 evidencectl request prepare adult-status \
   --purpose age-check \
   --subject person_id=person-123 \
   --name unnamed-caller
 ```
 
-```text
+```text test-expect
 evidencectl: the active project requires a registered client selected with --client
 ```
 
@@ -231,25 +234,33 @@ print(document)
 PY
 ```
 
-```json
+```json test-expect
 {
   "assuranceProfile": "local",
+  "audience": "urn:registrystack:evidence:local:client:age-check-app",
   "definitions": [
     {
       "concepts": [
         {
+          "concept": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
           "form": "boolean",
-          "id": "urn:registrystack:evidence:local:concept:adult-status:is_adult"
+          "handle": "is_adult",
+          "required": true
         }
       ],
       "configurationRevision": "sha256:<revision>",
       "evidenceType": "urn:registrystack:evidence:local:evidence-type:adult-status",
+      "handle": "adult-status",
       "kind": "criterion",
       "purpose": "age-check",
       "referenceFrameworks": [
         "urn:registrystack:evidence:local:framework:adult-status"
       ],
       "requirement": "urn:registrystack:evidence:local:requirement:adult-status",
+      "responseFormats": [
+        "signed-jws",
+        "sd-jwt-vc"
+      ],
       "subjects": [
         {
           "cardinality": "one",
@@ -377,7 +388,7 @@ print(document)
 PY
 ```
 
-```json
+```json test-expect
 {
   "audience": "urn:registrystack:evidence:local:client:age-check-app",
   "clock_skew_seconds": 30,
@@ -454,7 +465,7 @@ must be asked, moved.
 Open `age_check.py` in your editor and add the application. It loads the pinned procedure and never
 calls discovery again:
 
-```python
+```python title="age_check.py" test-file
 import fcntl
 import json
 import os
@@ -591,7 +602,7 @@ umask 077
 python3 age_check.py
 ```
 
-```text
+```text test-expect
 person-123 is_adult=True
 pinned binding recorded in subject-bindings.json
 ```
@@ -603,7 +614,7 @@ again:
 python3 age_check.py
 ```
 
-```text
+```text test-expect
 person-123 is_adult=True
 pinned binding recorded in subject-bindings.json
 ```
@@ -628,7 +639,7 @@ Ask about a different record:
 python3 age_check.py person-456
 ```
 
-```text
+```text test-expect
 person-456 is_adult=False
 pinned binding recorded in subject-bindings.json
 ```
@@ -640,7 +651,7 @@ The registry holds a name and a date of birth for both people. Neither answer co
 Change one stored binding to prove that the application, not the deployment, decides what it
 accepts:
 
-```sh
+```sh test-exit="1"
 python3 - <<'PY'
 import json
 from pathlib import Path
@@ -652,7 +663,7 @@ PY
 python3 age_check.py person-123
 ```
 
-```text
+```text test-expect
 unverifiable response, nothing read (policy): the Evidence response failed verification: Evidence payload does not match the relying procedure
 ```
 
@@ -695,7 +706,7 @@ evidencectl dev stop
 evidencectl dev clean
 ```
 
-```text
+```text test-expect
 Local Evidence stopped
 Removed stopped local Evidence state
 ```

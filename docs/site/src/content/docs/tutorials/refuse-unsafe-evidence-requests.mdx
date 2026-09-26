@@ -12,6 +12,9 @@ persona:
   - consumer or verifier
 locale: en
 standards_referenced: []
+tutorial_test:
+  toolset: evidence
+  after: tutorials/return-a-governed-value
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
@@ -42,18 +45,18 @@ you completed that tutorial. Without it, preparation stops with
 
 In one terminal, return to the `first-evidence-assertion` directory and serve the checked cases:
 
-```sh
+```sh test-cwd="first-evidence-assertion" test-background="http://127.0.0.1:4010/people/person-123"
 evidencectl source mock serve --config adult-status/mocks/source.yaml
 ```
 
 In another terminal, enter the existing project and start a fresh local generation:
 
-```sh
+```sh test-cwd="first-evidence-assertion"
 cd adult-status
 evidencectl dev start .
 ```
 
-```text
+```text test-excerpt
 Evidence ready at http://127.0.0.1:8080
 Issuer ready at http://127.0.0.1:8081
 ```
@@ -106,7 +109,7 @@ curl --silent --show-error \
   --write-out 'HTTP %{http_code}\n'
 ```
 
-```text
+```text test-expect
 HTTP 403
 ```
 
@@ -116,7 +119,15 @@ Inspect the public problem:
 python3 -m json.tool unauthorized-response.json
 ```
 
-The response identifies only the closed `evidence.denied` problem and public trace ID. It
+The response identifies only the closed `evidence.denied` problem and public trace ID:
+
+```json test-excerpt
+{
+  "code": "evidence.denied"
+}
+```
+
+It
 does not reveal source facts, selector values, grants, or credentials. The registry terminal shows
 no new `GET /people/person-123` because authorization failed before source access.
 
@@ -143,7 +154,7 @@ evidencectl verify authorized-response.jws.json \
   --output authorized-response.verified.json
 ```
 
-```text
+```text test-expect
 VERIFIED
 ```
 
@@ -169,13 +180,13 @@ PY
 
 Try to verify the changed response:
 
-```sh
+```sh test-exit="1"
 evidencectl verify tampered-response.jws.json \
   --context .evidence/requests/refusal-check/verification.json \
   --output tampered-response.verified.json
 ```
 
-```text
+```text test-expect
 evidencectl: Evidence response verification failed
 ```
 
@@ -193,7 +204,7 @@ evidencectl dev stop
 evidencectl dev clean
 ```
 
-```text
+```text test-expect
 Local Evidence stopped
 Removed stopped local Evidence state
 ```

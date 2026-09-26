@@ -11,6 +11,9 @@ persona:
   - consumer or verifier
 locale: en
 standards_referenced: []
+tutorial_test:
+  toolset: evidence
+  after: tutorials/first-evidence-assertion
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
@@ -35,7 +38,7 @@ trust and request expectations support later offline review.
 
 Enter the existing project. No service or registry needs to be running:
 
-```sh
+```sh test-cwd="first-evidence-assertion"
 cd adult-status
 ```
 
@@ -88,15 +91,24 @@ evidence verify \
 
 The result begins:
 
-```text
+```text test-excerpt
 verified-at: <recorded-instant>
 authentic: yes
 currently-valid: yes
 ```
 
-The command then prints the verified Evidence Gateway payload. It opens no listener, contacts no issuer,
-fetches no discovery document, and calls no source. The named JWKS file is the complete trust set
-for this verification.
+The command then prints the verified Evidence Gateway payload, which carries the same answer the first
+tutorial verified:
+
+```json test-excerpt
+{
+  "providesValueFor": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
+  "value": true
+}
+```
+
+It opens no listener, contacts no issuer, fetches no discovery document, and calls no source. The
+named JWKS file is the complete trust set for this verification.
 
 `authentic` and `currently-valid` answer different questions. An expired stored response can remain
 authentic evidence of what was signed and accepted at an earlier decision time. It must not be used

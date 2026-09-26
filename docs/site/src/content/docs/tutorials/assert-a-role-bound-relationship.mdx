@@ -11,6 +11,8 @@ persona:
   - assertion provider
 locale: en
 standards_referenced: []
+tutorial_test:
+  toolset: evidence
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
@@ -37,7 +39,7 @@ mkdir role-bound-relationship
 cd role-bound-relationship
 ```
 
-```python
+```python title="registry.py" test-file
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
@@ -98,7 +100,7 @@ ThreadingHTTPServer(("127.0.0.1", 8002), Registry).serve_forever()
 
 Start it in one terminal and leave it running:
 
-```sh
+```sh test-background="http://127.0.0.1:8002/openapi.json"
 python3 registry.py
 ```
 
@@ -121,7 +123,7 @@ cd parent-relationship
 
 Create the question definition:
 
-```yaml
+```yaml title="questions/parent-relationship.yaml" test-file
 id: parent-relationship
 question: Is the candidate registered as a parent of the child?
 purpose: relationship-check
@@ -153,7 +155,7 @@ arguments. The source decision is the only fact that reaches the derivation.
 
 Create the answer logic:
 
-```rhai
+```rhai title="derivations/parent-relationship.rhai" test-file
 fn answer(facts, selectors, context) {
     #{
         relationship_confirmed:
@@ -172,7 +174,7 @@ and both subject bindings before signing.
 evidencectl dev start .
 ```
 
-```text
+```text test-excerpt
 Evidence ready at http://127.0.0.1:8080
 Issuer ready at http://127.0.0.1:8081
 ```
@@ -213,7 +215,7 @@ evidencectl verify parent-relationship.jws.json \
   --output parent-relationship.verified.json
 ```
 
-```text
+```text test-expect
 VERIFIED
 ```
 
@@ -224,7 +226,7 @@ python3 -m json.tool parent-relationship.verified.json
 The verified assertion has two pseudonymous subject bindings, one for `child` and one for
 `candidate-parent`, plus this supported value:
 
-```json
+```json test-excerpt
 {
   "providesValueFor": "urn:registrystack:evidence:local:concept:parent-relationship:relationship_confirmed",
   "value": true
@@ -240,6 +242,13 @@ the answer to the requested subjects without turning the assertion into a copy o
 evidencectl dev stop
 evidencectl audit show --last-operation
 evidencectl dev clean
+```
+
+```text test-expect
+Local Evidence stopped
+ACCESS AUTHORIZED parent-relationship relationship-check requester=<pseudonym>
+DISCLOSURE RELEASED relationship_confirmed
+Removed stopped local Evidence state
 ```
 
 The audit identifies the authorized question, purpose, requester pseudonym, and disclosed concept.

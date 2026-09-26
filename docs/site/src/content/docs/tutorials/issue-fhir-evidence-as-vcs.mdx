@@ -13,6 +13,8 @@ locale: en
 standards_referenced:
   - fhir-r4
   - sd-jwt-vc
+tutorial_test:
+  toolset: evidence
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
@@ -73,7 +75,7 @@ record whose beneficiary resolves to a Patient that exists, and one active Organ
 healthcare provider. It writes only their selectors to two owner-only local files, and prints
 neither identifiers nor FHIR resources:
 
-```python
+```python title="discover-fhir-records.py" test-file
 import json
 import os
 import re
@@ -244,7 +246,7 @@ print("Organization selector file: ready")
 python3 discover-fhir-records.py
 ```
 
-```text
+```text test-expect
 Coverage selector file: ready
 Organization selector file: ready
 ```
@@ -264,7 +266,7 @@ selectors never reach a log file.
 
 Create `fhir-read-through.py`:
 
-```python
+```python title="fhir-read-through.py" test-file
 import json
 import os
 import re
@@ -383,7 +385,7 @@ done
 curl --silent --show-error --fail http://127.0.0.1:8000/healthz
 ```
 
-```text
+```text test-expect
 ready
 ```
 
@@ -402,7 +404,7 @@ origin, paths, response media type, projected fields, and bounds are all stated 
 
 Save this reviewed subset as `fhir-smart-r4.openapi.yaml`:
 
-```yaml
+```yaml title="fhir-smart-r4.openapi.yaml" test-file
 openapi: 3.1.0
 info:
   title: SMART Health IT public FHIR R4 tutorial subset
@@ -488,7 +490,7 @@ evidencectl init fhir-record-evidence \
 cd fhir-record-evidence
 ```
 
-```text
+```text test-excerpt
 Created an editable OpenAPI authoring project in fhir-record-evidence
 ```
 
@@ -500,7 +502,7 @@ authoring only; a deployment must use a reviewed authenticated HTTPS source.
 
 Create `questions/fhir-coverage-status.yaml`:
 
-```yaml
+```yaml title="questions/fhir-coverage-status.yaml" test-file
 id: fhir-coverage-status
 question: Does this coverage record report active coverage for the selected patient?
 purpose: coverage-record-verification
@@ -534,7 +536,7 @@ Patient resource.
 
 Create `derivations/fhir-coverage-status.rhai`:
 
-```rhai
+```rhai title="derivations/fhir-coverage-status.rhai" test-file
 fn answer(facts, selectors, context) {
     let coverage_id = selectors["coverage-record"]["values"]["coverage_id"];
     let patient_id = selectors["patient"]["values"]["patient_id"];
@@ -560,7 +562,7 @@ the payor, subscriber identifier, coverage class, period, and every other source
 
 Create `questions/fhir-healthcare-establishment.yaml`:
 
-```yaml
+```yaml title="questions/fhir-healthcare-establishment.yaml" test-file
 id: fhir-healthcare-establishment
 question: Does this organization record report an active healthcare provider?
 purpose: healthcare-establishment-verification
@@ -589,7 +591,7 @@ disclosure:
 
 Create `derivations/fhir-healthcare-establishment.rhai`:
 
-```rhai
+```rhai title="derivations/fhir-healthcare-establishment.rhai" test-file
 fn answer(facts, selectors, context) {
     let organization_id = selectors["organization"]["values"]["organization_id"];
     if required(facts.resource_id, "organization_id_missing") != organization_id {
@@ -621,7 +623,7 @@ Compile the two questions and start Evidence Gateway with its stock identity pro
 evidencectl dev start .
 ```
 
-```text
+```text test-excerpt
 Evidence ready at http://127.0.0.1:8080
 Issuer ready at http://127.0.0.1:8081
 ```
@@ -644,7 +646,7 @@ evidencectl request prepare fhir-coverage-status \
   --name fhir-coverage-vc
 ```
 
-```text
+```text test-expect
 Prepared request: .evidence/requests/fhir-coverage-vc/request.json
 Prepared verification context: .evidence/requests/fhir-coverage-vc/verification.json
 Prepared authorization: .evidence/requests/fhir-coverage-vc/authorization.curl
@@ -672,7 +674,7 @@ evidencectl verify fhir-coverage.sd-jwt \
   --output fhir-coverage.verified.json
 ```
 
-```text
+```text test-expect
 HTTP 200
 VERIFIED
 ```
@@ -685,7 +687,7 @@ python3 -m json.tool fhir-coverage.verified.json
 
 The verified payload carries one supported value:
 
-```json
+```json test-excerpt
 {
   "providesValueFor": "urn:registrystack:evidence:local:concept:fhir-coverage-status:coverage_record_reports_active",
   "value": true
@@ -722,8 +724,10 @@ evidencectl verify fhir-healthcare-establishment.sd-jwt \
   --output fhir-healthcare-establishment.verified.json
 ```
 
-```text
+```text test-expect
 Prepared request: .evidence/requests/fhir-healthcare-establishment-vc/request.json
+Prepared verification context: .evidence/requests/fhir-healthcare-establishment-vc/verification.json
+Prepared authorization: .evidence/requests/fhir-healthcare-establishment-vc/authorization.curl
 HTTP 200
 VERIFIED
 ```
@@ -749,6 +753,13 @@ rm -f \
   fhir-read-through.pid \
   fhir-coverage-subjects.json \
   fhir-organization-subjects.json
+```
+
+```text test-expect
+Local Evidence stopped
+ACCESS AUTHORIZED fhir-healthcare-establishment healthcare-establishment-verification requester=<pseudonym>
+DISCLOSURE RELEASED healthcare_provider_record_active
+Removed stopped local Evidence state
 ```
 
 The audit names the authorized question, the purpose it was authorized under, the requester
