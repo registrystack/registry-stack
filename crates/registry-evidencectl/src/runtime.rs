@@ -78,6 +78,13 @@ struct Diagnostic {
     suggested_action: &'static str,
 }
 
+impl DoctorArgs {
+    /// Whether the compatibility `--json` spelling was given.
+    pub(crate) fn json(&self) -> bool {
+        self.json
+    }
+}
+
 pub(crate) fn run(args: DoctorArgs, format: OutputFormat) -> Result<ExitCode> {
     if args.runtime_config.is_none() {
         let project = args.project.unwrap_or_else(|| PathBuf::from("."));

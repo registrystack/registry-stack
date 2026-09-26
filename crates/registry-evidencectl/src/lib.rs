@@ -242,7 +242,11 @@ pub fn main_entry() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let format = cli.output_format;
+    let format = if legacy_json_requested(&cli.command) {
+        OutputFormat::Json
+    } else {
+        cli.output_format
+    };
     if format == OutputFormat::Json {
         if let Some(command) = unsupported_json_command(&cli.command) {
             println!("{}", unsupported_json_format_failure(command));
@@ -461,6 +465,17 @@ fn requested_output_format(arguments: &[OsString]) -> OutputFormat {
         OutputFormat::Json
     } else {
         OutputFormat::Human
+    }
+}
+
+/// Whether a command's legacy `--json` flag asked for JSON output. The flag
+/// is an exact alias for `--format json`, so failures render as JSON too.
+fn legacy_json_requested(command: &Command) -> bool {
+    match command {
+        Command::Target(target::TargetCommand::Explain(args)) => args.json,
+        Command::Fixtures(fixtures::FixturesCommand::Run(args)) => args.json,
+        Command::Doctor(args) => args.json(),
+        _ => false,
     }
 }
 

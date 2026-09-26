@@ -267,3 +267,34 @@ fn malformed_source_export(root: &Path) -> std::path::PathBuf {
     .expect("source manifest");
     export
 }
+
+/// The legacy `--json` flags are exact aliases for `--format json`: a failure
+/// answers the same one JSON document on stdout, never human prose on stderr.
+#[test]
+fn legacy_json_flags_fail_with_one_json_document() {
+    let cases: &[&[&str]] = &[
+        &["target", "explain", "missing", "--json"],
+        &["fixtures", "run", "--project", "missing", "--json"],
+        &["doctor", "--project", "missing", "--json"],
+    ];
+    let directory = tempfile::tempdir().expect("temporary working directory");
+    for arguments in cases {
+        let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+            .args(*arguments)
+            .current_dir(directory.path())
+            .output()
+            .expect("run evidencectl");
+        assert!(!output.status.success(), "arguments: {arguments:?}");
+        assert!(
+            output.stderr.is_empty(),
+            "--json wrote human diagnostics for {arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|error| panic!("invalid JSON for {arguments:?}: {error}"));
+        assert!(
+            report["diagnostics"][0]["code"].is_string(),
+            "{arguments:?} answered no diagnostic: {report}"
+        );
+    }
+}
