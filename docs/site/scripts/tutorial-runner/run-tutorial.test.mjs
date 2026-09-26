@@ -143,6 +143,50 @@ test('the harness sets no shell variable a page could use or clobber', async () 
   });
 });
 
+test('the casework toolset serves all four binaries and stops Casework sessions before BReg ones', async () => {
+  const body =
+    '## Start\n\n' +
+    fence(
+      'sh',
+      'casework --version\nbreg --version\ncaseworkctl dev work/casework\nbregctl dev work/registry\n' +
+        'mkdir -p work/casework/.casework/dev work/registry/.breg/dev\n' +
+        'echo {} >work/casework/.casework/dev/state.json\necho {} >work/registry/.breg/dev/state.json',
+    ) +
+    fence('sh', 'false');
+  await withPage(body, async ({ dir, page }) => {
+    const calls = join(dir, 'calls.log');
+    for (const name of ['casework', 'caseworkctl', 'breg', 'bregctl']) {
+      await writeFile(join(dir, name), `#!/bin/sh\nprintf '%s %s\\n' ${name} "$*" >>'${calls}'\n`);
+      await chmod(join(dir, name), 0o755);
+    }
+    const { code, output } = await run(['--toolset', 'casework', page], {
+      CASEWORK_BIN: join(dir, 'casework'),
+      CASEWORKCTL_BIN: join(dir, 'caseworkctl'),
+      BREG_BIN: join(dir, 'breg'),
+      BREGCTL_BIN: join(dir, 'bregctl'),
+    });
+    assert.equal(code, 1, output);
+    const log = (await readFile(calls, 'utf8')).trim().split('\n');
+    assert.deepEqual(log.slice(0, 4), ['casework --version', 'breg --version', 'caseworkctl dev work/casework', 'bregctl dev work/registry']);
+    assert.match(log[4], /^caseworkctl dev stop \/\S+\/work\/casework --remove$/u);
+    assert.match(log[5], /^bregctl dev stop \/\S+\/work\/registry --remove$/u);
+    assert.equal(log.length, 6);
+  });
+});
+
+test('the casework toolset takes all four binaries or none', async () => {
+  await withPage('## A\n\n' + fence('sh', 'true'), async ({ dir, page }) => {
+    const { code, output } = await run(['--toolset', 'casework', page], {
+      CASEWORK_BIN: join(dir, 'casework'),
+      CASEWORKCTL_BIN: '',
+      BREG_BIN: '',
+      BREGCTL_BIN: '',
+    });
+    assert.equal(code, 2, output);
+    assert.match(output, /set CASEWORK_BIN, CASEWORKCTL_BIN, BREG_BIN, and BREGCTL_BIN, or none of them to build from source/u);
+  });
+});
+
 test('a test-edit block changes the file it names, relative to where the reader stands', async () => {
   const body =
     '## Setup\n\n' +

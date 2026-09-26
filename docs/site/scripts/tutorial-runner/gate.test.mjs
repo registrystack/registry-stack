@@ -6,8 +6,11 @@ import test from 'node:test';
 
 import { planGate } from './gate.mjs';
 
-const BREG = /(^|[^\w-])(bregctl|breg)([^\w-]|$)/mu;
-const KNOWN = ['breg', 'none'];
+const TOOLSETS = {
+  breg: { commands: /(^|[^\w-])(bregctl|breg)([^\w-]|$)/mu },
+  casework: { commands: /(^|[^\w-])(caseworkctl|casework)([^\w-]|$)/mu, includes: ['breg'] },
+  none: {},
+};
 
 async function withDocs(pages, fn) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'tutorial-gate-test.')));
@@ -33,7 +36,7 @@ test('a gate replays each chain of declared pages once, from its first page', as
     'tutorials/other': { body: '```sh\necho unrelated\n```\n' },
   };
   await withDocs(pages, async (root) => {
-    const plan = await planGate(root, 'breg', BREG, KNOWN);
+    const plan = await planGate(root, 'breg', TOOLSETS);
     assert.deepEqual(plan.errors, []);
     assert.deepEqual(plan.journeys, [['tutorials/alone'], ['tutorials/first', 'tutorials/second']]);
     assert.deepEqual(plan.skipped, [{ slug: 'start/later', reason: 'needs a production database' }]);
@@ -42,7 +45,7 @@ test('a gate replays each chain of declared pages once, from its first page', as
 
 test('a page that runs the toolset without declaring how it is tested fails by name', async () => {
   await withDocs({ 'tutorials/new': { body: runsBreg } }, async (root) => {
-    const { errors } = await planGate(root, 'breg', BREG, KNOWN);
+    const { errors } = await planGate(root, 'breg', TOOLSETS);
     assert.deepEqual(errors, [
       'tutorials/new.mdx runs breg commands but declares no tutorial_test; add tutorial_test with toolset breg, and a skip reason if it cannot be replayed',
     ]);
@@ -61,7 +64,7 @@ test('declarations that cannot hold are refused', async () => {
     'tutorials/loop-b': { frontmatter: 'tutorial_test:\n  toolset: breg\n  after: tutorials/loop-a\n', body: runsBreg },
   };
   await withDocs(pages, async (root) => {
-    const { errors } = await planGate(root, 'breg', BREG, KNOWN);
+    const { errors } = await planGate(root, 'breg', TOOLSETS);
     assert.deepEqual(errors, [
       'tutorials/after-skipped.mdx: tutorial_test.after names tutorials/skipped, which is skipped',
       'tutorials/loop-a.mdx: tutorial_test.after leads back to itself',
@@ -81,7 +84,7 @@ test('a journey starts in a copy of the checkout only when its first page asks',
     'tutorials/alone': { frontmatter: 'tutorial_test:\n  toolset: breg\n', body: runsBreg },
   };
   await withDocs(pages, async (root) => {
-    const plan = await planGate(root, 'breg', BREG, KNOWN);
+    const plan = await planGate(root, 'breg', TOOLSETS);
     assert.deepEqual(plan.errors, []);
     assert.deepEqual(plan.checkout, ['tutorials/first']);
   });
@@ -91,7 +94,7 @@ test('a journey starts in a copy of the checkout only when its first page asks',
     'tutorials/odd': { frontmatter: 'tutorial_test:\n  toolset: breg\n  checkout: yes please\n', body: runsBreg },
   };
   await withDocs(refused, async (root) => {
-    const { errors } = await planGate(root, 'breg', BREG, KNOWN);
+    const { errors } = await planGate(root, 'breg', TOOLSETS);
     assert.deepEqual(errors, [
       'tutorials/odd.mdx: tutorial_test.checkout is true or absent',
       'tutorials/second.mdx: tutorial_test.checkout belongs on tutorials/first, where the journey starts',
@@ -106,11 +109,27 @@ test('a page is refused, not ignored, when it names no known toolset or cannot b
     'tutorials/skipped': { frontmatter: 'tutorial_test:\n  toolset: breg\n  skip: offline\n', body: '```sh test-expcet\nbregctl check\n```\n' },
   };
   await withDocs(pages, async (root) => {
-    const { errors } = await planGate(root, 'breg', BREG, KNOWN);
+    const { errors } = await planGate(root, 'breg', TOOLSETS);
     assert.equal(errors.length, 3, errors.join('\n'));
     assert.match(errors[0], /^tutorials\/broken\.mdx: its frontmatter is not YAML: /u);
     assert.match(errors[1], /^tutorials\/skipped\.mdx: line \d+: unknown annotation test-expcet/u);
-    assert.equal(errors[2], 'tutorials/typo.mdx: unknown tutorial_test toolset bregg (expected breg or none)');
+    assert.equal(errors[2], 'tutorials/typo.mdx: unknown tutorial_test toolset bregg (expected breg, casework, or none)');
+  });
+});
+
+test('a page running a toolset is covered only by a toolset that serves it', async () => {
+  const pages = {
+    'tutorials/both': { frontmatter: 'tutorial_test:\n  toolset: casework\n', body: '```sh\ncaseworkctl init work\nbregctl check project\n```\n' },
+    'tutorials/escape': { frontmatter: 'tutorial_test:\n  toolset: none\n', body: runsBreg },
+  };
+  await withDocs(pages, async (root) => {
+    const breg = await planGate(root, 'breg', TOOLSETS);
+    assert.deepEqual(breg.errors, [
+      'tutorials/escape.mdx runs breg commands but declares toolset none, which does not serve them; declare toolset breg',
+    ]);
+    const casework = await planGate(root, 'casework', TOOLSETS);
+    assert.deepEqual(casework.errors, []);
+    assert.deepEqual(casework.journeys, [['tutorials/both']]);
   });
 });
 
@@ -123,7 +142,7 @@ test('a page running the toolset under another toolset, or skipping every one of
     },
   };
   await withDocs(pages, async (root) => {
-    const { errors } = await planGate(root, 'breg', BREG, KNOWN);
+    const { errors } = await planGate(root, 'breg', TOOLSETS);
     assert.deepEqual(errors, [
       'tutorials/all-skipped.mdx: every breg command on the page is test-skip; replay one, or give tutorial_test a skip reason',
       'tutorials/escape.mdx runs breg commands but declares toolset none, which does not serve them; declare toolset breg',

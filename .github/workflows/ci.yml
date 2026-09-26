@@ -1461,7 +1461,7 @@ jobs:
 
       - name: Test the tutorial runner
         working-directory: docs/site
-        run: npm run test:tutorial:breg
+        run: npm run test:tutorial:runner
 
       - name: Check tutorial command drift
         working-directory: docs/site
@@ -1558,9 +1558,9 @@ jobs:
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Test the tutorial gate helpers
+      - name: Test the tutorial runner
         working-directory: docs/site
-        run: npm run test:tutorial:casework
+        run: npm run test:tutorial:runner
 
       - name: Check tutorial command drift
         working-directory: docs/site
@@ -1608,7 +1608,7 @@ jobs:
           # gets. The runtime the page starts runs PostgreSQL in a disposable
           # container of its own, which is why the replay stays on the Docker
           # runner rather than inside a clean read-only container.
-          bash docs/site/scripts/check-casework-tutorial.sh
+          node docs/site/scripts/run-tutorial.mjs --gate casework
 
   breg-evidence-composition:
     # The offline proof that a BReg evidence-source export composes into an
