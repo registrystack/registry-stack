@@ -95,6 +95,18 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg/src/runtime_config.rs, RuntimeConfig::verify_package_envelope;
     crates/registry-breg/tests/runtime_config.rs, shared_package_envelope_and_pin_are_checked_before_startup. */}
 
+- BREAKING: `evidencectl package` now publishes one environment-neutral package
+  directory with `SHA256SUMS` and an optional hash-covered `REVISION`; it no
+  longer copies `runtime.yaml` into the output. Evidence Gateway verifies every
+  listed file at startup and `package.expectedDigest` pins the package digest.
+  The separate Evidence bundle and runtime revisions are removed, while each
+  requirement's package-derived `configurationRevision` remains. The retired
+  `evidencectl build` spelling is refused with `evidencectl package` as the fix.
+
+{/* Evidence: crates/registry-evidence/src/bundle.rs, DeploymentInputs::load;
+    crates/registry-evidencectl/src/build.rs, run_package_with_format;
+    crates/registry-evidencectl/src/authoring.rs, write_bundle. */}
+
 - `evidence check --require-runtime-dependencies` and `evidence serve` name
   the fault that stopped a Transit signer from initializing, after the
   unchanged `evidence: runtime signing initialization failed:` prefix: no

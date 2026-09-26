@@ -1202,13 +1202,13 @@ async fn openapi_route_serves_the_generated_contract_without_authentication_or_s
     assert_eq!(document.text(), generated[crate::contracts::OPENAPI_FILE]);
 
     // The document is static public material: it names no definition, reveals
-    // no deployment revision, and reaches no source.
+    // no package digest, and reaches no source.
     let served = document.json::<Value>();
     assert_eq!(served["openapi"], json!("3.1.0"));
     assert!(served["paths"]["/openapi.json"]["get"].is_object());
     assert!(!document
         .text()
-        .contains(&fixture.runtime.bundle().revision().to_string()));
+        .contains(&fixture.runtime.bundle().package_digest().to_string()));
     assert!(fixture
         .server
         .received_requests()
@@ -1680,10 +1680,9 @@ async fn discovery_declares_the_holder_bound_mode_for_a_holder_bound_requirement
 }
 
 #[tokio::test]
-async fn serving_runtime_never_reloads_merges_or_falls_back_after_bundle_capture() {
+async fn serving_runtime_never_reloads_merges_or_falls_back_after_package_capture() {
     let fixture = acceptance_runtime().await;
-    let captured_revision = fixture.runtime.bundle().revision().to_owned();
-    let captured_runtime_revision = fixture.runtime.runtime_revision().to_owned();
+    let captured_digest = fixture.runtime.bundle().package_digest().to_owned();
     let adult_requirement = adult_request().requirement;
     let captured_requirement_revision = fixture
         .runtime
@@ -1724,17 +1723,13 @@ async fn serving_runtime_never_reloads_merges_or_falls_back_after_bundle_capture
     )
     .expect("add an unreferenced fallback-like artifact");
 
-    assert_eq!(fixture.runtime.bundle().revision(), captured_revision);
+    assert_eq!(fixture.runtime.bundle().package_digest(), captured_digest);
     assert_eq!(
         fixture
             .runtime
             .bundle()
             .configuration_revision(&adult_requirement),
         Some(captured_requirement_revision.as_str())
-    );
-    assert_eq!(
-        fixture.runtime.runtime_revision(),
-        captured_runtime_revision
     );
     assert_eq!(
         fixture.runtime.bundle().artifact("evidence.yaml"),
@@ -9444,14 +9439,14 @@ async fn search_then_fetch_release_still_omits_source_arrays() {
     assert!(events[2]["record"].get("adapterIds").is_none());
 }
 
-/// An operator who pins the bundle revision starts only on that bundle.
+/// An operator who pins the package digest starts only on that package.
 #[tokio::test]
 async fn an_expected_package_digest_admits_only_the_bundle_it_names() {
     let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
-    let revision = DeploymentInputs::load(&prepared.runtime_path)
+    let digest = DeploymentInputs::load(&prepared.runtime_path)
         .expect("the immutable deployment loads")
         .bundle()
-        .revision()
+        .package_digest()
         .to_owned();
     let original =
         fs::read_to_string(&prepared.runtime_path).expect("runtime configuration is readable");
@@ -9470,21 +9465,19 @@ async fn an_expected_package_digest_admits_only_the_bundle_it_names() {
         make_file_read_only(&prepared.runtime_path);
     };
 
-    pin(&revision);
-    DeploymentInputs::load(&prepared.runtime_path).expect("the pinned bundle loads");
+    pin(&digest);
+    DeploymentInputs::load(&prepared.runtime_path).expect("the pinned package loads");
 
     let other = format!("sha256:{}", "0".repeat(64));
-    assert_ne!(other, revision);
+    assert_ne!(other, digest);
     pin(&other);
     let refused = DeploymentInputs::load(&prepared.runtime_path)
-        .expect_err("a different bundle revision is refused");
-    let fault = refused
-        .artifact_fault()
-        .expect("the refusal names the runtime file");
-    assert_eq!(fault.artifact(), "runtime.yaml");
-    assert_eq!(
-        fault.fault().cause(),
-        "package.expectedDigest does not match the revision of the bundle at package.root"
+        .expect_err("a different package digest is refused");
+    assert!(
+        refused.to_string().contains(&format!(
+            "package.expectedDigest is {other} but the package at package.root is {digest}"
+        )),
+        "{refused}"
     );
 }
 
@@ -9546,27 +9539,21 @@ async fn initialize_from_opens_the_deployment_it_was_handed_not_the_runtime_path
 /// wanted to hand initialization a different bundle or runtime document has no
 /// way to write it. That is a compile-time property, and this test pins the
 /// runtime half of it: what the accessors report before initialization is what
-/// the initialized runtime reports afterwards, on both captures, so a future
-/// change that let the pair be rebuilt between the two would show up here as a
-/// revision that no longer matches.
+/// the initialized runtime reports afterwards, on both captures.
 #[tokio::test]
-async fn initialize_from_serves_the_revisions_the_captured_inputs_carry() {
+async fn initialize_from_serves_the_captured_package_and_runtime_config() {
     let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
     let deployment =
         DeploymentInputs::load(&prepared.runtime_path).expect("the immutable deployment loads");
-    let captured_bundle = deployment.bundle().revision().to_owned();
-    let captured_runtime = deployment.runtime().revision().to_owned();
-    assert_ne!(
-        captured_bundle, captured_runtime,
-        "the two captures carry independent revisions"
-    );
+    let captured_package = deployment.bundle().package_digest().to_owned();
+    let captured_runtime = deployment.runtime().config.clone();
 
     let runtime = EvidenceRuntime::initialize_from(deployment)
         .await
         .expect("the captured deployment initializes");
 
-    assert_eq!(runtime.bundle().revision(), captured_bundle);
-    assert_eq!(runtime.runtime_revision(), captured_runtime);
+    assert_eq!(runtime.bundle().package_digest(), captured_package);
+    assert_eq!(runtime.runtime_config(), &captured_runtime);
 }
 
 async fn prepare_acceptance(binding_secret: &str) -> PreparedAcceptance {
@@ -9724,6 +9711,7 @@ fn prepare_fixture_root_with_mutation(
         &audit_path,
         ceilings,
     );
+    refresh_package_envelope(&bundle_root);
     make_file_read_only(&runtime_path);
     make_read_only(&bundle_root);
 
@@ -9733,6 +9721,25 @@ fn prepare_fixture_root_with_mutation(
         runtime_path,
         audit_path,
     }
+}
+
+fn refresh_package_envelope(root: &Path) {
+    for reserved in [
+        registry_platform_config::SUM_FILE,
+        registry_platform_config::REVISION_FILE,
+    ] {
+        let path = root.join(reserved);
+        if path.exists() {
+            fs::remove_file(path).expect("prior package envelope is removed");
+        }
+    }
+    registry_platform_config::write_sum_file(
+        root,
+        None,
+        &crate::bundle::evidence_package_limits(),
+        "evidencectl package",
+    )
+    .expect("package envelope is refreshed");
 }
 
 fn authenticator() -> Authenticator {

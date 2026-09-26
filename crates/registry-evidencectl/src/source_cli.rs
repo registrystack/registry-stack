@@ -508,8 +508,8 @@ mod tests {
         args.target = Some(target.clone());
         let mut output = Vec::new();
         let mut calls = Vec::new();
-        // This test pins command-to-compiler routing. The build helper's tests
-        // pin the real runtime revision computation; this layer never hashes it.
+        // This test pins command-to-compiler routing. The package helper's
+        // tests pin configuration revisions; this layer never hashes them.
         review_with_revisions(args, false, &mut output, |project, selected| {
             assert_eq!(selected, target);
             calls.push(project.to_path_buf());

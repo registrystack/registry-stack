@@ -1,6 +1,6 @@
 $schema: https://json-schema.org/draft/2020-12/schema
 $id: https://registrystack.org/schemas/evidence/bundle-v1.json
-title: Evidence immutable deployment bundle Version 1
+title: Evidence governed package configuration Version 1
 type: object
 additionalProperties: false
 required:
@@ -20,16 +20,16 @@ required:
 properties:
   version:
     description: >-
-      Selects the bundle grammar the rest of this document is read against, and a version
+      Selects the package configuration grammar the rest of this document is read against, and a version
       the runtime does not implement is rejected at startup.
     const: 1
   assuranceProfile:
     description: >-
-      Declares the governed assurance boundary of the whole bundle, and the value is visible
+      Declares the governed assurance boundary of the whole package, and the value is visible
       in every assertion, so an authentic `local` assertion never satisfies a relying procedure
       expecting a deployable profile. `local` is an authoring profile that lets a requirement
       omit `fixtures` and disables no other runtime boundary; the deployable profiles require
-      every requirement to reference a fixture suite with complete coverage before the bundle
+      every requirement to reference a fixture suite with complete coverage before the package
       loads.
     enum:
       - local

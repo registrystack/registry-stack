@@ -25,8 +25,8 @@ properties:
     const: EvidenceRuntimeConfig
   package:
     description: >-
-      Selects the one governed bundle this process loads at startup; no alternate, overlay,
-      or fallback bundle path exists for a running deployment.
+      Selects the one governed package this process verifies and loads at startup; no alternate,
+      overlay, or fallback package path exists for a running deployment.
     type: object
     additionalProperties: false
     required:
@@ -34,12 +34,12 @@ properties:
     properties:
       root:
         description: >-
-          Absolute path of the governed bundle directory this process loads.
+          Absolute path of the governed package directory this process verifies and loads.
         $ref: '#/$defs/absolute-path'
       expectedDigest:
         description: >-
-          Optional `sha256:` bundle revision the operator expects at `package.root`. When set,
-          startup is refused unless the bundle found there computes exactly this revision.
+          Optional `sha256:` digest of the package's `SHA256SUMS` file. When set, startup is
+          refused unless the verified package found at `package.root` has exactly this digest.
         type: string
         pattern: ^sha256:[0-9a-f]{64}$
   listener:
@@ -433,5 +433,5 @@ platform:
   supported: Unix
   reason: >-
     Version 1 requires Unix owner, mode, no-follow, link-count, and file-identity guarantees
-    for the runtime file, the bundle directory and its artifacts, named CA bundle files, the
+    for the runtime file, the package directory and its artifacts, named CA bundle files, the
     secret root, source extracts, individual secrets, and audit storage.

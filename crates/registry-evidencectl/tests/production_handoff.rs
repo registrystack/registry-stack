@@ -74,27 +74,23 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
         "offline production check",
     );
     let first = fixture.package(evidence);
-    let first_revision = bundle_revision(&first);
+    let first_revision = package_digest(&first);
     let first_bytes = snapshot_files(&fixture.candidate);
     fs::rename(&fixture.candidate, &fixture.first_candidate)
         .expect("archive the first create-only candidate");
 
     let second = fixture.package(evidence);
-    let revision = bundle_revision(&second);
+    let revision = package_digest(&second);
     assert_eq!(
         revision, first_revision,
-        "bundle revision must be repeatable"
+        "package digest must be repeatable"
     );
     assert_eq!(
         snapshot_files(&fixture.candidate),
         first_bytes,
         "identical inputs and output binding must reproduce every candidate file byte"
     );
-    assert_eq!(
-        fs::read(&fixture.target_runtime).expect("target runtime"),
-        fs::read(fixture.candidate.join("runtime.yaml")).expect("copied runtime"),
-        "the target runtime must be copied byte-for-byte"
-    );
+    assert!(!fixture.candidate.join("runtime.yaml").exists());
 
     fixture.provision_target_secrets();
     let audit_secret = fixture.secrets.join("audit-hmac-key");
@@ -103,7 +99,7 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
     let unavailable = evidencectl()
         .arg("doctor")
         .arg("--runtime-config")
-        .arg(fixture.candidate.join("runtime.yaml"))
+        .arg(fixture.target_runtime.clone())
         .env("EVIDENCE_BIN", evidence)
         .output()
         .expect("runtime doctor with unavailable secret starts");
@@ -119,8 +115,10 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
         .expect("restore audit secret mode");
     assert_success(
         evidencectl()
-            .args(["doctor", "--project"])
-            .arg(&fixture.candidate)
+            .arg("doctor")
+            .arg("--runtime-config")
+            .arg(&fixture.target_runtime)
+            .env("EVIDENCE_BIN", evidence)
             .output()
             .expect("doctor starts"),
         "target-host doctor",
@@ -128,13 +126,15 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
     assert_success(
         evidencectl()
             .arg("test")
-            .arg(&fixture.candidate)
+            .arg(&fixture.project)
+            .arg("--target")
+            .arg(&fixture.target)
             .env("EVIDENCE_BIN", evidence)
             .output()
             .expect("fixture driver starts"),
         "target-host fixtures",
     );
-    fixture.assert_compose_revision_distinction(evidence, &revision);
+    fixture.assert_compose_package_identity(evidence, &revision);
 
     let mut https = fixture.start_https();
     fixture.wait_for_https(&mut https);
@@ -142,7 +142,7 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
         evidencectl()
             .arg("doctor")
             .arg("--runtime-config")
-            .arg(fixture.candidate.join("runtime.yaml"))
+            .arg(fixture.target_runtime.clone())
             .env("EVIDENCE_BIN", evidence)
             .env("SSL_CERT_FILE", &fixture.ca)
             .output()
@@ -158,7 +158,7 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
     let beside = evidencectl()
         .arg("doctor")
         .arg("--runtime-config")
-        .arg(fixture.candidate.join("runtime.yaml"))
+        .arg(fixture.target_runtime.clone())
         .env("EVIDENCE_BIN", evidence)
         .env("SSL_CERT_FILE", &fixture.ca)
         .output()
@@ -176,7 +176,7 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
         evidencectl()
             .arg("doctor")
             .arg("--runtime-config")
-            .arg(fixture.candidate.join("runtime.yaml"))
+            .arg(fixture.target_runtime.clone())
             .arg("--without-audit-lock")
             .env("EVIDENCE_BIN", evidence)
             .env("SSL_CERT_FILE", &fixture.ca)
@@ -273,7 +273,7 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
         Command::new(evidence)
             .arg("verify-audit")
             .arg("--runtime-config")
-            .arg(fixture.candidate.join("runtime.yaml"))
+            .arg(fixture.target_runtime.clone())
             .output()
             .expect("audit verifier starts"),
         "complete audit-chain verification",
@@ -281,8 +281,8 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
 }
 
 #[test]
-#[ignore = "exact gate: runs the real production builder and sibling Evidence bundle check"]
-fn production_build_accepts_the_real_bundle_check_revision() {
+#[ignore = "exact gate: runs the real production packager and sibling Evidence package check"]
+fn production_package_accepts_the_real_package_check_digest() {
     let fixture = Fixture::new();
     let evidence = evidence_binary();
     fixture.stage_authoring_project();
@@ -291,9 +291,9 @@ fn production_build_accepts_the_real_bundle_check_revision() {
     fixture.authorize_four_shapes();
 
     let output = fixture.build(evidence);
-    let revision = bundle_revision(&output);
+    let revision = package_digest(&output);
     assert!(revision.starts_with("sha256:"));
-    assert!(fixture.candidate.join("bundle/evidence.yaml").is_file());
+    assert!(fixture.candidate.join("evidence.yaml").is_file());
 }
 
 #[test]
@@ -530,17 +530,17 @@ fn production_build_checks_and_evaluates_every_neutral_authoring_shape() {
     fixture.authorize_four_shapes();
 
     let output = fixture.build(evidence);
-    let revision = bundle_revision(&output);
+    let revision = package_digest(&output);
     fixture.provision_target_secrets();
-    let (checked_revision, _) = check_revisions(
+    let checked_revision = check_package(
         evidence,
-        &fixture.candidate.join("runtime.yaml"),
+        &fixture.target_runtime,
         "published four-shape production check",
     );
     assert_eq!(checked_revision, revision);
 
     let bundle: Value = serde_norway::from_slice(
-        &fs::read(fixture.candidate.join("bundle/evidence.yaml")).expect("four-shape bundle"),
+        &fs::read(fixture.candidate.join("evidence.yaml")).expect("four-shape bundle"),
     )
     .expect("four-shape bundle parses");
     assert_eq!(bundle["assuranceProfile"], "production");
@@ -583,7 +583,7 @@ fn production_build_checks_and_evaluates_every_neutral_authoring_shape() {
         assert!(
             fixture
                 .candidate
-                .join("bundle/fixtures")
+                .join("fixtures")
                 .join(fixture_path)
                 .is_file(),
             "the production candidate must capture fixture {fixture_path}"
@@ -593,11 +593,7 @@ fn production_build_checks_and_evaluates_every_neutral_authoring_shape() {
         .as_str()
         .expect("compiled controlled-category codelist path");
     assert!(
-        fixture
-            .candidate
-            .join("bundle")
-            .join(age_codelist)
-            .is_file(),
+        fixture.candidate.join(age_codelist).is_file(),
         "the governed controlled-category codelist must be captured"
     );
 }
@@ -693,7 +689,7 @@ fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
     let local_source_token =
         fs::read(fixture.project.join("secrets/source-token")).expect("local source token");
     let build = fixture.build(evidence);
-    bundle_revision(&build);
+    package_digest(&build);
     assert_eq!(
         snapshot_files(&dev_root),
         stopped_dev,
@@ -722,7 +718,7 @@ fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
         );
     }
     let production_bundle =
-        fs::read(fixture.candidate.join("bundle/evidence.yaml")).expect("production bundle");
+        fs::read(fixture.candidate.join("evidence.yaml")).expect("production bundle");
     assert!(
         production_bundle
             .windows(REQUIREMENT.len())
@@ -1686,7 +1682,7 @@ authorityProfiles:
             &self.target_runtime,
             format!(
                 "apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1\nkind: EvidenceRuntimeConfig\npackage:\n  root: {bundle}\nlistener:\n  bind: 127.0.0.1:{port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 5000\nsecretProviders:\n  file:\n    root: {secrets}\nsigner:\n  kind: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  timeoutMilliseconds: 2000\nauditStorage:\n  path: {audit}\n  maximumFileBytes: 1048576\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
-                bundle = self.candidate.join("bundle").display(),
+                bundle = self.candidate.clone().display(),
                 port = self.evidence_port,
                 secrets = self.secrets.display(),
                 transit_socket = self.root.join("transit-proxy.sock").display(),
@@ -1790,10 +1786,10 @@ authorityProfiles:
 
     fn active_evidence_public_jwk(&self) -> PathBuf {
         let bundle: Value = serde_norway::from_slice(
-            &fs::read(self.candidate.join("bundle/evidence.yaml")).expect("candidate bundle"),
+            &fs::read(self.candidate.join("evidence.yaml")).expect("candidate bundle"),
         )
         .expect("candidate bundle parses");
-        self.candidate.join("bundle").join(
+        self.candidate.clone().join(
             bundle["signing"]["activePublicJwkFile"]
                 .as_str()
                 .expect("active public JWK file"),
@@ -1811,13 +1807,11 @@ authorityProfiles:
             .to_owned()
     }
 
-    fn assert_compose_revision_distinction(&self, evidence: &Path, revision: &str) {
-        let (host_bundle, host_runtime) = check_revisions(
-            evidence,
-            &self.candidate.join("runtime.yaml"),
-            "host runtime check",
+    fn assert_compose_package_identity(&self, evidence: &Path, digest: &str) {
+        assert_eq!(
+            check_package(evidence, &self.target_runtime, "host runtime check"),
+            digest
         );
-        assert_eq!(host_bundle, revision);
 
         let compose = self.root.join("compose-adapter");
         fs::create_dir(&compose).expect("Compose adapter directory");
@@ -1827,8 +1821,8 @@ authorityProfiles:
             format!(
                 "apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1\nkind: EvidenceRuntimeConfig\npackage:\n  root: {bundle}\nlistener:\n  bind: 127.0.0.1:{port}\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 131072\n  maximumConcurrentRequests: 32\n  requestTimeoutMilliseconds: 15000\n  shutdownGraceMilliseconds: 10000\nsecretProviders:\n  file:\n    root: {secrets}\nsigner:\n  kind: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 1\n  timeoutMilliseconds: 2000\nauditStorage:\n  path: {audit}\n  maximumFileBytes: 2097152\noutboundTls:\n  systemRoots: true\n  trustProfiles: {{}}\n",
                 // This absolute host path stands for the unchanged read-only
-                // candidate/bundle mount in the container execution context.
-                bundle = self.candidate.join("bundle").display(),
+                // candidate package mount in the container execution context.
+                bundle = self.candidate.clone().display(),
                 port = free_port(),
                 secrets = self.secrets.display(),
                 transit_socket = self.root.join("transit-proxy.sock").display(),
@@ -1839,19 +1833,14 @@ authorityProfiles:
         fs::set_permissions(&runtime, fs::Permissions::from_mode(0o400))
             .expect("seal Compose runtime");
 
-        let unchanged_bundle = snapshot_files(&self.candidate.join("bundle"));
-        let (compose_bundle, compose_runtime) =
-            check_revisions(evidence, &runtime, "Compose-context runtime check");
+        let unchanged_package = snapshot_files(&self.candidate);
+        let compose_digest = check_package(evidence, &runtime, "Compose-context runtime check");
         assert_eq!(
-            snapshot_files(&self.candidate.join("bundle")),
-            unchanged_bundle,
-            "the Compose adapter must not edit the governed bundle"
+            snapshot_files(&self.candidate),
+            unchanged_package,
+            "the Compose adapter must not edit the governed package"
         );
-        assert_eq!(compose_bundle, revision);
-        assert_ne!(
-            compose_runtime, host_runtime,
-            "environment-specific runtime bindings require an independent runtime revision"
-        );
+        assert_eq!(compose_digest, digest);
     }
 
     fn start_https(&self) -> Child {
@@ -1886,7 +1875,7 @@ authorityProfiles:
         Command::new(evidence)
             .arg("serve")
             .arg("--runtime-config")
-            .arg(self.candidate.join("runtime.yaml"))
+            .arg(self.target_runtime.clone())
             .env("SSL_CERT_FILE", &self.ca)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log.try_clone().expect("clone Evidence log")))
@@ -2194,16 +2183,16 @@ fn assert_success(output: Output, label: &str) -> Output {
     output
 }
 
-fn bundle_revision(output: &Output) -> String {
+fn package_digest(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout)
         .lines()
-        .find_map(|line| line.strip_prefix("Bundle revision: "))
+        .find_map(|line| line.strip_prefix("Package digest: "))
         .filter(|revision| {
             revision.len() == 71
                 && revision.starts_with("sha256:")
                 && revision[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
         })
-        .expect("build reports one bundle revision")
+        .expect("build reports one package digest")
         .to_owned()
 }
 
@@ -2232,7 +2221,7 @@ fn assert_requirement_forms(
     );
 }
 
-fn check_revisions(evidence: &Path, runtime: &Path, label: &str) -> (String, String) {
+fn check_package(evidence: &Path, runtime: &Path, label: &str) -> String {
     let output = assert_success(
         Command::new(evidence)
             .arg("check")
@@ -2245,15 +2234,11 @@ fn check_revisions(evidence: &Path, runtime: &Path, label: &str) -> (String, Str
     let stdout = String::from_utf8(output.stdout).expect("Evidence check stdout");
     let fields = stdout
         .lines()
-        .find(|line| line.starts_with("Evidence deployment "))
+        .find(|line| line.starts_with("Evidence package "))
         .expect("Evidence check report")
         .split_whitespace()
         .collect::<Vec<_>>();
-    assert_eq!(fields.get(3), Some(&"/"), "Evidence revision separator");
-    (
-        fields.get(2).expect("bundle revision").to_string(),
-        fields.get(4).expect("runtime revision").to_string(),
-    )
+    fields.get(2).expect("package digest").to_string()
 }
 
 fn snapshot_files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
@@ -2384,7 +2369,7 @@ fn post_evidence(port: u16, token: &str, nonce: &str) -> (u16, Vec<u8>) {
 
 /// The configuration revision discovery publishes for the fixture requirement.
 ///
-/// It is requirement scoped, so it is not the deployment's bundle revision.
+/// It is requirement scoped, so it is not the deployment's package digest.
 /// Reading it from discovery keeps the assertion check independent of the
 /// signed payload it is compared against.
 fn published_configuration_revision(port: u16, token: &str) -> String {

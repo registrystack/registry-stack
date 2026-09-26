@@ -23,6 +23,27 @@ const CHECK_DIAGNOSTIC: &str =
     "evidence bundle-check diagnostic: derivations/answer.rhai failed static compilation";
 
 #[test]
+fn retired_build_command_refuses_with_package_replacement() {
+    let fixture = Fixture::new();
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .arg("build")
+        .arg("--project")
+        .arg(&fixture.project)
+        .arg("--target")
+        .arg(&fixture.target)
+        .arg("--output")
+        .arg(&fixture.output)
+        .output()
+        .expect("retired build command starts");
+
+    assert_failed(&output, "retired build command");
+    assert!(!fixture.output.exists());
+    let message = stderr(&output);
+    assert!(message.contains("evidence.build.retired"), "{message}");
+    assert!(message.contains("evidencectl package"), "{message}");
+}
+
+#[test]
 fn build_is_create_only_and_never_changes_an_existing_output() {
     let fixture = Fixture::new();
     fs::create_dir(&fixture.output).expect("existing output");
@@ -118,38 +139,30 @@ fn failed_runtime_check_leaves_no_output_or_private_staging() {
 #[test]
 fn a_rejected_bundle_and_fixture_name_the_command_that_shows_the_diagnosis() {
     let rejected_bundle = Fixture::new();
-    let project = fs::canonicalize(&rejected_bundle.project).expect("canonical project");
 
     let output = rejected_bundle.build_failing("check");
 
     assert_failed(&output, "a rejected bundle must fail the build");
     let message = stderr(&output);
     assert!(
-        message.contains(&format!(
-            "Run `evidencectl test {}` to read the diagnosis Evidence prints.",
-            project.display()
-        )),
-        "the refusal names the command that shows the diagnosis: {message}"
+        message.contains("evidence.package.failed"),
+        "the package refusal keeps its stable safe diagnostic: {message}"
     );
     assert!(
-        message.contains(CHECK_DIAGNOSTIC),
-        "the refusal includes what Evidence printed: {message}"
+        !message.contains(CHECK_DIAGNOSTIC),
+        "the package refusal does not relay delegated stderr: {message}"
     );
     assert_value_free(&output);
 
     let rejected_fixture = Fixture::new();
-    let project = fs::canonicalize(&rejected_fixture.project).expect("canonical project");
 
     let output = rejected_fixture.build_failing("fixture:fixtures/answer.yaml");
 
     assert_failed(&output, "a rejected fixture must fail the build");
     let message = stderr(&output);
     assert!(
-        message.contains(&format!(
-            "Run `evidencectl test {} --fixture fixtures/answer.yaml` to read the diagnosis Evidence prints.",
-            project.display()
-        )),
-        "the refusal names the rejected fixture with the command: {message}"
+        message.contains("evidence.package.failed"),
+        "the package refusal keeps its stable safe diagnostic: {message}"
     );
     assert!(
         !message.contains("Evidence reported:"),
@@ -167,16 +180,12 @@ fn a_long_bundle_check_diagnostic_is_bounded_and_says_so() {
     assert_failed(&output, "a long rejected bundle must still fail the build");
     let message = stderr(&output);
     assert!(
-        message.contains("diagnostic trimmed to the last 40 lines"),
-        "a long diagnostic says it was trimmed: {message}"
+        message.contains("evidence.package.failed"),
+        "a long delegated diagnostic maps to the stable safe refusal: {message}"
     );
     assert!(
-        message.contains("evidence bundle-check diagnostic line 200"),
-        "the most recent line survives the trim: {message}"
-    );
-    assert!(
-        !message.contains("evidence bundle-check diagnostic line 1\n"),
-        "an earlier line does not survive the trim: {message}"
+        !message.contains("evidence bundle-check diagnostic line"),
+        "delegated stderr is not relayed by package: {message}"
     );
 }
 
@@ -236,37 +245,29 @@ fn an_evidence_binary_that_does_not_identify_itself_is_refused_before_any_step()
 }
 
 #[test]
-fn successful_build_copies_runtime_exactly_and_excludes_local_and_validation_secrets() {
+fn successful_package_excludes_runtime_local_state_and_validation_secrets() {
     let fixture = Fixture::new();
     let local = fixture.project.join(".evidence/dev");
     fs::create_dir_all(&local).expect("local state");
     fs::write(local.join("disposable-private-key"), SECRET_CANARY).expect("local secret");
-    let runtime = fs::read(&fixture.runtime).expect("target runtime");
-
     let output = fixture.build();
 
-    assert_success(&output, "production build");
-    assert_eq!(
-        fs::read(fixture.output.join("runtime.yaml")).unwrap(),
-        runtime
-    );
+    assert_success(&output, "production package");
     let snapshot = snapshot(&fixture.output);
     assert_eq!(
         snapshot.keys().cloned().collect::<Vec<_>>(),
         vec![
-            PathBuf::from("bundle/adapters/source-extract.rhai"),
-            PathBuf::from("bundle/adapters/source-prepare.rhai"),
-            PathBuf::from("bundle/catalog.jsonld"),
-            PathBuf::from("bundle/derivations/answer.rhai"),
-            PathBuf::from("bundle/evidence.yaml"),
-            PathBuf::from("bundle/fixtures/answer.yaml"),
-            PathBuf::from(
-                "bundle/public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json",
-            ),
-            PathBuf::from("bundle/schemas/facts.schema.yaml"),
-            PathBuf::from("bundle/schemas/parameters.schema.yaml"),
-            PathBuf::from("bundle/schemas/response.schema.yaml"),
-            PathBuf::from("runtime.yaml"),
+            PathBuf::from("SHA256SUMS"),
+            PathBuf::from("adapters/source-extract.rhai"),
+            PathBuf::from("adapters/source-prepare.rhai"),
+            PathBuf::from("catalog.jsonld"),
+            PathBuf::from("derivations/answer.rhai"),
+            PathBuf::from("evidence.yaml"),
+            PathBuf::from("fixtures/answer.yaml"),
+            PathBuf::from("public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json",),
+            PathBuf::from("schemas/facts.schema.yaml"),
+            PathBuf::from("schemas/parameters.schema.yaml"),
+            PathBuf::from("schemas/response.schema.yaml"),
         ]
     );
     for (path, bytes) in snapshot {
@@ -299,8 +300,8 @@ fn an_empty_publication_description_leaves_no_candidate() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("publication"),
-        "the refusal names the publication the bundle declares: {stderr}"
+        stderr.contains("evidence.package.failed"),
+        "the refusal uses the stable package diagnostic: {stderr}"
     );
     assert!(!fixture.output.exists());
     fixture.assert_no_staging_residue();
@@ -317,38 +318,7 @@ fn a_bundle_without_publication_carries_no_catalog_description() {
         .expect("evidencectl build starts");
 
     assert_success(&output, "build of a bundle that declares no publication");
-    assert!(!fixture.output.join("bundle/catalog.jsonld").exists());
-    fixture.assert_no_staging_residue();
-}
-
-#[test]
-fn local_target_build_accepts_local_source_without_production_transport_requirements() {
-    let fixture = Fixture::new();
-    fs::write(
-        &fixture.governance,
-        GOVERNANCE.replace("assuranceProfile: production", "assuranceProfile: local"),
-    )
-    .expect("local target governance");
-    fs::write(
-        fixture.project.join("sources/registry.yaml"),
-        SOURCE
-            .replace("baseUrl: https://registry.invalid", "baseUrl: http://127.0.0.1:8088")
-            .replace(
-                "authentication: {kind: static-authorization, tokenRef: 'secret:file/source-token'}",
-                "authentication: {kind: none}",
-            ),
-    )
-    .expect("local source");
-
-    let output = fixture.build();
-
-    assert_success(&output, "local target build");
-    assert_eq!(fixture.steps(), ["check", "evaluate:fixtures/answer.yaml"]);
-    let bundle =
-        fs::read_to_string(fixture.output.join("bundle/evidence.yaml")).expect("generated bundle");
-    assert!(bundle.contains("assuranceProfile: local"));
-    assert!(bundle.contains("baseUrl: http://127.0.0.1:8088"));
-    assert!(!String::from_utf8_lossy(&output.stdout).contains("source-token"));
+    assert!(!fixture.output.join("catalog.jsonld").exists());
     fixture.assert_no_staging_residue();
 }
 
@@ -448,44 +418,28 @@ fn package_names_a_local_target_before_judging_the_output_location() {
 }
 
 #[test]
-fn package_refuses_a_package_root_that_does_not_resolve_to_the_output() {
+fn package_accepts_a_stable_package_root_outside_the_output() {
     for format in ["human", "json"] {
         let fixture = Fixture::new();
 
         let output = fixture.package(format);
 
-        assert_failed(&output, "stale bundle directory");
-        assert!(!fixture.output.exists());
-        assert!(fixture.invocations().is_empty());
-        assert_value_free(&output);
-        let expected_bundle = fixture.output.join("bundle").display().to_string();
+        assert_success(&output, "stable package root");
+        assert!(fixture.output.join("evidence.yaml").is_file());
         match format {
             "human" => {
-                assert!(output.stdout.is_empty());
-                let message = stderr(&output);
-                assert!(message.contains("evidence.package.root-mismatch"));
-                assert!(message.contains("runtime.yaml:/package/root"));
-                assert!(message.contains("/srv/evidence/candidate/bundle"));
-                assert!(message.contains(&expected_bundle));
+                assert!(stderr(&output).is_empty());
+                assert!(String::from_utf8_lossy(&output.stdout).contains("Package digest: sha256:"));
             }
             "json" => {
                 assert!(output.stderr.is_empty());
                 let report: serde_json::Value =
-                    serde_json::from_slice(&output.stdout).expect("JSON refusal report");
-                assert_eq!(report["status"], "domain-refusal");
-                assert_eq!(
-                    report["diagnostics"][0]["code"],
-                    "evidence.package.root-mismatch"
-                );
-                assert_eq!(
-                    report["diagnostics"][0]["path"],
-                    "runtime.yaml:/package/root"
-                );
-                let message = report["diagnostics"][0]["message"]
+                    serde_json::from_slice(&output.stdout).expect("JSON package report");
+                assert_eq!(report["status"], "packaged");
+                assert!(report["packageDigest"]
                     .as_str()
-                    .expect("diagnostic message");
-                assert!(message.contains("/srv/evidence/candidate/bundle"));
-                assert!(message.contains(&expected_bundle));
+                    .unwrap()
+                    .starts_with("sha256:"));
             }
             _ => unreachable!(),
         }
@@ -494,14 +448,14 @@ fn package_refuses_a_package_root_that_does_not_resolve_to_the_output() {
 }
 
 #[test]
-fn package_accepts_a_package_root_that_resolves_to_the_output() {
+fn package_refuses_a_package_root_inside_the_output() {
     let fixture = Fixture::new();
-    let matching_bundle_directory = fixture.output.join("bundle").display().to_string();
+    let unstable_package_directory = fixture.output.join("nested").display().to_string();
     fs::write(
         &fixture.runtime,
         TARGET_RUNTIME.replacen(
             "root: /srv/evidence/candidate/bundle",
-            &format!("root: {matching_bundle_directory}"),
+            &format!("root: {unstable_package_directory}"),
             1,
         ),
     )
@@ -509,16 +463,12 @@ fn package_accepts_a_package_root_that_resolves_to_the_output() {
 
     let output = fixture.package("human");
 
-    assert_success(&output, "self-consistent package");
-    assert!(fixture.output.join("bundle").is_dir());
-    assert_eq!(
-        fs::read_to_string(fixture.output.join("runtime.yaml")).unwrap(),
-        TARGET_RUNTIME.replacen(
-            "root: /srv/evidence/candidate/bundle",
-            &format!("root: {matching_bundle_directory}"),
-            1,
-        )
-    );
+    assert_failed(&output, "unstable package root");
+    assert!(!fixture.output.exists());
+    let message = stderr(&output);
+    assert!(message.contains("evidence.package.root-unstable"));
+    assert!(message.contains("runtime.yaml:/package/root"));
+    assert!(message.contains(&unstable_package_directory));
     fixture.assert_no_staging_residue();
 }
 
@@ -531,20 +481,17 @@ fn sqlite_extract_build_copies_the_statement_without_http_only_artifacts() {
 
     assert_success(&output, "SQLite extract production build");
     assert_eq!(
-        fs::read_to_string(fixture.output.join("bundle/queries/source.sql")).unwrap(),
+        fs::read_to_string(fixture.output.join("queries/source.sql")).unwrap(),
         "SELECT :reference <> '' AS allowed;\n"
     );
     assert!(fixture
         .output
-        .join("bundle/adapters/source-extract.rhai")
+        .join("adapters/source-extract.rhai")
         .is_file());
+    assert!(!fixture.output.join("adapters/source-prepare.rhai").exists());
     assert!(!fixture
         .output
-        .join("bundle/adapters/source-prepare.rhai")
-        .exists());
-    assert!(!fixture
-        .output
-        .join("bundle/schemas/parameters.schema.yaml")
+        .join("schemas/parameters.schema.yaml")
         .exists());
     assert_eq!(fixture.steps(), ["check", "evaluate:fixtures/answer.yaml"]);
     fixture.assert_no_staging_residue();
@@ -709,16 +656,6 @@ fn unresolved_review_markers_and_unknown_target_fields_fail_closed() {
 fn package_names_the_file_and_rule_of_an_unresolved_review_marker() {
     for format in ["human", "json"] {
         let fixture = Fixture::new();
-        let matching_bundle_directory = fixture.output.join("bundle").display().to_string();
-        fs::write(
-            &fixture.runtime,
-            TARGET_RUNTIME.replacen(
-                "root: /srv/evidence/candidate/bundle",
-                &format!("root: {matching_bundle_directory}"),
-                1,
-            ),
-        )
-        .expect("self-consistent target runtime");
         fs::write(
             fixture.project.join("fixtures/answer.yaml"),
             "fixture: TODO(evidencectl)\n",
@@ -848,7 +785,7 @@ fn every_referenced_fixture_is_delegated_and_one_failure_prevents_publication() 
 }
 
 #[test]
-fn identical_inputs_produce_identical_bundle_bytes_revision_and_stable_report_shape() {
+fn identical_inputs_produce_identical_package_bytes_digest_and_stable_report_shape() {
     let fixture = Fixture::new();
     let first_output = fixture.root.join("candidate-one");
     let second_output = fixture.root.join("candidate-two");
@@ -858,12 +795,9 @@ fn identical_inputs_produce_identical_bundle_bytes_revision_and_stable_report_sh
 
     assert_success(&first, "first deterministic build");
     assert_success(&second, "second deterministic build");
-    assert_eq!(
-        snapshot(&first_output.join("bundle")),
-        snapshot(&second_output.join("bundle"))
-    );
-    assert_report(&first, &first_output);
-    assert_report(&second, &second_output);
+    assert_eq!(snapshot(&first_output), snapshot(&second_output));
+    assert_report(&first, &first_output, &fixture.target);
+    assert_report(&second, &second_output, &fixture.target);
     assert_eq!(reported_revision(&first), reported_revision(&second));
 }
 
@@ -1128,8 +1062,7 @@ impl Fixture {
     fn command(&self, project: &Path, target: &Path, output: &Path) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_evidencectl"));
         command
-            .arg("build")
-            .arg("--project")
+            .arg("package")
             .arg(project)
             .arg("--target")
             .arg(target)
@@ -1373,14 +1306,14 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
-fn assert_report(output: &Output, candidate: &Path) {
+fn assert_report(output: &Output, candidate: &Path, target: &Path) {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(
         stdout,
         format!(
-            "Bundle revision: {REVISION}\nCandidate: {}\nProvision secret:file/audit-hmac-key\nProvision secret:file/source-token\nProvision secret:file/subject-binding-hmac-key\nTarget runtime paths and deployment secret material remain unverified until `evidencectl doctor --runtime-config {}/runtime.yaml`.\n",
+            "Package digest: {REVISION}\nPackage: {}\nProvision secret:file/audit-hmac-key\nProvision secret:file/source-token\nProvision secret:file/subject-binding-hmac-key\nTarget runtime paths and deployment secret material remain unverified until `evidencectl doctor --runtime-config {}/runtime.yaml`.\n",
             candidate.display(),
-            candidate.display(),
+            target.display(),
         )
     );
 }
@@ -1388,8 +1321,8 @@ fn assert_report(output: &Output, candidate: &Path) {
 fn reported_revision(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout)
         .lines()
-        .find_map(|line| line.strip_prefix("Bundle revision: "))
-        .expect("revision report")
+        .find_map(|line| line.strip_prefix("Package digest: "))
+        .expect("package digest report")
         .to_owned()
 }
 
@@ -1605,7 +1538,7 @@ fi
 
 if [ -z "$fixture" ]; then
   if [ "$json" = '1' ]; then
-    printf '%s\n' '{"bundleRevision":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","requirements":[{"id":"urn:example:requirements:allowed:v1","configurationRevision":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}'
+    printf '%s\n' '{"packageDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","requirements":[{"id":"urn:example:requirements:allowed:v1","configurationRevision":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}'
   else
     printf '%s\n' 'Evidence bundle sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa passed check (2 requirements)'
   fi

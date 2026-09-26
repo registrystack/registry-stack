@@ -129,7 +129,7 @@ for arg in "$@"; do
 done
 
 if [ "$step" = "bundle-check" ]; then
-  printf '{{"bundleRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000","requirements":[{{"id":"urn:example:stub:record-active","configurationRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}}]}}\n'
+  printf '{{"packageDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","requirements":[{{"id":"urn:example:stub:record-active","configurationRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}}]}}\n'
   exit 0
 fi
 

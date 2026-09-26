@@ -1544,7 +1544,7 @@ pub const EVIDENCE_RUNTIME_REMOVED_KEYS: &[RemovedKey] = &[
     },
     RemovedKey {
         path: "bundleDirectory",
-        replacement: "declare package.root as the absolute path of the bundle directory",
+        replacement: "declare package.root as the absolute path of the package directory",
     },
     RemovedKey {
         path: "listener.bindHost",
@@ -1582,7 +1582,7 @@ const RUNTIME_VALUE_CAUSES: [(&str, &str); 2] = [
 pub struct RuntimeConfig {
     pub api_version: String,
     pub kind: String,
-    /// The one governed bundle directory this process loads at startup.
+    /// The one governed package directory this process verifies and loads at startup.
     pub package: PackageConfig,
     pub listener: ListenerConfig,
     /// Optional operator-only metrics listener. Absent means the deployment

@@ -11,9 +11,9 @@ Evidence starts from two closed, startup-only inputs:
    TLS trust files.
 
 Both inputs are reviewed, validated completely before readiness, mounted
-read-only, and immutable for the process lifetime. Evidence computes stable
-bundle and runtime revisions at startup; audit events carry the governed bundle
-revision. Runtime configuration is not an override layer. It cannot
+read-only, and immutable for the process lifetime. Evidence verifies the
+package and computes its stable digest at startup; audit events carry that
+digest in the frozen `bundleRevision` field. Runtime configuration is not an override layer. It cannot
 change a source origin, request, credential kind, requirement, authority,
 selector, disclosure rule, rate limit, signing policy, or audit fail-closed
 policy.
@@ -995,7 +995,7 @@ against a deployment project like this one, it instead runs `evidence check`
 with the runtime file's real bindings, which is the check described above.
 
 The internal `evidence bundle-check --bundle <directory> --json` tooling seam
-returns `bundleRevision` and a `requirements` array of `id` and
+returns `packageDigest` and a `requirements` array of `id` and
 `configurationRevision` after validation. Those revisions come from the same
 bundle closure used by signed answers. The document contains identifiers and
 digests only; the default command output remains a human-readable check result.
@@ -1175,7 +1175,7 @@ The supported publication handoff is deliberately explicit because
    and mounted extract. The check refuses an extract that is already older than
    its source permits. Then run every referenced fixture, real startup, and
    `/ready` before routing traffic.
-   Retain the runtime revision and governed extract profile in the deployment
+   Retain the runtime file and governed extract profile in the deployment
    record. Do not copy publisher-controlled metadata values into logs, audit,
    or error tickets.
 
@@ -1268,8 +1268,8 @@ sourceExtracts:
 |---|---|---|
 | `apiVersion` | yes | Literal `registry.registrystack.org/evidence-runtime/v1alpha1`. Names the grammar the document is written in. |
 | `kind` | yes | Literal `EvidenceRuntimeConfig`. Together with `apiVersion` it tells an Evidence runtime file apart from another product's runtime configuration. |
-| `package.root` | yes | Absolute path to the single governed bundle directory. No alternate, overlay, or fallback bundle exists. |
-| `package.expectedDigest` | no | The `sha256:` bundle revision the operator approved. When set, startup is refused unless the bundle at `package.root` computes exactly this revision. Omission loads whatever bundle is there. |
+| `package.root` | yes | Absolute path to the single governed package directory. No alternate, overlay, or fallback package exists. |
+| `package.expectedDigest` | no | The `sha256:` package digest the operator approved. When set, startup is refused unless the package at `package.root` computes exactly this digest. Omission still verifies and loads the package found there. |
 | `listener.bind` | yes | Numeric socket address written `host:port`, with an IPv6 host in brackets (`[addr]:port`). Port `0` is refused. Under the default `private-address` exposure, the host must be loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6. Under explicit `container-private`, the unspecified IPv4 or IPv6 wildcard is also accepted. Hostnames, concrete public addresses, and multicast are always rejected. |
 | `listener.networkExposure` | no | `private-address` by default. `container-private` permits a wildcard bind only when the operator confines the container network and terminates TLS upstream. It does not enable direct public exposure. |
 | `listener.tlsTermination` | yes | Literal `operator-controlled-upstream`. |
@@ -1466,10 +1466,10 @@ The candidate contains `runtime.yaml` and `bundle/`, including only referenced
 adapters, derivations, schemas, codelists, fixtures, and public keys. Given
 identical authoring files, target governance, runtime bytes, and toolset
 release, bundle bytes and revision are identical. The copied runtime is
-environment-specific and has its own revision; it is not part of the bundle
-revision or signed `configurationRevision`.
+environment-specific and is not part of the package digest or signed
+`configurationRevision`.
 
-The bundle revision identifies the whole reviewed bundle and is what an operator
+The package digest identifies the whole reviewed package and is what an operator
 records at approval. A signed `configurationRevision` is narrower: it covers
 only the configuration and artifacts one requirement depends on. Editing a
 requirement, its source, one of its selector profiles, an authority grant naming
@@ -1478,11 +1478,11 @@ requirement's revision. The public verification keys and
 `signing.revokedKeyIds` are in no requirement's closure: which keys are
 published, which one signs, and which are revoked is trust a relying party
 takes from the JWKS and its verification policy's denylist, so publishing,
-activating, retiring, or revoking a key changes the bundle revision but no
+activating, retiring, or revoking a key changes the package digest but no
 requirement's revision. `authentication.revokedKeyIds` is in no requirement's
 closure either: it decides which caller tokens are accepted, not what an
-assertion means, so revoking an identity-provider key changes the bundle
-revision but no requirement's revision. Every other `authentication` member
+assertion means, so revoking an identity-provider key changes the package
+digest but no requirement's revision. Every other `authentication` member
 stays in every requirement's closure. An edit
 outside a requirement's closure leaves its revision unchanged, so it does not
 force every relying party to re-review.
@@ -1502,7 +1502,7 @@ evidence serve --runtime-config '<candidate>/runtime.yaml'
 Then route only after `/ready`, retain one authorized synthetic-subject
 response, verify it under independently prepared production policy and trusted
 keys, and verify the audit chain. A provider API or governance change produces
-a newly reviewed bundle revision and reruns the fixture matrix.
+a newly reviewed package digest and reruns the fixture matrix.
 
 Configure an OIDC issuer independently and register each workload with the exact
 resource, scopes, client identity, and public key required by its approved

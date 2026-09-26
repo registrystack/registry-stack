@@ -141,7 +141,7 @@ The query-platform line deserves stating precisely, because a source may
 execute a reviewed SQL statement against a mounted extract. A query platform is
 a system whose purpose is to accept a query at request time; Evidence accepts
 none, over any transport. A statement is written into the bundle, covered by
-the bundle hash, and reviewed as part of one disclosure surface. A caller
+the package sum file, and reviewed as part of one disclosure surface. A caller
 cannot write one, name a table or a column, add a predicate, widen a join, or
 choose among statements beyond selecting a requirement it is already authorized
 to invoke. This is the same reasoning that already admits a fixed HTTP request:
@@ -837,10 +837,10 @@ sources:
     factSchema: schemas/subject-extract-facts.schema.yaml
 ```
 
-The statement is a bundle artifact covered by the bundle hash. The file is not:
+The statement is a bundle artifact covered by the package sum file. The file is not:
 the bundle names a logical extract and the closed runtime file binds it to a
 path, exactly as it binds a private certificate authority. Republishing an
-extract therefore leaves the bundle revision a relying party pinned unchanged,
+extract therefore leaves the package digest a relying party pinned unchanged,
 which is why publication metadata and a declared maximum age are mandatory
 rather than advisory. Binding a path is not a capability gate: a deployment
 that mounts no extract runs no extract source, and no runtime switch turns this
@@ -931,7 +931,7 @@ a world that has moved. The comparison runs for every evaluation, not only at
 startup, so a process that has been running longer than its own tolerance
 refuses rather than serving out of a file it has already outlived.
 
-Staleness tolerance is bundle-declared because it is a property of the
+Staleness tolerance is package-declared because it is a property of the
 question, not of the deployment. A fact that cannot change once it is recorded
 is indifferent to a file published a week ago. A status that can be revoked at
 any moment is not, and the same week makes the same answer wrong. An
@@ -1017,7 +1017,7 @@ Rhai receives no ambient access to:
 - audit sinks;
 - signing keys.
 
-Scripts compile at startup and are identified by bundle hash. Each invocation receives fresh local state. Explicit limits apply to operations, call depth, strings, collections, modules, and result size.
+Scripts compile at startup and are identified by package sum file. Each invocation receives fresh local state. Explicit limits apply to operations, call depth, strings, collections, modules, and result size.
 
 A future `plan(context) -> SourceCall` hook requires a separate design and a demonstrated source that cannot use a fixed request. It is not a hidden extension point in version one.
 
@@ -1416,7 +1416,7 @@ server or source network.
 ### 11.6 Discovery and publication
 
 The set of definitions a requester may use is the intersection of the exact
-deployed bundle revision and the caller's verified authority context. It
+deployed package digest and the caller's verified authority context. It
 depends on requirement, purpose, audience, the complete role/profile/origin
 tuple, and any token-owned selector values together. A process-wide catalog
 would overstate availability and reveal definitions or selector structure that
@@ -1537,7 +1537,7 @@ Audit records establish accountable access. Reusable platform primitives may pro
 Authorized-material audit events contain only reviewed fields:
 
 - operation identifier and phase;
-- requirement and bundle revision;
+- requirement and package digest (carried in the frozen `bundleRevision` field);
 - purpose code;
 - pseudonymized requester and optional actor;
 - selector profile identifiers and one pseudonymized complete selector bundle
@@ -1576,7 +1576,8 @@ After successful authentication, an authorization refusal produces a separate
 minimal native event with the
 `registry.evidence.audit.authorization-refusal/v1` discriminator before
 Evidence returns the generic `403`. That event contains only the operation and
-event identifiers, assurance profile, bundle revision, a scoped requester
+event identifiers, assurance profile, package digest in the frozen
+`bundleRevision` field, a scoped requester
 pseudonym, an optional actor pseudonym, the closed `not-authorized` decision and
 safe error category, and timestamp and duration.
 It omits the untrusted requested requirement, purpose, subjects, unmatched
@@ -2353,7 +2354,7 @@ mandatory default and includes:
 - two coequal generic evidence-data transports: one fixed HTTP JSON request
   executor, and one reviewed-statement executor over a read-only mounted SQLite
   extract with a prepare-time authorizer verdict, required publication
-  metadata, a bundle-declared maximum extract age, declared row and step
+  metadata, a package-declared maximum extract age, declared row and step
   bounds, and the reserved evaluation instant in place of an ambient clock;
 - generic Basic, static Authorization header, static API-key header, and OAuth
   2.0 client-credentials authentication for HTTP sources using secret
@@ -2399,7 +2400,7 @@ mandatory default and includes:
   and audit-chain verification;
 - independently configured OIDC authentication with an explicit issuer,
   resource, scope and claim contract;
-- a documented Docker Compose adapter that mounts the candidate bundle
+- a documented Docker Compose adapter that mounts the candidate package
   unchanged without generating Compose, container, or cloud deployment output;
 - deterministic source-contract mocks for flat REST, DHIS2 Tracker-style REST,
   OpenCRVS Version 2 Event Search-style JSON, and a sanitized SQLite extract;
@@ -2700,7 +2701,7 @@ This concept fixes the following decisions:
 22. Evidence-definition discovery uses authenticated
     `GET /v1/evidence-definitions`, which returns only complete request shapes
     matching exactly one authority path for the verified caller and exact
-    bundle revision. Static onboarding owns token acquisition, human and legal
+    package digest. Static onboarding owns token acquisition, human and legal
     context, and verifier trust; OpenAPI describes the wire contract, RFC 9728
     metadata binds the public resource to its authorization server and JWKS,
     and JWKS provides key discovery. Discovery metadata never creates
@@ -2723,7 +2724,7 @@ This concept fixes the following decisions:
     extract. The statement is a bundle artifact, a prepare-time authorizer
     proves it cannot write or leave its file, Rust supplies the only clock
     through a reserved parameter, and an extract without publication metadata
-    or past its bundle-declared maximum age is refused before any row is read.
+    or past its package-declared maximum age is refused before any row is read.
 27. `POST /v1/evidence/batch` is a bounded audience-scoped evaluation envelope,
     not the holder-bound issuance batch. It returns ordered signed JWS or
     `evidence_not_available` outcomes, applies all admission gates before I/O,

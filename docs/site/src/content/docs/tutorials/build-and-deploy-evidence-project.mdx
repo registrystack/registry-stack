@@ -115,11 +115,12 @@ real identifiers.
 limits, signing, optional response formats, and authority profiles. Secret references use
 `secret:file/<name>` only. Do not place secret values or absolute secret paths in this file.
 
-`runtime.yaml` is the ordinary Evidence Gateway runtime document. It binds the final absolute candidate
-bundle path, private listener, secret root, audit path, and optional private certificate authority
-files. The build copies its bytes unchanged, so the target host remains the authority for path,
-ownership, permission, secret, and trust validation.
-Set `package.root` to `<new-candidate-directory>/bundle`, and keep the listener on a numeric
+`runtime.yaml` is the ordinary Evidence Gateway runtime document. It binds the stable absolute
+installed package path, private listener, secret root, audit path, and optional private certificate
+authority files. It stays in the deployment target and is never copied into the package, so the
+target host remains the authority for path, ownership, permission, secret, and trust validation.
+Set `package.root` to the stable installation path where this and future approved packages will be
+placed, and keep the listener on a numeric
 loopback or private address. `listener.networkExposure` declares which addresses that means. It
 defaults to `private-address`, which accepts loopback, RFC 1918 private IPv4, or RFC 4193
 unique-local IPv6. A container listener that must bind the wildcard `0.0.0.0` inside an isolated
@@ -146,40 +147,43 @@ evidencectl package "<deployment-repository>/shared/evidence-project" \
   --output "<new-candidate-directory>"
 ```
 
-The candidate contains the runtime document and closed bundle:
+The output is one closed package. Environment-specific runtime configuration stays in the
+deployment target:
 
 ```text
 <new-candidate-directory>/
-  runtime.yaml
-  bundle/
-    evidence.yaml
-    adapters/
-    derivations/
-    schemas/
-    fixtures/
-    public-keys/
+  SHA256SUMS
+  evidence.yaml
+  adapters/
+  derivations/
+  schemas/
+  fixtures/
+  public-keys/
 ```
 
-The build validates the generated bundle through the real `evidence` binary and every referenced
+The package command validates the generated package through the real `evidence` binary and every referenced
 fixture before it publishes the candidate. It asks that binary for its version first and refuses one
 that is not this evidencectl's, so the candidate is always the one the matching runtime shaped:
 `evidencectl package` takes the binary from `EVIDENCE_BIN` or the first `evidence` on `PATH`, and
 `evidencectl test` accepts `--evidence-bin` for the same handshake. A bundle that declares a
-`publication` also has to render the description that advertises it, and a build whose description
+`publication` also has to render the description that advertises it, and a package whose description
 comes back empty is refused rather than written, because `the candidate would carry no
-catalog.jsonld`. The build does not contact an identity provider or a source endpoint. It
+catalog.jsonld`. The package does not contain `runtime.yaml` or secret material. Packaging does not contact an identity provider or a source endpoint. It
 validates governed public-key semantics without contacting Transit or
 generating an unrelated signing key. The target-host check performs the provider self-test. Record
-the printed bundle revision with the approved candidate path.
+the printed package digest with the approved package path. Pass `--revision <review-reference>`
+when you also want one printable source or review reference recorded in `REVISION`.
 
 ## Provision the target host
 
-Transfer the exact candidate. The operator provisions the audit HMAC key, subject-binding HMAC key,
+Transfer the exact package to the stable absolute path named by the deployment target's
+`runtime.yaml` at `package.root`. Replacing the package does not require editing that runtime path.
+The operator provisions the audit HMAC key, subject-binding HMAC key,
 and source credentials beneath the runtime secret root. The workload-local Transit proxy holds the
 provider token and auto-auth state; Evidence Gateway receives only access to the configured Unix
 socket. Its non-exportable signing key remains in Transit.
-Make the candidate runtime and bundle non-writable to the Evidence Gateway service identity, for
-example `chmod -R a-w bundle && chmod 444 runtime.yaml`. `evidencectl test` below runs
+Make the installed package and target runtime non-writable to the Evidence Gateway service identity,
+for example `chmod -R a-w "<package.root>" && chmod 444 "<deployment-target>/runtime.yaml"`. `evidencectl test` below runs
 `evidence check` first, which refuses a writable runtime file, bundle artifact, or CA bundle file,
 a secret root reachable by group or other, or a writable extract, before it evaluates any fixture.
 
@@ -187,14 +191,14 @@ Start the workload-local Transit proxy. Run the grouped offline ceremony once af
 runtime bindings, trust files, secrets, and proxy socket are in place:
 
 ```sh
-evidencectl doctor --runtime-config "<candidate>/runtime.yaml"
-evidencectl test "<candidate>"
+evidencectl doctor --runtime-config "<deployment-target>/runtime.yaml"
+evidencectl test "<editable-project>" --target "<deployment-target>"
 ```
 
 Start Evidence Gateway only after both commands pass:
 
 ```sh
-evidence serve --runtime-config "<candidate>/runtime.yaml"
+evidence serve --runtime-config "<deployment-target>/runtime.yaml"
 ```
 
 Route traffic through operator-controlled TLS only after `GET /ready` succeeds. The listener stays
@@ -239,7 +243,7 @@ evidence verify \
   --jws "<assertion.jws.json>" \
   --jwks "<trusted-evidence-jwks.json>" \
   --policy "<production-verification-policy.json>"
-evidence verify-audit --runtime-config "<candidate>/runtime.yaml"
+evidence verify-audit --runtime-config "<deployment-target>/runtime.yaml"
 ```
 
 The signing policy and secret references are governed bundle content. Rotate a key by publishing a
@@ -249,7 +253,7 @@ identifier.
 ## Expected result
 
 You have a retained signed response that verifies under the independent production policy, an audit
-chain that passes verification, and a recorded bundle revision for the exact candidate serving the
+chain that passes verification, and a recorded package digest for the exact package serving the
 synthetic request.
 
 ## Clean up the request credential
