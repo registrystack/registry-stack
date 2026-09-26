@@ -34,8 +34,8 @@ use crate::history_erasure::{
     RecordHistoryErasureTarget, MAX_ERASURE_REVISIONS,
 };
 use crate::history_maintenance::{
-    append_maintenance_entries, profile_is_keyed, set_local_timeouts, verify_ready_identity,
-    HistoryMaintenanceTimeouts,
+    append_maintenance_entries, begin_maintenance_request, profile_is_keyed, set_local_timeouts,
+    verify_ready_identity, HistoryMaintenanceTimeouts,
 };
 use crate::history_rebaseline::{
     history_rebaseline_entry, rebaseline_history_coverage_in_transaction, HistoryRebaselineError,
@@ -588,8 +588,11 @@ pub async fn erase_field_encryption_history(
     // copies that still carry plaintext for a recorded erase-and-rebaseline
     // flip. The transaction also marks coverage incomplete, which is the
     // existing durable retry signal if this lifecycle stops before rebaseline.
+    // The lifecycle's request entry, when this run is one, is held until the
+    // run ends, so a run that stops before its terminal still answers it.
+    let mut lifecycle_attempt = None;
     let (_, _, needs_rebaseline, lifecycle_reference) =
-        scrub_plaintext_request_snapshots(client, &request).await?;
+        scrub_plaintext_request_snapshots(client, &request, &mut lifecycle_attempt).await?;
     let mut erased_any = false;
     loop {
         let targets = pending_erase_targets(client, &request).await?;
@@ -702,6 +705,7 @@ pub async fn erase_field_encryption_history(
 async fn scrub_plaintext_request_snapshots(
     client: &mut Client,
     request: &FieldEncryptionHistoryErasureRequest<'_>,
+    lifecycle_attempt: &mut Option<registry_platform_audit::AuditRequest>,
 ) -> Result<(u64, u64, bool, String), FieldEncryptionHistoryErasureError> {
     let transaction = client
         .transaction()
@@ -754,11 +758,13 @@ async fn scrub_plaintext_request_snapshots(
     // A recorded erase-and-rebaseline flip makes this a lifecycle run: its
     // request entry must be accepted before any request snapshot, record
     // history, or coverage state is read for erasure or changed.
-    append_maintenance_entries(
-        request.audit,
-        vec![lifecycle_request_entry(request, &lifecycle_reference)?],
-    )
-    .await?;
+    *lifecycle_attempt = Some(
+        begin_maintenance_request(
+            request.audit,
+            lifecycle_request_entry(request, &lifecycle_reference)?,
+        )
+        .await?,
+    );
     let (terminal_exists, correlated_progress_exists) =
         lifecycle_progress_state(&transaction, &lifecycle_reference).await?;
     let unresolved_provenance: bool = transaction
