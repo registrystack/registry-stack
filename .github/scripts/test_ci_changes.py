@@ -1042,23 +1042,20 @@ class CiChangesTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(classify(self.workspace, (path,))["breg_tutorial"])
 
-    def test_casework_tutorial_inputs_cover_every_registered_tutorial(self) -> None:
-        # The gate's registry is the source of truth for which tutorials it
-        # replays. A tutorial missing here would not trigger the job that
-        # replays it, so it could break without any pull request noticing.
-        gate = (
-            Path(__file__).resolve().parents[2]
-            / "docs/site/scripts/check-casework-tutorial.sh"
-        )
-        registry = re.search(
-            r"^CASEWORK_TUTORIALS=\((.*?)^\)",
-            gate.read_text(),
-            re.DOTALL | re.MULTILINE,
-        )
-        if registry is None:
-            self.fail("the gate must declare CASEWORK_TUTORIALS")
-        slugs = registry.group(1).split()
-        self.assertTrue(slugs, "the gate must register at least one tutorial")
+    def test_casework_tutorial_inputs_cover_every_replayed_tutorial(self) -> None:
+        # Each page's tutorial_test frontmatter is the source of truth for
+        # which tutorials the gate replays. A replayed page missing here would
+        # not trigger the job that replays it, so it could break without any
+        # pull request noticing.
+        docs = Path(__file__).resolve().parents[2] / "docs/site/src/content/docs"
+        slugs = []
+        for section in ("start", "tutorials"):
+            for page in sorted((docs / section).glob("*.mdx")):
+                frontmatter = yaml.safe_load(page.read_text().split("---\n")[1])
+                declaration = frontmatter.get("tutorial_test") or {}
+                if declaration.get("toolset") == "casework" and "skip" not in declaration:
+                    slugs.append(f"{section}/{page.stem}")
+        self.assertIn("tutorials/first-casework", slugs)
         for slug in slugs:
             with self.subTest(slug=slug):
                 page = f"docs/site/src/content/docs/{slug}.mdx"
@@ -1071,10 +1068,9 @@ class CiChangesTest(unittest.TestCase):
 
     def test_casework_tutorial_routing(self) -> None:
         infrastructure = (
-            "docs/site/scripts/check-casework-tutorial.sh",
-            "docs/site/scripts/check-casework-tutorial.test.mjs",
+            "docs/site/scripts/run-tutorial.mjs",
+            "docs/site/scripts/tutorial-runner/toolsets.mjs",
             "docs/site/src/content/docs/tutorials/first-casework.mdx",
-            "docs/site/src/content/docs/tutorials/review-breg-changes-in-casework.mdx",
             "docs/site/package.json",
         )
         for path in infrastructure:
@@ -1100,11 +1096,11 @@ class CiChangesTest(unittest.TestCase):
             ]
         )
         # Pages that share the tutorials directory and reach none of the
-        # Registry Casework replay.
+        # Registry Casework replay; the BReg review guide is skipped.
         for path in (
             "docs/site/src/content/docs/tutorials/first-breg.mdx",
             "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
-            "docs/site/scripts/run-tutorial.mjs",
+            "docs/site/src/content/docs/tutorials/review-breg-changes-in-casework.mdx",
         ):
             with self.subTest(path=path):
                 self.assertFalse(classify(self.workspace, (path,))["casework_tutorial"])

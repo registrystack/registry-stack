@@ -525,7 +525,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Registry Casework tutorial replay",
-        "bash docs/site/scripts/check-casework-tutorial.sh",
+        "node docs/site/scripts/run-tutorial.mjs --gate casework\n",
     ),
     (
         "Registry Casework tutorial command drift",
@@ -533,7 +533,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Registry Casework tutorial path filter",
-        '"docs/site/scripts/check-casework-tutorial.sh",',
+        '"docs/site/src/content/docs/tutorials/first-casework.mdx",',
     ),
 )
 
