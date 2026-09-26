@@ -53,7 +53,10 @@
     replaces the records and its response entry after, to a sibling file
     named for its role beside `audit.path` (`audit.schedulingctl.ndjson`
     beside `audit.ndjson`), and refuses to replace anything when that file
-    cannot be opened.
+    cannot be opened. A replacement whose commit was not acknowledged is
+    read back, and one whose outcome cannot be read is answered
+    `unfinished` with reason `records.replace-unacknowledged`, since it may
+    have taken effect.
 
 ## v0.34.0 - 2026-09-25
 
