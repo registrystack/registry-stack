@@ -326,21 +326,6 @@ impl<S: DeliverySeams> DeliveryService<S> {
         let next_generation = generation
             .checked_add(1)
             .ok_or(DeliveryError::Unavailable)?;
-        self.seams
-            .record_audit(
-                &transaction,
-                DeliveryAuditRecord {
-                    event_id,
-                    compiled_delivery_id,
-                    package_revision: &package_revision,
-                    generation: next_generation,
-                    attempt: 0,
-                    phase: DeliveryAuditPhase::Replay,
-                    outcome: DeliveryAuditOutcome::ReplayRequested,
-                    disposition: DeliveryAuditDisposition::ReplayPending,
-                },
-            )
-            .await?;
         let changed = transaction
             .execute(
                 &self.sql(
@@ -372,6 +357,21 @@ impl<S: DeliverySeams> DeliveryService<S> {
         if changed != 1 {
             return Err(DeliveryError::Unavailable);
         }
+        self.seams
+            .record_audit(
+                &transaction,
+                DeliveryAuditRecord {
+                    event_id,
+                    compiled_delivery_id,
+                    package_revision: &package_revision,
+                    generation: next_generation,
+                    attempt: 0,
+                    phase: DeliveryAuditPhase::Replay,
+                    outcome: DeliveryAuditOutcome::ReplayRequested,
+                    disposition: DeliveryAuditDisposition::ReplayPending,
+                },
+            )
+            .await?;
         transaction.commit().await?;
         Ok(next_generation)
     }
@@ -1205,21 +1205,6 @@ impl<S: DeliverySeams> DeliveryService<S> {
                 DeliveryOutcome::RetryScheduled,
             )
         };
-        self.seams
-            .record_audit(
-                &transaction,
-                DeliveryAuditRecord {
-                    event_id: claim.event_id,
-                    compiled_delivery_id: &claim.compiled_delivery_id,
-                    package_revision: &claim.package_revision,
-                    generation: claim.generation,
-                    attempt: claim.attempt,
-                    phase: DeliveryAuditPhase::Terminal,
-                    outcome,
-                    disposition,
-                },
-            )
-            .await?;
         let changed = match work_outcome {
             DeliveryOutcome::Delivered => {
                 self.update_terminal_state(
@@ -1292,6 +1277,21 @@ impl<S: DeliverySeams> DeliveryService<S> {
                 return Err(DeliveryError::Unavailable);
             }
         }
+        self.seams
+            .record_audit(
+                &transaction,
+                DeliveryAuditRecord {
+                    event_id: claim.event_id,
+                    compiled_delivery_id: &claim.compiled_delivery_id,
+                    package_revision: &claim.package_revision,
+                    generation: claim.generation,
+                    attempt: claim.attempt,
+                    phase: DeliveryAuditPhase::Terminal,
+                    outcome,
+                    disposition,
+                },
+            )
+            .await?;
         transaction.commit().await?;
         Ok(work_outcome)
     }
@@ -1820,7 +1820,9 @@ mod tests {
     };
 
     use super::*;
-    use crate::delivery::{DeliveryConnection, DeliverySignatureRefused};
+    use crate::delivery::{
+        insert_delivery, DeliveryCapture, DeliveryConnection, DeliverySignatureRefused,
+    };
 
     // A destination the tests below never reach: it exists only so the seam
     // fixtures can name their associated destination type.
@@ -2700,5 +2702,252 @@ mod tests {
         assert_eq!(exhausted.resulting_revision, None);
         assert_eq!(exhausted.code, None);
         assert_eq!(exhausted.summary, None);
+    }
+
+    /// Wraps a plain connection as the `DeliveryConnection` the seam trait
+    /// requires, the way a product wraps its pooled client.
+    struct DirectClient(tokio_postgres::Client);
+
+    impl std::ops::Deref for DirectClient {
+        type Target = tokio_postgres::Client;
+
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
+    impl std::ops::DerefMut for DirectClient {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.0
+        }
+    }
+
+    async fn connect_test_database(url: &str) -> tokio_postgres::Client {
+        let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls)
+            .await
+            .expect("connect to the local PostgreSQL test database");
+        tokio::spawn(async move {
+            if let Err(error) = connection.await {
+                eprintln!("test database connection closed: {error}");
+            }
+        });
+        client
+    }
+
+    /// A seam set that opens its own connection against a real PostgreSQL
+    /// test database and counts every audit record it is given, so a test can
+    /// prove no record was written for a transition that never happened.
+    struct RealDbSeams {
+        url: String,
+        audit_calls: Arc<Mutex<u32>>,
+    }
+
+    #[async_trait::async_trait]
+    impl DeliverySeams for RealDbSeams {
+        type Destination = UnusedDestination;
+        type Handler = UnusedHandler;
+
+        async fn connection(&self) -> Result<DeliveryConnection, DeliveryError> {
+            Ok(Box::new(DirectClient(
+                connect_test_database(&self.url).await,
+            )))
+        }
+
+        async fn verify_transaction(
+            &self,
+            _transaction: &Transaction<'_>,
+        ) -> Result<(), DeliveryError> {
+            Ok(())
+        }
+
+        fn destination(&self, _logical_destination_id: &str) -> Option<Self::Destination> {
+            None
+        }
+
+        fn handler(&self, _binding: HookHandlerBinding<'_>) -> Option<Self::Handler> {
+            None
+        }
+
+        async fn record_audit(
+            &self,
+            _transaction: &Transaction<'_>,
+            _record: DeliveryAuditRecord<'_>,
+        ) -> Result<(), DeliveryError> {
+            *self.audit_calls.lock().expect("audit calls lock") += 1;
+            Ok(())
+        }
+
+        fn operational_event(&self, _event: DeliveryOperationalEvent) {}
+
+        async fn apply_proposal(
+            &self,
+            _application: ProposalApplication<'_>,
+        ) -> Result<ProposalOutcome, DeliveryError> {
+            Err(DeliveryError::Unavailable)
+        }
+
+        async fn recover_proposal_receipt(
+            &self,
+            _recovery: ProposalReceiptRecovery<'_>,
+        ) -> Result<Option<ProposalOutcome>, DeliveryError> {
+            Err(DeliveryError::Unavailable)
+        }
+
+        async fn recover_proposal_receipt_in_transaction(
+            &self,
+            _transaction: &Transaction<'_>,
+            _recovery: ProposalReceiptRecovery<'_>,
+        ) -> Result<Option<ProposalOutcome>, DeliveryError> {
+            Err(DeliveryError::Unavailable)
+        }
+    }
+
+    // Requires a real PostgreSQL connection: `Transaction<'_>` cannot be
+    // faked, and the guarded update this test forces to zero rows is the
+    // real lease-vs-CAS statement running against a real table. Run with
+    // `--ignored` and `HOOKS_TEST_DATABASE_URL` set to a disposable database.
+    #[tokio::test]
+    #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
+    async fn finalize_refuses_a_terminal_transition_when_the_lease_was_stolen() {
+        let url = std::env::var("HOOKS_TEST_DATABASE_URL")
+            .expect("HOOKS_TEST_DATABASE_URL is required for the real PostgreSQL finalize test");
+        let schema = "hooks_delivery_lease_test";
+        let mut client = connect_test_database(&url).await;
+        client
+            .batch_execute(&format!(
+                "DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema};"
+            ))
+            .await
+            .expect("reset the test schema");
+        delivery_schema::install(&client, schema)
+            .await
+            .expect("install the delivery schema");
+
+        let event_id = Uuid::parse_str(STORED_EVENT_ID).expect("event id");
+        let compiled_delivery_id = "events.permit.granted.webhook";
+        let package_revision =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let schema_fingerprint =
+            "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+        client
+            .execute(
+                &format!(
+                    "INSERT INTO {schema}.registry_outbox
+                     (event_id, event_type, trigger, entity_id, record_reference,
+                      record_revision, package_revision, schema_fingerprint, payload_expires_at)
+                     VALUES ($1, $2, 'test', 'permit', $3, 3, $4, $5,
+                             transaction_timestamp() + interval '1 day')",
+                ),
+                &[
+                    &event_id,
+                    &"permit.granted",
+                    &"8f14e45fceea467a9cc18b2a4b9e2a1103b41d5ad4c88c8f2a0a9ac4f4c0d2b7",
+                    &package_revision,
+                    &schema_fingerprint,
+                ],
+            )
+            .await
+            .expect("insert the outbox row");
+
+        {
+            let transaction = client.transaction().await.expect("insert transaction");
+            insert_delivery(
+                &transaction,
+                schema,
+                event_id,
+                DeliveryCapture {
+                    compiled_delivery_id,
+                    handler_kind: HookHandlerKind::Rhai,
+                    logical_destination_id: None,
+                    destination_binding_digest:
+                        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    package_revision,
+                    schema_fingerprint,
+                    data_schema: STORED_DATA_SCHEMA,
+                    classification_ceiling: "public",
+                    authentication_profile: "hmac_sha256_v1",
+                    delivery_mode: "after_commit",
+                    attempt_timeout_ms: 5_000,
+                    initial_backoff_ms: 1_000,
+                    maximum_backoff_ms: 60_000,
+                    exponential_backoff_multiplier: 2,
+                    maximum_attempts: 3,
+                    retry_delays_ms: &[1_000, 2_000],
+                    maximum_payload_bytes: 1_024,
+                    payload: b"{}",
+                    deployed_attempt_timeout_ms: 5_000,
+                    deployed_maximum_attempts: 3,
+                    dead_letter: "required",
+                    operator_replay: false,
+                },
+            )
+            .await
+            .expect("insert the delivery row");
+            transaction.commit().await.expect("commit the insert");
+        }
+
+        // Simulate another worker stealing the lease: the row is `leased`
+        // under a lease token that is not the one the finalizing worker
+        // holds.
+        let stolen_lease_token = Uuid::new_v4();
+        let changed = client
+            .execute(
+                &format!(
+                    "UPDATE {schema}.registry_webhook_delivery_state
+                     SET state = 'leased',
+                         attempt = 1,
+                         next_attempt_at = NULL,
+                         attempt_started_at = transaction_timestamp(),
+                         lease_expires_at = transaction_timestamp() + interval '30 seconds',
+                         lease_token = $1
+                     WHERE event_id = $2 AND compiled_delivery_id = $3",
+                ),
+                &[&stolen_lease_token, &event_id, &compiled_delivery_id],
+            )
+            .await
+            .expect("simulate an active lease");
+        assert_eq!(changed, 1, "the inserted delivery state row exists");
+
+        let audit_calls = Arc::new(Mutex::new(0u32));
+        let service = DeliveryService::new(
+            RealDbSeams {
+                url: url.clone(),
+                audit_calls: Arc::clone(&audit_calls),
+            },
+            DeliveryConfig {
+                schema: schema.to_owned(),
+                idempotency_domain: b"hooks-delivery-lease-test-v1".to_vec(),
+                delivery_source: STORED_SOURCE.to_owned(),
+            },
+        );
+        let claim = DeliveryClaim {
+            event_id,
+            compiled_delivery_id: compiled_delivery_id.to_owned(),
+            generation: 1,
+            attempt: 1,
+            attempt_started_at: SystemTime::now(),
+            // The finalizing worker's own lease token: fresh, so it never
+            // matches the stolen token now stored on the row.
+            lease_token: Uuid::new_v4(),
+            deployed_maximum_attempts: 3,
+            retry_delays_ms: vec![1_000, 2_000],
+            package_revision: package_revision.to_owned(),
+            handler_kind: HookHandlerKind::Rhai,
+        };
+
+        let result = service
+            .finalize(&claim, AttemptResult::from(DeliveryAuditOutcome::Delivered))
+            .await;
+
+        assert!(
+            matches!(result, Err(DeliveryError::Unavailable)),
+            "a lease-guarded update that changes zero rows must fail closed"
+        );
+        assert_eq!(
+            *audit_calls.lock().expect("audit calls lock"),
+            0,
+            "no audit entry for a transition that did not happen"
+        );
     }
 }

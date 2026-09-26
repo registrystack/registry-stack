@@ -403,10 +403,12 @@ impl DeliverySeams for BregDeliverySeams {
         self.handlers.handler(binding)
     }
 
-    /// The platform worker calls this seam inside the transaction it is about
-    /// to commit, so the entry is appended before that commit: a refused
-    /// append rolls the transition back, and a failed commit after an
-    /// accepted append leaves an entry for a transition that did not happen.
+    /// The platform worker calls this seam only after the guarded transition
+    /// the entry reports has already succeeded, immediately before it commits
+    /// the transaction: a refused append still rolls that transition back,
+    /// but a failed commit after an accepted append leaves an entry for a
+    /// transition that did not happen, since this durable append cannot be
+    /// rolled back with the transaction.
     async fn record_audit(
         &self,
         _transaction: &Transaction<'_>,
