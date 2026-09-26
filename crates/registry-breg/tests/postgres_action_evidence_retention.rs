@@ -234,6 +234,7 @@ async fn expired_request_evidence_erases_only_retained_uses() {
         &[("failed", None), ("erased", Some(1)), ("erased", Some(0))],
     );
     drop(operator);
+    database.assert_every_audit_request_answered_once();
     database.cleanup().await;
 }
 fn cutoff() -> chrono::DateTime<chrono::Utc> {
@@ -327,7 +328,9 @@ async fn retention_refuses_misbound_database_with_identical_roles_and_catalog_dr
     assert_eq!(correct.erase_expired(cutoff()).await.unwrap(), 1);
     assert_eq!(count(&other).await, 0);
     drop((wrong, correct));
+    other.assert_every_audit_request_answered_once();
     other.cleanup().await;
+    original.assert_every_audit_request_answered_once();
     original.cleanup().await;
 }
 
@@ -420,5 +423,6 @@ async fn retention_serializes_activation_and_holds_identity_lock_through_deletio
     assert_eq!(erase.await.unwrap().unwrap(), 1);
     assert_eq!(count(&database).await, 0);
     drop(operator);
+    database.assert_every_audit_request_answered_once();
     database.cleanup().await;
 }

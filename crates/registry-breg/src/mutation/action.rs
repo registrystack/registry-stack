@@ -2695,9 +2695,16 @@ pub(crate) struct PreparedEvidenceAction {
     binding: crate::idempotency::ResolvedIdempotencyBinding,
     reserved_creates: BTreeMap<String, Uuid>,
     application_id: Uuid,
+    /// The action's attempt, held across Evidence evaluation until the
+    /// finalize terminal or refusal answers it. Dropping the admission
+    /// before that answers the attempt as unfinished.
+    attempt: Option<AuditRequest>,
 }
 
 impl MutationCoordinator {
+    /// Admit an Evidence action, recording its refusal when admission fails
+    /// before the deadline. A successful admission carries the held attempt
+    /// to [`Self::finalize_evidence_action`]; a recovered receipt answers it.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn preflight_evidence_action(
         &self,
@@ -2707,6 +2714,51 @@ impl MutationCoordinator {
         claims: &ActionClaimContext,
         target_authority: &BTreeMap<String, Vec<RowBoundaryContext>>,
         deadline: tokio::time::Instant,
+    ) -> Result<Result<PreparedEvidenceAction, MutationOutcome>, MutationError> {
+        let route_id = input.route_id;
+        let correlation = input.correlation;
+        let mut attempt = None;
+        let result = self
+            .preflight_evidence_action_holding(
+                client,
+                registry,
+                input,
+                claims,
+                target_authority,
+                deadline,
+                &mut attempt,
+            )
+            .await;
+        if result.is_err() && tokio::time::Instant::now() < deadline {
+            self.record_action_boundary_audit(
+                claims,
+                route_id,
+                correlation,
+                PreIoAuditKind::Refusal,
+            )
+            .await?;
+        }
+        Ok(match result? {
+            Ok(mut prepared) => {
+                prepared.attempt = attempt;
+                Ok(prepared)
+            }
+            Err(receipt) => Err(receipt),
+        })
+    }
+
+    /// Admission itself. The attempt it begins is left in `attempt`, so the
+    /// caller answers it on every path.
+    #[allow(clippy::too_many_arguments)]
+    async fn preflight_evidence_action_holding(
+        &self,
+        client: &mut Client,
+        registry: &CompiledRegistry,
+        input: ImmediateActionInput<'_>,
+        claims: &ActionClaimContext,
+        target_authority: &BTreeMap<String, Vec<RowBoundaryContext>>,
+        deadline: tokio::time::Instant,
+        attempt: &mut Option<AuditRequest>,
     ) -> Result<Result<PreparedEvidenceAction, MutationOutcome>, MutationError> {
         if !profile_is_keyed(self.audit.profile()) {
             return Err(MutationError::Unavailable);
@@ -2720,9 +2772,10 @@ impl MutationCoordinator {
         validate_action_claims(action, claims, Operation::Invoke)?;
         let normalized = validate_action_input(action, input.input)?;
         validate_precondition_set(action, &input.preconditions)?;
-        let _attempt = self
-            .begin_action_boundary_audit(claims, input.route_id, input.correlation)
-            .await?;
+        *attempt = Some(
+            self.begin_action_boundary_audit(claims, input.route_id, input.correlation)
+                .await?,
+        );
         let binding = resolve_action_binding(
             self.audit.profile(),
             &ActionIdempotencyBinding {
@@ -2819,6 +2872,7 @@ impl MutationCoordinator {
             binding,
             reserved_creates: reserve_action_create_ids(action)?,
             application_id,
+            attempt: None,
         }))
     }
 

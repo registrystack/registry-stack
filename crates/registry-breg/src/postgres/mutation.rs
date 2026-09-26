@@ -285,16 +285,6 @@ impl PostgresRecordMutationService {
                     deadline,
                 )
                 .await;
-            if result.is_err() && tokio::time::Instant::now() < deadline {
-                self.coordinator
-                    .record_action_boundary_audit(
-                        claims,
-                        route_id,
-                        correlation,
-                        crate::audit::PreIoAuditKind::Refusal,
-                    )
-                    .await?;
-            }
             guard.disarm();
             match result? {
                 Ok(prepared) => prepared,

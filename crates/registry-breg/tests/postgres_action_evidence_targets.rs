@@ -348,6 +348,7 @@ async fn final_local_target_checks_refuse_changes_during_external_wait_even_for_
             !row.get::<_, bool>(0),
             "the script omitted the declared patch slot"
         );
+        database.assert_every_audit_request_answered_once();
         database.cleanup().await;
     }
 }

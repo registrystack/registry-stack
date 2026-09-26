@@ -139,6 +139,37 @@ impl TestDatabase {
         self.audit.entries()
     }
 
+    /// Assert that every audit request accepted so far has exactly one
+    /// response, written after it under the same schema and correlation.
+    /// The only response allowed without a request is a refusal for a
+    /// correlation that never opened one: a request refused before its
+    /// attempt was recorded.
+    #[allow(dead_code)] // Not every integration target reads audit entries.
+    pub fn assert_every_audit_request_answered_once(&self) {
+        let entries = self.audit.entries();
+        let mut open = std::collections::BTreeMap::<(String, String), usize>::new();
+        for entry in &entries {
+            let key = (
+                entry["schema"].as_str().unwrap_or_default().to_owned(),
+                entry["correlation"].as_str().unwrap_or_default().to_owned(),
+            );
+            match entry["phase"].as_str() {
+                Some("request") => *open.entry(key).or_default() += 1,
+                Some("response") => match open.get_mut(&key) {
+                    Some(pending) if *pending > 0 => *pending -= 1,
+                    None if entry["record"]["phase"] == "refusal" => {}
+                    _ => panic!("a response answers no open request: {entry}\n{entries:#?}"),
+                },
+                other => panic!("an audit entry has no pairing phase {other:?}: {entry}"),
+            }
+        }
+        let unanswered: Vec<_> = open.iter().filter(|(_, pending)| **pending > 0).collect();
+        assert!(
+            unanswered.is_empty(),
+            "audit requests without a response: {unanswered:?}\n{entries:#?}"
+        );
+    }
+
     /// The record of every audit entry accepted so far.
     #[allow(dead_code)] // Not every integration target reads audit entries.
     pub fn audit_records(&self) -> Vec<Value> {
