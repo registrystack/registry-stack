@@ -479,10 +479,33 @@ impl RequestRetentionOperatorService {
             .erase_in_transaction(&mut client, scope.clone(), correlation)
             .await;
         let (plan, erasure, entry) = match erased {
-            Ok(erased) => erased,
+            Ok((plan, erasure, entry, true)) => (plan, erasure, entry),
+            Ok((plan, erasure, entry, false)) => {
+                // A commit that returned an error may still have committed,
+                // so the outcome recorded for this destructive operation is
+                // the one the database holds, read on a fresh connection.
+                match self.erasure_committed(&pool, scope.clone()).await {
+                    Some(true) => (plan, erasure, entry),
+                    resolved => {
+                        let outcome = if resolved == Some(false) {
+                            "failed"
+                        } else {
+                            "unfinished"
+                        };
+                        let answer = retention_outcome_record(&request_record, outcome);
+                        if attempt.respond(answer).await.is_err() {
+                            tracing::error!(
+                                "the unacknowledged erasure's response audit entry was not recorded"
+                            );
+                        }
+                        return Err(RequestRetentionError::Unavailable);
+                    }
+                }
+            }
             Err(error) => {
-                // Nothing committed: answer the request with the refusal or
-                // the failure.
+                // The erasure failed before its commit, so nothing
+                // committed: answer the request with the refusal or the
+                // failure.
                 let outcome = if error == RequestRetentionError::Unavailable {
                     "failed"
                 } else {
@@ -525,14 +548,33 @@ impl RequestRetentionOperatorService {
         })
     }
 
-    /// Erase one request's detail in one committed transaction and build the
-    /// terminal entry that records it.
+    /// Whether the detail `scope` names is erased, read on a fresh
+    /// connection after an erasure commit returned an error. `None` when the
+    /// state cannot be read.
+    async fn erasure_committed(
+        &self,
+        pool: &crate::postgres::RuntimePool,
+        scope: RequestDetailErasureScope<'_>,
+    ) -> Option<bool> {
+        let mut client = pool.get().await.ok()?;
+        let transaction = self.begin_verified_transaction(&mut client).await.ok()?;
+        let plan = load_erasure_plan(&transaction, &self.registry, scope, false)
+            .await
+            .ok()?;
+        transaction.commit().await.ok()?;
+        Some(plan.detail_erased)
+    }
+
+    /// Erase one request's detail in one transaction and build the terminal
+    /// entry that records it. The flag is false when the commit returned an
+    /// error, which does not prove the transaction rolled back; every
+    /// earlier error is returned as one.
     async fn erase_in_transaction(
         &self,
         client: &mut deadpool_postgres::Client,
         scope: RequestDetailErasureScope<'_>,
         correlation: RequestCorrelation,
-    ) -> Result<(RequestErasurePlan, RequestDetailErasure, AuditEntry)> {
+    ) -> Result<(RequestErasurePlan, RequestDetailErasure, AuditEntry, bool)> {
         let transaction = self.begin_verified_transaction(client).await?;
         let plan = load_erasure_plan(&transaction, &self.registry, scope.clone(), true).await?;
         let (erasure, current_revision) =
@@ -566,11 +608,8 @@ impl RequestRetentionOperatorService {
             erasure,
             correlation,
         )?;
-        transaction
-            .commit()
-            .await
-            .map_err(|_| RequestRetentionError::Unavailable)?;
-        Ok((plan, erasure, entry))
+        let acknowledged = transaction.commit().await.is_ok();
+        Ok((plan, erasure, entry, acknowledged))
     }
 
     /// Retry orphaned external objects even when every request is active or
