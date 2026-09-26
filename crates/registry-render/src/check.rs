@@ -1,5 +1,5 @@
-//! `registry-render check`: the plain-language preflight. Verifies structure and
-//! seal hashes, label-script font coverage, and per-locale label key sets.
+//! `registry-render check`: the plain-language authoring preflight. Verifies
+//! structure, label-script font coverage, and per-locale label key sets.
 //! The rendered file closure is governed where a render exists to capture
 //! it: the golden suite pins each acceptance bundle's closure and proves
 //! every file it reads is manifest-governed, and `compile --json` reports
@@ -39,25 +39,15 @@ pub fn run(
             root.display()
         );
     }
-    // Verify everything first; only a bundle that fully verifies gets
-    // sealed. Sealing a broken bundle would lend it an unearned seal.
-    let bundle = Bundle::load(bundle_dir)?;
-    if seal && bundle.manifest.is_sealed() {
+    if seal {
         return Err(RenderProblem::new(
             ProblemKind::InvalidArgument,
-            "bundle is already sealed; edit, then run `registry-render seal` to re-seal",
+            "`registry-render check --seal` is no longer accepted; run `registry-render check`, then build a new directory with `registry-render package --bundle <source> --output <directory>`",
         ));
     }
+    let bundle = Bundle::load_for_preview(bundle_dir)?;
     check_script_coverage(&bundle)?;
     check_label_key_sets(&bundle)?;
-    if seal {
-        Bundle::seal(bundle_dir)?;
-        println!("sealed (bundle hashes written to manifest.yaml)");
-    } else if !bundle.manifest.is_sealed() {
-        println!(
-            "note: bundle is unsealed; compile works, serve does not (run `registry-render seal`)"
-        );
-    }
     for document in bundle.documents.values() {
         let labels = document
             .spec
@@ -79,12 +69,7 @@ pub fn run(
                 .unwrap_or_else(|| "plain".to_owned())
         );
     }
-    let governed = bundle
-        .manifest
-        .hashes
-        .as_ref()
-        .map(|h| h.len())
-        .unwrap_or(0);
+    let governed = bundle.package_inputs().len();
     println!(
         "bundle {} v{} hash {} ({} fonts, {} documents, {} governed files)",
         bundle_dir.display(),

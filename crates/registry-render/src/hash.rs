@@ -1,4 +1,4 @@
-//! Hash helpers shared by manifest sealing, envelope hashing, and audit.
+//! Hash helpers shared by request envelopes, rendered output, and audit.
 
 use sha2::{Digest, Sha256};
 

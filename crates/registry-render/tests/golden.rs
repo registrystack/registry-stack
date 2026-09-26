@@ -69,8 +69,18 @@ fn issued_at() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 16, 10, 32, 0).unwrap()
 }
 
+fn load_package(root: &Path) -> registry_render::Bundle {
+    let verified = registry_platform_config::package::verify_package(
+        root,
+        &registry_render::runtime::package_limits(),
+        "registry-render package",
+    )
+    .expect("shared package envelope");
+    registry_render::Bundle::load_package(root, &verified).expect("bound package bytes")
+}
+
 fn render_case(case: &Case) -> registry_render::Rendered {
-    let bundle = registry_render::Bundle::load_sealed(&case.bundle).expect("sealed bundle");
+    let bundle = load_package(&case.bundle);
     let document = bundle.document(case.document).expect("document");
     let data: Value = serde_json::from_str(
         &std::fs::read_to_string(case.bundle.join("fixtures/data.json")).expect("fixture"),
@@ -113,6 +123,12 @@ fn golden_hashes_match() {
             "golden envelope hash drifted for {}",
             case.name
         );
+        assert_eq!(
+            rendered.bundle_hash,
+            pinned["bundleHash"].as_str().expect("pinned package hash"),
+            "golden package hash drifted for {}",
+            case.name
+        );
         assert!(
             rendered.warnings.is_empty(),
             "{} rendered with warnings: {:?}",
@@ -120,7 +136,7 @@ fn golden_hashes_match() {
             rendered.warnings
         );
         // Closure drift gate: the pinned file closure must match exactly,
-        // and every file it names must be governed by the manifest's seal
+        // and every file it names must be governed by the package envelope
         // (bundle files by their virtual path, package files by their
         // packages/… spelling).
         let pinned_deps: Option<Vec<String>> = pinned["deps"].as_array().map(|deps| {
@@ -135,7 +151,7 @@ fn golden_hashes_match() {
              different file set than the reviewed one",
             case.name
         );
-        let governed = manifest_hashes(&case.bundle);
+        let governed = package_files(&case.bundle);
         for dep in &rendered.deps {
             // Virtual request assets are scoped to the request and covered
             // by dataSha256, not by the bundle's manifest.
@@ -156,8 +172,8 @@ fn golden_hashes_match() {
                 None => dep.clone(),
             };
             assert!(
-                governed.contains_key(&governed_name),
-                "{} closure reads {}, which the manifest does not govern",
+                governed.contains(&governed_name),
+                "{} closure reads {}, which the package does not govern",
                 case.name,
                 governed_name
             );
@@ -165,11 +181,17 @@ fn golden_hashes_match() {
     }
 }
 
-/// The sealed manifest's per-file hash map, parsed by the crate's own model.
-fn manifest_hashes(bundle: &Path) -> std::collections::BTreeMap<String, String> {
-    let bytes = std::fs::read(bundle.join("manifest.yaml")).expect("manifest bytes");
-    let manifest = registry_render::manifest::Manifest::parse(&bytes).expect("manifest parses");
-    manifest.hashes.expect("example bundles are sealed")
+/// The paths governed by the shared package envelope.
+fn package_files(bundle: &Path) -> std::collections::BTreeSet<String> {
+    registry_platform_config::package::verify_package(
+        bundle,
+        &registry_render::runtime::package_limits(),
+        "registry-render package",
+    )
+    .expect("example package verifies")
+    .files()
+    .map(str::to_owned)
+    .collect()
 }
 
 #[test]
@@ -241,7 +263,7 @@ fn pdf_bytes_carry_no_renderer_version() {
 #[test]
 fn issued_at_changes_bytes_and_is_the_only_knob() {
     let case = cases().into_iter().find(|c| c.name == "receipt").unwrap();
-    let bundle = registry_render::Bundle::load_sealed(&case.bundle).unwrap();
+    let bundle = load_package(&case.bundle);
     let document = bundle.document("receipt").unwrap().clone();
     let data: Value = serde_json::from_str(
         &std::fs::read_to_string(case.bundle.join("fixtures/data.json")).unwrap(),
@@ -262,37 +284,30 @@ fn issued_at_changes_bytes_and_is_the_only_knob() {
 }
 
 #[test]
-fn tampered_sealed_bundle_is_refused() {
+fn tampered_package_is_refused() {
     let case = cases().into_iter().find(|c| c.name == "receipt").unwrap();
     let (_copy, copy) = physical_tempdir();
     copy_bundle(&case.bundle, &copy);
-    // Tamper with a governed file after sealing.
+    // Tamper with a governed file after packaging.
     let labels = copy.join("labels/ar.yaml");
     let mut text = std::fs::read_to_string(&labels).unwrap();
     text.push_str("extra: tampered\n");
     std::fs::write(&labels, text).unwrap();
-    let problem =
-        registry_render::Bundle::load_sealed(&copy).expect_err("tampered bundle must be refused");
-    assert_eq!(
-        problem.kind,
-        registry_render::ProblemKind::BundleTampered,
-        "{problem}"
-    );
-    assert!(
-        problem.locations.iter().any(|l| l.contains("ar.yaml")),
-        "the problem names the drifted file: {problem}"
-    );
+    let problem = registry_platform_config::package::verify_package(
+        &copy,
+        &registry_render::runtime::package_limits(),
+        "registry-render package",
+    )
+    .expect_err("tampered package must be refused");
+    assert!(problem.to_string().contains("labels/ar.yaml"), "{problem}");
 }
 
 #[test]
-fn sealed_template_and_package_bytes_are_bound_to_the_loaded_snapshot() {
-    let (_dir, bundle_dir) = physical_tempdir();
-    for sub in [
-        "templates",
-        "fonts",
-        "labels",
-        "packages/preview/notice/0.1.0/src",
-    ] {
+fn verified_template_and_typst_package_bytes_are_bound_to_the_loaded_snapshot() {
+    let (_dir, root) = physical_tempdir();
+    let bundle_dir = root.join("source");
+    std::fs::create_dir(&bundle_dir).unwrap();
+    for sub in ["templates", "packages/preview/notice/0.1.0/src"] {
         std::fs::create_dir_all(bundle_dir.join(sub)).unwrap();
     }
     std::fs::write(
@@ -301,10 +316,10 @@ fn sealed_template_and_package_bytes_are_bound_to_the_loaded_snapshot() {
     )
     .unwrap();
     let template = "#import \"@preview/notice:0.1.0\": message\n#message #read(\"value.txt\")\n";
-    let package = "#let message = [sealed content]\n";
+    let package = "#let message = [verified content]\n";
     std::fs::write(bundle_dir.join("templates/notice.typ"), template).unwrap();
     let file_path = bundle_dir.join("templates/value.txt");
-    std::fs::write(&file_path, "sealed file content\n").unwrap();
+    std::fs::write(&file_path, "verified file content\n").unwrap();
     std::fs::write(
         bundle_dir.join("packages/preview/notice/0.1.0/typst.toml"),
         "[package]\nname = \"notice\"\nversion = \"0.1.0\"\nentrypoint = \"src/lib.typ\"\n",
@@ -313,8 +328,17 @@ fn sealed_template_and_package_bytes_are_bound_to_the_loaded_snapshot() {
     let package_path = bundle_dir.join("packages/preview/notice/0.1.0/src/lib.typ");
     std::fs::write(&package_path, package).unwrap();
 
-    registry_render::Bundle::seal(&bundle_dir).expect("bundle seals");
-    let bundle = registry_render::Bundle::load_sealed(&bundle_dir).expect("sealed bundle loads");
+    registry_render::Bundle::load(&bundle_dir).expect("authored bundle");
+    let package_dir = root.join("package");
+    copy_bundle(&bundle_dir, &package_dir);
+    registry_platform_config::package::write_sum_file(
+        &package_dir,
+        None,
+        &registry_render::runtime::package_limits(),
+        "registry-render package",
+    )
+    .expect("package writes");
+    let bundle = load_package(&package_dir);
     let document = bundle.document("notice").unwrap().clone();
     let request = registry_render::RenderRequest {
         locale: None,
@@ -324,11 +348,11 @@ fn sealed_template_and_package_bytes_are_bound_to_the_loaded_snapshot() {
     };
     let baseline = registry_render::render(&bundle, &document, &request, false).unwrap();
 
-    // After the seal has been verified, replace the exact template path
+    // After the package has been verified, replace the exact template path
     // before Typst asks the world for it. The already loaded bundle must
     // still render only its verified snapshot bytes.
     std::fs::write(
-        bundle_dir.join("templates/notice.typ"),
+        package_dir.join("templates/notice.typ"),
         "tampered template content\n",
     )
     .unwrap();
@@ -339,8 +363,13 @@ fn sealed_template_and_package_bytes_are_bound_to_the_loaded_snapshot() {
 
     // Package source is resolved through a different Typst virtual root and
     // must be bound to the same immutable snapshot too.
-    std::fs::write(bundle_dir.join("templates/notice.typ"), template).unwrap();
-    std::fs::write(&package_path, "#let message = [tampered package content]\n").unwrap();
+    std::fs::write(package_dir.join("templates/notice.typ"), template).unwrap();
+    let deployed_package_path = package_dir.join("packages/preview/notice/0.1.0/src/lib.typ");
+    std::fs::write(
+        &deployed_package_path,
+        "#let message = [tampered package content]\n",
+    )
+    .unwrap();
     let after_package_replace =
         registry_render::render(&bundle, &document, &request, false).unwrap();
     assert_eq!(after_package_replace.pdf, baseline.pdf);
@@ -348,37 +377,40 @@ fn sealed_template_and_package_bytes_are_bound_to_the_loaded_snapshot() {
 
     // Non-source reads use `World::file`; those bytes must not be reopened
     // either. Restore the package path so this assertion isolates that path.
-    std::fs::write(&package_path, package).unwrap();
-    std::fs::write(&file_path, "tampered file content\n").unwrap();
+    std::fs::write(&deployed_package_path, package).unwrap();
+    std::fs::write(
+        package_dir.join("templates/value.txt"),
+        "tampered file content\n",
+    )
+    .unwrap();
     let after_file_replace = registry_render::render(&bundle, &document, &request, false).unwrap();
     assert_eq!(after_file_replace.pdf, baseline.pdf);
     assert_eq!(after_file_replace.bundle_hash, baseline.bundle_hash);
 }
 
 #[test]
-fn unsealed_bundle_is_refused_for_serving() {
+fn directory_without_sum_file_is_not_a_package_but_remains_authoring_source() {
     let case = cases()
         .into_iter()
         .find(|c| c.name == "certificate")
         .unwrap();
     let (_copy, copy) = physical_tempdir();
     copy_bundle(&case.bundle, &copy);
-    let manifest_path = copy.join("manifest.yaml");
-    let manifest = std::fs::read_to_string(&manifest_path).unwrap();
-    // Strip the hashes block: everything from `hashes:` to EOF.
-    let stripped = manifest.split("hashes:").next().unwrap().to_owned();
-    std::fs::write(&manifest_path, stripped).unwrap();
-    let problem = registry_render::Bundle::load_sealed(&copy)
-        .expect_err("unsealed bundle must be refused for serve");
-    assert_eq!(problem.kind, registry_render::ProblemKind::BundleUnsealed);
-    // But plain compile loading still works unsealed.
-    registry_render::Bundle::load(&copy).expect("compile accepts unsealed");
+    std::fs::remove_file(copy.join("SHA256SUMS")).unwrap();
+    let problem = registry_platform_config::package::verify_package(
+        &copy,
+        &registry_render::runtime::package_limits(),
+        "registry-render package",
+    )
+    .expect_err("source directory is not a package");
+    assert!(problem.to_string().contains("has no SHA256SUMS"));
+    registry_render::Bundle::load(&copy).expect("compile accepts raw authoring source");
 }
 
 #[test]
 fn schema_violations_carry_json_pointers() {
     let case = cases().into_iter().find(|c| c.name == "receipt").unwrap();
-    let bundle = registry_render::Bundle::load_sealed(&case.bundle).unwrap();
+    let bundle = load_package(&case.bundle);
     let document = bundle.document("receipt").unwrap().clone();
     let mut data: Value = serde_json::from_str(
         &std::fs::read_to_string(case.bundle.join("fixtures/data.json")).unwrap(),
@@ -419,7 +451,7 @@ fn schema_violations_carry_json_pointers() {
 #[test]
 fn bad_locale_is_refused_with_a_pointer() {
     let case = cases().into_iter().find(|c| c.name == "card").unwrap();
-    let bundle = registry_render::Bundle::load_sealed(&case.bundle).unwrap();
+    let bundle = load_package(&case.bundle);
     let document = bundle.document("beneficiary-card").unwrap().clone();
     let data: Value = serde_json::from_str(
         &std::fs::read_to_string(case.bundle.join("fixtures/data.json")).unwrap(),

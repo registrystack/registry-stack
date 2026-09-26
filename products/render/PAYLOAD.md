@@ -65,9 +65,12 @@ Rules worth internalizing:
 ## Authoring loop
 
 Edit templates freely with upstream tooling (tinymist/VS Code give live
-preview if you point them at the bundle). `registry-render compile` runs
-unsealed bundles with a notice; `registry-render seal` writes the manifest
-hashes; `registry-render serve` requires the sealed bundle.
+preview if you point them at the source bundle). `registry-render compile`,
+`validate`, and `check` accept raw source during authoring. When it is ready,
+`registry-render package --bundle <source> --output <new-directory>` validates
+the source and writes the shared `SHA256SUMS` envelope plus an optional
+`REVISION`. `registry-render serve` always verifies that package, including an
+optional `package.expectedDigest` pin, before it listens.
 `registry-render check` verifies everything,
 including that every label character is drawable by some bundle or baseline
 font — a successful render that prints tofu is wrong on paper, so coverage

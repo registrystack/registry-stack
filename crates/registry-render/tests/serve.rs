@@ -72,7 +72,7 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
-/// Build a deployment home: sealed receipt bundle, key file, audit dir,
+/// Build a deployment home: verified Render package, key file, audit dir,
 /// runtime.yaml. Returns (home, runtime_path, port).
 fn deployment(limits: &str, bundle_source: &Path) -> (PathBuf, PathBuf, u16) {
     let (home_guard, home) = physical_tempdir();
@@ -270,6 +270,18 @@ fn serve_health_and_ready() {
         DEFAULT_LIMITS,
         &repo_root().join("products/render/bundles/receipt"),
     );
+    let digest = registry_platform_config::sha256_uri(
+        &std::fs::read(home.join("bundle/SHA256SUMS")).unwrap(),
+    );
+    let text = std::fs::read_to_string(&runtime).unwrap();
+    std::fs::write(
+        &runtime,
+        text.replace(
+            "package:\n",
+            &format!("package:\n  expectedDigest: {digest}\n"),
+        ),
+    )
+    .unwrap();
     let server = start_server(&runtime);
     let health = request(server.port, "GET", "/health", &[], None);
     assert_eq!(health.status, 200);
@@ -482,17 +494,21 @@ fn a_refused_bind_is_caught_before_startup_touches_the_filesystem() {
 }
 
 #[test]
-fn a_package_pin_naming_another_bundle_refuses_startup() {
+fn serve_startup_package_digest_mismatch_uses_common_expected_and_found_shape() {
     let (home, runtime, _) = deployment(
         DEFAULT_LIMITS,
         &repo_root().join("products/render/bundles/receipt"),
     );
     let audit = home.join("audit-elsewhere");
+    let expected = format!("sha256:{}", "0".repeat(64));
+    let found = registry_platform_config::sha256_uri(
+        &std::fs::read(home.join("bundle/SHA256SUMS")).unwrap(),
+    );
     let text = std::fs::read_to_string(&runtime).unwrap();
     let text = text
         .replace(
             "package:\n",
-            &format!("package:\n  expectedDigest: sha256:{}\n", "0".repeat(64)),
+            &format!("package:\n  expectedDigest: {expected}\n"),
         )
         .replace(
             &format!("path: {}", audit_file(&home).display()),
@@ -509,7 +525,12 @@ fn a_package_pin_naming_another_bundle_refuses_startup() {
         "a pinned digest naming another bundle must refuse startup"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("package.expectedDigest"), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "package.expectedDigest is {expected} but the package at package.root is {found}"
+        )),
+        "{stderr}"
+    );
     assert!(
         !audit.exists(),
         "the refusal lands before the audit directory opens"
@@ -926,26 +947,43 @@ fn audit_events_are_value_free() {
 }
 
 #[test]
-fn tampered_bundle_refuses_to_serve() {
-    let (home, runtime, _) = deployment(
-        DEFAULT_LIMITS,
-        &repo_root().join("products/render/bundles/receipt"),
-    );
-    let labels = home.join("bundle/labels/ar.yaml");
-    let mut text = std::fs::read_to_string(&labels).unwrap();
-    text.push_str("extra: tampered\n");
-    std::fs::write(&labels, text).unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_registry-render"))
-        .args(["serve", "--runtime-config", runtime.to_str().unwrap()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let code = wait_for_exit(&mut child);
-    assert_eq!(
-        code,
-        registry_render::ProblemKind::BundleTampered.exit_code()
-    );
+fn package_changed_missing_and_extra_files_refuse_startup_by_name() {
+    for (label, mutate, path) in [
+        ("changed", "changed", "labels/ar.yaml"),
+        ("missing", "missing", "labels/ar.yaml"),
+        ("extra", "extra", "unexpected.txt"),
+    ] {
+        let (home, runtime, _) = deployment(
+            DEFAULT_LIMITS,
+            &repo_root().join("products/render/bundles/receipt"),
+        );
+        match mutate {
+            "changed" => {
+                let file = home.join("bundle").join(path);
+                let mut text = std::fs::read_to_string(&file).unwrap();
+                text.push_str("extra: tampered\n");
+                std::fs::write(file, text).unwrap();
+            }
+            "missing" => std::fs::remove_file(home.join("bundle").join(path)).unwrap(),
+            "extra" => std::fs::write(home.join("bundle").join(path), "extra").unwrap(),
+            _ => unreachable!(),
+        }
+        let output = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+            .args(["serve", "--runtime-config", runtime.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(registry_render::ProblemKind::BundleTampered.exit_code()),
+            "{label}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(label) && stderr.contains(path),
+            "{label}: {stderr}"
+        );
+    }
 }
 
 #[test]
@@ -961,7 +999,7 @@ fn bundle_drift_after_serve_starts_is_refused_per_render() {
         ("Content-Type", "application/json"),
     ];
 
-    // Content drift after startup: the per-request seal check catches it.
+    // Content drift after startup: the per-request package check catches it.
     let labels = home.join("bundle/labels/ar.yaml");
     let mut text = std::fs::read_to_string(&labels).unwrap();
     text.push_str("extra: tampered\n");
@@ -985,8 +1023,8 @@ fn bundle_drift_after_serve_starts_is_refused_per_render() {
         String::from_utf8_lossy(&tampered.body)
     );
 
-    // A bundle-load failure that formats a host path (here: a symlink the
-    // seal walk refuses) reaches the caller as a problem, so the bundle
+    // A package-load failure that names a path (here: a symlink the package
+    // walk refuses) reaches the caller as a problem, so the bundle
     // root must be redacted the way render diagnostics already are.
     #[cfg(unix)]
     {
@@ -1002,10 +1040,10 @@ fn bundle_drift_after_serve_starts_is_refused_per_render() {
         std::fs::remove_file(&escape).unwrap();
         let body = String::from_utf8_lossy(&symlinked.body).into_owned();
         assert_eq!(symlinked.status, 400, "{body}");
-        assert!(body.contains("manifest-invalid"), "{body}");
+        assert!(body.contains("bundle-tampered"), "{body}");
         assert!(
-            body.contains("<bundle>/escape"),
-            "the detail names the offending file under the redaction marker: {body}"
+            body.contains("escape") && body.contains("symbolic link"),
+            "the detail names the offending package entry: {body}"
         );
         for root in [
             home.to_string_lossy().into_owned(),
@@ -1021,13 +1059,9 @@ fn bundle_drift_after_serve_starts_is_refused_per_render() {
         }
     }
 
-    // Unsealing after startup (hashes stripped, content otherwise intact):
-    // the worker must load sealed, not merely verify-if-sealed.
-    let manifest_path = home.join("bundle/manifest.yaml");
-    let manifest = std::fs::read_to_string(&manifest_path).unwrap();
-    let stripped = manifest.split("hashes:").next().unwrap().to_owned();
-    std::fs::write(&manifest_path, stripped).unwrap();
-    let unsealed = request(
+    // Removing the envelope after startup is refused by every worker.
+    std::fs::remove_file(home.join("bundle/SHA256SUMS")).unwrap();
+    let unpackaged = request(
         server.port,
         "POST",
         "/v1/render/receipt",
@@ -1035,15 +1069,15 @@ fn bundle_drift_after_serve_starts_is_refused_per_render() {
         Some(&receipt_body()),
     );
     assert_eq!(
-        unsealed.status,
+        unpackaged.status,
         400,
         "{}",
-        String::from_utf8_lossy(&unsealed.body)
+        String::from_utf8_lossy(&unpackaged.body)
     );
     assert!(
-        String::from_utf8_lossy(&unsealed.body).contains("bundle-unsealed"),
-        "the worker must refuse an unsealed bundle per request: {}",
-        String::from_utf8_lossy(&unsealed.body)
+        String::from_utf8_lossy(&unpackaged.body).contains("bundle-unsealed"),
+        "the worker must refuse a directory without SHA256SUMS per request: {}",
+        String::from_utf8_lossy(&unpackaged.body)
     );
 }
 
@@ -1182,10 +1216,7 @@ fn pathological_renders_are_bounded_and_the_service_recovers() {
         "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: heavy\n    version: 1\n    entry: templates/heavy.typ\n  - id: healthy\n    version: 1\n    entry: templates/healthy.typ\n",
     )
     .unwrap();
-    for dir in ["templates", "fonts", "labels", "schemas"] {
-        std::fs::create_dir_all(bundle.join(dir)).unwrap();
-    }
-    std::fs::create_dir_all(bundle.join("packages/preview")).unwrap();
+    std::fs::create_dir_all(bundle.join("templates")).unwrap();
     std::fs::write(
         bundle.join("templates/heavy.typ"),
         "#let payload = json(bytes(sys.inputs.data))\n#let x = range(20000000).fold(0, (a, b) => a + b)\n#x\n",
@@ -1196,16 +1227,13 @@ fn pathological_renders_are_bounded_and_the_service_recovers() {
         "#let payload = json(bytes(sys.inputs.data))\n= Worker recovered\n",
     )
     .unwrap();
-    // Seal the heavy bundle so serve accepts it.
-    let sealed = Command::new(env!("CARGO_BIN_EXE_registry-render"))
-        .args(["seal", "--bundle", bundle.to_str().unwrap()])
-        .output()
-        .unwrap();
-    assert!(
-        sealed.status.success(),
-        "{}",
-        String::from_utf8_lossy(&sealed.stderr)
-    );
+    registry_platform_config::package::write_sum_file(
+        &bundle,
+        None,
+        &registry_render::runtime::package_limits(),
+        "registry-render package",
+    )
+    .unwrap();
 
     let (home, runtime, _) = deployment(
         "limits:\n  renderTimeoutSeconds: 2\n  maxOutputBytes: 8388608\n  maxRequestBodyBytes: 8388608\n  maxConcurrency: 2\n",
@@ -1297,25 +1325,19 @@ fn shutdown_is_bounded_by_grace_even_with_renders_in_flight() {
         "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: heavy\n    version: 1\n    entry: templates/heavy.typ\n",
     )
     .unwrap();
-    for dir in [
-        "templates",
-        "fonts",
-        "labels",
-        "schemas",
-        "packages/preview",
-    ] {
-        std::fs::create_dir_all(bundle.join(dir)).unwrap();
-    }
+    std::fs::create_dir_all(bundle.join("templates")).unwrap();
     std::fs::write(
         bundle.join("templates/heavy.typ"),
         "#let x = range(200000000).fold(0, (a, b) => a + b)\n#x\n",
     )
     .unwrap();
-    let sealed = Command::new(env!("CARGO_BIN_EXE_registry-render"))
-        .args(["seal", "--bundle", bundle.to_str().unwrap()])
-        .output()
-        .unwrap();
-    assert!(sealed.status.success());
+    registry_platform_config::package::write_sum_file(
+        &bundle,
+        None,
+        &registry_render::runtime::package_limits(),
+        "registry-render package",
+    )
+    .unwrap();
 
     let (home, runtime, port) = deployment(
         "limits:\n  renderTimeoutSeconds: 120\n  maxOutputBytes: 8388608\n  maxRequestBodyBytes: 8388608\n  maxConcurrency: 2\n",

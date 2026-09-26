@@ -6,6 +6,40 @@ All hashes below were produced on macOS (aarch64) with the workspace lockfile
 in this tree; the two-OS CI golden job re-proves them on Linux for every
 change.
 
+## Shared package migration (2026-09-26)
+
+Render now uses the Registry Stack package envelope instead of embedding
+per-file hashes in `manifest.yaml`. `registry-render package` validates raw
+authoring source, copies the exact validated files into a new directory, and
+writes sorted `SHA256SUMS` plus optional `REVISION`. The three maintained
+examples are current packages. Their package digests are:
+
+| Package | digest |
+|---|---|
+| receipt | `sha256:a4109d91fe340fd054c09f1b3b0d857332f964dd853265b13b014f248d7a2d38` |
+| certificate | `sha256:66e42dd1232470c8153411d16a9099ddb50727e76df57153f63c799fcade2051` |
+| beneficiary-card | `sha256:6089a24558875d34a015cd09e207d4b5fd6bec62716fbd5075576398343cd6ac` |
+
+Startup verifies `package.root`, applies optional `package.expectedDigest`,
+captures the package through held descriptors, and binds every captured byte
+and the captured sum file back to the shared verification result before any
+Render validation or consumer construction. Every serve worker repeats that
+process and the parent requires its digest to match startup. This covers lazy
+Typst template imports, vendored package source, fonts, schemas, labels, and
+`read()` calls rather than proving only startup metadata.
+
+Executable proof covers successful repeatable packaging with an optional
+revision, raw authoring checks, current-package check/validate/compile,
+missing/changed/extra file refusals by name, matching and mismatching digest
+pins, no-pin serving, path replacement between shared verification and product
+capture, and drift before a later render. The focused migration run passed 34
+unit tests, 14 golden tests, 19 scaffold/CLI tests, and 20 serve tests, followed
+by clippy for all Render targets with warnings denied.
+
+The dated entries below preserve the evidence history of the retired manifest
+seal. Where they use “seal” or old test names, this section and the current
+acceptance map describe the replacement contract.
+
 ## Merge gate: library mode ≡ Typst CLI (2026-09-17)
 
 The Definition of Done's merge gate: a library-mode render must reproduce the
@@ -101,8 +135,8 @@ Findings folded back into the product (the gate's purpose):
 
 ## Golden record
 
-`golden.json` pins, per bundle: PDF sha256, envelope (`dataSha256`)
-sha256, warnings (empty), bundle hash. Issued time fixed at
+`golden.json` pins, per bundle: PDF sha256, request envelope (`dataSha256`)
+sha256, warnings (empty), and package hash. Issued time fixed at
 `2026-09-16T10:32:00Z`. Regenerate only via the documented command and only
 as a reviewed diff:
 
@@ -121,7 +155,7 @@ every technical property the corpus exists to exercise: Arabic/RTL primary with
 French secondary, bidirectional text with embedded Latin, a ten-digit identifier
 pattern, a currency (now `XTS`, the ISO 4217 code reserved for testing), a region
 field, an embedded photo, and an offline QR. Content changed in all three
-bundles, so all three were re-sealed and every pinned value moved. The document
+bundles, so all three were rebuilt and every pinned value moved. The document
 versions were deliberately *not* bumped (receipt stays v3, certificate and
 beneficiary-card v1): nothing has been released, and a bump would imply an
 earlier version existed in the wild.
@@ -137,15 +171,15 @@ the findings above.
 | certificate | `252d40678919cb8496950101efa7fa4984ccd6825655679cca6dead05c7696c0` |
 | beneficiary-card | `cf607a3b82a2027abfb4345377b1b84cd2e616da7376e18f29355ca790c3da2f` |
 
-Envelope (`dataSha256`) and bundle hashes moved with them and live in
+Envelope (`dataSha256`) and package hashes live in
 `golden.json`: receipt envelope
-`8ab91deaf04f2ab9634da9fe45e63615f285c936659f8d839f413f647641b33a` / bundle
-`96d199d20c94b39d4947168a84337277db1f01e86bb8907d0614d211855b0e26`; certificate
+`8ab91deaf04f2ab9634da9fe45e63615f285c936659f8d839f413f647641b33a` / package
+`a4109d91fe340fd054c09f1b3b0d857332f964dd853265b13b014f248d7a2d38`; certificate
 envelope `cccb32e6fdcf4db99a556ede3abedcc4f46b94575b20a4b5ce361edfd1ac555a` /
-bundle `3bb68569252cd621f0b6992b329de04524c29d02995c14056892f177ac9e6dff`;
+package `66e42dd1232470c8153411d16a9099ddb50727e76df57153f63c799fcade2051`;
 beneficiary-card envelope
-`c595a3670a9b83327a8e16ef403b8253039d6d548b3388875930850d0f41fa18` / bundle
-`4dd435c0bed4c80f4408dc87173b0f72887071ca78f734441bed979cabfe7d88`. The
+`c595a3670a9b83327a8e16ef403b8253039d6d548b3388875930850d0f41fa18` / package
+`6089a24558875d34a015cd09e207d4b5fd6bec62716fbd5075576398343cd6ac`. The
 per-render dependency closures are unchanged. Every warning list is empty.
 
 The Arabic strings in the rewritten fixtures are plausible modern standard
@@ -354,20 +388,19 @@ seven more, each fixed with a failing test first except where noted:
 Test totals after the third pass: 71 (22 unit, 13 golden, 19 serve
 end-to-end, 17 scaffold/CLI), all green with `--locked`.
 
-## Immutable bundle snapshot hardening (2026-09-19)
+## Immutable bundle snapshot hardening (2026-09-19; package binding updated 2026-09-26)
 
-Sealed loads now capture the complete bundle through held directory
+Package loads capture the complete directory through held directory
 descriptors, opening every component in the configured root spelling and every
 descendant with `NOFOLLOW`, and refusing symlinks and non-regular files without
 a pathname reopen.
 The manifest is opened and parsed first through the secured root descriptor, so
-a missing, malformed, or unsealed manifest is refused before any descendant is
-read. Its exact bytes are retained in the snapshot. The manifest hash map is
-verified over the captured bytes, and the same immutable snapshot supplies the
+a missing or malformed manifest is refused before any descendant is read. Its
+exact bytes are retained in the snapshot. The shared package verification is
+bound to the captured file set and digests, and the same immutable snapshot supplies the
 manifest, labels, schemas, fonts, templates, package sources, and other
-project/package files consumed by Typst. Sealing uses the same root traversal
-and hashes the captured bytes, so it cannot accept a root or ancestor symlink
-that loading would immediately refuse.
+project/package files consumed by Typst. Authoring capture and package loading
+use the same root traversal, so neither accepts a root or ancestor symlink.
 
 Executable proof covers both sides of the former verified/use gap:
 
@@ -375,14 +408,17 @@ Executable proof covers both sides of the former verified/use gap:
   labels, schema, and font paths after capture; assembly still consumes the
   captured bytes.
 - `bundle::tests::bundle_root_and_ancestor_symlinks_are_refused_for_every_spelling`
-  covers a root symlink with a trailing slash and a symlinked ancestor for both
-  snapshot loading and sealing.
-- `bundle::tests::sealed_load_checks_the_manifest_before_capturing_descendants`
-  places a refused symlink beside missing, malformed, and unsealed manifests;
+  covers a root symlink with a trailing slash and a symlinked ancestor during
+  snapshot loading.
+- `bundle::tests::source_load_checks_the_manifest_before_capturing_descendants`
+  places a refused symlink beside missing and malformed manifests;
   each manifest result wins before descendant capture.
-- `golden::sealed_template_and_package_bytes_are_bound_to_the_loaded_snapshot`
-  replaces the template, a package source, and a non-source file after sealed
-  load; every render remains byte-identical under the original bundle hash.
+- `bundle::tests::package_load_refuses_bytes_replaced_after_shared_verification`
+  deterministically replaces a verified file before product capture and proves
+  the consumed-byte binding refuses it.
+- `golden::verified_template_and_typst_package_bytes_are_bound_to_the_loaded_snapshot`
+  replaces the template, a package source, and a non-source file after package
+  load; every render remains byte-identical under the original package hash.
 - The existing per-render serve drift test still refuses drift present before
   a worker captures its snapshot.
 

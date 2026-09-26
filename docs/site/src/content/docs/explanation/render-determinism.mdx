@@ -18,7 +18,7 @@ nothing to run here; read it to understand what you are trusting when you store 
 
 ## What fixes a document
 
-A rendered document is a function of five inputs: the sealed bundle, the document type, the
+A rendered document is a function of five inputs: the verified package, the document type, the
 locale, the request, and the issuance time. The request is two parts, `data` (validated against
 the document's JSON Schema) and `assets` (base64 images decoded and served to the template as
 virtual files). Nothing else enters: no host fonts, no environment, no machine clock.
@@ -82,13 +82,17 @@ the deflate stack is a reviewed golden-hash change, never a silent pass.
 {/* Evidence: products/render/EVIDENCE.md;
     .github/workflows/render-golden.yml. */}
 
-The bundle is sealed before serving: the manifest lists every governed file with its sha256, and
-a served render re-verifies the seal per request, in the worker, not only at startup. A bundle
-that drifted, or whose seal was stripped while the service was running, is refused with a named
-problem and an audit event.
+The template source is built with `registry-render package` before serving. The shared
+`SHA256SUMS` envelope covers every product file and optional `REVISION`; the package digest is
+the sha256 of those exact sum-file bytes. Startup verifies the envelope and optional
+`package.expectedDigest`, then binds every captured file back to the recorded digest before
+validation or rendering. Each worker repeats that process per request, and the parent requires
+the worker's package digest to equal startup. Changed, missing, and extra files are refused by
+name, including drift introduced after the service began.
 
-{/* Evidence: crates/registry-render/src/worker.rs, render_in_worker;
-    crates/registry-render/src/manifest.rs, compute_hashes;
+{/* Evidence: crates/registry-render/src/runtime.rs, load_package;
+    crates/registry-render/src/bundle.rs, load_package and bind_verified_snapshot;
+    crates/registry-render/src/worker.rs, render_in_worker;
     crates/registry-render/tests/serve.rs, bundle_drift_after_serve_starts_is_refused_per_render. */}
 
 ## Where the proof runs
@@ -109,7 +113,7 @@ Store both hashes with the record the document was made from: `pdfSha256` for th
 `dataSha256` for the exact request the artifact renders. A later re-render from the same stored
 inputs reproduces the first byte for byte, which is what makes a dead-letter replay safe and what
 lets an auditor compare the paper against the audit log. If a hash changes, one of the five inputs
-changed, the bundle's seal changed, or a dependency upgrade changed output, and the last case
+changed, the package digest changed, or a dependency upgrade changed output, and the last case
 arrives as a golden-hash review, not silently.
 
 {/* Evidence: products/render/integrations/openfn/JOURNEY.md;

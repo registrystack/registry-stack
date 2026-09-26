@@ -26,7 +26,7 @@ pub const OPENAPI_JSON: &str = r#"{
     },
     "/v1/documents": {
       "get": {
-        "summary": "List document types in the sealed bundle",
+        "summary": "List document types in the verified package",
         "security": [{ "bearerAuth": [] }],
         "responses": { "200": { "description": "document inventory" } }
       }

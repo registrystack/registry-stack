@@ -8,7 +8,7 @@ Date: 2026-09-17
 Render publishes governed registry data onto physical media — paper and
 cards — with the same discipline the rest of Registry Stack applies to
 APIs. It is a pure rendering function (bundle + validated data in,
-byte-stable PDF + hashes out), a sealed governed template bundle as its
+byte-stable PDF + hashes out), a governed template package as its
 content unit, and a value-free audit log as its issuance record.
 No database, no outbound calls, no engine changes in any other product.
 
@@ -32,7 +32,7 @@ an Evidence definition; Render mints nothing and does nothing at scan time.
 
 One crate (`crates/registry-render`), one binary (`registry-render`),
 following the
-house product anatomy: `init`/`check`/`validate`/`seal`/`compile`/`serve`/
+house product anatomy: `init`/`check`/`validate`/`package`/`compile`/`serve`/
 `healthcheck`; a strict runtime YAML
 (`registry.registrystack.org/render-runtime/v1alpha1`, read by the shared
 runtime configuration loader) for deployment-local bindings; the
@@ -48,8 +48,8 @@ equality; the two-OS golden CI job keeps it proven.
 
 ## Trust rules
 
-- Templates are governed input: reviewed, sealed (per-file hashes), and
-  verified at startup and by `check`. Not treated as hostile — sized for
+- Templates are governed input: reviewed, built into the shared package
+  envelope, and verified at startup and by each worker. They are not treated as hostile — sized for
   accidents, with kill-at-timeout supervision for the pathological case.
 - Request data is less trusted than templates: strict JSON Schema
   validation with pointers, size and media-type caps on assets, inert

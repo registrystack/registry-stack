@@ -87,8 +87,7 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     // leaves nothing half-made behind.
     let bind: SocketAddr = runtime.listener.bind.socket_addr();
     runtime::validate_bind(bind)?;
-    let bundle = Bundle::load_sealed(&runtime.package.root)?;
-    runtime::verify_package(&runtime, &bundle.bundle_hash)?;
+    let bundle = runtime::load_package(&runtime)?;
     crate::check::check_script_coverage(&bundle)?;
     crate::check::check_label_key_sets(&bundle)?;
     let audit = RenderAudit::open(runtime.audit.destination()?).await?;
@@ -755,7 +754,7 @@ fn prepare_render(
         assets: request.assets.unwrap_or_default(),
         issued_at,
         strict: false,
-        require_sealed: true,
+        require_package: true,
         max_output_bytes: service.limits.max_output_bytes,
         memory_limit_bytes: 512 * 1024 * 1024,
     };
@@ -778,13 +777,13 @@ async fn run_render(
     let result = worker::supervise(worker_request, timeout).await;
     drop(permit);
     // The worker already rendered from one verified immutable snapshot. Its
-    // manifest identity must also be the bundle serve started with, not merely
-    // a different valid sealed bundle installed during the request.
+    // package digest must also be the one serve started with, not merely
+    // a different valid package installed during the request.
     match result {
         Ok(rendered) if rendered.bundle_hash != service.bundle.bundle_hash => {
             Err(RenderProblem::new(
                 ProblemKind::BundleTampered,
-                "the bundle changed under serve; refusing the render from a drifted bundle",
+                "the package changed under serve; refusing the render from a drifted package",
             ))
         }
         other => other,
@@ -970,13 +969,20 @@ mod tests {
         }
     }
 
-    /// A service over the sealed receipt bundle with `permits` render slots.
+    /// A service over the packaged receipt bundle with `permits` render slots.
     /// Zero slots means a render can never start: any request that reaches
     /// the render step waits there forever.
     fn service(lines: &AuditLines, permits: usize) -> Arc<Service> {
         let bundle_path =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/render/bundles/receipt");
-        let bundle = Bundle::load_sealed(&bundle_path).expect("sealed receipt bundle");
+        let verified = registry_platform_config::package::verify_package(
+            &bundle_path,
+            &runtime::package_limits(),
+            "registry-render package",
+        )
+        .expect("packaged receipt bundle");
+        let bundle =
+            Bundle::load_package(&bundle_path, &verified).expect("packaged receipt bundle");
         Arc::new(Service {
             bundle,
             audit: RenderAudit::new(AuditWriter::from_line_sink(Box::new(lines.clone()))),
