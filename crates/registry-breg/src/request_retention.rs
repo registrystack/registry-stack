@@ -518,24 +518,16 @@ impl RequestRetentionOperatorService {
                 return Err(error);
             }
         };
-        // External objects are deleted before the response is recorded, so
-        // the entry states how many remain instead of claiming a finished
-        // erasure while objects still exist.
-        let external = self.retry_external_deletions(&mut client).await;
-        let mut record = entry.record().clone();
-        if let Some(fields) = record.as_object_mut() {
-            let (pending, tombstones) = match &external {
-                Ok((pending, tombstones)) => (json!(pending), json!(tombstones)),
-                Err(_) => (Value::Null, Value::Null),
-            };
-            fields.insert("pendingExternalDeletions".to_owned(), pending);
-            fields.insert("externalDeletionTombstones".to_owned(), tombstones);
-        }
+        // The committed erasure is recorded before external objects are
+        // retried, so a slow or failing backend cannot hold its response
+        // back. The result, not the entry, reports the registry-wide
+        // external deletions still pending.
         attempt
-            .respond(record)
+            .respond(entry.record().clone())
             .await
             .map_err(|_| RequestRetentionError::ErasureUnaudited)?;
-        let (pending_external_deletions, external_deletion_tombstones) = external?;
+        let (pending_external_deletions, external_deletion_tombstones) =
+            self.retry_external_deletions(&mut client).await?;
         Ok(RequestRetentionErase {
             request_entity_id: scope.request_entity_id.to_owned(),
             request_id: scope.request_id.to_string(),

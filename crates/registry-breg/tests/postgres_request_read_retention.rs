@@ -762,11 +762,7 @@ async fn request_detail_erasure_changes_nothing_when_the_audit_writer_refuses_it
     assert_eq!(phases, ["request", "response"]);
     assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
     assert_eq!(entries[0]["record"]["phase"], "attempt");
-    // The response is recorded after the external deletions ran, and states
-    // how many objects still wait for deletion.
     assert_eq!(entries[1]["record"]["outcome"], "committed");
-    assert_eq!(entries[1]["record"]["pendingExternalDeletions"], 0);
-    assert_eq!(entries[1]["record"]["externalDeletionTombstones"], 0);
     assert_eq!(
         entries[0]["record"]["recordReference"],
         entries[1]["record"]["recordReference"]
@@ -778,11 +774,143 @@ async fn request_detail_erasure_changes_nothing_when_the_audit_writer_refuses_it
     database.cleanup().await;
 }
 
+/// A committed request-detail erasure is recorded as soon as its commit is
+/// confirmed. The external-deletion retry that follows cannot hold the
+/// committed erasure's response back: the retry here waits for the registry
+/// lock while the response is already on record.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn request_detail_erasure_records_its_commit_before_retrying_external_deletions() {
+    let database = TestDatabase::create(6).await;
+    let registry = Arc::new(compiled_registry());
+    let identity = install_registry(&database, &registry).await;
+    let app = request_router(&database, registry.clone(), identity.clone());
+    let operator = claims("operator", "operator-principal");
+    let request_id = applied_correction_request(&app, operator, "recorded-erasure").await;
+    let request_uuid = Uuid::parse_str(&request_id).expect("request id parses");
+    let scope = RequestDetailErasureScope {
+        request_entity_id: "correction-request",
+        request_id: request_uuid,
+        proposal_version: 1,
+    };
+    let (audit, capture) = registry_breg::audit::test_support::capturing(
+        AuditProfile::production_from_secret_bytes(vec![0x8e; 32].into())
+            .expect("test audit profile is keyed"),
+    );
+    let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
+    let retention = RequestRetentionOperatorService::new_for_test(
+        registry.as_ref().clone(),
+        identity.clone(),
+        ExpectedManagedCatalog::compiled(&registry),
+        lock_key,
+        database.migration_config.clone(),
+        database.migration_role.clone(),
+        database.runtime_role.clone(),
+        audit,
+    );
+    // Other tests share the cluster, so only this database's sessions count.
+    let waiting = |wait_event: &'static str| {
+        let admin = &database.admin;
+        async move {
+            tokio::time::timeout(Duration::from_secs(4), async {
+                loop {
+                    let waiting: i64 = admin
+                        .query_one(
+                            "SELECT count(*) FROM pg_catalog.pg_stat_activity
+                              WHERE datname = current_database()
+                                AND wait_event_type = 'Lock' AND wait_event = $1",
+                            &[&wait_event],
+                        )
+                        .await
+                        .expect("administrator reads lock waits")
+                        .get(0);
+                    if waiting > 0 {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("a session waits for the held lock");
+        }
+    };
+
+    // The erasure holds the registry lock while it waits for the request
+    // row. A second session queues for the registry lock behind it, so it
+    // takes the lock the moment the erasure commits, and the
+    // external-deletion retry that follows waits for it.
+    let (holder, holder_task) = database.connect_admin().await;
+    holder
+        .batch_execute(&format!(
+            "BEGIN; SELECT 1 FROM registry_internal.registry_request_state
+              WHERE request_id = '{request_uuid}' FOR UPDATE"
+        ))
+        .await
+        .expect("administrator holds the request row");
+    let erasure = tokio::spawn(async move { retention.erase(scope).await });
+    waiting("transactionid").await;
+    let (queued, queued_task) = database.connect_admin().await;
+    let queued = Arc::new(queued);
+    let registry_lock = tokio::spawn({
+        let queued = Arc::clone(&queued);
+        async move {
+            queued
+                .execute("SELECT pg_catalog.pg_advisory_lock($1)", &[&lock_key.get()])
+                .await
+                .expect("the queued session takes the registry lock");
+        }
+    });
+    waiting("advisory").await;
+    holder
+        .batch_execute("ROLLBACK")
+        .await
+        .expect("administrator releases the request row");
+
+    let recorded = tokio::time::timeout(Duration::from_secs(4), async {
+        loop {
+            let entries = capture.entries();
+            if entries.len() >= 2 {
+                return entries;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    let still_retrying = !erasure.is_finished();
+    registry_lock
+        .await
+        .expect("the queued session holds the registry lock");
+    queued
+        .execute(
+            "SELECT pg_catalog.pg_advisory_unlock($1)",
+            &[&lock_key.get()],
+        )
+        .await
+        .expect("the queued session releases the registry lock");
+    let entries = recorded.expect("the committed erasure is recorded while the retry waits");
+    assert!(still_retrying, "the retry was still waiting for the lock");
+    assert_eq!(entries.len(), 2, "{entries:?}");
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[1]["record"]["outcome"], "committed");
+    assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
+    let erased = erasure
+        .await
+        .expect("the erasure task completes")
+        .expect("the erasure succeeds once the retry proceeds");
+    assert_eq!(erased.pending_external_deletions, 0);
+    assert_eq!(erased.external_deletion_tombstones, 0);
+    assert_eq!(capture.entries().len(), 2);
+
+    drop(holder);
+    drop(queued);
+    holder_task.abort();
+    queued_task.abort();
+    database.cleanup().await;
+}
+
 /// An erasure whose transaction fails after its request entry answers that
 /// entry with a failed response and erases nothing. One whose committed
 /// erasure the destination refuses to record reports that distinctly: the
-/// detail is gone, and the journal holds only the request. A recorded
-/// erasure states the external objects still pending deletion.
+/// detail is gone, and the journal holds only the request.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn request_detail_erasure_pairs_its_request_entry_on_every_outcome() {
     let database = TestDatabase::create(6).await;
