@@ -967,7 +967,8 @@ before it acts. The accepted skew is receiver policy, not a BReg limit.
 <EventReferenceTable id="delivery" />
 
 Runtime ceilings may tighten compiled limits, never widen them. A durable attempt audit precedes
-every send, and the terminal audit, state transition, and payload erasure commit together.
+every send, and the terminal audit entry is accepted before the state transition and payload
+erasure commit together.
 Activation refuses a destination change that would strand retained nonterminal work.
 
 <EventReferenceTable id="retry-replay" />

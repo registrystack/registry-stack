@@ -78,6 +78,13 @@ and replayed chunk transitions, standalone history erasure, history
 rebaseline, request-detail erasure, migration reconciliation, and the
 field-encryption erase-history lifecycle. Each negative test refuses the audit
 writer before the request entry and proves the operation changed nothing.
+A response entry the writer refuses after one of these operations commits is
+not replayed. Run creation takes no idempotency key and returns no run id in
+that case, so the caller finds the run by listing its open runs for the input
+digest, as `INGESTION-RUNS.md` describes. An operator rerun of an erasure,
+rebaseline, or reconciliation finds the state the first run committed rather
+than replaying its terminal entry. Both recoveries are operational, not a
+second audit mechanism.
 
 The HTTP record contract is also explicit: caller-filtered and generated
 OpenAPI artifacts assign every record-related route to the shared single or

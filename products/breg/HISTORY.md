@@ -378,10 +378,10 @@ separately authorized maintenance remain available.
 
 A successor package remains applicable after an erasure of revisions committed
 after the coverage baseline: the apply interlock admits a ready commit head
-whose unavailable-after position matches a committed terminal erasure audit
-record carrying no lifecycle reference. Erasing baseline data, a lifecycle
-erasure, a pruned erasure record, and any gap the journal does not record as an
-erasure still refuse successors until `history rebaseline` restores coverage.
+whose unavailable-after position matches an erasure coverage record that a
+standalone erasure committed with its erasure. Erasing baseline data, a
+lifecycle erasure, and any gap the database does not record as an erasure
+still refuse successors until `history rebaseline` restores coverage.
 
 Operators remain responsible for current records, saved exports, copies already
 delivered to external consumers, and backup expiry. Change-request proposals and

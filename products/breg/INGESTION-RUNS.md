@@ -85,6 +85,15 @@ and run-committed audit entries, written after the transaction that stores the
 receipt commits and before the receipt leaves, already account for that
 release.
 
+Run creation has no replay. It takes no `Idempotency-Key` header and
+allocates a fresh run id for every accepted request, so when the audit writer
+refuses the creation's response entry after the run commits, the caller
+receives `service.unavailable` without the run id. Recovery is operational:
+once the audit writer is restored and the runtime serves again, list the
+caller's runs with `status=open` and the input's `inputDigest`, then resume or
+cancel the run that listing returns. Creating the run again opens a second
+run.
+
 ## States
 
 A run is `open`, `complete`, `cancelled`, or `blocked`. An open run whose

@@ -120,7 +120,10 @@ the product does not do.
   file, or HTTP source, and no adapter layer to add one.
 - Audit is outside PostgreSQL: each process writes its own file or stdout stream. A crash after a
   mutation commits can leave a request entry without its response. Revision history still records
-  the change; external append-only storage supplies audit tamper evidence and completeness.
+  the change; external append-only storage supplies audit tamper evidence and completeness. An
+  operation with no idempotent replay, such as creating an ingestion run, answers unavailable
+  without its result when its response entry is refused; the caller recovers by listing the
+  committed state.
 - Every production change is a signed package: a one-line access widening goes through `check`,
   `test` against a schema-test database, `package`, external signing, and `apply`. No runtime
   administration API edits access rules, record shapes, or webhook destinations, and nothing hot
