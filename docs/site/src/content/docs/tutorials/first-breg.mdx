@@ -37,7 +37,7 @@ Everything you keep goes into one directory, `tutorial-work`.
 Install `breg` and `bregctl`. The local development command starts the maintained stock identity
 provider and registers the tutorial clients:
 
-```sh
+```sh test-skip="installs a release from the network; the runner serves the binaries under test"
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/breg-install.sh | bash
 bregctl --version
 ```
@@ -66,7 +66,7 @@ mkdir -p tutorial-work
 bregctl init tutorial-work/project
 ```
 
-```text
+```text test-expect
 Initialized a registry project. 6 artifacts written.
   revision  sha256:<digest>
 
@@ -193,7 +193,7 @@ curl --silent --show-error --fail-with-body \
   "$registry_url/v1/records/records?accessProfile=operator" | python3 -m json.tool
 ```
 
-```json
+```json test-expect
 {
     "items": [],
     "meta": {
@@ -219,7 +219,7 @@ curl --silent --show-error \
   "$registry_url/v1/records/records?accessProfile=operator"
 ```
 
-```text
+```text test-expect
 HTTP 404
 ```
 
@@ -244,7 +244,7 @@ curl --silent --show-error --fail-with-body \
   "$registry_url/v1/records/records?accessProfile=operator"
 ```
 
-```text
+```text test-expect
 HTTP 201
 ```
 
@@ -256,7 +256,7 @@ python3 -m json.tool tutorial-work/created.json
 
 The server generates the identifier, shown as `<record-id>`:
 
-```json
+```json test-expect
 {
   "data": {
     "domainData": {
@@ -318,7 +318,7 @@ curl --silent --show-error \
   "$registry_url/v1/records/records"
 ```
 
-```text
+```text test-expect
 HTTP 400
 ```
 
@@ -384,6 +384,27 @@ curl --silent --show-error --fail-with-body \
   "$registry_url/v1/records/records/$record_id?accessProfile=operator" | python3 -m json.tool
 ```
 
+```json test-expect
+{
+    "data": {
+        "domainData": {
+            "code": "DEMO-002",
+            "group": null,
+            "label": "North Quay Engineering Ltd",
+            "status": null
+        },
+        "recordIdentifier": "<record-id>",
+        "revisionIdentifier": "2",
+        "snapshot": "<snapshot-token>"
+    },
+    "meta": {
+        "datasetIdentifier": "generic-registry",
+        "entityTypeIdentifier": "record",
+        "registryIdentifier": "generic-registry"
+    }
+}
+```
+
 The response has the same identifier, `"revisionIdentifier": "2"`, and label `North Quay Engineering Ltd`.
 Patch paths address the object you sent at creation, so `/data/label` names the label;
 `domainData` in responses is not a patch target.
@@ -401,7 +422,7 @@ curl --silent --show-error \
   "$registry_url/v1/records/records/$record_id?accessProfile=operator"
 ```
 
-```text
+```text test-expect
 HTTP 412
 ```
 
@@ -426,7 +447,7 @@ curl --silent --show-error \
   "$registry_url/v1/records/records?accessProfile=operator"
 ```
 
-```text
+```text test-expect
 HTTP 400
 ```
 
