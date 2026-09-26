@@ -120,7 +120,15 @@ pub enum AuditError {
     /// an overlapping container during a restart or recreate). Each process
     /// writes its own stream, so a second writer on one path is refused.
     #[error("audit sink single-writer lock is already held by another writer: {path}")]
-    SinkLocked { path: String },
+    SinkLocked {
+        path: String,
+        /// The one-shot command role this destination was derived for via
+        /// [`AuditDestination::for_process`], or `None` when this is the
+        /// destination the long-running service opens directly. Lets a
+        /// caller report accurately whether the lock is held by another
+        /// invocation of the same companion command or by the service.
+        role: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]

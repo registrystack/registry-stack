@@ -1392,6 +1392,9 @@ fn lock_stopped_audit_file(path: &Path) -> Result<File, AuditError> {
         Ok(()) => Ok(lock),
         Err(TryLockError::WouldBlock) => Err(AuditError::SinkLocked {
             path: lock_path.display().to_string(),
+            // This lock check is not a companion-process collision; it only
+            // confirms a writer still holds the file before an offline read.
+            role: None,
         }),
         Err(TryLockError::Error(error)) => Err(AuditError::Io(error)),
     }
