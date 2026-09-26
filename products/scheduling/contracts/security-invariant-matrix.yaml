@@ -255,12 +255,17 @@ invariants:
       the ledger decided: an admission refusal, the hold ceiling, a lapsed
       grant, a stale observed revision, or a cancellation past its cutoff.
       Every request entry is answered. A commitment nothing decided, because
-      its transaction failed, the environment records were replaced under it,
-      or its idempotency key was refused as reused or expired, writes one
-      response entry with the outcome unfinished and a closed reason, and
-      never an authorization verdict. One that returns or is canceled before
-      it answers writes the commitment.unfinished response when its request
-      handle is dropped. The match that selects between them is exhaustive,
+      its transaction rolled back on a failure, the environment records were
+      replaced under it, or its idempotency key was refused as reused or
+      expired, writes one response entry with the outcome unfinished and a
+      closed reason, and never an authorization verdict. A capacity commit
+      that is not acknowledged is read back by its transaction identifier on
+      a separate connection that mutates nothing: one that took effect is
+      answered and recorded as committed, one that rolled back is recorded
+      commitment.failed, and one whose status cannot be read is recorded
+      commitment.unfinished, never failed. One that returns or is canceled
+      before it answers writes the commitment.unfinished response when its
+      request handle is dropped. The match that selects between them is exhaustive,
       so a new outcome states its side. A replayed receipt, including one a
       concurrent identical request won, is answered only after its own
       response entry is accepted, and that entry records the

@@ -1414,7 +1414,9 @@ impl SchedulingService {
     /// a replay of that key answers the same, and is answered only once its
     /// `response` entry is accepted: denied for a decision the ledger took,
     /// `unfinished` with its reason for a failed transaction, a replaced
-    /// environment, or a refused idempotency key. Every entry carries the
+    /// environment, a refused idempotency key, or a commit whose outcome
+    /// could not be read back. A commit that took effect though its
+    /// acknowledgment was lost reaches here as minted. Every entry carries the
     /// `correlation` of the commitment's `request` entry.
     #[allow(clippy::too_many_arguments)]
     async fn commitment_outcome<T>(
@@ -1465,6 +1467,13 @@ impl SchedulingService {
                         tracing::error!(%error, "the Scheduling store failed mid-commitment");
                         Unanswered::Unfinished("commitment.failed")
                     }
+                    // The commit was not acknowledged and its read-back
+                    // failed, so it may have taken effect: this records the
+                    // outcome as unknown, never as failed.
+                    CommitError::Unacknowledged => {
+                        tracing::error!(%error, "a Scheduling commitment's outcome is unknown");
+                        Unanswered::Unfinished("commitment.unfinished")
+                    }
                     // A records replacement moved under this request, and the
                     // caller retries; the swap is an expected operator act, so
                     // this is a warning, not a failure.
@@ -1489,7 +1498,8 @@ impl SchedulingService {
                 };
                 // A refusal writes its receipt so a replay of the key answers
                 // the same. A failed transaction and a replaced environment
-                // decided nothing, and an expired receipt cannot be
+                // decided nothing, an unacknowledged commit may already hold
+                // the key's receipt, and an expired receipt cannot be
                 // recreated. A reused key still passes through the
                 // insert-or-replay path: a concurrent identical winner is
                 // replayed, while a different request hash remains key-reused.
@@ -1500,6 +1510,7 @@ impl SchedulingService {
                         | CommitError::Hooks(_)
                         | CommitError::FactsStale
                         | CommitError::KeyExpired
+                        | CommitError::Unacknowledged
                 );
                 if receipted {
                     let receipt = self.commitment(
@@ -2165,6 +2176,9 @@ fn problem_of(error: &CommitError) -> ProblemCode {
         CommitError::CutoffPassed => ProblemCode::CancellationCutoffPassed,
         // Nothing was decided: the caller retries against the current records.
         CommitError::FactsStale => ProblemCode::ServiceUnavailable,
+        // The caller retries under the same key, which replays the receipt
+        // if the commit took effect.
+        CommitError::Unacknowledged => ProblemCode::ServiceUnavailable,
     }
 }
 

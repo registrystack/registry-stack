@@ -6591,6 +6591,192 @@ async fn a_failed_capacity_transaction_pairs_its_request_entry() {
     assert_eq!(response["operation"], "appointment.create");
 }
 
+/// SCHEDULING-SEC-14: a capacity commit that took effect though its
+/// acknowledgment was lost is read back as committed. The caller gets the
+/// appointment, its response entry records it allowed, and a retry under the
+/// same key replays the same appointment.
+#[tokio::test]
+async fn a_commitment_whose_commit_acknowledgment_is_lost_is_read_back_as_committed() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let body = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+    let before = fx.capture.entries().len();
+    fx.store.lose_next_commit_acknowledgment();
+    let (status, appointment) = fx
+        .post("/v1/appointments", &fx.agent, "lost-ack", body.clone())
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{appointment}");
+    let response = one_request_and_one_response(&fx.capture.entries().split_off(before));
+    assert_eq!(response["operation"], "appointment.create");
+    assert_eq!(response["outcome"], "allowed");
+    assert_eq!(response["reason"], "authorization.allowed");
+
+    let (status, replayed) = fx
+        .post("/v1/appointments", &fx.agent, "lost-ack", body)
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{replayed}");
+    assert_eq!(replayed["appointmentId"], appointment["appointmentId"]);
+}
+
+/// SCHEDULING-SEC-14: a capacity commit that was not acknowledged and whose
+/// status cannot be read back is recorded as unfinished, never as failed,
+/// because it may have taken effect. Here it did, so a retry under the same
+/// key replays the appointment it committed.
+#[tokio::test]
+async fn a_commitment_whose_outcome_cannot_be_read_back_is_recorded_unfinished() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let body = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+    let before = fx.capture.entries().len();
+    fx.store.lose_next_commit_acknowledgment();
+    fx.store.fail_next_read_back();
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "unknown-commit",
+            body.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+    assert_eq!(problem["code"], "service.unavailable");
+    let response = one_unfinished_response(
+        &fx.capture.entries().split_off(before),
+        "commitment.unfinished",
+    );
+    assert_eq!(response["operation"], "appointment.create");
+
+    let (status, replayed) = fx
+        .post("/v1/appointments", &fx.agent, "unknown-commit", body)
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{replayed}");
+}
+
+/// SCHEDULING-SEC-14: a capacity transaction refused at `COMMIT` itself rolls
+/// back, and the read-back finds it rolled back, so its request entry is
+/// answered as failed.
+#[tokio::test]
+async fn a_commitment_refused_at_commit_is_read_back_as_failed() {
+    let fx = fixture().await;
+    fx.admin
+        .batch_execute(
+            "CREATE FUNCTION test_refuse_at_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RAISE EXCEPTION 'refused at commit'; END $$;
+             CREATE CONSTRAINT TRIGGER test_refuse_claim_at_commit AFTER INSERT ON scheduling_claims
+             DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION test_refuse_at_commit();",
+        )
+        .await
+        .expect("install a trigger that refuses the commitment at COMMIT");
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let before = fx.capture.entries().len();
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "refused-at-commit",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+    let response =
+        one_unfinished_response(&fx.capture.entries().split_off(before), "commitment.failed");
+    assert_eq!(response["operation"], "appointment.create");
+    let claims: i64 = fx
+        .admin
+        .query_one("SELECT count(*) FROM scheduling_claims", &[])
+        .await
+        .expect("count claims")
+        .get(0);
+    assert_eq!(claims, 0, "the refused commitment rolled back");
+}
+
+/// SCHEDULING-SEC-14: a commitment whose caller goes away while its capacity
+/// transaction waits for the supply lock pairs its request entry with exactly
+/// one unfinished response, and commits nothing.
+#[tokio::test]
+async fn a_commitment_dropped_inside_its_capacity_transaction_writes_one_unfinished_response() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let body = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+    let (http, agent, capture) = (fx.http.clone(), fx.agent.clone(), fx.capture.clone());
+    let before = capture.entries().len();
+    let mut admin = fx.admin;
+    let claims_before: i64 = admin
+        .query_one("SELECT count(*) FROM scheduling_claims", &[])
+        .await
+        .expect("count claims")
+        .get(0);
+    let holder = admin
+        .transaction()
+        .await
+        .expect("the stand-in capacity transaction opens");
+    holder
+        .execute("SELECT supply_id FROM scheduling_supply FOR UPDATE", &[])
+        .await
+        .expect("the stand-in holds every supply anchor");
+    let holder_pid: i32 = holder
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .expect("the stand-in's backend")
+        .get(0);
+
+    let commitment = tokio::spawn(send(
+        http,
+        "POST".to_owned(),
+        "/v1/appointments".to_owned(),
+        agent,
+        Some("dropped-commitment".to_owned()),
+        Some(body),
+    ));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let waiting: i64 = holder
+            .query_one(
+                "SELECT count(DISTINCT pid) FROM pg_locks WHERE $1=ANY(pg_blocking_pids(pid))",
+                &[&holder_pid],
+            )
+            .await
+            .expect("read the waiting commitment")
+            .get(0);
+        if waiting > 0 {
+            break;
+        }
+        assert!(
+            !commitment.is_finished(),
+            "the commitment finished before reaching the supply lock"
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the commitment never waited on the supply lock"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    commitment.abort();
+    assert!(commitment
+        .await
+        .expect_err("the commitment was dropped")
+        .is_cancelled());
+    holder
+        .rollback()
+        .await
+        .expect("the stand-in releases the supply");
+
+    let response = one_unfinished_response(
+        &capture.entries().split_off(before),
+        "commitment.unfinished",
+    );
+    assert_eq!(response["operation"], "appointment.create");
+    let claims_after: i64 = admin
+        .query_one("SELECT count(*) FROM scheduling_claims", &[])
+        .await
+        .expect("count claims")
+        .get(0);
+    assert_eq!(
+        claims_after, claims_before,
+        "the dropped commitment committed nothing"
+    );
+}
+
 /// SCHEDULING-SEC-14: an idempotency key refused as reused, and one refused
 /// as expired, each answer the request entry the commitment wrote, without
 /// recording the key refusal as an authorization decision.
@@ -6708,9 +6894,10 @@ async fn a_records_swap_under_a_commitment_pairs_its_request_entry() {
 }
 
 /// SCHEDULING-SEC-14: a refusal is answered only once its response entry is
-/// accepted, like an allowed commitment. When the destination refuses it, the
-/// caller is told the service is unavailable, for a permission mismatch
-/// decided before the transaction and for a refusal the ledger decided.
+/// accepted, like an allowed commitment. When the destination refuses the
+/// response entry of a refusal the ledger decided, the caller is told the
+/// service is unavailable. The permission mismatch decided before the
+/// transaction is covered by the test that follows.
 #[tokio::test]
 async fn a_refusal_whose_response_entry_is_refused_answers_service_unavailable() {
     let fx = fixture().await;

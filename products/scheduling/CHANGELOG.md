@@ -24,11 +24,17 @@
   - Every commitment request entry is answered. A refusal, decided by the
     ledger or by the permission check, is answered only once its response
     entry is accepted, and `service.unavailable` otherwise, where it was
-    previously answered with the write failure only logged. A failed
-    transaction, records replaced under a commitment, and a reused or expired
-    idempotency key now write a response with the outcome `unfinished` and a
-    closed reason, and a commitment that returns or is canceled before
-    answering writes `commitment.unfinished`.
+    previously answered with the write failure only logged. A transaction
+    rolled back on a failure, records replaced under a commitment, and a
+    reused or expired idempotency key now write a response with the outcome
+    `unfinished` and a closed reason, and a commitment that returns or is
+    canceled before answering writes `commitment.unfinished`.
+  - A capacity commit that is not acknowledged is read back by its
+    transaction identifier before it is recorded: one that took effect is
+    answered and recorded as committed, one that rolled back writes
+    `commitment.failed`, and one whose status cannot be read writes
+    `commitment.unfinished` and answers `service.unavailable`, never
+    `commitment.failed`.
   - Hook delivery writes an attempt's request entry before egress and its
     terminal response entry with the same correlation; a refused entry leaves
     the delivery pending and sends nothing.

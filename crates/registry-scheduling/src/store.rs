@@ -34,6 +34,10 @@
 
 use std::collections::HashMap;
 use std::str::FromStr;
+#[cfg(feature = "postgres-test")]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "postgres-test")]
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
@@ -177,6 +181,12 @@ pub enum StoreError {
 pub struct PostgresStore {
     pool: Pool,
     clock: SharedClock,
+    /// Test switches that report the next capacity commit that took effect
+    /// as unacknowledged, and the next read-back of one as unreadable.
+    #[cfg(feature = "postgres-test")]
+    lose_acknowledgment: Arc<AtomicBool>,
+    #[cfg(feature = "postgres-test")]
+    fail_read_back: Arc<AtomicBool>,
 }
 
 impl PostgresStore {
@@ -210,6 +220,117 @@ impl PostgresStore {
             .write()
             .expect("the store clock is never held across a panic") = clock;
     }
+
+    /// Report the next capacity commit as unacknowledged after it took
+    /// effect, as a connection lost during `COMMIT` does. Test-only, and
+    /// shared by every handle cloned from this store.
+    #[cfg(feature = "postgres-test")]
+    pub fn lose_next_commit_acknowledgment(&self) {
+        self.lose_acknowledgment.store(true, Ordering::SeqCst);
+    }
+
+    /// Make the next read-back of an unacknowledged commit unreadable, as a
+    /// database that cannot be reached again does. Test-only.
+    #[cfg(feature = "postgres-test")]
+    pub fn fail_next_read_back(&self) {
+        self.fail_read_back.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether the test switch reports this commit as unacknowledged. Always
+    /// false outside tests.
+    fn acknowledgment_lost(&self) -> bool {
+        #[cfg(feature = "postgres-test")]
+        {
+            self.lose_acknowledgment.swap(false, Ordering::SeqCst)
+        }
+        #[cfg(not(feature = "postgres-test"))]
+        {
+            false
+        }
+    }
+
+    /// Whether the test switch makes this read-back unreadable. Always false
+    /// outside tests.
+    fn read_back_fails(&self) -> bool {
+        #[cfg(feature = "postgres-test")]
+        {
+            self.fail_read_back.swap(false, Ordering::SeqCst)
+        }
+        #[cfg(not(feature = "postgres-test"))]
+        {
+            false
+        }
+    }
+
+    /// Commit a capacity transaction whose decision is already written.
+    ///
+    /// A `COMMIT` whose acknowledgment never arrives may still have taken
+    /// effect, as when the connection is lost after it reached the database.
+    /// Its transaction's status is then read back on another connection,
+    /// outside any transaction: the read writes nothing and takes no
+    /// capacity lock. A commit that took effect is answered as committed,
+    /// one that rolled back as the query failure it was, and one whose
+    /// status cannot be read as [`CommitError::Unacknowledged`].
+    async fn commit_capacity(
+        &self,
+        transaction: deadpool_postgres::Transaction<'_>,
+    ) -> Result<(), CommitError> {
+        let transaction_id: String = transaction
+            .query_one("SELECT pg_current_xact_id()::text", &[])
+            .await?
+            .get(0);
+        let failure = match transaction.commit().await {
+            Ok(()) if !self.acknowledgment_lost() => return Ok(()),
+            Ok(()) => None,
+            Err(error) => Some(error),
+        };
+        match self.read_back(&transaction_id).await {
+            ReadBack::Committed => {
+                tracing::warn!(
+                    "a Scheduling capacity commit was not acknowledged but took effect; it is answered as committed"
+                );
+                Ok(())
+            }
+            ReadBack::RolledBack => {
+                Err(failure.map_or(CommitError::Unacknowledged, CommitError::Query))
+            }
+            ReadBack::Unknown => {
+                tracing::error!(
+                    "a Scheduling capacity commit was not acknowledged and its outcome could not be read back"
+                );
+                Err(CommitError::Unacknowledged)
+            }
+        }
+    }
+
+    /// Read whether the transaction `transaction_id` committed, on a pooled
+    /// connection outside any transaction.
+    async fn read_back(&self, transaction_id: &str) -> ReadBack {
+        if self.read_back_fails() {
+            return ReadBack::Unknown;
+        }
+        let Ok(client) = self.client().await else {
+            return ReadBack::Unknown;
+        };
+        let status = client
+            .query_one("SELECT pg_xact_status($1::text::xid8)", &[&transaction_id])
+            .await
+            .map(|row| row.get::<_, Option<String>>(0));
+        match status.as_ref().map(|status| status.as_deref()) {
+            Ok(Some("committed")) => ReadBack::Committed,
+            Ok(Some("aborted")) => ReadBack::RolledBack,
+            // Still in progress, too old to report, or unreadable.
+            _ => ReadBack::Unknown,
+        }
+    }
+}
+
+/// What reading back an unacknowledged capacity commit found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReadBack {
+    Committed,
+    RolledBack,
+    Unknown,
 }
 
 impl std::fmt::Debug for PostgresStore {
@@ -410,6 +531,11 @@ pub enum CommitError {
     /// current records.
     #[error("the environment records were replaced while the request was in flight")]
     FactsStale,
+    /// The capacity transaction's `COMMIT` was not acknowledged and reading
+    /// its status back failed, so whether it took effect is unknown. A retry
+    /// under the same idempotency key replays its receipt if it did.
+    #[error("the capacity commit was not acknowledged and its outcome is unknown")]
+    Unacknowledged,
 }
 
 /// One due or delivered outbox intent.
@@ -512,6 +638,10 @@ impl PostgresStore {
         Ok(Self {
             pool,
             clock: system_clock(),
+            #[cfg(feature = "postgres-test")]
+            lose_acknowledgment: Arc::default(),
+            #[cfg(feature = "postgres-test")]
+            fail_read_back: Arc::default(),
         })
     }
 
@@ -1366,7 +1496,7 @@ impl PostgresStore {
             )
             .await?;
         self.recheck_grant(&commitment)?;
-        transaction.commit().await?;
+        self.commit_capacity(transaction).await?;
         Ok(CommitOutcome::Hold(claim))
     }
 
@@ -1474,7 +1604,7 @@ impl PostgresStore {
             )
             .await?;
         self.recheck_grant(&commitment)?;
-        transaction.commit().await?;
+        self.commit_capacity(transaction).await?;
         Ok(CommitOutcome::Booking(claim))
     }
 
@@ -1620,7 +1750,7 @@ impl PostgresStore {
             )
             .await?;
         self.recheck_grant(&commitment)?;
-        transaction.commit().await?;
+        self.commit_capacity(transaction).await?;
         Ok(CommitOutcome::Booking(claim))
     }
 
@@ -1687,7 +1817,7 @@ impl PostgresStore {
             )
             .await?;
         self.recheck_grant(&commitment)?;
-        transaction.commit().await?;
+        self.commit_capacity(transaction).await?;
         Ok(CommitOutcome::Released)
     }
 
@@ -1845,7 +1975,7 @@ impl PostgresStore {
             )
             .await?;
         self.recheck_grant(&commitment)?;
-        transaction.commit().await?;
+        self.commit_capacity(transaction).await?;
         Ok(CommitOutcome::Booking(moved))
     }
 
@@ -1971,7 +2101,7 @@ impl PostgresStore {
             )
             .await?;
         self.recheck_grant(&commitment)?;
-        transaction.commit().await?;
+        self.commit_capacity(transaction).await?;
         Ok(CommitOutcome::Cancelled(cancelled))
     }
 
