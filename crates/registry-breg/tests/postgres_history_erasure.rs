@@ -1092,6 +1092,14 @@ async fn field_encryption_erasure_uses_flip_provenance_for_structured_plaintext(
         .expect("completed lifecycle replay state resolves");
     assert!(replay_state.get::<_, bool>(0));
     assert_eq!(field_encryption_terminal_entries(&database).len(), 1);
+    // The refused replay still answers the lifecycle request it wrote.
+    let last = database
+        .audit_entries()
+        .pop()
+        .expect("the replay's entries");
+    assert_eq!(last["schema"], FIELD_ENCRYPTION_AUDIT_SCHEMA);
+    assert_eq!(last["phase"], "response");
+    assert_eq!(last["record"]["outcome"], "unfinished");
 
     migration_task.abort();
     database.cleanup().await;
@@ -2366,6 +2374,7 @@ fn field_encryption_terminal_entries(database: &TestDatabase) -> Vec<serde_json:
         .filter(|entry| {
             entry["schema"] == FIELD_ENCRYPTION_AUDIT_SCHEMA
                 && entry["record"]["phase"] == "terminal"
+                && entry["record"]["outcome"] != "unfinished"
         })
         .collect()
 }

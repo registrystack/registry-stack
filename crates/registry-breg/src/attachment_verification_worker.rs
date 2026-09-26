@@ -113,7 +113,9 @@ impl AttachmentVerificationWorker {
         };
         transaction.commit().await.map_err(unavailable)?;
         drop(client);
-        self.audit_job(&job, "attempt", "started").await?;
+        // Held until the terminal entry answers it; a run that ends first,
+        // including one its time budget cancels, answers it as unfinished.
+        let _attempt = self.begin_job(&job).await?;
 
         let verdict = match self.content(&job).await {
             Ok(bytes) => verifier
@@ -240,10 +242,42 @@ impl AttachmentVerificationWorker {
         Ok(transaction)
     }
 
+    /// Append the attempt `request` entry of one leased job and return the
+    /// handle that owes its terminal `response`.
+    async fn begin_job(
+        &self,
+        job: &VerificationJob,
+    ) -> Result<registry_platform_audit::AuditRequest> {
+        let (reference, record) = self.job_record(job, "attempt", "started")?;
+        let (_, unfinished) = self.job_record(job, "terminal", "unfinished")?;
+        self.audit
+            .begin(
+                AuditEntry::request(ATTACHMENT_VERIFICATION_AUDIT_SCHEMA, reference, record),
+                unfinished,
+            )
+            .await
+            .map_err(unavailable)
+    }
+
     /// Append one verification entry. The attempt is the `request` entry and
     /// the terminal outcome is the `response` entry; both are correlated by
     /// the keyed verification reference of the leased job.
     async fn audit_job(&self, job: &VerificationJob, phase: &str, outcome: &str) -> Result<()> {
+        let (reference, record) = self.job_record(job, phase, outcome)?;
+        let entry = if phase == "attempt" {
+            AuditEntry::request(ATTACHMENT_VERIFICATION_AUDIT_SCHEMA, reference, record)
+        } else {
+            AuditEntry::response(ATTACHMENT_VERIFICATION_AUDIT_SCHEMA, reference, record)
+        };
+        self.audit.append(entry).await.map_err(unavailable)
+    }
+
+    fn job_record(
+        &self,
+        job: &VerificationJob,
+        phase: &str,
+        outcome: &str,
+    ) -> Result<(String, serde_json::Value)> {
         let hasher = self.audit.profile().key_hasher();
         let reference = hasher
             .audit_reference_hash(
@@ -257,12 +291,7 @@ impl AttachmentVerificationWorker {
             "packageRevision": self.expected.package_revision,
             "actor": "breg:attachment-verifier", "verificationReference": reference,
         });
-        let entry = if phase == "attempt" {
-            AuditEntry::request(ATTACHMENT_VERIFICATION_AUDIT_SCHEMA, reference, record)
-        } else {
-            AuditEntry::response(ATTACHMENT_VERIFICATION_AUDIT_SCHEMA, reference, record)
-        };
-        self.audit.append(entry).await.map_err(unavailable)
+        Ok((reference, record))
     }
 }
 

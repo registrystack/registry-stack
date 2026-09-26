@@ -24,8 +24,8 @@ use crate::history_commit::{
     allocate_coverage_baseline_commit, lock_history_head, HistoryCommitError,
 };
 use crate::history_maintenance::{
-    append_maintenance_entries, profile_is_keyed, set_local_timeouts, verify_ready_identity,
-    HistoryMaintenanceError,
+    append_maintenance_entries, begin_maintenance_request, profile_is_keyed, set_local_timeouts,
+    verify_ready_identity, HistoryMaintenanceError,
 };
 use crate::history_migration::{verify_live_rows_match_journal_heads, HistoryMigrationError};
 use crate::model::CompiledRegistry;
@@ -156,12 +156,9 @@ pub async fn rebaseline_history_coverage(
     // The baseline position is known only once the transaction allocates it,
     // so one invocation correlates its two entries by a fresh identifier.
     let correlation = Uuid::new_v4().to_string();
-    append_maintenance_entries(
+    let _attempt = begin_maintenance_request(
         request.audit,
-        vec![history_rebaseline_request_entry(
-            &request,
-            correlation.clone(),
-        )?],
+        history_rebaseline_request_entry(&request, correlation.clone())?,
     )
     .await?;
 

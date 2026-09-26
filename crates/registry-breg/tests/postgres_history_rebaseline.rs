@@ -255,9 +255,15 @@ async fn rebaseline_refuses_while_maintenance_is_not_ready() {
         .collect::<Vec<_>>();
     assert_eq!(
         rebaseline_entries,
-        ["request"],
-        "a refused rebaseline records its request and no committed response"
+        ["request", "response"],
+        "a refused rebaseline answers its request without a committed response"
     );
+    let answer = database
+        .audit_entries()
+        .into_iter()
+        .rfind(|entry| entry["schema"] == HISTORY_REBASELINE_AUDIT_SCHEMA)
+        .expect("the refused rebaseline's answer");
+    assert_eq!(answer["record"]["outcome"], "unfinished");
 
     migration_task.abort();
     database.cleanup().await;
@@ -852,8 +858,8 @@ fn assert_rebaseline_audit_is_minimized(database: &TestDatabase) {
         })
         .collect::<Vec<_>>();
     // The erasure, the completed rebaseline, and the second rebaseline that
-    // had nothing to do each record their request; the two that committed
-    // record their response under the same correlation.
+    // had nothing to do each record their request and a response under the
+    // same correlation; the one that had nothing to do answers unfinished.
     assert_eq!(
         shape,
         [
@@ -862,10 +868,13 @@ fn assert_rebaseline_audit_is_minimized(database: &TestDatabase) {
             (HISTORY_REBASELINE_AUDIT_SCHEMA, "request"),
             (HISTORY_REBASELINE_AUDIT_SCHEMA, "response"),
             (HISTORY_REBASELINE_AUDIT_SCHEMA, "request"),
+            (HISTORY_REBASELINE_AUDIT_SCHEMA, "response"),
         ]
     );
     assert_eq!(entries[2]["correlation"], entries[3]["correlation"]);
     assert_ne!(entries[2]["correlation"], entries[4]["correlation"]);
+    assert_eq!(entries[4]["correlation"], entries[5]["correlation"]);
+    assert_eq!(entries[5]["record"]["outcome"], "unfinished");
     let audit_text = serde_json::Value::Array(entries[2..].to_vec()).to_string();
     assert!(audit_text.contains("history-rebaseline-maintenance"));
     assert!(!audit_text.contains(OPERATOR_CANARY));
