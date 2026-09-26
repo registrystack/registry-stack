@@ -156,7 +156,7 @@ bundle, or the sealed Relay package. It assumes you have already configured your
   chmod -R a-w "<installed-package>" && chmod 444 "<deployment-target>/runtime.yaml"
   evidence check --runtime-config "<deployment-target>/runtime.yaml"
   evidence evaluate --runtime-config "<deployment-target>/runtime.yaml" \
-    --fixture "<installed-package>/fixtures/<cases>.yaml"
+    --fixture "fixtures/<cases>.yaml"
   ```
 
 - Review the complete simultaneously enabled bundle as one disclosure surface before deployment,
