@@ -998,6 +998,12 @@ impl AppendRequest {
     /// Seal the active file under the next sequence, open a fresh active file,
     /// and delete sealed files older than the retention period.
     fn rotate(&mut self) -> Result<File, AuditError> {
+        // Retention ages a sealed file by its last modification, and a rename
+        // keeps it, so sealing stamps it: a file last written longer ago than
+        // the retention period is not deleted by the rotation that seals it.
+        self.active
+            .set_modified(SystemTime::now())
+            .map_err(AuditError::Io)?;
         self.sync_active()?;
         let mut sequence = self.next_sequence;
         let mut sealed = segment_path(&self.path, sequence);
@@ -1779,6 +1785,53 @@ mod tests {
                 .collect::<Vec<_>>(),
             [2]
         );
+    }
+
+    #[tokio::test]
+    async fn rotation_keeps_the_segment_it_seals_after_a_quiet_period() {
+        let directory = directory();
+        let destination = file_destination(&directory)
+            .with_rotate_bytes(MIN_AUDIT_ROTATE_BYTES)
+            .expect("rotation")
+            .with_retain_days(1)
+            .expect("retention");
+        let path = destination.path().to_path_buf();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path.parent().expect("parent"))
+            .expect("audit directory");
+        let line = format!("{{\"padding\":\"{}\"}}\n", "x".repeat(1000));
+        let seeded = usize::try_from(MIN_AUDIT_ROTATE_BYTES).expect("size") / line.len();
+        fs::write(&path, line.repeat(seeded)).expect("nearly full active file");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("mode");
+        // The active file was last written before the retention period.
+        File::options()
+            .write(true)
+            .open(&path)
+            .and_then(|handle| {
+                handle.set_modified(SystemTime::now() - Duration::from_secs(3 * SECONDS_PER_DAY))
+            })
+            .expect("age active file");
+
+        let writer = AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect("open");
+        writer
+            .append(AuditEntry::request(
+                "schema/v2",
+                "req-1",
+                json!({"padding": "x".repeat(4096)}),
+            ))
+            .await
+            .expect("append rotates");
+
+        let sealed = sealed_segments(&path).expect("sealed");
+        assert_eq!(
+            sealed.len(),
+            1,
+            "the segment sealed by this rotation is kept"
+        );
+        assert_eq!(lines(&sealed[0].1).len(), seeded);
     }
 
     #[tokio::test]
