@@ -49,3 +49,9 @@ test('a json string that is only a <placeholder> matches any string', () => {
 test('output that is not JSON is reported as such', () => {
   assert.match(checkExpectation('json', '{}', 'curl: (7) refused\n'), /output is not JSON/u);
 });
+
+test('a <placeholder> inside a json string stands for one run of non-space characters', () => {
+  assert.equal(checkExpectation('json', '{"digest": "sha256:<digest>"}', '{"digest": "sha256:0f3a"}'), null);
+  assert.match(checkExpectation('json', '{"digest": "sha256:<digest>"}', '{"digest": "md5:0f3a"}'), /at \$\.digest/u);
+  assert.match(checkExpectation('json', '{"digest": "sha256:<digest>"}', '{"digest": 7}'), /at \$\.digest/u);
+});

@@ -172,10 +172,49 @@ test('test-exit expects a refusal, and a command that succeeds instead fails the
 test('pages given together replay in one reader directory, each in a fresh shell', async () => {
   await withPage('## First\n\n' + fence('sh', 'mkdir work\nshared=yes\ncd work'), async ({ dir, page }) => {
     const second = join(dir, 'second.mdx');
-    await writeFile(second, '---\ntitle: s\n---\n\n## Second\n\n' + fence('sh', 'ls\necho "shared=${shared:-unset}"') + fence('text test-expect', 'work\nshared=unset'));
+    await writeFile(second, '---\ntitle: s\n---\n\n## Second\n\n' + fence('sh', 'ls\necho "shared=${shared:-unset}"') + fence('text test-expect', 'work\nshared=unset') + fence('text test-excerpt', 'shared=unset'));
     const { code, output } = await run([page, second]);
     assert.equal(code, 0, output);
     assert.match(output, /==> page\.mdx line 7 \(First\)/u);
     assert.match(output, /expect second\.mdx line 12: ok/u);
+    assert.match(output, /excerpt second\.mdx line 17: ok/u);
+    const plan = await run(['--dry-run', page, second]);
+    assert.match(plan.output, /excerpt second\.mdx line 17: checks line 7/u);
+  });
+});
+
+test('a file excerpt is checked against the file as it stood at that point of the journey', async () => {
+  const body =
+    '## Write\n\n' +
+    fence('sh', "printf 'a: 1\\n  b: 2\\n' >conf.yaml") +
+    fence('yaml test-excerpt="conf.yaml"', 'b: 2') +
+    fence('sh', "printf 'a: 1\\n  b: 3\\n' >conf.yaml\nprintf 'done\\n{\\n  \"b\": 3,\\n  \"c\": 4\\n}\\n'") +
+    fence('json test-excerpt', '{"b": 3}');
+  await withPage(body, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 0, output);
+    assert.match(output, /excerpt line 11: ok/u);
+    assert.match(output, /excerpt line 20: ok/u);
+    const plan = await run(['--dry-run', page]);
+    assert.match(plan.output, /excerpt line 11: conf\.yaml/u);
+    assert.match(plan.output, /excerpt line 20: checks line 15/u);
+  });
+});
+
+test('an excerpt that is not there fails after the journey, and a missing file stops it', async () => {
+  const absent = '## Read\n\n' + fence('sh', "echo '{\"b\": 3}'") + fence('json test-excerpt', '{"b": 4}');
+  await withPage(absent, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 1, output);
+    assert.match(output, /excerpt line 11: the output of the sh fence at line 7 does not contain it/u);
+    assert.match(output, /closest: at \$\.b: expected 4, got 3/u);
+  });
+  const missing = '## Read\n\n' + fence('yaml test-excerpt="nowhere.yaml"', 'b: 2') + fence('sh', 'echo never');
+  await withPage(missing, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 1, output);
+    assert.match(output, /the excerpt at line 7 \(Read\) failed/u);
+    assert.match(output, /nowhere\.yaml/u);
+    assert.doesNotMatch(output, /^never$/mu);
   });
 });

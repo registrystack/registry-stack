@@ -227,3 +227,29 @@ test('a test-edit line whose marker is followed by - or + is refused, since the 
     'line 1: a test-edit line starts with -- or +- or ++ or -+, which the page shows as plain text; start the change at the indentation it has in the file, with the line above as context',
   ]);
 });
+
+test('a test-excerpt block checks a file at that point, or with no path the output above it', () => {
+  const { steps, errors } = readJourney(
+    '## Read\n\n```sh\nmake-report\n```\n\n```json test-excerpt\n{"a": 1}\n```\n\n' +
+      '```yaml test-excerpt="work/conf.yaml"\nb: 2\n```\n',
+  );
+  assert.deepEqual(errors, []);
+  assert.deepEqual(steps.slice(1), [
+    { kind: 'excerpt', line: 7, heading: 'Read', format: 'json', text: '{"a": 1}', runIndex: 0 },
+    { kind: 'excerpt', line: 11, heading: 'Read', format: 'text', text: 'b: 2', path: 'work/conf.yaml' },
+  ]);
+});
+
+test('test-excerpt mistakes are errors that name the line', () => {
+  const { errors } = readJourney(
+    '```json test-excerpt\n{}\n```\n\n```sh test-excerpt\ntrue\n```\n\n' +
+      '```sh test-skip="offline"\ntrue\n```\n\n```json test-excerpt\n{}\n```\n\n' +
+      '```text test-excerpt test-expect\nx\n```\n',
+  );
+  assert.deepEqual(errors, [
+    'line 1: test-excerpt has no sh fence above it to check',
+    'line 5: test-excerpt belongs on a block the page shows, not on an sh fence',
+    'line 13: test-excerpt checks the output of the sh fence at line 9, which is skipped',
+    'line 17: a block is either test-expect or test-excerpt, not both',
+  ]);
+});

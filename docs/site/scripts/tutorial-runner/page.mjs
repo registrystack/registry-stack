@@ -12,6 +12,11 @@
 // a file path and marked test-edit is the change the page asks the reader to
 // make in that file (see edit.mjs).
 //
+// A block marked test-excerpt shows part of something larger (see
+// excerpt.mjs): with a path, as test-excerpt="<path>", part of that file as it
+// stands at that point of the journey; bare, part of the output of the
+// nearest sh fence above it.
+//
 // The page is parsed as Markdown rather than MDX, as check-draft-links.mjs
 // does: fences, including fences indented inside list items, parse the same
 // way, and JSX or comment lines read as paragraphs the journey never runs.
@@ -21,7 +26,7 @@ import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 
 const parser = unified().use(remarkParse).use(remarkGfm);
-const ANNOTATIONS = new Set(['test-skip', 'test-expect', 'test-exit', 'test-edit']);
+const ANNOTATIONS = new Set(['test-skip', 'test-expect', 'test-exit', 'test-edit', 'test-excerpt']);
 
 // Parse the test- tokens of a fence meta string: bare flags and key="value"
 // pairs. Other tokens belong to Expressive Code and are ignored here.
@@ -81,6 +86,8 @@ function* walk(node) {
 //   { kind: 'skip', line, heading, code, reason }
 //   { kind: 'expect', line, heading, format, text, runIndex }
 //   { kind: 'edit', line, heading, path, before, after }
+//   { kind: 'excerpt', line, heading, format, text, runIndex }
+//   { kind: 'excerpt', line, heading, format, text, path }
 // where runIndex is the index in steps of the fence whose output it checks.
 // Errors are sentences naming a line; a page with any is not run.
 export function readJourney(text) {
@@ -102,6 +109,7 @@ export function readJourney(text) {
     const expect = annotations['test-expect'];
     const exit = annotations['test-exit'];
     const edit = annotations['test-edit'];
+    const excerpt = annotations['test-excerpt'];
 
     if (node.lang === 'sh') {
       if (expect !== undefined) {
@@ -111,6 +119,9 @@ export function readJourney(text) {
         errors.push(`line ${line}: test-skip needs a reason, as test-skip="<why this fence is not run>"`);
       }
       if (edit !== undefined) errors.push(`line ${line}: test-edit applies only to diff blocks`);
+      if (excerpt !== undefined) {
+        errors.push(`line ${line}: test-excerpt belongs on a block the page shows, not on an sh fence`);
+      }
       const step = { kind: skip === undefined ? 'run' : 'skip', line, heading, code: node.value };
       if (typeof skip === 'string' && skip !== '') step.reason = skip;
       if (exit !== undefined) {
@@ -141,22 +152,32 @@ export function readJourney(text) {
       } else steps.push({ kind: 'edit', line, heading, path, ...sides });
       continue;
     }
-    if (expect === undefined) continue;
+    if (expect === undefined && excerpt === undefined) continue;
+    if (expect !== undefined && excerpt !== undefined) {
+      errors.push(`line ${line}: a block is either test-expect or test-excerpt, not both`);
+      continue;
+    }
+    const format = node.lang === 'json' ? 'json' : 'text';
+    if (typeof excerpt === 'string' && excerpt !== '') {
+      steps.push({ kind: 'excerpt', line, heading, format, text: node.value, path: excerpt });
+      continue;
+    }
+    const annotation = expect !== undefined ? 'test-expect' : 'test-excerpt';
     if (lastCommand === -1) {
-      errors.push(`line ${line}: test-expect has no sh fence above it to check`);
+      errors.push(`line ${line}: ${annotation} has no sh fence above it to check`);
       continue;
     }
     if (steps[lastCommand].kind === 'skip') {
       errors.push(
-        `line ${line}: test-expect checks the output of the sh fence at line ${steps[lastCommand].line}, which is skipped`,
+        `line ${line}: ${annotation} checks the output of the sh fence at line ${steps[lastCommand].line}, which is skipped`,
       );
       continue;
     }
     steps.push({
-      kind: 'expect',
+      kind: expect !== undefined ? 'expect' : 'excerpt',
       line,
       heading,
-      format: node.lang === 'json' ? 'json' : 'text',
+      format,
       text: node.value,
       runIndex: lastCommand,
     });

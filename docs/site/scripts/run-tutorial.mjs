@@ -8,9 +8,11 @@
 // outside the checkout, so a `cd` or a shell variable carries from one fence
 // to the next as it does for a reader. The first failing command stops the
 // journey. A test-edit block changes its file between fences
-// (tutorial-runner/edit.mjs). Once every fence has run, each test-expect block
-// is compared with the output of the fence it follows
-// (tutorial-runner/expect.mjs).
+// (tutorial-runner/edit.mjs), and a test-excerpt block naming a file takes a
+// copy of that file as it stands then. Once every fence has run, each
+// test-expect block is compared with the output of the fence it follows
+// (tutorial-runner/expect.mjs), and each test-excerpt block is looked for in
+// its file or its fence's output (tutorial-runner/excerpt.mjs).
 //
 // Several pages replay in the order given, in the same reader directory, each
 // in a fresh shell: a tutorial that continues from another starts where the
@@ -29,6 +31,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { checkExcerpt } from './tutorial-runner/excerpt.mjs';
 import { checkExpectation } from './tutorial-runner/expect.mjs';
 import { readJourney } from './tutorial-runner/page.mjs';
 import { TOOLSETS, ToolsetError } from './tutorial-runner/toolsets.mjs';
@@ -60,7 +63,8 @@ function parseArgs(argv) {
 
 const at = (step) => `${step.page ? `${step.page} ` : ''}line ${step.line}`;
 const where = (step) => `${at(step)}${step.heading ? ` (${step.heading})` : ''}`;
-const blockName = (step) => (step.kind === 'edit' ? 'the edit' : 'the sh fence');
+const BLOCK_NAMES = { edit: 'the edit', excerpt: 'the excerpt' };
+const blockName = (step) => BLOCK_NAMES[step.kind] ?? 'the sh fence';
 const quote = (text) => `'${text.replaceAll("'", "'\\''")}'`;
 const outName = (index) => `${String(index).padStart(3, '0')}.out`;
 
@@ -70,6 +74,8 @@ function printPlan(steps) {
     if (step.kind === 'run') console.log(`run   ${where(step)}: ${step.code.split('\n')[0]}${exit}`);
     else if (step.kind === 'skip') console.log(`skip  ${where(step)}: ${step.reason}`);
     else if (step.kind === 'edit') console.log(`edit  ${where(step)}: ${step.path}`);
+    else if (step.kind === 'excerpt' && step.path) console.log(`excerpt ${at(step)}: ${step.path}`);
+    else if (step.kind === 'excerpt') console.log(`excerpt ${at(step)}: checks line ${steps[step.runIndex].line}`);
     else console.log(`expect ${at(step)}: checks line ${steps[step.runIndex].line}`);
   }
 }
@@ -79,7 +85,8 @@ function printPlan(steps) {
 // to the end of its page; its output goes to its own file outside the reader
 // directory, then to the log. Standard input is closed, and nothing runs on a
 // terminal, so tools print no colour codes. An edit runs apply-edit.mjs from
-// the shell's current directory, where the reader would open the file.
+// the shell's current directory, where the reader would open the file, and a
+// file excerpt copies its file from there.
 async function journeyScript(pages, outDir) {
   const lines = ['set -euo pipefail', "trap 'exit 130' HUP INT TERM", `OUT=${quote(outDir)}`];
   let index = 0;
@@ -95,6 +102,10 @@ async function journeyScript(pages, outDir) {
         lines.push(`printf '\\n%s\\n' ${quote(`==> ${where(step)}`)}`);
         lines.push(`${quote(process.execPath)} ${quote(APPLY_EDIT)} ${quote(request)} >${out} 2>&1 </dev/null`);
         lines.push(`cat ${out}`);
+      } else if (step.kind === 'excerpt' && step.path) {
+        lines.push(`printf '\\n%s\\n' ${quote(`==> ${where(step)}`)}`);
+        lines.push(`cat -- ${quote(step.path)} >${out} 2>&1 </dev/null`);
+        lines.push(`printf 'read %s\\n' ${quote(step.path)}`);
       } else if (step.kind === 'run' && step.exit === undefined) {
         lines.push(`printf '\\n%s\\n' ${quote(`==> ${where(step)}`)}`);
         lines.push(`{\n${step.code}\n} >${out} 2>&1 </dev/null`);
@@ -138,17 +149,28 @@ async function stoppedAt(steps, outDir) {
   return { step: steps[Number.parseInt(last, 10)], output: await readFile(join(outDir, last), 'utf8') };
 }
 
-async function checkExpectations(steps, outDir) {
+// Check every test-expect and test-excerpt block, in page order, against the
+// output or file copy the journey left for it. Returns the number that fail.
+async function checkBlocks(steps, outDir) {
   let failures = 0;
-  for (const step of steps.filter((candidate) => candidate.kind === 'expect')) {
-    const checked = steps[step.runIndex];
-    const output = await readFile(join(outDir, outName(step.runIndex)), 'utf8');
-    const problem = checkExpectation(step.format, step.text, output);
+  for (const [index, step] of steps.entries()) {
+    if (step.kind !== 'expect' && step.kind !== 'excerpt') continue;
+    const sourceIndex = step.path ? index : step.runIndex;
+    const source = await readFile(join(outDir, outName(sourceIndex)), 'utf8');
+    const fenceOutput = step.path ? undefined : `the output of the sh fence at line ${steps[step.runIndex].line}`;
+    let problem;
+    if (step.kind === 'expect') {
+      problem = checkExpectation(step.format, step.text, source);
+      if (problem) problem = `output of the sh fence at line ${steps[step.runIndex].line} does not match\n${problem}`;
+    } else {
+      problem = checkExcerpt(step.format, step.text, source);
+      if (problem) problem = `${fenceOutput ?? step.path} does not contain it: ${problem}`;
+    }
     if (problem === null) {
-      console.log(`expect ${at(step)}: ok`);
+      console.log(`${step.kind} ${at(step)}: ok`);
     } else {
       failures += 1;
-      console.log(`expect ${at(step)}: output of the sh fence at line ${checked.line} does not match\n${problem}`);
+      console.log(`${step.kind} ${at(step)}: ${problem}`);
     }
   }
   return failures;
@@ -188,7 +210,7 @@ async function replay(pages, toolset) {
       console.log('tutorial FAIL');
     } else {
       console.log('');
-      const failures = await checkExpectations(steps, outDir);
+      const failures = await checkBlocks(steps, outDir);
       console.log(failures === 0 ? 'tutorial PASS' : 'tutorial FAIL');
       status = failures === 0 ? 0 : 1;
     }
@@ -209,8 +231,8 @@ async function replay(pages, toolset) {
 }
 
 // Read every page before anything runs. With more than one page, each step is
-// named with its page, and an expectation's runIndex points into the whole
-// journey rather than its own page.
+// named with its page, and the runIndex of an expectation or excerpt points
+// into the whole journey rather than its own page.
 const options = parseArgs(process.argv.slice(2));
 const pages = [];
 let offset = 0;
@@ -224,7 +246,7 @@ for (const page of options.pages) {
     steps.map((step) => ({
       ...step,
       ...(name ? { page: name } : {}),
-      ...(step.kind === 'expect' ? { runIndex: step.runIndex + offset } : {}),
+      ...(step.runIndex === undefined ? {} : { runIndex: step.runIndex + offset }),
     })),
   );
   offset += steps.length;
