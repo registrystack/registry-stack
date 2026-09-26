@@ -1210,7 +1210,7 @@ pub(crate) async fn append_run_audit(
 /// The request a run transition is about to serve: what its `request` entry
 /// names before the transition's first protected read or write.
 pub(crate) struct RunRequest<'a> {
-    /// `create`, `cancel`, or `submitChunk`.
+    /// `create`, `cancel`, `submitChunk`, or `chunkReceipt`.
     pub(crate) transition: &'a str,
     pub(crate) run_id: Option<Uuid>,
     pub(crate) chunk_index: Option<i64>,

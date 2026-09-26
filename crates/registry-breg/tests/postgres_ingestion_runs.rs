@@ -791,6 +791,7 @@ async fn erasing_record_history_erases_the_receipt_that_describes_it() {
 
     // The receipt described erased history: recovery reports it gone instead
     // of replaying bytes the record history no longer backs.
+    let before_recovery = harness.database.audit_entries().len();
     let after = harness
         .get_json(
             &format!(
@@ -802,6 +803,30 @@ async fn erasing_record_history_erases_the_receipt_that_describes_it() {
         .await;
     assert_eq!(after.status(), StatusCode::GONE);
     assert_eq!(body_json(after).await["code"], "ingestion.receipt_erased");
+
+    // The refused recovery still closes the request entry it opened before
+    // reading the erased chunk, with a response entry under the same
+    // correlation.
+    let entries = harness.database.audit_entries();
+    let new_entries = &entries[before_recovery..];
+    let request = new_entries
+        .iter()
+        .find(|entry| {
+            entry["schema"] == "breg-ingestion-audit/v1"
+                && entry["phase"] == "request"
+                && entry["record"]["transition"] == "chunkReceipt"
+        })
+        .expect("the recovery request entry is written before the erased chunk is read");
+    let responses = new_entries
+        .iter()
+        .filter(|entry| {
+            entry["phase"] == "response" && entry["correlation"] == request["correlation"]
+        })
+        .count();
+    assert_eq!(
+        responses, 1,
+        "the erased-chunk refusal answers the request once"
+    );
 
     let replay = harness
         .post_json(
@@ -1597,6 +1622,97 @@ async fn a_recovered_receipt_discloses_an_audited_receipt() {
         assert_eq!(record["runId"], run_id);
         assert_eq!(record["chunkIndex"], 0);
     }
+}
+
+/// Recovery appends its own request entry before it reads the run or the
+/// stored chunk, and the disclosure entry it already owed the journal answers
+/// that same request, under one shared correlation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chunk_receipt_recovery_correlates_a_request_and_a_response_entry() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("receipt-request-entry", 2);
+    let chunks = plan_chunks(&items, 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    let before_recovery = harness.database.audit_entries().len();
+
+    let recovered = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(recovered.status(), StatusCode::OK);
+
+    let entries = harness.database.audit_entries();
+    let ingestion_entries = entries[before_recovery..]
+        .iter()
+        .filter(|entry| entry["schema"] == "breg-ingestion-audit/v1")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ingestion_entries.len(),
+        2,
+        "recovery writes exactly its request entry and its disclosure entry"
+    );
+    assert_eq!(ingestion_entries[0]["phase"], "request");
+    assert_eq!(ingestion_entries[0]["record"]["transition"], "chunkReceipt");
+    assert_eq!(ingestion_entries[1]["phase"], "response");
+    assert_eq!(ingestion_entries[1]["record"]["kind"], "ingestionReceipt");
+    assert_eq!(
+        ingestion_entries[0]["correlation"], ingestion_entries[1]["correlation"],
+        "the disclosure entry answers the recovery's own request"
+    );
+}
+
+/// Recovery of a chunk that was never committed still closes its own request
+/// entry with a response entry: an audit outage is the only thing allowed to
+/// leave a caller-visible refusal unanswered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chunk_receipt_recovery_of_an_unknown_chunk_answers_its_request_entry() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("receipt-unknown-chunk", 4);
+    let chunks = plan_chunks(&items, 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let before_recovery = harness.database.audit_entries().len();
+
+    // Chunk 1 was never submitted, so no receipt exists to recover.
+    let recovered = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/1/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(recovered.status(), StatusCode::NOT_FOUND);
+
+    let entries = harness.database.audit_entries();
+    let new_entries = &entries[before_recovery..];
+    let request = new_entries
+        .iter()
+        .find(|entry| {
+            entry["schema"] == "breg-ingestion-audit/v1"
+                && entry["phase"] == "request"
+                && entry["record"]["transition"] == "chunkReceipt"
+        })
+        .expect("the recovery request entry is written before the unknown chunk is read");
+    let responses = new_entries
+        .iter()
+        .filter(|entry| {
+            entry["phase"] == "response" && entry["correlation"] == request["correlation"]
+        })
+        .count();
+    assert_eq!(
+        responses, 1,
+        "the unknown-chunk refusal answers the request once"
+    );
 }
 
 /// An audit outage gates both release paths: once the writer refuses an

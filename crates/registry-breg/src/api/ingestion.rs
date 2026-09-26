@@ -631,7 +631,20 @@ async fn chunk_receipt(
         .await
     {
         Ok(receipt) => ingestion_response(StatusCode::OK, receipt),
-        Err(error) => ingestion_problem(error),
+        // A recovery the run refuses after its request entry was accepted
+        // owes the journal the same durable refusal envelope a refused
+        // cancellation or chunk submission owes.
+        Err(error) => {
+            audited_mutation_refusal(
+                mutations,
+                &binding.base,
+                &surface.context,
+                None,
+                ingestion_problem(error),
+                &correlation,
+            )
+            .await
+        }
     }
 }
 
