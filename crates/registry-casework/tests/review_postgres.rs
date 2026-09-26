@@ -3319,6 +3319,85 @@ async fn review_cancellation_is_audited_after_the_cancel_commits() {
 }
 
 #[tokio::test]
+async fn review_notes_are_audited_without_their_text() {
+    let fixture = fixture().await;
+    let (service, audit) = service_with_audit(&fixture, project("1"));
+    let created = service
+        .create_review_request(
+            &fixture.producer,
+            request("note-audit", "producer-ref-note-audit"),
+            "create-note-audit",
+        )
+        .await
+        .expect("create note audit review");
+    let request_id = created.accepted.request_id;
+    let note = |text: &str| ReviewNoteRequest {
+        audience: ReviewHistoryAudience::Requester,
+        note: text.to_owned(),
+    };
+    let added = service
+        .add_review_note(
+            &fixture.producer,
+            request_id,
+            None,
+            "producer-token",
+            note("a note that stays out of the audit"),
+            "note-audit",
+        )
+        .await
+        .expect("add note");
+    let record = audited_response(
+        &audit,
+        "review_note_added",
+        "eventId",
+        &added.event_id.to_string(),
+    );
+    assert!(!serde_json::to_string(&audit.entries())
+        .expect("audit JSON")
+        .contains("stays out of the audit"));
+    assert!(record.get("principalPseudonym").is_some());
+
+    let (replay_service, replay_audit) = service_with_audit(&fixture, project("1"));
+    replay_service
+        .add_review_note(
+            &fixture.producer,
+            request_id,
+            None,
+            "producer-token",
+            note("a note that stays out of the audit"),
+            "note-audit",
+        )
+        .await
+        .expect("replay note");
+    assert_replay_audited(&replay_audit, "review_note_added");
+
+    // A refused note still pairs the request entry it wrote.
+    let (refused_service, refused_audit) = service_with_audit(&fixture, project("1"));
+    assert!(matches!(
+        refused_service
+            .add_review_note(
+                &fixture.producer,
+                request_id,
+                None,
+                "producer-token",
+                note(" "),
+                "note-audit-refused",
+            )
+            .await,
+        Err(ReviewRuntimeError::Invalid)
+    ));
+    let entries = refused_audit.entries();
+    assert_eq!(entries.len(), 2, "{entries:?}");
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[1]["correlation"], entries[0]["correlation"]);
+    assert_eq!(
+        entries[1]["record"],
+        json!({"event": "casework.review_note_added", "outcome": "unfinished"})
+    );
+}
+
+#[tokio::test]
 async fn review_task_ownership_transitions_are_audited() {
     let fixture = fixture().await;
     let (service, audit) = service_with_audit(&fixture, project("1"));

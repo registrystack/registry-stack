@@ -7,10 +7,13 @@
 //! operation that recorded no domain event, such as an idempotent replay,
 //! appends one `response` entry naming its terminal outcome instead, so no
 //! caller-requested result is released without an accepted `response` entry.
+//! One that returns without committing, a refusal, a failure, or a canceled
+//! request, appends `{event, outcome: "unfinished"}` as its `response` entry
+//! when its operation is dropped, so no `request` entry stays unpaired.
 //! Entries carry only event metadata and keyed references, never source
 //! selectors, free-text reasons, receipts, or issuer and subject identities.
 
-use registry_platform_audit::{AuditEntry, AuditKeyHasher, AuditWriter};
+use registry_platform_audit::{AuditEntry, AuditKeyHasher, AuditRequest, AuditWriter};
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
@@ -62,19 +65,20 @@ impl CaseworkAudit {
             .and_then(Value::as_str)
             .ok_or(StoreError::Corrupt)?
             .to_owned();
-        let correlation = Uuid::new_v4().to_string();
-        self.writer
-            .append(AuditEntry::request(
+        let unfinished = self.minimized(json!({"event": event, "outcome": "unfinished"}))?;
+        let request = self
+            .writer
+            .begin(
                 CASEWORK_AUDIT_SCHEMA,
-                correlation.clone(),
+                Uuid::new_v4().to_string(),
                 record,
-            ))
+                unfinished,
+            )
             .await
             .map_err(|_| StoreError::AuditUnavailable)?;
         Ok(AuditOperation {
             audit: self.clone(),
-            correlation,
-            request_event: Some(event),
+            pairing: Pairing::Requested { request, event },
             outcome: None,
             responses: Vec::new(),
         })
@@ -90,8 +94,9 @@ impl CaseworkAudit {
         }
         Ok(AuditOperation {
             audit: self.clone(),
-            correlation: Uuid::new_v4().to_string(),
-            request_event: None,
+            pairing: Pairing::Background {
+                correlation: Uuid::new_v4().to_string(),
+            },
             outcome: None,
             responses: Vec::new(),
         })
@@ -161,16 +166,26 @@ impl AuditOutcome {
 
 /// One audited operation whose `request` entry was accepted. It collects the
 /// minimized `response` records its transaction produces and appends them
-/// once the transaction commits.
+/// once the transaction commits. Dropped before then, a caller-requested
+/// operation appends its `unfinished` response entry.
 #[must_use = "an audited operation appends its response entries only when completed"]
 pub(crate) struct AuditOperation {
     audit: CaseworkAudit,
-    correlation: String,
-    /// The event of the accepted `request` entry; absent for background work,
-    /// which writes no `request` entry.
-    request_event: Option<String>,
+    pairing: Pairing,
     outcome: Option<AuditOutcome>,
     responses: Vec<(Uuid, Value)>,
+}
+
+/// How an operation's `response` entries are correlated.
+enum Pairing {
+    /// A caller-requested operation: its accepted `request` entry, which owes
+    /// the `response` entries, and the event that entry names.
+    Requested {
+        request: AuditRequest,
+        event: String,
+    },
+    /// Background work no caller requested, which writes no `request` entry.
+    Background { correlation: String },
 }
 
 impl AuditOperation {
@@ -186,7 +201,10 @@ impl AuditOperation {
     /// nor a terminal outcome to append, since its result would leave without
     /// an accepted `response` entry.
     fn ensure_terminal(&self) -> Result<(), StoreError> {
-        if self.request_event.is_some() && self.responses.is_empty() && self.outcome.is_none() {
+        if matches!(self.pairing, Pairing::Requested { .. })
+            && self.responses.is_empty()
+            && self.outcome.is_none()
+        {
             tracing::error!(
                 "a Casework audited operation has no response entry to append; its result is withheld"
             );
@@ -265,29 +283,34 @@ impl AuditOperation {
     /// destination unavailable while the committed change stays in place.
     pub(crate) async fn complete(self) -> Result<(), StoreError> {
         self.ensure_terminal()?;
-        let mut records: Vec<Value> = self
-            .responses
-            .into_iter()
-            .map(|(_, record)| record)
-            .collect();
+        let Self {
+            audit,
+            mut pairing,
+            outcome,
+            responses,
+        } = self;
+        let mut records: Vec<Value> = responses.into_iter().map(|(_, record)| record).collect();
         if records.is_empty() {
-            if let (Some(event), Some(outcome)) = (&self.request_event, self.outcome) {
-                records.push(
-                    self.audit
-                        .minimized(json!({"event": event, "outcome": outcome.as_str()}))?,
-                );
+            if let (Pairing::Requested { event, .. }, Some(outcome)) = (&pairing, outcome) {
+                records
+                    .push(audit.minimized(json!({"event": event, "outcome": outcome.as_str()}))?);
             }
         }
         for record in records {
-            self.audit
-                .writer
-                .append(AuditEntry::response(
-                    CASEWORK_AUDIT_SCHEMA,
-                    self.correlation.clone(),
-                    record,
-                ))
-                .await
-                .map_err(|_| StoreError::AuditUnavailable)?;
+            match &mut pairing {
+                Pairing::Requested { request, .. } => request.respond(record).await,
+                Pairing::Background { correlation } => {
+                    audit
+                        .writer
+                        .append(AuditEntry::response(
+                            CASEWORK_AUDIT_SCHEMA,
+                            correlation.clone(),
+                            record,
+                        ))
+                        .await
+                }
+            }
+            .map_err(|_| StoreError::AuditUnavailable)?;
         }
         Ok(())
     }

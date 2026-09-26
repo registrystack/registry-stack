@@ -1743,6 +1743,27 @@ async fn a_resubmitted_proposal_supersedes_the_earlier_application_item() {
     assert_eq!(current.state, OccurrenceState::WaitingApplication);
 }
 
+/// The correlations of request entries no response entry answers.
+fn unpaired_requests(entries: &[serde_json::Value]) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|entry| entry["phase"] == "request")
+        .filter(|request| {
+            !entries.iter().any(|entry| {
+                entry["phase"] == "response"
+                    && entry["schema"] == request["schema"]
+                    && entry["correlation"] == request["correlation"]
+            })
+        })
+        .map(|request| {
+            request["correlation"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect()
+}
+
 const SETTLEMENT_REASON: &str =
     "The source refused the saved evidence version; the registrar confirmed no change was made.";
 const SETTLEMENT_DECIDED_BY: &str = "Registrar duty officer, ticket OPS-4411";
@@ -1890,12 +1911,17 @@ impl SettlementFixture {
             .await
             .expect("settlement snapshot")
             .get(0);
+        // A refusal pairs its request entry with an `unfinished` response;
+        // only a response recording a committed change counts as a write.
         snapshot["auditResponses"] = serde_json::json!(self
             .audit
             .entries()
             .iter()
-            .filter(|entry| entry["phase"] == "response")
+            .filter(|entry| {
+                entry["phase"] == "response" && entry["record"]["outcome"] != "unfinished"
+            })
             .count());
+        snapshot["unpairedRequests"] = serde_json::json!(unpaired_requests(&self.audit.entries()));
         snapshot
     }
 
@@ -2153,6 +2179,39 @@ async fn a_refused_audit_response_reports_unavailable_after_the_settlement_commi
         entries[written]["record"]["event"],
         "casework.attempt_settled"
     );
+}
+
+#[tokio::test]
+async fn a_refusal_after_the_request_entry_pairs_it_with_an_unfinished_response() {
+    let fixture = settlement_fixture("refusal_pairs_request", true).await;
+    let written = fixture.audit.entries().len();
+    let missing = fixture
+        .store
+        .claim(&fixture.holder, uuid::Uuid::new_v4(), 1, "claim-missing")
+        .await;
+    assert!(matches!(missing, Err(StoreError::NotFound)), "{missing:?}");
+    let item = fixture.store.item(fixture.item_id).await.expect("item");
+    let again = fixture
+        .store
+        .claim(&fixture.holder, item.item_id, item.revision, "claim-again")
+        .await;
+    assert!(
+        matches!(again, Err(StoreError::AlreadyClaimed)),
+        "{again:?}"
+    );
+
+    let entries = fixture.audit.entries()[written..].to_vec();
+    assert_eq!(entries.len(), 4, "{entries:#?}");
+    for pair in entries.chunks(2) {
+        assert_eq!(pair[0]["phase"], "request");
+        assert_eq!(pair[1]["phase"], "response");
+        assert_eq!(pair[1]["schema"], pair[0]["schema"]);
+        assert_eq!(pair[1]["correlation"], pair[0]["correlation"]);
+        assert_eq!(
+            pair[1]["record"],
+            serde_json::json!({"event": "casework.claimed", "outcome": "unfinished"})
+        );
+    }
 }
 
 #[tokio::test]
