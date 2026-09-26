@@ -146,20 +146,14 @@ const AUDIT_OUTBOX_DROP_VERSION: i64 = 17;
 
 /// Refuse a migration that would drop audit records the previous release has
 /// not yet published to its audit journal. They have no successor in the
-/// database, so the operator drains them with that release first.
+/// database, so the operator drains them with that release first. The caller
+/// runs this from inside the same migration transaction that would perform
+/// the drop, after it has already confirmed this version is unapplied, so the
+/// exclusive lock taken here holds for the rest of that transaction and no
+/// concurrent writer can insert a row between this count and that drop.
 async fn refuse_to_drop_unpublished_audit(
     transaction: &tokio_postgres::Transaction<'_>,
 ) -> Result<(), StoreError> {
-    let dropped: bool = transaction
-        .query_one(
-            "SELECT EXISTS(SELECT 1 FROM casework_schema_migrations WHERE version=$1)",
-            &[&AUDIT_OUTBOX_DROP_VERSION],
-        )
-        .await?
-        .get(0);
-    if dropped {
-        return Ok(());
-    }
     let exists: bool = transaction
         .query_one(
             "SELECT to_regclass('casework_audit_outbox') IS NOT NULL",
@@ -170,6 +164,9 @@ async fn refuse_to_drop_unpublished_audit(
     if !exists {
         return Ok(());
     }
+    transaction
+        .batch_execute("LOCK TABLE casework_audit_outbox IN ACCESS EXCLUSIVE MODE")
+        .await?;
     let rows: i64 = transaction
         .query_one(
             "SELECT count(*) FROM casework_audit_outbox WHERE published_at IS NULL",
@@ -397,7 +394,6 @@ impl PostgresStore {
             .get(0);
         refuse_newer_schema(newest_applied)?;
         refuse_to_drop_hosted_work(&transaction).await?;
-        refuse_to_drop_unpublished_audit(&transaction).await?;
         transaction.commit().await?;
 
         for (version, migration) in MIGRATIONS {
@@ -410,6 +406,12 @@ impl PostgresStore {
                 .await?
                 .get(0);
             if !applied {
+                if version == AUDIT_OUTBOX_DROP_VERSION {
+                    // Checked here, inside the same transaction that runs this
+                    // version's SQL, so nothing can add an unpublished row
+                    // between the check and the drop below.
+                    refuse_to_drop_unpublished_audit(&transaction).await?;
+                }
                 transaction.batch_execute(migration).await?;
                 transaction
                     .execute(
