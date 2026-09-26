@@ -126,6 +126,10 @@ entries:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_replayed_refusal_is_recorded_as_the_refusal_it_replays}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_racing_replay_is_not_released_when_its_response_entry_is_refused}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_failed_capacity_transaction_pairs_its_request_entry}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_commitment_whose_commit_acknowledgment_is_lost_is_read_back_as_committed}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_commitment_whose_outcome_cannot_be_read_back_is_recorded_unfinished}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_commitment_refused_at_commit_is_read_back_as_failed}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_commitment_dropped_inside_its_capacity_transaction_writes_one_unfinished_response}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: an_idempotency_key_refusal_pairs_its_request_entry}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_records_swap_under_a_commitment_pairs_its_request_entry}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_refusal_whose_response_entry_is_refused_answers_service_unavailable}

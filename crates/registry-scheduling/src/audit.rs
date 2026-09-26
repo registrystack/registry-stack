@@ -5,10 +5,15 @@
 //! opens and one `response` entry once the decision is known: after commit
 //! for an allowed commitment, after rollback for a refused one. Both share a
 //! correlation, which is also the `eventId` the response record carries.
-//! A commitment nothing decided, because its transaction failed, the
-//! environment records moved under it, or its idempotency key was refused,
-//! still answers its request entry with an `unfinished` response naming the
-//! reason; one that returns or is canceled without answering writes the
+//! A commitment nothing decided, because its transaction rolled back on a
+//! failure, the environment records moved under it, or its idempotency key
+//! was refused, still answers its request entry with an `unfinished`
+//! response naming the reason. A capacity commit that is not acknowledged is
+//! read back from the database before it is recorded: one that took effect is
+//! answered and recorded as committed, one that rolled back as
+//! `commitment.failed`, and one whose status cannot be read is recorded as
+//! `commitment.unfinished`, never as failed, because it may have taken
+//! effect. One that returns or is canceled without answering writes the
 //! `commitment.unfinished` response when its request handle is dropped.
 //! Entries carry only pseudonymized references and closed codes, never a raw
 //! principal, grant, claim identifier, or free-text reason.

@@ -104,13 +104,20 @@ the hold ceiling, a lapsed grant, a stale observed revision, or a cancellation
 past its cutoff) or the permission check refused it before the transaction
 opened, reaches the caller only once its `response` entry is accepted, and
 answers `service.unavailable` otherwise. A commitment nothing decided still
-answers its `request` entry: a failed transaction, records replaced under it,
-or a reused or expired idempotency key writes a `response` with the outcome
-`unfinished` and the reason `commitment.failed`, `commitment.facts-stale`,
-`idempotency.key-reused`, or `idempotency.expired`, and one that returns or is
-canceled before answering writes `commitment.unfinished`. `/readyz` reports unavailable
-while the destination refuses writes. An expired hold writes its history entry
-as `system` and no audit entry.
+answers its `request` entry: a transaction rolled back on a failure, records
+replaced under it, or a reused or expired idempotency key writes a `response`
+with the outcome `unfinished` and the reason `commitment.failed`,
+`commitment.facts-stale`, `idempotency.key-reused`, or `idempotency.expired`,
+and one that returns or is canceled before answering writes
+`commitment.unfinished`. A capacity commit that is not acknowledged is read
+back by its transaction identifier on a separate connection that changes
+nothing: one that took effect is answered and recorded as committed, one that
+rolled back writes `commitment.failed`, and one whose status cannot be read
+writes `commitment.unfinished` and answers `service.unavailable`, because it
+may have taken effect; a retry under the same idempotency key then replays
+whatever committed. `/readyz` reports unavailable while the destination
+refuses writes. An expired hold writes its history entry as `system` and no
+audit entry.
 
 `destinations` is optional. `destinations.reminders` is the one place due
 reminder intents are delivered, as CloudEvents 1.0 events over HTTPS POST with
