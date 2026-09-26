@@ -993,8 +993,7 @@ class CiChangesTest(unittest.TestCase):
         for path in infrastructure:
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["breg_tutorial"])
-        # The journey starts the quickstart launcher, so the launcher and the
-        # support it runs decide what the reader gets.
+        # Listed inputs, and the issuer tooling `bregctl dev` links.
         for path in (
             "products/breg/quickstart/run.sh",
             "products/breg/quickstart/support/quickstart.py",
@@ -1012,7 +1011,7 @@ class CiChangesTest(unittest.TestCase):
                 "breg_tutorial"
             ]
         )
-        # The launcher mints the operator token the tutorial's first
+        # `bregctl dev` mints the operator token the tutorial's first
         # authenticated call carries.
         self.assertTrue(
             classify(self.workspace, ("crates/registry-thunderid-tooling/src/lib.rs",))[
@@ -1030,11 +1029,11 @@ class CiChangesTest(unittest.TestCase):
                 ),
             )["breg_tutorial"]
         )
-        # The replay starts the quickstart launcher and no Evidence binary, and
+        # The replay starts `bregctl dev` and no Evidence binary, and
         # it replays neither composition page. The offline composition proof
         # owns the Evidence toolset and those pages' commands. A change to
         # registry-evidence itself still reaches the replay, because Registry
-        # Issuer tooling links it and the launcher issues the reader's operator token.
+        # Issuer tooling links it and `bregctl dev` issues the reader's operator token.
         for path in (
             "crates/registry-evidencectl/src/source_cli.rs",
             "docs/site/src/content/docs/tutorials/evidence-from-breg.mdx",
@@ -1106,7 +1105,7 @@ class CiChangesTest(unittest.TestCase):
         for path in (
             "docs/site/src/content/docs/tutorials/first-breg.mdx",
             "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
-            "docs/site/scripts/check-breg-tutorial.sh",
+            "docs/site/scripts/run-tutorial.mjs",
         ):
             with self.subTest(path=path):
                 self.assertFalse(classify(self.workspace, (path,))["casework_tutorial"])
@@ -1135,7 +1134,7 @@ class CiChangesTest(unittest.TestCase):
             "docs/site/src/content/docs/tutorials/evidence-from-breg.mdx",
             "docs/site/src/content/docs/tutorials/deploy-evidence-from-breg.mdx",
             "docs/site/scripts/generate-breg-evidence-starter.mjs",
-            "docs/site/scripts/check-breg-tutorial.sh",
+            "docs/site/scripts/run-tutorial.mjs",
         ):
             with self.subTest(path=path):
                 self.assertFalse(

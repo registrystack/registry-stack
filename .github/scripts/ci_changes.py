@@ -220,10 +220,10 @@ EVIDENCE_TUTORIAL_INPUTS = frozenset(
     }
 )
 
-# Every input the Base Registry Engine tutorial gate replays or is built from.
-# The gate starts the quickstart launcher the page tells a reader to run, so
-# the launcher and pinned issuer tooling are inputs to the replay alongside
-# the page: a change to either changes what a reader gets.
+# Every input the Base Registry Engine tutorial gate replays or is built from:
+# the page runner, the pages whose frontmatter it replays, and the build inputs
+# of the binaries it runs. The same job runs the request-attachments acceptance
+# check.
 BREG_TUTORIAL_INPUTS = (
     "Cargo.lock",
     "Cargo.toml",
@@ -455,8 +455,8 @@ ASSEMBLED_PYTHON_CLIENT_PACKAGES = frozenset(
 )
 
 # The gate builds and runs exactly these: the registry, the tool that applies
-# its package, and issuer tooling, because the launcher the tutorial starts
-# issues the operator token the reader's first authenticated call carries. The
+# its package, and issuer tooling, because the `bregctl dev` session the
+# tutorial starts issues the operator token the reader's first authenticated call carries. The
 # clients in the Base Registry Engine shard are not on the replayed path.
 BREG_TUTORIAL_PACKAGES = frozenset(
     {"registry-breg", "registry-bregctl", "registry-thunderid-tooling"}
