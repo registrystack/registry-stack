@@ -147,3 +147,83 @@ output of a skipped command
     'line 27: test-expect checks the output of the sh fence at line 23, which is skipped',
   ]);
 });
+
+test('a test-edit diff block is an edit step on the file its title names', () => {
+  const { steps, errors } = readJourney(`## Grant
+
+\`\`\`diff lang="yaml" title="work/registry.yaml" test-edit
+ filterable: [code]
+-readable: [code]
++readable: [code, note]
+
+\`\`\`
+`);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(steps, [
+    {
+      kind: 'edit',
+      line: 3,
+      heading: 'Grant',
+      path: 'work/registry.yaml',
+      before: ['filterable: [code]', 'readable: [code]'],
+      after: ['filterable: [code]', 'readable: [code, note]'],
+    },
+  ]);
+});
+
+test('a test-edit block must be a titled diff of -, +, and context lines', () => {
+  const { errors } = readJourney(`\`\`\`yaml title="a.yaml" test-edit
+a: 1
+\`\`\`
+
+\`\`\`diff test-edit
+-a
+\`\`\`
+
+\`\`\`diff title="a.yaml" test-edit
+-a
+b
+\`\`\`
+
+\`\`\`diff title="a.yaml" test-edit
+ a
+\`\`\`
+`);
+  assert.deepEqual(errors, [
+    'line 1: test-edit applies only to diff blocks',
+    'line 5: test-edit needs the file path, as title="<path>"',
+    'line 9: every line of a test-edit block starts with -, +, or a space',
+    'line 14: a test-edit block changes nothing: it needs a - or + line',
+  ]);
+});
+
+test('test-exit names the exit status an sh fence must end with', () => {
+  const { steps, errors } = readJourney(`\`\`\`sh test-exit="1"
+false
+\`\`\`
+
+\`\`\`sh test-exit="no"
+false
+\`\`\`
+
+\`\`\`text test-exit="1"
+x
+\`\`\`
+`);
+  assert.equal(steps[0].exit, 1);
+  assert.deepEqual(errors, [
+    'line 5: test-exit takes an exit status, as test-exit="1"',
+    'line 9: test-exit applies only to sh fences',
+  ]);
+});
+
+test('a test-edit line whose marker is followed by - or + is refused, since the page would show it unmarked', () => {
+  const { errors } = readJourney(`\`\`\`diff title="a.yaml" test-edit
+-- {id: a}
++- {id: b}
+\`\`\`
+`);
+  assert.deepEqual(errors, [
+    'line 1: a test-edit line starts with -- or +- or ++ or -+, which the page shows as plain text; start the change at the indentation it has in the file, with the line above as context',
+  ]);
+});

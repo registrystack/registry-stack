@@ -56,7 +56,7 @@ Check the project you generated:
 bregctl check tutorial-work/project
 ```
 
-```text
+```text test-expect
 Authoring check passed.
   revision  sha256:<digest>
 
@@ -124,10 +124,12 @@ Adding a field to the model grants nobody access to it, and no profile lists `in
 In `tutorial-work/project/registry.yaml`, find the `operator` grant for `record` and add the field to its
 readable and writable lists, keeping the indentation:
 
-```yaml
-readableFields: [code, label, group, status, internal-note]
-writableFields: [code, label, group, status, internal-note]
-filterableFields: [code, status]
+```diff lang="yaml" title="tutorial-work/project/registry.yaml" test-edit
+-readableFields: [code, label, group, status]
+-writableFields: [code, label, group, status]
++readableFields: [code, label, group, status, internal-note]
++writableFields: [code, label, group, status, internal-note]
+ filterableFields: [code, status]
 ```
 
 Check the project:
@@ -143,13 +145,28 @@ not something a list is filtered by.
 ## Change the module
 
 Now change the module itself.
-In `module.yaml`, raise `maxLength` to `1000` and `version` to `0.2.0`, then run the check again:
+In `module.yaml`, raise `version` to `0.2.0`:
 
-```sh
+```diff lang="yaml" title="tutorial-work/project/modules/record-notes/module.yaml" test-edit
+-version: 0.1.0
++version: 0.2.0
+```
+
+and raise the field's `maxLength` to `1000`:
+
+```diff lang="yaml" title="tutorial-work/project/modules/record-notes/module.yaml" test-edit
+ fields:
+-  - {id: internal-note, type: string, maxLength: 500, classification: internal}
++  - {id: internal-note, type: string, maxLength: 1000, classification: internal}
+```
+
+Then run the check again:
+
+```sh test-exit="1"
 bregctl check tutorial-work/project
 ```
 
-```text
+```text test-expect
 bregctl check refused.
 
   error    module.lock.digest_mismatch  project.modules[].digest
