@@ -461,12 +461,12 @@ Build a new candidate directory with explicit target and output paths:
 ```sh
 evidencectl package "<editable-project>" \
   --target "<editable-project>/environments/production/evidence" \
-  --output "<new-candidate-directory>"
+  --output "<new-package-directory>"
 ```
 
-The output is create-only and contains `runtime.yaml` and a closed `bundle/`. It contains no
-secret values, source responses, local request state, or audit records. The compiler validates
-the resulting bundle with the `evidence` binary and every referenced fixture before publishing.
+The output is one create-only package with `SHA256SUMS` at its root. Runtime configuration stays in
+the target. The package contains no secret values, source responses, local request state, or audit
+records. The compiler validates it with the `evidence` binary and every referenced fixture before publishing.
 It does not contact an identity provider or a source endpoint.
 
 Use [Build and deploy an Evidence Gateway project](../../tutorials/build-and-deploy-evidence-project/)

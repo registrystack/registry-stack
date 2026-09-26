@@ -19,8 +19,8 @@
   status: current-source
   surface: "Sealed directory in the shared Registry Stack package format: a `SHA256SUMS` file listing the digest of every other file, alongside the authored registry, the governed inputs, the compiled registry, and the generated artifacts a Relay process verifies and re-derives before it activates."
   source_of_truth:
-    label: Relay V2 package
-    url: https://github.com/registrystack/registry-stack/blob/2573f77d0fb59cbdae10c3b554c1b2328eeb32be/crates/registry-relay-v2/src/package.rs
+    label: Relay adopter tooling specification
+    url: /spec/rs-pr-relayctl/
   consumer_note: >-
     `relayctl package` produces the directory and Relay verifies it before it
     opens the database, audit file, token issuer, or listener. Its package

@@ -214,7 +214,7 @@ impl std::error::Error for SafeCliFailure {}
 
 #[derive(Debug, Args)]
 struct ArtifactInspectArgs {
-    /// Deployment project containing runtime.yaml beside bundle/.
+    /// Deployment target whose runtime.yaml names the installed package.
     project: PathBuf,
 }
 

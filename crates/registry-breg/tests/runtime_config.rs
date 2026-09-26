@@ -236,20 +236,20 @@ fn shared_package_envelope_and_pin_are_checked_before_startup() {
     assert!(missing.contains("package.json"), "{missing}");
 
     fs::write(&governed, b"governed-package\n").expect("governed package restores again");
-    let wrong_pin = raw.replace(
-        written.digest(),
-        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-    );
+    let wrong = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    let wrong_pin = raw.replace(written.digest(), wrong);
     let mismatch = parse_runtime_config(&wrong_pin)
         .expect("runtime with a well-formed wrong pin parses")
         .verify_package_envelope()
         .expect_err("wrong package pin is refused")
         .to_string();
-    assert!(mismatch.contains(written.digest()), "{mismatch}");
-    assert!(
-        mismatch
-            .contains("sha256:0000000000000000000000000000000000000000000000000000000000000000"),
-        "{mismatch}"
+    assert_eq!(
+        mismatch,
+        format!(
+            "package.expectedDigest is {wrong} but the package at package.root is {}; \
+             deploy the pinned package or update package.expectedDigest",
+            written.digest()
+        )
     );
 }
 

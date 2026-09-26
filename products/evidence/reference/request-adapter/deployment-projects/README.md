@@ -57,7 +57,7 @@ Follow the [authoring and production-build workflow](CONFIG.md#authoring-and-pro
 when adapting a project. Use these complete bundles as reference material, not
 as local state to copy or promote. An editable project gains its own reviewed
 governance metadata and fixtures, then `evidencectl package` produces one closed
-candidate. Keep that candidate bundle unchanged across environments and bind
+package. Keep that package unchanged across environments and bind
 each environment through its own runtime file and secret mounts.
 
 ## Security boundary

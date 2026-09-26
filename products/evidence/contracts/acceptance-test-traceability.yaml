@@ -295,7 +295,7 @@ entries:
       - {file: crates/registry-evidence/src/main.rs, name: offline_cli_evaluates_the_combined_acceptance_bundle}
       - {file: crates/registry-evidence/src/kernel.rs, name: all_four_acceptance_bundles_use_the_same_kernel}
   - id: acceptance-row-45
-    summary: Governed bundle and runtime configuration have separate closed schemas, independent startup digests, read-only lifetime enforcement, and negative tests proving runtime fields cannot override sources, authorization, disclosure, limits, signing, or audit policy.
+    summary: Governed package and runtime configuration have separate closed schemas, package-digest verification, one-time read-only runtime capture, and negative tests proving runtime fields cannot override sources, authorization, disclosure, limits, signing, or audit policy.
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: runtime_document_is_closed_and_contains_no_governed_override_surface}
       - {file: crates/registry-evidence/src/bundle.rs, name: runtime_and_ca_bytes_are_captured_from_independent_read_only_inputs}

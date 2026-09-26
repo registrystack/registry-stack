@@ -967,8 +967,8 @@ sound only because the read-only check passed. A file the process or anything
 else can still write makes the promise false, and an immutable connection over a
 file that changes is undefined behaviour rather than a stale read, because
 SQLite is entitled to trust pages it has already cached. Publish a new extract
-as a new file, mount it read-only, and restart. Startup digests each bound file
-into the runtime digest, so a replacement shows up in the digest instead of
+as a new file, mount it read-only, and restart. Startup captures each bound
+file's identity and content digest, so a replacement is refused instead of
 passing silently.
 
 Digesting the file and opening it are not the same moment: the bundle, the
@@ -1307,8 +1307,8 @@ A string value may carry `${NAME}` or `${NAME:-default}`, substituted from the
 process environment after the document is parsed. Substitution is refused
 inside a secret reference and anywhere under `secretProviders`, so an
 environment variable can move a path or an address but can never choose which
-secret a field names. The runtime digest covers both the exact file bytes and
-the document after substitution, so a changed variable changes the digest.
+secret a field names. The runtime captures the substituted document once at
+startup, so a changed variable takes effect only after restart.
 
 `package.root`, secret roots, audit destinations, and CA files must be
 absolute paths. The runtime rejects symlinks, insecure ownership/modes, missing
@@ -1359,8 +1359,7 @@ source or issuer that names it. A source and the issuer may name the same
 profile. Hostname verification and source-origin checks remain mandatory.
 There is no `insecure`, `skipVerification`, or `trustAll` setting, and the
 issuer needs no process-wide trust store change such as `SSL_CERT_FILE`.
-Changing a trust file requires restart and changes the runtime
-digest.
+Changing a trust file requires restart before the new bytes can be used.
 
 A bundle source that reads an extract names one `extractProfile` and never a
 filesystem location, so the operator decides where the file sits without
@@ -1368,8 +1367,8 @@ editing reviewed material. Each bound file must be a regular, non-symlink,
 read-only file. Read-only is a correctness requirement rather than hygiene: the
 statement executor opens the file as immutable, and an immutable connection
 over a file that can change is undefined behaviour. Startup digests each file
-without reading it into memory and folds that digest into the runtime digest,
-so replacing an extract requires restart and changes the digest. Startup
+without reading it into memory and retains that content digest with the opened
+extract, so replacing an extract requires restart. Startup
 refuses a profile the bundle names and the runtime does not bind, and a profile
 the runtime binds and no source reads, naming the profile in each case.
 
@@ -1467,11 +1466,11 @@ makes no identity-provider or source-data call; opens no listener; and
 writes no production audit event. The editable project and `.evidence` local
 state remain unchanged.
 
-The candidate contains `runtime.yaml` and `bundle/`, including only referenced
-adapters, derivations, schemas, codelists, fixtures, and public keys. Given
-identical authoring files, target governance, runtime bytes, and toolset
-release, bundle bytes and revision are identical. The copied runtime is
-environment-specific and is not part of the package digest or signed
+The package contains `SHA256SUMS` at its root with only referenced adapters,
+derivations, schemas, codelists, fixtures, and public keys. Given identical
+authoring files, target governance, and toolset release, package bytes and
+digest are identical. Environment-specific runtime configuration remains in
+the target and is not part of the package digest or signed
 `configurationRevision`.
 
 The package digest identifies the whole reviewed package and is what an operator
@@ -1492,16 +1491,16 @@ stays in every requirement's closure. An edit
 outside a requirement's closure leaves its revision unchanged, so it does not
 force every relying party to re-review.
 
-After approval, transfer the exact candidate, provision independent owner-only
-secrets under the configured secret root, make bundle and runtime non-writable
+After approval, transfer the exact package to the stable `package.root`, provision independent owner-only
+secrets under the configured secret root, make the package and runtime non-writable
 to the service identity, and run the grouped handoff once whenever candidate
 bytes, runtime bindings, trust files, or secrets change:
 
 ```sh
-evidencectl doctor --runtime-config '<candidate>/runtime.yaml'
-evidencectl test '<candidate>'
-evidence check --runtime-config '<candidate>/runtime.yaml' --require-runtime-dependencies
-evidence serve --runtime-config '<candidate>/runtime.yaml'
+evidencectl doctor --runtime-config '<deployment-target>/runtime.yaml'
+evidencectl test '<editable-project>' --target '<deployment-target>'
+evidence check --runtime-config '<deployment-target>/runtime.yaml' --require-runtime-dependencies
+evidence serve --runtime-config '<deployment-target>/runtime.yaml'
 ```
 
 Then route only after `/ready`, retain one authorized synthetic-subject
@@ -1519,10 +1518,10 @@ or provision an issuer; verify the configured issuer-to-resource journey as
 part of the handoff.
 
 Docker Compose is a documented adapter rather than build output. It mounts the
-candidate bundle unchanged and read-only; mounts a distinct container runtime,
+approved package unchanged and read-only; mounts a distinct container runtime,
 secrets, and persistent audit storage separately; binds Evidence privately; and
-keeps TLS and public routing operator-controlled. The Compose runtime has its
-own revision while assertions continue to carry their unchanged per-requirement
+keeps TLS and public routing operator-controlled. The Compose runtime remains
+outside the package while assertions continue to carry their per-requirement
 configuration revisions.
 Retain the configured issuer's public HTTPS identity and JWKS URI when services
 share a network; internal plain-HTTP service names do not replace them.

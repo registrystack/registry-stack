@@ -179,7 +179,7 @@ applies the same authoring validation and reports its status, findings, and
 revision with the authored inventory. Add `--target <environment-target>` to
 include that target's governance.
 
-`evidencectl package <editable-project> --target <environment-target> --output <new-candidate-directory>`
+`evidencectl package <editable-project> --target <environment-target> --output <new-package-directory>`
 is create-only. It reads regular files
 without following symlinks, compiles one closed bundle, and delegates its
 internal bundle-only check and every referenced fixture to the real `evidence`
@@ -189,16 +189,16 @@ request, opens no listener, writes no production audit event, and never copies
 local `.evidence` state, credentials, tokens, responses, or private keys into
 the candidate.
 
-The candidate contains `runtime.yaml` and `bundle/`; the bundle may contain
-adapters, derivations, schemas, codelists, fixtures, and public keys where
-referenced. The operator independently provisions the Transit key and
+The package contains `SHA256SUMS` at its root and may contain adapters,
+derivations, schemas, codelists, fixtures, and public keys where referenced.
+Runtime configuration remains in the environment target. The operator independently provisions the Transit key and
 workload-local proxy, plus audit, subject-binding, and source secrets, then
 runs one grouped handoff:
 
 ```sh
-evidencectl doctor --runtime-config '<candidate>/runtime.yaml'
-evidencectl test '<candidate>'
-evidence serve --runtime-config '<candidate>/runtime.yaml'
+evidencectl doctor --runtime-config '<environment-target>/runtime.yaml'
+evidencectl test '<editable-project>' --target '<environment-target>'
+evidence serve --runtime-config '<environment-target>/runtime.yaml'
 ```
 
 Doctor delegates the runtime-owned live startup dependency preflight without
@@ -214,7 +214,7 @@ algorithms, token type, and claim mappings declared by the Evidence runtime.
 Register the workload's client, resource and scopes at that issuer. The maintained
 local development tooling uses pinned stock ThunderID; production issuer
 registration remains an operator responsibility. Inspect the deployment with
-`evidencectl artifact inspect <candidate>` and verify its actual token and
+`evidencectl artifact inspect <environment-target>` and verify its actual token and
 resource journey before handoff.
 
 Registry Stack publishes the `ghcr.io/registrystack/evidence` runtime image.

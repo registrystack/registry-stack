@@ -139,16 +139,16 @@ Never replace bytes behind a running immutable connection. Publish a new path an
 
 Create a complete governed target by following [Build and deploy an Evidence Gateway
 project](../build-and-deploy-evidence-project/). Then build the editable project and run the checks
-against the exact candidate and mounted extract:
+against the exact package, target runtime, and mounted extract:
 
 ```sh test-skip="needs the complete governed deployment target from Build and deploy an Evidence Gateway project"
 evidencectl package registry-status \
   --target registry-status/deployment-targets/staging \
   --output candidate-staging
 
-evidencectl doctor --runtime-config "$(pwd)/candidate-staging/runtime.yaml"
-evidencectl test candidate-staging
-evidence check --runtime-config candidate-staging/runtime.yaml
+evidencectl doctor --runtime-config "$(pwd)/registry-status/deployment-targets/staging/runtime.yaml"
+evidencectl test registry-status --target registry-status/deployment-targets/staging
+evidence check --runtime-config registry-status/deployment-targets/staging/runtime.yaml
 ```
 
 The last command opens the bound extract, validates its metadata and fixed statement, and refuses

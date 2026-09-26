@@ -52,23 +52,25 @@ which only `source add --apply` (or the hand `source import`) provides, so
 `check` reports it missing and the run refuses.
 
 The copied `targets/local/settings.yaml` is the explicit loopback teaching
-target for a candidate. Review its fixed authority and connection, then use
-`pwd -P` to replace its absolute runtime paths: set the bundle directory to your
-chosen candidate's `bundle/`, the file secret root to this project's `secrets/`,
+target for development. Review its fixed authority and connection, then use
+`pwd -P` to replace its absolute runtime paths: set `package.root` to your
+chosen package directory, the file secret root to this project's `secrets/`,
 and audit storage to `audit/evidence.jsonl`. Its source endpoints use BReg's
 default ports `8090` and `8091`; match any ports you selected on the registry's
-first start. Then build the candidate and serve the local rehearsal:
+first start. Then test the editable project and serve the local rehearsal:
 
 ```sh
 evidencectl target new ./targets/configured --settings ./targets/local/settings.yaml \
   --signing-public-key ./secrets/signing-p256-public.jwk.json
-evidencectl build --project . --target ./targets/configured --output ../candidate
+evidencectl test . --target ./targets/configured
 bregctl dev start ../registry
 evidencectl dev --target ./targets/local --detach
 ```
 
 `dev --target` rehearses the source connection using a separate generated local
 caller authority. It does not serve the target's complete caller governance.
+Create a separate reviewed production or evidence-grade target with HTTPS
+authorities and a production signer before running `evidencectl package`.
 Use the maintained “Answer questions from Base Registry Engine” tutorial for
 record creation, requests, verification, and shutdown.
 
