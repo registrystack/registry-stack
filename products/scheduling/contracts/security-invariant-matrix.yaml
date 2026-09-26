@@ -491,6 +491,35 @@ invariants:
     negativeTest:
       path: crates/registry-scheduling/tests/postgres_commitments.rs
       name: a_supply_identifier_may_not_anchor_both_a_pool_and_a_window
+  - id: SCHEDULING-SEC-28
+    state: enforced
+    threat: >-
+      A caller probes release_hold or confirm_appointment with an id it
+      chose. An id that names no claim at all, one whose claim is not a
+      hold, and a hold that exists but that the caller's grant does not
+      reach are three different facts about the store. If the first two
+      were refused before authorization ran, while the third waited for
+      require_permission and then answered with the same code a denied
+      grant already uses elsewhere, an unauthorized caller could read the
+      pre-authorization refusal as an oracle over which ids are live holds.
+    enforcementPoint: >-
+      release_hold and confirm_appointment resolve the claim through a
+      shared hold lookup before they name an offering or call
+      require_permission. That lookup answers None alike for an id that
+      resolves no claim and one whose claim is not a hold, and both
+      handlers turn that None into the same operation.not-authorized
+      problem require_permission already returns for a hold outside the
+      caller's grant. Whether an existing hold has already been released or
+      expired stays a decision the store makes deeper in the same
+      transaction, where it is authorized and auditable rather than
+      exposed ahead of permission.
+    refusal: >-
+      Refuse the request with operation.not-authorized (403) for an
+      unknown id, a non-hold id, and a hold outside the caller's grant
+      alike, and take no store action for any of the three.
+    negativeTest:
+      path: crates/registry-scheduling/tests/postgres_commitments.rs
+      name: release_hold_refuses_indistinguishably_for_missing_and_unauthorized_holds
 deferred:
   - id: SCHEDULING-DEF-01
     subject: Full task-grant bounds re-checked inside the capacity transaction

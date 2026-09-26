@@ -205,3 +205,7 @@ entries:
     tests:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_supply_identifier_may_not_anchor_both_a_pool_and_a_window}
       - {path: crates/registry-scheduling-core/src/policy.rs, name: a_pool_and_a_window_may_not_share_one_supply_identifier}
+  - id: SCHEDULING-SEC-28
+    tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: release_hold_refuses_indistinguishably_for_missing_and_unauthorized_holds}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: confirm_appointment_refuses_indistinguishably_for_missing_and_unauthorized_holds}
