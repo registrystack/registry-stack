@@ -591,6 +591,104 @@ async fn real_postgres_confirms_only_the_exact_active_ready_package() {
     database.cleanup().await;
 }
 
+/// A release before the audit-simplification migration kept its own audit
+/// journal in `registry_audit`. Installing the current schema drops that
+/// table unconditionally, so an initial apply through the real coordinator
+/// must refuse while it still carries rows the operator has not acknowledged
+/// discarding, before any other schema object is touched, and the retired
+/// rows must survive the refusal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_initial_apply_refuses_retired_audit_rows_without_acknowledgement() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs extension");
+    let base = compile_variant(Variant::Base, 1);
+    let fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &fingerprint);
+
+    // Simulate a database that ran a pre-simplification release and still
+    // carries unarchived audit rows, installed after the rehearsal above so
+    // the fingerprint rehearsal itself is not caught by the same guard. The
+    // fixture is created through the migration role, as the retired release
+    // would have owned it, so the guard's table lock is not itself refused
+    // for want of privilege on an administrator-owned table.
+    let (migration_owner, migration_owner_task) = database.connect_migration().await;
+    migration_owner
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_audit (id integer);
+             INSERT INTO registry_internal.registry_audit (id) VALUES (1);",
+        )
+        .await
+        .expect("retired audit fixture installs");
+    migration_owner_task.abort();
+
+    let refused = apply(&database, &initial, ApplyPrecondition::InitialActivation).await;
+    assert_value_free(refused.err(), MigrationError::RetiredAuditRowsPresent);
+
+    let still_present = database
+        .admin
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM registry_internal.registry_audit)",
+            &[],
+        )
+        .await
+        .expect("catalog lookup succeeds")
+        .get::<_, bool>(0);
+    assert!(still_present, "retired audit rows survive a refused apply");
+    database.cleanup().await;
+}
+
+/// The same apply succeeds, and drops the retired table, once the operator
+/// acknowledges discarding its rows.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_initial_apply_drops_retired_audit_rows_with_acknowledgement() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs extension");
+    let base = compile_variant(Variant::Base, 1);
+    let fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &fingerprint);
+
+    // See the refusal test above for why this is owned by the migration role.
+    let (migration_owner, migration_owner_task) = database.connect_migration().await;
+    migration_owner
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_audit (id integer);
+             INSERT INTO registry_internal.registry_audit (id) VALUES (1);",
+        )
+        .await
+        .expect("retired audit fixture installs");
+    migration_owner_task.abort();
+
+    apply_verified_package(
+        request(&database, &initial, ApplyPrecondition::InitialActivation)
+            .with_acknowledge_retired_audit_discard(true),
+    )
+    .await
+    .expect("initial package activates once the retired rows are acknowledged");
+
+    let dropped = database
+        .admin
+        .query_one(
+            "SELECT to_regclass('registry_internal.registry_audit') IS NULL",
+            &[],
+        )
+        .await
+        .expect("catalog lookup succeeds")
+        .get::<_, bool>(0);
+    assert!(
+        dropped,
+        "retired audit table is dropped once discard is acknowledged"
+    );
+    database.cleanup().await;
+}
+
 /// An unreachable database or an apply lock another session holds, before
 /// maintenance begins, changes nothing, so it is reported as the database
 /// being unavailable and never as a failed migration that needs

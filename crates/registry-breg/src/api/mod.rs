@@ -5385,12 +5385,14 @@ fn mutation_problem(error: MutationError) -> Response {
             "The idempotency key is bound to another request.",
         ),
         MutationError::IngestionRefusal(refusal) => ingestion::batch_refusal_problem(refusal),
-        // Only a schema install still carrying pre-migration review data can
-        // produce this cause; request handling never reaches it, but the
-        // match stays exhaustive over the whole closed vocabulary.
+        // Only a schema install still carrying pre-migration review data or
+        // retired audit rows can produce these two causes; request handling
+        // never reaches them, but the match stays exhaustive over the whole
+        // closed vocabulary.
         MutationError::Unavailable
         | MutationError::RetryableConflict
-        | MutationError::LegacyReviewDataPresent => fixed_problem(
+        | MutationError::LegacyReviewDataPresent
+        | MutationError::RetiredAuditRowsPresent => fixed_problem(
             StatusCode::SERVICE_UNAVAILABLE,
             "service.unavailable",
             "The Registry mutation service is unavailable.",

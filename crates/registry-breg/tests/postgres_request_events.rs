@@ -72,7 +72,7 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
     load_postgres_env();
     let database = TestDatabase::create(4).await;
     let (mut migration, migration_task) = database.connect_migration().await;
-    install_mutation_schema(&migration, &database.runtime_role)
+    install_mutation_schema(&migration, &database.runtime_role, false)
         .await
         .expect("mutation and outbox schema installs");
 
