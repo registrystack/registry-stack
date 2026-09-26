@@ -1725,7 +1725,7 @@ class CiChangesTest(unittest.TestCase):
             breg_job,
         )
         self.assertIn(
-            "uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d",
+            "uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7",
             breg_job,
         )
         self.assertIn('version: "0.11.16"', breg_job)
