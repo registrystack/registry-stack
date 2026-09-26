@@ -131,6 +131,7 @@ failure has one recovery:
 
 | Failure | Next move |
 | --- | --- |
+| Creating the run answers `503 service.unavailable` | Creation takes no idempotency key, so the run may already exist without its id reaching you. Once the service answers again, list the runs with `status=open` and your `inputDigest`, then resume or cancel the run it returns. Creating again opens a second run. |
 | A response is lost | Reread the run, then submit the same chunk again. An exact replay returns the original receipt and writes nothing new. |
 | The transport drops a submission | Resubmit the chunk the run's `nextChunkIndex` names. |
 | A chunk holds an invalid item or a business refusal | The checkpoint stays where it is. Start a successor run for the remainder; skipping the refused rows is never a default recovery. |
