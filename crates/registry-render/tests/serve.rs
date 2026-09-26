@@ -747,7 +747,10 @@ fn a_render_writes_a_request_entry_then_a_response_entry_sharing_correlation() {
             );
         }
     }
-    assert_eq!(entries[0]["correlation"], "effect-1234");
+    // The pairing correlation is always drawn by the server; the caller's
+    // key stays in the record for the caller's own cross-referencing.
+    let drawn = entries[0]["correlation"].as_str().expect("correlation");
+    assert_eq!(drawn.len(), 36, "a drawn random id: {drawn}");
     assert_eq!(entries[0]["record"]["correlationId"], "effect-1234");
     let drawn = entries[2]["correlation"].as_str().expect("correlation");
     assert_eq!(drawn.len(), 36, "a drawn random id: {drawn}");
