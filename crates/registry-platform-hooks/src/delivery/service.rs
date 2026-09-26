@@ -11,6 +11,7 @@
 //! worker sends the captured envelope bytes unchanged, with the delivery
 //! attributes the transport carries beside them.
 
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use registry_platform_httputil::destination::{DestinationSendError, EventDeliveryHeaders};
@@ -95,12 +96,22 @@ impl PendingAudit {
 }
 
 /// The delivery worker over one product's seams.
-#[derive(Clone)]
 pub struct DeliveryService<S: DeliverySeams> {
-    seams: S,
+    seams: Arc<S>,
     schema: String,
     idempotency_domain: Vec<u8>,
     delivery_source: String,
+}
+
+impl<S: DeliverySeams> Clone for DeliveryService<S> {
+    fn clone(&self) -> Self {
+        Self {
+            seams: Arc::clone(&self.seams),
+            schema: self.schema.clone(),
+            idempotency_domain: self.idempotency_domain.clone(),
+            delivery_source: self.delivery_source.clone(),
+        }
+    }
 }
 
 impl<S: DeliverySeams> DeliveryService<S> {
@@ -114,7 +125,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
     pub fn new(seams: S, config: DeliveryConfig) -> Self {
         let schema = delivery_schema::require_plain_identifier(&config.schema).to_owned();
         Self {
-            seams,
+            seams: Arc::new(seams),
             schema,
             idempotency_domain: config.idempotency_domain,
             delivery_source: config.delivery_source,
@@ -279,10 +290,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
         event_id: Uuid,
         compiled_delivery_id: &str,
         expected_generation: i64,
-    ) -> Result<i64, DeliveryError>
-    where
-        S: Clone,
-    {
+    ) -> Result<i64, DeliveryError> {
         // The replay runs to its response in a task of its own: once its
         // request entry is accepted, a caller that stops waiting (a timeout
         // or a disconnect) cannot leave that request unanswered.
@@ -501,6 +509,17 @@ impl<S: DeliverySeams> DeliveryService<S> {
     }
 
     async fn claim(&self) -> Result<Option<DeliveryClaim>, DeliveryError> {
+        // The claim runs to its commit in a task of its own: once its
+        // attempt entry is accepted, a caller that stops waiting (a worker
+        // aborted at shutdown) cannot roll the lease back and leave that
+        // attempt with no lease for expiry recovery to answer.
+        let service = self.clone();
+        tokio::spawn(async move { service.claim_in().await })
+            .await
+            .map_err(|_| DeliveryError::Unavailable)?
+    }
+
+    async fn claim_in(&self) -> Result<Option<DeliveryClaim>, DeliveryError> {
         let mut client = self.seams.connection().await?;
         let transaction = client.transaction().await?;
         if self.seams.verify_transaction(&transaction).await.is_err() {
@@ -3170,6 +3189,15 @@ mod tests {
         refused_connections: Vec<u32>,
         interleave: Option<(u32, String)>,
         handler_digest: Option<String>,
+        hold_attempt: Option<Arc<AttemptHold>>,
+    }
+
+    /// Holds the claim inside its accepted attempt entry, before the lease
+    /// commits, until the test releases it.
+    #[derive(Default)]
+    struct AttemptHold {
+        accepted: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        release: tokio::sync::Notify,
     }
 
     impl RealDbSeams {
@@ -3181,6 +3209,7 @@ mod tests {
                 refused_connections: Vec::new(),
                 interleave: None,
                 handler_digest: None,
+                hold_attempt: None,
             }
         }
     }
@@ -3233,6 +3262,16 @@ mod tests {
                 record.outcome,
                 record.disposition,
             ));
+            if let Some(hold) = self
+                .hold_attempt
+                .as_ref()
+                .filter(|_| record.outcome == DeliveryAuditOutcome::AttemptStarted)
+            {
+                if let Some(accepted) = hold.accepted.lock().expect("hold lock").take() {
+                    let _ = accepted.send(());
+                }
+                hold.release.notified().await;
+            }
             Ok(())
         }
 
@@ -3650,6 +3689,59 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    /// A claim canceled after its attempt entry was accepted still commits
+    /// its lease, so expiry recovery answers that attempt.
+    #[tokio::test]
+    #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
+    async fn a_claim_canceled_after_its_attempt_entry_still_commits_its_lease() {
+        let url = real_database_url();
+        let schema = "hooks_delivery_claim_cancel_test";
+        let mut client = fresh_delivery_schema(&url, schema).await;
+        let event_id = Uuid::parse_str(STORED_EVENT_ID).expect("event id");
+        insert_real_delivery(&mut client, schema, event_id, "1 day", false).await;
+        let audit = Arc::new(Mutex::new(Vec::new()));
+        let (accepted, attempt_accepted) = tokio::sync::oneshot::channel();
+        let hold = Arc::new(AttemptHold {
+            accepted: Mutex::new(Some(accepted)),
+            ..AttemptHold::default()
+        });
+        let service = real_service(
+            RealDbSeams {
+                hold_attempt: Some(Arc::clone(&hold)),
+                ..RealDbSeams::new(&url, &audit)
+            },
+            schema,
+        );
+
+        let claim = tokio::spawn(async move { service.claim().await });
+        attempt_accepted
+            .await
+            .expect("the attempt entry was accepted");
+        claim.abort();
+        assert!(claim.await.is_err(), "the caller was canceled");
+        hold.release.notify_one();
+
+        let mut state = String::new();
+        for _ in 0..200 {
+            state = client
+                .query_one(
+                    &format!(
+                        "SELECT state FROM {schema}.registry_webhook_delivery_state
+                          WHERE event_id = $1"
+                    ),
+                    &[&event_id],
+                )
+                .await
+                .expect("read the delivery state")
+                .get(0);
+            if state == "leased" {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(state, "leased", "the lease committed after the cancel");
     }
 
     /// A claim whose lease commit failed still records every transition of
