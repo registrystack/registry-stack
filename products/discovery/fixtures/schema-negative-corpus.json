@@ -104,10 +104,16 @@
       "value": "RelayRuntimeConfig"
     },
     {
-      "name": "runtime-refuses-parent-traversal-index-path",
+      "name": "runtime-refuses-relative-package-root",
       "contract": "runtime",
-      "pointer": "/indexPath",
-      "value": "../discovery-index.json"
+      "pointer": "/package/root",
+      "value": "../package"
+    },
+    {
+      "name": "runtime-refuses-non-normal-package-root",
+      "contract": "runtime",
+      "pointer": "/package/root",
+      "value": "/srv/current/../package"
     },
     {
       "name": "index-refuses-unknown-root-member",

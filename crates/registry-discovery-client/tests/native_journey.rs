@@ -18,7 +18,7 @@ use chrono::{SecondsFormat, TimeDelta, Utc};
 use registry_discovery::{
     load_index, mapping_revision, router as discovery_router, CompiledEvidenceMapping, Directory,
     DiscoveryService, EvidenceTypeAlternative, EvidenceTypeResolveRequest, ServiceFilters,
-    ServiceKind,
+    ServiceKind, INDEX_FILE,
 };
 use registry_discovery_client::{
     accept_service_selection, validate_service_selection_structure, DiscoveryClient,
@@ -26,7 +26,7 @@ use registry_discovery_client::{
     EvidenceTypeResolveSelectionExt, MatchedCapability, RelayCapabilityMatch,
     RelaySelectionRequest, RelayServiceQuery, ServiceSearchSelectionExt, ServiceSelection,
 };
-use registry_discoveryctl::{build_project_at, BuildError};
+use registry_discoveryctl::{package_project_at, BuildError};
 use registry_evidence::config::EvidenceConfig;
 use registry_evidence_client::{
     AssuranceProfile, EvidenceClient, EvidenceClientConfig, EvidenceRequestSpec,
@@ -546,7 +546,8 @@ fn relay_description(provider_base: &str) -> Vec<u8> {
     let package = project.path().join("package-output");
     let report = package_project(&PackageOptions {
         project_root: project.path().to_path_buf(),
-        output_dir: package.clone(),
+        output_dir: Some(package.clone()),
+        revision: None,
     })
     .expect("the maintained Relay package operation runs");
     assert!(report.is_success(), "Relay packaging refused: {report:?}");
@@ -721,23 +722,26 @@ async fn complete_evidence_and_relay_journeys_build_select_trust_and_invoke_nati
     let provider = start_provider().await;
     let project = TempDir::new().expect("the Discovery authoring project creates");
     write_authoring_project(project.path(), &provider, false);
-    let index_path = project.path().join("discovery-index.json");
-    build_project_at(
+    let package_root = project.path().join("discovery-package");
+    package_project_at(
         project.path(),
-        &index_path,
+        &package_root,
         true,
+        None,
         OffsetDateTime::UNIX_EPOCH,
     )
     .await
-    .expect("discoveryctl builds every approved local origin");
+    .expect("discoveryctl packages every approved local origin");
     assert_eq!(provider.origin_requests.load(Ordering::SeqCst), 3);
 
+    let index_path = package_root.join(INDEX_FILE);
     let valid_index = fs::read(&index_path).expect("the valid immutable index reads");
     write_authoring_project(project.path(), &provider, true);
-    let invalid = build_project_at(
+    let invalid = package_project_at(
         project.path(),
-        &index_path,
+        &package_root,
         true,
+        None,
         OffsetDateTime::UNIX_EPOCH,
     )
     .await;

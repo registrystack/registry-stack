@@ -7,8 +7,8 @@ become enforced bindings in the security matrix.
 ## Evidence
 
 1. A validated Evidence deployment derives and packages a public description.
-2. `discoveryctl build` reads that exact description from an approved local
-   fixture origin and writes one immutable index.
+2. `discoveryctl package` reads that exact description from an approved local
+   fixture origin and writes one package containing the index and `SHA256SUMS`.
 3. A relying application resolves an explicit requirement to evidence types,
    searches that type, and selects one exact record.
 4. Existing application-owned Evidence trust accepts the selection.
@@ -19,7 +19,7 @@ become enforced bindings in the security matrix.
 
 1. A validated Relay deployment packages its public description as a sealed
    public artifact.
-2. The one-shot build indexes it as a separate origin record.
+2. The one-shot package operation indexes it as a separate origin record.
 3. A relying application searches an exact public semantic class or operation
    family, explicitly selects the record, and applies existing native Relay
    trust.
@@ -32,5 +32,5 @@ become enforced bindings in the security matrix.
   product-kind capability is refused before a description can reach an index.
 - A hostile origin, resource-bound breach, collision, mapping failure,
   validation failure, canonicalization failure, or output-bound failure emits
-  no new visible index.
+  no new visible package.
 - A local trust refusal occurs before native credential creation or traffic.

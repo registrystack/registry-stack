@@ -31,12 +31,12 @@ AUTHORING_FIXTURE = ROOT / "fixtures/project"
 REQUIRED_INVARIANTS = {
     "sec-provider-public-projection", "sec-origin-target-confinement",
     "sec-profile-parser-confinement", "sec-build-resource-bounds",
-    "sec-origin-record-isolation", "sec-atomic-index-build",
+    "sec-origin-record-isolation", "sec-atomic-index-package", "sec-package-integrity",
     "sec-discovery-not-trust", "sec-query-and-log-minimization",
 }
 REQUIRED_DOD_IDS = {
     "discovery-dod-16-1-product-scope", "discovery-dod-16-2-standards-profile",
-    "discovery-dod-16-3-provider-publication", "discovery-dod-16-4-origin-build",
+    "discovery-dod-16-3-provider-publication", "discovery-dod-16-4-origin-package",
     "discovery-dod-16-5-evidence-resolver", "discovery-dod-16-6-runtime-query-api",
     "discovery-dod-16-7-client-trust-invocation", "discovery-dod-16-8-adopter-maintenance-ux",
     "discovery-dod-16-9-acceptance-journeys", "discovery-dod-16-10-security-ci",

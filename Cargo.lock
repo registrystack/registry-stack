@@ -5318,6 +5318,7 @@ dependencies = [
  "registry-discovery-profile",
  "registry-platform-buildinfo",
  "registry-platform-canonical-json",
+ "registry-platform-config",
  "registry-platform-httputil",
  "reqwest",
  "serde",

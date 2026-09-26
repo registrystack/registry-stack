@@ -1,11 +1,11 @@
 ---
 title: Publish and consume a Registry Discovery index
-description: Build a local Discovery index from Evidence and Relay advertisements, select exact records, and hand them to native product trust.
+description: Package a local Discovery index from Evidence and Relay advertisements, select exact records, and hand them to native product trust.
 status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-14"
+last_reviewed: "2026-09-26"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -20,12 +20,12 @@ standards_referenced:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Build a local Registry Discovery index from exact Evidence Gateway and Registry Relay publication
+Package a local Registry Discovery index from exact Evidence Gateway and Registry Relay publication
 bytes, resolve and select one record for each product, then verify both selections through the
 maintained native clients and adopter-owned trust.
 
 <QuickstartMeta
-  outcome="One immutable local index, exact Evidence and Relay selections, and two direct native client handoffs."
+  outcome="One immutable local package, exact Evidence and Relay selections, and two direct native client handoffs."
   time="About 15 minutes after the Rust dependencies are available"
   level="Local development with synthetic data"
   prerequisites={['Git', 'Rust 1.95.0 through rustup', 'Python 3', 'curl', 'shasum', 'Bash', 'Local ports 38080 and 38090']}
@@ -117,18 +117,19 @@ alternatives:
 ```
 
 `discoveryctl check` validates these authoring files without contacting either URL. The later explicit
-build is the only step that fetches the enabled origins.
+package command is the only step that fetches the enabled origins.
 
 {/* Evidence: `crates/registry-discoveryctl/src/project.rs`, test
     `check_is_offline_and_accepts_an_unreachable_https_origin`, proves the offline check.
     `crates/registry-discoveryctl/tests/build.rs`, test
-    `build_fetches_each_origin_once_and_preserves_semantic_revisions`, covers the one-shot fetch. */}
+    `package_fetches_each_origin_once_and_preserves_semantic_revisions`, covers the one-shot fetch. */}
 
-## Build, serve, select, and hand off
+## Package, serve, select, and hand off
 
 Run the product-owned reader journey. The script builds `discovery` and `discoveryctl`, copies the
 operator project into a fresh temporary directory, checks it before starting the provider, performs
-one explicit build, waits for readiness, and calls the real resolve and search routes.
+one explicit package operation, starts Discovery from that verified package, waits for readiness,
+and calls the real resolve and search routes.
 
 ```sh
 bash products/discovery/scripts/test-adopter-tutorial.sh
@@ -142,7 +143,7 @@ checked-in semantic inputs.
 [provider] evidence.jsonld sha256=fc96f3a8cb0d82239425ea5712dceca975a5899e5528616648174da661fae905
 [provider] relay.jsonld sha256=5a34fa469803b7c28b3d5e7134a42398e326a2f173aacae9090d29787bc8f4d7
 [operator] offline check: valid origins=2 mappings=1
-[operator] explicit build: built catalogRevision=sha256:b4b7195f36691c245bf49a88a248049ed899c0c41dbf1a87a386571c0dbfba0f mappingRevision=sha256:332004ca3920c498539180946e8f2637e9998ba7e49cd98f31e19d6f818857ac
+[operator] explicit package: packaged packageDigest=sha256:<digest-for-this-run> catalogRevision=sha256:b4b7195f36691c245bf49a88a248049ed899c0c41dbf1a87a386571c0dbfba0f mappingRevision=sha256:332004ca3920c498539180946e8f2637e9998ba7e49cd98f31e19d6f818857ac
 [operator] readiness: {"status":"ready"}
 [consumer] resolved evidenceType=urn:example:evidence-type:adult-status alternatives=1
 [consumer] selected evidence recordId=urn:registrystack:discovery:record:sha256:676659c10ce5cc9d353f4fd2816673c7947e612151efbbe1cc4d42372d9be9d5
@@ -159,6 +160,11 @@ every required type. It separately searches one correlated Relay semantic-class 
 tuple and records one exact Relay result. The saved typed selections contain public metadata,
 complete resolution context, capability matches, and revision provenance only. Rust, Node.js, and
 Python applications perform the same workflow through their maintained Discovery client binding.
+
+The package digest covers the exact canonical index and optional `REVISION` through `SHA256SUMS`.
+The semantic revisions above remain stable for the checked-in descriptions and mappings. The
+package digest can change on a later run because the index truthfully records that run's
+`originFetchedAt` and `builtAt` provenance.
 
 The final two handoff checks revalidate each persisted selection, then repeat the exact-selection
 boundary against publications derived by the native products. The adopter's existing Evidence and
@@ -182,16 +188,17 @@ a collection directly. Discovery is stopped before those direct calls.
 | --- | --- | --- | --- |
 | Assertion provider | Packaged Evidence public description | Public Evidence endpoint, profile, evidence type, or issuer role changes | Publish the exact packaged bytes at the approved URL |
 | Data publisher | Packaged Relay public description | Public Relay endpoint, profile, semantic class, operation family, or authority role changes | Publish the exact sealed artifact bytes at the approved URL |
-| Operator | `origins.yaml`, mapping files, immutable index, and `runtime.yaml` | An approved origin or mapping changes | Run offline `check`, explicit `build`, deploy the complete index, then restart Discovery |
+| Operator | `origins.yaml`, mapping files, immutable package, and `runtime.yaml` | An approved origin or mapping changes | Run offline `check`, explicit `package`, deploy the complete package, pin its digest when required, then restart Discovery |
 | Consumer or verifier | Saved exact selection and native product trust | A catalog revision, mapping revision, origin digest, binding, or local trust decision changes | Re-evaluate local trust, then call the selected native endpoint directly |
 
-The operator does not run a synchronization scheduler or maintain a writable catalog. A failed build
-does not replace the deployed index. Deploy a complete new index and restart the process when the
-change is intentional.
+The operator does not run a synchronization scheduler or maintain a writable catalog. A failed
+package operation does not replace the deployed package. Deploy a complete new package and restart
+the process when the change is intentional.
 
-{/* Tier-C evidence: `products/discovery/README.md` defines check, explicit build, deployment, and restart
+{/* Tier-C evidence: `products/discovery/README.md` defines check, explicit package, deployment, and restart
     as the maintenance loop. `crates/registry-discoveryctl/tests/build.rs`, test
-    `failed_origin_fetch_leaves_the_previous_output_untouched`, proves atomic replacement.
+    `failed_origin_fetch_leaves_the_previous_output_untouched`, proves that a failed collection
+    leaves the prior output unchanged.
     `crates/registry-discovery/src/startup.rs`, test
     `runtime_is_closed_and_contains_no_origin_mapping_trust_or_fetch_configuration`, defines the
     runtime configuration boundary. `crates/registry-discovery-client/tests/native_journey.rs`, test
@@ -209,7 +216,7 @@ remains active.
 ## What you built
 
 - The provider roles supplied two deterministic public descriptions.
-- The operator checked explicit origins and mappings offline, built one immutable index, started
+- The operator checked explicit origins and mappings offline, packaged one immutable index, started
   Discovery, and waited for `{"status":"ready"}`.
 - The consumer resolved one Evidence requirement and made exact Evidence and Relay selections.
 - The verifier applied adopter-owned native trust and used the existing clients without routing
@@ -231,7 +238,7 @@ remains active.
 
 ## Next
 
-- [Build and run a Registry Discovery index](../../configure/discovery/) with your approved HTTPS
+- [Package and run a Registry Discovery index](../../configure/discovery/) with your approved HTTPS
   origins, deployment directory, and runtime limits.
 - [Registry Discovery is an index](../../explanation/discovery-as-an-index/) explains why trust and
   invocation stay in the native products.

@@ -16,9 +16,10 @@ queries, and client handoff belong outside that crate. The profile's pinned
 JSON-LD context is a local contract resource; parsing does not fetch contexts,
 expand RDF, resolve remote references, or merge graphs.
 
-`discoveryctl` builds indexes outside the serving runtime, fetching only exact
-operator-approved origins within fixed bounds. A failure leaves the previous
-output intact.
+`discoveryctl package` builds index packages outside the serving runtime,
+fetching only exact operator-approved origins within fixed bounds. A failure
+leaves an existing output untouched. The runtime verifies the shared package
+envelope and consumes only index bytes bound to its recorded file digest.
 The runtime serves one immutable index until restart. Keep records scoped to
 their origin, preserve exact capability pairs and mapping provenance, and
 reject ambiguous selection. Evidence matching retains the complete AND-list;
