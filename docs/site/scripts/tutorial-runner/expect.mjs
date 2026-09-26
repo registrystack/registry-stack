@@ -2,22 +2,30 @@
 //
 // A <placeholder>, a lowercase name in angle brackets, stands for a value the
 // page cannot know: an identifier, a digest, a token. In text it matches one
-// run of non-space characters; as a whole JSON string it matches any string.
+// run of non-space characters; as a whole JSON string it matches any string,
+// and inside a longer JSON string it matches as it does in text.
 // Everything else is literal.
 
 const PLACEHOLDER = /<[a-z][a-z0-9-]*>/gu;
 const WHOLE_PLACEHOLDER = /^<[a-z][a-z0-9-]*>$/u;
+const HAS_PLACEHOLDER = /<[a-z][a-z0-9-]*>/u;
 
-function lines(text) {
+export function lines(text) {
   const all = text.split('\n').map((line) => line.trimEnd());
   while (all.length > 0 && all[0] === '') all.shift();
   while (all.length > 0 && all.at(-1) === '') all.pop();
   return all;
 }
 
-function linePattern(expected) {
+// The regular expression source matching one expected line, placeholders
+// included, without anchors.
+export function lineSource(expected) {
   const parts = expected.split(PLACEHOLDER).map((part) => part.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'));
-  return new RegExp(`^${parts.join('\\S+')}$`, 'u');
+  return parts.join('\\S+');
+}
+
+function linePattern(expected) {
+  return new RegExp(`^${lineSource(expected)}$`, 'u');
 }
 
 function checkText(expectedText, actualText) {
@@ -29,14 +37,18 @@ function checkText(expectedText, actualText) {
   return `expected:\n${indent(expected)}\nactual:\n${indent(actual)}`;
 }
 
-function describe(value) {
+export function describe(value) {
   return JSON.stringify(value);
 }
 
 // Return the first difference between two parsed JSON values, or null.
-function firstDifference(expected, actual, path) {
+export function firstDifference(expected, actual, path) {
   if (typeof expected === 'string' && WHOLE_PLACEHOLDER.test(expected)) {
     return typeof actual === 'string' ? null : `at ${path}: expected a string for ${expected}, got ${describe(actual)}`;
+  }
+  if (typeof expected === 'string' && HAS_PLACEHOLDER.test(expected)) {
+    const matches = typeof actual === 'string' && linePattern(expected).test(actual);
+    return matches ? null : `at ${path}: expected ${describe(expected)}, got ${describe(actual)}`;
   }
   if (Array.isArray(expected)) {
     if (!Array.isArray(actual)) return `at ${path}: expected an array, got ${describe(actual)}`;
