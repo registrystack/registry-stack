@@ -2799,7 +2799,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "d387df3f984f76528426d92e6ca7b1bbc57e7bb31399a6e6d00cc307916a6938",
+        "sha256": "60455b8f63171c1799cb62bfd96b1251d7bd8340e23e1e0d16864a48ecb71f3f",
         "mediaType": "application/schema+json"
       }
     },
@@ -2903,11 +2903,11 @@
       "description": "Relay V2 authoring JSON Schema.",
       "source": {
         "path": "crates/registry-relayctl/schemas/authoring/runtime.schema.json",
-        "sha256": "e8085148247c322df4ab481c7b7e496ecd5b2e5dd8a7a5ec943b2435e9b40706"
+        "sha256": "fe03e4bd463fc48bad5c6fc3ddd1161dfe37d2a06f74cfa350539b20ca900b2b"
       },
       "artifact": {
         "path": "crates/registry-relayctl/schemas/authoring/runtime.schema.json",
-        "sha256": "e8085148247c322df4ab481c7b7e496ecd5b2e5dd8a7a5ec943b2435e9b40706",
+        "sha256": "fe03e4bd463fc48bad5c6fc3ddd1161dfe37d2a06f74cfa350539b20ca900b2b",
         "mediaType": "application/schema+json"
       }
     },

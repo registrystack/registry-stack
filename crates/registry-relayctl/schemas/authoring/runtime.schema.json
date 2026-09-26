@@ -18,6 +18,27 @@
     "AuditRuntime": {
       "additionalProperties": false,
       "description": "Where Relay writes its audit lines, in the shape every Registry Stack\nproduct shares. A relative `path` is resolved against the runtime file's\ndirectory at startup.",
+      "else": {
+        "properties": {
+          "path": {
+            "pattern": "\\S",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "if": {
+        "properties": {
+          "destination": {
+            "const": "stdout"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
       "properties": {
         "destination": {
           "$ref": "#/$defs/AuditDestinationKind",
@@ -31,7 +52,8 @@
         },
         "retainDays": {
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 36500,
+          "minimum": 1,
           "type": [
             "integer",
             "null"
@@ -39,10 +61,53 @@
         },
         "rotateBytes": {
           "format": "uint64",
-          "minimum": 0,
+          "maximum": 4294967295,
+          "minimum": 1048576,
           "type": [
             "integer",
             "null"
+          ]
+        }
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "properties": {
+                "path": {
+                  "not": {
+                    "type": "null"
+                  }
+                }
+              },
+              "required": [
+                "path"
+              ]
+            },
+            {
+              "properties": {
+                "rotateBytes": {
+                  "not": {
+                    "type": "null"
+                  }
+                }
+              },
+              "required": [
+                "rotateBytes"
+              ]
+            },
+            {
+              "properties": {
+                "retainDays": {
+                  "not": {
+                    "type": "null"
+                  }
+                }
+              },
+              "required": [
+                "retainDays"
+              ]
+            }
           ]
         }
       },
