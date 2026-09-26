@@ -309,6 +309,27 @@
     },
     "RawAuditConfig": {
       "additionalProperties": false,
+      "else": {
+        "properties": {
+          "path": {
+            "pattern": "^/",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "if": {
+        "properties": {
+          "destination": {
+            "const": "stdout"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
       "properties": {
         "destination": {
           "$ref": "#/$defs/AuditDestinationKind",
@@ -355,6 +376,48 @@
       "required": [
         "hashKeyRef"
       ],
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "properties": {
+                "path": {
+                  "not": {
+                    "type": "null"
+                  }
+                }
+              },
+              "required": [
+                "path"
+              ]
+            },
+            {
+              "properties": {
+                "rotateBytes": {
+                  "not": {
+                    "type": "null"
+                  }
+                }
+              },
+              "required": [
+                "rotateBytes"
+              ]
+            },
+            {
+              "properties": {
+                "retainDays": {
+                  "not": {
+                    "type": "null"
+                  }
+                }
+              },
+              "required": [
+                "retainDays"
+              ]
+            }
+          ]
+        }
+      },
       "type": "object"
     },
     "RawAuthenticationConfig": {
