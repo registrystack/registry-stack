@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
@@ -471,4 +472,121 @@ test('a gate dry run builds nothing and starts nothing', async () => {
     assert.equal(code, 0, output);
     assert.equal(existsSync(join(bin, 'calls')), false, output);
   });
+});
+
+// A loopback port nothing listens on right now.
+async function freePort() {
+  const server = createServer();
+  await new Promise((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+  const { port } = server.address();
+  await new Promise((resolvePromise) => server.close(resolvePromise));
+  return port;
+}
+
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error.code === 'ESRCH') return false;
+    throw error;
+  }
+};
+
+test('a test-file block writes the whole file where the reader stands', async () => {
+  const body =
+    '## Write\n\n' +
+    fence('sh', 'mkdir -p work/questions\ncd work\necho stale >questions/q.yaml') +
+    'Open `questions/q.yaml` and add:\n\n' +
+    fence('yaml title="questions/q.yaml" test-file', 'id: q\npurpose: check') +
+    fence('sh', 'cat questions/q.yaml') +
+    fence('text test-expect', 'id: q\npurpose: check');
+  await withPage(body, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 0, output);
+    assert.match(output, /wrote questions\/q\.yaml/u);
+    assert.match(output, /tutorial PASS/u);
+    const plan = await run(['--dry-run', page]);
+    assert.match(plan.output, /file  line 15 \(Write\): questions\/q\.yaml/u);
+  });
+});
+
+test('a test-file block whose directory does not exist stops the journey', async () => {
+  const body = '## Write\n\n' + fence('yaml title="missing/q.yaml" test-file', 'id: q') + fence('sh', 'echo never');
+  await withPage(body, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 1, output);
+    assert.match(output, /the file at line 7 \(Write\) failed/u);
+    assert.doesNotMatch(output, /^never$/mu);
+  });
+});
+
+test('a background fence runs until the next one starts or the page ends, and test-cwd says where a fence runs', async () => {
+  const port = await freePort();
+  const url = `http://127.0.0.1:${port}/`;
+  const serve = `python3 -m http.server ${port} --bind 127.0.0.1`;
+  const body =
+    '## Serve\n\n' +
+    fence('sh', 'mkdir -p site/one site/two other\necho first >site/one/index.html\necho second >site/two/index.html\ncd other') +
+    fence(`sh test-background="${url}" test-cwd="site/one"`, serve) +
+    fence('sh', `curl -fsS ${url}\npwd | sed 's|.*/||'`) +
+    fence('text test-expect', 'first\nother') +
+    fence(`sh test-background="${url}" test-cwd="site/two"`, serve) +
+    fence('sh test-cwd="site"', `curl -fsS ${url}\npwd | sed 's|.*/||'`) +
+    fence('text test-expect', 'second\nsite');
+  await withPage(body, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 0, output);
+    assert.match(output, /tutorial PASS/u);
+    await assert.rejects(fetch(url), 'the page end must stop the background fence');
+    const plan = await run(['--dry-run', page]);
+    assert.match(plan.output, new RegExp(`run   line 14 \\(Serve\\): ${serve} \\(in site/one, in the background until ${url} answers\\)`, 'u'));
+  });
+});
+
+test('a background fence that ends before it is ready stops the journey and shows what it printed', async () => {
+  const port = await freePort();
+  const body = '## Serve\n\n' + fence(`sh test-background="http://127.0.0.1:${port}/"`, 'echo "port taken" >&2\nfalse') + fence('sh', 'echo never');
+  await withPage(body, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 1, output);
+    assert.match(output, /port taken/u);
+    assert.match(output, /the sh fence at line 7 \(Serve\) failed/u);
+    assert.doesNotMatch(output, /^never$/mu);
+  });
+});
+
+test('an expectation on a background fence checks what it printed while it ran', async () => {
+  const port = await freePort();
+  const url = `http://127.0.0.1:${port}/`;
+  const body =
+    '## Serve\n\n' +
+    fence(`sh test-background="${url}"`, `echo "ready on ${port}"\nexec python3 -m http.server ${port} --bind 127.0.0.1 2>/dev/null`) +
+    fence('text test-expect', 'ready on <port>') +
+    fence('sh', `curl -fsS -o /dev/null ${url}`);
+  await withPage(body, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 0, output);
+    assert.match(output, /expect line 12: ok/u);
+  });
+});
+
+test('a journey that ends, passing or failing, leaves no process it started running', async () => {
+  const port = await freePort();
+  const body = (pids, last) =>
+    '## Start\n\n' +
+    fence('sh', `sleep 300 &\necho "$!" >>'${pids}'`) +
+    fence(`sh test-background="http://127.0.0.1:${port}/"`, `echo "$BASHPID" >>'${pids}'\nexec python3 -m http.server ${port} --bind 127.0.0.1`) +
+    fence('sh', last);
+  for (const [last, expected] of [['true', 0], ['false', 1]]) {
+    await withPage('', async ({ dir, page }) => {
+      const pids = join(dir, 'pids');
+      await writeFile(page, `---\ntitle: t\n---\n\n${body(pids, last)}`);
+      const { code, output } = await run([page]);
+      assert.equal(code, expected, output);
+      const started = (await readFile(pids, 'utf8')).trim().split('\n').map(Number);
+      assert.equal(started.length, 2, output);
+      for (const pid of started) assert.equal(alive(pid), false, `process ${pid} outlived the journey\n${output}`);
+    });
+  }
 });

@@ -17,6 +17,14 @@
 // stands at that point of the journey; bare, part of the output of the
 // nearest sh fence above it.
 //
+// A block titled with a file path and marked test-file is the whole file the
+// page asks the reader to create or replace in their editor.
+//
+// test-background="<url>" on an sh fence is a command the page leaves running
+// while the reader carries on in another terminal: the journey goes on once
+// the URL answers. test-cwd="<dir>" on an sh fence names the directory, inside
+// the reader directory, that the page tells the reader to return to first.
+//
 // The page is parsed as Markdown rather than MDX, as check-draft-links.mjs
 // does: fences, including fences indented inside list items, parse the same
 // way, and JSX or comment lines read as paragraphs the journey never runs.
@@ -26,7 +34,16 @@ import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 
 const parser = unified().use(remarkParse).use(remarkGfm);
-const ANNOTATIONS = new Set(['test-skip', 'test-expect', 'test-exit', 'test-edit', 'test-excerpt']);
+const ANNOTATIONS = new Set([
+  'test-skip',
+  'test-expect',
+  'test-exit',
+  'test-edit',
+  'test-excerpt',
+  'test-file',
+  'test-background',
+  'test-cwd',
+]);
 
 // Parse the test- tokens of a fence meta string: bare flags and key="value"
 // pairs. Other tokens belong to Expressive Code and are ignored here.
@@ -82,10 +99,11 @@ function* walk(node) {
 }
 
 // Return { steps, errors }. A step is one of
-//   { kind: 'run', line, heading, code, exit? }
+//   { kind: 'run', line, heading, code, exit?, background?, cwd? }
 //   { kind: 'skip', line, heading, code, reason }
 //   { kind: 'expect', line, heading, format, text, runIndex }
 //   { kind: 'edit', line, heading, path, before, after }
+//   { kind: 'file', line, heading, path, text }
 //   { kind: 'excerpt', line, heading, format, text, runIndex }
 //   { kind: 'excerpt', line, heading, format, text, path }
 // where runIndex is the index in steps of the fence whose output it checks.
@@ -110,6 +128,9 @@ export function readJourney(text) {
     const exit = annotations['test-exit'];
     const edit = annotations['test-edit'];
     const excerpt = annotations['test-excerpt'];
+    const file = annotations['test-file'];
+    const background = annotations['test-background'];
+    const cwd = annotations['test-cwd'];
 
     if (node.lang === 'sh') {
       if (expect !== undefined) {
@@ -122,11 +143,28 @@ export function readJourney(text) {
       if (excerpt !== undefined) {
         errors.push(`line ${line}: test-excerpt belongs on a block the page shows, not on an sh fence`);
       }
+      if (file !== undefined) errors.push(`line ${line}: test-file belongs on a block showing the file, not on an sh fence`);
       const step = { kind: skip === undefined ? 'run' : 'skip', line, heading, code: node.value };
       if (typeof skip === 'string' && skip !== '') step.reason = skip;
       if (exit !== undefined) {
         if (typeof exit === 'string' && /^\d+$/u.test(exit)) step.exit = Number(exit);
         else errors.push(`line ${line}: test-exit takes an exit status, as test-exit="1"`);
+      }
+      if (background !== undefined) {
+        if (typeof background !== 'string' || !/^https?:\/\/\S+$/u.test(background)) {
+          errors.push(
+            `line ${line}: test-background takes the URL that answers once the command is ready, as test-background="http://127.0.0.1:4010/"`,
+          );
+        } else if (exit !== undefined) {
+          errors.push(`line ${line}: a test-background fence keeps running, so it cannot also be test-exit`);
+        } else if (skip !== undefined) {
+          errors.push(`line ${line}: a test-background fence is run, so it cannot also be test-skip`);
+        } else step.background = background;
+      }
+      if (cwd !== undefined) {
+        if (typeof cwd !== 'string' || cwd === '' || cwd.startsWith('/') || cwd.split('/').includes('..')) {
+          errors.push(`line ${line}: test-cwd takes a directory inside the reader directory, as test-cwd="first-project"`);
+        } else step.cwd = cwd;
       }
       lastCommand = steps.push(step) - 1;
       continue;
@@ -134,6 +172,19 @@ export function readJourney(text) {
 
     if (skip !== undefined) errors.push(`line ${line}: test-skip applies only to sh fences`);
     if (exit !== undefined) errors.push(`line ${line}: test-exit applies only to sh fences`);
+    if (background !== undefined) errors.push(`line ${line}: test-background applies only to sh fences`);
+    if (cwd !== undefined) errors.push(`line ${line}: test-cwd applies only to sh fences`);
+    if ([file, edit, expect, excerpt].filter((value) => value !== undefined).length > 1) {
+      errors.push(`line ${line}: a block is one of test-file, test-edit, test-expect, or test-excerpt`);
+      continue;
+    }
+    if (file !== undefined) {
+      const path = titleOf(node.meta);
+      if (node.lang === 'diff') errors.push(`line ${line}: test-file takes the whole file; a diff block is test-edit`);
+      else if (!path) errors.push(`line ${line}: test-file needs the file path, as title="<path>"`);
+      else steps.push({ kind: 'file', line, heading, path, text: `${node.value}\n` });
+      continue;
+    }
     if (edit !== undefined) {
       const path = titleOf(node.meta);
       const sides = node.lang === 'diff' ? diffSides(node.value) : undefined;
@@ -153,10 +204,6 @@ export function readJourney(text) {
       continue;
     }
     if (expect === undefined && excerpt === undefined) continue;
-    if (expect !== undefined && excerpt !== undefined) {
-      errors.push(`line ${line}: a block is either test-expect or test-excerpt, not both`);
-      continue;
-    }
     const format = node.lang === 'json' ? 'json' : 'text';
     if (typeof excerpt === 'string' && excerpt !== '') {
       steps.push({ kind: 'excerpt', line, heading, format, text: node.value, path: excerpt });
