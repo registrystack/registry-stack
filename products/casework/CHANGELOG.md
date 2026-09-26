@@ -9,9 +9,10 @@
   same correlation. A commit whose acknowledgment was lost is read back
   first, and one that took effect is answered and recorded like any other.
   A committed operation writes all of its response entries even when its
-  caller disconnects while they are written. Adding a review note is audited as
-  `casework.review_note_added`, naming the note's history event but never its
-  text or audience.
+  caller disconnects while they are written. Adding a review note is audited
+  as `casework.review_note_added`, naming the review request by its keyed
+  pseudonym and the note's history event, but never the note's text or
+  audience.
 
 - BREAKING: write audit through the shared platform audit writer instead of
   a hash-chained journal published from a PostgreSQL outbox.
