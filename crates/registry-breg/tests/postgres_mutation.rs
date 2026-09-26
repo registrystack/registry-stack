@@ -304,10 +304,10 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
         assert_eq!(
             durable_counts(&database, table).await,
             DurableCounts {
-                audit: before.audit + 1,
+                audit: before.audit + 2,
                 ..before
             },
-            "fault {fault:?} retains only its unavoidable durable attempt"
+            "fault {fault:?} retains only its attempt and the unfinished answer to it"
         );
     }
 
@@ -2257,10 +2257,11 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     assert_eq!(
         durable_counts(&database, &table).await,
         DurableCounts {
-            audit: before_fault.audit + 1,
+            audit: before_fault.audit + 2,
             ..before_fault
         },
-        "terminal audit failure releases no success bytes and commits no mutation packet"
+        "terminal audit failure releases no success bytes, commits no mutation packet, and \
+         answers its attempt as unfinished"
     );
 
     assert_journals_are_minimized_and_paired(&database).await;
