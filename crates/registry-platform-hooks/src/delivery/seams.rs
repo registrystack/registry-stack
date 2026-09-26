@@ -138,9 +138,12 @@ pub trait DeliverySeams: Send + Sync + 'static {
     ) -> Result<Option<ProposalOutcome>, DeliveryError>;
 
     /// Record one neutral delivery-audit event in the product's audit
-    /// journal, inside the transaction the worker is about to commit. Every
-    /// audited occurrence and every audited field of the moved worker arrives
-    /// here.
+    /// journal. The worker calls this only after every guarded transition the
+    /// event reports has already succeeded, immediately before it commits the
+    /// transaction: a failed commit after an accepted append still leaves an
+    /// entry for a transition that did not happen, since a durable append
+    /// cannot be rolled back with the transaction. Every audited occurrence
+    /// and every audited field of the moved worker arrives here.
     async fn record_audit(
         &self,
         transaction: &Transaction<'_>,
