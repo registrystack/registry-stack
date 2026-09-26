@@ -704,8 +704,7 @@ impl RuntimeConfig {
         // bytes captured from the verified package.
         if let Err(error) = reject_authored_environment_expressions_bytes(&policy_bytes) {
             if matches!(error, RuntimeConfigError::Load(_)) {
-                CaseworkProject::from_slice(&policy_bytes)
-                    .map_err(RuntimeConfigError::Project)?;
+                CaseworkProject::from_slice(&policy_bytes).map_err(RuntimeConfigError::Project)?;
             }
             return Err(error);
         }
