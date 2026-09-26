@@ -6550,3 +6550,213 @@ async fn migration_refuses_to_drop_unpublished_audit_and_drops_a_drained_outbox(
         .await
         .expect("the schema is at this release");
 }
+
+/// The single `response` entry that answers the commitment's `request`
+/// entry among `appended`, after checking the pair shares one correlation
+/// and records a commitment nothing decided.
+fn one_unfinished_response(appended: &[Value], reason: &str) -> Value {
+    let response = one_request_and_one_response(appended);
+    assert_eq!(response["outcome"], "unfinished", "{response}");
+    assert_eq!(response["reason"], reason, "{response}");
+    response
+}
+
+/// SCHEDULING-SEC-14: a capacity transaction that fails decided nothing, and
+/// its request entry is still answered: one response entry records that the
+/// commitment did not finish.
+#[tokio::test]
+async fn a_failed_capacity_transaction_pairs_its_request_entry() {
+    let fx = hook_fixture().await;
+    fx.admin
+        .batch_execute(
+            "ALTER TABLE registry_outbox
+             ADD CONSTRAINT test_refuse_hook_capture
+             CHECK (event_type <> 'confirmed-observer')",
+        )
+        .await
+        .expect("install the transaction failure seam");
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let before = fx.capture.entries().len();
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "failed-transaction",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+    let response =
+        one_unfinished_response(&fx.capture.entries().split_off(before), "commitment.failed");
+    assert_eq!(response["operation"], "appointment.create");
+}
+
+/// SCHEDULING-SEC-14: an idempotency key refused as reused, and one refused
+/// as expired, each answer the request entry the commitment wrote, without
+/// recording the key refusal as an authorization decision.
+#[tokio::test]
+async fn an_idempotency_key_refusal_pairs_its_request_entry() {
+    let fx = fixture().await;
+    let (first, second) = first_overlapping_pair(&fx, OFFERING, 90, 260).await;
+    let (status, _) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "idem-audit",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, first)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let before = fx.capture.entries().len();
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "idem-audit",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, second)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    one_unfinished_response(
+        &fx.capture.entries().split_off(before),
+        "idempotency.key-reused",
+    );
+
+    fx.store
+        .erase_expired_attempts(Utc::now() + TimeDelta::days(8))
+        .await
+        .expect("the retention sweep runs");
+    let before = fx.capture.entries().len();
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "idem-audit",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, first)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::GONE, "{problem}");
+    one_unfinished_response(
+        &fx.capture.entries().split_off(before),
+        "idempotency.expired",
+    );
+}
+
+/// SCHEDULING-SEC-14: a records replacement that lands while a commitment
+/// waits on its revision guard leaves the commitment undecided, and its
+/// request entry is still answered.
+#[tokio::test]
+async fn a_records_swap_under_a_commitment_pairs_its_request_entry() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let body = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+    let (http, agent, capture) = (fx.http.clone(), fx.agent.clone(), fx.capture.clone());
+    let before = capture.entries().len();
+    let mut admin = fx.admin;
+    let swap = admin
+        .transaction()
+        .await
+        .expect("the stand-in records swap opens");
+    swap.execute(
+        "UPDATE scheduling_meta SET facts_revision = facts_revision + 1 WHERE singleton",
+        &[],
+    )
+    .await
+    .expect("the stand-in swap moves the records revision");
+
+    let commitment = tokio::spawn(send(
+        http,
+        "POST".to_owned(),
+        "/v1/appointments".to_owned(),
+        agent,
+        Some("swapped-records".to_owned()),
+        Some(body),
+    ));
+    // Wait until the commitment is blocked on the revision guard, which it
+    // reaches only after reading the records it was evaluated against.
+    loop {
+        swap.batch_execute("SELECT pg_stat_clear_snapshot()")
+            .await
+            .expect("refresh the activity snapshot");
+        let waiting: i64 = swap
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity
+                 WHERE wait_event_type = 'Lock' AND query LIKE '%FROM scheduling_meta%FOR SHARE%'",
+                &[],
+            )
+            .await
+            .expect("read the waiting commitment")
+            .get(0);
+        if waiting > 0 {
+            break;
+        }
+        assert!(
+            !commitment.is_finished(),
+            "the commitment finished before reaching its revision guard"
+        );
+        tokio::task::yield_now().await;
+    }
+    swap.commit().await.expect("the stand-in swap commits");
+
+    let (status, problem) = commitment.await.expect("the commitment answers");
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+    one_unfinished_response(
+        &capture.entries().split_off(before),
+        "commitment.facts-stale",
+    );
+}
+
+/// SCHEDULING-SEC-14: a refusal is answered only once its response entry is
+/// accepted, like an allowed commitment. When the destination refuses it, the
+/// caller is told the service is unavailable, for a permission mismatch
+/// decided before the transaction and for a refusal the ledger decided.
+#[tokio::test]
+async fn a_refusal_whose_response_entry_is_refused_answers_service_unavailable() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let (status, appointment) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "refusal-audit-create",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let appointment_id = appointment["appointmentId"].as_str().unwrap().to_owned();
+    let stale = appointment["revision"].as_u64().unwrap() + 1;
+
+    // A ledger refusal: the request entry is accepted, its response is not.
+    fx.capture.refuse_after(fx.capture.entries().len() + 1);
+    let other = first_slot(&fx, OFFERING, 480, 620).await;
+    let (status, problem) = fx
+        .post(
+            &format!("/v1/appointments/{appointment_id}/reschedule"),
+            &fx.agent,
+            "refusal-audit-stale",
+            json!({"observedRevision": stale, "admission": admission(&fx, OFFERING, other)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+    assert_eq!(problem["code"], "service.unavailable");
+}
+
+/// SCHEDULING-SEC-14: a permission mismatch refused before the transaction
+/// is answered only once its response entry is accepted.
+#[tokio::test]
+async fn a_permission_refusal_the_destination_refuses_answers_service_unavailable() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    fx.capture.refuse_after(fx.capture.entries().len());
+    let (status, problem) = fx
+        .post(
+            "/v1/holds",
+            &agent_token_outside_its_bounds(),
+            "outside-bounds-unaudited",
+            admission(&fx, OFFERING, slot),
+        )
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+    assert_eq!(problem["code"], "service.unavailable");
+}

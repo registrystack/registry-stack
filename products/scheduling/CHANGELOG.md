@@ -21,6 +21,14 @@
     response entry, recording the decision the receipt carries, is accepted;
     a refused one answers `service.unavailable` without the receipt. A
     permission refused before the transaction is one response entry.
+  - Every commitment request entry is answered. A refusal, decided by the
+    ledger or by the permission check, is answered only once its response
+    entry is accepted, and `service.unavailable` otherwise, where it was
+    previously answered with the write failure only logged. A failed
+    transaction, records replaced under a commitment, and a reused or expired
+    idempotency key now write a response with the outcome `unfinished` and a
+    closed reason, and a commitment that returns or is canceled before
+    answering writes `commitment.unfinished`.
   - Hook delivery writes an attempt's request entry before egress and its
     terminal response entry with the same correlation; a refused entry leaves
     the delivery pending and sends nothing.
