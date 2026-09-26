@@ -197,6 +197,8 @@ audit file resolves under a persistent root, as a container preflight, and refus
 destination.
 
 {/* Evidence: crates/registry-render/src/audit.rs, AUDIT_SCHEMA, RenderAuditEvent, and correlation;
+    crates/registry-render/src/audit.rs, RenderAudit::request writes unfinished when dropped;
+    crates/registry-render/src/server.rs, the_request_entry_is_accepted_before_the_render_starts;
     crates/registry-render/src/cli.rs, require_audit_under;
     crates/registry-platform-audit/src/writer.rs, DEFAULT_AUDIT_ROTATE_BYTES and DEFAULT_AUDIT_RETAIN_DAYS. */}
 

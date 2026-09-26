@@ -314,18 +314,22 @@ entry. The file destination acknowledges an append after fsync; `stdout` flushes
 provides best-effort delivery. A failed request entry blocks protected I/O, and a failed response
 entry blocks disclosure. A request that ends before its outcome is known, because it failed, timed
 out, or its caller went away, or an operator command that exits early, still answers its request
-entry with a response whose outcome is `unfinished`. Only a crash, or a destination that already
-stopped accepting entries, can leave a request entry without a response.
+entry. A runtime read or mutation answers with a response whose `phase` is `unfinished`, carrying
+only the operation and request it answers; an operator command answers with a `terminal` response
+whose `outcome` is `unfinished`. Only a crash, or a destination that already stopped accepting
+entries, can leave a request entry without a response.
 
 Operator commands follow the same rule. `evidence-retention erase-expired` records the cutoff it
 was given in its request entry and the number of assertions it erased in its response.
 `request-retention erase` deletes the external attachment objects before it records its response,
-which states how many objects still wait for deletion. If the erasure committed but its response
+which states how many objects still wait for deletion; when that deletion pass itself fails, the
+count is `null` and the command reports the failure. If the erasure committed but its response
 entry could not be written, the command reports `request_retention.erasure.unaudited`: the detail is
 gone, so restore the audit destination and reconcile the erased request against the database. An
-event delivery's attempt is recorded before its request leaves, and its outcome only once the
-delivery's state has committed, so the journal never records a delivery that rolled back; an
-operator replay is recorded as a request before the reset and a response once it commits or is
+event delivery's attempt is recorded inside the transaction that leases it, before its request
+leaves. If that lease transaction does not commit, no request leaves and the attempt is answered
+`worker_interrupted`, so an attempt entry does not prove a request was sent. An attempt's terminal
+outcome is recorded only once the delivery's state has committed; an operator replay is recorded as a request before the reset and a response once it commits or is
 refused.
 
 A crash or a killed process can also tear the file's final line itself, leaving it without its
@@ -373,10 +377,12 @@ Choose a fresh audit path when changing from another audit format, and preserve 
 outside the new writer's retention directory.
 :::
 
-{/* Evidence: crates/registry-breg/src/audit.rs;
+{/* Evidence: crates/registry-breg/src/audit.rs, unfinished_record;
     crates/registry-breg/src/runtime_config.rs, AuditConfig;
     crates/registry-platform-audit/src/writer.rs, AuditRequest;
-    crates/registry-breg/src/request_retention.rs, ErasureUnaudited;
+    crates/registry-breg/src/request_retention.rs, ErasureUnaudited, retention_outcome_record,
+    and pendingExternalDeletions;
+    crates/registry-platform-hooks/src/delivery/service.rs, WorkerInterrupted;
     crates/registry-breg/src/action_evidence_maintenance.rs, EVIDENCE_RETENTION_AUDIT_SCHEMA;
     crates/registry-platform-hooks/src/delivery/seams.rs, record_audit;
     crates/registry-breg/src/postgres/schema.rs;
