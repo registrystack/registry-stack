@@ -1,5 +1,7 @@
 import { defineEcConfig } from '@astrojs/starlight/expressive-code';
 
+import { pluginDiffCopy } from './src/lib/ec-diff-copy.mjs';
+
 // Expressive Code is configured here rather than through Starlight's
 // `expressiveCode` option because the `starlight-openapi` plugin replaces that
 // option wholesale: its `config:setup` hook builds a fresh object, reads
@@ -8,6 +10,7 @@ import { defineEcConfig } from '@astrojs/starlight/expressive-code';
 // it over the real settings. A config file is merged separately by
 // astro-expressive-code and survives.
 export default defineEcConfig({
+  plugins: [pluginDiffCopy()],
   shiki: {
     // Shiki ships no Rhai grammar, so every Rhai block rendered as flat
     // unhighlighted text beside fully coloured YAML and shell blocks on the
