@@ -287,9 +287,9 @@ async fn data_response(
         Some(representation.wire_format()),
         &trace,
     );
-    if service.audit.attempt(&audit).await.is_err() {
+    let Ok(_attempt) = service.audit.attempt(&audit).await else {
         return ProblemCode::AuditUnavailable.response(&trace);
-    }
+    };
 
     let limit = query.limit;
     let explicit_limit = query.explicit_limit;
@@ -472,9 +472,9 @@ pub(crate) async fn structure(
         Some("sdmx-structure-json"),
         &trace,
     );
-    if service.audit.attempt(&audit).await.is_err() {
+    let Ok(_attempt) = service.audit.attempt(&audit).await else {
         return ProblemCode::AuditUnavailable.response(&trace);
-    }
+    };
     let artifact_id = format!("{}-sdmx-{}-structure", dataset.id, kind.artifact_suffix());
     let artifact_path = format!("artifacts/{}.{}", dataset.id, kind.path_suffix());
     let operation_identifier = dataset.operation_identifier();

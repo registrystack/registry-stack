@@ -649,9 +649,9 @@ async fn record_collection(
     );
     audit.wire_format = Some(query.response_format.cursor_kind().into());
     audit.format_profile = query.response_format.cursor_profile().map(str::to_owned);
-    if service.audit.attempt(&audit).await.is_err() {
+    let Ok(_attempt) = service.audit.attempt(&audit).await else {
         return ProblemCode::AuditUnavailable.response(&trace);
-    }
+    };
     let result = service
         .sqlite
         .execute(
@@ -1114,9 +1114,9 @@ async fn single_operation(
     );
     audit.wire_format = Some(representation.cursor_kind().into());
     audit.format_profile = representation.cursor_profile().map(str::to_owned);
-    if service.audit.attempt(&audit).await.is_err() {
+    let Ok(_attempt) = service.audit.attempt(&audit).await else {
         return ProblemCode::AuditUnavailable.response(trace);
-    }
+    };
     request.query.row_authority = access.authorization.row_authority.clone();
     let result = service
         .sqlite

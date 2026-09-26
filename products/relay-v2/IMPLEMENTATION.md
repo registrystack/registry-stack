@@ -685,7 +685,9 @@ Each gate is one line written through the shared platform audit writer, with
 schema `registry.relay.audit/v2alpha2`: the attempt is a `request` entry and a
 refusal or terminal outcome is a `response` entry, and both carry the operation
 id as `correlation`. A refusal decided before source access is one `response`
-entry. A `file` destination accepts an entry only after it is `fsync`ed; a
+entry. A handler dropped after its attempt and before its terminal outcome,
+such as by a client disconnecting during source execution, writes a terminal
+`unfinished` outcome as the attempt's `response` entry. A `file` destination accepts an entry only after it is `fsync`ed; a
 `stdout` destination accepts it once the line is written and flushed. Audit
 destination failure returns `503` and prevents source access or response
 release at the relevant gate. Events contain stable Registry, resource, operation,

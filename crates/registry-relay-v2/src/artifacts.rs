@@ -2001,7 +2001,8 @@ fn audit_record_schema() -> Value {
             "outcome": {"enum": [
                 "released", "not-modified", "unresolved", "invalid-request",
                 "missing-credential", "invalid-credential", "denied", "rate-limited",
-                "timed-out", "source-failed", "internal-failed", "not-found"
+                "timed-out", "source-failed", "internal-failed", "not-found",
+                "unfinished"
             ]}
         }
     })
