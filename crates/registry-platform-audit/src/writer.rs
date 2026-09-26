@@ -229,6 +229,8 @@ pub enum AuditDestinationError {
     MissingPath,
     #[error("audit.path must be absolute")]
     RelativePath,
+    #[error("audit.path must not contain a `.` or `..` component")]
+    InvalidPathComponent,
     #[error("audit.{field} applies only when audit.destination is file")]
     FileOnlyField { field: &'static str },
     #[error("audit.rotateBytes must be between {minimum} and {maximum}")]

@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::net::SocketAddr;
 use std::ops::Deref;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
 use serde::de::{self, MapAccess, Visitor};
@@ -1549,18 +1549,45 @@ pub struct AuditRuntime {
 impl AuditRuntime {
     /// Check the destination shape before any path is resolved. A relative
     /// `path` cannot be judged absolute until startup resolves it against the
-    /// runtime directory, so an absolute stand-in takes its place here; startup
-    /// checks the resolved path again with the same rules.
+    /// runtime directory, so an absolute stand-in takes its place here for the
+    /// destination checks that need one; the component shape a configured
+    /// `path` is allowed to use is checked directly, with the same rules
+    /// `resolve_binding` applies at startup.
     pub fn check_shape(&self) -> Result<(), AuditDestinationError> {
         let path = match self.path.as_deref() {
             Some(path) if path.trim().is_empty() => {
                 return Err(AuditDestinationError::MissingPath);
             }
-            Some(_) => Some(PathBuf::from("/relay-runtime/audit.jsonl")),
+            Some(path) => {
+                if !audit_path_has_valid_shape(path) {
+                    return Err(AuditDestinationError::InvalidPathComponent);
+                }
+                Some(PathBuf::from("/relay-runtime/audit.jsonl"))
+            }
             None => None,
         };
         AuditDestination::from_settings(self.destination, path, self.rotate_bytes, self.retain_days)
             .map(|_| ())
+    }
+}
+
+/// Whether `path` uses only the component shapes startup's `resolve_binding`
+/// accepts once a relative `audit.path` is joined to the runtime directory:
+/// an absolute path may use root, prefix, and normal components, and a
+/// relative path may use only normal components. Neither may contain a `.`
+/// or `..` component.
+fn audit_path_has_valid_shape(path: &str) -> bool {
+    let path = Path::new(path);
+    if path.is_absolute() {
+        path.components().all(|component| {
+            matches!(
+                component,
+                Component::RootDir | Component::Prefix(_) | Component::Normal(_)
+            )
+        })
+    } else {
+        path.components()
+            .all(|component| matches!(component, Component::Normal(_)))
     }
 }
 
@@ -1779,6 +1806,12 @@ disclosureProfiles: {}
             (
                 "{path: /var/log/relay.jsonl, hashKeyRef: secret:env/RELAY_KEY}",
                 "unknown field",
+            ),
+            ("{path: /var/log/../relay.jsonl}", "audit.path"),
+            ("{destination: file, path: ./var/audit.jsonl}", "audit.path"),
+            (
+                "{destination: file, path: var/../audit.jsonl}",
+                "audit.path",
             ),
         ] {
             let error = RelayRuntime::parse_yaml(&template(invalid))
