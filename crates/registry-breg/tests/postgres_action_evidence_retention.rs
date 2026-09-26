@@ -84,7 +84,38 @@ fn service(
         connection,
         database.migration_role.clone(),
         database.runtime_role.clone(),
+        database.audit(
+            registry_platform_audit::AuditProfile::production_from_secret_bytes(
+                vec![0x5e; 32].into(),
+            )
+            .unwrap(),
+        ),
     ))
+}
+
+/// Every erasure is one request entry naming its threshold, answered under
+/// its correlation: `outcomes` lists each answer's outcome and erased count.
+fn assert_retention_audited(database: &TestDatabase, outcomes: &[(&str, Option<u64>)]) {
+    let entries = database
+        .audit_entries()
+        .into_iter()
+        .filter(|entry| entry["schema"] == "breg-evidence-retention-audit/v1")
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), outcomes.len() * 2, "{entries:?}");
+    for (pair, (outcome, erased)) in entries.chunks(2).zip(outcomes) {
+        assert_eq!(pair[0]["phase"], "request");
+        assert_eq!(pair[1]["phase"], "response");
+        assert_eq!(pair[0]["correlation"], pair[1]["correlation"]);
+        assert!(pair[0]["record"]["before"].is_string());
+        assert_eq!(pair[1]["record"]["before"], pair[0]["record"]["before"]);
+        assert_eq!(pair[1]["record"]["outcome"], *outcome);
+        assert_eq!(
+            pair[1]["record"]
+                .get("erased")
+                .and_then(serde_json::Value::as_u64),
+            *erased
+        );
+    }
 }
 
 async fn sentinel(database: &TestDatabase) {
@@ -168,6 +199,7 @@ async fn expired_request_evidence_erases_only_retained_uses() {
     assert_eq!(remaining.get::<_, i64>(0), 1);
     assert_eq!(remaining.get::<_, i64>(1), 1);
     assert_eq!(operator.erase_expired(cutoff()).await.unwrap(), 0);
+    assert_retention_audited(&database, &[("erased", Some(1)), ("erased", Some(0))]);
     drop(operator);
     database.cleanup().await;
 }
@@ -236,6 +268,7 @@ async fn retention_refuses_misbound_database_with_identical_roles_and_catalog_dr
     let wrong = service(&original, &registry, &expected, other_connection.clone());
     assert!(wrong.erase_expired(cutoff()).await.is_err(), "a verified runtime identity cannot authorize deletion in another database sharing its role names");
     assert_eq!(count(&other).await, 1);
+    assert_retention_audited(&original, &[("failed", None)]);
     let correct = service(&original, &registry, &other_expected, other_connection);
     other
         .admin

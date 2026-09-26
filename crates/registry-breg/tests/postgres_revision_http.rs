@@ -301,8 +301,9 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
     assert_eq!(body_json(faulted).await["code"], "source.unavailable");
     assert_eq!(
         audit_count(&database).await,
-        before_fault + 1,
-        "terminal audit gate failure releases no held revision and leaves only the attempt"
+        before_fault + 2,
+        "terminal audit gate failure releases no held revision and answers the attempt as \
+         unfinished"
     );
 
     let unkeyed = revision_router(
@@ -779,7 +780,10 @@ async fn assert_revision_audit_is_ordered_and_minimized(
             && window[1]["phase"] == "terminal"
             && window[1]["outcome"] == "returned"
     }));
-    assert_eq!(records.last().expect("fault attempt")["phase"], "attempt");
+    // The faulted read's attempt is answered as unfinished.
+    let fault_answer = records.len() - 1;
+    assert_eq!(records[fault_answer]["phase"], "unfinished");
+    assert_eq!(records[fault_answer - 1]["phase"], "attempt");
     assert!(records.iter().any(|record| record["phase"] == "refusal"));
     assert!(records.iter().any(|record| {
         record["phase"] == "terminal"

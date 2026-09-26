@@ -173,13 +173,9 @@ impl MutationCoordinator {
         validate_action_claims(action, claims, Operation::Invoke)?;
         let normalized_input = validate_action_input(action, input.input)?;
         validate_precondition_set(action, &input.preconditions)?;
-        self.record_action_boundary_audit(
-            claims,
-            input.route_id,
-            input.correlation,
-            PreIoAuditKind::Attempt,
-        )
-        .await?;
+        let _attempt = self
+            .begin_action_boundary_audit(claims, input.route_id, input.correlation)
+            .await?;
         let request_digest =
             canonical_action_request_digest(action, &normalized_input, &input.preconditions)?;
         let binding = resolve_action_binding(
@@ -712,14 +708,10 @@ impl MutationCoordinator {
         };
         let application_id = Uuid::new_v4();
         let correlation = RequestCorrelation::breg_created();
-        self.record_action_boundary_audit(
-            &claims,
-            &route_id,
-            &correlation,
-            PreIoAuditKind::Attempt,
-        )
-        .await
-        .map_err(|_| UncertainApply)?;
+        let _attempt = self
+            .begin_action_boundary_audit(&claims, &route_id, &correlation)
+            .await
+            .map_err(|_| UncertainApply)?;
 
         let deadline = tokio::time::Instant::now() + HOOK_PROPOSAL_APPLY_BUDGET;
         let fault = FaultControl::Disabled;
@@ -840,13 +832,9 @@ impl MutationCoordinator {
         )?;
         validate_action_claims(action, claims, Operation::Invoke)?;
         let refs = validate_condition_inputs(action, input.input)?;
-        self.record_action_boundary_audit(
-            claims,
-            input.route_id,
-            input.correlation,
-            PreIoAuditKind::Attempt,
-        )
-        .await?;
+        let _attempt = self
+            .begin_action_boundary_audit(claims, input.route_id, input.correlation)
+            .await?;
         let result = self
             .action_target_conditions_after_attempt(
                 client,
@@ -869,6 +857,30 @@ impl MutationCoordinator {
             .await?;
         }
         result
+    }
+
+    /// Append the action's attempt and hold it until its terminal or refusal
+    /// entry answers it.
+    pub(crate) async fn begin_action_boundary_audit(
+        &self,
+        claims: &ActionClaimContext,
+        operation_id: &str,
+        correlation: &RequestCorrelation,
+    ) -> Result<AuditRequest, MutationError> {
+        Ok(begin_action_pre_io_audit(
+            &self.audit,
+            &self.expected,
+            claims,
+            PreIoAudit {
+                kind: PreIoAuditKind::Attempt,
+                method: HttpMethod::Post,
+                operation_id,
+                target_record: None,
+                refusal_reason: None,
+                correlation,
+            },
+        )
+        .await?)
     }
 
     pub(crate) async fn record_action_boundary_audit(
@@ -2708,13 +2720,9 @@ impl MutationCoordinator {
         validate_action_claims(action, claims, Operation::Invoke)?;
         let normalized = validate_action_input(action, input.input)?;
         validate_precondition_set(action, &input.preconditions)?;
-        self.record_action_boundary_audit(
-            claims,
-            input.route_id,
-            input.correlation,
-            PreIoAuditKind::Attempt,
-        )
-        .await?;
+        let _attempt = self
+            .begin_action_boundary_audit(claims, input.route_id, input.correlation)
+            .await?;
         let binding = resolve_action_binding(
             self.audit.profile(),
             &ActionIdempotencyBinding {

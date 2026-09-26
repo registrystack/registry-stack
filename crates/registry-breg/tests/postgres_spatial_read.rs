@@ -613,8 +613,9 @@ async fn real_postgres_spatial_bbox_reads_preserve_authority_and_geojson_audit()
     assert!(!faulted.to_string().contains("edge-west"));
     assert_eq!(
         audit_count(&harness.database).await,
-        before_fault + 1,
-        "terminal audit failure releases no held GeoJSON bytes and commits only the attempt"
+        before_fault + 2,
+        "terminal audit failure releases no held GeoJSON bytes and answers the attempt as \
+         unfinished"
     );
 
     let before_adapter_fault = audit_count(&harness.database).await;
@@ -631,8 +632,9 @@ async fn real_postgres_spatial_bbox_reads_preserve_authority_and_geojson_audit()
     assert!(!adapter_faulted.to_string().contains("zero-area"));
     assert_eq!(
         audit_count(&harness.database).await,
-        before_adapter_fault + 1,
-        "GIS adapter terminal audit failure releases no held GeoJSON bytes"
+        before_adapter_fault + 2,
+        "GIS adapter terminal audit failure releases no held GeoJSON bytes and answers the \
+         attempt as unfinished"
     );
 
     assert_pool_context_clean(&harness.pool, &harness.database.runtime_role).await;

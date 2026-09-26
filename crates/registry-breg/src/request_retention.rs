@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use registry_platform_audit::{AuditEntry, AuditProfile};
 use serde::Serialize;
+use serde_json::{json, Value};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
@@ -48,6 +49,12 @@ pub enum RequestRetentionError {
     AttachmentStorageBindingMismatch,
     #[error("request retention state is unavailable")]
     Unavailable,
+    /// The erasure committed, but the audit destination refused the entry
+    /// recording it. The erased detail is gone; restore the destination,
+    /// then reconcile the erasure against the database before relying on
+    /// the audit journal for it.
+    #[error("the request detail erasure committed but its audit entry was not recorded; restore the audit destination")]
+    ErasureUnaudited,
 }
 
 pub type Result<T> = std::result::Result<T, RequestRetentionError>;
@@ -451,19 +458,82 @@ impl RequestRetentionOperatorService {
             .await
             .map_err(|_| RequestRetentionError::Unavailable)?;
         // The request entry is accepted before the erasure transaction opens,
-        // so an audit outage erases nothing; the committed response shares
-        // its correlation.
+        // so an audit outage erases nothing; the response shares its
+        // correlation. An erasure that ends without one writes the
+        // unfinished outcome when the held request is dropped.
         let correlation = RequestCorrelation::breg_created();
-        self.audit
-            .append(retention_request_entry(
-                self.audit.profile(),
-                &self.expected,
-                scope.clone(),
-                &correlation,
-            )?)
+        let request_entry = retention_request_entry(
+            self.audit.profile(),
+            &self.expected,
+            scope.clone(),
+            &correlation,
+        )?;
+        let unfinished = retention_outcome_record(&request_entry, "unfinished");
+        let request_record = request_entry.clone();
+        let mut attempt = self
+            .audit
+            .begin(request_entry, unfinished)
             .await
             .map_err(|_| RequestRetentionError::Unavailable)?;
-        let transaction = self.begin_verified_transaction(&mut client).await?;
+        let erased = self
+            .erase_in_transaction(&mut client, scope.clone(), correlation)
+            .await;
+        let (plan, erasure, entry) = match erased {
+            Ok(erased) => erased,
+            Err(error) => {
+                // Nothing committed: answer the request with the refusal or
+                // the failure.
+                let outcome = if error == RequestRetentionError::Unavailable {
+                    "failed"
+                } else {
+                    "refused"
+                };
+                let answer = retention_outcome_record(&request_record, outcome);
+                if attempt.respond(answer).await.is_err() {
+                    tracing::error!("the failed erasure's response audit entry was not recorded");
+                }
+                return Err(error);
+            }
+        };
+        // External objects are deleted before the response is recorded, so
+        // the entry states how many remain instead of claiming a finished
+        // erasure while objects still exist.
+        let external = self.retry_external_deletions(&mut client).await;
+        let mut record = entry.record().clone();
+        if let Some(fields) = record.as_object_mut() {
+            let (pending, tombstones) = match &external {
+                Ok((pending, tombstones)) => (json!(pending), json!(tombstones)),
+                Err(_) => (Value::Null, Value::Null),
+            };
+            fields.insert("pendingExternalDeletions".to_owned(), pending);
+            fields.insert("externalDeletionTombstones".to_owned(), tombstones);
+        }
+        attempt
+            .respond(record)
+            .await
+            .map_err(|_| RequestRetentionError::ErasureUnaudited)?;
+        let (pending_external_deletions, external_deletion_tombstones) = external?;
+        Ok(RequestRetentionErase {
+            request_entity_id: scope.request_entity_id.to_owned(),
+            request_id: scope.request_id.to_string(),
+            proposal_version: scope.proposal_version,
+            request_state: plan.current_state,
+            retention_mode: retention_mode_name(plan.retention_mode),
+            erasure,
+            pending_external_deletions,
+            external_deletion_tombstones,
+        })
+    }
+
+    /// Erase one request's detail in one committed transaction and build the
+    /// terminal entry that records it.
+    async fn erase_in_transaction(
+        &self,
+        client: &mut deadpool_postgres::Client,
+        scope: RequestDetailErasureScope<'_>,
+        correlation: RequestCorrelation,
+    ) -> Result<(RequestErasurePlan, RequestDetailErasure, AuditEntry)> {
+        let transaction = self.begin_verified_transaction(client).await?;
         let plan = load_erasure_plan(&transaction, &self.registry, scope.clone(), true).await?;
         let (erasure, current_revision) =
             erase_request_detail_in_transaction(&transaction, &self.registry, scope.clone(), &plan)
@@ -500,22 +570,7 @@ impl RequestRetentionOperatorService {
             .commit()
             .await
             .map_err(|_| RequestRetentionError::Unavailable)?;
-        self.audit
-            .append(entry)
-            .await
-            .map_err(|_| RequestRetentionError::Unavailable)?;
-        let (pending_external_deletions, external_deletion_tombstones) =
-            self.retry_external_deletions(&mut client).await?;
-        Ok(RequestRetentionErase {
-            request_entity_id: scope.request_entity_id.to_owned(),
-            request_id: scope.request_id.to_string(),
-            proposal_version: scope.proposal_version,
-            request_state: plan.current_state,
-            retention_mode: retention_mode_name(plan.retention_mode),
-            erasure,
-            pending_external_deletions,
-            external_deletion_tombstones,
-        })
+        Ok((plan, erasure, entry))
     }
 
     /// Retry orphaned external objects even when every request is active or
@@ -535,36 +590,50 @@ impl RequestRetentionOperatorService {
         // audit state.
         let transaction = self.begin_verified_transaction(&mut client).await?;
         transaction.commit().await.map_err(map_retention_error)?;
-        self.audit
-            .append(AuditEntry::request(
-                ATTACHMENT_CLEANUP_AUDIT_SCHEMA,
-                correlation.clone(),
-                serde_json::json!({
-                    "kind":"attachmentCleanup", "phase":"attempt", "outcome":"started",
-                    "packageRevision":self.expected.package_revision,
-                    "actor":"breg:request-retention-operator", "correlation":correlation,
-                }),
-            ))
+        let record = |phase: &str, outcome: &str| {
+            serde_json::json!({
+                "kind":"attachmentCleanup", "phase":phase, "outcome":outcome,
+                "packageRevision":self.expected.package_revision,
+                "actor":"breg:request-retention-operator", "correlation":correlation,
+            })
+        };
+        // A cleanup that ends before its response writes the unfinished
+        // outcome when the held request is dropped.
+        let mut attempt = self
+            .audit
+            .begin(
+                AuditEntry::request(
+                    ATTACHMENT_CLEANUP_AUDIT_SCHEMA,
+                    correlation.clone(),
+                    record("attempt", "started"),
+                ),
+                record("terminal", "unfinished"),
+            )
             .await
             .map_err(|_| RequestRetentionError::Unavailable)?;
-        let (pending_external_deletions, external_deletion_tombstones) =
-            self.retry_external_deletions(&mut client).await?;
+        let (pending_external_deletions, external_deletion_tombstones) = match self
+            .retry_external_deletions(&mut client)
+            .await
+        {
+            Ok(counts) => counts,
+            Err(error) => {
+                if attempt.respond(record("terminal", "failed")).await.is_err() {
+                    tracing::error!("the failed cleanup's response audit entry was not recorded");
+                }
+                return Err(error);
+            }
+        };
         let result = AttachmentCleanup {
             pending_external_deletions,
             external_deletion_tombstones,
         };
-        self.audit
-            .append(AuditEntry::response(
-                ATTACHMENT_CLEANUP_AUDIT_SCHEMA,
-                correlation.clone(),
-                serde_json::json!({
-                    "kind":"attachmentCleanup", "phase":"terminal", "outcome":"completed",
-                    "packageRevision":self.expected.package_revision,
-                    "actor":"breg:request-retention-operator", "correlation":correlation,
-                    "pendingExternalDeletions":result.pending_external_deletions,
-                    "externalDeletionTombstones":result.external_deletion_tombstones,
-                }),
-            ))
+        let mut completed = record("terminal", "completed");
+        completed["pendingExternalDeletions"] =
+            serde_json::json!(result.pending_external_deletions);
+        completed["externalDeletionTombstones"] =
+            serde_json::json!(result.external_deletion_tombstones);
+        attempt
+            .respond(completed)
             .await
             .map_err(|_| RequestRetentionError::Unavailable)?;
         Ok(result)
@@ -1464,6 +1533,17 @@ fn retention_request_entry(
             "recordReference": record_reference,
         }),
     ))
+}
+
+/// The `response` of an erasure that did not record its committed terminal:
+/// the request's identities with `outcome`, and no count.
+fn retention_outcome_record(request: &AuditEntry, outcome: &str) -> Value {
+    let mut record = request.record().clone();
+    if let Some(fields) = record.as_object_mut() {
+        fields.insert("phase".to_owned(), json!("terminal"));
+        fields.insert("outcome".to_owned(), json!(outcome));
+    }
+    record
 }
 
 fn retention_terminal_entry(

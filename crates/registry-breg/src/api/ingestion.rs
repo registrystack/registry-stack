@@ -177,15 +177,17 @@ async fn create_run(
         .await
     {
         Ok(run) => ingestion_response(StatusCode::CREATED, json!({ "run": run })),
-        // A refusal after the request entry was accepted owes the journal
-        // its response entry, as a refused chunk submission does.
-        Err(error) => {
+        // A refusal after the ingestion request entry is already answered in
+        // the ingestion schema; any other refusal owes the journal its
+        // single refusal entry here, so an audit outage gates it.
+        Err(refusal) if refusal.answered => ingestion_problem(refusal.error),
+        Err(refusal) => {
             audited_mutation_refusal(
                 mutations,
                 &binding.base,
                 &surface.context,
                 None,
-                ingestion_problem(error),
+                ingestion_problem(refusal.error),
                 &correlation,
             )
             .await
@@ -395,15 +397,17 @@ async fn cancel_run(
         .await
     {
         Ok(run) => ingestion_response(StatusCode::OK, json!({ "run": run })),
-        // A refusal after the request entry was accepted owes the journal
-        // its response entry, as a refused chunk submission does.
-        Err(error) => {
+        // A refusal after the ingestion request entry is already answered in
+        // the ingestion schema; any other refusal owes the journal its
+        // single refusal entry here, so an audit outage gates it.
+        Err(refusal) if refusal.answered => ingestion_problem(refusal.error),
+        Err(refusal) => {
             audited_mutation_refusal(
                 mutations,
                 &binding.base,
                 &surface.context,
                 None,
-                ingestion_problem(error),
+                ingestion_problem(refusal.error),
                 &correlation,
             )
             .await
@@ -545,16 +549,17 @@ async fn submit_chunk(
         .await
     {
         Ok(answer) => ingestion_response(StatusCode::OK, answer),
-        // A submission the run refuses after parsing owes the journal the
-        // same durable refusal envelope pre-parse failures write, so an audit
-        // outage gates the refusal instead of passing silently.
-        Err(error) => {
+        // A refusal after the ingestion request entry is already answered in
+        // the ingestion schema; any other refusal owes the journal its
+        // single refusal entry here, so an audit outage gates it.
+        Err(refusal) if refusal.answered => ingestion_problem(refusal.error),
+        Err(refusal) => {
             audited_mutation_refusal(
                 mutations,
                 &binding.base,
                 &surface.context,
                 None,
-                ingestion_problem(error),
+                ingestion_problem(refusal.error),
                 &correlation,
             )
             .await
@@ -631,16 +636,17 @@ async fn chunk_receipt(
         .await
     {
         Ok(receipt) => ingestion_response(StatusCode::OK, receipt),
-        // A recovery the run refuses after its request entry was accepted
-        // owes the journal the same durable refusal envelope a refused
-        // cancellation or chunk submission owes.
-        Err(error) => {
+        // A refusal after the ingestion request entry is already answered in
+        // the ingestion schema; any other refusal owes the journal its
+        // single refusal entry here, so an audit outage gates it.
+        Err(refusal) if refusal.answered => ingestion_problem(refusal.error),
+        Err(refusal) => {
             audited_mutation_refusal(
                 mutations,
                 &binding.base,
                 &surface.context,
                 None,
-                ingestion_problem(error),
+                ingestion_problem(refusal.error),
                 &correlation,
             )
             .await
