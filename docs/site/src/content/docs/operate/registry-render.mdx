@@ -172,8 +172,10 @@ Each line is one entry: `schema` (`render.registrystack.org/audit/v1`), `eventId
 `phase` (`request` or `response`), `correlation`, and the value-free `record`: hashes, versions,
 the caller's key fingerprint, the outcome, and the trace and correlation ids, never data values or
 image bytes. The `request` entry carries no outcome. Both entries of one render share their
-`correlation`: the caller's `Idempotency-Key`, or a random identifier when there is none. For
-example, to list outcomes by correlation:
+`correlation`, a random identifier the server draws for every call; the caller's `Idempotency-Key`
+is recorded only as the record's `correlationId`, because two calls may carry the same key. A call
+that ends before its outcome is written, such as one whose caller disconnected, has the outcome
+`unfinished`. For example, to list outcomes by correlation:
 
 ```sh
 jq -c '{correlation, phase, outcome: .record.outcome}' /var/lib/registry-render/audit/render.jsonl
