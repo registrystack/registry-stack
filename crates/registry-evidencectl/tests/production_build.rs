@@ -869,6 +869,10 @@ fn identical_inputs_produce_identical_bundle_bytes_revision_and_stable_report_sh
 
 #[test]
 fn termination_cancels_evidence_and_removes_only_current_build_staging() {
+    // Only a hung build reaches this; a runner starved by parallel builds just
+    // makes each wait below longer.
+    const BUILD_EVENT_DEADLINE: Duration = Duration::from_secs(120);
+
     for signal in [rustix::process::Signal::INT, rustix::process::Signal::TERM] {
         let fixture = Fixture::new();
         let ready = fixture.root.join("blocked-evidence-ready");
@@ -885,7 +889,7 @@ fn termination_cancels_evidence_and_removes_only_current_build_staging() {
             .spawn()
             .expect("blocking evidencectl build starts");
 
-        let ready_deadline = Instant::now() + Duration::from_secs(10);
+        let ready_deadline = Instant::now() + BUILD_EVENT_DEADLINE;
         while !ready.exists() {
             assert!(
                 child.try_wait().expect("poll blocking build").is_none(),
@@ -904,7 +908,7 @@ fn termination_cancels_evidence_and_removes_only_current_build_staging() {
         .expect("evidencectl PID is positive");
         rustix::process::kill_process(pid, signal).expect("send signal to evidencectl build");
 
-        let exit_deadline = Instant::now() + Duration::from_secs(10);
+        let exit_deadline = Instant::now() + BUILD_EVENT_DEADLINE;
         loop {
             if child.try_wait().expect("poll interrupted build").is_some() {
                 break;

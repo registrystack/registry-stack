@@ -22,7 +22,7 @@ use std::{
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use serde_json::{json, Value};
@@ -626,9 +626,9 @@ async fn a_request_immediately_after_a_change_never_serves_the_edit_it_replaced(
 // duplicate the small amount of raw framing `tests/protocol.rs` already hand-rolls, because that
 // module's helpers are private to their own binary and there is no third crate for both to share.
 
-/// How long a test waits for one more message before concluding the server has stopped producing
-/// them.
-const MESSAGE_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a test waits for the response to one request before concluding the server is hung.
+/// Far above any healthy response time, since a busy runner can starve the server for seconds.
+const RESPONSE_DEADLINE: Duration = Duration::from_secs(120);
 
 fn send(stdin: &mut ChildStdin, message: Value) {
     let body = serde_json::to_vec(&message).unwrap();
@@ -658,8 +658,8 @@ fn read_one_message<R: BufRead>(reader: &mut R) -> Option<Value> {
 }
 
 /// Reads framed LSP messages off a reader on a background thread and forwards each one to the
-/// returned channel, so a caller waiting for a message that never arrives times out on
-/// `Receiver::recv_timeout` instead of blocking on the pipe. The join handle lets a caller wait for
+/// returned channel, so a caller waiting for a response that never arrives fails at
+/// [`RESPONSE_DEADLINE`] instead of blocking on the pipe. The join handle lets a caller wait for
 /// the thread to observe end-of-stream, which matters for the stdout-hygiene test below: it has to
 /// know every byte the process ever wrote has been accounted for before it inspects them.
 fn spawn_message_reader<R: Read + Send + 'static>(reader: R) -> (Receiver<Value>, JoinHandle<()>) {
@@ -675,20 +675,22 @@ fn spawn_message_reader<R: Read + Send + 'static>(reader: R) -> (Receiver<Value>
     (receiver, handle)
 }
 
-fn receive(messages: &Receiver<Value>) -> Value {
-    match messages.recv_timeout(MESSAGE_TIMEOUT) {
-        Ok(message) => message,
-        Err(RecvTimeoutError::Timeout) => {
-            panic!("language server sent nothing for {MESSAGE_TIMEOUT:?}")
-        }
-        Err(RecvTimeoutError::Disconnected) => panic!("language server closed stdout"),
-    }
-}
-
+/// Waits for the response to request `id`, setting aside any notifications that arrive first.
 fn receive_response(messages: &Receiver<Value>, id: i64) -> Value {
+    let deadline = Instant::now() + RESPONSE_DEADLINE;
     let mut others = Vec::new();
     loop {
-        let message = receive(messages);
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let message = match messages.recv_timeout(remaining) {
+            Ok(message) => message,
+            Err(RecvTimeoutError::Timeout) => panic!(
+                "language server did not return response {id} within {RESPONSE_DEADLINE:?}; \
+                 received instead: {others:?}"
+            ),
+            Err(RecvTimeoutError::Disconnected) => panic!(
+                "language server closed stdout before response {id}; received instead: {others:?}"
+            ),
+        };
         if message.get("id").and_then(Value::as_i64) == Some(id) {
             return message;
         }
