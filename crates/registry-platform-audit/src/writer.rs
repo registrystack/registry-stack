@@ -244,6 +244,10 @@ pub enum AuditDestinationError {
 pub enum AuditDestination {
     File(FileDestination),
     Stdout,
+    /// Standard error, for a companion command whose own report owns stdout.
+    /// Configuration never selects it; [`AuditDestination::for_process`]
+    /// derives it from `stdout`.
+    Stderr,
 }
 
 /// A durable, size-rotated JSON Lines file with age-based retention.
@@ -400,15 +404,17 @@ impl AuditDestination {
     pub fn kind(&self) -> AuditDestinationKind {
         match self {
             Self::File(_) => AuditDestinationKind::File,
-            Self::Stdout => AuditDestinationKind::Stdout,
+            // `stderr` reports the configured kind it derives from.
+            Self::Stdout | Self::Stderr => AuditDestinationKind::Stdout,
         }
     }
 
-    /// Check that a writer could open this destination. `stdout` always passes.
+    /// Check that a writer could open this destination. A stream always
+    /// passes.
     pub fn check_writable(&self) -> Result<(), AuditError> {
         match self {
             Self::File(file) => file.check_writable(),
-            Self::Stdout => Ok(()),
+            Self::Stdout | Self::Stderr => Ok(()),
         }
     }
 
@@ -416,8 +422,9 @@ impl AuditDestination {
     /// subcommand) writes to while the service may hold this one. A file
     /// destination becomes a sibling file with `role` before the extension
     /// (`audit.jsonl` becomes `audit.<role>.jsonl`) and the same rotation and
-    /// retention, so it takes its own single-writer lock. `stdout` stays
-    /// `stdout`.
+    /// retention, so it takes its own single-writer lock. A `stdout`
+    /// destination becomes `stderr`, so a companion command's own report
+    /// keeps stdout.
     pub fn for_process(&self, role: &str) -> Result<Self, AuditDestinationError> {
         let valid = (1..=32).contains(&role.len())
             && !role.starts_with('-')
@@ -446,7 +453,7 @@ impl AuditDestination {
                     retain_days: file.retain_days,
                 }))
             }
-            Self::Stdout => Ok(Self::Stdout),
+            Self::Stdout | Self::Stderr => Ok(Self::Stderr),
         }
     }
 }
@@ -488,6 +495,9 @@ impl AuditWriter {
             }
             AuditDestination::Stdout => {
                 WriterInner::Stream(LineStream::new(Box::new(io::stdout())))
+            }
+            AuditDestination::Stderr => {
+                WriterInner::Stream(LineStream::new(Box::new(io::stderr())))
             }
         };
         Ok(Self {
@@ -1952,10 +1962,20 @@ mod tests {
             directory.path().join("audit").join("journal.breg-migrate")
         );
 
+        // A companion command's own report owns stdout, so its audit moves to
+        // stderr and keeps the configured stdout kind.
+        let companion = AuditDestination::Stdout
+            .for_process("schedulingctl")
+            .expect("role");
+        assert_eq!(companion, AuditDestination::Stderr);
+        assert_eq!(companion.kind(), AuditDestinationKind::Stdout);
+        assert!(companion.check_writable().is_ok());
         assert_eq!(
-            AuditDestination::Stdout.for_process("schedulingctl"),
-            Ok(AuditDestination::Stdout)
+            companion.for_process("schedulingctl"),
+            Ok(AuditDestination::Stderr)
         );
+        let companion_writer = AuditWriter::open(companion).await.expect("stderr");
+        assert_eq!(companion_writer.kind(), AuditDestinationKind::Stdout);
         for role in ["", "-x", "Bregctl", "a/b", "a.b", &"x".repeat(33)] {
             assert_eq!(
                 service.for_process(role),

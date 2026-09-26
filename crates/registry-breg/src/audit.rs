@@ -63,7 +63,8 @@ impl RegistryAudit {
     /// Open the audit handle an operator command appends to while the runtime
     /// may hold the configured destination. A file destination becomes its
     /// `bregctl` sibling (`audit.jsonl` becomes `audit.bregctl.jsonl`) under
-    /// its own single-writer lock; `stdout` stays `stdout`.
+    /// its own single-writer lock; `stdout` becomes `stderr`, so the
+    /// command's own report keeps stdout.
     pub async fn open_companion(
         config: &crate::runtime_config::RuntimeConfig,
     ) -> Result<Self, RegistryAuditError> {

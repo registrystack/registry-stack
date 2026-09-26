@@ -644,7 +644,7 @@ async fn worker_stop(mut stopped: mpsc::Receiver<&'static str>) {
 /// a one-shot subcommand) that writes audit while the service may hold the
 /// destination passes its role, and writes to the sibling file
 /// [`registry_platform_audit::AuditDestination::for_process`] names under its
-/// own single-writer lock.
+/// own single-writer lock, or to stderr when the destination is `stdout`.
 pub async fn open_audit(
     config: &RuntimeConfig,
     secrets: &SecretResolver,
