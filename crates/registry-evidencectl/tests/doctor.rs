@@ -148,6 +148,29 @@ fn doctor_reports_an_audit_directory_the_audit_writer_refuses() {
 }
 
 #[test]
+fn doctor_passes_a_relative_audit_path_from_the_default_current_directory_project() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    provision(&project);
+    provision_bearer_token(&project);
+
+    freeze(&project);
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .arg("doctor")
+        .current_dir(&project)
+        .output()
+        .expect("running evidencectl");
+    unfreeze(&project);
+
+    let stdout = stdout_of(&output);
+    assert!(
+        output.status.success(),
+        "doctor failed the current-directory project:\n{stdout}{}",
+        stderr_of(&output)
+    );
+}
+
+#[test]
 fn doctor_passes_a_stdout_audit_destination_without_inspecting_a_file() {
     let workspace = tempfile::tempdir().expect("tempdir");
     let project = workspace.path().join("project");

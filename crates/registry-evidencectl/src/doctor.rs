@@ -393,7 +393,19 @@ fn check_audit(project: &Path, runtime: &YamlValue, runtime_path: &Path) -> Chec
         return run.finish();
     };
     let path = resolve_against(runtime_path, project, Path::new(path));
-    match FileDestination::new(&path) {
+    // The writer holds only absolute paths; a current-directory project
+    // resolves this one against the working directory.
+    let absolute = match std::path::absolute(&path) {
+        Ok(absolute) => absolute,
+        Err(error) => {
+            run.refuse(
+                &path,
+                format!("cannot be resolved to an absolute path: {error}"),
+            );
+            return run.finish();
+        }
+    };
+    match FileDestination::new(absolute) {
         Ok(destination) => {
             run.read_declaration();
             if let Err(error) = AuditDestination::File(destination).check_writable() {
