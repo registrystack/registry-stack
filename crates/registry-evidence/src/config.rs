@@ -9099,6 +9099,14 @@ outboundTls:
                 "retention-zero",
                 "audit:\n  path: /var/lib/evidence/audit.jsonl\n  retainDays: 0\n",
             ),
+            (
+                "rotation-above-maximum",
+                "audit:\n  path: /var/lib/evidence/audit.jsonl\n  rotateBytes: 4294967296\n",
+            ),
+            (
+                "retention-above-maximum",
+                "audit:\n  path: /var/lib/evidence/audit.jsonl\n  retainDays: 36501\n",
+            ),
             ("unknown-destination", "audit:\n  destination: syslog\n"),
             (
                 "legacy-maximum-file-bytes",
@@ -9124,6 +9132,14 @@ outboundTls:
             (
                 "retention-zero",
                 "audit:\n  path: /var/lib/evidence/audit.jsonl\n  retainDays: 0\n",
+            ),
+            (
+                "rotation-above-maximum",
+                "audit:\n  path: /var/lib/evidence/audit.jsonl\n  rotateBytes: 4294967296\n",
+            ),
+            (
+                "retention-above-maximum",
+                "audit:\n  path: /var/lib/evidence/audit.jsonl\n  retainDays: 36501\n",
             ),
             ("unknown-destination", "audit:\n  destination: syslog\n"),
             (

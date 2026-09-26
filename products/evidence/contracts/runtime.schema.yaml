@@ -270,6 +270,7 @@ properties:
           104857600 (100 MiB). File destination only.
         type: integer
         minimum: 1048576
+        maximum: 4294967295
       retainDays:
         description: >-
           Age in days after which a sealed file is deleted when the writer opens or rotates;
