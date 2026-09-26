@@ -148,7 +148,8 @@ that port. The `relay healthcheck` command validates the configured URL before m
 For every data operation, including anonymous public access, Relay writes an attempt event as a
 `request` entry before SQLite access, and a refusal or a terminal release, unresolved, or
 source-failed event as a `response` entry before returning. Both entries carry the operation id as
-their `correlation`. The release event covers the exact response bytes.
+their `correlation`. The caller holds the exact serialized response bytes until the response entry's
+write returns, so that entry gates their release; it does not describe or bind them.
 An audit failure blocks source access or withholds the response with `503 audit.unavailable`.
 
 Each line is one envelope, `{schema, eventId, time, phase, correlation, record}`, with schema
