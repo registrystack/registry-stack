@@ -412,7 +412,8 @@ impl FileDestination {
                     .custom_flags(open_flags())
                     .open(&self.path)
                     .map_err(AuditError::Io)?;
-                require_complete_final_entry(&active)
+                require_complete_final_entry(&active)?;
+                require_current_entry_format(&active)
             }
             Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
             Err(error) => Err(AuditError::Io(error)),
@@ -831,6 +832,7 @@ impl SegmentedFile {
         let active = open_append(&path)?;
         validate_active_file(&active)?;
         require_complete_final_entry(&active)?;
+        require_current_entry_format(&active)?;
         active.sync_all().map_err(AuditError::Io)?;
         if created || lock_created {
             sync_directory(&parent)?;
@@ -1126,6 +1128,46 @@ fn require_complete_final_entry(active: &File) -> Result<(), AuditError> {
     Ok(())
 }
 
+/// Refuse an active file whose first entry was not produced by this writer,
+/// such as a leftover journal from the pre-simplification hash-chained
+/// writer. Every entry this writer appends carries `eventId`, `schema`,
+/// `time`, `phase`, and `correlation`; an old-format entry carries none of
+/// them. Only the first line is read, bounded to the largest entry this
+/// writer accepts, since a file this writer manages never mixes formats.
+fn require_current_entry_format(active: &File) -> Result<(), AuditError> {
+    let length = active.metadata().map_err(AuditError::Io)?.len();
+    if length == 0 {
+        return Ok(());
+    }
+    let read_len = length.min(MAX_ENTRY_BYTES as u64);
+    #[allow(clippy::cast_possible_truncation)]
+    let mut buffer = vec![0; read_len as usize];
+    active
+        .read_exact_at(&mut buffer, 0)
+        .map_err(AuditError::Io)?;
+    let first_line = buffer.split(|&byte| byte == b'\n').next().unwrap_or(&[]);
+    let is_current_format = serde_json::from_slice::<Value>(first_line)
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .is_some_and(|entry| {
+            entry.get("eventId").is_some_and(Value::is_string)
+                && entry.get("schema").is_some_and(Value::is_string)
+                && entry.get("time").is_some_and(Value::is_string)
+                && entry.get("correlation").is_some_and(Value::is_string)
+                && matches!(
+                    entry.get("phase").and_then(Value::as_str),
+                    Some("request" | "response")
+                )
+        });
+    if !is_current_format {
+        return Err(AuditError::Io(io::Error::new(
+            ErrorKind::InvalidData,
+            "audit file's first entry is not in the format this writer produces; archive it and restart with a fresh path",
+        )));
+    }
+    Ok(())
+}
+
 fn open_append(path: &Path) -> Result<File, AuditError> {
     open_owned(path, OpenOptions::new().read(true).append(true))
 }
@@ -1333,6 +1375,10 @@ mod tests {
             correlation,
             json!({"operationId": "read", "outcome": null}),
         )
+    }
+
+    fn current_format_line(correlation: &str) -> String {
+        request(correlation).to_line().expect("line")
     }
 
     fn lines(path: &Path) -> Vec<Value> {
@@ -1877,9 +1923,13 @@ mod tests {
             .mode(0o700)
             .create(path.parent().expect("parent"))
             .expect("audit directory");
-        let line = format!("{{\"padding\":\"{}\"}}\n", "x".repeat(1000));
-        let seeded = usize::try_from(MIN_AUDIT_ROTATE_BYTES).expect("size") / line.len();
-        fs::write(&path, line.repeat(seeded)).expect("nearly full active file");
+        let filler = format!("{{\"padding\":\"{}\"}}\n", "x".repeat(1000));
+        let seeded = usize::try_from(MIN_AUDIT_ROTATE_BYTES).expect("size") / filler.len();
+        // The first line must be current format; only it is checked at open,
+        // and the rest are filler this test does not otherwise inspect.
+        let mut content = current_format_line("seed");
+        content.push_str(&filler.repeat(seeded - 1));
+        fs::write(&path, content).expect("nearly full active file");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("mode");
         // The active file was last written before the retention period.
         File::options()
@@ -2372,13 +2422,44 @@ mod tests {
             .mode(0o700)
             .create(path.parent().expect("parent"))
             .expect("audit directory");
-        fs::write(&path, "{}\n").expect("file");
+        let entry = current_format_line("existing");
+        fs::write(&path, &entry).expect("file");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("mode");
         destination.check_writable().expect("complete final entry");
-        fs::write(&path, "{}\n{").expect("torn file");
+        fs::write(&path, format!("{entry}{{")).expect("torn file");
         destination
             .check_writable()
             .expect_err("incomplete final entry");
+    }
+
+    #[test]
+    fn check_writable_refuses_a_file_whose_first_entry_is_not_current_format() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path.parent().expect("parent"))
+            .expect("audit directory");
+        // Shape of an entry written by the pre-simplification hash-chained
+        // writer (`AuditEnvelope` in `crates/registry-platform-audit/src/lib.rs`
+        // on `origin/main`): `envelope_id`/`prev_hash`/`record_hash`, none of
+        // which this writer's `eventId`/`schema`/`phase`/`correlation` shape has.
+        fs::write(
+            &path,
+            "{\"envelope_id\":\"01J000000000000000000000\",\"timestamp_unix_ms\":0,\
+             \"prev_hash\":null,\"record\":{},\"record_hash\":\"sha256:00\"}\n",
+        )
+        .expect("old-format file");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("mode");
+        destination
+            .check_writable()
+            .expect_err("leftover hash-chained journal");
+
+        fs::write(&path, "{}\n").expect("unrelated shape");
+        destination
+            .check_writable()
+            .expect_err("first entry missing the current format's fields");
     }
 
     #[test]
@@ -2461,5 +2542,29 @@ mod tests {
         AuditWriter::open(AuditDestination::File(destination))
             .await
             .expect_err("write-only lock");
+    }
+
+    #[tokio::test]
+    async fn open_refuses_a_leftover_hash_chained_journal_file() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path.parent().expect("parent"))
+            .expect("audit directory");
+        // Shape of an entry written by the pre-simplification hash-chained
+        // writer, left behind at this path by an operator who restarted a
+        // service here without archiving it first.
+        fs::write(
+            &path,
+            "{\"envelope_id\":\"01J000000000000000000000\",\"timestamp_unix_ms\":0,\
+             \"prev_hash\":null,\"record\":{},\"record_hash\":\"sha256:00\"}\n",
+        )
+        .expect("old-format file");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("mode");
+        AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect_err("leftover hash-chained journal");
     }
 }
