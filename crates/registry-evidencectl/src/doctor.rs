@@ -37,7 +37,7 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
-use registry_platform_audit::{AuditDestination, FileDestination};
+use registry_platform_audit::{AuditDestination, AuditDestinationKind};
 use serde::{Deserialize, Serialize};
 use serde_norway::Value as YamlValue;
 
@@ -372,50 +372,93 @@ fn check_signer(project: &Path, runtime: &YamlValue, runtime_path: &Path) -> Che
     run.finish()
 }
 
-/// The audit file destination, held to the same rule the audit writer applies
-/// when it opens, and its lock companion when it exists. Absence is not a
-/// finding: the service creates both on first write. A `stdout` destination
-/// leaves nothing on this host to inspect.
+/// The audit destination, held to the settings rules the service applies and,
+/// for a file, to the rule the audit writer applies when it opens, and its lock
+/// companion when it exists. Absence of the file is not a finding: the service
+/// creates both on first write. A `stdout` destination leaves nothing on this
+/// host to inspect.
 fn check_audit(project: &Path, runtime: &YamlValue, runtime_path: &Path) -> Check {
     let mut run = CheckRun::new("audit", project);
     let Some(audit) = runtime.get("audit") else {
         return run.finish();
     };
-    if audit.get("destination").and_then(YamlValue::as_str) == Some("stdout") {
+    let kind = match audit.get("destination").map(YamlValue::as_str) {
+        None | Some(Some("file")) => AuditDestinationKind::File,
+        Some(Some("stdout")) => AuditDestinationKind::Stdout,
+        Some(_) => {
+            run.refuse(
+                runtime_path,
+                "declares an audit destination that is neither file nor stdout".to_owned(),
+            );
+            return run.finish();
+        }
+    };
+    let declared_path = match audit.get("path").map(YamlValue::as_str) {
+        None => None,
+        Some(Some(path)) => Some(resolve_against(runtime_path, project, Path::new(path))),
+        Some(None) => {
+            run.refuse(
+                runtime_path,
+                "declares an audit path that is not a string".to_owned(),
+            );
+            return run.finish();
+        }
+    };
+    let Some(rotate_bytes) = audit_setting(&mut run, runtime_path, audit, "rotateBytes") else {
+        return run.finish();
+    };
+    let Some(retain_days) = audit_setting(&mut run, runtime_path, audit, "retainDays") else {
+        return run.finish();
+    };
+    let Ok(retain_days) = retain_days.map(u32::try_from).transpose() else {
+        run.refuse(
+            runtime_path,
+            "declares audit retainDays out of range".to_owned(),
+        );
+        return run.finish();
+    };
+    // The writer holds only absolute paths; a current-directory project
+    // resolves a relative one against the working directory.
+    let absolute = match declared_path
+        .as_deref()
+        .map(std::path::absolute)
+        .transpose()
+    {
+        Ok(absolute) => absolute,
+        Err(error) => {
+            let path = declared_path.as_deref().unwrap_or(runtime_path);
+            run.refuse(
+                path,
+                format!("cannot be resolved to an absolute path: {error}"),
+            );
+            return run.finish();
+        }
+    };
+    let destination =
+        match AuditDestination::from_settings(kind, absolute, rotate_bytes, retain_days) {
+            Ok(destination) => destination,
+            Err(error) => {
+                run.refuse(
+                    runtime_path,
+                    format!("declares audit settings the service refuses: {error}"),
+                );
+                return run.finish();
+            }
+        };
+    let (AuditDestination::File(_), Some(path)) = (&destination, declared_path) else {
         run.note(
             "stdout destination: the collector reading the service's standard output owns \
              durability, rotation, and retention"
                 .to_owned(),
         );
         return run.finish();
-    }
-    let Some(path) = audit.get("path").and_then(YamlValue::as_str) else {
-        return run.finish();
     };
-    let path = resolve_against(runtime_path, project, Path::new(path));
-    // The writer holds only absolute paths; a current-directory project
-    // resolves this one against the working directory.
-    let absolute = match std::path::absolute(&path) {
-        Ok(absolute) => absolute,
-        Err(error) => {
-            run.refuse(
-                &path,
-                format!("cannot be resolved to an absolute path: {error}"),
-            );
-            return run.finish();
-        }
-    };
-    match FileDestination::new(absolute) {
-        Ok(destination) => {
-            run.read_declaration();
-            if let Err(error) = AuditDestination::File(destination).check_writable() {
-                run.refuse(
-                    &path,
-                    format!("is a destination the audit writer refuses: {error}"),
-                );
-            }
-        }
-        Err(error) => run.refuse(&path, format!("is not an audit file destination: {error}")),
+    run.read_declaration();
+    if let Err(error) = destination.check_writable() {
+        run.refuse(
+            &path,
+            format!("is a destination the audit writer refuses: {error}"),
+        );
     }
     let lock = lock_companion(&path);
     if !lock.exists() {
@@ -433,6 +476,29 @@ fn check_audit(project: &Path, runtime: &YamlValue, runtime_path: &Path) -> Chec
     }
     require_sole_owner(&mut run, &lock, &metadata);
     run.finish()
+}
+
+/// An optional unsigned audit setting, or `None` after refusing one that is
+/// not an unsigned integer.
+fn audit_setting(
+    run: &mut CheckRun,
+    runtime_path: &Path,
+    audit: &YamlValue,
+    name: &str,
+) -> Option<Option<u64>> {
+    match audit.get(name) {
+        None => Some(None),
+        Some(value) => match value.as_u64() {
+            Some(value) => Some(Some(value)),
+            None => {
+                run.refuse(
+                    runtime_path,
+                    format!("declares audit {name} that is not an unsigned integer"),
+                );
+                None
+            }
+        },
+    }
 }
 
 /// One requirement's declared acquisition, projected far enough to say what the
