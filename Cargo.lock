@@ -5635,6 +5635,7 @@ name = "registry-platform-audit"
 version = "0.34.0"
 dependencies = [
  "hmac 0.13.0",
+ "regex",
  "rustix 1.1.5",
  "schemars",
  "serde",
@@ -5968,6 +5969,7 @@ dependencies = [
  "jsonwebtoken",
  "oxjsonld",
  "p256",
+ "regex",
  "registry-discovery-profile",
  "registry-platform-audit",
  "registry-platform-authcommon",

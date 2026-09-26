@@ -1591,6 +1591,16 @@ fn audit_path_has_valid_shape(path: &str) -> bool {
     }
 }
 
+/// The JSON Schema pattern of the paths `audit_path_has_valid_shape`
+/// accepts: an absolute path with no `..` segment, or a relative path that
+/// neither starts with `.` or `..` nor contains a `..` segment.
+#[cfg(any(feature = "schema", test))]
+fn relay_audit_path_pattern() -> String {
+    let segment = registry_platform_audit::AUDIT_PATH_SEGMENT_PATTERN;
+    let first = r"(?:[^/.][^/]*|\.(?:[^/.][^/]*|\.[^/]+))";
+    format!("^(?:/+(?:{segment}(?:/+{segment})*)?|{first}(?:/+{segment})*)/*$")
+}
+
 /// State the rules `AuditRuntime::check_shape` enforces: the `stdout`
 /// destination refuses every file setting, the `file` destination needs a
 /// non-blank path, and the rotation and retention settings stay in bounds.
@@ -1645,7 +1655,10 @@ fn audit_runtime_schema(schema: &mut schemars::Schema) {
         "else".to_owned(),
         serde_json::json!({
             "required": ["path"],
-            "properties": {"path": {"type": "string", "pattern": "\\S"}}
+            "properties": {"path": {
+                "type": "string",
+                "allOf": [{"pattern": "\\S"}, {"pattern": relay_audit_path_pattern()}]
+            }}
         }),
     );
 }
@@ -1684,6 +1697,30 @@ pub struct ShutdownRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_schema_audit_path_pattern_accepts_exactly_the_checked_shapes() {
+        let pattern = regex::Regex::new(&relay_audit_path_pattern()).expect("pattern compiles");
+        let segments = ["a", ".", "..", "...", ".a", "..a", "a.b"];
+        let mut paths = vec!["/".to_owned(), "//".to_owned()];
+        for first in segments {
+            paths.push(first.to_owned());
+            paths.push(format!("/{first}"));
+            paths.push(format!("{first}/"));
+            for second in segments {
+                paths.push(format!("/{first}/{second}"));
+                paths.push(format!("{first}/{second}"));
+                paths.push(format!("{first}//{second}/"));
+            }
+        }
+        for path in paths {
+            assert_eq!(
+                pattern.is_match(&path),
+                audit_path_has_valid_shape(&path),
+                "{path:?}"
+            );
+        }
+    }
 
     #[test]
     fn ordered_map_rejects_duplicate_property_keys() {
