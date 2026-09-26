@@ -109,6 +109,9 @@ pub enum AuditInitializationFault {
     Storage,
     /// Another writer already holds the destination's single-writer lock.
     Locked,
+    /// The audit file's last entry was torn by an interrupted write, so the
+    /// writer refuses to reopen and append to it.
+    IncompleteEntry,
 }
 
 impl AuditInitializationFault {
@@ -123,6 +126,9 @@ impl AuditInitializationFault {
                 "the audit file or lock is not owner-only, or its directory is unavailable or not owner-controlled"
             }
             Self::Locked => "another writer already holds the audit destination lock",
+            Self::IncompleteEntry => {
+                "the audit file ends in an incomplete entry; archive it and start on a fresh path"
+            }
         }
     }
 }
@@ -149,8 +155,12 @@ impl From<&EvidenceAuditError> for AuditInitializationFault {
                 | AuditError::EnvVarNotUnicode { .. }
                 | AuditError::EmptySecret { .. }
                 | AuditError::WeakSecret { .. } => Self::Secret,
-                // Everything else opening a destination can report is about
-                // the file, its lock, or its directory.
+                // The writer's incomplete-final-entry refusal reports this
+                // exact kind; every other I/O failure opening a destination
+                // is about the file, its lock, or its directory.
+                AuditError::Io(io_error) if io_error.kind() == std::io::ErrorKind::InvalidData => {
+                    Self::IncompleteEntry
+                }
                 _ => Self::Storage,
             },
         }

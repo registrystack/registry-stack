@@ -1977,6 +1977,18 @@ fn serve_names_why_the_audit_boundary_refused_to_initialize() {
             expected: "evidence: runtime audit initialization failed: another writer already \
                        holds the audit destination lock\n",
         },
+        AuditFaultCase {
+            label: "an audit file whose last entry was torn by an interrupted write",
+            break_audit: |deployment| {
+                // No trailing newline: the writer's incomplete-final-entry
+                // check refuses to reopen a file it cannot prove finished its
+                // last write.
+                deployment.stage_audit_file("{\"written\":\"before the interruption\"");
+                None
+            },
+            expected: "evidence: runtime audit initialization failed: the audit file ends in \
+                       an incomplete entry; archive it and start on a fresh path\n",
+        },
     ];
 
     for case in cases {
