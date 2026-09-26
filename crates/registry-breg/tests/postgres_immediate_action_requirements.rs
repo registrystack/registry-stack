@@ -104,7 +104,10 @@ fn app(
     fault: Option<MutationFaultPoint>,
 ) -> axum::Router {
     let pool = database.runtime_config.build_pool().unwrap();
-    let audit = AuditProfile::production_from_secret_bytes(vec![0x42; 32].into()).unwrap();
+    let audit = registry_breg::audit::test_support::capturing(
+        AuditProfile::production_from_secret_bytes(vec![0x42; 32].into()).unwrap(),
+    )
+    .0;
     let lock = RegistryLockKey::derive(PACKAGE).unwrap();
     let cursors = Arc::new(
         CursorCodec::new(Zeroizing::new(vec![0x63; 32]), Duration::from_secs(300)).unwrap(),

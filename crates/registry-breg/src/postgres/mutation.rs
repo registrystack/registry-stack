@@ -14,7 +14,7 @@ use crate::api::{
     BatchMutationInput, ConditionalMutationInput, CreateMutationInput, HeldReadResponse,
     ImmediateActionInput, RowBoundaryOperator as ApiRowBoundaryOperator, VerifiedRowBoundary,
 };
-use crate::audit::{record_http_refusal_audit, HttpRefusalAudit};
+use crate::audit::{record_http_refusal_audit, HttpRefusalAudit, RegistryAudit};
 use crate::correlation::RequestCorrelation;
 use crate::event_destination::ActivatedEventDestinationRegistry;
 use crate::ingestion_store::{self, IngestionAttemptOutcome, IngestionRunStatus};
@@ -43,7 +43,7 @@ pub struct PostgresRecordMutationService {
     expected: ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
     lock_timeout: Duration,
-    audit_profile: AuditProfile,
+    audit: RegistryAudit,
     field_encryption: Option<Arc<crate::field_encryption::FieldEncryptionService>>,
     action_timeout: Duration,
     evidence_timeout: Duration,
@@ -85,6 +85,36 @@ pub struct IngestionRunListQuery {
     pub input_digest: Option<String>,
     pub after_run_id: Option<Uuid>,
     pub limit: i64,
+}
+
+/// A refused ingestion-run call. `answered` is true when the call's refusal
+/// is already on record as the `response` of the ingestion `request` entry it
+/// wrote, so the caller must not record it again in another schema.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IngestionRefusal {
+    pub error: IngestionServiceError,
+    pub answered: bool,
+}
+
+/// What one ingestion-run call has recorded so far: the ingestion `request`
+/// entry it wrote, or whether it handed the chunk to the batch mutation,
+/// which records its own attempt and refusal.
+#[derive(Default)]
+struct IngestionAudit {
+    run: Option<ingestion_store::RunAttempt>,
+    batch: bool,
+    /// The transition's commit returned an error, so whether it committed
+    /// is unknown and the request is answered unfinished, never refused.
+    commit_unknown: bool,
+}
+
+impl IngestionAudit {
+    /// Mark the transition's commit outcome unknown and refuse the call as
+    /// an outage.
+    fn commit_failed(&mut self) -> IngestionServiceError {
+        self.commit_unknown = true;
+        IngestionServiceError::Unavailable
+    }
 }
 
 /// The closed refusal vocabulary of the ingestion-run service. It is bounded
@@ -267,17 +297,6 @@ impl PostgresRecordMutationService {
                     deadline,
                 )
                 .await;
-            if result.is_err() && tokio::time::Instant::now() < deadline {
-                self.coordinator
-                    .record_action_boundary_audit(
-                        guard.client(),
-                        claims,
-                        route_id,
-                        correlation,
-                        crate::audit::PreIoAuditKind::Refusal,
-                    )
-                    .await?;
-            }
             guard.disarm();
             match result? {
                 Ok(prepared) => prepared,
@@ -386,7 +405,9 @@ impl PostgresRecordMutationService {
                 .await;
         }
         if is_evidence_apply {
-            return self.request_evidence_apply(input, &claims, None).await;
+            return self
+                .request_evidence_apply(input, &claims, None, None)
+                .await;
         }
         let client = self
             .pool
@@ -430,7 +451,12 @@ impl PostgresRecordMutationService {
         input: crate::api::RequestActionInput<'_>,
         claims: &ClaimContext,
         review_evidence: Option<&crate::review_integration::AcceptedReviewEvidence>,
+        attempt: Option<registry_platform_audit::AuditRequest>,
     ) -> Result<MutationOutcome, MutationError> {
+        // The request's attempt, held until the action answers it: the
+        // reviewed apply that routes here has already recorded it, and the
+        // preflight records it otherwise.
+        let mut attempt = attempt;
         let evaluator = self
             .evidence_evaluator
             .as_ref()
@@ -457,16 +483,12 @@ impl PostgresRecordMutationService {
                         &input,
                         claims,
                         deadline,
+                        &mut attempt,
                     )
                     .await;
                 if result.is_err() && tokio::time::Instant::now() < deadline {
                     self.coordinator
-                        .record_request_boundary_refusal(
-                            guard.client(),
-                            &self.registry,
-                            &input,
-                            claims,
-                        )
+                        .record_request_boundary_refusal(&self.registry, &input, claims)
                         .await?;
                 }
                 result
@@ -549,6 +571,15 @@ impl PostgresRecordMutationService {
             MutationFaultControl::At(point) => crate::mutation::FaultControl::At(point),
             _ => crate::mutation::FaultControl::Disabled,
         };
+        // The attempt precedes the receipt preflight's reads, the review
+        // authority, and the action transaction, and is held across them.
+        let attempt = tokio::time::timeout_at(
+            deadline,
+            self.coordinator
+                .begin_request_action_audit(&self.registry, &input, claims),
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)??;
         let receipt_preflight = {
             let client = self
                 .pool
@@ -567,9 +598,23 @@ impl PostgresRecordMutationService {
             )
             .await;
             match result {
-                Ok(result) => {
+                Ok(Ok(preflight)) => {
                     guard.disarm();
-                    result?
+                    preflight
+                }
+                Ok(Err(error)) => {
+                    guard.disarm();
+                    tokio::time::timeout_at(
+                        deadline,
+                        self.coordinator.record_request_boundary_refusal(
+                            &self.registry,
+                            &input,
+                            claims,
+                        ),
+                    )
+                    .await
+                    .map_err(|_| MutationError::Unavailable)??;
+                    return Err(error);
                 }
                 Err(_) => {
                     guard.cancel_and_discard().await;
@@ -598,7 +643,7 @@ impl PostgresRecordMutationService {
                         fault,
                         None,
                         None,
-                        false,
+                        true,
                     ),
                 )
                 .await;
@@ -654,33 +699,15 @@ impl PostgresRecordMutationService {
         }
         .await;
         if let Err(error) = task_authority {
-            // The refusal happens before any journaled attempt, so it is
-            // recorded here, the same as a refused evidence-apply preflight.
-            let client = tokio::time::timeout_at(deadline, self.pool.get())
-                .await
-                .map_err(|_| MutationError::Unavailable)?
-                .map_err(|_| MutationError::Unavailable)?;
-            let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
-            let recorded = tokio::time::timeout_at(
+            // The refusal answers the held attempt, the same as a refused
+            // evidence-apply preflight.
+            tokio::time::timeout_at(
                 deadline,
-                self.coordinator.record_request_boundary_refusal(
-                    guard.client(),
-                    &self.registry,
-                    &input,
-                    claims,
-                ),
+                self.coordinator
+                    .record_request_boundary_refusal(&self.registry, &input, claims),
             )
-            .await;
-            match recorded {
-                Ok(recorded) => {
-                    guard.disarm();
-                    recorded?;
-                }
-                Err(_) => {
-                    guard.cancel_and_discard().await;
-                    return Err(MutationError::Unavailable);
-                }
-            }
+            .await
+            .map_err(|_| MutationError::Unavailable)??;
             return Err(error);
         }
         let source = self
@@ -690,7 +717,7 @@ impl PostgresRecordMutationService {
         let review_evidence = source.approved_evidence(&authority, &accepted).await?;
         if needs_action_evidence {
             return self
-                .request_evidence_apply(input, claims, Some(&review_evidence))
+                .request_evidence_apply(input, claims, Some(&review_evidence), Some(attempt))
                 .await;
         }
         let client = self
@@ -709,7 +736,7 @@ impl PostgresRecordMutationService {
                 fault,
                 Some(&review_evidence),
                 None,
-                false,
+                true,
             ),
         )
         .await;
@@ -731,7 +758,7 @@ impl PostgresRecordMutationService {
         expected: ExpectedRegistryIdentity,
         lock_key: RegistryLockKey,
         lock_timeout: Duration,
-        audit_profile: AuditProfile,
+        audit: RegistryAudit,
     ) -> Self {
         Self::new_with_event_destinations(
             pool,
@@ -739,7 +766,7 @@ impl PostgresRecordMutationService {
             expected,
             lock_key,
             lock_timeout,
-            audit_profile,
+            audit,
             None,
         )
     }
@@ -751,14 +778,14 @@ impl PostgresRecordMutationService {
         expected: ExpectedRegistryIdentity,
         lock_key: RegistryLockKey,
         lock_timeout: Duration,
-        audit_profile: AuditProfile,
+        audit: RegistryAudit,
         event_destinations: Option<Arc<ActivatedEventDestinationRegistry>>,
     ) -> Self {
         let coordinator = MutationCoordinator::new_with_event_destinations(
             lock_key,
             lock_timeout,
             expected.clone(),
-            audit_profile.clone(),
+            audit.clone(),
             event_destinations,
         );
         Self {
@@ -768,7 +795,7 @@ impl PostgresRecordMutationService {
             expected,
             lock_key,
             lock_timeout,
-            audit_profile,
+            audit,
             field_encryption: None,
             action_timeout: REQUEST_ACTION_TIMEOUT,
             evidence_timeout: REQUEST_ACTION_TIMEOUT,
@@ -810,21 +837,9 @@ impl PostgresRecordMutationService {
         if matches!(self.fault, MutationFaultControl::RefusalAudit) {
             return Err(MutationError::Unavailable);
         }
-        let mut client = self
-            .pool
-            .get()
+        record_http_refusal_audit(&self.audit, &self.expected, event)
             .await
-            .map_err(|_| MutationError::Unavailable)?;
-        record_http_refusal_audit(
-            &mut client,
-            self.lock_key,
-            self.lock_timeout,
-            &self.expected,
-            &self.audit_profile,
-            event,
-        )
-        .await
-        .map_err(MutationError::from)
+            .map_err(MutationError::from)
     }
 
     pub(crate) async fn record_attachment_refusal(
@@ -836,17 +851,9 @@ impl PostgresRecordMutationService {
         if matches!(self.fault, MutationFaultControl::RefusalAudit) {
             return Err(MutationError::Unavailable);
         }
-        let mut client = self
-            .pool
-            .get()
-            .await
-            .map_err(|_| MutationError::Unavailable)?;
         crate::audit::record_attachment_http_refusal_audit(
-            &mut client,
-            self.lock_key,
-            self.lock_timeout,
+            &self.audit,
             &self.expected,
-            &self.audit_profile,
             event,
             slot_id,
         )
@@ -990,7 +997,8 @@ impl PostgresRecordMutationService {
         &self,
         principal: &str,
     ) -> Result<String, IngestionServiceError> {
-        self.audit_profile
+        self.audit
+            .profile()
             .key_hasher()
             .audit_reference_hash(
                 "breg-ingestion-principal-v1",
@@ -1009,7 +1017,7 @@ impl PostgresRecordMutationService {
         &self,
         claims: &ClaimContext,
     ) -> Result<String, IngestionServiceError> {
-        ingestion_context_reference(&self.audit_profile, &self.expected.database_id, claims)
+        ingestion_context_reference(self.audit.profile(), &self.expected.database_id, claims)
     }
 
     async fn client(&self) -> Result<deadpool_postgres::Client, IngestionServiceError> {
@@ -1067,16 +1075,104 @@ impl PostgresRecordMutationService {
         run.response_json(active.0, active.1)
     }
 
-    /// Create a durable ingestion run bound to the active package revision,
-    /// schema fingerprint, entity, profile, operation, input digest, chunking
-    /// algorithm, and announced counts.
+    /// Open one ingestion run.
     pub async fn create_ingestion_run(
         &self,
         context: &AuthorizedRequestContext,
         correlation: &RequestCorrelation,
         input: IngestionRunCreateInput,
+    ) -> Result<Value, IngestionRefusal> {
+        let mut attempt = IngestionAudit::default();
+        let result = self
+            .create_ingestion_run_in(context, correlation, input, &mut attempt)
+            .await;
+        Self::settle_ingestion(result, attempt).await
+    }
+
+    /// Cancel one open ingestion run.
+    pub async fn cancel_ingestion_run(
+        &self,
+        context: &AuthorizedRequestContext,
+        correlation: &RequestCorrelation,
+        entity_id: &str,
+        run_id: Uuid,
+    ) -> Result<Value, IngestionRefusal> {
+        let mut attempt = IngestionAudit::default();
+        let result = self
+            .cancel_ingestion_run_in(context, correlation, entity_id, run_id, &mut attempt)
+            .await;
+        Self::settle_ingestion(result, attempt).await
+    }
+
+    /// Submit one chunk of an open ingestion run.
+    pub async fn submit_ingestion_chunk(
+        &self,
+        context: &AuthorizedRequestContext,
+        correlation: &RequestCorrelation,
+        input: IngestionChunkSubmitInput,
+    ) -> Result<Value, IngestionRefusal> {
+        let mut attempt = IngestionAudit::default();
+        let result = self
+            .submit_ingestion_chunk_in(context, correlation, input, &mut attempt)
+            .await;
+        Self::settle_ingestion(result, attempt).await
+    }
+
+    /// Recover the retained receipt of one committed chunk.
+    pub async fn ingestion_chunk_receipt(
+        &self,
+        context: &AuthorizedRequestContext,
+        correlation: &RequestCorrelation,
+        entity_id: &str,
+        run_id: Uuid,
+        chunk_index: i64,
+    ) -> Result<Value, IngestionRefusal> {
+        let mut attempt = IngestionAudit::default();
+        let result = self
+            .ingestion_chunk_receipt_in(
+                context,
+                correlation,
+                entity_id,
+                run_id,
+                chunk_index,
+                &mut attempt,
+            )
+            .await;
+        Self::settle_ingestion(result, attempt).await
+    }
+
+    /// Answer the ingestion `request` entry a refused call wrote, in the
+    /// ingestion schema, so the refusal is never recorded only in another
+    /// schema. A call refused before it wrote one leaves the refusal to its
+    /// caller.
+    async fn settle_ingestion(
+        result: Result<Value, IngestionServiceError>,
+        audit: IngestionAudit,
+    ) -> Result<Value, IngestionRefusal> {
+        let error = match result {
+            Ok(value) => return Ok(value),
+            Err(error) => error,
+        };
+        let answered = match audit.run {
+            Some(attempt) if attempt.is_answered() => true,
+            Some(attempt) if audit.commit_unknown => attempt.abandon().await,
+            Some(attempt) => attempt.refuse().await,
+            None => audit.batch,
+        };
+        Err(IngestionRefusal { error, answered })
+    }
+
+    /// Create a durable ingestion run bound to the active package revision,
+    /// schema fingerprint, entity, profile, operation, input digest, chunking
+    /// algorithm, and announced counts.
+    async fn create_ingestion_run_in(
+        &self,
+        context: &AuthorizedRequestContext,
+        correlation: &RequestCorrelation,
+        input: IngestionRunCreateInput,
+        attempt: &mut IngestionAudit,
     ) -> Result<Value, IngestionServiceError> {
-        if !crate::audit::profile_is_keyed(&self.audit_profile) {
+        if !crate::audit::profile_is_keyed(self.audit.profile()) {
             return Err(IngestionServiceError::Unavailable);
         }
         let claims = strict_claim_context(&self.registry, context, &input.entity_id)
@@ -1146,6 +1242,27 @@ impl PostgresRecordMutationService {
         };
         ingestion_store::validate_new_run(&run)
             .map_err(|_| IngestionServiceError::RequestInvalid)?;
+        let request_correlation = correlation.request_id().to_string();
+        // The request entry is accepted before the run is opened: an audit
+        // outage refuses the creation instead of opening a run nobody
+        // recorded asking for.
+        attempt.run = Some(
+            ingestion_store::begin_run_request(
+                &self.audit,
+                ingestion_store::RunRequest {
+                    transition: "create",
+                    run_id: None,
+                    chunk_index: None,
+                    package_revision: &self.expected.package_revision,
+                    entity_id: &run.entity_id,
+                    profile_id: &run.profile_id,
+                    principal_reference: &run.created_principal_reference,
+                    correlation: &request_correlation,
+                },
+            )
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?,
+        );
         let mut client = self.client().await?;
         // The run binding must name the package the database still holds
         // active, so creation takes the same guarded transaction ordinary
@@ -1164,21 +1281,20 @@ impl PostgresRecordMutationService {
         let record = ingestion_store::insert_run(tx, &run)
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?;
-        ingestion_store::append_run_audit(
-            tx,
-            &self.audit_profile,
-            ingestion_store::run_audit_record(
-                "created",
-                &record,
-                &self.expected.package_revision,
-                &record.created_principal_reference,
-                Some(&correlation.request_id().to_string()),
-            ),
-        )
-        .await
-        .map_err(|_| IngestionServiceError::Unavailable)?;
+        let audit_record = ingestion_store::run_audit_record(
+            "created",
+            &record,
+            &self.expected.package_revision,
+            &record.created_principal_reference,
+            Some(&request_correlation),
+        );
         transaction
             .commit()
+            .await
+            .map_err(|_| attempt.commit_failed())?;
+        // The run exists once the transaction commits; its answer leaves only
+        // after the audit entry is accepted.
+        ingestion_store::append_run_audit(&self.audit, audit_record)
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?;
         // The guarded transaction just proved the durable binding equals
@@ -1341,16 +1457,42 @@ impl PostgresRecordMutationService {
 
     /// Cancel an open or blocked run, preserving the committed prefix, the
     /// counts, and the audit trail.
-    pub async fn cancel_ingestion_run(
+    async fn cancel_ingestion_run_in(
         &self,
         context: &AuthorizedRequestContext,
         correlation: &RequestCorrelation,
         entity_id: &str,
         run_id: Uuid,
+        attempt: &mut IngestionAudit,
     ) -> Result<Value, IngestionServiceError> {
-        if !crate::audit::profile_is_keyed(&self.audit_profile) {
+        if !crate::audit::profile_is_keyed(self.audit.profile()) {
             return Err(IngestionServiceError::Unavailable);
         }
+        let claims = strict_claim_context(&self.registry, context, entity_id)
+            .map_err(|_| IngestionServiceError::RequestInvalid)?;
+        let Some(principal) = claims.principal() else {
+            return Err(IngestionServiceError::RequestInvalid);
+        };
+        let request_correlation = correlation.request_id().to_string();
+        // The request entry is accepted before the run is read or closed: an
+        // audit outage leaves the run open and resumable.
+        attempt.run = Some(
+            ingestion_store::begin_run_request(
+                &self.audit,
+                ingestion_store::RunRequest {
+                    transition: "cancel",
+                    run_id: Some(run_id),
+                    chunk_index: None,
+                    package_revision: &self.expected.package_revision,
+                    entity_id,
+                    profile_id: claims.access_profile(),
+                    principal_reference: &self.ingestion_principal_reference(principal)?,
+                    correlation: &request_correlation,
+                },
+            )
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?,
+        );
         let mut client = self.client().await?;
         let run = self
             .visible_run(&**client, context, entity_id, run_id)
@@ -1358,8 +1500,6 @@ impl PostgresRecordMutationService {
         // Cancellation owes the run the same admission chunk submission and
         // receipt recovery owe it: a drifted profile or claim context cannot
         // terminate a run it could not continue.
-        let claims = strict_claim_context(&self.registry, context, entity_id)
-            .map_err(|_| IngestionServiceError::RequestInvalid)?;
         if run.profile_id != claims.access_profile() {
             return Err(IngestionServiceError::ProfileMismatch);
         }
@@ -1386,21 +1526,18 @@ impl PostgresRecordMutationService {
                 .await
                 .map_err(|_| IngestionServiceError::Unavailable)?
                 .ok_or(IngestionServiceError::RunNotOpen)?;
-        ingestion_store::append_run_audit(
-            tx,
-            &self.audit_profile,
-            ingestion_store::run_audit_record(
-                "cancelled",
-                &cancelled,
-                &self.expected.package_revision,
-                &cancelled.created_principal_reference,
-                Some(&correlation.request_id().to_string()),
-            ),
-        )
-        .await
-        .map_err(|_| IngestionServiceError::Unavailable)?;
+        let audit_record = ingestion_store::run_audit_record(
+            "cancelled",
+            &cancelled,
+            &self.expected.package_revision,
+            &cancelled.created_principal_reference,
+            Some(&request_correlation),
+        );
         transaction
             .commit()
+            .await
+            .map_err(|_| attempt.commit_failed())?;
+        ingestion_store::append_run_audit(&self.audit, audit_record)
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?;
         // A cancelled run is terminal, so it renders identically under any
@@ -1418,11 +1555,12 @@ impl PostgresRecordMutationService {
     /// Submit the next exact chunk of one run. The server derives the
     /// idempotency key from the run binding, so an interrupted submission
     /// replays the original receipt without a duplicate mutation.
-    pub async fn submit_ingestion_chunk(
+    async fn submit_ingestion_chunk_in(
         &self,
         context: &AuthorizedRequestContext,
         correlation: &RequestCorrelation,
         input: IngestionChunkSubmitInput,
+        attempt: &mut IngestionAudit,
     ) -> Result<Value, IngestionServiceError> {
         let claims = strict_claim_context(&self.registry, context, &input.entity_id)
             .map_err(|_| IngestionServiceError::RequestInvalid)?;
@@ -1503,13 +1641,32 @@ impl PostgresRecordMutationService {
             // scrubs the receipt, so a release that parks through an erasure
             // re-reads the row after the erasure committed and answers
             // receipt_erased instead of serving the erased values. The
-            // replayed attempt marker and the disclosure record commit
-            // atomically with that check, so a refused release moves no
-            // marker and writes no record: an audit outage gates the release
-            // instead of passing silently.
-            if !crate::audit::profile_is_keyed(&self.audit_profile) {
-                return Err(IngestionServiceError::Unavailable);
-            }
+            // replayed attempt marker commits atomically with that check, so
+            // a refused release moves no marker and writes no record. The
+            // disclosure entry is appended after that commit and before the
+            // receipt leaves: an audit outage gates the release instead of
+            // passing silently.
+            let request_correlation = correlation.request_id().to_string();
+            // The request entry is accepted before the release transaction
+            // opens: an audit outage moves no attempt marker and releases
+            // nothing.
+            attempt.run = Some(
+                ingestion_store::begin_run_request(
+                    &self.audit,
+                    ingestion_store::RunRequest {
+                        transition: "submitChunk",
+                        run_id: Some(run.run_id),
+                        chunk_index: Some(input.chunk_index),
+                        package_revision: &self.expected.package_revision,
+                        entity_id: &run.entity_id,
+                        profile_id: &run.profile_id,
+                        principal_reference: &principal_reference,
+                        correlation: &request_correlation,
+                    },
+                )
+                .await
+                .map_err(|_| IngestionServiceError::Unavailable)?,
+            );
             let mut disclosure_writer = self.client().await?;
             let disclosure_transaction = begin_record_transaction(
                 &mut disclosure_writer,
@@ -1595,38 +1752,39 @@ impl PostgresRecordMutationService {
             )
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?;
-            ingestion_store::append_run_audit(
-                tx,
-                &self.audit_profile,
-                ingestion_store::receipt_disclosure_record(
-                    &run,
-                    input.chunk_index,
-                    &principal_reference,
-                    Some(&correlation.request_id().to_string()),
-                ),
-            )
-            .await
-            .map_err(|_| IngestionServiceError::Unavailable)?;
-            disclosure_transaction
-                .commit()
-                .await
-                .map_err(|_| IngestionServiceError::Unavailable)?;
+            let disclosure_record = ingestion_store::receipt_disclosure_record(
+                &run,
+                input.chunk_index,
+                &principal_reference,
+                Some(&request_correlation),
+            );
             // The attempt row above moved the run's last-attempt marker, so
             // the answer describes the run as it now stands, not as this
-            // request found it. The guarded transaction proved the durable
-            // binding equals this process's identity, so the replayed run
-            // renders under it.
-            let run = ingestion_store::load_run(&**client, run.run_id)
+            // request found it. It is read inside the release transaction,
+            // which sees that row, and the answer is built before the
+            // disclosure entry: once that entry is accepted, nothing fallible
+            // stands between it and the caller. The guarded transaction
+            // proved the durable binding equals this process's identity, so
+            // the replayed run renders under it.
+            let current = ingestion_store::load_run(tx, run.run_id)
                 .await
                 .map_err(|_| IngestionServiceError::Unavailable)?
                 .ok_or(IngestionServiceError::Unavailable)?;
-            return Ok(json!({
+            let answer = json!({
                 "run": Self::run_response(
-                    &run,
+                    &current,
                     (&self.expected.package_revision, &self.expected.schema_fingerprint),
                 ),
                 "receipt": receipt_json(input.chunk_index, &input.digest, true, false, batch),
-            }));
+            });
+            disclosure_transaction
+                .commit()
+                .await
+                .map_err(|_| attempt.commit_failed())?;
+            ingestion_store::append_run_audit(&self.audit, disclosure_record)
+                .await
+                .map_err(|_| IngestionServiceError::Unavailable)?;
+            return Ok(answer);
         }
         // A terminal run stays terminal when the active package later
         // changes: the blocking transition belongs to open runs alone, so a
@@ -1640,6 +1798,26 @@ impl PostgresRecordMutationService {
             IngestionRunStatus::Open => {}
         }
         if !run.active_binding_matches(&active.0, &active.1) {
+            let request_correlation = correlation.request_id().to_string();
+            // The request entry is accepted before the blocking transition
+            // opens: an audit outage leaves the run open.
+            attempt.run = Some(
+                ingestion_store::begin_run_request(
+                    &self.audit,
+                    ingestion_store::RunRequest {
+                        transition: "submitChunk",
+                        run_id: Some(run.run_id),
+                        chunk_index: Some(input.chunk_index),
+                        package_revision: &active.0,
+                        entity_id: &run.entity_id,
+                        profile_id: &run.profile_id,
+                        principal_reference: &principal_reference,
+                        correlation: &request_correlation,
+                    },
+                )
+                .await
+                .map_err(|_| IngestionServiceError::Unavailable)?,
+            );
             let mut writer = self.client().await?;
             let transaction = writer
                 .transaction()
@@ -1684,27 +1862,22 @@ impl PostgresRecordMutationService {
             )
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?;
-            if crate::audit::profile_is_keyed(&self.audit_profile) {
-                let mut audited_run = run.clone();
-                audited_run.status = IngestionRunStatus::Blocked;
-                audited_run.blocked_reason =
-                    Some(ingestion_store::IngestionBlockedReason::ActivePackageChanged);
-                ingestion_store::append_run_audit(
-                    tx,
-                    &self.audit_profile,
-                    ingestion_store::run_audit_record(
-                        "blocked",
-                        &audited_run,
-                        &active.0,
-                        &run.created_principal_reference,
-                        Some(&correlation.request_id().to_string()),
-                    ),
-                )
-                .await
-                .map_err(|_| IngestionServiceError::Unavailable)?;
-            }
+            let mut audited_run = run.clone();
+            audited_run.status = IngestionRunStatus::Blocked;
+            audited_run.blocked_reason =
+                Some(ingestion_store::IngestionBlockedReason::ActivePackageChanged);
+            let blocked_record = ingestion_store::run_audit_record(
+                "blocked",
+                &audited_run,
+                &active.0,
+                &run.created_principal_reference,
+                Some(&request_correlation),
+            );
             transaction
                 .commit()
+                .await
+                .map_err(|_| attempt.commit_failed())?;
+            ingestion_store::append_run_audit(&self.audit, blocked_record)
                 .await
                 .map_err(|_| IngestionServiceError::Unavailable)?;
             return Err(IngestionServiceError::RunBlocked);
@@ -1769,6 +1942,9 @@ impl PostgresRecordMutationService {
             ingestion: Some(&chunk_binding),
         };
         let mut writer = self.client().await?;
+        // From here the batch mutation records the chunk's attempt and its
+        // refusal under this request's correlation.
+        attempt.batch = true;
         #[cfg(feature = "postgres-test")]
         if let MutationFaultControl::At(fault) = self.fault {
             return self
@@ -1916,6 +2092,7 @@ impl PostgresRecordMutationService {
                     | MutationError::Unavailable
                     | MutationError::RetryableConflict
                     | MutationError::LegacyReviewDataPresent
+                    | MutationError::RetiredAuditRowsPresent
                     | MutationError::FieldEncryptionUnavailable
                     | MutationError::PlannerFailure(_)
                     | MutationError::ActionHandlerFailure(_)
@@ -1989,27 +2166,52 @@ impl PostgresRecordMutationService {
 
     /// Recover the stored receipt of one committed chunk after a lost
     /// response. The receipt is erased with the record history it describes.
-    pub async fn ingestion_chunk_receipt(
+    async fn ingestion_chunk_receipt_in(
         &self,
         context: &AuthorizedRequestContext,
         correlation: &RequestCorrelation,
         entity_id: &str,
         run_id: Uuid,
         chunk_index: i64,
+        attempt: &mut IngestionAudit,
     ) -> Result<Value, IngestionServiceError> {
         if chunk_index < 0 {
             return Err(IngestionServiceError::RequestInvalid);
         }
-        let client = self.client().await?;
-        let run = self
-            .visible_run(&**client, context, entity_id, run_id)
-            .await?;
+        if !crate::audit::profile_is_keyed(self.audit.profile()) {
+            return Err(IngestionServiceError::Unavailable);
+        }
         let claims = strict_claim_context(&self.registry, context, entity_id)
             .map_err(|_| IngestionServiceError::RequestInvalid)?;
         let Some(principal) = claims.principal() else {
             return Err(IngestionServiceError::RequestInvalid);
         };
         let principal_reference = self.ingestion_principal_reference(principal)?;
+        let request_correlation = correlation.request_id().to_string();
+        // The request entry is accepted before the run or the stored chunk is
+        // read: an audit outage refuses the recovery instead of releasing a
+        // receipt nobody recorded asking for.
+        attempt.run = Some(
+            ingestion_store::begin_run_request(
+                &self.audit,
+                ingestion_store::RunRequest {
+                    transition: "chunkReceipt",
+                    run_id: Some(run_id),
+                    chunk_index: Some(chunk_index),
+                    package_revision: &self.expected.package_revision,
+                    entity_id,
+                    profile_id: claims.access_profile(),
+                    principal_reference: &principal_reference,
+                    correlation: &request_correlation,
+                },
+            )
+            .await
+            .map_err(|_| IngestionServiceError::Unavailable)?,
+        );
+        let client = self.client().await?;
+        let run = self
+            .visible_run(&**client, context, entity_id, run_id)
+            .await?;
         if run.profile_id != claims.access_profile() {
             return Err(IngestionServiceError::ProfileMismatch);
         }
@@ -2021,17 +2223,14 @@ impl PostgresRecordMutationService {
         // takes: the registry lock plus the durable identity check inside it
         // leave an instance whose package a successor retired no window to
         // serve the receipt under permissions the successor already revoked,
-        // while a current instance owes the journal the disclosure record,
-        // committed before the answer leaves, so an audit outage gates the
+        // while a current instance owes the audit log the disclosure record,
+        // accepted before the answer leaves, so an audit outage gates the
         // release. The stored receipt is read inside that same transaction,
         // after the lock is held: a record-history erasure takes the lock
         // exclusively while it scrubs the receipt, so a release that parks
         // through an erasure re-reads the row after the erasure committed and
         // answers receipt_erased instead of serving the erased values, and
         // writes no disclosure record for them.
-        if !crate::audit::profile_is_keyed(&self.audit_profile) {
-            return Err(IngestionServiceError::Unavailable);
-        }
         let mut writer = self.client().await?;
         let transaction = begin_record_transaction(
             &mut writer,
@@ -2084,20 +2283,17 @@ impl PostgresRecordMutationService {
             ),
             &mut batch,
         )?;
-        ingestion_store::append_run_audit(
-            tx,
-            &self.audit_profile,
-            ingestion_store::receipt_disclosure_record(
-                &run,
-                stored.chunk_index,
-                &principal_reference,
-                Some(&correlation.request_id().to_string()),
-            ),
-        )
-        .await
-        .map_err(|_| IngestionServiceError::Unavailable)?;
+        let disclosure_record = ingestion_store::receipt_disclosure_record(
+            &run,
+            stored.chunk_index,
+            &principal_reference,
+            Some(&request_correlation),
+        );
         transaction
             .commit()
+            .await
+            .map_err(|_| attempt.commit_failed())?;
+        ingestion_store::append_run_audit(&self.audit, disclosure_record)
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?;
         Ok(receipt_json(

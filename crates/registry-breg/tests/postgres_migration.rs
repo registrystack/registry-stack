@@ -591,6 +591,104 @@ async fn real_postgres_confirms_only_the_exact_active_ready_package() {
     database.cleanup().await;
 }
 
+/// A release before the audit-simplification migration kept its own audit
+/// journal in `registry_audit`. Installing the current schema drops that
+/// table unconditionally, so an initial apply through the real coordinator
+/// must refuse while it still carries rows the operator has not acknowledged
+/// discarding, before any other schema object is touched, and the retired
+/// rows must survive the refusal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_initial_apply_refuses_retired_audit_rows_without_acknowledgement() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs extension");
+    let base = compile_variant(Variant::Base, 1);
+    let fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &fingerprint);
+
+    // Simulate a database that ran a pre-simplification release and still
+    // carries unarchived audit rows, installed after the rehearsal above so
+    // the fingerprint rehearsal itself is not caught by the same guard. The
+    // fixture is created through the migration role, as the retired release
+    // would have owned it, so the guard's table lock is not itself refused
+    // for want of privilege on an administrator-owned table.
+    let (migration_owner, migration_owner_task) = database.connect_migration().await;
+    migration_owner
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_audit (id integer);
+             INSERT INTO registry_internal.registry_audit (id) VALUES (1);",
+        )
+        .await
+        .expect("retired audit fixture installs");
+    migration_owner_task.abort();
+
+    let refused = apply(&database, &initial, ApplyPrecondition::InitialActivation).await;
+    assert_value_free(refused.err(), MigrationError::RetiredAuditRowsPresent);
+
+    let still_present = database
+        .admin
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM registry_internal.registry_audit)",
+            &[],
+        )
+        .await
+        .expect("catalog lookup succeeds")
+        .get::<_, bool>(0);
+    assert!(still_present, "retired audit rows survive a refused apply");
+    database.cleanup().await;
+}
+
+/// The same apply succeeds, and drops the retired table, once the operator
+/// acknowledges discarding its rows.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_initial_apply_drops_retired_audit_rows_with_acknowledgement() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs extension");
+    let base = compile_variant(Variant::Base, 1);
+    let fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &fingerprint);
+
+    // See the refusal test above for why this is owned by the migration role.
+    let (migration_owner, migration_owner_task) = database.connect_migration().await;
+    migration_owner
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_audit (id integer);
+             INSERT INTO registry_internal.registry_audit (id) VALUES (1);",
+        )
+        .await
+        .expect("retired audit fixture installs");
+    migration_owner_task.abort();
+
+    apply_verified_package(
+        request(&database, &initial, ApplyPrecondition::InitialActivation)
+            .with_acknowledge_retired_audit_discard(true),
+    )
+    .await
+    .expect("initial package activates once the retired rows are acknowledged");
+
+    let dropped = database
+        .admin
+        .query_one(
+            "SELECT to_regclass('registry_internal.registry_audit') IS NULL",
+            &[],
+        )
+        .await
+        .expect("catalog lookup succeeds")
+        .get::<_, bool>(0);
+    assert!(
+        dropped,
+        "retired audit table is dropped once discard is acknowledged"
+    );
+    database.cleanup().await;
+}
+
 /// An unreachable database or an apply lock another session holds, before
 /// maintenance begins, changes nothing, so it is reported as the database
 /// being unavailable and never as a failed migration that needs
@@ -824,6 +922,74 @@ async fn real_postgres_reconciliation_completes_reverts_or_refuses_a_pinned_targ
     reconciliation_assessment_writes_nothing().await;
 }
 
+/// Reconciliation executes a maintenance transition, so its request entry must
+/// be accepted before that transition runs. A writer that refuses the request
+/// entry leaves the pinned target, the ledger, and the journal as they were,
+/// and a later writer can still revert the same target.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_reconciliation_changes_nothing_when_the_audit_writer_refuses_its_request_entry(
+) {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs extension");
+    let base = compile_variant(Variant::Base, 1);
+    let fingerprint = initial_fingerprint(&database, &base).await;
+    let initial = prepare_and_load_initial(&base, &fingerprint);
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("refusal scenario initial package activates");
+    seed_backfill_rows(&database, &base, 5).await;
+    let required = compile_variant(Variant::RankRequired, 2);
+    let target_fingerprint = required_target_fingerprint(&database, &required).await;
+    let package = prepare_and_load_reviewed(
+        2,
+        &active,
+        &base,
+        Variant::RankRequired,
+        &target_fingerprint,
+        backfill_source(BackfillSourceRequest {
+            id: "reconcile-refused-request",
+            current: &active,
+            prior: &base,
+            candidate: &required,
+            final_fingerprint: &target_fingerprint,
+            pre: AssertionMode::False,
+            post: AssertionMode::True,
+            rehearsed_rows: 5,
+        }),
+    );
+    let refused = apply(
+        &database,
+        &package,
+        ApplyPrecondition::Successor { current: &active },
+    )
+    .await;
+    assert_value_free(refused.err(), MigrationError::ApplyFailed);
+
+    let before = durable_snapshot(&database).await;
+    database.audit_capture().fail_after(0);
+    assert_eq!(
+        reconcile(&database, &package, &active, &base, true)
+            .await
+            .expect_err("a refused request entry stops the revert"),
+        ReconcileError::Unavailable
+    );
+    assert_eq!(durable_snapshot(&database).await, before);
+    assert_non_ready_target(&database, &active, &package, "failed").await;
+
+    database.audit_capture().restore();
+    let reverted = reconcile(&database, &package, &active, &base, true)
+        .await
+        .expect("a later writer reverts the same target");
+    assert!(reverted.executed);
+    assert_ready_target(&database, &active).await;
+    assert_reconcile_audit_is_minimized(&database, "reverted").await;
+    database.cleanup().await;
+}
+
 /// A reviewed apply whose every durable step closed, failing only because an
 /// administrator left an unmanaged object behind. While the object is there
 /// the reconciliation is unresolvable and refuses to execute; once it is gone
@@ -913,6 +1079,50 @@ async fn reconciliation_completes_a_target_the_catalog_already_reached() {
     assert_eq!(completable.target_catalog_finding, None);
     assert_eq!(completable.reviewed_plan_closed, Some(true));
     assert!(!completable.executed);
+
+    let before_refusal = durable_snapshot(&database).await;
+    database.audit_capture().fail_after(0);
+    assert_eq!(
+        reconcile(&database, &package, &active, &base, true)
+            .await
+            .expect_err("a refused request entry stops the completion"),
+        ReconcileError::Unavailable
+    );
+    assert_eq!(durable_snapshot(&database).await, before_refusal);
+    database.audit_capture().restore();
+
+    // A transition that fails after its request entry answers that entry
+    // with a failed response under the same correlation.
+    database
+        .admin
+        .batch_execute(
+            "BEGIN; SELECT 1 FROM registry_internal.registry_state WHERE singleton FOR UPDATE",
+        )
+        .await
+        .expect("administrator holds the Registry state row");
+    let entries_before = database.audit_entries().len();
+    reconcile(&database, &package, &active, &base, true)
+        .await
+        .expect_err("the activation cannot take the held Registry state row");
+    database
+        .admin
+        .batch_execute("ROLLBACK")
+        .await
+        .expect("administrator releases the Registry state row");
+    let failed = database.audit_entries().split_off(entries_before);
+    assert_eq!(
+        failed
+            .iter()
+            .map(|entry| (
+                entry["phase"].as_str().expect("phase"),
+                entry["record"]["outcome"].as_str().expect("outcome")
+            ))
+            .collect::<Vec<_>>(),
+        [("request", "started"), ("response", "failed")],
+        "{failed:?}"
+    );
+    assert_eq!(failed[0]["correlation"], failed[1]["correlation"]);
+    assert!(!failed[1].to_string().contains(RECONCILE_OPERATOR_CANARY));
 
     let completed = reconcile(&database, &package, &active, &base, true)
         .await
@@ -3792,8 +4002,10 @@ async fn reconcile(
     current_registry: &CompiledRegistry,
     execute: bool,
 ) -> Result<ReconcileReport, ReconcileError> {
-    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x63; 32].into())
-        .expect("test owns a keyed audit profile");
+    let audit = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x63; 32].into())
+            .expect("test owns a keyed audit profile"),
+    );
     reconcile_failed_migration(ReconcileRequest {
         config: &database.migration_config,
         target_package: package,
@@ -3803,7 +4015,7 @@ async fn reconcile(
         runtime_role: &database.runtime_role,
         timeouts: ReconcileTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
             .expect("test timeouts are bounded"),
-        audit_profile: &audit_profile,
+        audit: &audit,
         operator_reference: RECONCILE_OPERATOR_CANARY,
         execute,
     })
@@ -3824,13 +4036,13 @@ fn target_identity(package: &VerifiedPackage) -> ExpectedRegistryIdentity {
 }
 
 /// The whole durable maintenance record an assessment must leave untouched:
-/// the state row, every ledger row and step, and the audit journal.
+/// the state row, every ledger row and step, and the audit entries.
 async fn durable_snapshot(
     database: &TestDatabase,
 ) -> (
     Vec<(String, String, String)>,
     Vec<(String, Option<Uuid>, i64)>,
-    Vec<Vec<u8>>,
+    Vec<String>,
     (String, String, Option<String>),
 ) {
     let steps = database
@@ -3847,15 +4059,9 @@ async fn durable_snapshot(
         .map(|row| (row.get(0), row.get(1), row.get(2)))
         .collect();
     let audit = database
-        .admin
-        .query(
-            "SELECT record_hash FROM registry_internal.registry_audit ORDER BY record_hash",
-            &[],
-        )
-        .await
-        .expect("audit journal reads")
-        .into_iter()
-        .map(|row| row.get(0))
+        .audit_entries()
+        .iter()
+        .map(serde_json::Value::to_string)
         .collect();
     let state = database
         .admin
@@ -3874,25 +4080,29 @@ async fn durable_snapshot(
     )
 }
 
-/// The reconciliation audit record carries identities, the plan shape, and
-/// counts. The operator's own reference must reach it only as a keyed hash.
+/// The reconciliation audit records carry identities, the plan shape, and
+/// counts: one request entry before the transition and one correlated response
+/// entry after it commits. The operator's own reference must reach them only
+/// as a keyed hash.
 async fn assert_reconcile_audit_is_minimized(database: &TestDatabase, action: &str) {
-    let envelopes = database
-        .admin
-        .query("SELECT envelope FROM registry_internal.registry_audit", &[])
-        .await
-        .expect("audit journal reads");
-    let mut matched = 0;
-    for row in &envelopes {
-        let bytes: Vec<u8> = row.get(0);
-        let text = String::from_utf8(bytes).expect("audit envelopes are UTF-8");
+    let mut matched = Vec::new();
+    for entry in database.audit_entries() {
+        let text = entry.to_string();
         assert!(!text.contains(RECONCILE_OPERATOR_CANARY));
-        if text.contains("breg-migration-reconcile-audit/v1") {
+        if entry["schema"] == "breg-migration-reconcile-audit/v2" {
             assert!(text.contains(&format!("\"action\":\"{action}\"")));
-            matched += 1;
+            matched.push(entry);
         }
     }
-    assert_eq!(matched, 1);
+    // Every execution is a request answered by one response under its
+    // correlation; the last one committed.
+    assert!(!matched.is_empty() && matched.len() % 2 == 0, "{matched:?}");
+    for pair in matched.chunks(2) {
+        assert_eq!(pair[0]["phase"], "request");
+        assert_eq!(pair[1]["phase"], "response");
+        assert_eq!(pair[0]["correlation"], pair[1]["correlation"]);
+    }
+    assert_eq!(matched[matched.len() - 1]["record"]["outcome"], "committed");
 }
 
 fn assert_value_free(actual: Option<MigrationError>, expected: MigrationError) {

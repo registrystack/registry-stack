@@ -10,7 +10,7 @@ views {
       Open the runtime view for logical components and the interoperability views for
       optional integrations. Arrows indicate use or data movement, not deployment order.
     '''
-    include application, issuer, breg, postgres, operator, tooling, project, package
+    include application, issuer, breg, postgres, bregAuditStore, operator, tooling, project, package
     global predicate breg_issuer
     global predicate breg_storage
   }
@@ -27,7 +27,7 @@ views {
       Event projection runs inside the write transaction; webhook delivery runs after
       commit. These are logical responsibilities, not a proposed microservice decomposition.
     '''
-    include breg.*, postgres, application, issuer, casework.api, receiver
+    include breg.*, postgres, bregAuditStore, application, issuer, casework.api, receiver
     exclude breg.webhooks -> casework.api
     exclude issuer -> casework.api
     exclude application -> casework.api
@@ -39,7 +39,7 @@ views {
     description '''
       A package declares created, patched, tombstoned or request_lifecycle events.
       Event projection and delivery intent commit with the owning record/request,
-      history and audit in one PostgreSQL transaction. A nonmatching event condition
+      history in one PostgreSQL transaction. A nonmatching event condition
       permits the write without producing that event; capture failure rolls it back.
       The in-process worker claims committed deliveries and sends authenticated
       CloudEvents to the operator-bound receiver. An event has at most one webhook
@@ -47,7 +47,7 @@ views {
       fanout. Delivery is at least once with no global or per-record ordering. Consumers
       use the record revision to detect stale or missing transitions.
     '''
-    include application, breg.api, breg.writes, breg.events, breg.audit, postgres, breg.webhooks, receiver
+    include application, breg.api, breg.writes, breg.events, breg.audit, postgres, bregAuditStore, breg.webhooks, receiver
     include bindings .artifactFlow breg.webhooks
   }
 
@@ -55,7 +55,7 @@ views {
     title 'BReg / 04. A write reaches its receiver'
     description '''
       An illustrative successful mutation whose declared event condition matches.
-      Record/request state, history, audit, idempotency result and event intent commit
+      Record/request state, history, idempotency result and event intent commit
       together. The webhook worker can claim the event only after commit. HTTP response
       release and webhook delivery then proceed independently, with no ordering between
       them. A receiver may apply an effect before BReg finalizes the attempt, so redelivery
@@ -65,21 +65,21 @@ views {
     breg.api -> breg.access 'Checks the caller and operation authority'
     breg.api -> breg.writes 'Dispatches the configured operation'
     breg.writes -> breg.audit 'Commits a durable attempt audit before protected I/O'
-    breg.audit -> postgres 'Commits the attempt in a separate transaction'
+    breg.audit -> bregAuditStore 'Accepts the request entry outside PostgreSQL'
     breg.writes -> postgres 'Begins transaction and changes governed state'
     breg.writes -> breg.events 'Evaluates the declared trigger and projection'
     breg.events -> postgres 'Inserts canonical event and pending delivery in the same transaction'
-    breg.writes -> breg.audit 'Appends the terminal mutation record in the write transaction'
-    breg.audit -> postgres 'Extends the audit chain before release'
-    breg.writes -> postgres 'Commits state, history, terminal audit, idempotency result and event intent'
+    breg.writes -> postgres 'Commits state, history, idempotency result and event intent'
+    breg.writes -> breg.audit 'Appends the response entry after the write commits'
+    breg.audit -> bregAuditStore 'Accepts the response entry before release'
     parallel 'Independent after-commit paths' {
       breg.api -> application 'Returns the committed response after terminal audit succeeds'
       try 'Webhook delivery branch' {
-        breg.webhooks -> postgres 'Commits delivery lease and attempt audit before egress'
+        breg.webhooks -> postgres 'Commits delivery lease before egress'
         breg.webhooks -> receiver 'Sends signed CloudEvents 1.0 request'
         receiver -> receiver 'Checks signature and freshness; deduplicates before effects'
         receiver -> breg.webhooks 'Acknowledges with 2xx'
-        breg.webhooks -> postgres 'Atomically commits delivered state, audit and payload erasure'
+        breg.webhooks -> postgres 'Atomically commits delivered state and payload erasure'
       }
     }
   }
@@ -97,13 +97,13 @@ views {
       Expired or erased payloads cannot be replayed. No delivery ordering is promised;
       consumers use the record revision to detect stale or missing transitions.
     '''
-    breg.webhooks -> postgres 'Commits delivery lease and attempt audit before egress'
+    breg.webhooks -> postgres 'Commits delivery lease before egress'
     breg.webhooks -> receiver 'Sends event with captured policy and delivery key'
     receiver -> breg.webhooks 'Returns non-2xx, or no acknowledgement arrives'
     breg.webhooks -> postgres 'Records failure and schedules a bounded retry'
     breg.webhooks -> receiver 'Retries with the same event, body and delivery key'
     receiver -> breg.webhooks 'Fails again through the allowed attempt limit'
-    breg.webhooks -> postgres 'Atomically commits audit and dead-letter state'
+    breg.webhooks -> postgres 'Commits dead-letter state'
     operator -> tooling 'Requests replay for exact event, delivery and generation'
     tooling -> postgres 'Invokes BReg operator service to audit and queue the next generation' {
       notes 'Checks terminal dead-letter state, retained payload, compiled replay permission, matching destination binding and exact expected generation. This is local operator database access, not a public HTTP administration route.'
@@ -111,7 +111,7 @@ views {
     breg.webhooks -> postgres 'Claims the replayed pending delivery'
     breg.webhooks -> receiver 'Sends the same event with a new delivery idempotency key'
     receiver -> breg.webhooks 'Acknowledges replay with 2xx'
-    breg.webhooks -> postgres 'Atomically commits delivered state, audit and payload erasure'
+    breg.webhooks -> postgres 'Atomically commits delivered state and payload erasure'
   }
 
   view interoperability {
@@ -173,7 +173,7 @@ views {
       check; a source failure makes the write unavailable. Revoked or expired authority
       is refused. BReg and Casework do not share a distributed transaction. Submission
       retains the original grant separately from later reviewers and binds it into write
-      idempotency and minimized audit.
+      idempotency, followed by minimized response audit.
       An exact completed receipt can be recovered under current disclosure without
       another status check; a different grant conflicts and cannot reapply the change.
     '''
@@ -181,8 +181,8 @@ views {
     breg.api -> breg.access 'Verifies token identity, actor kind, requester client and profile permissions'
     breg.access -> breg.task_grants 'Binds profile source issuer, permitted client, required purpose, BReg audience, subjects and equal bounds'
     breg.api -> breg.writes 'Dispatches the governed change-request submission'
-    breg.writes -> breg.audit 'Commits attempt audit in a separate transaction before protected I/O'
-    breg.audit -> postgres 'Persists the minimized attempt'
+    breg.writes -> breg.audit 'Accepts request audit before protected I/O'
+    breg.audit -> bregAuditStore 'Persists the minimized attempt'
     breg.writes -> postgres 'Locks current request state and checks idempotency or completed recovery'
     alt {
       when 'Exact completed receipt' {
@@ -197,21 +197,21 @@ views {
         casework.task_grants -> casework.breg_adapter 'Requests current proposal identity and subject context'
         casework.breg_adapter -> breg.api 'Rereads through the service reader; source failure fails the status check'
         casework.api -> breg.task_grants 'Returns active status after the source reread'
-        breg.writes -> breg.audit 'Appends the terminal outcome within the proposal transaction'
-        breg.audit -> postgres 'Extends the audit chain'
-        breg.writes -> postgres 'Commits proposal state, original authority, idempotency and terminal audit atomically'
+        breg.writes -> postgres 'Commits proposal state, original authority and idempotency atomically'
+        breg.writes -> breg.audit 'Appends the response after the proposal commits'
+        breg.audit -> bregAuditStore 'Accepts the response entry'
         breg.api -> taskAgent 'Returns the committed proposal and receipt'
       }
     }
     application -> breg.api 'Later submits human approval or application before the original deadline'
     breg.api -> breg.writes 'Dispatches review of the frozen proposal'
     breg.writes -> breg.audit 'Commits a new pre-I/O attempt audit for the review action'
-    breg.audit -> postgres 'Persists the minimized review attempt in a separate transaction'
+    breg.audit -> bregAuditStore 'Accepts the minimized review request entry'
     breg.writes -> postgres 'Locks the proposal and loads its retained original grant'
     breg.writes -> breg.task_grants 'Rechecks the retained grant deadline and fresh Casework status; database retries repeat this check'
     breg.task_grants -> casework.api 'Checks the complete retained grant; Casework performs the same source reread'
     casework.api -> breg.task_grants 'Returns active status after the source reread'
-    breg.writes -> postgres 'Commits the reviewed lifecycle transition and terminal audit'
+    breg.writes -> postgres 'Commits the reviewed lifecycle transition'
     breg.api -> application 'Returns the approved or applied result'
   }
 
@@ -223,8 +223,8 @@ views {
       the earlier token or grant expiry. It does not call Casework status for a read, so
       re-exchanged access tokens may continue to read after revocation until the original
       grant deadline, at most 900 seconds after Casework task approval. The normal
-      authenticated-read gates still apply: a durable attempt audit commits before
-      protected record I/O, then a terminal audit commits after materialization and before
+      authenticated-read gates still apply: a durable request audit is accepted before
+      protected record I/O, then a response audit is accepted after materialization and before
       any response bytes are released. Audit failure makes the read unavailable.
     '''
     taskAgent -> breg.api 'Requests a task-bound read with an exchanged token'
@@ -232,10 +232,10 @@ views {
     breg.access -> breg.task_grants 'Binds source issuer, client, purpose, subjects and equal compiled bounds; checks expiry locally'
     breg.api -> breg.reads 'Dispatches the authorized read without a Casework status call'
     breg.reads -> breg.audit 'Records the attempt before protected record I/O'
-    breg.audit -> postgres 'Commits the minimized attempt in a separate transaction'
+    breg.audit -> bregAuditStore 'Accepts the minimized request entry'
     breg.reads -> postgres 'Reads only permitted records, fields and history under RLS'
     breg.reads -> breg.audit 'Records returned, empty, unresolved or refused terminal outcome'
-    breg.audit -> postgres 'Commits the terminal audit before response release'
+    breg.audit -> bregAuditStore 'Commits the terminal audit before response release'
     breg.api -> taskAgent 'Returns the Registry Record response after the audit gate succeeds'
   }
 }

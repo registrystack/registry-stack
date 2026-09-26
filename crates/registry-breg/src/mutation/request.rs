@@ -172,7 +172,7 @@ impl MutationCoordinator {
             .access_profiles
             .get(claims.access_profile())
             .ok_or(MutationError::InvalidRequest)?;
-        if !profile_is_keyed(&self.audit_profile)
+        if !profile_is_keyed(self.audit.profile())
             || entity.change_request.is_none()
             || route.entity_id != entity.id
             || claims.entity_id() != entity.id
@@ -190,7 +190,7 @@ impl MutationCoordinator {
             return Err(MutationError::InvalidRequest);
         }
         let binding = resolve_binding(
-            &self.audit_profile,
+            self.audit.profile(),
             &IdempotencyBinding {
                 key: input.idempotency_key,
                 context: claims,
@@ -219,7 +219,7 @@ impl MutationCoordinator {
         let request_id =
             Uuid::parse_str(input.record_id).map_err(|_| MutationError::InvalidRequest)?;
         let actor =
-            request_actor_reference(&self.audit_profile, &self.expected.database_id, claims)?;
+            request_actor_reference(self.audit.profile(), &self.expected.database_id, claims)?;
         let header = transaction
             .transaction()
             .query_opt(
@@ -285,9 +285,40 @@ impl MutationCoordinator {
         })
     }
 
+    /// Append the attempt of one request action and return the handle that
+    /// owes its response. An orchestrating caller that runs protected reads
+    /// before the action itself, such as a reviewed apply's receipt
+    /// preflight, holds it across all of them.
+    pub(crate) async fn begin_request_action_audit(
+        &self,
+        registry: &CompiledRegistry,
+        input: &RequestActionInput<'_>,
+        claims: &ClaimContext,
+    ) -> Result<AuditRequest, MutationError> {
+        let route = registry
+            .routes()
+            .routes
+            .iter()
+            .find(|route| route.id == input.route_id)
+            .ok_or(MutationError::InvalidRequest)?;
+        Ok(begin_pre_io_audit(
+            &self.audit,
+            &self.expected,
+            claims,
+            PreIoAudit {
+                kind: PreIoAuditKind::Attempt,
+                method: route.method,
+                operation_id: &route.id,
+                target_record: Some(input.record_id),
+                refusal_reason: None,
+                correlation: input.correlation,
+            },
+        )
+        .await?)
+    }
+
     pub(crate) async fn record_request_boundary_refusal(
         &self,
-        client: &mut Client,
         registry: &CompiledRegistry,
         input: &RequestActionInput<'_>,
         claims: &ClaimContext,
@@ -299,12 +330,9 @@ impl MutationCoordinator {
             .find(|route| route.id == input.route_id)
             .ok_or(MutationError::InvalidRequest)?;
         record_pre_io_audit(
-            client,
-            self.lock_key,
-            self.lock_timeout,
+            &self.audit,
             &self.expected,
             claims,
-            &self.audit_profile,
             PreIoAudit {
                 kind: PreIoAuditKind::Refusal,
                 method: route.method,
@@ -325,6 +353,7 @@ impl MutationCoordinator {
         input: &RequestActionInput<'_>,
         claims: &ClaimContext,
         deadline: tokio::time::Instant,
+        attempt: &mut Option<AuditRequest>,
     ) -> Result<RequestEvidencePreflight, MutationError> {
         let route = registry
             .routes()
@@ -354,7 +383,7 @@ impl MutationCoordinator {
         };
         if plan.application.preconditions.evidence.is_empty()
             || plan.on_approved.mode != crate::model::CompiledChangeRequestOnApprovedMode::Manual
-            || !profile_is_keyed(&self.audit_profile)
+            || !profile_is_keyed(self.audit.profile())
             || route.entity_id != entity.id
             || claims.entity_id() != entity.id
             || claims.principal().is_none()
@@ -369,25 +398,28 @@ impl MutationCoordinator {
         {
             return Err(MutationError::InvalidRequest);
         }
-        record_pre_io_audit(
-            client,
-            self.lock_key,
-            self.lock_timeout,
-            &self.expected,
-            claims,
-            &self.audit_profile,
-            PreIoAudit {
-                kind: PreIoAuditKind::Attempt,
-                method: route.method,
-                operation_id: &route.id,
-                target_record: Some(input.record_id),
-                refusal_reason: None,
-                correlation: input.correlation,
-            },
-        )
-        .await?;
+        // The caller holds the attempt across the remote Evidence I/O and the
+        // action transaction that follow this preflight.
+        if attempt.is_none() {
+            *attempt = Some(
+                begin_pre_io_audit(
+                    &self.audit,
+                    &self.expected,
+                    claims,
+                    PreIoAudit {
+                        kind: PreIoAuditKind::Attempt,
+                        method: route.method,
+                        operation_id: &route.id,
+                        target_record: Some(input.record_id),
+                        refusal_reason: None,
+                        correlation: input.correlation,
+                    },
+                )
+                .await?,
+            );
+        }
         let binding = resolve_binding(
-            &self.audit_profile,
+            self.audit.profile(),
             &IdempotencyBinding {
                 key: input.idempotency_key,
                 context: claims,
@@ -421,7 +453,7 @@ impl MutationCoordinator {
         let request_id =
             Uuid::parse_str(input.record_id).map_err(|_| MutationError::InvalidRequest)?;
         let actor =
-            request_actor_reference(&self.audit_profile, &self.expected.database_id, claims)?;
+            request_actor_reference(self.audit.profile(), &self.expected.database_id, claims)?;
         let header = transaction
             .transaction()
             .query_opt(
@@ -477,7 +509,7 @@ impl MutationCoordinator {
             return Ok(RequestEvidencePreflight::Receipt);
         }
         let etag = request_action_etag(
-            &self.audit_profile,
+            self.audit.profile(),
             claims,
             &self.expected.package_revision,
             route,
@@ -650,7 +682,7 @@ impl MutationCoordinator {
             .access_profiles
             .get(claims.access_profile())
             .ok_or(MutationError::InvalidRequest)?;
-        if !profile_is_keyed(&self.audit_profile)
+        if !profile_is_keyed(self.audit.profile())
             || entity.change_request.is_none()
             || route.entity_id != entity.id
             || claims.entity_id() != entity.id
@@ -675,18 +707,20 @@ impl MutationCoordinator {
             refusal_reason,
             correlation: input.correlation,
         };
-        if !attempt_recorded {
-            record_pre_io_audit(
-                client,
-                self.lock_key,
-                self.lock_timeout,
-                &self.expected,
-                claims,
-                &self.audit_profile,
-                audit(PreIoAuditKind::Attempt, None),
+        // A caller that recorded the attempt holds it until this returns.
+        let _attempt = if attempt_recorded {
+            None
+        } else {
+            Some(
+                begin_pre_io_audit(
+                    &self.audit,
+                    &self.expected,
+                    claims,
+                    audit(PreIoAuditKind::Attempt, None),
+                )
+                .await?,
             )
-            .await?;
-        }
+        };
         let deadline = tokio::time::Instant::now() + REQUEST_ACTION_TIMEOUT;
         // Capture the exact intake under request RLS, close that transaction,
         // then run the bounded planner exactly once outside retry and target
@@ -710,12 +744,9 @@ impl MutationCoordinator {
                     };
                     if !fault.is_enabled() {
                         record_pre_io_audit(
-                            client,
-                            self.lock_key,
-                            self.lock_timeout,
+                            &self.audit,
                             &self.expected,
                             claims,
-                            &self.audit_profile,
                             audit(PreIoAuditKind::Refusal, refusal_reason),
                         )
                         .await?;
@@ -785,12 +816,9 @@ impl MutationCoordinator {
         }
         if result.is_err() && !fault.is_enabled() {
             record_pre_io_audit(
-                client,
-                self.lock_key,
-                self.lock_timeout,
+                &self.audit,
                 &self.expected,
                 claims,
-                &self.audit_profile,
                 audit(PreIoAuditKind::Refusal, None),
             )
             .await?;
@@ -814,7 +842,7 @@ impl MutationCoordinator {
             Sha256::digest(canonicalize_json(&body).map_err(|_| MutationError::InvalidRequest)?)
                 .into();
         let binding = resolve_binding(
-            &self.audit_profile,
+            self.audit.profile(),
             &IdempotencyBinding {
                 key: input.idempotency_key,
                 context: claims,
@@ -844,7 +872,7 @@ impl MutationCoordinator {
         let request_id =
             Uuid::parse_str(input.record_id).map_err(|_| MutationError::InvalidRequest)?;
         let actor_reference =
-            request_actor_reference(&self.audit_profile, &self.expected.database_id, claims)?;
+            request_actor_reference(self.audit.profile(), &self.expected.database_id, claims)?;
         let header = transaction
             .transaction()
             .query_opt(
@@ -890,7 +918,7 @@ impl MutationCoordinator {
             crate::request_store::load(transaction.transaction(), &entity.id, request_id, false)
                 .await?;
         let etag = request_action_etag(
-            &self.audit_profile,
+            self.audit.profile(),
             claims,
             &self.expected.package_revision,
             route,
@@ -983,7 +1011,7 @@ impl MutationCoordinator {
             Sha256::digest(canonicalize_json(&body).map_err(|_| MutationError::InvalidRequest)?)
                 .into();
         let binding = resolve_binding(
-            &self.audit_profile,
+            self.audit.profile(),
             &IdempotencyBinding {
                 key: input.idempotency_key,
                 context: claims,
@@ -1009,7 +1037,7 @@ impl MutationCoordinator {
         let request_id =
             Uuid::parse_str(input.record_id).map_err(|_| MutationError::InvalidRequest)?;
         let actor_reference =
-            request_actor_reference(&self.audit_profile, &self.expected.database_id, claims)?;
+            request_actor_reference(self.audit.profile(), &self.expected.database_id, claims)?;
         // Only the version is read before target-row authorization. No intake,
         // decisions, snapshots, or held response can cross this boundary.
         let header = transaction
@@ -1059,7 +1087,7 @@ impl MutationCoordinator {
                 )
                 .await?;
                 let preview_etag = request_action_etag(
-                    &self.audit_profile,
+                    self.audit.profile(),
                     claims,
                     &self.expected.package_revision,
                     route,
@@ -1153,9 +1181,8 @@ impl MutationCoordinator {
                     &actor_reference,
                 )?;
             }
-            append_terminal_audit(
-                transaction.transaction(),
-                &self.audit_profile,
+            let entry = terminal_entry(
+                self.audit.profile(),
                 self.request_terminal(
                     input,
                     claims,
@@ -1164,12 +1191,12 @@ impl MutationCoordinator {
                     current.record_revision,
                     TerminalAuditOutcome::Replayed,
                 ),
-            )
-            .await?;
+            )?;
             transaction
                 .commit()
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
+            self.audit.append(entry).await?;
             return Ok(MutationOutcome {
                 response: stored.response,
                 replayed: true,
@@ -1194,7 +1221,7 @@ impl MutationCoordinator {
                 // different idempotency key must not accept a page, another
                 // profile's action, or an arbitrary syntactically valid ETag.
                 let precondition = request_action_etag_for_revisions(
-                    &self.audit_profile,
+                    self.audit.profile(),
                     claims,
                     &self.expected.package_revision,
                     route,
@@ -1265,7 +1292,7 @@ impl MutationCoordinator {
                 )?;
                 let metadata = StoredResultMetadata::Application {
                     record_reference: record_reference(
-                        &self.audit_profile,
+                        self.audit.profile(),
                         &self.expected.package_revision,
                         input.record_id,
                     )?,
@@ -1274,9 +1301,8 @@ impl MutationCoordinator {
                     result_count: u16::try_from(application.result_links().len())
                         .map_err(|_| MutationError::Unavailable)?,
                 };
-                append_terminal_audit(
-                    transaction.transaction(),
-                    &self.audit_profile,
+                let entry = terminal_entry(
+                    self.audit.profile(),
                     self.request_terminal(
                         input,
                         claims,
@@ -1285,8 +1311,7 @@ impl MutationCoordinator {
                         current.record_revision,
                         TerminalAuditOutcome::Replayed,
                     ),
-                )
-                .await?;
+                )?;
                 insert_result(transaction.transaction(), &binding, &metadata, &held).await?;
                 crate::request_store::link_idempotency_result(
                     transaction.transaction(),
@@ -1300,6 +1325,7 @@ impl MutationCoordinator {
                     .commit()
                     .await
                     .map_err(|_| MutationError::Unavailable)?;
+                self.audit.append(entry).await?;
                 return Ok(MutationOutcome {
                     response: held,
                     replayed: true,
@@ -1307,7 +1333,7 @@ impl MutationCoordinator {
             }
         }
         let etag = request_action_etag(
-            &self.audit_profile,
+            self.audit.profile(),
             claims,
             &self.expected.package_revision,
             route,
@@ -1459,7 +1485,7 @@ impl MutationCoordinator {
             .map_err(|_| MutationError::Unavailable)?;
         current = advance_request_revision(transaction.transaction(), entity, &current).await?;
         let request_reference = record_reference(
-            &self.audit_profile,
+            self.audit.profile(),
             &self.expected.package_revision,
             input.record_id,
         )?;
@@ -1662,9 +1688,8 @@ impl MutationCoordinator {
             &actor_reference,
         )?;
         fault.fail_at(MutationFaultPoint::BeforeTerminalAudit)?;
-        append_terminal_audit(
-            transaction.transaction(),
-            &self.audit_profile,
+        let entry = terminal_entry(
+            self.audit.profile(),
             self.request_terminal(
                 input,
                 claims,
@@ -1673,8 +1698,7 @@ impl MutationCoordinator {
                 current.record_revision,
                 TerminalAuditOutcome::Committed,
             ),
-        )
-        .await?;
+        )?;
         let result_metadata = match application_count {
             Some(result_count) => StoredResultMetadata::Application {
                 record_reference: request_reference,
@@ -1702,6 +1726,7 @@ impl MutationCoordinator {
             .commit()
             .await
             .map_err(|_| MutationError::Unavailable)?;
+        self.audit.append(entry).await?;
         fault.fail_at(MutationFaultPoint::AfterCommitBeforeResponseRelease)?;
         Ok(MutationOutcome {
             response: held,
@@ -2517,7 +2542,7 @@ impl MutationCoordinator {
         current.predecessor_revision = target.expected_revision;
         current.before_data = target.before.clone();
         let reference =
-            record_reference(&self.audit_profile, &self.expected.package_revision, &id)?;
+            record_reference(self.audit.profile(), &self.expected.package_revision, &id)?;
         // The target journal describes the canonical entity operation. The
         // protected request-results relation records its request provenance.
         let target_operation_id =

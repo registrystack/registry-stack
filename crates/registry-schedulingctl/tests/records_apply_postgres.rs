@@ -5,14 +5,16 @@
 //! The test proves the one attributable operator write end to end: the schema
 //! migration runs, the first document lands whole (locations, pools, members,
 //! and the typed exception columns), a second document replaces the first
-//! rather than appending to it, and every apply leaves its audit row in the
-//! outbox carrying the operator's allowed reason.
+//! rather than appending to it, and every apply writes a `request` audit
+//! entry before its transaction and a `response` entry carrying the
+//! operator's allowed reason after it commits, to the `schedulingctl` sibling
+//! of the runtime's audit file.
 
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_scheduling::config::RuntimeConfig;
 use registry_scheduling::store::PostgresStore;
 use registry_schedulingctl::records;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::path::Path;
 use uuid::Uuid;
 
@@ -155,12 +157,20 @@ fn apply_error(config: &Path, records_path: &Path) -> String {
     let config = config.to_path_buf();
     let records_path = records_path.to_path_buf();
     std::thread::spawn(move || {
-        let error = records::apply(&config, &records_path)
-            .expect_err("records apply refuses a different deployment identity");
+        let error = records::apply(&config, &records_path).expect_err("records apply refuses");
         format!("{error:#}")
     })
     .join()
     .expect("records apply does not panic")
+}
+
+/// Every entry the audit file at `path` holds, in write order.
+fn audit_entries(path: &Path) -> Vec<Value> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("an audit entry is JSON"))
+        .collect()
 }
 
 #[tokio::test]
@@ -255,16 +265,24 @@ async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
     assert_eq!(facts.exceptions[0].id, "staff-training");
     assert_eq!(facts.exceptions[0].date, "2026-10-07");
 
-    let audit = store.pending_audit(10).await.unwrap();
-    let applies: Vec<_> = audit
-        .iter()
-        .filter(|(_, record)| record["operation"] == "records.apply")
-        .collect();
-    assert_eq!(applies.len(), 1, "{audit:?}");
-    assert_eq!(applies[0].1["outcome"], "allowed");
-    assert_eq!(applies[0].1["reason"], "authorization.allowed");
-    assert_eq!(applies[0].1["counts"]["exceptions"], 1);
-    assert_eq!(applies[0].1["counts"]["windows"], 1);
+    // The command writes beside the runtime's audit file, never into it.
+    let audit_path = root.path().join("audit.schedulingctl.ndjson");
+    assert!(!root.path().join("audit.ndjson").exists());
+    let audit = audit_entries(&audit_path);
+    assert_eq!(audit.len(), 2, "{audit:?}");
+    let (request, response) = (&audit[0], &audit[1]);
+    assert_eq!(request["schema"], "registry-scheduling-audit/v1");
+    assert_eq!(request["phase"], "request");
+    assert_eq!(response["phase"], "response");
+    assert_eq!(request["correlation"], response["correlation"]);
+    assert_eq!(request["record"]["operation"], "records.apply");
+    assert_eq!(request["record"]["actorKind"], "operator");
+    assert!(request["record"]["outcome"].is_null());
+    assert_eq!(response["record"]["outcome"], "allowed");
+    assert_eq!(response["record"]["reason"], "authorization.allowed");
+    assert_eq!(response["record"]["eventId"], response["correlation"]);
+    assert_eq!(response["record"]["counts"]["exceptions"], 1);
+    assert_eq!(response["record"]["counts"]["windows"], 1);
 
     // The second document replaces the first: the second location lands, the
     // retired station is gone, and the closure does not survive.
@@ -285,15 +303,12 @@ async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
     assert_eq!(facts.windows.len(), 1);
     assert_eq!(facts.windows[0].revision, 2, "the window was replaced");
 
-    let audit = store.pending_audit(10).await.unwrap();
-    let applies: Vec<_> = audit
+    let audit = audit_entries(&audit_path);
+    assert_eq!(audit.len(), 4, "{audit:?}");
+    assert!(audit
         .iter()
-        .filter(|(_, record)| record["operation"] == "records.apply")
-        .collect();
-    assert_eq!(applies.len(), 2, "{audit:?}");
-    assert!(applies
-        .iter()
-        .all(|(_, record)| record["reason"] == "authorization.allowed"));
+        .filter(|entry| entry["phase"] == "response")
+        .all(|entry| entry["record"]["reason"] == "authorization.allowed"));
 
     admin
         .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))
@@ -397,6 +412,66 @@ async fn records_apply_rejects_a_different_deployment_identity_without_writing()
     assert_eq!(
         after, before,
         "the refused apply changed the existing facts"
+    );
+    // The request entry was written before the transaction the store
+    // refused; the refusal still writes a paired response so the request is
+    // never left orphaned.
+    let refused = audit_entries(&root.path().join("other-audit.schedulingctl.ndjson"));
+    assert_eq!(refused.len(), 2, "{refused:?}");
+    assert_eq!(refused[0]["phase"], "request");
+    assert_eq!(refused[1]["phase"], "response");
+    assert_eq!(refused[0]["correlation"], refused[1]["correlation"]);
+    assert_eq!(refused[1]["record"]["outcome"], "refused");
+    assert_eq!(refused[1]["record"]["reason"], "records.replace-failed");
+    assert_eq!(refused[1]["record"]["eventId"], refused[1]["correlation"]);
+    // The store's refusal can name records and carry driver diagnostics, so
+    // it reaches the command's error, never the closed audit record.
+    let mut keys: Vec<&str> = refused[1]["record"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "actorKind",
+            "counts",
+            "eventId",
+            "operation",
+            "outcome",
+            "reason"
+        ]
+    );
+    let text =
+        std::fs::read_to_string(root.path().join("other-audit.schedulingctl.ndjson")).unwrap();
+    assert!(
+        !text.contains("belongs to another deployment"),
+        "the store's refusal leaked into the audit stream: {text}"
+    );
+
+    // An audit destination that cannot be opened refuses the apply before
+    // the database is written.
+    let blocked_config = root.path().join("blocked-runtime.yaml");
+    std::fs::write(
+        &blocked_config,
+        runtime(&adopted_project, &root.path().join("blocked-audit.ndjson")),
+    )
+    .unwrap();
+    std::fs::create_dir(root.path().join("blocked-audit.schedulingctl.ndjson")).unwrap();
+    let error = apply_error(&blocked_config, &root.path().join("second.yaml"));
+    assert!(
+        error.starts_with("opening the schedulingctl audit destination"),
+        "{error}"
+    );
+    let (unchanged, _) = store
+        .facts()
+        .await
+        .expect("the existing records remain readable");
+    assert_eq!(
+        unchanged, before,
+        "an unaudited apply changed the existing facts"
     );
 
     admin

@@ -12,7 +12,7 @@ use axum::http::{Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
 use axum::{middleware, Router};
-use registry_platform_audit::AuditProfile;
+use registry_platform_audit::AuditWriter;
 use registry_platform_oidc::JwksFetcher;
 use thiserror::Error;
 use tokio::net::TcpListener;
@@ -24,6 +24,7 @@ use crate::api::{
     authenticated_router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
 };
 use crate::attachment_verification_worker::AttachmentVerificationWorker;
+use crate::audit::RegistryAudit;
 use crate::auth::RegistryAuthenticator;
 use crate::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
 use crate::metrics::{self, Metrics};
@@ -59,7 +60,7 @@ pub enum StartupError {
     /// Authored field address only, never the expression or database diagnostic.
     #[error("a persisted field pattern has invalid PostgreSQL syntax")]
     FieldPatternSyntax { entity_id: String, field_id: String },
-    #[error("the Registry audit profile was refused")]
+    #[error("the Registry audit profile or destination was refused")]
     Audit,
     #[error("the Registry cursor profile was refused")]
     Cursor,
@@ -331,7 +332,7 @@ impl StartupError {
             Self::FieldPatternSyntax { .. } => {
                 "a persisted field pattern has invalid PostgreSQL syntax"
             }
-            Self::Audit => "the Registry audit profile was refused",
+            Self::Audit => "the Registry audit profile or destination was refused",
             Self::Cursor => "the Registry cursor profile was refused",
             Self::Oidc => "the Registry OIDC key source was refused",
             Self::Authentication => "the Registry authentication profile was refused",
@@ -503,7 +504,30 @@ pub async fn prepare(config_path: &Path) -> Result<PreparedServer> {
     let connection = config
         .runtime_database_connection_config()
         .map_err(map_runtime_config_error)?;
-    prepare_verified_package_with_connection(config, package, connection).await
+    prepare_verified_package_with_connection(config, package, connection, AuditOpening::Serve).await
+}
+
+/// Check every dependency [`prepare`] opens, then discard the unbound state,
+/// keeping only the PostgreSQL baseline advisories it decided.
+///
+/// The audit destination is checked with `check_writable` instead of being
+/// opened, so the check takes no writer lock, creates no audit file, and can
+/// run beside a serving process that holds the destination. The discarded
+/// state is built over a writer that refuses every entry, so nothing it holds
+/// can append.
+pub async fn check(config_path: &Path) -> Result<Vec<BaselineAdvisory>> {
+    let config = load_runtime_config(config_path).map_err(map_runtime_config_error)?;
+    let package_root = config.package().root().to_path_buf();
+    let package = {
+        let package_context = config.package_load_context();
+        load_package(&package_root, &package_context).map_err(StartupError::PackageRefused)?
+    };
+    let connection = config
+        .runtime_database_connection_config()
+        .map_err(map_runtime_config_error)?;
+    prepare_verified_package_with_connection(config, package, connection, AuditOpening::CheckOnly)
+        .await
+        .map(|prepared| prepared.postgres_advisories().to_vec())
 }
 
 /// Prepare the clean database capability consumed by the production pre-sign
@@ -667,7 +691,24 @@ pub async fn prepare_with_connection_config_for_test(
         let package_context = config.package_load_context();
         load_package(&package_root, &package_context).map_err(StartupError::PackageRefused)?
     };
-    prepare_verified_package_with_connection(config, package, connection).await
+    prepare_verified_package_with_connection(config, package, connection, AuditOpening::Serve).await
+}
+
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn check_with_connection_config_for_test(
+    config_path: &Path,
+    connection: crate::postgres::ConnectionConfig,
+) -> Result<()> {
+    let config = load_runtime_config(config_path).map_err(map_runtime_config_error)?;
+    let package_root = config.package().root().to_path_buf();
+    let package = {
+        let package_context = config.package_load_context();
+        load_package(&package_root, &package_context).map_err(StartupError::PackageRefused)?
+    };
+    prepare_verified_package_with_connection(config, package, connection, AuditOpening::CheckOnly)
+        .await
+        .map(drop)
 }
 
 #[cfg(feature = "postgres-test")]
@@ -686,10 +727,19 @@ pub async fn prepare_with_connection_and_key_source_for_test(
     prepare_verified_package_with_key_source(config, package, connection, key_source).await
 }
 
+/// Whether startup opens the configured audit destination for serving or only
+/// checks that a writer could open it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AuditOpening {
+    Serve,
+    CheckOnly,
+}
+
 async fn prepare_verified_package_with_connection(
     config: RuntimeConfig,
     package: VerifiedPackage,
     connection: crate::postgres::ConnectionConfig,
+    opening: AuditOpening,
 ) -> Result<PreparedServer> {
     let (pool, startup, postgres_advisories) = prepare_database_startup(
         package,
@@ -698,7 +748,10 @@ async fn prepare_verified_package_with_connection(
         config.database().roles().runtime(),
     )
     .await?;
-    let audit_profile = config.audit_profile().map_err(|_| StartupError::Audit)?;
+    let audit = match opening {
+        AuditOpening::Serve => open_registry_audit(&config).await?,
+        AuditOpening::CheckOnly => check_registry_audit(&config)?,
+    };
     let cursor_codec = Arc::new(config.cursor_codec().map_err(|_| StartupError::Cursor)?);
     let key_source = config
         .oidc_key_source()
@@ -710,7 +763,7 @@ async fn prepare_verified_package_with_connection(
         pool,
         postgres_advisories,
         key_source,
-        audit_profile,
+        audit,
         cursor_codec,
     )
     .await
@@ -730,7 +783,7 @@ async fn prepare_verified_package_with_key_source(
         config.database().roles().runtime(),
     )
     .await?;
-    let audit_profile = config.audit_profile().map_err(|_| StartupError::Audit)?;
+    let audit = open_registry_audit(&config).await?;
     let cursor_codec = Arc::new(config.cursor_codec().map_err(|_| StartupError::Cursor)?);
     finish_prepared_server(
         config,
@@ -738,10 +791,64 @@ async fn prepare_verified_package_with_key_source(
         pool,
         postgres_advisories,
         key_source,
-        audit_profile,
+        audit,
         cursor_codec,
     )
     .await
+}
+
+/// Resolve the keyed reference profile and open the one audit writer this
+/// process appends to for its whole lifetime. The file destination takes the
+/// single-writer lock here, so a second process configured with the same path
+/// refuses to start instead of interleaving entries.
+async fn open_registry_audit(config: &RuntimeConfig) -> Result<RegistryAudit> {
+    let profile = config.audit_profile().map_err(|_| StartupError::Audit)?;
+    let writer = AuditWriter::open(config.audit().destination().clone())
+        .await
+        .map_err(|_| StartupError::Audit)?;
+    Ok(RegistryAudit::new(profile, writer))
+}
+
+/// Resolve the keyed reference profile and check, without opening it, that a
+/// writer could open the configured destination. The returned handle refuses
+/// every entry.
+///
+/// This also checks the `bregctl` companion destination operator commands
+/// append to beside the runtime (see [`crate::audit::RegistryAudit::open_companion`]):
+/// a torn final entry or an unwritable directory there blocks an operator
+/// command exactly as one in the runtime's own destination would, so doctor
+/// must refuse it too instead of reporting a clean audit dependency.
+fn check_registry_audit(config: &RuntimeConfig) -> Result<RegistryAudit> {
+    let profile = config.audit_profile().map_err(|_| StartupError::Audit)?;
+    let destination = config.audit().destination();
+    destination
+        .check_writable()
+        .map_err(|_| StartupError::Audit)?;
+    destination
+        .for_process(crate::audit::COMPANION_PROCESS_ROLE)
+        .map_err(|_| StartupError::Audit)?
+        .check_writable()
+        .map_err(|_| StartupError::Audit)?;
+    Ok(RegistryAudit::new(
+        profile,
+        AuditWriter::from_line_sink(Box::new(RefuseEveryEntry)),
+    ))
+}
+
+/// A line sink that refuses every write, so a checked-only startup state
+/// fails closed if anything in it tries to append.
+struct RefuseEveryEntry;
+
+impl std::io::Write for RefuseEveryEntry {
+    fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::other(
+            "a checked-only startup appends no audit entry",
+        ))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// How long a server session may sit idle inside an open transaction before
@@ -791,7 +898,7 @@ async fn finish_prepared_server(
     pool: RuntimePool,
     postgres_advisories: Vec<BaselineAdvisory>,
     key_source: Arc<JwksFetcher>,
-    audit_profile: AuditProfile,
+    audit: RegistryAudit,
     cursor_codec: Arc<crate::cursor::CursorCodec>,
 ) -> Result<PreparedServer> {
     let oidc = config.authentication().oidc();
@@ -843,6 +950,7 @@ async fn finish_prepared_server(
         lock_key,
         key_source: Arc::clone(&key_source),
         requires_postgis: registry.ddl().requires_postgis,
+        audit_writer: audit.writer().clone(),
     });
     if !readiness.is_ready().await {
         return Err(StartupError::DatabaseUnready);
@@ -911,7 +1019,7 @@ async fn finish_prepared_server(
         expected.clone(),
         lock_key,
         config.operational_timeouts().record_lock,
-        audit_profile.clone(),
+        audit.clone(),
         Arc::clone(&cursor_codec),
     )
     .with_attachment_storage(attachment_storage.clone())
@@ -930,7 +1038,7 @@ async fn finish_prepared_server(
         expected.clone(),
         lock_key,
         config.operational_timeouts().record_lock,
-        audit_profile.clone(),
+        audit.clone(),
     );
     let revisions = Arc::new(match field_encryption.clone() {
         Some(field_encryption) => revisions.with_field_encryption(field_encryption),
@@ -942,7 +1050,7 @@ async fn finish_prepared_server(
         expected.clone(),
         lock_key,
         config.operational_timeouts().record_lock,
-        audit_profile.clone(),
+        audit.clone(),
         Arc::clone(&cursor_codec),
     );
     let snapshots = Arc::new(match field_encryption.clone() {
@@ -961,7 +1069,7 @@ async fn finish_prepared_server(
         expected.clone(),
         lock_key,
         config.operational_timeouts().record_lock,
-        audit_profile.clone(),
+        audit.clone(),
         field_encryption.clone(),
     );
     webhook_delivery
@@ -1021,7 +1129,7 @@ async fn finish_prepared_server(
             expected.clone(),
             lock_key,
             config.operational_timeouts().record_lock,
-            audit_profile.clone(),
+            audit.clone(),
             attachment_storage.clone(),
             attachment_verification.clone(),
         ))
@@ -1032,7 +1140,7 @@ async fn finish_prepared_server(
         expected,
         lock_key,
         config.operational_timeouts().record_lock,
-        audit_profile,
+        audit,
         Some(event_destinations),
     )
     .with_task_status(task_status)
@@ -1245,7 +1353,7 @@ async fn request_timeout(
     let status = crate::correlation::status_class(response.status());
     let elapsed = started.elapsed();
     // A refusal of a caller with no principal is counted here instead of
-    // being appended to the hash-chained journal; the refusal site marks the
+    // being appended to the audit journal; the refusal site marks the
     // response and this boundary already holds the matched route template.
     let anonymous_refusal = response
         .extensions()
@@ -1565,6 +1673,7 @@ struct DynamicRuntimeReadiness {
     lock_key: RegistryLockKey,
     key_source: Arc<JwksFetcher>,
     requires_postgis: bool,
+    audit_writer: AuditWriter,
 }
 
 impl DynamicRuntimeReadiness {
@@ -1635,6 +1744,11 @@ impl DynamicRuntimeReadiness {
             .ensure_key_set()
             .await
             .map_err(|_| StartupError::Oidc)?;
+        // A writer that refused an append refuses every later one, so every
+        // audited request would answer audit-unavailable until a restart.
+        if !self.audit_writer.ready().await {
+            return Err(StartupError::Audit);
+        }
         Ok(())
     }
 }

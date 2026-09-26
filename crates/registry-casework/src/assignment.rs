@@ -252,6 +252,14 @@ impl PostgresStore {
         )?;
         let operation = "directory.team.update";
         let request_hash = assignment_hash(&(expected_directory_revision, team_id, request))?;
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                "team_updated",
+                Some(actor),
+                &actor.profile_id,
+                json!({"teamId": team_id}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         lock_assignment_key(&transaction, actor, operation, team_id, idempotency_key).await?;
@@ -269,7 +277,8 @@ impl PostgresStore {
                 .get("revision")
                 .and_then(Value::as_i64)
                 .ok_or(StoreError::Corrupt)?;
-            transaction.commit().await?;
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
+            audit.commit(transaction).await?;
             return Ok(revision);
         }
         let actual: i64 = transaction
@@ -329,6 +338,7 @@ impl PostgresStore {
         crate::store::directory_snapshot(&transaction, next).await?;
         append_directory_assignment_event(
             &transaction,
+            &mut audit,
             actor,
             next,
             "team_updated",
@@ -350,7 +360,7 @@ impl PostgresStore {
             &json!({"revision":next}),
         )
         .await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(next)
     }
 
@@ -531,6 +541,18 @@ impl PostgresStore {
         };
         let resource = absence_id.map_or_else(|| "absences".to_owned(), |id| id.to_string());
         let request_hash = assignment_hash(&(expected_directory_revision, input))?;
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                if absence_id.is_some() {
+                    "absence_updated"
+                } else {
+                    "absence_created"
+                },
+                Some(actor),
+                &actor.profile_id,
+                json!({}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         lock_assignment_key(&transaction, actor, operation, &resource, idempotency_key).await?;
@@ -576,7 +598,8 @@ impl PostgresStore {
         .await?
         {
             let record = serde_json::from_value(response).map_err(StoreError::Json)?;
-            transaction.commit().await?;
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
+            audit.commit(transaction).await?;
             return Ok(record);
         }
         if actual != expected_directory_revision {
@@ -614,6 +637,7 @@ impl PostgresStore {
         };
         append_directory_assignment_event(
             &transaction,
+            &mut audit,
             actor,
             next,
             if absence_id.is_some() {
@@ -634,7 +658,7 @@ impl PostgresStore {
             &serde_json::to_value(&record)?,
         )
         .await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(record)
     }
 
@@ -648,6 +672,14 @@ impl PostgresStore {
         let operation = "directory.absence.delete";
         let resource = absence_id.to_string();
         let request_hash = assignment_hash(&expected_directory_revision)?;
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                "absence_deleted",
+                Some(actor),
+                &actor.profile_id,
+                json!({}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         lock_assignment_key(&transaction, actor, operation, &resource, idempotency_key).await?;
@@ -666,7 +698,8 @@ impl PostgresStore {
             if !can_manage_person(&transaction, actor, &replay.person).await? {
                 return Err(StoreError::Forbidden);
             }
-            transaction.commit().await?;
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
+            audit.commit(transaction).await?;
             return Ok(replay.revision);
         }
         let actual: i64 = transaction
@@ -699,6 +732,7 @@ impl PostgresStore {
             .await?;
         append_directory_assignment_event(
             &transaction,
+            &mut audit,
             actor,
             next,
             "absence_deleted",
@@ -720,7 +754,7 @@ impl PostgresStore {
             &response,
         )
         .await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(next)
     }
 
@@ -869,6 +903,7 @@ impl PostgresStore {
         _origin: AssignmentOrigin,
         item_id: Uuid,
     ) -> Result<bool, StoreError> {
+        let mut audit = self.begin_background_audit().await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let table = "casework_items";
@@ -892,17 +927,17 @@ impl PostgresStore {
         let queue: String = row.get(0);
         let state: String = row.get(1);
         let Some(holder) = principal_columns(&row, 2, 3)? else {
-            transaction.commit().await?;
+            audit.commit(transaction).await?;
             return Ok(false);
         };
         if state != "claimed" || is_staff_for_queue(&transaction, &holder, &queue).await? {
-            transaction.commit().await?;
+            audit.commit(transaction).await?;
             return Ok(false);
         }
         match ensure_no_source_attempt(&transaction, item_id).await {
             Ok(()) => {}
             Err(StoreError::AttemptPending) => {
-                transaction.commit().await?;
+                audit.commit(transaction).await?;
                 return Ok(false);
             }
             Err(error) => return Err(error),
@@ -938,6 +973,7 @@ impl PostgresStore {
             .await?;
         crate::store::append_item_event(
             &transaction,
+            &mut audit,
             &crate::store::row_to_item(&updated)?,
             HistoryKind::Released,
             Some(&system_actor),
@@ -945,7 +981,7 @@ impl PostgresStore {
             detail,
         )
         .await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(true)
     }
 
@@ -1039,6 +1075,14 @@ impl PostgresStore {
         if let Some(reason) = reason {
             validate_reason(reason, MAXIMUM_REASON_BYTES, false)?;
         }
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                kind,
+                Some(actor),
+                &actor.profile_id,
+                json!({"itemId": item_id}),
+            ))
+            .await?;
         let origin = self.assignment_origin(item_id).await?;
         let operation = format!("item.{kind}");
         let resource = item_id.to_string();
@@ -1107,7 +1151,8 @@ impl PostgresStore {
         }
         if let Some(response) = replay {
             let result = serde_json::from_value(response).map_err(StoreError::Json)?;
-            transaction.commit().await?;
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
+            audit.commit(transaction).await?;
             return Ok(result);
         }
         if required_holder.is_some_and(|expected| holder.as_ref() != Some(expected)) {
@@ -1180,6 +1225,7 @@ impl PostgresStore {
         };
         crate::store::append_item_event(
             &transaction,
+            &mut audit,
             &item,
             history_kind,
             Some(actor),
@@ -1202,7 +1248,7 @@ impl PostgresStore {
             &serde_json::to_value(&result)?,
         )
         .await?;
-        transaction.commit().await?;
+        audit.commit(transaction).await?;
         Ok(result)
     }
 
@@ -1982,6 +2028,7 @@ async fn insert_assignment_replay(
 }
 async fn append_directory_assignment_event(
     tx: &Transaction<'_>,
+    audit: &mut crate::audit::AuditOperation,
     actor: &ActorContext,
     revision: i64,
     kind: &str,
@@ -1990,6 +2037,8 @@ async fn append_directory_assignment_event(
     let event_id = Uuid::new_v4();
     let now = Utc::now();
     tx.execute("INSERT INTO casework_directory_events(event_id,directory_revision,event_kind,occurred_at,actor_issuer,actor_subject,profile_id,detail) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",&[&event_id,&revision,&kind,&now,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&detail]).await?;
-    tx.execute("INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)",&[&event_id,&json!({"event":format!("casework.{kind}"),"directoryRevision":revision,"actor":{"issuer":actor.principal.issuer,"subject":actor.principal.subject},"profileId":actor.profile_id,"detail":detail})]).await?;
-    Ok(())
+    audit.record(
+        event_id,
+        json!({"event":format!("casework.{kind}"),"directoryRevision":revision,"actor":{"issuer":actor.principal.issuer,"subject":actor.principal.subject},"profileId":actor.profile_id,"detail":detail}),
+    )
 }

@@ -46,7 +46,7 @@ pub enum ProblemKind {
     BodyTooLarge,
     /// The caller exceeded a limit (HTTP 429/413 semantics).
     RateLimited,
-    /// The audit ledger refused or failed (fail closed before responding).
+    /// The audit destination refused or failed (fail closed before responding).
     AuditFailed,
     /// The runtime configuration is invalid.
     RuntimeInvalid,

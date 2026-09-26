@@ -19,8 +19,8 @@ use crate::api::{
     RevisionReadService, RowBoundaryOperator as ApiRowBoundaryOperator, ServiceFuture,
 };
 use crate::audit::{
-    append_read_terminal_audit, profile_is_keyed, record_pre_io_audit, PreIoAudit, PreIoAuditKind,
-    ReadTerminalAudit, TerminalAudit, TerminalAuditOutcome,
+    begin_pre_io_audit, profile_is_keyed, read_terminal_entry, record_pre_io_audit, PreIoAudit,
+    PreIoAuditKind, ReadTerminalAudit, RegistryAudit, TerminalAudit, TerminalAuditOutcome,
 };
 use crate::contract::{FieldTypeSource, Operation, ProvenanceFieldSource};
 use crate::cursor::CursorRepresentation;
@@ -56,7 +56,7 @@ pub struct PostgresRevisionReadService {
     expected: ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
     lock_timeout: Duration,
-    audit_profile: AuditProfile,
+    audit: RegistryAudit,
     field_encryption: Option<SharedFieldEncryptionService>,
     fault: RevisionReadFaultControl,
 }
@@ -69,7 +69,7 @@ impl PostgresRevisionReadService {
         expected: ExpectedRegistryIdentity,
         lock_key: RegistryLockKey,
         lock_timeout: Duration,
-        audit_profile: AuditProfile,
+        audit: RegistryAudit,
     ) -> Self {
         Self {
             pool,
@@ -77,7 +77,7 @@ impl PostgresRevisionReadService {
             expected,
             lock_key,
             lock_timeout,
-            audit_profile,
+            audit,
             field_encryption: None,
             fault: RevisionReadFaultControl::Disabled,
         }
@@ -104,7 +104,7 @@ impl PostgresRevisionReadService {
         &self,
         request: RevisionReadRequest,
     ) -> Result<RevisionReadResult, ReadServiceError> {
-        if !profile_is_keyed(&self.audit_profile) {
+        if !profile_is_keyed(self.audit.profile()) {
             return Err(ReadServiceError::Unavailable);
         }
         let mut client = self
@@ -117,12 +117,9 @@ impl PostgresRevisionReadService {
             Ok(plan) => plan,
             Err(()) => {
                 record_pre_io_audit(
-                    &mut client,
-                    self.lock_key,
-                    self.lock_timeout,
+                    &self.audit,
                     &self.expected,
                     &claims,
-                    &self.audit_profile,
                     PreIoAudit {
                         kind: PreIoAuditKind::Refusal,
                         method: request.method,
@@ -138,13 +135,10 @@ impl PostgresRevisionReadService {
             }
         };
 
-        record_pre_io_audit(
-            &mut client,
-            self.lock_key,
-            self.lock_timeout,
+        let _attempt = begin_pre_io_audit(
+            &self.audit,
             &self.expected,
             &claims,
-            &self.audit_profile,
             PreIoAudit {
                 kind: PreIoAuditKind::Attempt,
                 method: request.method,
@@ -161,27 +155,19 @@ impl PostgresRevisionReadService {
         let materialized = match materialized {
             Ok(materialized) => materialized,
             Err(error) => {
-                let _ = self
-                    .record_terminal(
-                        &mut client,
-                        &claims,
-                        &request,
-                        &plan,
-                        TerminalAuditOutcome::Refused,
-                        0,
-                        &[],
-                    )
-                    .await;
-                return Err(error);
+                return Err(self.refused(&claims, &request, &plan, error).await);
             }
         };
-        let held = RevisionReadResult::from_rows(
+        let held = match RevisionReadResult::from_rows(
             &self.registry,
             &plan.entity,
             request.representation,
             plan.kind,
             materialized,
-        )?;
+        ) {
+            Ok(held) => held,
+            Err(error) => return Err(self.refused(&claims, &request, &plan, error).await),
+        };
         self.fault
             .fail_at(RevisionReadFaultPoint::BeforeTerminalAudit)?;
         let outcome = if held.result_count == 0 {
@@ -190,7 +176,6 @@ impl PostgresRevisionReadService {
             TerminalAuditOutcome::Returned
         };
         self.record_terminal(
-            &mut client,
             &claims,
             &request,
             &plan,
@@ -201,6 +186,27 @@ impl PostgresRevisionReadService {
         .await
         .map_err(|_| ReadServiceError::Unavailable)?;
         Ok(held)
+    }
+
+    /// Record the Refused terminal of a read that failed after its attempt,
+    /// then hand back the failure. A terminal the destination refuses is
+    /// logged: the read already fails, and its held attempt then writes the
+    /// unfinished response instead.
+    async fn refused(
+        &self,
+        claims: &ClaimContext,
+        request: &RevisionReadRequest,
+        plan: &RevisionReadPlan,
+        error: ReadServiceError,
+    ) -> ReadServiceError {
+        if self
+            .record_terminal(claims, request, plan, TerminalAuditOutcome::Refused, 0, &[])
+            .await
+            .is_err()
+        {
+            tracing::error!("the refused revision read's terminal audit entry was not recorded");
+        }
+        error
     }
 
     async fn read_rows(
@@ -280,10 +286,11 @@ impl PostgresRevisionReadService {
         Ok(rows)
     }
 
+    /// Append the read's `response` entry. The caller releases the result
+    /// only after this returns `Ok`.
     #[allow(clippy::too_many_arguments)]
     async fn record_terminal(
         &self,
-        client: &mut deadpool_postgres::Client,
         claims: &ClaimContext,
         request: &RevisionReadRequest,
         plan: &RevisionReadPlan,
@@ -291,7 +298,7 @@ impl PostgresRevisionReadService {
         result_count: usize,
         _exact_response_bytes: &[u8],
     ) -> Result<(), crate::audit::RegistryAuditError> {
-        let key_hasher = self.audit_profile.key_hasher();
+        let key_hasher = self.audit.profile().key_hasher();
         let principal_reference = claims
             .principal()
             .map(|principal| {
@@ -311,24 +318,17 @@ impl PostgresRevisionReadService {
             )
             .map_err(|_| crate::audit::RegistryAuditError::InvalidContext)?;
         let field_set_reference = field_set_reference(
-            &self.audit_profile,
+            self.audit.profile(),
             &self.expected.package_revision,
             &request.selected_fields,
         )?;
-        let row_boundary_reference =
-            row_boundary_reference(&self.audit_profile, &self.expected.package_revision, claims)?;
-        let transaction = begin_record_transaction(
-            client,
-            self.lock_key,
-            self.lock_timeout,
-            &self.expected,
+        let row_boundary_reference = row_boundary_reference(
+            self.audit.profile(),
+            &self.expected.package_revision,
             claims,
-        )
-        .await
-        .map_err(|_| crate::audit::RegistryAuditError::Unavailable)?;
-        append_read_terminal_audit(
-            transaction.transaction(),
-            &self.audit_profile,
+        )?;
+        let entry = read_terminal_entry(
+            self.audit.profile(),
             ReadTerminalAudit {
                 terminal: TerminalAudit {
                     grant: None,
@@ -351,12 +351,8 @@ impl PostgresRevisionReadService {
                 query_reference: None,
                 row_boundary_reference: Some(row_boundary_reference),
             },
-        )
-        .await?;
-        transaction
-            .commit()
-            .await
-            .map_err(|_| crate::audit::RegistryAuditError::Unavailable)
+        )?;
+        self.audit.append(entry).await
     }
 }
 
@@ -380,17 +376,9 @@ impl RevisionReadService for PostgresRevisionReadService {
         request: crate::api::RevisionReadRefusal,
     ) -> ServiceFuture<'_, Result<(), ReadServiceError>> {
         Box::pin(async move {
-            let mut client = self
-                .pool
-                .get()
-                .await
-                .map_err(|_| ReadServiceError::Unavailable)?;
             crate::audit::record_http_refusal_audit(
-                &mut client,
-                self.lock_key,
-                self.lock_timeout,
+                &self.audit,
                 &self.expected,
-                &self.audit_profile,
                 crate::audit::HttpRefusalAudit {
                     grant: None,
                     method: request.method,

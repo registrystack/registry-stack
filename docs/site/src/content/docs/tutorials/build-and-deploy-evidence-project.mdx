@@ -230,16 +230,22 @@ curl --fail --silent --show-error \
 ```
 
 Verify the retained response with an independently prepared production verification policy and
-trusted public keys. Then drain traffic and stop Evidence Gateway before verifying the audit chain:
-a running writer holds the active segment, so `verify-audit` would prove only sealed history and
-skip the record this request just wrote.
+trusted public keys:
 
 ```sh
 evidence verify \
   --jws "<assertion.jws.json>" \
   --jwks "<trusted-evidence-jwks.json>" \
   --policy "<production-verification-policy.json>"
-evidence --runtime "<candidate>/runtime.yaml" verify-audit
+```
+
+Then confirm that the request's audit entries reached the deployment's append-only audit store,
+not only the local audit file: an `access-attempt` entry and a `disclosure-release` entry that
+share one `correlation`. For example, against a shipped copy of the audit file:
+
+```sh
+jq -c 'select(.record.phase == "disclosure-release") | {correlation, time, evidenceId: .record.evidenceId}' \
+  "<shipped-audit-file.jsonl>"
 ```
 
 The signing policy and secret references are governed bundle content. Rotate a key by publishing a
@@ -248,14 +254,14 @@ identifier.
 
 ## Expected result
 
-You have a retained signed response that verifies under the independent production policy, an audit
-chain that passes verification, and a recorded bundle revision for the exact candidate serving the
-synthetic request.
+You have a retained signed response that verifies under the independent production policy, audit
+entries for the synthetic request in append-only storage, and a recorded bundle revision for the
+exact candidate serving the synthetic request.
 
 ## Clean up the request credential
 
 Remove the temporary Curl configuration when the deployment check is complete. Retain the signed
-response and audit-verification record according to the operator's evidence-retention procedure.
+response and the audit confirmation according to the operator's evidence-retention procedure.
 
 ```sh
 rm -f "<owner-only-curl-config>"

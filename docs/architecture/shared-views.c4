@@ -21,7 +21,7 @@ global {
   predicateGroup casework_storage {
     include
       casework -> casework_postgres with {
-        title 'Persists coordination state and audit intent'
+        title 'Persists coordination state and history'
       }
   }
 }

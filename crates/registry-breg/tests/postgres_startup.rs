@@ -34,8 +34,8 @@ use registry_breg::postgres::{
     ExpectedRegistryIdentity, RegistryStateTestIdentity,
 };
 use registry_breg::startup::{
-    prepare_with_connection_and_key_source_for_test, prepare_with_connection_config_for_test,
-    serve_until_shutdown, PreparedServer, StartupError,
+    check_with_connection_config_for_test, prepare_with_connection_and_key_source_for_test,
+    prepare_with_connection_config_for_test, serve_until_shutdown, PreparedServer, StartupError,
 };
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm, PrivateJwk};
@@ -575,9 +575,23 @@ async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_databas
         .await
         .expect("test restores active package");
     assert_ready(&prepared, StatusCode::OK).await;
+    let unopened_config_path = fixture.write_static_jwks_config(
+        &package,
+        &database.migration_role,
+        &database.runtime_role,
+        &idp,
+        Some("0123456789abcdef0123456789abcdef"),
+    );
     idp.stop().await;
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_ready(&prepared, StatusCode::OK).await;
+    drop(prepared);
+    assert_audit_destination_has_one_writer_and_checks_take_none(
+        &database,
+        &config_path,
+        &unopened_config_path,
+    )
+    .await;
     database.cleanup().await;
 }
 
@@ -1006,10 +1020,12 @@ async fn live_old_server_drains_apply_and_exact_successor_restart_becomes_ready(
             .expect("prior in-flight task joins")
             .expect("prior in-flight HTTP exchange completes");
         // Apply wins only after the record transaction releases its shared
-        // lock. If that happens before the terminal audit can gate release,
-        // the held old-package bytes are discarded as a value-free refusal.
-        assert_eq!(drained.status, 503);
-        assert!(!drained.body.contains("old-row"));
+        // lock, so the read completed under the package that was active for
+        // its whole transaction. Its response entry is written to the audit
+        // file without reopening the database, and the old-package bytes it
+        // read are released: the read is ordered before the apply.
+        assert_eq!(drained.status, 200);
+        assert!(drained.body.contains("old-row"));
         assert!(!drained.body.contains("recovery-operator"));
         assert!(!drained.body.contains(&token));
 
@@ -1403,6 +1419,104 @@ async fn assert_ready(prepared: &PreparedServer, expected: StatusCode) {
     assert_eq!(response.status(), expected);
 }
 
+/// A serving process holds its audit file's single-writer lock, so a second
+/// process configured with the same path refuses to start. The startup check
+/// that doctor runs only checks the destination is writable: it succeeds
+/// beside the lock holder and creates no audit file. The process WASM
+/// executor admits one prepared server at a time, so a directly opened writer
+/// stands in for the serving process here. The check also covers the
+/// `bregctl` sibling destination operator commands append to, not only the
+/// runtime's own destination: a torn final entry there must refuse doctor's
+/// check exactly as one in the runtime's own destination would.
+async fn assert_audit_destination_has_one_writer_and_checks_take_none(
+    database: &TestDatabase,
+    serving_config: &Path,
+    unopened: &Path,
+) {
+    let serving_writer = registry_platform_audit::AuditWriter::open(
+        registry_platform_audit::AuditDestination::from_settings(
+            registry_platform_audit::AuditDestinationKind::File,
+            Some(configured_audit_path(serving_config)),
+            None,
+            None,
+        )
+        .expect("the configured audit destination is valid"),
+    )
+    .await
+    .expect("the serving writer takes the audit file lock");
+    assert_eq!(
+        prepare_with_connection_config_for_test(serving_config, database.runtime_config.clone())
+            .await
+            .err(),
+        Some(StartupError::Audit),
+        "a second writer over the serving audit file refuses to start"
+    );
+    check_with_connection_config_for_test(serving_config, database.runtime_config.clone())
+        .await
+        .expect("the startup check runs beside the serving writer");
+    drop(serving_writer);
+
+    check_with_connection_config_for_test(unopened, database.runtime_config.clone())
+        .await
+        .expect("the startup check accepts a destination no writer has opened");
+    let audit_path = configured_audit_path(unopened);
+    assert!(
+        !audit_path.exists() && !audit_path.parent().expect("audit directory").exists(),
+        "the startup check creates neither the audit directory nor its file"
+    );
+
+    let registry_platform_audit::AuditDestination::File(companion) =
+        registry_platform_audit::AuditDestination::from_settings(
+            registry_platform_audit::AuditDestinationKind::File,
+            Some(audit_path),
+            None,
+            None,
+        )
+        .expect("the configured audit destination is valid")
+        .for_process(registry_breg::audit::COMPANION_PROCESS_ROLE)
+        .expect("bregctl is a valid process role")
+    else {
+        panic!("expected a file destination");
+    };
+    let companion_path = companion.path().to_path_buf();
+    let companion_directory = companion_path.parent().expect("audit directory");
+    fs::create_dir_all(companion_directory).expect("companion audit directory is created");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(companion_directory, fs::Permissions::from_mode(0o700))
+            .expect("companion audit directory mode is set");
+        // The first entry must be in the writer's current envelope format, so
+        // the only defect the check can find is the torn final entry.
+        let complete_entry = "{\"eventId\":\"5b1b5b8e-6f2b-4c1a-9b7a-6b1b5b8e6f2b\",\"schema\":\"registry.test.audit/v1\",\"time\":\"2024-01-01T00:00:00Z\",\"correlation\":\"bregctl-companion\",\"phase\":\"request\",\"record\":{}}\n";
+        fs::write(&companion_path, format!("{complete_entry}{{"))
+            .expect("torn companion entry is written");
+        fs::set_permissions(&companion_path, fs::Permissions::from_mode(0o600))
+            .expect("companion audit file mode is set");
+        assert_eq!(
+            check_with_connection_config_for_test(unopened, database.runtime_config.clone())
+                .await
+                .err(),
+            Some(StartupError::Audit),
+            "a torn final entry in the bregctl companion destination refuses the startup check"
+        );
+        fs::write(&companion_path, complete_entry).expect("companion entry is completed");
+        check_with_connection_config_for_test(unopened, database.runtime_config.clone())
+            .await
+            .expect("the startup check accepts a completed companion destination");
+    }
+    fs::remove_dir_all(companion_directory).expect("companion audit directory cleanup");
+}
+
+fn configured_audit_path(config_path: &Path) -> PathBuf {
+    let config = fs::read_to_string(config_path).expect("runtime config reads");
+    let mut lines = config.lines().skip_while(|line| *line != "audit:");
+    lines
+        .find_map(|line| line.strip_prefix("  path: "))
+        .map(PathBuf::from)
+        .expect("the runtime config names its audit path")
+}
+
 async fn assert_unknown_static_kid_refuses_value_free(prepared: &PreparedServer) {
     const UNKNOWN_KID_CANARY: &str = "unknown-static-kid-canary";
     let now = SystemTime::now()
@@ -1588,6 +1702,12 @@ impl StartupFixture {
         };
         let ordinal = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let path = self.root.join(format!("runtime-{ordinal}.yaml"));
+        let audit_path = self
+            .root
+            .join(format!("audit-{ordinal}"))
+            .join("audit.jsonl")
+            .display()
+            .to_string();
         fs::write(
             &path,
             format!(
@@ -1641,6 +1761,7 @@ authentication:
     principal: principal
 audit:
   hashKeyRef: {hash_key_ref}
+  path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
   maxAgeSeconds: 300

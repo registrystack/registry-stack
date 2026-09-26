@@ -11,7 +11,6 @@ This crate is test-only. It fails to compile unless callers enable the
   key rotation.
 - `MockHttpUpstream`, a WireMock-backed upstream with request-size tracking.
 - Ed25519 JWK fixtures for signing and verification tests.
-- `assert_chain_integrity` for internally consistent audit envelope assertions.
 - `assert_json_absent_strings` for focused audit non-leak checks over JSON
   records.
 - `oidc_verifier_config` for a standard EdDSA test verifier configuration.
@@ -47,45 +46,40 @@ Ok(())
 ### `MockIdp`
 
 In-process OIDC issuer. Key methods:
-- `start()` — bind a random port, spawn the server.
-- `issuer()` — base URL string.
-- `discovery_url()` — `{issuer}/.well-known/openid-configuration` URL string;
+- `start()`: bind a random port, spawn the server.
+- `issuer()`: base URL string.
+- `discovery_url()`: `{issuer}/.well-known/openid-configuration` URL string;
   useful when wiring test OIDC config that reads discovery from a URL.
-- `jwks_uri()` — `{issuer}/jwks.json` URL string.
-- `mint_token(claims)` — sign a JWT with the current key and default claim
+- `jwks_uri()`: `{issuer}/jwks.json` URL string.
+- `mint_token(claims)`: sign a JWT with the current key and default claim
   normalization (`iss`, `iat`, `nbf`, `exp`).
-- `rotate_key()` — switch to the second fixture key, simulating a key rollover.
-- `stop()` — graceful shutdown.
+- `rotate_key()`: switch to the second fixture key, simulating a key rollover.
+- `stop()`: graceful shutdown.
 
 ### `MockExpectation<'a>`
 
 Builder returned by `MockHttpUpstream::expect(method, path)`. Wire up the
 response with:
-- `respond(ResponseTemplate)` — arbitrary WireMock response.
-- `respond_status(u16)` — status only.
-- `respond_json(u16, Value)` — JSON body.
-- `respond_body(u16, bytes)` — raw bytes.
+- `respond(ResponseTemplate)`: arbitrary WireMock response.
+- `respond_status(u16)`: status only.
+- `respond_json(u16, Value)`: JSON body.
+- `respond_body(u16, bytes)`: raw bytes.
 
 Also tracks request body size (used by `assert_max_request_bytes`).
 
-### `ChainAssertionError`
-
-Type alias for `registry_platform_audit::ChainVerificationError`. Exported here
-so test code only needs to import from this crate.
-
 ### JWT signing helpers
 
-- `sign_ed25519_compact_jwt(private_jwk, typ, kid, claims)` — parse a JWK
+- `sign_ed25519_compact_jwt(private_jwk, typ, kid, claims)`: parse a JWK
   string then sign a compact JWT with the given `typ` and `kid`.
-- `sign_ed25519_compact_jwt_with_key(private, typ, kid, claims)` — sign with
+- `sign_ed25519_compact_jwt_with_key(private, typ, kid, claims)`: sign with
   an already-parsed `PrivateJwk`.
-- `sign_ed25519_compact_jwt_with_provider(signer, typ, claims)` — sign with a
+- `sign_ed25519_compact_jwt_with_provider(signer, typ, claims)`: sign with a
   `SigningProvider`; the JWT header `kid` is taken from the provider.
-- `jwks_from_private_jwk(private)` — return `{"keys": [public]}` as a
+- `jwks_from_private_jwk(private)`: return `{"keys": [public]}` as a
   `serde_json::Value`; useful for mocking a JWKS endpoint.
-- `jwks_from_signing_provider(signer)` — return a JWKS from provider public
+- `jwks_from_signing_provider(signer)`: return a JWKS from provider public
   metadata, without private JWK members.
-- `fixtures::ed25519_signer()` — return a `LocalJwkSigner` backed by the
+- `fixtures::ed25519_signer()`: return a `LocalJwkSigner` backed by the
   primary Ed25519 fixture key.
 
 ## Fixture Notes
@@ -104,7 +98,7 @@ cargo test -p registry-platform-testing --features test-utils
 ```
 
 The crate also owns a cross-crate integration test that exercises middleware,
-OIDC, and audit behavior together.
+OIDC, and the audit writer together.
 
 ## License
 

@@ -56,8 +56,31 @@ Principal selection belongs exclusively to each authored
 `accessProfiles[].principalClaim` in `casework.yaml`. The removed runtime field
 `authentication.oidc.principalClaim` is refused with that replacement.
 
-`audit.path` is the absolute JSONL journal path. `audit.hashKeyRef` supplies its
-keyed-chain secret. `sources` is keyed by the exact source ids declared by the
+`audit` selects where Casework writes its audit entries and the key that
+pseudonymizes the principals and identifiers they name. `audit.hashKeyRef` is
+that key's secret reference. `audit.destination` is `file` (the default) or
+`stdout`. A `file` destination requires the absolute `audit.path` of the active
+file and accepts `audit.rotateBytes` (default 104857600, at least 1048576, at
+most 4294967295) and `audit.retainDays` (default 90, at most 36500); `stdout`
+refuses all three. A
+`caseworkctl` command that writes audit, such as an applied erasure or
+settlement, writes to a sibling file named for its process role beside
+`audit.path`, `audit.caseworkctl.ndjson` for `audit.ndjson`, or to standard
+error with a `stdout` destination, so the command's own report keeps standard
+output. Every entry carries the schema
+`registry-casework-audit/v1`, a phase, and a correlation shared by an
+operation's request entry and its response entries. A requested operation
+writes one request entry before it opens the operation's transaction, and one
+response entry for each domain event it records after that transaction
+commits; a destination that refuses either fails the request with
+`service.unavailable`, and a refused response leaves the committed change in
+place. A requested operation that records no domain event, such as an
+idempotent replay, writes one response entry whose `outcome` is `replayed` or
+`unchanged`, and returns its result only after that entry is accepted.
+Background work no caller requested, such as source reconciliation or a
+maintenance pass, writes no request entry: it opens its transaction only while
+the writer reports ready, and its response entries share a correlation that
+identifies the run. The database holds no audit state. `sources` is keyed by the exact source ids declared by the
 selected policy; missing, extra, or empty ids are refused. Source access remains
 bound to each source's configured reader profile and does not grant a caller a
 Casework access profile.

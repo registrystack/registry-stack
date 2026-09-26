@@ -58,6 +58,7 @@ For a narrative explanation with worked examples, see the [architecture overview
 | 0.6.0 | 2026-08-03 | draft | Registry Notary is retired. Removed its component section, its federation flow step, and REQ-ARC-G-008, REQ-ARC-G-009, REQ-ARC-G-012, and REQ-ARC-G-013. Restated REQ-ARC-G-007 with Evidence Gateway as the owner of requirement evaluation. Added Evidence Gateway and Registry Mint as components and added REQ-ARC-G-014, REQ-ARC-G-015, and REQ-ARC-G-016. |
 | 0.7.0 | 2026-08-09 | draft | Added the Evidence Gateway multi-subject request-batch boundary and REQ-ARC-G-017, preserving one independently signed assertion per available evaluation and separating request batching from holder-bound issuance batching. |
 | 0.8.0 | 2026-08-11 | draft | Replaced the Registry Relay component with the contract-compiled Relay runtime, added its `relayctl` authoring tool and the Evidence wallet delivery front end, and removed the retired Relay policy decision point. Retired REQ-ARC-G-006 (manifest-to-Relay runtime binding) and REQ-ARC-G-011 (the Relay PDP profile), which have no successor. Restated REQ-ARC-G-002, REQ-ARC-G-003, REQ-ARC-G-007, and REQ-ARC-G-010 without the retired coupling. Added REQ-ARC-G-018 through REQ-ARC-G-021. |
+| 0.8.1 | 2026-09-25 | draft | Described Relay's audit as a log without a hash chain in the serving flow and REQ-ARC-G-020. |
 
 ## 1. Scope and audience
 
@@ -179,7 +180,7 @@ The following ordered flow describes how a request moves through the stack from 
 
 4. **Sealing.** `relayctl` builds a sealed package containing the authored contract, the governed closure, the canonical compiled model, the generated artifacts, and a manifest that digests every file. Deployment-local bindings are excluded by construction.
 
-5. **Serving.** A Relay process verifies the package by re-deriving it, opens its issuer, audit sink, source, and listener only after that verification succeeds, and serves read-only consultation routes. Every attempt is recorded to the audit chain before the source is read, and the request is refused when the audit sink cannot accept the record.
+5. **Serving.** A Relay process verifies the package by re-deriving it, opens its issuer, audit sink, source, and listener only after that verification succeeds, and serves read-only consultation routes. Every attempt is recorded to the audit log before the source is read, and the request is refused when the audit destination cannot accept the entry.
 
 6. **Assertion.** Evidence Gateway authenticates the caller's access token against its one trusted issuer, matches exactly one authority path per evaluation, evaluates one predefined requirement over its own fixed bounded sources, and returns one signed minimum-disclosure assertion per available evaluation. A singular request carries one evaluation; a request batch groups up to sixteen ordered audience-scoped evaluations under one common requirement and purpose. Caller identity and authorization details may authorize or parameterize an evaluation, but do not become evidence. Each assertion carries the answer the requirement defines, not the source record behind it.
 
@@ -213,7 +214,7 @@ REQ-ARC-G-018: A Relay deployment MUST serve only from a sealed package it verif
 
 REQ-ARC-G-019: Authoring and serving MUST be separate processes with separate binaries. The authoring tool MUST NOT start, contact, or configure a running deployment, and the serving process MUST NOT compile an authoring project. Both MUST perform their shared work through the same library, so a rule an adopter validated at authoring time is the rule the deployment enforces.
 
-REQ-ARC-G-020: Relay MUST own no source of truth. It MUST read adopter data through a bounded read-only boundary over the schema objects its governed contract declares, and MUST NOT persist a record value. The append-only audit chain is the only state a Relay deployment writes.
+REQ-ARC-G-020: Relay MUST own no source of truth. It MUST read adopter data through a bounded read-only boundary over the schema objects its governed contract declares, and MUST NOT persist a record value. The audit log is the only state a Relay deployment writes.
 
 REQ-ARC-G-021: A wallet delivery front end MUST NOT sign a credential, hold an Evidence signing key, hold a holder private key, or add a claim of its own. It MUST pass a wallet-supplied holder public key to Evidence Gateway unchanged, and the dependency MUST run one way: no Evidence Gateway crate depends on it at runtime.
 

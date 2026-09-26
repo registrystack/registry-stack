@@ -613,8 +613,9 @@ done
         self.assertIn("dev stop --remove", down)
         self.assertIn("registry-stack-casework-loadtest-v1", down)
         self.assertIn("DYLD_FALLBACK_LIBRARY_PATH", run + down)
-        for name in ("auditLockWaiters", "lockWaiters", "blockedBackends"):
+        for name in ("reviewHistoryLockWaiters", "lockWaiters", "blockedBackends"):
             self.assertIn(f"'{name}'", dbstats)
+        self.assertNotIn("auditLockWaiters", dbstats)
         # json_agg output spans lines; the jsonb cast keeps each wait sample on
         # the single line the JSON-lines reader expects.
         self.assertEqual(dbstats.count(")::jsonb::text;"), 2)

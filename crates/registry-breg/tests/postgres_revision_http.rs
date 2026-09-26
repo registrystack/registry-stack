@@ -17,6 +17,7 @@ use registry_breg::api::{
     router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
     VerifiedRequestClaims,
 };
+use registry_breg::audit::RegistryAudit;
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
@@ -26,7 +27,7 @@ use registry_breg::postgres::{
     PostgresRecordReadService, PostgresRevisionReadService, RegistryLockKey,
     RegistryStateTestIdentity, RevisionReadFaultPoint,
 };
-use registry_platform_audit::{AuditEnvelope, AuditProfile};
+use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -88,14 +89,16 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
         .build_pool()
         .expect("bounded runtime pool builds");
     let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock identity is bounded");
-    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x5d; 32].into())
-        .expect("test owns a strongly keyed audit profile");
+    let audit = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x5d; 32].into())
+            .expect("test owns a strongly keyed audit profile"),
+    );
     let app = revision_router(
         pool.clone(),
         Arc::clone(&registry),
         identity.clone(),
         lock_key,
-        audit_profile.clone(),
+        audit.clone(),
         None,
     );
 
@@ -263,7 +266,7 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
         Arc::clone(&registry),
         identity.clone(),
         lock_key,
-        audit_profile.clone(),
+        audit.clone(),
         Some(RevisionReadFaultPoint::HistoricalStatementTimeout),
     );
     let outrun_budget = send(
@@ -285,7 +288,7 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
         Arc::clone(&registry),
         identity.clone(),
         lock_key,
-        audit_profile.clone(),
+        audit.clone(),
         Some(RevisionReadFaultPoint::BeforeTerminalAudit),
     );
     let faulted = send(
@@ -298,8 +301,9 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
     assert_eq!(body_json(faulted).await["code"], "source.unavailable");
     assert_eq!(
         audit_count(&database).await,
-        before_fault + 1,
-        "terminal audit gate failure releases no held revision and leaves only the attempt"
+        before_fault + 2,
+        "terminal audit gate failure releases no held revision and answers the attempt as \
+         unfinished"
     );
 
     let unkeyed = revision_router(
@@ -307,7 +311,7 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
         Arc::clone(&registry),
         identity,
         lock_key,
-        AuditProfile::unkeyed_dev_only(),
+        database.audit(AuditProfile::unkeyed_dev_only()),
         None,
     );
     let before_unkeyed = audit_count(&database).await;
@@ -381,16 +385,11 @@ async fn real_postgres_revision_http_lists_internal_migration_revisions() {
         .build_pool()
         .expect("bounded runtime pool builds");
     let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock identity is bounded");
-    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x5d; 32].into())
-        .expect("test owns a strongly keyed audit profile");
-    let app = revision_router(
-        pool,
-        Arc::clone(&registry),
-        identity,
-        lock_key,
-        audit_profile,
-        None,
+    let audit = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x5d; 32].into())
+            .expect("test owns a strongly keyed audit profile"),
     );
+    let app = revision_router(pool, Arc::clone(&registry), identity, lock_key, audit, None);
 
     let response = send(
         &app,
@@ -418,7 +417,7 @@ fn revision_router(
     registry: Arc<registry_breg::CompiledRegistry>,
     identity: registry_breg::postgres::ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
-    audit_profile: AuditProfile,
+    audit: RegistryAudit,
     fault: Option<RevisionReadFaultPoint>,
 ) -> axum::Router {
     let cursors = Arc::new(
@@ -431,7 +430,7 @@ fn revision_router(
         identity.clone(),
         lock_key,
         Duration::from_secs(2),
-        audit_profile.clone(),
+        audit.clone(),
         Arc::clone(&cursors),
     ));
     let revisions = PostgresRevisionReadService::new(
@@ -440,7 +439,7 @@ fn revision_router(
         identity.clone(),
         lock_key,
         Duration::from_secs(2),
-        audit_profile,
+        audit,
     );
     let revisions = match fault {
         Some(fault) => revisions.with_fault_for_test(fault),
@@ -767,48 +766,24 @@ async fn insert_migration_revision(
         .expect("migration seeds one internal migration revision row");
 }
 
-async fn audit_count(database: &TestDatabase) -> i64 {
-    database
-        .admin
-        .query_one("SELECT count(*) FROM registry_internal.registry_audit", &[])
-        .await
-        .expect("administrator inspects audit count")
-        .get(0)
+async fn audit_count(database: &TestDatabase) -> usize {
+    database.audit_entries().len()
 }
 
 async fn assert_revision_audit_is_ordered_and_minimized(
     database: &TestDatabase,
     registry: &registry_breg::CompiledRegistry,
 ) {
-    let rows = database
-        .admin
-        .query("SELECT envelope FROM registry_internal.registry_audit", &[])
-        .await
-        .expect("administrator inspects audit envelopes");
-    let mut envelopes = rows
-        .iter()
-        .map(|row| {
-            serde_json::from_slice::<AuditEnvelope>(&row.get::<_, Vec<u8>>(0))
-                .expect("audit envelope is canonical platform JSON")
-        })
-        .collect::<Vec<_>>();
-    let mut records = Vec::with_capacity(envelopes.len());
-    let mut predecessor = None;
-    while !envelopes.is_empty() {
-        let index = envelopes
-            .iter()
-            .position(|envelope| envelope.prev_hash == predecessor)
-            .expect("audit chain has one next record");
-        let envelope = envelopes.remove(index);
-        predecessor = Some(envelope.record_hash);
-        records.push(envelope.record);
-    }
+    let records = database.audit_records();
     assert!(records.windows(2).any(|window| {
         window[0]["phase"] == "attempt"
             && window[1]["phase"] == "terminal"
             && window[1]["outcome"] == "returned"
     }));
-    assert_eq!(records.last().expect("fault attempt")["phase"], "attempt");
+    // The faulted read's attempt is answered as unfinished.
+    let fault_answer = records.len() - 1;
+    assert_eq!(records[fault_answer]["phase"], "unfinished");
+    assert_eq!(records[fault_answer - 1]["phase"], "attempt");
     assert!(records.iter().any(|record| record["phase"] == "refusal"));
     assert!(records.iter().any(|record| {
         record["phase"] == "terminal"

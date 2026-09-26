@@ -13,6 +13,7 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use registry_platform_audit::AuditEntry;
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_config::{ProtectedSecret, SecretResolver, MAX_SECRET_BYTES};
 use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields};
@@ -46,6 +47,7 @@ use tokio_postgres::Transaction;
 use url::Url;
 use uuid::Uuid;
 
+use crate::audit::{SchedulingAudit, SCHEDULING_AUDIT_SCHEMA};
 use crate::config::HookDestinationConfig;
 use crate::store::{ClaimRow, PostgresStore};
 
@@ -448,11 +450,16 @@ impl ActivatedHooks {
     }
 
     /// Bind the generic platform service to Scheduling's database identity,
-    /// audit outbox, destinations, and fixed wire constants.
+    /// audit destination, destinations, and fixed wire constants.
     #[must_use]
-    pub fn delivery_service(&self, store: PostgresStore) -> HookDeliveryService {
+    pub fn delivery_service(
+        &self,
+        store: PostgresStore,
+        audit: SchedulingAudit,
+    ) -> HookDeliveryService {
         let seams = SchedulingDeliverySeams {
             store,
+            audit,
             destinations: Arc::clone(&self.destinations),
             identity: self.identity.clone(),
             schema: self.schema.clone(),
@@ -668,6 +675,7 @@ impl HookDestination for DestinationBinding {
 #[derive(Clone)]
 struct SchedulingDeliverySeams {
     store: PostgresStore,
+    audit: SchedulingAudit,
     destinations: Arc<ActivatedDestinations>,
     identity: HookRuntimeIdentity,
     schema: String,
@@ -752,11 +760,20 @@ impl DeliverySeams for SchedulingDeliverySeams {
         Ok(None)
     }
 
-    async fn record_audit(
-        &self,
-        transaction: &Transaction<'_>,
-        record: DeliveryAuditRecord<'_>,
-    ) -> Result<(), DeliveryError> {
+    /// The platform worker records an attempt's start inside the lease
+    /// transaction before it commits, so an attempt is on record before its
+    /// request can leave the process and a destination that refuses it rolls
+    /// the lease back without egress; a lease whose commit then fails is
+    /// answered with a worker interruption. A terminal disposition, an
+    /// expiry, and a replay's outcome are recorded only after the transition
+    /// commits, so no entry names a transition that rolled back.
+    ///
+    /// An attempt's start and an operator's replay request are `request`
+    /// entries; the terminal disposition and the replay's committed or
+    /// refused reset are `response` entries. One attempt's entries share a
+    /// correlation built from the hook event, the compiled delivery, the
+    /// generation, and the attempt.
+    async fn record_audit(&self, record: DeliveryAuditRecord<'_>) -> Result<(), DeliveryError> {
         let audit = json!({
             "event": "scheduling.hook-delivery",
             "hookEventId": record.event_id,
@@ -768,19 +785,23 @@ impl DeliverySeams for SchedulingDeliverySeams {
             "outcome": audit_outcome(record.outcome),
             "disposition": audit_disposition(record.disposition),
         });
-        let sql = format!(
-            "INSERT INTO {}.scheduling_audit_outbox(event_id, audit_record) VALUES($1, $2)",
-            self.schema
+        let correlation = format!(
+            "{}/{}/{}/{}",
+            record.event_id, record.compiled_delivery_id, record.generation, record.attempt
         );
-        let changed = transaction
-            .execute(&sql, &[&Uuid::new_v4(), &audit])
+        let entry = match (record.phase, record.outcome) {
+            (DeliveryAuditPhase::Attempt, _)
+            | (DeliveryAuditPhase::Replay, DeliveryAuditOutcome::ReplayRequested) => {
+                AuditEntry::request(SCHEDULING_AUDIT_SCHEMA, correlation, audit)
+            }
+            (DeliveryAuditPhase::Terminal | DeliveryAuditPhase::Replay, _) => {
+                AuditEntry::response(SCHEDULING_AUDIT_SCHEMA, correlation, audit)
+            }
+        };
+        self.audit
+            .append(entry)
             .await
-            .map_err(|_| DeliveryError::Unavailable)?;
-        if changed == 1 {
-            Ok(())
-        } else {
-            Err(DeliveryError::Unavailable)
-        }
+            .map_err(|_| DeliveryError::Unavailable)
     }
 
     fn operational_event(&self, event: DeliveryOperationalEvent) {
@@ -1066,6 +1087,8 @@ fn audit_outcome(value: DeliveryAuditOutcome) -> &'static str {
         DeliveryAuditOutcome::PayloadExpired => "payload_expired",
         DeliveryAuditOutcome::WorkerInterrupted => "worker_interrupted",
         DeliveryAuditOutcome::ReplayRequested => "replay_requested",
+        DeliveryAuditOutcome::ReplayCommitted => "replay_committed",
+        DeliveryAuditOutcome::ReplayRefused => "replay_refused",
     }
 }
 

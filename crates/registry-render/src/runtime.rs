@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
+use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
 use serde::{Deserialize, Serialize};
 
 use crate::problem::{ProblemKind, RenderProblem};
@@ -151,26 +152,41 @@ pub fn default_max_concurrency() -> usize {
         .unwrap_or(2)
 }
 
+/// The audit block every Registry Stack product shares: a `file` (the
+/// default) or `stdout` destination, with rotation and retention for a file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuditRuntime {
-    /// Directory for the sealed, hash-chained JSONL ledger. Relative paths
+    /// Where audit lines go: `file` or `stdout`.
+    #[serde(default)]
+    pub destination: AuditDestinationKind,
+    /// The active audit file, for a `file` destination. Relative paths
     /// anchor to the runtime file's directory (see [`load`]).
-    pub directory: PathBuf,
-    /// `secret:file/…` or `secret:env/…` reference to the chain integrity
-    /// key (>= 32 bytes).
-    pub integrity_key_ref: String,
-    /// Sealed segment size before rotation.
-    #[serde(default = "default_max_segment_bytes")]
-    pub max_segment_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+    /// Size at which the active file rotates, for a `file` destination.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotate_bytes: Option<u64>,
+    /// Days a rotated file is kept, for a `file` destination.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retain_days: Option<u32>,
 }
 
-pub fn default_max_segment_bytes() -> u64 {
-    64 * 1024 * 1024
+impl AuditRuntime {
+    /// The validated destination the audit writer opens.
+    pub fn destination(&self) -> Result<AuditDestination, RenderProblem> {
+        AuditDestination::from_settings(
+            self.destination,
+            self.path.clone(),
+            self.rotate_bytes,
+            self.retain_days,
+        )
+        .map_err(|err| RenderProblem::new(ProblemKind::RuntimeInvalid, err.to_string()))
+    }
 }
 
 /// Load and validate a runtime file, expanding bounded `${VAR}` references.
-/// Relative `bundle.path` and `audit.directory` values are anchored to the
+/// Relative `bundle.path` and `audit.path` values are anchored to the
 /// runtime file's directory — the same anchor `secret:file/…` refs use — so
 /// one runtime file behaves identically regardless of the working directory
 /// it is loaded from. Returns the runtime and its canonical sha256 config id.
@@ -243,7 +259,17 @@ pub fn load(path: &Path) -> Result<(RenderRuntime, String), RenderProblem> {
     }
     let anchor = runtime_anchor(path);
     runtime.bundle.path = anchored(&anchor, &runtime.bundle.path);
-    runtime.audit.directory = anchored(&anchor, &runtime.audit.directory);
+    if let Some(audit_path) = runtime.audit.path.take() {
+        // An empty path would anchor to the runtime directory itself.
+        if audit_path.as_os_str().is_empty() {
+            return Err(RenderProblem::new(
+                ProblemKind::RuntimeInvalid,
+                AuditDestinationError::MissingPath.to_string(),
+            ));
+        }
+        runtime.audit.path = Some(anchored(&anchor, &audit_path));
+    }
+    runtime.audit.destination()?;
     let id = crate::hash::sha256_hex(expanded.as_bytes());
     Ok((runtime, id))
 }
@@ -316,7 +342,7 @@ mod tests {
     #[test]
     fn bind_defaults_to_loopback() {
         let runtime = runtime_yaml(
-            "bundle:\n  path: /b\nauth:\n  apiKeyRef: secret:file/k\naudit:\n  directory: /a\n  integrityKeyRef: secret:file/k\n",
+            "bundle:\n  path: /b\nauth:\n  apiKeyRef: secret:file/k\naudit:\n  path: /a/render.jsonl\n",
         );
         assert_eq!(runtime.server.bind, "127.0.0.1:8080");
     }
@@ -341,12 +367,16 @@ mod tests {
     /// `load` on a runtime file written under a temporary directory, so the
     /// checks that only `load` performs are exercised.
     fn load_yaml(body: &str) -> Result<RenderRuntime, RenderProblem> {
+        load_yaml_with_audit("  path: /a/render.jsonl\n", body)
+    }
+
+    fn load_yaml_with_audit(audit: &str, body: &str) -> Result<RenderRuntime, RenderProblem> {
         let home = tempfile::tempdir().expect("deployment home");
         let file = home.path().join("runtime.yaml");
         std::fs::write(
             &file,
             format!(
-                "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nbundle:\n  path: /b\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n  directory: /a\n  integrityKeyRef: secret:file/audit.key\n{body}"
+                "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nbundle:\n  path: /b\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n{audit}{body}"
             ),
         )
         .expect("runtime file");
@@ -386,13 +416,13 @@ mod tests {
         let file = deploy.join("runtime.yaml");
         std::fs::write(
             &file,
-            "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nbundle:\n  path: ../bundle\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n  directory: ../audit\n  integrityKeyRef: secret:file/audit.key\n",
+            "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nbundle:\n  path: ../bundle\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n  path: ../audit/render.jsonl\n",
         )
         .expect("runtime file");
         let (runtime, _) = load(&file).expect("runtime loads");
         let home = std::fs::canonicalize(home.path()).expect("canonical home");
         assert_eq!(runtime.bundle.path, home.join("bundle"));
-        assert_eq!(runtime.audit.directory, home.join("audit"));
+        assert_eq!(runtime.audit.path, Some(home.join("audit/render.jsonl")));
     }
 
     #[test]
@@ -401,15 +431,69 @@ mod tests {
         let file = home.path().join("runtime.yaml");
         std::fs::write(
             &file,
-            "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nbundle:\n  path: /srv/render/bundle\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n  directory: /var/lib/render/audit\n  integrityKeyRef: secret:file/audit.key\n",
+            "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nbundle:\n  path: /srv/render/bundle\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n  path: /var/lib/render/audit/render.jsonl\n",
         )
         .expect("runtime file");
         let (runtime, _) = load(&file).expect("runtime loads");
         assert_eq!(runtime.bundle.path, PathBuf::from("/srv/render/bundle"));
         assert_eq!(
-            runtime.audit.directory,
-            PathBuf::from("/var/lib/render/audit")
+            runtime.audit.path,
+            Some(PathBuf::from("/var/lib/render/audit/render.jsonl"))
         );
+    }
+
+    #[test]
+    fn the_audit_block_takes_the_shared_destination_shape() {
+        let file = load_yaml_with_audit(
+            "  path: /a/render.jsonl\n  rotateBytes: 1048576\n  retainDays: 30\n",
+            "",
+        )
+        .expect("a file destination with rotation and retention loads");
+        match file.audit.destination().expect("destination") {
+            AuditDestination::File(file) => {
+                assert_eq!(file.path(), Path::new("/a/render.jsonl"));
+                assert_eq!(file.rotate_bytes(), 1_048_576);
+                assert_eq!(file.retain_days(), 30);
+            }
+            AuditDestination::Stdout | AuditDestination::Stderr => {
+                panic!("file is the default destination")
+            }
+        }
+        let stdout = load_yaml_with_audit("  destination: stdout\n", "")
+            .expect("a stdout destination loads");
+        assert_eq!(
+            stdout.audit.destination().expect("destination"),
+            AuditDestination::Stdout
+        );
+    }
+
+    #[test]
+    fn an_audit_block_outside_the_shared_shape_is_refused() {
+        for (audit, expected) in [
+            ("  destination: file\n", "audit.path is required"),
+            ("  path: \"\"\n", "audit.path is required"),
+            (
+                "  destination: stdout\n  path: /a/render.jsonl\n",
+                "audit.path applies only",
+            ),
+            (
+                "  path: /a/render.jsonl\n  rotateBytes: 1024\n",
+                "audit.rotateBytes must be between",
+            ),
+            (
+                "  path: /a/render.jsonl\n  retainDays: 0\n",
+                "audit.retainDays must be between",
+            ),
+            ("  directory: /a\n", "unknown field `directory`"),
+            (
+                "  path: /a/render.jsonl\n  integrityKeyRef: secret:file/audit.key\n",
+                "unknown field `integrityKeyRef`",
+            ),
+        ] {
+            let err = load_yaml_with_audit(audit, "").expect_err(audit);
+            assert_eq!(err.kind, ProblemKind::RuntimeInvalid, "{audit}");
+            assert!(err.detail.contains(expected), "{audit}: {}", err.detail);
+        }
     }
 
     #[test]

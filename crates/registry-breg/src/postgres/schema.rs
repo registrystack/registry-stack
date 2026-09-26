@@ -14,7 +14,7 @@ use crate::generated_ddl::{policy_sql, DdlObjectOwner, DdlPolicyRole, DdlStateme
 use crate::history_commit::install_empty_history_baseline;
 use crate::history_store::install_history_schema_store;
 use crate::model::CompiledRegistry;
-use crate::mutation::install_mutation_schema;
+use crate::mutation::{install_mutation_schema, MutationError};
 
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use super::config::ConnectionTls;
@@ -51,9 +51,20 @@ pub async fn install_compiled_schema(
     }
 
     install_registry_state_schema(migration, runtime_role).await?;
-    install_mutation_schema(migration, runtime_role)
-        .await
-        .map_err(|_| PostgresKernelError::Connection)?;
+    install_mutation_schema(
+        migration,
+        runtime_role,
+        // Every caller of `install_compiled_schema` installs onto a database
+        // already verified to hold no managed objects, so a retired
+        // pre-simplification audit table can never be present here to
+        // discard.
+        false,
+    )
+    .await
+    .map_err(|error| match error {
+        MutationError::RetiredAuditRowsPresent => PostgresKernelError::RetiredAuditRowsPresent,
+        _ => PostgresKernelError::Connection,
+    })?;
     install_history_schema_store(migration, runtime_role)
         .await
         .map_err(|_| PostgresKernelError::Connection)?;

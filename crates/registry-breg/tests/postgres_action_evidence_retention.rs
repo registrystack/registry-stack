@@ -10,6 +10,7 @@ use registry_breg::{
     action_evidence_maintenance::ActionEvidenceRetentionOperatorService,
     compiler::{compile_project_with_assets, CompileProfile},
     contract::{parse_project_yaml, ModuleAssetSource},
+    mutation::MutationError,
     postgres::{
         initialize_registry_state_for_catalog_test, install_compiled_schema, ConnectionConfig,
         ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
@@ -84,7 +85,38 @@ fn service(
         connection,
         database.migration_role.clone(),
         database.runtime_role.clone(),
+        database.audit(
+            registry_platform_audit::AuditProfile::production_from_secret_bytes(
+                vec![0x5e; 32].into(),
+            )
+            .unwrap(),
+        ),
     ))
+}
+
+/// Every erasure is one request entry naming its threshold, answered under
+/// its correlation: `outcomes` lists each answer's outcome and erased count.
+fn assert_retention_audited(database: &TestDatabase, outcomes: &[(&str, Option<u64>)]) {
+    let entries = database
+        .audit_entries()
+        .into_iter()
+        .filter(|entry| entry["schema"] == "breg-evidence-retention-audit/v1")
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), outcomes.len() * 2, "{entries:?}");
+    for (pair, (outcome, erased)) in entries.chunks(2).zip(outcomes) {
+        assert_eq!(pair[0]["phase"], "request");
+        assert_eq!(pair[1]["phase"], "response");
+        assert_eq!(pair[0]["correlation"], pair[1]["correlation"]);
+        assert!(pair[0]["record"]["before"].is_string());
+        assert_eq!(pair[1]["record"]["before"], pair[0]["record"]["before"]);
+        assert_eq!(pair[1]["record"]["outcome"], *outcome);
+        assert_eq!(
+            pair[1]["record"]
+                .get("erased")
+                .and_then(serde_json::Value::as_u64),
+            *erased
+        );
+    }
 }
 
 async fn sentinel(database: &TestDatabase) {
@@ -154,6 +186,35 @@ async fn expired_request_evidence_erases_only_retained_uses() {
         &expected,
         database.migration_config.clone(),
     );
+    // The erasure's commit is refused after every statement succeeded, so
+    // its outcome is read back from the database: nothing was erased.
+    database
+        .admin
+        .batch_execute(
+            "CREATE OR REPLACE FUNCTION public.test_refuse_evidence_commit()
+               RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RAISE EXCEPTION 'test refuses this erasure commit'; END $$;
+             GRANT EXECUTE ON FUNCTION public.test_refuse_evidence_commit() TO PUBLIC;
+             CREATE CONSTRAINT TRIGGER test_refuse_evidence_commit
+               AFTER DELETE ON registry_internal.registry_request_evidence_uses
+               DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+               EXECUTE FUNCTION public.test_refuse_evidence_commit();",
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        operator.erase_expired(cutoff()).await,
+        Err(MutationError::Unavailable)
+    ));
+    database
+        .admin
+        .batch_execute(
+            "DROP TRIGGER test_refuse_evidence_commit
+               ON registry_internal.registry_request_evidence_uses;
+             DROP FUNCTION public.test_refuse_evidence_commit();",
+        )
+        .await
+        .unwrap();
     assert_eq!(operator.erase_expired(cutoff()).await.unwrap(), 1);
     let remaining = database
         .admin
@@ -168,7 +229,12 @@ async fn expired_request_evidence_erases_only_retained_uses() {
     assert_eq!(remaining.get::<_, i64>(0), 1);
     assert_eq!(remaining.get::<_, i64>(1), 1);
     assert_eq!(operator.erase_expired(cutoff()).await.unwrap(), 0);
+    assert_retention_audited(
+        &database,
+        &[("failed", None), ("erased", Some(1)), ("erased", Some(0))],
+    );
     drop(operator);
+    database.assert_every_audit_request_answered_once();
     database.cleanup().await;
 }
 fn cutoff() -> chrono::DateTime<chrono::Utc> {
@@ -236,6 +302,7 @@ async fn retention_refuses_misbound_database_with_identical_roles_and_catalog_dr
     let wrong = service(&original, &registry, &expected, other_connection.clone());
     assert!(wrong.erase_expired(cutoff()).await.is_err(), "a verified runtime identity cannot authorize deletion in another database sharing its role names");
     assert_eq!(count(&other).await, 1);
+    assert_retention_audited(&original, &[("failed", None)]);
     let correct = service(&original, &registry, &other_expected, other_connection);
     other
         .admin
@@ -261,7 +328,9 @@ async fn retention_refuses_misbound_database_with_identical_roles_and_catalog_dr
     assert_eq!(correct.erase_expired(cutoff()).await.unwrap(), 1);
     assert_eq!(count(&other).await, 0);
     drop((wrong, correct));
+    other.assert_every_audit_request_answered_once();
     other.cleanup().await;
+    original.assert_every_audit_request_answered_once();
     original.cleanup().await;
 }
 
@@ -354,5 +423,6 @@ async fn retention_serializes_activation_and_holds_identity_lock_through_deletio
     assert_eq!(erase.await.unwrap().unwrap(), 1);
     assert_eq!(count(&database).await, 0);
     drop(operator);
+    database.assert_every_audit_request_answered_once();
     database.cleanup().await;
 }

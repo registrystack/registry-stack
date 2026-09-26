@@ -15,7 +15,7 @@ path = "src/main.rs"
 [features]
 default = []
 postgres-test = ["dep:registry-breg", "registry-breg/postgres-test"]
-schema = ["dep:schemars", "registry-casework-breg/schema"]
+schema = ["dep:schemars", "registry-casework-breg/schema", "registry-platform-audit/schema"]
 
 [lints]
 workspace = true

@@ -1,6 +1,5 @@
 //! The `registry-render` CLI: init, check, validate, seal, compile,
-//! serve, healthcheck, audit-verify. Exit codes come from the problem
-//! model.
+//! serve, healthcheck. Exit codes come from the problem model.
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -55,11 +54,12 @@ pub enum Command {
         /// Rewrite the manifest hashes, sealing the bundle.
         #[arg(long)]
         seal: bool,
-        /// Runtime file whose audit directory is proven to resolve under
-        /// the given root (the container preflight proof).
+        /// Runtime file whose audit file is proven to resolve under the
+        /// given root (the container preflight proof). A stdout audit
+        /// destination is refused.
         #[arg(long)]
         runtime: Option<PathBuf>,
-        /// Root the audit directory must resolve under (with --runtime).
+        /// Root the audit file must resolve under (with --runtime).
         #[arg(long)]
         require_audit_under: Option<PathBuf>,
     },
@@ -152,18 +152,6 @@ pub enum Command {
         #[arg(long, env = "REGISTRY_RENDER_RUNTIME")]
         runtime: Option<PathBuf>,
     },
-    /// Verify a sealed audit chain end to end.
-    AuditVerify {
-        /// Runtime file naming the ledger directory and integrity key.
-        #[arg(long, env = "REGISTRY_RENDER_RUNTIME")]
-        runtime: Option<PathBuf>,
-        /// Ledger directory (alternative to --runtime).
-        #[arg(long)]
-        dir: Option<PathBuf>,
-        /// Integrity key reference, for use with --dir.
-        #[arg(long = "key")]
-        key_ref: Option<String>,
-    },
     /// Hidden: one supervised render (used by `registry-render serve`).
     #[command(hide = true, name = "__worker")]
     Worker,
@@ -218,15 +206,29 @@ fn wants_json(cli: &Cli) -> bool {
 fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
     match cli.command {
         Command::Init { dir, labels } => crate::init::scaffold(&dir, &labels),
-        Command::Check { bundle, seal, runtime, require_audit_under } => {
-            crate::check::run(&bundle, seal, runtime.as_deref(), require_audit_under.as_deref())
-        }
+        Command::Check {
+            bundle,
+            seal,
+            runtime,
+            require_audit_under,
+        } => crate::check::run(
+            &bundle,
+            seal,
+            runtime.as_deref(),
+            require_audit_under.as_deref(),
+        ),
         Command::Seal { bundle } => {
             Bundle::seal(&bundle)?;
             println!("sealed {}", bundle.display());
             Ok(0)
         }
-        Command::Validate { bundle, document, data, locale, json } => {
+        Command::Validate {
+            bundle,
+            document,
+            data,
+            locale,
+            json,
+        } => {
             let bundle = Bundle::load(&bundle)?;
             let document = bundle.document(&document)?;
             // Validate is a schema dry-run; it needs no issuance time and
@@ -335,7 +337,10 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
                     "warnings": rendered.warnings,
                     "deps": rendered.deps,
                 });
-                println!("{}", serde_json::to_string_pretty(&summary).expect("summary json"));
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&summary).expect("summary json")
+                );
             } else {
                 println!(
                     "wrote {} ({} bytes, pdf sha256 {}, data sha256 {})",
@@ -357,21 +362,6 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
         Command::Healthcheck { runtime } => {
             let code = crate::server::healthcheck(runtime.as_deref())?;
             Ok(code)
-        }
-        Command::AuditVerify { runtime, dir, key_ref } => {
-            match (runtime, dir, key_ref) {
-                (Some(runtime), _, _) => {
-                    let (config, _) = crate::runtime::load(&runtime)?;
-                    crate::audit::verify_chain(&runtime, &config.audit.directory, &config.audit.integrity_key_ref)
-                }
-                (None, Some(dir), Some(key_ref)) => {
-                    crate::audit::verify_chain(&dir, &dir, &key_ref)
-                }
-                _ => Err(RenderProblem::new(
-                    crate::problem::ProblemKind::InvalidArgument,
-                    "audit-verify needs --runtime <file>, or --dir <dir> together with --key <secret-ref>",
-                )),
-            }
         }
         Command::Worker => Ok(crate::worker::worker_main()),
     }

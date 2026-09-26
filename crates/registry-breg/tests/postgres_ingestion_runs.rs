@@ -19,6 +19,7 @@ use registry_breg::api::{
     router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
     VerifiedRequestClaims,
 };
+use registry_breg::audit::RegistryAudit;
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
@@ -649,26 +650,13 @@ async fn package_change_blocks_the_run_and_keeps_it_inspectable() {
     assert_eq!(body_json(refused).await["code"], "ingestion.run_blocked");
 
     // The blocking audit record carries the blocked state it wrote.
-    let blocked_records = harness
-        .database
-        .admin
-        .query(
-            "SELECT convert_from(envelope, 'UTF8')
-               FROM registry_internal.registry_audit
-              WHERE convert_from(envelope, 'UTF8') LIKE '%\"kind\":\"ingestionRun\"%'
-                AND convert_from(envelope, 'UTF8') LIKE '%\"outcome\":\"blocked\"%'",
-            &[],
-        )
-        .await
-        .expect("administrator inspects the run audit journal");
+    let blocked_records = blocked_run_records(&harness);
     assert!(
         !blocked_records.is_empty(),
         "the blocked transition is audited"
     );
-    for row in blocked_records {
-        let envelope: Value =
-            serde_json::from_str(&row.get::<_, String>(0)).expect("audit envelope is JSON");
-        assert_eq!(envelope["record"]["status"], "blocked");
+    for record in blocked_records {
+        assert_eq!(record["status"], "blocked");
     }
 
     // The creator may still cancel a blocked run.
@@ -720,6 +708,196 @@ async fn cancel_closes_the_run_and_preserves_the_committed_prefix() {
         .await;
     assert_eq!(second.status(), StatusCode::CONFLICT);
     assert_eq!(body_json(second).await["code"], "ingestion.run_not_open");
+}
+
+/// A run creation refused after its ingestion request entry is answered in
+/// the ingestion schema under the same correlation, and a chunk the batch
+/// mutation refuses is answered by that mutation's own refusal; neither is
+/// recorded a second time as a general refusal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_refusal_after_the_ingestion_request_is_answered_in_the_ingestion_schema() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("refused-after-request", 4);
+    let chunks = plan_chunks(&items, 2);
+
+    refuse_inserts(&harness, "registry_ingestion_runs").await;
+    let before = harness.database.audit_entries().len();
+    let refused = harness
+        .post_json(
+            "/v1/records/widgets/ingestion-runs",
+            &claims,
+            harness.run_body("create", &chunks),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    allow_inserts(&harness, "registry_ingestion_runs").await;
+    assert_answered_in_the_ingestion_schema(&harness.database.audit_entries()[before..], "create");
+
+    let run_id = harness.create_run(&claims, &chunks).await;
+    refuse_inserts(&harness, "registry_ingestion_run_chunks").await;
+    let before = harness.database.audit_entries().len();
+    let refused = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    allow_inserts(&harness, "registry_ingestion_run_chunks").await;
+    let entries = &harness.database.audit_entries()[before..];
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| (
+                entry["schema"].as_str().expect("schema"),
+                entry["phase"].as_str().expect("phase")
+            ))
+            .collect::<Vec<_>>(),
+        [("breg-audit/v2", "request"), ("breg-audit/v2", "response")],
+        "{entries:?}"
+    );
+    assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
+}
+
+/// A run transition whose commit returns an error may still have committed,
+/// so its request entry is answered unfinished rather than refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_transition_whose_commit_fails_is_answered_unfinished() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("unacknowledged-commit", 4);
+    let chunks = plan_chunks(&items, 2);
+
+    refuse_run_commits(&harness).await;
+    let before = harness.database.audit_entries().len();
+    let refused = harness
+        .post_json(
+            "/v1/records/widgets/ingestion-runs",
+            &claims,
+            harness.run_body("create", &chunks),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    allow_run_commits(&harness).await;
+    assert_unfinished_in_the_ingestion_schema(
+        &harness.database.audit_entries()[before..],
+        "create",
+    );
+
+    let run_id = harness.create_run(&claims, &chunks).await;
+    refuse_run_commits(&harness).await;
+    let before = harness.database.audit_entries().len();
+    let refused = harness
+        .post_empty(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/cancel"),
+            &claims,
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    allow_run_commits(&harness).await;
+    assert_unfinished_in_the_ingestion_schema(
+        &harness.database.audit_entries()[before..],
+        "cancel",
+    );
+    harness.database.assert_every_audit_request_answered_once();
+}
+
+fn assert_unfinished_in_the_ingestion_schema(entries: &[Value], transition: &str) {
+    let ingestion = entries
+        .iter()
+        .filter(|entry| entry["record"]["transition"] == transition)
+        .collect::<Vec<_>>();
+    assert_eq!(ingestion.len(), 2, "{entries:?}");
+    assert_eq!(ingestion[0]["phase"], "request");
+    assert_eq!(ingestion[1]["phase"], "response");
+    assert_eq!(
+        ingestion[1]["record"]["outcome"], "unfinished",
+        "{entries:?}"
+    );
+    assert_eq!(ingestion[0]["correlation"], ingestion[1]["correlation"]);
+}
+
+/// Refuse every commit that wrote a run row, after all its statements ran.
+async fn refuse_run_commits(harness: &IngestionHarness) {
+    harness
+        .database
+        .admin
+        .batch_execute(
+            "CREATE OR REPLACE FUNCTION public.test_refuse_run_commit() RETURNS trigger
+               LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'test refuses this commit'; END $$;
+             GRANT EXECUTE ON FUNCTION public.test_refuse_run_commit() TO PUBLIC;
+             CREATE CONSTRAINT TRIGGER test_refuse_run_commit
+               AFTER INSERT OR UPDATE ON registry_internal.registry_ingestion_runs
+               DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+               EXECUTE FUNCTION public.test_refuse_run_commit();",
+        )
+        .await
+        .expect("administrator installs the commit refusal");
+}
+
+async fn allow_run_commits(harness: &IngestionHarness) {
+    harness
+        .database
+        .admin
+        .batch_execute(
+            "DROP TRIGGER test_refuse_run_commit ON registry_internal.registry_ingestion_runs;
+             DROP FUNCTION public.test_refuse_run_commit();",
+        )
+        .await
+        .expect("administrator removes the commit refusal");
+}
+
+/// The refused call wrote one ingestion request entry and one response
+/// entry answering it, both in the ingestion schema, and nothing else.
+fn assert_answered_in_the_ingestion_schema(entries: &[Value], transition: &str) {
+    let ingestion = entries
+        .iter()
+        .filter(|entry| entry["record"]["transition"] == transition)
+        .collect::<Vec<_>>();
+    assert_eq!(ingestion.len(), 2, "{entries:?}");
+    for entry in &ingestion {
+        assert_eq!(entry["schema"], "breg-ingestion-audit/v1");
+    }
+    assert_eq!(ingestion[0]["phase"], "request");
+    assert_eq!(ingestion[1]["phase"], "response");
+    assert_eq!(ingestion[1]["record"]["outcome"], "refused");
+    assert_eq!(ingestion[0]["correlation"], ingestion[1]["correlation"]);
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry["correlation"] != ingestion[0]["correlation"]
+                || entry["schema"] == "breg-ingestion-audit/v1"),
+        "the refusal is not recorded again in another schema: {entries:?}"
+    );
+}
+
+async fn refuse_inserts(harness: &IngestionHarness, table: &str) {
+    harness
+        .database
+        .admin
+        .batch_execute(&format!(
+            "CREATE OR REPLACE FUNCTION public.test_refuse_insert() RETURNS trigger
+               LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'test refuses this insert'; END $$;
+             GRANT EXECUTE ON FUNCTION public.test_refuse_insert() TO PUBLIC;
+             CREATE TRIGGER test_refuse_insert BEFORE INSERT ON registry_internal.{table}
+               FOR EACH ROW EXECUTE FUNCTION public.test_refuse_insert();"
+        ))
+        .await
+        .expect("administrator installs the insert refusal");
+}
+
+async fn allow_inserts(harness: &IngestionHarness, table: &str) {
+    harness
+        .database
+        .admin
+        .batch_execute(&format!(
+            "DROP TRIGGER test_refuse_insert ON registry_internal.{table};
+             DROP FUNCTION public.test_refuse_insert();"
+        ))
+        .await
+        .expect("administrator removes the insert refusal");
 }
 
 /// Cancellation is itself the run's last attempt, and it is not a chunk
@@ -803,6 +981,7 @@ async fn erasing_record_history_erases_the_receipt_that_describes_it() {
 
     // The receipt described erased history: recovery reports it gone instead
     // of replaying bytes the record history no longer backs.
+    let before_recovery = harness.database.audit_entries().len();
     let after = harness
         .get_json(
             &format!(
@@ -814,6 +993,30 @@ async fn erasing_record_history_erases_the_receipt_that_describes_it() {
         .await;
     assert_eq!(after.status(), StatusCode::GONE);
     assert_eq!(body_json(after).await["code"], "ingestion.receipt_erased");
+
+    // The refused recovery still closes the request entry it opened before
+    // reading the erased chunk, with a response entry under the same
+    // correlation.
+    let entries = harness.database.audit_entries();
+    let new_entries = &entries[before_recovery..];
+    let request = new_entries
+        .iter()
+        .find(|entry| {
+            entry["schema"] == "breg-ingestion-audit/v1"
+                && entry["phase"] == "request"
+                && entry["record"]["transition"] == "chunkReceipt"
+        })
+        .expect("the recovery request entry is written before the erased chunk is read");
+    let responses = new_entries
+        .iter()
+        .filter(|entry| {
+            entry["phase"] == "response" && entry["correlation"] == request["correlation"]
+        })
+        .count();
+    assert_eq!(
+        responses, 1,
+        "the erased-chunk refusal answers the request once"
+    );
 
     let replay = harness
         .post_json(
@@ -1151,19 +1354,10 @@ async fn a_cancellation_committed_during_a_parked_block_answers_the_stored_statu
         stored.get::<_, Option<i64>>(2).is_none(),
         "the cancelled run keeps its chunkless attempt marker"
     );
-    let blocked_records = harness
-        .database
-        .admin
-        .query(
-            "SELECT convert_from(envelope, 'UTF8')
-               FROM registry_internal.registry_audit
-              WHERE convert_from(envelope, 'UTF8') LIKE '%\"kind\":\"ingestionRun\"%'
-                AND convert_from(envelope, 'UTF8') LIKE '%\"outcome\":\"blocked\"%'
-                AND convert_from(envelope, 'UTF8') LIKE $1",
-            &[&format!("%\"runId\":\"{run_id}\"%")],
-        )
-        .await
-        .expect("administrator inspects the run audit journal");
+    let blocked_records = blocked_run_records(&harness)
+        .into_iter()
+        .filter(|record| record["runId"] == run_id.as_str())
+        .collect::<Vec<_>>();
     assert!(
         blocked_records.is_empty(),
         "a cancelled run takes no blocked audit record"
@@ -1567,25 +1761,12 @@ async fn a_replayed_chunk_discloses_an_audited_receipt() {
     assert_eq!(replayed.status(), StatusCode::OK);
     assert_eq!(body_json(replayed).await["receipt"]["replayed"], true);
 
-    let records = harness
-        .database
-        .admin
-        .query(
-            "SELECT convert_from(envelope, 'UTF8')
-               FROM registry_internal.registry_audit
-              WHERE convert_from(envelope, 'UTF8') LIKE '%\"kind\":\"ingestionReceipt\"%'",
-            &[],
-        )
-        .await
-        .expect("administrator inspects the run audit journal");
+    let records = receipt_records(&harness);
     assert!(
         !records.is_empty(),
         "the replayed receipt is disclosed in the audit journal"
     );
-    for row in records {
-        let envelope: Value =
-            serde_json::from_str(&row.get::<_, String>(0)).expect("audit envelope is JSON");
-        let record = &envelope["record"];
+    for record in &records {
         assert_eq!(record["runId"], run_id);
         assert_eq!(record["chunkIndex"], 0);
         assert!(record["principalReference"].is_string());
@@ -1622,33 +1803,112 @@ async fn a_recovered_receipt_discloses_an_audited_receipt() {
         .await;
     assert_eq!(recovered.status(), StatusCode::OK);
 
-    let records = harness
-        .database
-        .admin
-        .query(
-            "SELECT convert_from(envelope, 'UTF8')
-               FROM registry_internal.registry_audit
-              WHERE convert_from(envelope, 'UTF8') LIKE '%\"kind\":\"ingestionReceipt\"%'",
-            &[],
-        )
-        .await
-        .expect("administrator inspects the run audit journal");
+    let records = receipt_records(&harness);
     assert!(
         !records.is_empty(),
         "the recovered receipt is disclosed in the audit journal"
     );
-    for row in records {
-        let envelope: Value =
-            serde_json::from_str(&row.get::<_, String>(0)).expect("audit envelope is JSON");
-        assert_eq!(envelope["record"]["runId"], run_id);
-        assert_eq!(envelope["record"]["chunkIndex"], 0);
+    for record in records {
+        assert_eq!(record["runId"], run_id);
+        assert_eq!(record["chunkIndex"], 0);
     }
 }
 
-/// An audit outage gates both release paths: while the journal cannot extend
-/// its chain, a keyed process answers an outage instead of releasing the
-/// retained answer unaudited, and the receipt releases once the chain
-/// extends again.
+/// Recovery appends its own request entry before it reads the run or the
+/// stored chunk, and the disclosure entry it already owed the journal answers
+/// that same request, under one shared correlation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chunk_receipt_recovery_correlates_a_request_and_a_response_entry() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("receipt-request-entry", 2);
+    let chunks = plan_chunks(&items, 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    let before_recovery = harness.database.audit_entries().len();
+
+    let recovered = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(recovered.status(), StatusCode::OK);
+
+    let entries = harness.database.audit_entries();
+    let ingestion_entries = entries[before_recovery..]
+        .iter()
+        .filter(|entry| entry["schema"] == "breg-ingestion-audit/v1")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ingestion_entries.len(),
+        2,
+        "recovery writes exactly its request entry and its disclosure entry"
+    );
+    assert_eq!(ingestion_entries[0]["phase"], "request");
+    assert_eq!(ingestion_entries[0]["record"]["transition"], "chunkReceipt");
+    assert_eq!(ingestion_entries[1]["phase"], "response");
+    assert_eq!(ingestion_entries[1]["record"]["kind"], "ingestionReceipt");
+    assert_eq!(
+        ingestion_entries[0]["correlation"], ingestion_entries[1]["correlation"],
+        "the disclosure entry answers the recovery's own request"
+    );
+}
+
+/// Recovery of a chunk that was never committed still closes its own request
+/// entry with a response entry: an audit outage is the only thing allowed to
+/// leave a caller-visible refusal unanswered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chunk_receipt_recovery_of_an_unknown_chunk_answers_its_request_entry() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("receipt-unknown-chunk", 4);
+    let chunks = plan_chunks(&items, 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let before_recovery = harness.database.audit_entries().len();
+
+    // Chunk 1 was never submitted, so no receipt exists to recover.
+    let recovered = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/1/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(recovered.status(), StatusCode::NOT_FOUND);
+
+    let entries = harness.database.audit_entries();
+    let new_entries = &entries[before_recovery..];
+    let request = new_entries
+        .iter()
+        .find(|entry| {
+            entry["schema"] == "breg-ingestion-audit/v1"
+                && entry["phase"] == "request"
+                && entry["record"]["transition"] == "chunkReceipt"
+        })
+        .expect("the recovery request entry is written before the unknown chunk is read");
+    let responses = new_entries
+        .iter()
+        .filter(|entry| {
+            entry["phase"] == "response" && entry["correlation"] == request["correlation"]
+        })
+        .count();
+    assert_eq!(
+        responses, 1,
+        "the unknown-chunk refusal answers the request once"
+    );
+}
+
+/// An audit outage gates both release paths: once the writer refuses an
+/// append, the process answers an outage instead of releasing the retained
+/// answer unaudited, and a restarted process over a working destination
+/// releases the receipt again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_audit_outage_gates_the_receipt_release() {
     let harness = IngestionHarness::create().await;
@@ -1665,18 +1925,9 @@ async fn an_audit_outage_gates_the_receipt_release() {
         .await;
     assert_eq!(committed.status(), StatusCode::OK);
 
-    // A journal the runtime role can no longer extend refuses every further
-    // append, as a revoked grant or an unwritable journal would.
-    let role = harness.database.runtime_role.as_str().to_owned();
-    harness
-        .database
-        .admin
-        .execute(
-            &format!("REVOKE INSERT ON registry_internal.registry_audit FROM \"{role}\""),
-            &[],
-        )
-        .await
-        .expect("the audit insert grant is revoked");
+    // A destination that refuses every further append, as a full disk or an
+    // unwritable audit file would.
+    harness.database.audit_capture().fail_after(0);
 
     let replayed = harness
         .post_json(
@@ -1694,18 +1945,11 @@ async fn an_audit_outage_gates_the_receipt_release() {
         .await;
     assert_eq!(recovered.status(), StatusCode::SERVICE_UNAVAILABLE);
 
-    // Once the journal accepts appends again, the same replay discloses and
-    // releases.
-    harness
-        .database
-        .admin
-        .execute(
-            &format!("GRANT INSERT ON registry_internal.registry_audit TO \"{role}\""),
-            &[],
-        )
-        .await
-        .expect("the audit insert grant is restored");
-    let replayed = harness
+    // A failed writer stays failed; a restarted process over a destination
+    // that accepts appends again discloses and releases the same replay.
+    harness.database.audit_capture().restore();
+    let restarted = harness.restart(None).await;
+    let replayed = restarted
         .post_json(
             &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
             &claims,
@@ -1714,6 +1958,239 @@ async fn an_audit_outage_gates_the_receipt_release() {
         .await;
     assert_eq!(replayed.status(), StatusCode::OK);
     assert_eq!(body_json(replayed).await["receipt"]["replayed"], true);
+}
+
+/// Run creation appends its request entry before it opens the run: a writer
+/// that refuses that entry answers an outage and leaves no run row, however
+/// often the caller retries while the destination stays unavailable.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn run_creation_opens_no_run_when_the_audit_writer_refuses_its_request_entry() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&announce_items("audit-refused-create", 2), 2);
+
+    harness.database.audit_capture().fail_after(0);
+    for _ in 0..2 {
+        let refused = harness
+            .post_json(
+                "/v1/records/widgets/ingestion-runs",
+                &claims,
+                harness.run_body("create", &chunks),
+            )
+            .await;
+        assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+    harness.database.audit_capture().restore();
+
+    assert_eq!(stored_run_count(&harness).await, 0);
+    assert!(
+        harness.database.audit_entries().is_empty(),
+        "a refused request entry leaves the destination empty"
+    );
+}
+
+/// Run cancellation appends its request entry before it reads or closes the
+/// run: a writer that refuses that entry answers an outage and leaves the run
+/// open and resumable.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn run_cancellation_closes_nothing_when_the_audit_writer_refuses_its_request_entry() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&announce_items("audit-refused-cancel", 2), 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let accepted = harness.database.audit_entries().len();
+
+    harness.database.audit_capture().fail_after(0);
+    let refused = harness
+        .post_empty(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/cancel"),
+            &claims,
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    harness.database.audit_capture().restore();
+
+    let (status, last_attempt) = stored_run_status(&harness, &run_id).await;
+    assert_eq!(status, "open");
+    assert_eq!(last_attempt, None);
+    assert_eq!(harness.database.audit_entries().len(), accepted);
+}
+
+/// A package change blocks an open run only after the blocking submission's
+/// request entry is accepted: a refused entry leaves the run open.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_run_is_not_blocked_when_the_audit_writer_refuses_the_request_entry() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&announce_items("audit-refused-block", 4), 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let changed = harness.restart_with_revision("package-ingestion-2").await;
+
+    harness.database.audit_capture().fail_after(0);
+    let refused = changed
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    harness.database.audit_capture().restore();
+
+    let (status, last_attempt) = stored_run_status(&harness, &run_id).await;
+    assert_eq!(status, "open");
+    assert_eq!(last_attempt, None);
+}
+
+/// A committed chunk's replay moves the run's attempt marker only after its
+/// request entry is accepted: a refused entry leaves the marker where the
+/// commit left it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_replay_moves_no_attempt_marker_when_the_audit_writer_refuses_the_request_entry() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&announce_items("audit-refused-replay", 4), 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    let before = stored_run_status(&harness, &run_id).await;
+
+    harness.database.audit_capture().fail_after(0);
+    let refused = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    harness.database.audit_capture().restore();
+
+    assert_eq!(stored_run_status(&harness, &run_id).await, before);
+}
+
+/// Creation and cancellation each write one request entry before their
+/// effect and one response entry after it, correlated by the request, and
+/// neither entry carries the raw principal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn run_creation_and_cancellation_correlate_a_request_and_a_response_entry() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&announce_items("audit-correlated", 2), 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let cancelled = harness
+        .post_empty(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/cancel"),
+            &claims,
+        )
+        .await;
+    assert_eq!(cancelled.status(), StatusCode::OK);
+
+    let entries = harness
+        .database
+        .audit_entries()
+        .into_iter()
+        .filter(|entry| entry["schema"] == "breg-ingestion-audit/v1")
+        .collect::<Vec<_>>();
+    let shape = entries
+        .iter()
+        .map(|entry| {
+            (
+                entry["phase"].as_str().expect("phase").to_owned(),
+                entry["record"]["transition"]
+                    .as_str()
+                    .or_else(|| entry["record"]["outcome"].as_str())
+                    .expect("transition or outcome")
+                    .to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        shape,
+        [
+            ("request".to_owned(), "create".to_owned()),
+            ("response".to_owned(), "created".to_owned()),
+            ("request".to_owned(), "cancel".to_owned()),
+            ("response".to_owned(), "cancelled".to_owned()),
+        ]
+    );
+    assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
+    assert_eq!(entries[2]["correlation"], entries[3]["correlation"]);
+    assert_ne!(entries[0]["correlation"], entries[2]["correlation"]);
+    assert_eq!(entries[2]["record"]["runId"], run_id);
+    for entry in &entries {
+        assert!(!entry.to_string().contains(PRINCIPAL));
+    }
+}
+
+/// A cancellation the service refuses after its request entry was accepted
+/// still closes that request with a response entry under the same
+/// correlation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_refused_cancellation_answers_its_request_entry_with_a_response_entry() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let refused = harness
+        .post_empty(
+            &format!(
+                "/v1/records/widgets/ingestion-runs/{}/cancel",
+                Uuid::new_v4()
+            ),
+            &claims,
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::NOT_FOUND);
+
+    let entries = harness.database.audit_entries();
+    let request = entries
+        .iter()
+        .find(|entry| {
+            entry["schema"] == "breg-ingestion-audit/v1"
+                && entry["phase"] == "request"
+                && entry["record"]["transition"] == "cancel"
+        })
+        .expect("the cancellation request entry is written");
+    let responses = entries
+        .iter()
+        .filter(|entry| {
+            entry["phase"] == "response" && entry["correlation"] == request["correlation"]
+        })
+        .count();
+    assert_eq!(responses, 1, "the refusal answers the request once");
+}
+
+async fn stored_run_count(harness: &IngestionHarness) -> i64 {
+    harness
+        .database
+        .admin
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_ingestion_runs",
+            &[],
+        )
+        .await
+        .expect("administrator counts the stored runs")
+        .get(0)
+}
+
+async fn stored_run_status(harness: &IngestionHarness, run_id: &str) -> (String, Option<String>) {
+    let row = harness
+        .database
+        .admin
+        .query_one(
+            "SELECT status, last_attempt_outcome
+               FROM registry_internal.registry_ingestion_runs
+              WHERE run_id = $1",
+            &[&Uuid::parse_str(run_id).expect("run id parses")],
+        )
+        .await
+        .expect("administrator inspects the stored run");
+    (row.get(0), row.get(1))
 }
 
 /// Two identical submissions that both pass the service preflight serialize
@@ -2066,9 +2543,8 @@ async fn receipt_releases_fail_closed_without_key_state() {
 
 /// The binding a stale serving instance enforces is the one the database
 /// holds active, not the retired identity the process started under: the
-/// stale instance refuses the read, the successor reports the run blocked,
-/// and the next chunk submission takes the blocked transition durably even
-/// through the stale instance.
+/// successor reports the run blocked, and the next chunk submission takes the
+/// blocked transition durably even through the stale instance.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_stale_instance_reports_and_blocks_runs_against_the_durable_binding() {
     let harness = IngestionHarness::create().await;
@@ -2100,10 +2576,10 @@ async fn a_stale_instance_reports_and_blocks_runs_against_the_durable_binding() 
     assert_eq!(run["status"], "blocked");
     assert_eq!(run["blockedReason"], "activePackageChanged");
 
-    // The stale instance takes the blocking transition, and its refusal
-    // still answers an outage: the refusal envelope itself cannot be
-    // written under the retired identity, so the caller is told the process
-    // is unavailable while the run is durably blocked.
+    // The stale instance takes the blocking transition and answers the
+    // value-free blocked refusal once its audit response entry is accepted.
+    // That entry goes to the audit writer, not the database, so it does not
+    // depend on the identity the process started under.
     let refused = harness
         .post_json(
             &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
@@ -2111,7 +2587,8 @@ async fn a_stale_instance_reports_and_blocks_runs_against_the_durable_binding() 
             chunk_body(&chunks, 1),
         )
         .await;
-    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(refused).await["code"], "ingestion.run_blocked");
 
     let after = successor
         .get_json(
@@ -2125,18 +2602,7 @@ async fn a_stale_instance_reports_and_blocks_runs_against_the_durable_binding() 
     assert_eq!(after["committedItems"], 2);
     assert_eq!(after["nextChunkIndex"], 1);
 
-    let blocked_records = harness
-        .database
-        .admin
-        .query(
-            "SELECT convert_from(envelope, 'UTF8')
-               FROM registry_internal.registry_audit
-              WHERE convert_from(envelope, 'UTF8') LIKE '%\"kind\":\"ingestionRun\"%'
-                AND convert_from(envelope, 'UTF8') LIKE '%\"outcome\":\"blocked\"%'",
-            &[],
-        )
-        .await
-        .expect("administrator inspects the run audit journal");
+    let blocked_records = blocked_run_records(&harness);
     assert!(
         !blocked_records.is_empty(),
         "the stale instance wrote the blocked transition"
@@ -2533,17 +2999,12 @@ async fn service_level_chunk_refusals_are_audited() {
 
     let rows = harness
         .database
-        .admin
-        .query(
-            "SELECT convert_from(envelope, 'UTF8')
-               FROM registry_internal.registry_audit
-              WHERE convert_from(envelope, 'UTF8') LIKE '%\"phase\":\"refusal\"%'
-                AND convert_from(envelope, 'UTF8')
-                    LIKE '%\"operationId\":\"records.widget.batch\"%'",
-            &[],
-        )
-        .await
-        .expect("administrator inspects the audit journal");
+        .audit_records()
+        .into_iter()
+        .filter(|record| {
+            record["phase"] == "refusal" && record["operationId"] == "records.widget.batch"
+        })
+        .collect::<Vec<_>>();
     assert!(
         !rows.is_empty(),
         "the chunk refusal is audited like any mutation refusal"
@@ -3219,21 +3680,17 @@ async fn run_rows_and_audit_never_carry_source_values() {
         assert_eq!(row.get::<_, i64>(0), 0, "{table} carries no source canary");
     }
 
+    let audit_text = harness
+        .database
+        .audit_entries()
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
     for canary in [RECORD_CANARY, PRINCIPAL] {
-        let row = harness
-            .database
-            .admin
-            .query_one(
-                "SELECT count(*) FROM registry_internal.registry_audit
-                 WHERE envelope::text LIKE '%' || $1 || '%'",
-                &[&canary],
-            )
-            .await
-            .expect("audit envelopes are readable");
-        assert_eq!(
-            row.get::<_, i64>(0),
-            0,
-            "no audit envelope carries the canary"
+        assert!(
+            !audit_text.contains(canary),
+            "no audit entry carries the canary"
         );
     }
 }
@@ -3339,7 +3796,7 @@ impl IngestionHarness {
             registry.clone(),
             identity.clone(),
             lock_key,
-            audit_profile.clone(),
+            database.audit(audit_profile.clone()),
             None,
             field_encryption.clone(),
         );
@@ -3392,7 +3849,7 @@ impl IngestionHarness {
                 registry,
                 identity,
                 self.lock_key,
-                self.audit_profile.clone(),
+                self.database.audit(self.audit_profile.clone()),
                 fault,
                 field_encryption,
             ),
@@ -3530,7 +3987,7 @@ impl IngestionHarness {
                     Duration::from_secs(5),
                 )
                 .expect("timeouts are bounded"),
-                audit_profile: &self.audit_profile,
+                audit: &self.database.audit(self.audit_profile.clone()),
                 operator_reference: "ingestion-erasure-operator",
                 reason: "ingestion-receipt-erasure-proof",
                 target,
@@ -3547,7 +4004,7 @@ fn build_router(
     registry: Arc<registry_breg::CompiledRegistry>,
     identity: registry_breg::postgres::ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
-    profile: AuditProfile,
+    profile: RegistryAudit,
     fault: Option<MutationFaultPoint>,
     field_encryption: Option<Arc<FieldEncryptionService>>,
 ) -> axum::Router {
@@ -4191,25 +4648,30 @@ async fn poll_waiting_registry_locks(
     }
 }
 
-/// The parsed disclosure records the journal holds for one run.
+/// The parsed disclosure records the audit destination holds for one run.
 async fn receipt_disclosures(harness: &IngestionHarness, run_id: &str) -> Vec<Value> {
-    let rows = harness
-        .database
-        .admin
-        .query(
-            "SELECT convert_from(envelope, 'UTF8')
-               FROM registry_internal.registry_audit
-              WHERE convert_from(envelope, 'UTF8') LIKE '%\"kind\":\"ingestionReceipt\"%'",
-            &[],
-        )
-        .await
-        .expect("administrator inspects the run audit journal");
-    rows.iter()
-        .map(|row| {
-            let envelope: Value =
-                serde_json::from_str(&row.get::<_, String>(0)).expect("audit envelope is JSON");
-            envelope["record"].clone()
-        })
+    receipt_records(harness)
+        .into_iter()
         .filter(|record| record["runId"] == run_id)
+        .collect()
+}
+
+/// Every receipt disclosure record the audit destination holds.
+fn receipt_records(harness: &IngestionHarness) -> Vec<Value> {
+    harness
+        .database
+        .audit_records()
+        .into_iter()
+        .filter(|record| record["kind"] == "ingestionReceipt")
+        .collect()
+}
+
+/// Every blocked run transition record the audit destination holds.
+fn blocked_run_records(harness: &IngestionHarness) -> Vec<Value> {
+    harness
+        .database
+        .audit_records()
+        .into_iter()
+        .filter(|record| record["kind"] == "ingestionRun" && record["outcome"] == "blocked")
         .collect()
 }

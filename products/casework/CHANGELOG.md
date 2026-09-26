@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+- Answer every audited request entry. An operation whose change is not
+  known to have committed (a refusal, a failure, a canceled request, or a
+  commit whose acknowledgment was lost and whose outcome could not be read
+  back) writes `{event, outcome: "unfinished"}` as its response under the
+  same correlation. A commit whose acknowledgment was lost is read back
+  first, and one that took effect is answered and recorded like any other.
+  A committed operation writes all of its response entries even when its
+  caller disconnects while they are written. Adding a review note is audited
+  as `casework.review_note_added`, naming the review request by its keyed
+  pseudonym and the note's history event, but never the note's text or
+  audience.
+
+- BREAKING: write audit through the shared platform audit writer instead of
+  a hash-chained journal published from a PostgreSQL outbox.
+  - The `audit` block takes `hashKeyRef`, `destination` (`file`, the
+    default, or `stdout`), and, for `file` only, the absolute `path`,
+    `rotateBytes` (default 104857600, at least 1048576), and `retainDays`
+    (default 90, at most 36500). An existing `{path, hashKeyRef}` block keeps
+    working as a `file` destination.
+  - Every entry carries the schema `registry-casework-audit/v1`, a `request`
+    or `response` phase, and a correlation shared by an operation's request
+    and response entries. The runtime writes the request entry before it
+    opens the operation's transaction and the response entries after that
+    transaction commits. A destination that refuses either fails the call
+    with `service.unavailable`; a refused response leaves the committed
+    change in place. An accountability read returns protected fields only
+    after its response entry is accepted. A requested operation that records
+    no domain event, such as an idempotent replay or a request whose state
+    already held, writes one response entry whose `outcome` is `replayed` or
+    `unchanged` and returns its result only after that entry is accepted.
+  - Entries are no longer hash-chained, and the runtime keeps no audit state
+    in PostgreSQL. Schema version 17 drops `casework_audit_outbox`; `migrate`
+    refuses with `casework.migration.refused` while the outbox still holds
+    unpublished records, so run the previous release until its publisher has
+    drained the outbox, then migrate.
+  - The review database trigger no longer writes audit; the runtime writes
+    the invalidation entries it caused after the transaction commits.
+  - Before starting the upgraded runtime, archive the old active audit file
+    and every numbered sibling separately, then use a fresh `audit.path`.
+    Retention now deletes aged sealed files under that path. Update log
+    consumers to the new envelope and ship entries to append-only storage
+    when tamper evidence is required.
+  - `/ready` reports ready only while the audit writer is ready, and
+    `caseworkctl doctor` reports an `audit` check.
+  - A `caseworkctl` command that writes audit, such as an applied erasure or
+    settlement, writes to a sibling file named for its role beside
+    `audit.path` (`audit.caseworkctl.ndjson` beside `audit.ndjson`).
+  - The retention report no longer carries an `auditRecords` count.
+
 ## v0.34.0 - 2026-09-25
 
 - BREAKING: give each paired BReg request entity its own lifecycle hook, so

@@ -1,6 +1,6 @@
 ---
 title: Retain, erase, and audit
-description: Erase retained record history and change-request detail under an approved retention request, restore snapshot coverage after an erasure, and verify, export, and prune the hash-chained audit journal of a Base Registry Engine registry.
+description: Erase retained record history and change-request detail under an approved retention request, restore snapshot coverage after an erasure, and retain the audit stream of a Base Registry Engine registry.
 status: current
 owner: registry-docs
 source_repos:
@@ -15,10 +15,9 @@ standards_referenced: []
 
 You operate an active registry under an institutional retention policy, hold the migration
 credential, and need to erase retained history or change-request detail, restore snapshot coverage
-after an erasure, or prove, copy, and prune the audit journal. At the end of this page each of those
-maintenance actions has run once, under the interlock the migration authority uses, with a chained
-audit record and a report that carries counts rather than values. The erasure, attachment
-cleanup, and pruning commands remove bytes that nothing restores. The next section says
+after an erasure, or retain the audit stream. Maintenance uses the migration interlock and writes
+minimized audit entries separately from the database transaction. Reports carry counts rather than
+values. The erasure and attachment cleanup commands remove bytes that nothing restores. The next section says
 exactly what each one destroys.
 
 ## What cannot be undone
@@ -29,16 +28,15 @@ exactly what each one destroys.
 | `request-retention erase` | The payload detail of one change-request proposal version: proposal and target snapshots, idempotency results, request revision snapshots, outbox payloads, intake rows, and attachment references/content. | The value-free lifecycle rows of that request, and record history. |
 | `request-retention cleanup-attachments` | Unreferenced external attachment bytes awaiting deletion, including abandoned uploads and objects recreated after an earlier confirmed deletion. | Live attachment references, request detail, and durable deletion tombstones. |
 | `evidence-retention erase-expired` | The signed Evidence responses and verification context a governed action retained, once their 24-hour window has closed. | Every retained assertion still inside its window, and the action receipts that used them. |
-| `audit prune` | The longest run of audit records at the start of the chain whose creation time precedes the boundary you give. | Every later record, and one retention record stating what left the chain. |
 
-`history rebaseline`, `request-retention list`, `request-retention dry-run`, `audit verify`, and
-`audit export` remove nothing: the rebaseline writes one baseline commit, the export creates one
-file, and the others only read. A saved export or a snapshot reference is not a way back either:
+`history rebaseline`, `request-retention list`, and `request-retention dry-run` remove nothing:
+the rebaseline writes one baseline commit, and the others only read. A saved export or a snapshot
+reference is not a way back either:
 an erased revision is gone from the registry, and a snapshot reference that named it can no longer
 be served.
 
 Every command on this page reads the runtime file and connects to PostgreSQL directly with the
-migration credential, and the erasures, the rebaseline, and the prune take the exclusive registry
+migration credential, and the erasures and the rebaseline take the exclusive registry
 lock, so run them from the operator host while no activation is in progress. When the database
 uses a private certificate authority, set
 `SSL_CERT_FILE` to its PEM bundle for each command. Paths given to `--runtime-config`,
@@ -46,8 +44,7 @@ uses a private certificate authority, set
 
 {/* Evidence: crates/registry-breg/src/history_erasure.rs;
     crates/registry-breg/src/request_retention.rs;
-    crates/registry-breg/src/audit_tooling.rs;
-    crates/registry-bregctl/src/lib.rs, HistoryCommand, RequestRetentionCommand, and AuditCommand;
+    crates/registry-bregctl/src/lib.rs, HistoryCommand and RequestRetentionCommand;
     products/breg/quickstart/run.sh. */}
 
 ## Erase retained history
@@ -99,10 +96,10 @@ registry on its own: run `history rebaseline` when snapshot reads of current sta
 Live reads and writes continue.
 
 An erasure of revisions committed after the coverage baseline does not hold back the next
-package: `bregctl apply` accepts a successor when the only gap in coverage is one the audit
-journal records as that erasure. Erasing baseline data, or any gap the journal does not record as
-a committed erasure, still refuses every successor package until `history rebaseline` restores
-coverage. That includes an erasure whose audit record `audit prune` has since removed. The
+package: `bregctl apply` accepts a successor when the only gap in coverage is a committed erasure recorded in the
+database's dedicated history-erasure coverage table. Erasing baseline data, or any gap without
+that committed coverage record, still refuses every successor package until `history rebaseline`
+restores coverage. Audit-file retention does not change this decision. The
 refusal is `apply.history.coverage_incomplete`, and it leaves maintenance state unchanged, so
 apply the same package again once the rebaseline completes.
 
@@ -120,7 +117,7 @@ apply the same package again once the rebaseline completes.
 After an erasure, a snapshot reference for current state is refused until the migration authority
 re-establishes a covered position. `history rebaseline` is that command, and it runs under the
 same interlock as the erasure: the configured migration role, bounded timeouts, the exclusive
-registry lock, a ready registry, and one chained audit record.
+registry lock, a ready registry, and minimized audit entries.
 
 Write an owner-only JSON request file (mode `0600`) carrying the operator reference alone:
 
@@ -310,67 +307,86 @@ version, this erasure works from the time boundary alone.
 
 ## Keep the audit journal
 
-Every write path appends one hash-chained audit record, and the journal keeps its own head. The
-`audit` commands prove that chain, take a portable copy of it, and retire its oldest part under a
-retention boundary. They read envelope bytes, hashes, envelope identifiers, and timestamps only,
-so no record value reaches the report or a refusal.
+Each audited request writes one `request` entry before protected I/O and at least one `response`
+entry before disclosure or after a mutation commits. The entries share a correlation and contain
+keyed references and closed vocabulary, not raw record values. A refusal can have only a response
+entry. The file destination acknowledges an append after fsync; `stdout` flushes each line and
+provides best-effort delivery. A failed request entry blocks protected I/O, and a failed response
+entry blocks disclosure. A request that ends before its outcome is known, because it failed, timed
+out, or its caller went away, or an operator command that exits early, still answers its request
+entry. A runtime read or mutation answers with a response whose `phase` is `unfinished`, carrying
+only the operation and request it answers; an operator command answers with a `terminal` response
+whose `outcome` is `unfinished`. Only a crash, or a destination that already stopped accepting
+entries, can leave a request entry without a response.
 
-```sh
-bregctl --format json audit verify \
-  --runtime-config /etc/breg/runtime.yaml
+Operator commands follow the same rule. `evidence-retention erase-expired` records the cutoff it
+was given in its request entry and the number of assertions it erased in its response.
+`request-retention erase` deletes the external attachment objects before it records its response,
+which states how many objects still wait for deletion; when that deletion pass itself fails, the
+count is `null` and the command reports the failure. If the erasure committed but its response
+entry could not be written, the command reports `request_retention.erasure.unaudited`: the detail is
+gone, so restore the audit destination and reconcile the erased request against the database. An
+event delivery's attempt is recorded inside the transaction that leases it, before its request
+leaves. If that lease transaction does not commit, no request leaves and the attempt is answered
+`worker_interrupted`, so an attempt entry does not prove a request was sent. An attempt's terminal
+outcome is recorded only once the delivery's state has committed; an operator replay is recorded as a request before the reset and a response once it commits or is
+refused.
 
-bregctl --format json audit export \
-  --runtime-config /etc/breg/runtime.yaml \
-  --output /srv/registry/private/audit-journal.jsonl
+A crash or a killed process can also tear the file's final line itself, leaving it without its
+closing newline. The writer refuses to open a destination in that state, so the next start of the
+runtime, and any `doctor` or `bregctl` companion command checking the same destination (including
+its own sibling audit file), is refused rather than appending after the torn entry. Archive the file
+and restart on a fresh `audit.path`; do not edit the active file to repair it, since that is the same
+external change the writer already treats as a fault (see
+[Audit retention](../retention-and-persistent-state/#audit-retention)).
+
+A mutation can already be committed when its response entry fails. Use the operation's idempotent
+retry where one exists. Ingestion-run creation has none, and it returns no run id when this
+happens: once the runtime serves again, list the open ingestion runs for the input's digest and
+resume or cancel the one you find. An operator rerun of `history erase`, `history rebaseline`, or
+`migration reconcile` finds the state the first run committed instead of replaying its result, so
+read what that rerun reports before doing anything else.
+
+Configure the stream in the runtime file:
+
+```yaml
+audit:
+  hashKeyRef: secret:file/audit-key
+  destination: file
+  path: /var/lib/breg/audit/breg.jsonl
+  rotateBytes: 104857600
+  retainDays: 90
 ```
 
-`verify` walks the chain from the recorded head backwards through the recorded links, never by
-timestamp, so a clock skew or an out-of-order insert cannot change what the journal claims. It
-runs in one repeatable-read read-only transaction that also compares the head and the total row
-count, and reports the record count with the first previous hash, the last hash, and the head
-hash. A chain that no longer links reports `audit.chain.broken`; a head row that does not match the
-chain reports `audit.head.mismatch`. `export` verifies the same way while it writes, and emits one
-envelope per line in chain order. The destination must be an absolute path that holds no file; the
-command creates it with owner-only permissions and removes it again when the export does not
-finish, so a partial copy is never left behind. Verification proves the retained journal links and
-matches the head; it cannot prove the journal is complete, because a pruned prefix is gone and the
-earliest retained record's previous hash is the only trace of it.
+The file path is absolute and belongs to one process. Give each runtime instance its own path;
+`bregctl` maintenance uses a sibling such as `breg.bregctl.jsonl` on the operator host. Collect
+those companion streams as well as the service stream. Local development keeps its files under
+`.breg/dev/audit`, including after `bregctl dev stop --remove`.
 
-`prune` removes the longest run of records at the start of the chain whose creation time precedes
-one RFC 3339 boundary. It stops at the first retained record, so a gap can never open in the
-middle, and it refuses a boundary later than the database transaction time. Take an export first,
-then count what the boundary would remove:
+The writer rotates at `rotateBytes` and removes sealed segments older than `retainDays` when it
+opens or rotates. Ship sealed segments to append-only storage before expiry and verify receipt in
+your log pipeline. Do not rename, truncate, or replace the active file or its lock while the writer
+runs. See [Audit retention](../retention-and-persistent-state/#audit-retention) for shipping and
+recovery. The log has no hash chain or signature; tamper evidence and completeness depend on that
+external storage. Database backups do not contain these streams.
 
-```sh
-bregctl --format json audit prune \
-  --runtime-config /etc/breg/runtime.yaml \
-  --before 2026-01-01T00:00:00Z --dry-run
-```
-
-:::danger[Pruning the journal is irreversible]
-Pruned records leave no copy behind. Export the journal and store it under the institution's
-retention policy before running a prune without `--dry-run`, and confirm the approved boundary
-against the dry run's counts.
+:::caution[Upgrading from database audit]
+Archive any audit records your retention policy requires before upgrading. The database audit
+tables and the `bregctl audit` command group are removed; the upgrade does not export their data.
+Choose a fresh audit path when changing from another audit format, and preserve old segments
+outside the new writer's retention directory.
 :::
 
-```sh
-bregctl --format json audit prune \
-  --runtime-config /etc/breg/runtime.yaml \
-  --before 2026-01-01T00:00:00Z
-```
-
-The report names whether the run was a dry run, how many records it removed and retained, the
-hash the retained chain now starts from, and the first retained envelope. A prune runs on the
-migration connection under the exclusive registry lock with the head row locked, so no writer can
-append and no second operator can prune while the prefix is being decided; the runtime role keeps
-its insert-only grant and cannot delete a record. Every prune that removes anything appends one
-retention record to the journal, so the chain states what left it.
-
-{/* Evidence: crates/registry-breg/src/audit_tooling.rs;
-    crates/registry-bregctl/src/audit_lifecycle.rs;
-    crates/registry-bregctl/src/lib.rs, AuditVerifyArgs, AuditExportArgs, and AuditPruneArgs;
-    crates/registry-breg/tests/postgres_audit_tooling.rs;
-    crates/registry-bregctl/tests/audit.rs. */}
+{/* Evidence: crates/registry-breg/src/audit.rs, unfinished_record;
+    crates/registry-breg/src/runtime_config.rs, AuditConfig;
+    crates/registry-platform-audit/src/writer.rs, AuditRequest;
+    crates/registry-breg/src/request_retention.rs, ErasureUnaudited, retention_outcome_record,
+    and pendingExternalDeletions;
+    crates/registry-platform-hooks/src/delivery/service.rs, WorkerInterrupted;
+    crates/registry-breg/src/action_evidence_maintenance.rs, EVIDENCE_RETENTION_AUDIT_SCHEMA;
+    crates/registry-platform-hooks/src/delivery/seams.rs, record_audit;
+    crates/registry-breg/src/postgres/schema.rs;
+    crates/registry-bregctl/src/dev/mod.rs. */}
 
 ## Troubleshooting
 
@@ -383,14 +399,7 @@ retention record to the journal, so the chain states what left it.
 | `history.erase.request_file.refused` or `history.rebaseline.request_file.refused` | The request file must be an absolute path to an owner-only regular file, not a symbolic link, holding the documented fields and nothing else. |
 | `request-retention erase` is refused | The request entity's retention mode is `retain`, or the version is pinned. Run the dry run for the exact version first. |
 | `evidence-retention erase-expired` removes nothing | No retained assertion has passed its 24-hour window yet, or the cutoff precedes every expiry. The count is the whole report. |
-| `audit verify` reports `audit.chain.broken` or `audit.head.mismatch` | The journal no longer links to its head. Export what is still reachable, keep the database as it is, and treat it as an integrity incident. |
-| `audit verify`, `audit export`, or `audit prune` reports `audit.envelope.invalid` | A reachable journal record holds an envelope no reader accepts. Nothing is pruned. Keep the database as it is and treat it as an integrity incident, like a broken chain. |
-| `audit verify`, `audit export`, or `audit prune` reports `audit.records.unreachable` | Records exist in the journal that the chain from the head does not reach. Nothing is pruned. Keep the database as it is and treat it as an integrity incident, like a broken chain. |
-| `audit prune` reports `audit.boundary.future` | `--before` is later than the database transaction time. Choose a boundary in the past. |
-| `audit export` is refused with `audit.operation.refused` | The runtime configuration path or `--output` is relative, or the database is unreachable. |
-| `audit export` is refused with `audit.output.exists` | `--output` already names an existing file. Choose a destination that does not exist. |
-| `audit export` is refused with `audit.output.not_durable` | The export reached `--output` and the directory holding it could not be made durable, so a crash may lose it. Verify the file, or remove it and export again. |
-| `audit export` is refused with `audit.output.invalid` | `--output`'s parent is not an available directory, or a component of it is a symbolic link. Name the real directory that holds the export. |
+| Readiness or an operation reports audit unavailable | Check destination permissions, free space, and the single-writer lock. Repair the destination and restart a stopped writer. For a mutation whose response failed after commit, inspect its receipt or domain history before retrying. |
 | An operator command cannot reach PostgreSQL | Check the migration URL secret, the role names, and `SSL_CERT_FILE` for a private authority. |
 
 ## Next

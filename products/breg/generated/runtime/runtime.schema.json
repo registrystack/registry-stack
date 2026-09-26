@@ -1,5 +1,20 @@
 {
   "$defs": {
+    "AuditDestinationKind": {
+      "description": "The configured audit destination kind, as written in product configuration.",
+      "oneOf": [
+        {
+          "const": "file",
+          "description": "Durable, rotated JSON Lines file.",
+          "type": "string"
+        },
+        {
+          "const": "stdout",
+          "description": "One JSON line per entry on standard output, flushed per entry.",
+          "type": "string"
+        }
+      ]
+    },
     "Classification": {
       "enum": [
         "public",
@@ -294,17 +309,115 @@
     },
     "RawAuditConfig": {
       "additionalProperties": false,
+      "else": {
+        "properties": {
+          "path": {
+            "pattern": "^/",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "if": {
+        "properties": {
+          "destination": {
+            "const": "stdout"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
       "properties": {
+        "destination": {
+          "$ref": "#/$defs/AuditDestinationKind",
+          "default": "file",
+          "description": "`file` (the default) writes a durable, rotated JSON Lines file at\n`path`; `stdout` writes one JSON line per entry to standard output."
+        },
         "hashKeyRef": {
           "maxLength": 140,
           "minLength": 1,
           "pattern": "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
           "type": "string"
+        },
+        "path": {
+          "default": null,
+          "description": "Absolute path of the active audit file. Required for, and accepted\nonly with, the `file` destination.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retainDays": {
+          "default": null,
+          "description": "Days a rotated file is retained. Defaults to 90.",
+          "format": "uint32",
+          "maximum": 36500,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "rotateBytes": {
+          "default": null,
+          "description": "Size in bytes at which the active file rotates. Defaults to 100 MiB.",
+          "format": "uint64",
+          "maximum": 4294967295,
+          "minimum": 1048576,
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "required": [
         "hashKeyRef"
       ],
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "properties": {
+                "path": {
+                  "not": {
+                    "type": "null"
+                  }
+                }
+              },
+              "required": [
+                "path"
+              ]
+            },
+            {
+              "properties": {
+                "rotateBytes": {
+                  "not": {
+                    "type": "null"
+                  }
+                }
+              },
+              "required": [
+                "rotateBytes"
+              ]
+            },
+            {
+              "properties": {
+                "retainDays": {
+                  "not": {
+                    "type": "null"
+                  }
+                }
+              },
+              "required": [
+                "retainDays"
+              ]
+            }
+          ]
+        }
+      },
       "type": "object"
     },
     "RawAuthenticationConfig": {

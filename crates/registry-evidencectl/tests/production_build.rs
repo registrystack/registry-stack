@@ -1489,7 +1489,7 @@ authentication:
   evidenceAudienceClaim: evidence_audience
   maximumTokenLifetimeSeconds: 300
   revokedKeyIds: []
-audit: {format: keyed-jsonl, hashSecretRef: 'secret:file/audit-hmac-key', hashKeyVersion: 1, failClosed: true}
+audit: {hashKeyRef: 'secret:file/audit-hmac-key', hashKeyVersion: 1}
 subjectBinding: {secretRef: 'secret:file/subject-binding-hmac-key', keyVersion: 1}
 rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 10, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}
 signing:
@@ -1542,7 +1542,7 @@ signer:
   keyName: evidence-signing
   keyVersion: 7
   timeoutMilliseconds: 2000
-auditStorage: {path: /var/lib/evidence/audit.jsonl, maximumFileBytes: 1048576}
+audit: {path: /var/lib/evidence/audit.jsonl}
 outboundTls: {systemRoots: true, trustProfiles: {}}
 "#;
 

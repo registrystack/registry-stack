@@ -728,8 +728,13 @@ fn service_for(registry: Arc<CompiledRegistry>, mutations: bool) -> HttpService 
         },
         RegistryLockKey::derive("action-admission").unwrap(),
         duration,
-        registry_platform_audit::AuditProfile::production_from_secret_bytes(vec![0x81; 32].into())
+        crate::audit::test_support::capturing(
+            registry_platform_audit::AuditProfile::production_from_secret_bytes(
+                vec![0x81; 32].into(),
+            )
             .unwrap(),
+        )
+        .0,
     )))
 }
 

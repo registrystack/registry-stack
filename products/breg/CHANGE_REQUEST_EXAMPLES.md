@@ -101,7 +101,8 @@ Submission freezes request values, target identities, target revisions, and
 minimized guard fields. Apply rechecks current source authority, the exact
 proposal and accepted result binding, current targets, UTC validity, Evidence
 identity and freshness, and every predicate. Effects, the application receipt,
-audit, outbox, and protected Evidence linkage commit atomically. Retrying the
+outbox, and protected Evidence linkage commit atomically, and the receipt is
+released only after its audit response entry is accepted. Retrying the
 same application idempotency key recovers the stored receipt without contacting
 Casework or acquiring Evidence again.
 

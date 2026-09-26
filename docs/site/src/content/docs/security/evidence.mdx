@@ -225,9 +225,9 @@ Owner-only key files. Each secret file below the configured
 `secretProviders.file.root` must be a regular, non-symlink file owned by the
 service identity with mode `0400` or `0600`; the file provider rejects anything else.
 Audit and subject-binding secret files must contain independently generated
-raw key bytes and be at least 32 bytes. The runtime derives separated audit-chain and identifier
-subkeys from each master, but Evidence Gateway also requires the two secret references and resolved
-master bytes to be distinct.
+raw key bytes and be at least 32 bytes. The runtime expands the audit master into the key that
+computes identifier pseudonyms, and Evidence Gateway also requires the two secret references and
+resolved master bytes to be distinct.
 
 Immutable bundle and runtime file. The operator mounts one reviewed governed
 bundle and one closed `runtime.yaml` read-only at startup; the bundle

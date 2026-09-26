@@ -9,7 +9,7 @@ Render publishes governed registry data onto physical media — paper and
 cards — with the same discipline the rest of Registry Stack applies to
 APIs. It is a pure rendering function (bundle + validated data in,
 byte-stable PDF + hashes out), a sealed governed template bundle as its
-content unit, and a value-free keyed audit ledger as its issuance record.
+content unit, and a value-free audit log as its issuance record.
 No database, no outbound calls, no engine changes in any other product.
 
 ## Document families
@@ -33,10 +33,10 @@ an Evidence definition; Render mints nothing and does nothing at scan time.
 One crate (`crates/registry-render`), one binary (`registry-render`),
 following the
 house product anatomy: `init`/`check`/`validate`/`seal`/`compile`/`serve`/
-`healthcheck`/`audit-verify`; a strict runtime YAML
+`healthcheck`; a strict runtime YAML
 (`render.registrystack.org/v1alpha1`) for deployment-local bindings; the
 `registry-platform-*` primitives (config secrets, httpsec layers and
-problems, keyed audit chain, authcommon key handling, buildinfo, canonical
+problems, the shared audit writer, authcommon key handling, buildinfo, canonical
 JSON) reused rather than reinvented.
 
 The rendering engine is Typst in library mode, pinned at 0.15.1 with a
@@ -57,7 +57,7 @@ equality; the two-OS golden CI job keeps it proven.
   agreed decision recorded before a template is written (see the App Kit
   skill sketch in `integrations/`).
 - Issuance integrity lives in three already-trusted places: the record's
-  hash fields, the attachment bytes, and the audit chain. Render adds no
+  hash fields, the attachment bytes, and the audit log. Render adds no
   new store to defend.
 
 ## Consumers

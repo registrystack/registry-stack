@@ -83,6 +83,11 @@ fn public_origin_accepts_only_explicit_web_origins_and_redacts_debug() {
 }
 
 fn valid_runtime(secret_root: &Path, package_root: &Path, trust_anchor: &Path) -> String {
+    let audit_path = secret_root
+        .with_file_name("audit")
+        .join("audit.jsonl")
+        .display()
+        .to_string();
     format!(
         r#"
 apiVersion: {api_version}
@@ -139,6 +144,7 @@ authentication:
     purpose: registry_purpose
 audit:
   hashKeyRef: secret:file/audit-key
+  path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
   maxAgeSeconds: 300
@@ -380,6 +386,99 @@ fn runtime_document_identity_is_required_and_exact() {
             env_lookup
         )
         .expect_err("missing kind refused by strict document shape"),
+        RuntimeConfigError::Document
+    );
+}
+
+#[test]
+fn audit_destination_defaults_to_a_rotated_file_and_refuses_incomplete_settings() {
+    use registry_platform_audit::{
+        AuditDestination, AuditDestinationKind, DEFAULT_AUDIT_RETAIN_DAYS,
+        DEFAULT_AUDIT_ROTATE_BYTES,
+    };
+
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let audit_path = fixture
+        .secret_root
+        .with_file_name("audit")
+        .join("audit.jsonl");
+    let path_line = format!("  path: {}\n", audit_path.display());
+    assert!(base.contains(&path_line));
+
+    let config = parse_runtime_config_with_env(&base, env_lookup)
+        .expect("a file destination with only a path validates");
+    let AuditDestination::File(file) = config.audit().destination() else {
+        panic!("the audit destination defaults to a file");
+    };
+    assert_eq!(file.path(), audit_path);
+    assert_eq!(file.rotate_bytes(), DEFAULT_AUDIT_ROTATE_BYTES);
+    assert_eq!(file.retain_days(), DEFAULT_AUDIT_RETAIN_DAYS);
+
+    let tuned = base.replace(
+        &path_line,
+        &format!("{path_line}  rotateBytes: 2097152\n  retainDays: 7\n"),
+    );
+    let config = parse_runtime_config_with_env(&tuned, env_lookup)
+        .expect("explicit rotation and retention validate");
+    let AuditDestination::File(file) = config.audit().destination() else {
+        panic!("an explicit file destination stays a file");
+    };
+    assert_eq!(file.rotate_bytes(), 2_097_152);
+    assert_eq!(file.retain_days(), 7);
+
+    let stdout = base.replace(&path_line, "  destination: stdout\n");
+    assert_eq!(
+        parse_runtime_config_with_env(&stdout, env_lookup)
+            .expect("stdout needs no path")
+            .audit()
+            .destination()
+            .kind(),
+        AuditDestinationKind::Stdout
+    );
+
+    for (document, reason) in [
+        (
+            base.replace(&path_line, ""),
+            "a file destination needs a path",
+        ),
+        (
+            base.replace(&path_line, "  path: relative/audit.jsonl\n"),
+            "the path is absolute",
+        ),
+        (
+            base.replace(&path_line, &format!("  destination: stdout\n{path_line}")),
+            "stdout refuses a file path",
+        ),
+        (
+            base.replace(&path_line, "  destination: stdout\n  retainDays: 7\n"),
+            "stdout refuses file retention",
+        ),
+        (
+            base.replace(&path_line, &format!("{path_line}  rotateBytes: 1\n")),
+            "rotation is bounded",
+        ),
+        (
+            base.replace(&path_line, &format!("{path_line}  retainDays: 0\n")),
+            "retention is bounded",
+        ),
+    ] {
+        assert_eq!(
+            parse_runtime_config_with_env(&document, env_lookup).expect_err(reason),
+            RuntimeConfigError::InvalidAudit,
+            "{reason}"
+        );
+    }
+    assert_eq!(
+        parse_runtime_config_with_env(
+            &base.replace(&path_line, "  destination: syslog\n"),
+            env_lookup
+        )
+        .expect_err("the destination set is closed"),
         RuntimeConfigError::Document
     );
 }

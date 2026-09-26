@@ -14,16 +14,18 @@
 //! it. References before the new baseline stay refused, because the bytes they
 //! named are gone.
 
-use registry_platform_audit::AuditProfile;
+use registry_platform_audit::AuditEntry;
 use serde_json::json;
 use tokio_postgres::Client;
+use uuid::Uuid;
 
+use crate::audit::RegistryAudit;
 use crate::history_commit::{
     allocate_coverage_baseline_commit, lock_history_head, HistoryCommitError,
 };
 use crate::history_maintenance::{
-    append_audit_envelope, profile_is_keyed, set_local_timeouts, verify_ready_identity,
-    HistoryMaintenanceError,
+    append_maintenance_entries, begin_maintenance_request, profile_is_keyed, set_local_timeouts,
+    verify_ready_identity, HistoryMaintenanceError,
 };
 use crate::history_migration::{verify_live_rows_match_journal_heads, HistoryMigrationError};
 use crate::model::CompiledRegistry;
@@ -42,13 +44,15 @@ pub use crate::history_migration::MAX_HISTORY_MIGRATION_COMMIT_MEMBERS as MAX_RE
 const MAX_OPERATOR_REFERENCE_BYTES: usize = 512;
 const AUDIT_OPERATION_ID: &str = "history-rebaseline-maintenance";
 const BASELINE_SYSTEM_ORIGIN: &str = "breg-coverage-rebaseline-v1";
+/// The audit schema of the coverage rebaseline entry.
+pub const HISTORY_REBASELINE_AUDIT_SCHEMA: &str = "breg-history-rebaseline-audit/v2";
 
 pub struct HistoryRebaselineRequest<'a> {
     pub expected: &'a ExpectedRegistryIdentity,
     pub migration_role: &'a SqlIdentifier,
     pub lock_key: RegistryLockKey,
     pub timeouts: HistoryRebaselineTimeouts,
-    pub audit_profile: &'a AuditProfile,
+    pub audit: &'a RegistryAudit,
     pub operator_reference: &'a str,
     pub registry: &'a CompiledRegistry,
 }
@@ -139,14 +143,24 @@ pub async fn rebaseline_history_coverage_with_connection(
 
 /// Re-establish snapshot coverage from the current state through an already
 /// opened migration connection. The transaction takes the exclusive Registry
-/// advisory lock, then the commit-head row, then the audit head, preserving the
-/// runtime lock order the erasure path uses.
+/// advisory lock, then the commit-head row, preserving the runtime lock order
+/// the erasure path uses. The rebaseline's `request` entry is accepted before
+/// the transaction opens, and its `response` entry, under the same
+/// correlation, is appended after the transaction commits.
 pub async fn rebaseline_history_coverage(
     client: &mut Client,
     request: HistoryRebaselineRequest<'_>,
 ) -> Result<HistoryRebaselineOutcome, HistoryRebaselineError> {
     validate_request(&request)?;
     verify_migration_role(client, request.migration_role).await?;
+    // The baseline position is known only once the transaction allocates it,
+    // so one invocation correlates its two entries by a fresh identifier.
+    let correlation = Uuid::new_v4().to_string();
+    let _attempt = begin_maintenance_request(
+        request.audit,
+        history_rebaseline_request_entry(&request, correlation.clone())?,
+    )
+    .await?;
 
     let transaction = client
         .transaction()
@@ -163,18 +177,21 @@ pub async fn rebaseline_history_coverage(
     verify_ready_identity(&transaction, request.expected).await?;
 
     let outcome = rebaseline_history_coverage_in_transaction(&transaction, &request).await?;
+    let entry = history_rebaseline_entry(&request, &outcome, correlation)?;
     transaction
         .commit()
         .await
         .map_err(|_| HistoryRebaselineError::Unavailable)?;
+    append_maintenance_entries(request.audit, vec![entry]).await?;
     Ok(outcome)
 }
 
-/// Re-establish coverage and append the rebaseline audit inside a caller-owned
-/// maintenance transaction. The caller must already hold the Registry advisory
-/// lock and have verified the ready identity. Keeping commit ownership outside
-/// this helper lets a compound maintenance lifecycle add its own terminal audit
-/// before either the coverage change or any audit becomes durable.
+/// Re-establish coverage inside a caller-owned maintenance transaction. The
+/// caller must already hold the Registry advisory lock and have verified the
+/// ready identity. Keeping commit ownership outside this helper lets a
+/// compound maintenance lifecycle record its own terminal state in the same
+/// commit; the caller builds the rebaseline entry with
+/// [`history_rebaseline_entry`] and appends it after that commit.
 pub(crate) async fn rebaseline_history_coverage_in_transaction(
     transaction: &tokio_postgres::Transaction<'_>,
     request: &HistoryRebaselineRequest<'_>,
@@ -243,7 +260,6 @@ pub(crate) async fn rebaseline_history_coverage_in_transaction(
         previous_coverage_baseline_position: head.coverage_baseline_position,
         previous_unavailable_after_position: head.unavailable_after_position,
     };
-    append_history_rebaseline_audit(transaction, request, &outcome).await?;
     Ok(outcome)
 }
 
@@ -288,28 +304,58 @@ async fn has_unindexed_journal_heads(
     Ok(row.get::<_, bool>(0))
 }
 
-async fn append_history_rebaseline_audit(
-    transaction: &tokio_postgres::Transaction<'_>,
+/// Build the rebaseline's `response` entry under `correlation`: the new
+/// baseline position for a standalone rebaseline, or the lifecycle reference
+/// of the compound lifecycle that closed with it.
+fn rebaseline_operator_reference(
     request: &HistoryRebaselineRequest<'_>,
-    outcome: &HistoryRebaselineOutcome,
-) -> Result<(), HistoryRebaselineError> {
-    if !profile_is_keyed(request.audit_profile) {
+) -> Result<String, HistoryRebaselineError> {
+    if !profile_is_keyed(request.audit.profile()) {
         return Err(HistoryRebaselineError::InvalidInput);
     }
-    let operator_reference = request
-        .audit_profile
+    request
+        .audit
+        .profile()
         .key_hasher()
         .audit_reference_hash(
             "breg-history-rebaseline-operator-v1",
             &request.expected.package_revision,
             request.operator_reference,
         )
-        .map_err(|_| HistoryRebaselineError::InvalidInput)?;
-    append_audit_envelope(
-        transaction,
-        request.audit_profile,
+        .map_err(|_| HistoryRebaselineError::InvalidInput)
+}
+
+/// Build a standalone rebaseline's `request` entry. It names only the
+/// operation, package revision, and keyed operator reference its `response`
+/// entry already records.
+fn history_rebaseline_request_entry(
+    request: &HistoryRebaselineRequest<'_>,
+    correlation: String,
+) -> Result<AuditEntry, HistoryRebaselineError> {
+    let operator_reference = rebaseline_operator_reference(request)?;
+    Ok(AuditEntry::request(
+        HISTORY_REBASELINE_AUDIT_SCHEMA,
+        correlation,
         json!({
-            "schema": "breg-history-rebaseline-audit/v1",
+            "phase": "attempt",
+            "outcome": "started",
+            "operationId": AUDIT_OPERATION_ID,
+            "packageRevision": request.expected.package_revision,
+            "operatorReference": operator_reference,
+        }),
+    ))
+}
+
+pub(crate) fn history_rebaseline_entry(
+    request: &HistoryRebaselineRequest<'_>,
+    outcome: &HistoryRebaselineOutcome,
+    correlation: String,
+) -> Result<AuditEntry, HistoryRebaselineError> {
+    let operator_reference = rebaseline_operator_reference(request)?;
+    Ok(AuditEntry::response(
+        HISTORY_REBASELINE_AUDIT_SCHEMA,
+        correlation,
+        json!({
             "phase": "terminal",
             "outcome": "committed",
             "operationId": AUDIT_OPERATION_ID,
@@ -323,9 +369,7 @@ async fn append_history_rebaseline_audit(
             "coveragePolicy": "references_before_the_new_baseline_remain_unavailable",
             "sourcePolicy": "live_rows_verified_against_retained_journal_heads",
         }),
-    )
-    .await?;
-    Ok(())
+    ))
 }
 
 fn validate_request(request: &HistoryRebaselineRequest<'_>) -> Result<(), HistoryRebaselineError> {
@@ -336,7 +380,7 @@ fn validate_request(request: &HistoryRebaselineRequest<'_>) -> Result<(), Histor
     {
         return Err(HistoryRebaselineError::InvalidInput);
     }
-    if !profile_is_keyed(request.audit_profile) {
+    if !profile_is_keyed(request.audit.profile()) {
         return Err(HistoryRebaselineError::InvalidInput);
     }
     Ok(())

@@ -11,7 +11,7 @@ ADD --checksum=sha256:8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8a
 # The policy package, operator configuration, source bindings, and secrets are
 # deployment inputs. The image carries only the runtime binary and its licenses.
 # Casework stores work and accountability records in PostgreSQL; only its local
-# append-only audit chain needs a writable persistent directory.
+# append-only audit stream needs a writable persistent directory.
 RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
     --mount=type=bind,source=LICENSE,target=/workspace/LICENSE \
     --mount=type=bind,source=THIRD_PARTY_NOTICES,target=/workspace/THIRD_PARTY_NOTICES,readonly \

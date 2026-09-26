@@ -80,11 +80,44 @@ here.
 Scopes authorize reads only. Every commitment takes its authority from a task
 grant instead, which [TASK_GRANTS.md](TASK_GRANTS.md) documents.
 
-`audit.path` is the absolute JSONL journal path. `audit.hashKeyRef` supplies
-its keyed-chain secret. Every commitment and every authorization refusal is
-journaled there, and the publication loop is the one worker whose lag bounds
-the record's durability. An expired hold writes its history entry as
-`system` and no audit row.
+`audit.hashKeyRef` supplies the key that pseudonymizes principals and grants in
+audit entries. `audit.destination` is `file`, the default, or `stdout`. A `file`
+destination requires `audit.path`, the absolute active audit file, which one
+process writes at a time; the file rotates at `audit.rotateBytes` (default 100
+MiB, at least 1 MiB, at most 4294967295) and rotated files are removed after
+`audit.retainDays` (default 90, at most 36500). `stdout` takes none of the
+three and leaves collection and retention to the platform that reads the
+stream. `schedulingctl records apply`
+writes beside the runtime, to `<stem>.schedulingctl.<ext>` next to
+`audit.path`, so the two processes never share a file, or to standard error
+with a `stdout` destination, so its own report keeps standard output.
+
+Every entry carries the schema `registry-scheduling-audit/v1`, a `request` or
+`response` phase, and a correlation shared by one decision's entries. A
+commitment's `request` entry is accepted before its capacity transaction opens,
+and its `response` entry after the transaction commits or rolls back; a
+permission refused before the transaction is one `response` entry. Audit fails
+closed: a refused `request` entry opens no transaction, and a refused `response`
+entry for a committed change answers `service.unavailable` with the change
+committed. A refusal, whether the ledger decided it (an admission refusal,
+the hold ceiling, a lapsed grant, a stale observed revision, or a cancellation
+past its cutoff) or the permission check refused it before the transaction
+opened, reaches the caller only once its `response` entry is accepted, and
+answers `service.unavailable` otherwise. A commitment nothing decided still
+answers its `request` entry: a transaction rolled back on a failure, records
+replaced under it, or a reused or expired idempotency key writes a `response`
+with the outcome `unfinished` and the reason `commitment.failed`,
+`commitment.facts-stale`, `idempotency.key-reused`, or `idempotency.expired`,
+and one that returns or is canceled before answering writes
+`commitment.unfinished`. A capacity commit that is not acknowledged is read
+back by its transaction identifier on a separate connection that changes
+nothing: one that took effect is answered and recorded as committed, one that
+rolled back writes `commitment.failed`, and one whose status cannot be read
+writes `commitment.unfinished` and answers `service.unavailable`, because it
+may have taken effect; a retry under the same idempotency key then replays
+whatever committed. `/readyz` reports unavailable while the destination
+refuses writes. An expired hold writes its history entry as `system` and no
+audit entry.
 
 `destinations` is optional. `destinations.reminders` is the one place due
 reminder intents are delivered, as CloudEvents 1.0 events over HTTPS POST with
@@ -114,8 +147,8 @@ binding is no longer available.
 cursors keep their fixed fifteen-minute lifetime. `retention.hookPayloadDays`
 sets the canonical observer payload's retry and dead-letter lifetime from 1
 through 30 days. Both configured values default to seven days, which is not a
-jurisdictional recommendation. Appointment, history, reminder outbox, and
-audit retention remain deferred. An idempotency receipt past its period is
+jurisdictional recommendation. Appointment, history, and reminder outbox
+retention remain deferred; `audit.retainDays` bounds rotated audit files. An idempotency receipt past its period is
 erased, so an exact retry after expiry answers `idempotency.expired` with HTTP
 410 instead of replaying the first answer.
 

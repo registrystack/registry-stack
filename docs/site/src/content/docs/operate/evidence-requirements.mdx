@@ -26,8 +26,9 @@ local tutorials, which start disposable versions of everything on your machine.
 - **A signing key you control.** Production signing uses a Vault or OpenBao Transit key that never
   leaves the vault, reached through a proxy on the same host. A local development profile may use
   a key file instead.
-- **Durable storage for the audit trail.** Every request appends to a keyed, hash-chained log on
-  disk. The disk it lands on, and its backups, are yours.
+- **Durable storage for the audit trail.** Every request appends minimized JSON lines to an audit
+  file on disk, or to standard output for your log collector. The disk it lands on, and the
+  append-only store you ship it to, are yours.
 - **The authoritative source.** Each question makes one fixed request to a system your institution
   already operates, over HTTP or against a read-only SQLite extract. That system has to answer
   within the timeout you configure.
@@ -78,23 +79,25 @@ an older assertion fails.
 process refuses to start when they are. There is no hot reload or override layer; a change means
 a new bundle, a fresh check, and a restart.
 
-**The audit trail.** One process owns one audit path, so scaling out means several processes with
-several audit paths, run active-passive rather than active-active. Segments rotate on their own,
-but retention, backup, restore, and chain verification are operator work, and the runtime never
-deletes a sealed segment.
+**The audit trail.** One process owns one audit path, so scaling out means several processes, each
+with its own audit path, or a `stdout` destination gathered by your log collector. The file
+rotates on its own and the runtime deletes sealed files after `retainDays`, so shipping each
+sealed file to append-only storage before then is operator work, and that store is the only place
+the log is tamper-evident.
 
 **Readiness.** The health endpoint answers when the process is alive. The readiness endpoint fails
 closed while any secret, signing provider, audit sink, or source credential is unavailable. Route
 traffic on readiness. Metrics are off until you open a second, private-address listener for them.
 
-{/* Evidence: products/evidence/OPERATOR-CONTRACT.md, "Secrets and keys", "Audit chain rotation and
-    rollback", "Listener placement", and "Startup and readiness"; crates/registry-evidence/src/audit.rs. */}
+{/* Evidence: products/evidence/OPERATOR-CONTRACT.md, "Secrets and keys", "Audit destinations,
+    rotation, and retention", "Listener placement", and "Startup and readiness";
+    crates/registry-evidence/src/audit.rs. */}
 
 ## Capacity
 
 No throughput or latency figure is part of the Version 1 contract. The cost that shapes throughput
 is durability: a successful request pays two durable audit writes, or three when it searches before
-it fetches, and the audit sink batches writes that overlap so a busy deployment amortizes the disk
+it fetches, and the audit writer batches writes that overlap so a busy deployment amortizes the disk
 barrier. Measurements taken on macOS are kept in the product's performance note, and it asks you to
 measure again on the Linux host you will run before you size anything. Because each process owns
 its own audit path, N processes give close to N times the throughput.

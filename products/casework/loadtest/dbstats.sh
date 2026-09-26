@@ -7,23 +7,24 @@ action="${1:-snapshot}"
 interval="${2:-1}"
 
 case "$action" in
-  snapshot|sample|analyze) ;;
-  *)
-    printf '%s\n' 'usage: products/casework/loadtest/dbstats.sh snapshot|sample [interval-seconds]|analyze' >&2
-    exit 2
-    ;;
+snapshot | sample | analyze) ;;
+*)
+	printf '%s\n' 'usage: products/casework/loadtest/dbstats.sh snapshot|sample [interval-seconds]|analyze' >&2
+	exit 2
+	;;
 esac
 if [[ "$action" == sample && ! "$interval" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-  printf '%s\n' 'sample interval must be a positive number of seconds' >&2
-  exit 2
+	printf '%s\n' 'sample interval must be a positive number of seconds' >&2
+	exit 2
 fi
 
 if [[ ! -f "$run_dir/env.json" ]]; then
-  printf '%s\n' "no load-test environment at $run_dir/env.json; run up.sh first" >&2
-  exit 2
+	printf '%s\n' "no load-test environment at $run_dir/env.json; run up.sh first" >&2
+	exit 2
 fi
 
-read -r container database < <(python3 - "$run_dir/env.json" <<'PY'
+read -r container database < <(
+	python3 - "$run_dir/env.json" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -46,26 +47,27 @@ PY
 )
 
 psql_exec() {
-  docker exec -i "$container" psql -v ON_ERROR_STOP=1 -q -U postgres -d "$database" "$@"
+	docker exec -i "$container" psql -v ON_ERROR_STOP=1 -q -U postgres -d "$database" "$@"
 }
 
 if [[ "$action" == analyze ]]; then
-  psql_exec -c 'ANALYZE;' >/dev/null
-  exit 0
+	psql_exec -c 'ANALYZE;' >/dev/null
+	exit 0
 fi
 
 # Casework appends review accountability to casework_review_history inside
-# each mutating transaction, and publishes audit through casework_audit_outbox.
-# Both count as the audit path for the auditLockWaiters sample.
+# each mutating transaction; reviewHistoryLockWaiters measures those waits.
+# Audit entries go to the runtime's audit destination,
+# not to the database.
 if [[ "$action" == snapshot ]]; then
-  psql_exec -At <<'SQL'
+	psql_exec -At <<'SQL'
 WITH table_sizes AS (
   SELECT relname AS name,
          pg_total_relation_size(relid) AS "totalBytes",
          n_live_tup AS "liveRows",
          n_dead_tup AS "deadRows"
   FROM pg_stat_user_tables
-  WHERE strpos(relname, 'casework_review_') = 1 OR relname = 'casework_audit_outbox'
+  WHERE strpos(relname, 'casework_review_') = 1
   ORDER BY pg_total_relation_size(relid) DESC
   LIMIT 20
 ), current_waits AS (
@@ -87,21 +89,19 @@ SELECT json_build_object(
   'reviewRequests', (SELECT count(*) FROM casework_review_requests),
   'reviewTaskStates', COALESCE((SELECT json_agg(task_states) FROM task_states), '[]'::json),
   'reviewHistoryRows', (SELECT count(*) FROM casework_review_history),
-  'auditOutboxRows', (SELECT count(*) FROM casework_audit_outbox),
   'backends', (SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid())
 )::jsonb::text;
 SQL
-  exit 0
+	exit 0
 fi
 
 while true; do
-  psql_exec -At <<'SQL'
+	psql_exec -At <<'SQL'
 WITH activity AS (
   SELECT wait_event_type,
          wait_event,
          state,
-         (strpos(lower(query), 'casework_review_history') > 0
-           OR strpos(lower(query), 'casework_audit_outbox') > 0) AS audit_query,
+         strpos(lower(query), 'casework_review_history') > 0 AS review_history_query,
          cardinality(pg_blocking_pids(pid)) > 0 AS blocked
   FROM pg_stat_activity
   WHERE datname = current_database() AND pid <> pg_backend_pid()
@@ -114,7 +114,7 @@ WITH activity AS (
 )
 SELECT json_build_object(
   'timestamp', clock_timestamp(),
-  'auditLockWaiters', (SELECT count(*) FROM activity WHERE state = 'active' AND audit_query AND wait_event_type = 'Lock'),
+  'reviewHistoryLockWaiters', (SELECT count(*) FROM activity WHERE state = 'active' AND review_history_query AND wait_event_type = 'Lock'),
   'lockWaiters', (SELECT count(*) FROM activity WHERE state = 'active' AND wait_event_type = 'Lock'),
   'blockedBackends', (SELECT count(*) FROM activity WHERE state = 'active' AND blocked),
   'activeBackends', (SELECT count(*) FROM activity WHERE state = 'active'),
@@ -122,5 +122,5 @@ SELECT json_build_object(
   'waitEvents', COALESCE((SELECT json_agg(waits) FROM waits), '[]'::json)
 )::jsonb::text;
 SQL
-  sleep "$interval"
+	sleep "$interval"
 done

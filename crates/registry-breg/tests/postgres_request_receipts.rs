@@ -45,7 +45,7 @@ async fn application_receipt_upgrade_preserves_legacy_results_and_enforces_shape
         .expect("test installs the previous receipt schema and retained results");
 
     for _ in 0..2 {
-        install_mutation_schema(&migration, &database.runtime_role)
+        install_mutation_schema(&migration, &database.runtime_role, false)
             .await
             .expect("schema installation upgrades retained receipts repeatably");
     }
@@ -144,7 +144,7 @@ async fn application_receipt_upgrade_preserves_legacy_results_and_enforces_shape
         )
         .await
         .expect("operator can erase bytes while preserving the result identity");
-    install_mutation_schema(&migration, &database.runtime_role)
+    install_mutation_schema(&migration, &database.runtime_role, false)
         .await
         .expect("schema reinstallation preserves erased receipts");
     migration_task.abort();

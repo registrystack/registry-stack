@@ -13,6 +13,7 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::time::Duration;
 
+use registry_breg::audit::RegistryAudit;
 use registry_breg::history_rebaseline::{
     rebaseline_history_coverage_with_connection, HistoryRebaselineError, HistoryRebaselineOutcome,
     HistoryRebaselineRequest, HistoryRebaselineTimeouts,
@@ -30,6 +31,8 @@ const MAX_REBASELINE_REQUEST_BYTES: u64 = 16 * 1024;
 #[derive(Debug)]
 pub(crate) enum HistoryRebaselineLifecycleError {
     RuntimeConfigPath,
+    /// The companion audit destination could not be opened.
+    Audit,
     RequestFile,
     RequestDocument,
     RuntimeConfig(RuntimeConfigError),
@@ -82,7 +85,7 @@ pub(crate) fn run(
     let migration_connection = config
         .migration_database_connection_config()
         .map_err(|_| HistoryRebaselineLifecycleError::DatabaseConfiguration)?;
-    let audit_profile = config
+    config
         .audit_profile()
         .map_err(HistoryRebaselineLifecycleError::RuntimeConfig)?;
     let lock_key = RegistryLockKey::derive(&expected.package_id)
@@ -96,6 +99,9 @@ pub(crate) fn run(
         .enable_all()
         .build()
         .map_err(|_| HistoryRebaselineLifecycleError::Runtime)?;
+    let audit = runtime
+        .block_on(RegistryAudit::open_companion(&config))
+        .map_err(|_| HistoryRebaselineLifecycleError::Audit)?;
     let outcome = runtime
         .block_on(rebaseline_history_coverage_with_connection(
             &migration_connection,
@@ -104,7 +110,7 @@ pub(crate) fn run(
                 migration_role: config.database().roles().migration(),
                 lock_key,
                 timeouts,
-                audit_profile: &audit_profile,
+                audit: &audit,
                 operator_reference: &rebaseline.operator_reference,
                 registry: package.registry(),
             },

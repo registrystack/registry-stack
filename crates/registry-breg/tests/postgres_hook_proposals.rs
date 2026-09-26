@@ -476,7 +476,7 @@ async fn setup_with_options(
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
     let coordinator = match field_encryption.clone() {
@@ -494,7 +494,7 @@ async fn setup_with_options(
         identity.clone(),
         lock_key,
         Duration::from_secs(2),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
         field_encryption,
     );
     drop(destinations);
@@ -557,7 +557,7 @@ impl Setup {
             identity,
             lock_key,
             Duration::from_secs(2),
-            audit_profile,
+            self.database.audit(audit_profile),
         )
     }
 
@@ -2468,6 +2468,12 @@ impl DestinationFixture {
     }
 
     fn runtime_config(&self, event_destinations: &str) -> String {
+        let audit_path = self
+            .root
+            .join("audit")
+            .join("audit.jsonl")
+            .display()
+            .to_string();
         format!(
             r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
 kind: BRegRuntimeConfig
@@ -2522,6 +2528,7 @@ authentication:
     purpose: registry_purpose
 audit:
   hashKeyRef: secret:file/audit-key
+  path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
   maxAgeSeconds: 300

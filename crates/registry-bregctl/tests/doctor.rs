@@ -180,11 +180,12 @@ secretProviders:\n  file:\n    root: {secrets}\n\
 database:\n  runtimeUrlRef: secret:file/runtime-database-url\n  migrationUrlRef: secret:file/migration-database-url\n  pool:\n    maxSize: 8\n  roles:\n    migration: registry_migration\n    runtime: registry_runtime\n\
 package:\n  root: {missing}\n  trustAnchorPath: {missing}/trust-anchor.json\n  compilerSourceRevision: generic-registry-0.1.0\n  activeRevision: sha256:0000000000000000000000000000000000000000000000000000000000000\n  activeSequence: 1\n\
 authentication:\n  oidc:\n    issuer: https://issuer.example.invalid\n    audience: generic-registry\n    allowedAlgorithm: ES256\n    accessTokenType: at+jwt\n    scopeClaim: scope\n    scopeSeparator: \" \"\n    allowedClients: [generic-registry-client]\n    deniedKids: []\n    maxTokenLifetimeSeconds: 300\n    leewayMilliseconds: 30000\n    jwksSource:\n      kind: discovery\n  authorityClaims:\n    principal: registry_principal\n    purpose: registry_purpose\n\
-audit:\n  hashKeyRef: secret:file/audit-key\n\
+audit:\n  hashKeyRef: secret:file/audit-key\n  path: {audit}\n\
 cursor:\n  secretRef: secret:file/cursor-key\n\
 eventDestinations: {{}}\n",
             secrets = secrets_root.display(),
             missing = directory.path.join("does-not-exist").display(),
+            audit = directory.path.join("audit").join("audit.jsonl").display(),
         ),
     )
     .expect("runtime configuration with a missing package root is written");

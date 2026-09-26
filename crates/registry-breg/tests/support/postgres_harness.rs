@@ -7,9 +7,12 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use registry_breg::audit::{test_support::AuditCapture, RegistryAudit};
 use registry_breg::postgres::{
     provision_managed_schemas, ConnectionConfig, PoolBounds, SqlIdentifier,
 };
+use registry_platform_audit::AuditProfile;
+use serde_json::Value;
 use tokio::task::JoinHandle;
 use tokio_postgres::{Client, Config, NoTls};
 
@@ -27,6 +30,7 @@ pub struct TestDatabase {
     pub intruder_role: SqlIdentifier,
     database: SqlIdentifier,
     migration_raw: Config,
+    audit: AuditCapture,
 }
 
 impl TestDatabase {
@@ -111,7 +115,69 @@ impl TestDatabase {
             intruder_role,
             database,
             migration_raw,
+            audit: AuditCapture::default(),
         }
+    }
+
+    /// An audit handle whose entries land in this database's capture. Every
+    /// handle a test builds shares the one capture, so entries from several
+    /// services read back in append order.
+    #[allow(dead_code)] // Not every integration target builds services directly.
+    pub fn audit(&self, profile: AuditProfile) -> RegistryAudit {
+        self.audit.audit(profile)
+    }
+
+    /// The capture behind [`Self::audit`], for failure injection.
+    #[allow(dead_code)] // Only the audit failure tests inject refusals.
+    pub fn audit_capture(&self) -> &AuditCapture {
+        &self.audit
+    }
+
+    /// Every audit entry accepted so far, as whole envelopes.
+    #[allow(dead_code)] // Not every integration target reads audit entries.
+    pub fn audit_entries(&self) -> Vec<Value> {
+        self.audit.entries()
+    }
+
+    /// Assert that every audit request accepted so far has exactly one
+    /// response, written after it under the same schema and correlation.
+    /// The only response allowed without a request is a refusal for a
+    /// correlation that never opened one: a request refused before its
+    /// attempt was recorded.
+    #[allow(dead_code)] // Not every integration target reads audit entries.
+    pub fn assert_every_audit_request_answered_once(&self) {
+        let entries = self.audit.entries();
+        let mut open = std::collections::BTreeMap::<(String, String), usize>::new();
+        for entry in &entries {
+            let key = (
+                entry["schema"].as_str().unwrap_or_default().to_owned(),
+                entry["correlation"].as_str().unwrap_or_default().to_owned(),
+            );
+            match entry["phase"].as_str() {
+                Some("request") => *open.entry(key).or_default() += 1,
+                Some("response") => match open.get_mut(&key) {
+                    Some(pending) if *pending > 0 => *pending -= 1,
+                    None if entry["record"]["phase"] == "refusal" => {}
+                    _ => panic!("a response answers no open request: {entry}\n{entries:#?}"),
+                },
+                other => panic!("an audit entry has no pairing phase {other:?}: {entry}"),
+            }
+        }
+        let unanswered: Vec<_> = open.iter().filter(|(_, pending)| **pending > 0).collect();
+        assert!(
+            unanswered.is_empty(),
+            "audit requests without a response: {unanswered:?}\n{entries:#?}"
+        );
+    }
+
+    /// The record of every audit entry accepted so far.
+    #[allow(dead_code)] // Not every integration target reads audit entries.
+    pub fn audit_records(&self) -> Vec<Value> {
+        self.audit
+            .entries()
+            .into_iter()
+            .map(|mut entry| entry["record"].take())
+            .collect()
     }
 
     #[allow(dead_code)] // Not every integration target needs a migration-role session.

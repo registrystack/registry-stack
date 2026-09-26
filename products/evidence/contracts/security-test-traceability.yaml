@@ -194,25 +194,20 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: disclosure_audit_failure_prevents_signed_response_release}
       - {file: crates/registry-evidence/src/audit.rs, name: frozen_audit_fixture_matches_native_event_shape_and_phase_rules}
       - {file: crates/registry-evidence/src/audit.rs, name: audit_is_durable_keyed_and_redacted}
-      - {file: crates/registry-evidence/src/audit.rs, name: restart_verifies_a_nonempty_keyed_chain_before_accepting_appends}
-      - {file: crates/registry-evidence/src/audit.rs, name: restart_rejects_same_length_chain_corruption}
-      - {file: crates/registry-evidence/src/audit.rs, name: restart_rejects_a_truncated_final_record}
-      - {file: crates/registry-evidence/src/audit.rs, name: restart_rejects_the_wrong_audit_key}
+      - {file: crates/registry-evidence/src/audit.rs, name: entries_carry_the_envelope_schema_phase_and_correlation}
+      - {file: crates/registry-evidence/src/audit.rs, name: restart_appends_to_the_same_destination}
       - {file: crates/registry-evidence/src/audit.rs, name: same_length_external_mutation_fails_readiness_and_future_appends}
-      - {file: crates/registry-evidence/src/audit.rs, name: appends_rotate_into_sealed_segments_and_the_chain_spans_the_seam}
-      - {file: crates/registry-evidence/src/audit.rs, name: a_restart_after_rotation_continues_from_the_sealed_tail}
-      - {file: crates/registry-evidence/src/audit.rs, name: a_missing_active_segment_recovers_from_the_sealed_tail}
-      - {file: crates/registry-evidence/src/audit.rs, name: a_corrupt_sealed_tail_is_rejected_at_startup}
-      - {file: crates/registry-evidence/src/audit.rs, name: sealed_segment_corruption_passes_startup_and_fails_the_verifier}
-      - {file: crates/registry-evidence/src/audit.rs, name: pathname_replacement_is_rejected_even_when_the_append_would_rotate}
-      - {file: crates/registry-evidence/src/audit.rs, name: an_archived_middle_segment_is_reported_as_missing_not_as_corruption}
-      - {file: crates/registry-evidence/src/audit.rs, name: concurrent_appends_extend_one_keyed_chain_without_forking}
+      - {file: crates/registry-evidence/src/audit.rs, name: pathname_replacement_never_redirects_the_pinned_audit_writer}
+      - {file: crates/registry-evidence/src/audit.rs, name: second_writer_is_rejected}
+      - {file: crates/registry-evidence/src/audit.rs, name: invalid_release_shape_fails_closed_before_any_write}
+      - {file: crates/registry-evidence/src/audit.rs, name: concurrent_appends_record_each_entry_exactly_once}
       - {file: crates/registry-evidence/src/audit.rs, name: concurrent_appends_share_durable_writes}
-      - {file: crates/registry-evidence/src/audit.rs, name: a_failed_durable_write_poisons_the_sink_instead_of_forking_the_chain}
-      - {file: crates/registry-evidence/src/audit.rs, name: a_poisoned_sink_fails_concurrent_waiters_instead_of_hanging_them}
+      - {file: crates/registry-evidence/src/audit.rs, name: a_failed_durable_write_stops_the_writer}
+      - {file: crates/registry-evidence/src/audit.rs, name: a_refused_write_stops_every_later_append}
+      - {file: crates/registry-evidence/src/audit.rs, name: a_stopped_writer_fails_concurrent_waiters_instead_of_hanging_them}
       - {file: crates/registry-evidence/src/audit.rs, name: readiness_holds_while_appends_are_in_flight}
-      - {file: crates/registry-evidence/src/main.rs, name: verify_audit_fails_on_sealed_segment_corruption}
-      - {file: crates/registry-evidence/src/main.rs, name: verify_audit_reports_an_archived_segment_as_missing_not_corrupt}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: concurrent_evidence_requests_write_every_audit_entry_once}
+      - {file: crates/registry-evidence/tests/cli.rs, name: dependency_check_fails_when_an_audit_writer_already_holds_the_destination}
   - id: sec-secret-values-rejected-from-bundle
     tests: [{file: crates/registry-evidence/src/config.rs, name: yaml_names_and_secret_references_are_strict}]
   - id: sec-proxy-identity-header-rejected
@@ -352,9 +347,11 @@ entries:
       - {file: crates/registry-platform-crypto/src/lib.rs, name: public_jwk_thumbprint_uses_required_members_only}
   - id: sec-audit-key-epoch
     tests:
-      - {file: crates/registry-platform-audit/src/lib.rs, name: audit_profile_chain_and_identifier_keys_are_domain_separated}
-      - {file: crates/registry-platform-audit/src/lib.rs, name: byte_backed_profiles_reject_weak_master_secrets_without_echo}
-      - {file: crates/registry-evidence/src/audit.rs, name: restart_rejects_the_wrong_audit_key}
+      - {file: crates/registry-platform-audit/src/lib.rs, name: production_identifier_hashes_match_known_answers}
+      - {file: crates/registry-platform-audit/src/lib.rs, name: byte_backed_profile_rejects_a_weak_master_secret_without_echo}
+      - {file: crates/registry-evidence/src/audit.rs, name: pseudonyms_are_byte_identical_for_one_secret_and_key_version}
+      - {file: crates/registry-evidence/src/audit.rs, name: pseudonyms_keep_key_epochs_distinguishable}
+      - {file: crates/registry-evidence/src/audit.rs, name: an_unusable_key_version_opens_no_destination}
   - id: sec-sd-jwt-claims-closed
     tests: [{file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_prohibited_claim_rejected}]
   - id: sec-local-source-none-boundary

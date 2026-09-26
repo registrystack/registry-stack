@@ -20,7 +20,7 @@ required-features = ["postgres-test"]
 [features]
 default = []
 postgres-test = []
-schema = ["dep:schemars"]
+schema = ["dep:schemars", "registry-platform-audit/schema"]
 
 [lints]
 workspace = true
@@ -64,6 +64,7 @@ url.workspace = true
 uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
+jsonschema.workspace = true
 reqwest.workspace = true
 tempfile.workspace = true
 tower.workspace = true

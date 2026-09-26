@@ -21,24 +21,25 @@
 
 use std::collections::BTreeSet;
 
-use registry_platform_audit::AuditProfile;
+use registry_platform_audit::AuditEntry;
 use serde::Serialize;
 use serde_json::json;
 use tokio_postgres::Client;
 use zeroize::Zeroizing;
 
+use crate::audit::RegistryAudit;
 use crate::history_commit::lock_history_head;
 use crate::history_erasure::{
     erase_record_history_for_lifecycle, HistoryErasureError, HistoryErasureRequest,
     RecordHistoryErasureTarget, MAX_ERASURE_REVISIONS,
 };
 use crate::history_maintenance::{
-    append_audit_envelope, profile_is_keyed, set_local_timeouts, verify_ready_identity,
-    HistoryMaintenanceTimeouts,
+    append_maintenance_entries, begin_maintenance_request, profile_is_keyed, set_local_timeouts,
+    verify_ready_identity, HistoryMaintenanceTimeouts,
 };
 use crate::history_rebaseline::{
-    rebaseline_history_coverage_in_transaction, HistoryRebaselineError, HistoryRebaselineOutcome,
-    HistoryRebaselineRequest,
+    history_rebaseline_entry, rebaseline_history_coverage_in_transaction, HistoryRebaselineError,
+    HistoryRebaselineOutcome, HistoryRebaselineRequest,
 };
 use crate::migration_plan::{
     ReviewedFieldEncryptionHistory, ReviewedMigrationStepDescriptor, ValidatedReviewedMigrationPlan,
@@ -54,10 +55,10 @@ use crate::postgres::{
 
 pub use crate::history_maintenance::HistoryMaintenanceTimeouts as FieldEncryptionBackfillTimeouts;
 
-/// The audit schema every field-encryption lifecycle envelope carries. The
-/// shape follows the history maintenance envelopes: actor reference, package
-/// revision, step, and counts; field values never cross this boundary.
-pub const FIELD_ENCRYPTION_AUDIT_SCHEMA: &str = "breg-field-encryption-audit/v1";
+/// The audit schema every field-encryption lifecycle entry carries. The shape
+/// follows the history maintenance entries: actor reference, package revision,
+/// step, and counts; field values never cross this boundary.
+pub const FIELD_ENCRYPTION_AUDIT_SCHEMA: &str = "breg-field-encryption-audit/v2";
 
 const MAX_OPERATOR_REFERENCE_BYTES: usize = 512;
 const MAX_REASON_BYTES: usize = 1024;
@@ -491,7 +492,7 @@ pub struct FieldEncryptionHistoryErasureRequest<'a> {
     pub migration_role: &'a SqlIdentifier,
     pub lock_key: RegistryLockKey,
     pub timeouts: HistoryMaintenanceTimeouts,
-    pub audit_profile: &'a AuditProfile,
+    pub audit: &'a RegistryAudit,
     pub operator_reference: &'a str,
     pub reason: &'a str,
     /// The active package's compiled registry, used by the closing rebaseline.
@@ -570,9 +571,10 @@ pub async fn erase_field_encryption_history_with_connection(
 }
 
 /// Run the erase-history lifecycle over an already opened migration
-/// connection: enumerate the pending targets, erase each record's retained
-/// history through the established erasure path, rebaseline coverage once,
-/// then append the lifecycle's audit envelope. Each per-record erasure and the
+/// connection: accept the lifecycle's request entry once a recorded flip makes
+/// this a lifecycle run, enumerate the pending targets, erase each record's
+/// retained history through the established erasure path, rebaseline coverage
+/// once, then append the rebaseline and lifecycle entries after that commit. Each per-record erasure and the
 /// rebaseline take the Registry advisory transaction lock in turn, so the
 /// lifecycle never runs concurrent with an apply that holds the session lock.
 pub async fn erase_field_encryption_history(
@@ -586,8 +588,11 @@ pub async fn erase_field_encryption_history(
     // copies that still carry plaintext for a recorded erase-and-rebaseline
     // flip. The transaction also marks coverage incomplete, which is the
     // existing durable retry signal if this lifecycle stops before rebaseline.
+    // The lifecycle's request entry, when this run is one, is held until the
+    // run ends, so a run that stops before its terminal still answers it.
+    let mut lifecycle_attempt = None;
     let (_, _, needs_rebaseline, lifecycle_reference) =
-        scrub_plaintext_request_snapshots(client, &request).await?;
+        scrub_plaintext_request_snapshots(client, &request, &mut lifecycle_attempt).await?;
     let mut erased_any = false;
     loop {
         let targets = pending_erase_targets(client, &request).await?;
@@ -606,7 +611,7 @@ pub async fn erase_field_encryption_history(
                     migration_role: request.migration_role,
                     lock_key: request.lock_key,
                     timeouts: request.timeouts,
-                    audit_profile: request.audit_profile,
+                    audit: request.audit,
                     operator_reference: request.operator_reference,
                     reason: request.reason,
                     target: RecordHistoryErasureTarget::new(
@@ -625,9 +630,10 @@ pub async fn erase_field_encryption_history(
         return Err(FieldEncryptionHistoryErasureError::NoPendingPlaintextHistory);
     }
 
-    // Coverage and both terminal audit records form one closing commit. A
-    // failed field-encryption terminal audit therefore leaves coverage
-    // incomplete and the existing retry path remains available.
+    // Coverage and the lifecycle's terminal progress row form one closing
+    // commit; the rebaseline and terminal entries are appended after it. A
+    // failure before that commit leaves coverage incomplete and the existing
+    // retry path remains available.
     let transaction = client
         .transaction()
         .await
@@ -646,7 +652,7 @@ pub async fn erase_field_encryption_history(
         migration_role: request.migration_role,
         lock_key: request.lock_key,
         timeouts: request.timeouts,
-        audit_profile: request.audit_profile,
+        audit: request.audit,
         operator_reference: request.operator_reference,
         registry: request.registry,
     };
@@ -667,11 +673,26 @@ pub async fn erase_field_encryption_history(
         removed_descriptor_count: counts.removed_descriptor_count,
         rebaseline,
     };
-    append_erase_history_audit(&transaction, &request, &lifecycle_reference, &outcome).await?;
+    let rebaseline_entry = history_rebaseline_entry(
+        &rebaseline_request,
+        &outcome.rebaseline,
+        lifecycle_reference.clone(),
+    )
+    .map_err(FieldEncryptionHistoryErasureError::Rebaseline)?;
+    let terminal_entry = erase_history_entry(&request, &lifecycle_reference, &outcome)?;
+    record_lifecycle_progress(
+        &transaction,
+        &lifecycle_reference,
+        LifecycleProgressKind::Terminal,
+        0,
+        0,
+    )
+    .await?;
     transaction
         .commit()
         .await
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
+    append_maintenance_entries(request.audit, vec![rebaseline_entry, terminal_entry]).await?;
     Ok(outcome)
 }
 
@@ -684,6 +705,7 @@ pub async fn erase_field_encryption_history(
 async fn scrub_plaintext_request_snapshots(
     client: &mut Client,
     request: &FieldEncryptionHistoryErasureRequest<'_>,
+    lifecycle_attempt: &mut Option<registry_platform_audit::AuditRequest>,
 ) -> Result<(u64, u64, bool, String), FieldEncryptionHistoryErasureError> {
     let transaction = client
         .transaction()
@@ -733,8 +755,18 @@ async fn scrub_plaintext_request_snapshots(
             .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
         return Ok((0, 0, false, lifecycle_reference));
     }
+    // A recorded erase-and-rebaseline flip makes this a lifecycle run: its
+    // request entry must be accepted before any request snapshot, record
+    // history, or coverage state is read for erasure or changed.
+    *lifecycle_attempt = Some(
+        begin_maintenance_request(
+            request.audit,
+            lifecycle_request_entry(request, &lifecycle_reference)?,
+        )
+        .await?,
+    );
     let (terminal_exists, correlated_progress_exists) =
-        lifecycle_audit_state(&transaction, &lifecycle_reference).await?;
+        lifecycle_progress_state(&transaction, &lifecycle_reference).await?;
     let unresolved_provenance: bool = transaction
         .query_one(
             "WITH target_positions AS (
@@ -984,6 +1016,7 @@ async fn scrub_plaintext_request_snapshots(
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?
         .get(0);
     let lifecycle_started = scrubbed_any || has_pending_revisions;
+    let mut scrub_entry = None;
     if terminal_exists && lifecycle_started {
         // A completed flip manifest must never acquire fresh pre-flip work.
         // Returning before commit rolls back any request scrubs above.
@@ -1004,14 +1037,20 @@ async fn scrub_plaintext_request_snapshots(
             return Err(FieldEncryptionHistoryErasureError::Unavailable);
         }
         if scrubbed_any {
-            append_request_scrub_progress_audit(
+            record_lifecycle_progress(
                 &transaction,
-                request,
                 &lifecycle_reference,
+                LifecycleProgressKind::RequestScrub,
                 scrubbed_request_target_count,
                 scrubbed_request_proposal_count,
             )
             .await?;
+            scrub_entry = Some(request_scrub_entry(
+                request,
+                &lifecycle_reference,
+                scrubbed_request_target_count,
+                scrubbed_request_proposal_count,
+            ));
         }
     }
     let head_incomplete = !head.coverage_ready || head.unavailable_after_position.is_some();
@@ -1021,6 +1060,7 @@ async fn scrub_plaintext_request_snapshots(
         .commit()
         .await
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
+    append_maintenance_entries(request.audit, scrub_entry.into_iter().collect()).await?;
     Ok((
         scrubbed_request_target_count,
         scrubbed_request_proposal_count,
@@ -1162,7 +1202,8 @@ async fn field_encryption_lifecycle_reference_in_transaction(
     let manifest = serde_json::to_string(&manifest)
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
     request
-        .audit_profile
+        .audit
+        .profile()
         .key_hasher()
         .audit_reference_hash(
             "breg-field-encryption-lifecycle-v1",
@@ -1172,48 +1213,91 @@ async fn field_encryption_lifecycle_reference_in_transaction(
         .map_err(|_| FieldEncryptionHistoryErasureError::InvalidInput)
 }
 
-async fn lifecycle_audit_state(
+/// Report whether the lifecycle already recorded its terminal step, and
+/// whether it recorded any other progress: a per-record erasure or a request
+/// scrub. Both facts are durable state written in the commit of the step they
+/// describe, never read back from audit output.
+async fn lifecycle_progress_state(
     transaction: &tokio_postgres::Transaction<'_>,
     lifecycle_reference: &str,
 ) -> Result<(bool, bool), FieldEncryptionHistoryErasureError> {
     let row = transaction
         .query_one(
-            "WITH audited AS (
-                 SELECT convert_from(envelope, 'UTF8')::jsonb -> 'record' AS record
-                   FROM registry_internal.registry_audit
-             )
-             SELECT
-                 count(*) FILTER (
-                     WHERE record ->> 'schema' = $2
-                       AND record ->> 'phase' = 'terminal'
-                 ) > 0,
-                 count(*) FILTER (
-                     WHERE NOT (
-                         record ->> 'schema' = $2
-                         AND record ->> 'phase' = 'terminal'
-                     )
-                 ) > 0
-               FROM audited
-              WHERE record ->> 'lifecycleReference' = $1",
-            &[&lifecycle_reference, &FIELD_ENCRYPTION_AUDIT_SCHEMA],
+            "SELECT
+                 EXISTS (
+                     SELECT 1
+                       FROM registry_internal.registry_field_encryption_lifecycle_progress
+                      WHERE lifecycle_reference = $1
+                        AND progress_kind = 'terminal'
+                 ),
+                 EXISTS (
+                     SELECT 1
+                       FROM registry_internal.registry_field_encryption_lifecycle_progress
+                      WHERE lifecycle_reference = $1
+                        AND progress_kind <> 'terminal'
+                 )",
+            &[&lifecycle_reference],
         )
         .await
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
     Ok((row.get(0), row.get(1)))
 }
 
-async fn append_request_scrub_progress_audit(
+#[derive(Clone, Copy)]
+enum LifecycleProgressKind {
+    RequestScrub,
+    Terminal,
+}
+
+impl LifecycleProgressKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::RequestScrub => "request-scrub",
+            Self::Terminal => "terminal",
+        }
+    }
+}
+
+/// Record one lifecycle step in the commit that performs it. Per-record
+/// erasures record their own rows through the erasure path.
+async fn record_lifecycle_progress(
     transaction: &tokio_postgres::Transaction<'_>,
+    lifecycle_reference: &str,
+    kind: LifecycleProgressKind,
+    scrubbed_request_target_count: u64,
+    scrubbed_request_proposal_count: u64,
+) -> Result<(), FieldEncryptionHistoryErasureError> {
+    let count = |value: u64| {
+        i64::try_from(value).map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)
+    };
+    transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_field_encryption_lifecycle_progress
+                    (lifecycle_reference, progress_kind,
+                     scrubbed_request_target_count, scrubbed_request_proposal_count)
+             VALUES ($1, $2, $3, $4)",
+            &[
+                &lifecycle_reference,
+                &kind.as_str(),
+                &count(scrubbed_request_target_count)?,
+                &count(scrubbed_request_proposal_count)?,
+            ],
+        )
+        .await
+        .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
+    Ok(())
+}
+
+fn request_scrub_entry(
     request: &FieldEncryptionHistoryErasureRequest<'_>,
     lifecycle_reference: &str,
     scrubbed_request_target_count: u64,
     scrubbed_request_proposal_count: u64,
-) -> Result<(), FieldEncryptionHistoryErasureError> {
-    append_audit_envelope(
-        transaction,
-        request.audit_profile,
+) -> AuditEntry {
+    AuditEntry::response(
+        FIELD_ENCRYPTION_AUDIT_SCHEMA,
+        lifecycle_reference,
         json!({
-            "schema": FIELD_ENCRYPTION_AUDIT_SCHEMA,
             "phase": "request-scrub",
             "outcome": "committed",
             "operationId": AUDIT_OPERATION_ID,
@@ -1223,8 +1307,6 @@ async fn append_request_scrub_progress_audit(
             "scrubbedRequestProposalCount": scrubbed_request_proposal_count,
         }),
     )
-    .await?;
-    Ok(())
 }
 
 async fn aggregate_lifecycle_counts(
@@ -1233,46 +1315,37 @@ async fn aggregate_lifecycle_counts(
 ) -> Result<FieldEncryptionLifecycleCounts, FieldEncryptionHistoryErasureError> {
     let row = transaction
         .query_one(
-            "WITH audited AS (
-                 SELECT convert_from(envelope, 'UTF8')::jsonb -> 'record' AS record
-                   FROM registry_internal.registry_audit
-             )
-             SELECT
-                 count(DISTINCT COALESCE(
-                     record ->> 'targetRecordReference',
-                     record ->> 'targetReference'
-                 )) FILTER (
-                     WHERE record ->> 'schema' = 'breg-history-erasure-audit/v1'
+            "SELECT
+                 count(DISTINCT target_record_reference) FILTER (
+                     WHERE progress_kind = 'record-erasure'
                  )::bigint,
-                 COALESCE(sum((record ->> 'erasedRevisionCount')::bigint) FILTER (
-                     WHERE record ->> 'schema' = 'breg-history-erasure-audit/v1'
+                 COALESCE(sum(erased_revision_count) FILTER (
+                     WHERE progress_kind = 'record-erasure'
                  ), 0)::bigint,
-                 COALESCE(sum((record ->> 'erasedCommitMemberCount')::bigint) FILTER (
-                     WHERE record ->> 'schema' = 'breg-history-erasure-audit/v1'
+                 COALESCE(sum(erased_commit_member_count) FILTER (
+                     WHERE progress_kind = 'record-erasure'
                  ), 0)::bigint,
-                 COALESCE(sum((record ->> 'scrubbedChangeContextCount')::bigint) FILTER (
-                     WHERE record ->> 'schema' = 'breg-history-erasure-audit/v1'
+                 COALESCE(sum(scrubbed_change_context_count) FILTER (
+                     WHERE progress_kind = 'record-erasure'
                  ), 0)::bigint,
-                 COALESCE(sum((record ->> 'scrubbedOutboxPayloadCount')::bigint) FILTER (
-                     WHERE record ->> 'schema' = 'breg-history-erasure-audit/v1'
+                 COALESCE(sum(scrubbed_outbox_payload_count) FILTER (
+                     WHERE progress_kind = 'record-erasure'
                  ), 0)::bigint,
-                 COALESCE(sum((record ->> 'scrubbedCachedResponseCount')::bigint) FILTER (
-                     WHERE record ->> 'schema' = 'breg-history-erasure-audit/v1'
+                 COALESCE(sum(scrubbed_cached_response_count) FILTER (
+                     WHERE progress_kind = 'record-erasure'
                  ), 0)::bigint,
-                 COALESCE(sum((record ->> 'scrubbedRequestTargetCount')::bigint) FILTER (
-                     WHERE record ->> 'schema' = $2
-                       AND record ->> 'phase' = 'request-scrub'
+                 COALESCE(sum(scrubbed_request_target_count) FILTER (
+                     WHERE progress_kind = 'request-scrub'
                  ), 0)::bigint,
-                 COALESCE(sum((record ->> 'scrubbedRequestProposalCount')::bigint) FILTER (
-                     WHERE record ->> 'schema' = $2
-                       AND record ->> 'phase' = 'request-scrub'
+                 COALESCE(sum(scrubbed_request_proposal_count) FILTER (
+                     WHERE progress_kind = 'request-scrub'
                  ), 0)::bigint,
-                 COALESCE(sum((record ->> 'removedDescriptorCount')::bigint) FILTER (
-                     WHERE record ->> 'schema' = 'breg-history-erasure-audit/v1'
+                 COALESCE(sum(removed_descriptor_count) FILTER (
+                     WHERE progress_kind = 'record-erasure'
                  ), 0)::bigint
-               FROM audited
-              WHERE record ->> 'lifecycleReference' = $1",
-            &[&lifecycle_reference, &FIELD_ENCRYPTION_AUDIT_SCHEMA],
+               FROM registry_internal.registry_field_encryption_lifecycle_progress
+              WHERE lifecycle_reference = $1",
+            &[&lifecycle_reference],
         )
         .await
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
@@ -1293,38 +1366,19 @@ async fn aggregate_lifecycle_counts(
     })
 }
 
-/// Append the lifecycle's one summary envelope. It names counts and hashed
+/// Build the lifecycle's one summary entry. It names counts and hashed
 /// references only: which records were erased stays in the per-record erasure
-/// envelopes, and no field value ever reaches the audit journal.
-async fn append_erase_history_audit(
-    transaction: &tokio_postgres::Transaction<'_>,
+/// entries, and no field value ever reaches the audit log.
+fn erase_history_entry(
     request: &FieldEncryptionHistoryErasureRequest<'_>,
     lifecycle_reference: &str,
     outcome: &FieldEncryptionHistoryErasureOutcome,
-) -> Result<(), FieldEncryptionHistoryErasureError> {
-    if !profile_is_keyed(request.audit_profile) {
-        return Err(FieldEncryptionHistoryErasureError::InvalidInput);
-    }
-    let key_hasher = request.audit_profile.key_hasher();
-    let operator_reference = key_hasher
-        .audit_reference_hash(
-            "breg-field-encryption-operator-v1",
-            &request.expected.package_revision,
-            request.operator_reference,
-        )
-        .map_err(|_| FieldEncryptionHistoryErasureError::InvalidInput)?;
-    let reason_reference = key_hasher
-        .audit_reference_hash(
-            "breg-field-encryption-reason-v1",
-            &request.expected.package_revision,
-            request.reason,
-        )
-        .map_err(|_| FieldEncryptionHistoryErasureError::InvalidInput)?;
-    append_audit_envelope(
-        transaction,
-        request.audit_profile,
+) -> Result<AuditEntry, FieldEncryptionHistoryErasureError> {
+    let (operator_reference, reason_reference) = lifecycle_operator_references(request)?;
+    Ok(AuditEntry::response(
+        FIELD_ENCRYPTION_AUDIT_SCHEMA,
+        lifecycle_reference,
         json!({
-            "schema": FIELD_ENCRYPTION_AUDIT_SCHEMA,
             "phase": "terminal",
             "outcome": "committed",
             "operationId": AUDIT_OPERATION_ID,
@@ -1345,9 +1399,56 @@ async fn append_erase_history_audit(
             "baselinePosition": outcome.rebaseline.baseline_position,
             "coveragePolicy": "per_record_erasure_then_single_rebaseline",
         }),
-    )
-    .await?;
-    Ok(())
+    ))
+}
+
+/// Build the lifecycle's request entry, accepted before its first scrub. It
+/// names only the references the terminal entry also names, and shares its
+/// correlation, the lifecycle reference.
+fn lifecycle_request_entry(
+    request: &FieldEncryptionHistoryErasureRequest<'_>,
+    lifecycle_reference: &str,
+) -> Result<AuditEntry, FieldEncryptionHistoryErasureError> {
+    let (operator_reference, reason_reference) = lifecycle_operator_references(request)?;
+    Ok(AuditEntry::request(
+        FIELD_ENCRYPTION_AUDIT_SCHEMA,
+        lifecycle_reference,
+        json!({
+            "phase": "attempt",
+            "outcome": "started",
+            "operationId": AUDIT_OPERATION_ID,
+            "packageRevision": request.expected.package_revision,
+            "lifecycleReference": lifecycle_reference,
+            "operatorReference": operator_reference,
+            "reasonReference": reason_reference,
+            "historyChoice": "erase-and-rebaseline",
+        }),
+    ))
+}
+
+/// The keyed operator and reason references every lifecycle entry carries.
+fn lifecycle_operator_references(
+    request: &FieldEncryptionHistoryErasureRequest<'_>,
+) -> Result<(String, String), FieldEncryptionHistoryErasureError> {
+    if !profile_is_keyed(request.audit.profile()) {
+        return Err(FieldEncryptionHistoryErasureError::InvalidInput);
+    }
+    let key_hasher = request.audit.profile().key_hasher();
+    let operator_reference = key_hasher
+        .audit_reference_hash(
+            "breg-field-encryption-operator-v1",
+            &request.expected.package_revision,
+            request.operator_reference,
+        )
+        .map_err(|_| FieldEncryptionHistoryErasureError::InvalidInput)?;
+    let reason_reference = key_hasher
+        .audit_reference_hash(
+            "breg-field-encryption-reason-v1",
+            &request.expected.package_revision,
+            request.reason,
+        )
+        .map_err(|_| FieldEncryptionHistoryErasureError::InvalidInput)?;
+    Ok((operator_reference, reason_reference))
 }
 
 fn validate_request(
@@ -1361,7 +1462,7 @@ fn validate_request(
         || request.reason.len() > MAX_REASON_BYTES
         || request.reason.chars().any(char::is_control)
         || request.registry.entities().is_empty()
-        || !profile_is_keyed(request.audit_profile)
+        || !profile_is_keyed(request.audit.profile())
     {
         return Err(FieldEncryptionHistoryErasureError::InvalidInput);
     }

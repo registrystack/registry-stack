@@ -258,9 +258,8 @@ through a governed read, and privacy regressions that expose raw subject identif
 ## Threats the design considers and mitigates
 
 - Secret material in deployment configuration: Relay holds no source credential, because its
-  source is a local file. The only secrets it resolves are the audit chain integrity key and the
-  optional cursor integrity key, and both are named indirectly as `secret:env/<NAME>` or
-  `secret:file/<name>` rather than written inline. The file provider accepts only a single flat
+  source is a local file. The only secret it resolves is the optional cursor integrity key, named
+  indirectly as `secret:env/<NAME>` or `secret:file/<name>` rather than written inline. The file provider accepts only a single flat
   filename under the runtime root, refuses traversal and nesting, opens with `O_NOFOLLOW`, and
   requires a regular file owned by the effective user, with mode `0400` or `0600`, and exactly one
   hard link.
@@ -404,34 +403,33 @@ through a governed read, and privacy regressions that expose raw subject identif
 actual acquisition stage, plus one disclosure-release record per successful response. Each
 access-attempt event must be durably accepted before its source read, and the disclosure-release
 event must be durably accepted after signing and before the response is released. Either
-failure blocks the corresponding action. The chain is keyed and hash-linked, has no severity
-levels and no way to turn records off, and carries reviewed identifiers and decision categories
-only: never raw selector values, per-field selector hashes, source values, credentials, tokens,
+failure blocks the corresponding action. The log has no severity levels and no way to turn
+records off, and carries reviewed identifiers and decision categories only: never raw selector values, per-field selector hashes, source values, credentials, tokens,
 or raw subject identifiers. Where correlation is required, one keyed, domain-separated,
 versioned pseudonym covers the complete canonical selector bundle and is deliberately not
 globally stable across purposes or audiences.
 
-Relay audits on the same principle under its own schema, `registry.relay.audit/v2alpha1`. It
-records an attempt phase, a refusal phase, and a terminal phase, carrying resource, operation,
+Relay audits on the same principle under its own schema, `registry.relay.audit/v2alpha2`. It
+records an attempt phase, a refusal phase, and a terminal phase, joined by the operation
+identifier, carrying resource, operation,
 contract revision, access and disclosure profile names, transform identifiers, and the principal
 kind, and never a row value or a selector value. Failure to durably accept a record refuses the
 request with a `503` `audit.unavailable` problem, and this is not configurable: there is no
-best-effort mode to fall back to. Readiness re-verifies the sink, so replacing the audit file
-under a running process takes the deployment out of `/ready`.
+best-effort mode to fall back to. Readiness re-verifies the audit writer, so replacing the audit
+file under a running process takes the deployment out of `/ready`.
 {/* Evidence: AUDIT_SCHEMA and the value-free AuditContext,
      crates/registry-relay-v2/src/audit.rs:1-140; every audit failure returns
      ProblemCode::AuditUnavailable, crates/registry-relay-v2/src/api.rs; the test
      audit_path_replacement_revokes_readiness, crates/registry-relay-v2/src/startup.rs. */}
 
-Three caveats for the auditor. First, exactly one Evidence Gateway process may write a given audit
-path: the sink takes an exclusive advisory lock, because the chain head lives in process
-memory and two writers would interleave records and destroy tamper evidence. That makes the
-supported shape one replica per audit path, active/passive rather than active/active. Second,
-startup recovers the chain head from the newest sealed segment and fully verifies only the
-active segment, so corruption inside an already sealed segment is not detected at startup;
-only an out-of-band `evidence verify-audit` pass over the whole directory detects it. Third,
-audit records hashed principals and correlation identifiers, so operator-side investigation
-depends on retaining the hashing secret and request context.
+Three caveats for the auditor. First, the audit log is not chained or signed, so the host that
+writes it can rewrite or delete entries without detection. Tamper evidence and completeness come
+only from shipping sealed files, or the standard-output stream, to append-only storage the
+service account cannot change, and neither service proves remote receipt. Second, exactly one
+process may write a given audit path: the writer takes an exclusive lock, and a second process on
+the same path fails at startup, so each replica needs its own path or a standard-output
+destination. Third, audit records hashed principals and correlation identifiers, so
+operator-side investigation depends on retaining the hashing secret and request context.
 
 ## Field encryption draws a boundary inside the database
 

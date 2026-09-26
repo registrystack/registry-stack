@@ -108,7 +108,7 @@ a review, not a failure to suppress.
 Store both hashes with the record the document was made from: `pdfSha256` for the artifact,
 `dataSha256` for the exact request the artifact renders. A later re-render from the same stored
 inputs reproduces the first byte for byte, which is what makes a dead-letter replay safe and what
-lets an auditor compare the paper against the ledger. If a hash changes, one of the five inputs
+lets an auditor compare the paper against the audit log. If a hash changes, one of the five inputs
 changed, the bundle's seal changed, or a dependency upgrade changed output, and the last case
 arrives as a golden-hash review, not silently.
 

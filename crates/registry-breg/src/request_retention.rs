@@ -6,12 +6,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Duration;
 
-use registry_platform_audit::AuditProfile;
+use registry_platform_audit::{AuditEntry, AuditProfile};
 use serde::Serialize;
+use serde_json::{json, Value};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
-use crate::audit::{append_terminal_audit, TerminalAudit, TerminalAuditOutcome};
+use crate::audit::{terminal_entry, RegistryAudit, TerminalAudit, TerminalAuditOutcome};
 use crate::correlation::RequestCorrelation;
 use crate::history_commit::{
     allocate_revision_commit, CommitAllocation, HistoryCommitError, RevisionCommitMember,
@@ -27,6 +28,8 @@ use crate::postgres::{
 use crate::runtime_config::load_runtime_config;
 
 const MAX_RETAINED_HISTORY_PAGE_SIZE: u16 = 50;
+/// The audit schema of the attachment-cleanup attempt and outcome entries.
+pub const ATTACHMENT_CLEANUP_AUDIT_SCHEMA: &str = "breg-attachment-cleanup-audit/v1";
 // Reserve the other half of the client's 2 MiB request-extension budget for
 // current actions and the remaining request metadata.
 const MAX_RETAINED_HISTORY_BYTES: usize = 1_048_576;
@@ -46,6 +49,12 @@ pub enum RequestRetentionError {
     AttachmentStorageBindingMismatch,
     #[error("request retention state is unavailable")]
     Unavailable,
+    /// The erasure committed, but the audit destination refused the entry
+    /// recording it. The erased detail is gone; restore the destination,
+    /// then reconcile the erasure against the database before relying on
+    /// the audit journal for it.
+    #[error("the request detail erasure committed but its audit entry was not recorded; restore the audit destination")]
+    ErasureUnaudited,
 }
 
 pub type Result<T> = std::result::Result<T, RequestRetentionError>;
@@ -188,7 +197,7 @@ pub struct RequestRetentionOperatorService {
     runtime_role: SqlIdentifier,
     lock_timeout: Duration,
     statement_timeout: Duration,
-    audit_profile: AuditProfile,
+    audit: RegistryAudit,
     attachment_storage: crate::attachment_storage::AttachmentStorage,
     verification_policy: String,
 }
@@ -224,8 +233,8 @@ impl RequestRetentionOperatorService {
         let migration_connection = config
             .migration_database_connection_config()
             .map_err(|_| RequestRetentionError::Unavailable)?;
-        let audit_profile = config
-            .audit_profile()
+        let audit = RegistryAudit::open_companion(&config)
+            .await
             .map_err(|_| RequestRetentionError::Unavailable)?;
         let attachment_storage = config
             .activate_attachment_storage(startup.package().registry().registry_id())
@@ -247,7 +256,7 @@ impl RequestRetentionOperatorService {
             runtime_role: config.database().roles().runtime().clone(),
             lock_timeout: config.operational_timeouts().migration_lock,
             statement_timeout: config.operational_timeouts().migration_statement,
-            audit_profile,
+            audit,
         })
     }
 
@@ -262,7 +271,7 @@ impl RequestRetentionOperatorService {
         migration_connection: ConnectionConfig,
         migration_role: SqlIdentifier,
         runtime_role: SqlIdentifier,
-        audit_profile: AuditProfile,
+        audit: RegistryAudit,
     ) -> Self {
         Self {
             attachment_storage: crate::attachment_storage::AttachmentStorage::Database,
@@ -276,7 +285,7 @@ impl RequestRetentionOperatorService {
             runtime_role,
             lock_timeout: Duration::from_secs(5),
             statement_timeout: Duration::from_secs(30),
-            audit_profile,
+            audit,
         }
     }
 
@@ -448,7 +457,117 @@ impl RequestRetentionOperatorService {
             .get()
             .await
             .map_err(|_| RequestRetentionError::Unavailable)?;
-        let transaction = self.begin_verified_transaction(&mut client).await?;
+        // The request entry is accepted before the erasure transaction opens,
+        // so an audit outage erases nothing; the response shares its
+        // correlation. An erasure that ends without one writes the
+        // unfinished outcome when the held request is dropped.
+        let correlation = RequestCorrelation::breg_created();
+        let request_entry = retention_request_entry(
+            self.audit.profile(),
+            &self.expected,
+            scope.clone(),
+            &correlation,
+        )?;
+        let unfinished = retention_outcome_record(&request_entry, "unfinished");
+        let request_record = request_entry.clone();
+        let mut attempt = self
+            .audit
+            .begin(request_entry, unfinished)
+            .await
+            .map_err(|_| RequestRetentionError::Unavailable)?;
+        let erased = self
+            .erase_in_transaction(&mut client, scope.clone(), correlation)
+            .await;
+        let (plan, erasure, entry) = match erased {
+            Ok((plan, erasure, entry, true)) => (plan, erasure, entry),
+            Ok((plan, erasure, entry, false)) => {
+                // A commit that returned an error may still have committed,
+                // so the outcome recorded for this destructive operation is
+                // the one the database holds, read on a fresh connection.
+                match self.erasure_committed(&pool, scope.clone()).await {
+                    Some(true) => (plan, erasure, entry),
+                    resolved => {
+                        let outcome = if resolved == Some(false) {
+                            "failed"
+                        } else {
+                            "unfinished"
+                        };
+                        let answer = retention_outcome_record(&request_record, outcome);
+                        if attempt.respond(answer).await.is_err() {
+                            tracing::error!(
+                                "the unacknowledged erasure's response audit entry was not recorded"
+                            );
+                        }
+                        return Err(RequestRetentionError::Unavailable);
+                    }
+                }
+            }
+            Err(error) => {
+                // The erasure failed before its commit, so nothing
+                // committed: answer the request with the refusal or the
+                // failure.
+                let outcome = if error == RequestRetentionError::Unavailable {
+                    "failed"
+                } else {
+                    "refused"
+                };
+                let answer = retention_outcome_record(&request_record, outcome);
+                if attempt.respond(answer).await.is_err() {
+                    tracing::error!("the failed erasure's response audit entry was not recorded");
+                }
+                return Err(error);
+            }
+        };
+        // The committed erasure is recorded before external objects are
+        // retried, so a slow or failing backend cannot hold its response
+        // back. The result, not the entry, reports the registry-wide
+        // external deletions still pending.
+        attempt
+            .respond(entry.record().clone())
+            .await
+            .map_err(|_| RequestRetentionError::ErasureUnaudited)?;
+        let (pending_external_deletions, external_deletion_tombstones) =
+            self.retry_external_deletions(&mut client).await?;
+        Ok(RequestRetentionErase {
+            request_entity_id: scope.request_entity_id.to_owned(),
+            request_id: scope.request_id.to_string(),
+            proposal_version: scope.proposal_version,
+            request_state: plan.current_state,
+            retention_mode: retention_mode_name(plan.retention_mode),
+            erasure,
+            pending_external_deletions,
+            external_deletion_tombstones,
+        })
+    }
+
+    /// Whether the detail `scope` names is erased, read on a fresh
+    /// connection after an erasure commit returned an error. `None` when the
+    /// state cannot be read.
+    async fn erasure_committed(
+        &self,
+        pool: &crate::postgres::RuntimePool,
+        scope: RequestDetailErasureScope<'_>,
+    ) -> Option<bool> {
+        let mut client = pool.get().await.ok()?;
+        let transaction = self.begin_verified_transaction(&mut client).await.ok()?;
+        let plan = load_erasure_plan(&transaction, &self.registry, scope, false)
+            .await
+            .ok()?;
+        transaction.commit().await.ok()?;
+        Some(plan.detail_erased)
+    }
+
+    /// Erase one request's detail in one transaction and build the terminal
+    /// entry that records it. The flag is false when the commit returned an
+    /// error, which does not prove the transaction rolled back; every
+    /// earlier error is returned as one.
+    async fn erase_in_transaction(
+        &self,
+        client: &mut deadpool_postgres::Client,
+        scope: RequestDetailErasureScope<'_>,
+        correlation: RequestCorrelation,
+    ) -> Result<(RequestErasurePlan, RequestDetailErasure, AuditEntry, bool)> {
+        let transaction = self.begin_verified_transaction(client).await?;
         let plan = load_erasure_plan(&transaction, &self.registry, scope.clone(), true).await?;
         let (erasure, current_revision) =
             erase_request_detail_in_transaction(&transaction, &self.registry, scope.clone(), &plan)
@@ -474,30 +593,15 @@ impl RequestRetentionOperatorService {
             .await
             .map_err(map_history_commit_error)?;
         }
-        append_retention_audit(
-            &transaction,
-            &self.audit_profile,
+        let entry = retention_terminal_entry(
+            self.audit.profile(),
             &self.expected,
             scope.clone(),
             erasure,
-        )
-        .await?;
-        transaction
-            .commit()
-            .await
-            .map_err(|_| RequestRetentionError::Unavailable)?;
-        let (pending_external_deletions, external_deletion_tombstones) =
-            self.retry_external_deletions(&mut client).await?;
-        Ok(RequestRetentionErase {
-            request_entity_id: scope.request_entity_id.to_owned(),
-            request_id: scope.request_id.to_string(),
-            proposal_version: scope.proposal_version,
-            request_state: plan.current_state,
-            retention_mode: retention_mode_name(plan.retention_mode),
-            erasure,
-            pending_external_deletions,
-            external_deletion_tombstones,
-        })
+            correlation,
+        )?;
+        let acknowledged = transaction.commit().await.is_ok();
+        Ok((plan, erasure, entry, acknowledged))
     }
 
     /// Retry orphaned external objects even when every request is active or
@@ -512,40 +616,57 @@ impl RequestRetentionOperatorService {
             .await
             .map_err(|_| RequestRetentionError::Unavailable)?;
         let correlation = Uuid::new_v4().to_string();
+        // The verified transaction proves this process may act on the
+        // managed catalog before the request entry is written; it holds no
+        // audit state.
         let transaction = self.begin_verified_transaction(&mut client).await?;
-        crate::audit::append_envelope(
-            &transaction,
-            &self.audit_profile,
+        transaction.commit().await.map_err(map_retention_error)?;
+        let record = |phase: &str, outcome: &str| {
             serde_json::json!({
-                "kind":"attachmentCleanup", "phase":"attempt", "outcome":"started",
+                "kind":"attachmentCleanup", "phase":phase, "outcome":outcome,
                 "packageRevision":self.expected.package_revision,
                 "actor":"breg:request-retention-operator", "correlation":correlation,
-            }),
-        )
-        .await
-        .map_err(|_| RequestRetentionError::Unavailable)?;
-        transaction.commit().await.map_err(map_retention_error)?;
-        let (pending_external_deletions, external_deletion_tombstones) =
-            self.retry_external_deletions(&mut client).await?;
+            })
+        };
+        // A cleanup that ends before its response writes the unfinished
+        // outcome when the held request is dropped.
+        let mut attempt = self
+            .audit
+            .begin(
+                AuditEntry::request(
+                    ATTACHMENT_CLEANUP_AUDIT_SCHEMA,
+                    correlation.clone(),
+                    record("attempt", "started"),
+                ),
+                record("terminal", "unfinished"),
+            )
+            .await
+            .map_err(|_| RequestRetentionError::Unavailable)?;
+        let (pending_external_deletions, external_deletion_tombstones) = match self
+            .retry_external_deletions(&mut client)
+            .await
+        {
+            Ok(counts) => counts,
+            Err(error) => {
+                if attempt.respond(record("terminal", "failed")).await.is_err() {
+                    tracing::error!("the failed cleanup's response audit entry was not recorded");
+                }
+                return Err(error);
+            }
+        };
         let result = AttachmentCleanup {
             pending_external_deletions,
             external_deletion_tombstones,
         };
-        let transaction = self.begin_verified_transaction(&mut client).await?;
-        crate::audit::append_envelope(
-            &transaction,
-            &self.audit_profile,
-            serde_json::json!({
-                "kind":"attachmentCleanup", "phase":"terminal", "outcome":"completed",
-                "packageRevision":self.expected.package_revision,
-                "actor":"breg:request-retention-operator", "correlation":correlation,
-                "pendingExternalDeletions":result.pending_external_deletions,
-                "externalDeletionTombstones":result.external_deletion_tombstones,
-            }),
-        )
-        .await
-        .map_err(|_| RequestRetentionError::Unavailable)?;
-        transaction.commit().await.map_err(map_retention_error)?;
+        let mut completed = record("terminal", "completed");
+        completed["pendingExternalDeletions"] =
+            serde_json::json!(result.pending_external_deletions);
+        completed["externalDeletionTombstones"] =
+            serde_json::json!(result.external_deletion_tombstones);
+        attempt
+            .respond(completed)
+            .await
+            .map_err(|_| RequestRetentionError::Unavailable)?;
         Ok(result)
     }
 
@@ -1396,21 +1517,74 @@ async fn set_request_table_force_row_security(
     Ok(())
 }
 
-async fn append_retention_audit(
-    transaction: &tokio_postgres::Transaction<'_>,
+/// Build the `response` entry for one request-detail erasure. The caller
+/// appends it after the erasure transaction commits.
+fn retention_record_reference(
     profile: &AuditProfile,
     expected: &ExpectedRegistryIdentity,
-    scope: RequestDetailErasureScope<'_>,
-    erasure: RequestDetailErasure,
-) -> Result<()> {
-    let record_reference = profile
+    scope: &RequestDetailErasureScope<'_>,
+) -> Result<String> {
+    profile
         .key_hasher()
         .audit_reference_hash(
             "breg-record-v1",
             &expected.package_revision,
             &scope.request_id.to_string(),
         )
-        .map_err(|_| RequestRetentionError::Unavailable)?;
+        .map_err(|_| RequestRetentionError::Unavailable)
+}
+
+/// The `request` entry of one request-detail erasure. It names only what the
+/// erasure's `response` entry already records: the operation, the package
+/// revision, the operator profile, and the keyed record reference.
+fn retention_request_entry(
+    profile: &AuditProfile,
+    expected: &ExpectedRegistryIdentity,
+    scope: RequestDetailErasureScope<'_>,
+    correlation: &RequestCorrelation,
+) -> Result<AuditEntry> {
+    if !crate::audit::profile_is_keyed(profile) {
+        return Err(RequestRetentionError::Unavailable);
+    }
+    let record_reference = retention_record_reference(profile, expected, &scope)?;
+    Ok(AuditEntry::request(
+        crate::audit::AUDIT_SCHEMA,
+        correlation.request_id().to_string(),
+        serde_json::json!({
+            "phase": "attempt",
+            "method": "DELETE",
+            "operationId": RETENTION_OPERATION_ID,
+            "entityId": scope.request_entity_id,
+            "requestId": correlation.request_id().to_string(),
+            "traceId": correlation.trace_id().as_str(),
+            "packageRevision": expected.package_revision,
+            "selectedAccessProfile": "operator",
+            "purposePresent": false,
+            "principalReference": null,
+            "recordReference": record_reference,
+        }),
+    ))
+}
+
+/// The `response` of an erasure that did not record its committed terminal:
+/// the request's identities with `outcome`, and no count.
+fn retention_outcome_record(request: &AuditEntry, outcome: &str) -> Value {
+    let mut record = request.record().clone();
+    if let Some(fields) = record.as_object_mut() {
+        fields.insert("phase".to_owned(), json!("terminal"));
+        fields.insert("outcome".to_owned(), json!(outcome));
+    }
+    record
+}
+
+fn retention_terminal_entry(
+    profile: &AuditProfile,
+    expected: &ExpectedRegistryIdentity,
+    scope: RequestDetailErasureScope<'_>,
+    erasure: RequestDetailErasure,
+    correlation: RequestCorrelation,
+) -> Result<AuditEntry> {
+    let record_reference = retention_record_reference(profile, expected, &scope)?;
     let count = erasure
         .proposal_snapshots
         .checked_add(erasure.target_snapshots)
@@ -1424,8 +1598,7 @@ async fn append_retention_audit(
         .and_then(|count| count.checked_add(erasure.current_intake_rows))
         .and_then(|count| count.checked_add(erasure.attachment_references))
         .ok_or(RequestRetentionError::Unavailable)?;
-    append_terminal_audit(
-        transaction,
+    terminal_entry(
         profile,
         TerminalAudit {
             grant: None,
@@ -1444,10 +1617,9 @@ async fn append_retention_audit(
                 usize::try_from(count).map_err(|_| RequestRetentionError::Unavailable)?,
             ),
             field_set_reference: Some(RETENTION_REFERENCE.to_owned()),
-            correlation: RequestCorrelation::breg_created(),
+            correlation,
         },
     )
-    .await
     .map_err(|_| RequestRetentionError::Unavailable)
 }
 

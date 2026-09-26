@@ -24,6 +24,14 @@ impl PostgresStore {
         selector: &SourceRetentionSelector,
     ) -> Result<SourceRetentionReport, StoreError> {
         validate_selector(selector)?;
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                "source_retention_erased",
+                None,
+                "system:operator",
+                serde_json::json!({}),
+            ))
+            .await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         lock_subject(&transaction, selector).await?;
@@ -90,12 +98,6 @@ impl PostgresStore {
                 .await?;
             transaction
                 .execute(
-                    "UPDATE casework_audit_outbox a SET audit_record=((a.audit_record-'detail')-'reason')-'sourceReceipt' WHERE a.event_id IN (SELECT h.event_id FROM casework_history h WHERE h.item_id=ANY($1))",
-                    &[&item_ids],
-                )
-                .await?;
-            transaction
-                .execute(
                     "DELETE FROM casework_cursors WHERE last_item_id=ANY($1)",
                     &[&item_ids],
                 )
@@ -152,18 +154,12 @@ impl PostgresStore {
                 "historyDetails": report.history_details,
                 "eventDetails": report.event_details,
                 "idempotencyResponses": report.idempotency_responses,
-                "auditRecords": report.audit_records,
                 "clockOccurrences": report.clock_occurrences,
                 "clockPreviews": report.clock_previews
             }
         });
-        transaction
-            .execute(
-                "INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)",
-                &[&audit_event_id, &audit_record],
-            )
-            .await?;
-        transaction.commit().await?;
+        audit.record(audit_event_id, audit_record)?;
+        audit.commit(transaction).await?;
         Ok(report)
     }
 }
@@ -217,7 +213,7 @@ async fn retention_report(
 ) -> Result<SourceRetentionReport, StoreError> {
     let row = transaction
         .query_one(
-            "WITH selected_items AS (SELECT item_id FROM casework_items WHERE source_id=$1 AND subject_kind=$2 AND subject_id=$3), selected_history AS (SELECT event_id FROM casework_history WHERE item_id IN (SELECT item_id FROM selected_items)), selected_previews AS (SELECT DISTINCT p.preview_id FROM casework_clock_recompute_previews p JOIN casework_clock_occurrences o USING(clock_occurrence_id) WHERE o.source_id=$1 AND o.subject_kind=$2 AND o.subject_id=$3) SELECT
+            "WITH selected_items AS (SELECT item_id FROM casework_items WHERE source_id=$1 AND subject_kind=$2 AND subject_id=$3), selected_previews AS (SELECT DISTINCT p.preview_id FROM casework_clock_recompute_previews p JOIN casework_clock_occurrences o USING(clock_occurrence_id) WHERE o.source_id=$1 AND o.subject_kind=$2 AND o.subject_id=$3) SELECT
                 (SELECT count(*) FROM casework_attempts WHERE item_id IN (SELECT item_id FROM selected_items) AND state IN ('pending','uncertain')),
                 (SELECT count(*) FROM casework_items WHERE item_id IN (SELECT item_id FROM selected_items) AND erased_at IS NULL),
                 (SELECT count(*) FROM casework_drafts WHERE item_id IN (SELECT item_id FROM selected_items)),
@@ -227,7 +223,6 @@ async fn retention_report(
                 (SELECT count(*) FROM casework_history WHERE item_id IN (SELECT item_id FROM selected_items) AND detail<>'{}'::jsonb),
                 (SELECT count(*) FROM casework_events WHERE item_id IN (SELECT item_id FROM selected_items) AND detail<>'{}'::jsonb),
                 (SELECT count(*) FROM casework_idempotency WHERE response IS NOT NULL AND (resource IN (SELECT item_id::text FROM selected_items) OR (operation='clock.recompute.apply' AND resource IN (SELECT preview_id::text FROM selected_previews)))),
-                (SELECT count(*) FROM casework_audit_outbox WHERE event_id IN (SELECT event_id FROM selected_history) AND (audit_record ? 'detail' OR audit_record ? 'reason' OR audit_record ? 'sourceReceipt')),
                 (SELECT count(*) FROM casework_clock_occurrences o WHERE o.source_id=$1 AND o.subject_kind=$2 AND o.subject_id=$3 AND (o.state NOT IN ('completed','cancelled') OR o.next_action_at IS NOT NULL OR o.lease_token IS NOT NULL OR EXISTS(SELECT 1 FROM casework_clock_calculations c WHERE c.clock_occurrence_id=o.clock_occurrence_id AND c.source_timing IS NOT NULL))),
                 (SELECT count(*) FROM casework_clock_recompute_previews WHERE preview_id IN (SELECT preview_id FROM selected_previews))",
             &[&selector.source_id, &selector.request_kind, &selector.request_id],
@@ -245,9 +240,8 @@ async fn retention_report(
         history_details: count(&row, 6)?,
         event_details: count(&row, 7)?,
         idempotency_responses: count(&row, 8)?,
-        audit_records: count(&row, 9)?,
-        clock_occurrences: count(&row, 10)?,
-        clock_previews: count(&row, 11)?,
+        clock_occurrences: count(&row, 9)?,
+        clock_previews: count(&row, 10)?,
     })
 }
 

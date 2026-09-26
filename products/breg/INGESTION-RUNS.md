@@ -66,23 +66,33 @@ the exact chunk replays the original receipt instead of writing again. A
 committed chunk index is answered with the retained receipt only when both the
 submitted chunk digest and the submitted prefix digest match the stored ones.
 
-Chunk mutations, record revisions, run audit, the idempotency receipt, and the
+Chunk mutations, record revisions, the idempotency receipt, and the
 checkpoint advancement commit in one transaction. A fault after that commit is
 recovered by reading the run and replaying the chunk, never by a second
-mutation. Every release of a stored receipt appends a value-free disclosure
-record to the run audit before the answer leaves, so an audit outage gates the
+mutation. Every release of a stored receipt writes a value-free disclosure
+entry to the run audit before the answer leaves, so an audit outage gates the
 release instead of passing silently. The service-level replay and the recovery
-read append it inside the same guarded record transaction that verifies the
-durable registry identity, so a serving instance a successor activation has
-left stale refuses the release with an outage and commits nothing: no
-disclosure record, and for the replay no replayed attempt marker either. The
-row-lock replay a duplicate submission takes when a concurrent submission
-already committed the chunk appends it in the same transaction as its attempt
-record, inside the run lock that decided the replay. A fresh submission's
-first release needs no
-disclosure record of its own: its terminal and run-committed audit records,
-written in the same transaction as the receipt it stores, already account for
-that release.
+read decide the release inside the same guarded record transaction that
+verifies the durable registry identity, so a serving instance a successor
+activation has left stale refuses the release with an outage and commits
+nothing: no disclosure entry, and for the replay no replayed attempt marker
+either. The row-lock replay a duplicate submission takes when a concurrent
+submission already committed the chunk decides the release inside the run lock
+that decided the replay. In every case the disclosure entry is written after
+the deciding transaction commits and before the answer leaves. A fresh
+submission's first release needs no disclosure entry of its own: its terminal
+and run-committed audit entries, written after the transaction that stores the
+receipt commits and before the receipt leaves, already account for that
+release.
+
+Run creation has no replay. It takes no `Idempotency-Key` header and
+allocates a fresh run id for every accepted request, so when the audit writer
+refuses the creation's response entry after the run commits, the caller
+receives `service.unavailable` without the run id. Recovery is operational:
+once the audit writer is restored and the runtime serves again, list the
+caller's runs with `status=open` and the input's `inputDigest`, then resume or
+cancel the run that listing returns. Creating the run again opens a second
+run.
 
 ## States
 

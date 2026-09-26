@@ -1091,7 +1091,7 @@ async fn terminal_problem(
     code: ProblemCode,
     trace: &TraceContext,
 ) -> Response<Body> {
-    if service.audit.terminal(audit, outcome, None).await.is_err() {
+    if service.audit.terminal(audit, outcome).await.is_err() {
         return ProblemCode::AuditUnavailable.response(trace);
     }
     code.response(trace)
@@ -1118,7 +1118,7 @@ async fn release_bytes(
     {
         if service
             .audit
-            .terminal(audit, AuditOutcome::NotModified, None)
+            .terminal(audit, AuditOutcome::NotModified)
             .await
             .is_err()
         {
@@ -1128,7 +1128,7 @@ async fn release_bytes(
     }
     if service
         .audit
-        .terminal(audit, AuditOutcome::Released, Some(&bytes))
+        .terminal(audit, AuditOutcome::Released)
         .await
         .is_err()
     {

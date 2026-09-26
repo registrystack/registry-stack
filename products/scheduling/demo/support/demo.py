@@ -467,8 +467,8 @@ def prepare(
     secrets_root.mkdir()
     audit_dir = root / "audit"
     audit_dir.mkdir()
-    # The audit path is the journal file itself; its advisory lock file is
-    # created beside it.
+    # The audit path is the audit file itself; the writer's single-writer
+    # lock file and its rotated files are created beside it.
     audit_path = audit_dir / "audit.jsonl"
     # The demo always generates its own database PKI: the demo container
     # serves it, and the runtime trusts exactly its authority. An external

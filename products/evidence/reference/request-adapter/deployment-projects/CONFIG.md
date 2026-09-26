@@ -128,7 +128,7 @@ The governed file is `bundle/evidence.yaml`.
 | `service` | yes | Evidence provider identity and trust domain. |
 | `issuer` | yes | Issuer identity placed in evidence. |
 | `authentication` | yes | Closed inbound OIDC access-token verification policy. |
-| `audit` | yes | Audit format, pseudonymization key reference/version, and fail-closed policy. Storage location is runtime-owned. |
+| `audit` | yes | Audit pseudonymization key reference and version. Every audit gate is fail closed; the audit destination is runtime-owned. |
 | `subjectBinding` | yes | Subject-binding key reference/version. The key is the same whichever binding mode a requirement selects; the modes are domain-separated inside the derivation. |
 | `rateLimits` | yes | Governed anti-enumeration and request limits. |
 | `signing` | yes | Evidence/JWS format, algorithm, key references, validity, JWKS path, and rollover policy. |
@@ -185,7 +185,7 @@ artifact, or alternate evaluator is introduced by the assurance profile.
 
 | Section | Required fields and rule |
 |---|---|
-| `audit` | `format: keyed-jsonl`, file-only `hashSecretRef`, positive `hashKeyVersion`, and `failClosed: true`. The referenced master contains at least 32 raw secret bytes. Rust HKDF-separates chain and identifier subkeys. The runtime file owns storage location. |
+| `audit` | File-only `hashKeyRef` and positive `hashKeyVersion`, both required. The referenced master contains at least 32 raw secret bytes; Rust derives the audit pseudonym key from it, and `hashKeyVersion` is stamped into every audit pseudonym so pseudonyms under different key material stay distinguishable. Every audit gate is fail closed whatever this section says. The runtime file owns the audit destination. |
 | `subjectBinding` | File-only `secretRef` and positive `keyVersion`. The referenced master contains at least 32 raw secret bytes, uses a distinct reference, and must resolve to bytes distinct from the audit master. Rust derives purpose-scoped bindings over the complete canonical role/profile/value bundle, never per-field hashes. The remaining scope input is the requirement's binding mode: the authenticated audience for an audience-scoped requirement, the presented holder key thumbprint for a holder-bound one. The two derivations are domain-separated, so one mode's binding can never be read as the other's. |
 | `rateLimits` | Positive `requestsPerPrincipalPerMinute`, `burstPerPrincipal`, and `failedSelectorAttemptsPerPrincipalAuthorityPerMinute`. Raw selector values never become rate-limit labels. |
 | `signing` | Exact keys are `format: flattened-jws-json`, `algorithm: ES256`, `activePublicJwkFile`, `publishedPublicJwkFiles`, `revokedKeyIds`, fixed `jwksPath`, `maximumAssertionValiditySeconds`, and `verifierClockSkewSeconds`. Every exact public EC P-256 JWK has a 43-character RFC 7638 thumbprint `kid`; active, published, and revoked sets are disjoint. Missing signing material fails readiness; there is no unsigned fallback. |
@@ -1228,9 +1228,11 @@ signer:
   keyName: evidence-signing
   keyVersion: 7
   timeoutMilliseconds: 2000
-auditStorage:
+audit:
+  destination: file
   path: /var/lib/registry-evidence/audit/evidence.jsonl
-  maximumFileBytes: 1073741824
+  rotateBytes: 104857600
+  retainDays: 90
 outboundTls:
   systemRoots: true
   trustProfiles:
@@ -1257,8 +1259,11 @@ sourceExtracts:
 | `metricsListener` | no | Optional operator-only telemetry listener serving `GET /metrics`, a binding separate from the evidence listener above and absent from the public evidence contract. Absence is the default and serves no metrics endpoint. `bindHost` accepts only loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6, and `bindHost`/`port` together must not repeat the evidence listener's exact binding. |
 | `secretProviders.file.root` | yes | Absolute root for logical `secret:file/...` references. Only regular, non-symlink, single-link files owned by the service identity with exact mode `0400` or `0600` are accepted. |
 | `signer` | yes | Closed runtime signer union. `production` and `evidence-grade` require a pinned Transit signer over a workload-local Unix socket. `local` requires `kind: local-jwk` with `privateKeyRef: secret:file/evidence-signing`. Startup validates provider controls and exact public-key agreement, then signs and verifies a challenge. |
-| `auditStorage.path` | yes | Absolute keyed-JSONL audit path on operator-owned durable storage. |
-| `auditStorage.maximumFileBytes` | yes | 1,048,576 through 1,099,511,627,776 bytes. Reaching the bound seals the active segment under an ascending sequence number and opens a fresh empty segment at the configured path for subsequent writes; sealed segments are never deleted. A write or sync failure, not rotation itself, is what fails closed. |
+| `audit` | yes | Where this process writes its audit entries through the shared platform audit writer, one JSON line per entry with the members `schema`, `eventId`, `time`, `phase`, `correlation`, and `record`. Entries are not chained; ship them to append-only storage for tamper evidence. Every audit gate is fail closed on either destination. |
+| `audit.destination` | no | `file` by default, or `stdout`. `file` appends each entry durably (the append returns only after `fsync`) under a single-writer lock at `<path>.lock`, so a second process on the same path fails startup. `stdout` writes each entry as one line on standard output for a collector that owns durability, rotation, and retention; `check --require-audit-under` refuses it, and local audit inspection cannot read it. |
+| `audit.path` | for `file` | Absolute path to the active append-only JSON Lines audit file on operator-owned durable storage. Refused for `stdout`. |
+| `audit.rotateBytes` | no | 1,048,576 through 4,294,967,295 bytes; 104,857,600 (100 MiB) by default. Reaching it seals the active file under an ascending sequence number and opens a fresh one at `path`. A write or sync failure, not rotation itself, is what fails closed. Refused for `stdout`. |
+| `audit.retainDays` | no | 1 through 36,500 days; 90 by default. When the writer opens or rotates, sealed files last modified longer ago than this are deleted; the active file never is. Refused for `stdout`. |
 | `outboundTls.systemRoots` | yes | Literal `true`. |
 | `outboundTls.trustProfiles` | yes | Closed map of at most 64 logical profile ids. It may be empty when no source names a private trust profile. |
 | `outboundTls.trustProfiles.<id>.caBundleFile` | for each profile | Absolute path to one bounded PEM CA file. Profile names must exactly match bundle `tlsTrustProfile` references. |
@@ -1457,7 +1462,7 @@ evidence --runtime '<candidate>/runtime.yaml' serve
 
 Then route only after `/ready`, retain one authorized synthetic-subject
 response, verify it under independently prepared production policy and trusted
-keys, and verify the audit chain. A provider API or governance change produces
+keys, and confirm the audit entries reached the operator's append-only store. A provider API or governance change produces
 a newly reviewed bundle revision and reruns the fixture matrix.
 
 Configure an OIDC issuer independently and register each workload with the exact
@@ -1515,10 +1520,8 @@ acquisitionCapabilities
 acquisitionCapabilities[]
 assuranceProfile
 audit
-audit.failClosed
-audit.format
+audit.hashKeyRef
 audit.hashKeyVersion
-audit.hashSecretRef
 authentication
 authentication.actorClaim
 authentication.algorithms
@@ -1847,9 +1850,11 @@ version
 ```text
 acquisitionCapabilities
 acquisitionCapabilities[]
-auditStorage
-auditStorage.maximumFileBytes
-auditStorage.path
+audit
+audit.destination
+audit.path
+audit.retainDays
+audit.rotateBytes
 bundleDirectory
 listener
 listener.bindHost

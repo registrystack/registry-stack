@@ -7,8 +7,10 @@
 //! wholesale. The
 //! records document is parsed and validated offline first, nothing reaches
 //! the database until the whole document holds together, and the swap itself
-//! lands through the store's single replace transaction, which writes its own
-//! audit row beside the new facts.
+//! lands through the store's single replace transaction. The command writes
+//! its `request` audit entry before that transaction opens and a paired
+//! `response` entry after it either commits or the store refuses it, to the
+//! `schedulingctl` sibling of the runtime's audit destination.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -16,7 +18,9 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
 use registry_platform_config::{SecretProvider, SecretResolver};
+use registry_scheduling::audit::{with_event_id, SchedulingAudit};
 use registry_scheduling::config::RuntimeConfig;
+use registry_scheduling::runtime::open_audit;
 use registry_scheduling::store::PostgresStore;
 use registry_scheduling_core::{location_open_intervals, SchedulingFacts};
 use serde_json::{json, Value};
@@ -48,17 +52,35 @@ pub fn apply(config_path: &Path, records_path: &Path) -> Result<Value> {
         .context(
             "checking the Scheduling schema; run `scheduling --runtime-config <runtime.yaml> migrate` first",
         )?;
-    let audit_event = Uuid::new_v4();
-    let audit_record = json!({
-        "actorKind": "operator",
-        "operation": "records.apply",
-        "outcome": "allowed",
-        "reason": "authorization.allowed",
-        "counts": counts,
-    });
+    let (_, audit) = runtime
+        .block_on(open_audit(&config, &resolver, Some("schedulingctl")))
+        .context("opening the schedulingctl audit destination")?;
+    let correlation = Uuid::new_v4();
     runtime
-        .block_on(store.replace_facts(&policy.scheduling.id, &facts, audit_event, audit_record))
-        .context("replacing the environment records")?;
+        .block_on(audit.request(
+            correlation,
+            json!({
+                "actorKind": "operator",
+                "operation": "records.apply",
+                "counts": counts,
+            }),
+        ))
+        .context("writing the records.apply request audit entry; nothing was replaced")?;
+    match runtime.block_on(store.replace_facts(&policy.scheduling.id, &facts)) {
+        Ok(()) => {}
+        Err(store_error) => {
+            let error =
+                anyhow::Error::new(store_error).context("replacing the environment records");
+            return Err(record_refused(
+                &runtime,
+                &audit,
+                correlation,
+                &counts,
+                error,
+            ));
+        }
+    }
+    record_applied(&runtime, &audit, correlation, &counts)?;
     Ok(json!({
         "ok": true,
         "command": "records-apply",
@@ -66,6 +88,66 @@ pub fn apply(config_path: &Path, records_path: &Path) -> Result<Value> {
         "records": records_path,
         "applied": counts,
     }))
+}
+
+/// Write the `response` entry of a committed swap. The records are already
+/// replaced, so a refusal here reports that the change stands unaudited.
+fn record_applied(
+    runtime: &tokio::runtime::Runtime,
+    audit: &SchedulingAudit,
+    correlation: Uuid,
+    counts: &Value,
+) -> Result<()> {
+    let record = with_event_id(
+        correlation,
+        json!({
+            "actorKind": "operator",
+            "operation": "records.apply",
+            "outcome": "allowed",
+            "reason": "authorization.allowed",
+            "counts": counts,
+        }),
+    )
+    .ok_or_else(|| anyhow!("the records.apply audit record carries no identity"))?;
+    runtime
+        .block_on(audit.response(correlation, record))
+        .context(
+            "the environment records were replaced, but the records.apply response audit \
+             entry could not be written",
+        )
+}
+
+/// Write the `response` entry of a swap the store refused. The `request`
+/// entry was already written, so a refusal here would otherwise leave it
+/// orphaned. The store's own refusal is always what `apply` returns; a
+/// response entry that also fails to write says so too, rather than hiding
+/// behind the store's message.
+fn record_refused(
+    runtime: &tokio::runtime::Runtime,
+    audit: &SchedulingAudit,
+    correlation: Uuid,
+    counts: &Value,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    let record = with_event_id(
+        correlation,
+        json!({
+            "actorKind": "operator",
+            "operation": "records.apply",
+            "outcome": "refused",
+            "reason": "records.replace-failed",
+            "counts": counts,
+        }),
+    );
+    let Some(record) = record else {
+        return error.context("the records.apply audit record carries no identity");
+    };
+    match runtime.block_on(audit.response(correlation, record)) {
+        Ok(()) => error,
+        Err(audit_error) => error.context(format!(
+            "the records.apply response audit entry could not be written either: {audit_error}"
+        )),
+    }
 }
 
 /// Read the environment records, refusing a document the model does not

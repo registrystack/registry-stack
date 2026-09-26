@@ -174,7 +174,7 @@ cd adult-status
 ```
 
 `--profile local` creates a loopback-only development project, not a production deployment.
-The command creates owner-only local keys for signing, subject binding, and audit integrity.
+The command creates owner-only local keys for signing, subject binding, and audit pseudonyms.
 OpenAPI describes the source, but you still decide the question and what the answer may disclose.
 
 The new project separates those decisions from the retained API description:
@@ -547,7 +547,7 @@ issuer metadata, tamper refusal, and structured-field projection.
 
 ## Stop the local services
 
-Stop Evidence Gateway and the local issuer before reading the completed audit chain:
+Stop Evidence Gateway and the local issuer before reading the completed audit log:
 
 ```sh
 evidencectl dev stop
@@ -559,7 +559,7 @@ Local Evidence stopped
 
 ## Inspect the audit entry
 
-Verify the completed audit chain and show its last operation:
+Show the last operation in the completed audit log:
 
 ```sh
 evidencectl audit show --last-operation

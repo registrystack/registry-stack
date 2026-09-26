@@ -159,7 +159,10 @@ the runtime file does not change the active process, but the still-running old p
 keep serving the package it started with either: its readiness check re-verifies the database's
 active identity on every poll, and once the successor's `apply` moves that identity forward, the
 check fails. `GET /ready` and record reads return 503 and the process logs repeated claim
-refusals until you restart it onto the successor package.
+refusals until you restart it onto the successor package. A read checks maintenance status and the
+active package when it runs its query. A result it already read under the old package can still be
+returned after the activation or after maintenance begins; its audit response entry does not
+check the package again.
 
 Applying the package that is already active is a no-op, so a deploy job can run `apply` again
 after the runtime file names the successor. `apply` verifies the package in full as the configured
@@ -173,6 +176,7 @@ package that only shares the active sequence still refuses with `apply.package.b
     crates/registry-breg/src/migration.rs, apply_verified_package(), confirm_active_package();
     crates/registry-breg/tests/postgres_migration.rs, real_postgres_confirms_only_the_exact_active_ready_package;
     crates/registry-breg/src/postgres/interlock.rs;
+    crates/registry-breg/src/postgres/context.rs, begin_record_transaction();
     crates/registry-breg/tests/postgres_migration.rs. */}
 
 ## Recover a failed activation
@@ -200,7 +204,7 @@ outcome:
 | `unresolvable` | The catalog matches neither package, or a reviewed migration committed steps only the same target can finish. | Restore the pre-activation backup. The assessment exits as a refusal, `migration.reconcile.outcome.unresolvable`, whose message names the reason and the catalog finding for each package. |
 
 `--execute` performs only the transition the assessment named, refuses every other outcome, and
-records the transition in the audit chain inside that transition's own transaction. Completing an
+writes the transition's response audit entry after the database transaction commits. Completing an
 activation writes the same ledger, history baseline, and postconditions a successful `apply`
 writes, so update the runtime
 file and restart as you would after any activation. Abandoning a target clears the pin and leaves
@@ -238,14 +242,13 @@ written under the undone model stay, reshaped by the revert's own migration.
 **Restore the pre-activation backup** when the data itself must go back: `migration reconcile`
 reported `unresolvable`, or a reviewed migration changed rows in a way no successor can undo.
 
-1. Stop the server, and export the audit journal with
-   [`audit export`](../breg-retention/#keep-the-audit-journal) so the records written
-   after the backup are kept outside the database.
+1. Stop the server and preserve its [audit files](../breg-retention/#keep-the-audit-journal),
+   including operator companion files, in your append-only archive.
 2. Restore the database from the backup you took before the `apply`, with your PostgreSQL tooling.
 3. Point the runtime file at the package that was active when the backup was taken, with its
    directory, revision, and sequence, run `bregctl verify`, and start the server.
 
-A restore discards every write, activation, and audit record committed after the backup, and it
+A restore discards every database write and activation committed after the backup, and it
 brings back history that a later `history erase` removed: repeat those erasures before the
 registry serves traffic again. Webhook deliveries and exports already sent are not recalled. The
 next successor needs a sequence above the restored active package, not above the discarded one.
@@ -288,7 +291,7 @@ server binary, and earlier packages keep verifying under their recorded rules.
 | `apply` reports `apply.package.empty_plan` | The successor has nothing to apply: its plan has no schema statement and no reviewed migration, and it is not an access or disclosure change alone, for example a successor built from unchanged sources with only `package.sequence` raised. Keep the active package until the model changes, then build the successor from that change. Nothing was changed. |
 | `apply` reports `apply.package.binding_mismatch` | The package, or the active package at `package.root`, is bound to a different deployment than the runtime file. The report path names the runtime key that differs (`identity.environment`, `identity.databaseInitializationEnvironment`, `identity.instanceId`, `identity.databaseId`, `package.compilerSourceRevision`, `package.activeRevision`, or `package.activeSequence`) and never either value. A `package.activeSequence` mismatch means the target is a different package at the active sequence: build it as a successor of the active package. Nothing was changed. |
 | `apply` reports `apply.package.active_mismatch` | The runtime file names the target as the active package, but the database does not record it as active and ready. Set `package.activeRevision` and `package.activeSequence` to the package the database runs and apply again. If the database has never been activated, apply with `--initial`. If the database is pinned in maintenance, run `migration reconcile`. Nothing was changed. |
-| `apply` reports `apply.history.coverage_incomplete` | Retained history coverage does not admit a successor: a `field-encryption erase-history` run has not finished, or an erasure reached the coverage baseline or left a gap the audit journal does not record. Finish the erase-history run, or run [`history rebaseline`](../breg-retention/#restore-snapshot-coverage-after-an-erasure), then apply the same package again. Maintenance state was not changed, so there is nothing to reconcile. |
+| `apply` reports `apply.history.coverage_incomplete` | Retained history coverage does not admit a successor: a `field-encryption erase-history` run has not finished, or an erasure reached the coverage baseline or left a gap the dedicated history-erasure coverage table does not record. Finish the erase-history run, or run [`history rebaseline`](../breg-retention/#restore-snapshot-coverage-after-an-erasure), then apply the same package again. Maintenance state was not changed, so there is nothing to reconcile. |
 | `migration reconcile` reports `in_progress` | Another session holds the migration lock. Wait for it to finish, then assess again. |
 | The process still serves the old package after `apply` | Activation changes the database, not the process. Update the runtime file and restart the server. |
 

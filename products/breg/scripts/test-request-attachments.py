@@ -190,6 +190,8 @@ def test_request_attachment_journey() -> None:
             configured["secretProviders"]["environment"] = {}
             configured_port = free_ports()[0]
             configured["listener"]["bind"] = f"127.0.0.1:{configured_port}"
+            # The dev runtime keeps running and holds its audit file's writer lock.
+            configured["audit"]["path"] = str(temporary / "verified-audit" / "audit.jsonl")
             configured["attachmentVerification"] = {
                 "kind": "http", "endpoint": f"http://127.0.0.1:{verifier.server_port}/verify",
                 "authorizationRef": "secret:env/BREG_ACCEPTANCE_VERIFIER_AUTHORIZATION",

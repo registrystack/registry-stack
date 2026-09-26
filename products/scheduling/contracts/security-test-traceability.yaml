@@ -114,12 +114,31 @@ entries:
       - {path: crates/registry-scheduling-client/tests/http_boundary.rs, name: edge_answers_stay_edge_talk}
   - id: SCHEDULING-SEC-14
     tests:
-      - {path: crates/registry-scheduling/src/runtime.rs, name: a_pending_audit_record_is_stamped_with_its_identity_exactly_once}
+      - {path: crates/registry-scheduling/src/audit.rs, name: a_response_record_is_stamped_with_its_identity_exactly_once}
+      - {path: crates/registry-scheduling/src/audit.rs, name: a_request_record_omits_only_the_decision}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_hold_confirms_into_an_appointment_with_attributable_history}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_permission_refused_before_the_transaction_writes_its_audit_row}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: refusals_decided_inside_the_capacity_transaction_write_their_audit_rows}
-      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: the_audit_journal_is_read_in_the_order_it_was_written}
-      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: the_audit_chain_continues_across_a_restart}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: an_allowed_commitment_writes_its_request_before_and_its_response_after}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_refused_request_entry_opens_no_capacity_transaction}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_refused_response_entry_answers_unavailable_with_the_commitment_committed}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_replayed_receipt_is_released_only_after_its_response_entry_is_accepted}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_replayed_refusal_is_recorded_as_the_refusal_it_replays}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_racing_replay_is_not_released_when_its_response_entry_is_refused}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_failed_capacity_transaction_pairs_its_request_entry}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_commitment_whose_commit_acknowledgment_is_lost_is_read_back_as_committed}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_commitment_whose_outcome_cannot_be_read_back_is_recorded_unfinished}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_commitment_refused_at_commit_is_read_back_as_failed}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_commitment_dropped_inside_its_capacity_transaction_writes_one_unfinished_response}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: an_idempotency_key_refusal_pairs_its_request_entry}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_records_swap_under_a_commitment_pairs_its_request_entry}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_refusal_whose_response_entry_is_refused_answers_service_unavailable}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_permission_refusal_the_destination_refuses_answers_service_unavailable}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_concurrent_identical_request_replays_the_winning_receipt}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: concurrent_identical_admissible_requests_replay_one_winning_success}
+      - {path: crates/registry-scheduling/src/service.rs, name: a_replayed_receipt_records_the_decision_it_carries}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: migration_refuses_to_drop_unpublished_audit_and_drops_a_drained_outbox}
+      - {path: crates/registry-schedulingctl/tests/records_apply_postgres.rs, name: records_apply_replaces_facts_wholesale_and_audits_each_write}
   - id: SCHEDULING-SEC-15
     tests:
       - {path: crates/registry-scheduling/src/config.rs, name: production_requires_a_verified_package_while_loopback_accepts_authoring}
@@ -195,3 +214,7 @@ entries:
     tests:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_supply_identifier_may_not_anchor_both_a_pool_and_a_window}
       - {path: crates/registry-scheduling-core/src/policy.rs, name: a_pool_and_a_window_may_not_share_one_supply_identifier}
+  - id: SCHEDULING-SEC-28
+    tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: release_hold_refuses_indistinguishably_for_missing_and_unauthorized_holds}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: confirm_appointment_refuses_indistinguishably_for_missing_and_unauthorized_holds}

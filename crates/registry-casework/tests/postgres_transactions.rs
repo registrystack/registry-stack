@@ -138,9 +138,13 @@ async fn transactional_checkpoint_invariants_hold_in_postgresql() {
         trusted_root_certificate_ref: None,
         test_only_plaintext: true,
     };
-    let store = PostgresStore::connect_migration(&config, &secrets).expect("migration pool");
+    let store = PostgresStore::connect_migration(&config, &secrets)
+        .expect("migration pool")
+        .with_audit(registry_casework::CaseworkAudit::capture().0);
     store.migrate().await.expect("migrate");
-    let runtime = PostgresStore::connect_runtime(&config, &secrets).expect("runtime pool");
+    let runtime = PostgresStore::connect_runtime(&config, &secrets)
+        .expect("runtime pool")
+        .with_audit(registry_casework::CaseworkAudit::capture().0);
     synchronization_claims_reserve_fresh_and_retry_capacity(&client, &runtime).await;
     item_identity_does_not_require_a_subject_ledger_parent(&client, &runtime).await;
 
@@ -936,12 +940,29 @@ async fn isolated_schema(prefix: &str) -> (PostgresStore, tokio_postgres::Client
         trusted_root_certificate_ref: None,
         test_only_plaintext: true,
     };
-    let store = PostgresStore::connect_migration(&config, &secrets).expect("migration pool");
+    let store = PostgresStore::connect_migration(&config, &secrets)
+        .expect("migration pool")
+        .with_audit(registry_casework::CaseworkAudit::capture().0);
     let (client, connection) = tokio_postgres::connect(&scoped, tokio_postgres::NoTls)
         .await
         .expect("connect isolated schema");
     tokio::spawn(async move { connection.await.expect("schema connection") });
     (store, client, schema)
+}
+
+/// A second connection into a schema `isolated_schema` already created, for a
+/// test's own concurrent session (a lock holder, a writer) alongside the
+/// store and the first connection it returns.
+async fn connect_scoped(schema: &str) -> tokio_postgres::Client {
+    let base = env::var("CASEWORK_TEST_DATABASE_URL")
+        .expect("CASEWORK_TEST_DATABASE_URL is required for the real PostgreSQL test");
+    let separator = if base.contains('?') { '&' } else { '?' };
+    let scoped = format!("{base}{separator}options=-csearch_path%3D{schema}");
+    let (client, connection) = tokio_postgres::connect(&scoped, tokio_postgres::NoTls)
+        .await
+        .expect("connect isolated schema");
+    tokio::spawn(async move { connection.await.expect("scoped schema connection") });
+    client
 }
 
 async fn occurrence_index(client: &tokio_postgres::Client, schema: &str) -> (u32, bool) {
@@ -973,7 +994,7 @@ async fn repeated_migration_is_a_ledger_no_op_and_never_drops_the_occurrence_ind
     let (store, client, schema) = isolated_schema("migrate").await;
     store.migrate().await.expect("first migration");
     let applied = applied_versions(&client).await;
-    assert_eq!(applied, (1..=16).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=17).collect::<Vec<i64>>());
     let index = occurrence_index(&client, &schema).await;
     assert!(index.1, "the occurrence identity index is unique");
 
@@ -1171,7 +1192,7 @@ async fn migration_16_releases_superseded_identities_in_a_database_that_holds_th
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=16).collect::<Vec<_>>()
+        (1..=17).collect::<Vec<_>>()
     );
     let second_a = observe_open_in_generation(&store, "binding-a").await;
     let states: Vec<(uuid::Uuid, String)> = items_by_state(&client)
@@ -1312,6 +1333,59 @@ async fn migration_refuses_to_drop_retained_hosted_work_and_writes_nothing() {
 }
 
 #[tokio::test]
+async fn migration_refuses_to_drop_unpublished_audit_and_drops_a_drained_outbox() {
+    let (store, client, _schema) = isolated_schema("audit_outbox_upgrade").await;
+    store.migrate().await.expect("establish current schema");
+    // The schema head of the release that published audit from an outbox,
+    // holding one record its publisher has not reached.
+    client
+        .batch_execute(
+            "CREATE TABLE casework_audit_outbox (event_id uuid PRIMARY KEY, audit_record jsonb NOT NULL, published_at timestamptz); \
+             INSERT INTO casework_audit_outbox(event_id,audit_record) \
+                 VALUES('00000000-0000-4000-8000-0000000000c1','{}'); \
+             DELETE FROM casework_schema_migrations WHERE version=17;",
+        )
+        .await
+        .expect("simulate the schema before migration 17");
+
+    let refusal = store
+        .migrate()
+        .await
+        .expect_err("migration must not drop unpublished audit records");
+    assert!(
+        matches!(
+            refusal,
+            StoreError::UnpublishedAuditWouldBeDropped {
+                version: 17,
+                rows: 1
+            }
+        ),
+        "{refusal:?}"
+    );
+    assert_eq!(
+        applied_versions(&client).await,
+        (1..=16).collect::<Vec<_>>()
+    );
+    assert_eq!(row_count(&client, "casework_audit_outbox").await, 1);
+
+    client
+        .batch_execute("UPDATE casework_audit_outbox SET published_at=now()")
+        .await
+        .expect("the earlier release publishes the record");
+    store.migrate().await.expect("a drained outbox is dropped");
+    assert_eq!(
+        applied_versions(&client).await,
+        (1..=17).collect::<Vec<_>>()
+    );
+    let dropped: bool = client
+        .query_one("SELECT to_regclass('casework_audit_outbox') IS NULL", &[])
+        .await
+        .expect("inspect the audit outbox")
+        .get(0);
+    assert!(dropped, "the database holds no audit state");
+}
+
+#[tokio::test]
 async fn migration_replaces_empty_hosted_tables_through_the_ledger_head() {
     let (store, client, _schema) = isolated_schema("hosted_empty_upgrade").await;
     establish_v0_32_schema(&client).await;
@@ -1323,7 +1397,7 @@ async fn migration_replaces_empty_hosted_tables_through_the_ledger_head() {
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=16).collect::<Vec<_>>()
+        (1..=17).collect::<Vec<_>>()
     );
     let hosted_tables_remaining: bool = client
         .query_one(
@@ -1335,6 +1409,63 @@ async fn migration_replaces_empty_hosted_tables_through_the_ledger_head() {
         .get(0);
     assert!(!hosted_tables_remaining);
     store.ready().await.expect("the migrated schema is current");
+}
+
+#[tokio::test]
+async fn migration_locks_hosted_work_before_counting_it_for_the_drop() {
+    let (store, client, schema) = isolated_schema("hosted_work_lock").await;
+    establish_v0_32_schema(&client).await;
+
+    // Hold the table a concurrent writer would insert into, so the migration
+    // must wait right where it takes its own lock on hosted work, if it takes
+    // one at all.
+    let mut blocker = connect_scoped(&schema).await;
+    let blocker_transaction = blocker.transaction().await.expect("blocker transaction");
+    blocker_transaction
+        .batch_execute("LOCK TABLE casework_hosted_items IN ACCESS EXCLUSIVE MODE")
+        .await
+        .expect("hold the hosted-items table ahead of the migration");
+
+    let migrated = tokio::spawn(async move { store.migrate().await });
+
+    // A plain read only ever waits for AccessShareLock; only a migration that
+    // takes its own exclusive lock before counting shows up here waiting in
+    // AccessExclusiveLock.
+    let mut waiting_for_exclusive = false;
+    for _ in 0..500 {
+        waiting_for_exclusive = client
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE relation='casework_hosted_items'::regclass \
+                 AND mode='AccessExclusiveLock' AND NOT granted)",
+                &[],
+            )
+            .await
+            .expect("inspect pending locks on hosted items")
+            .get(0);
+        if waiting_for_exclusive {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    blocker_transaction
+        .commit()
+        .await
+        .expect("release the hosted-items table");
+    assert!(
+        waiting_for_exclusive,
+        "the migration must take its own exclusive lock on hosted work before counting it, \
+         not rely on the shared lock a plain read takes, or a concurrent writer could insert a \
+         row between the count and the drop unseen"
+    );
+
+    migrated
+        .await
+        .expect("migration task")
+        .expect("migration completes once the blocker releases the table");
+    assert_eq!(
+        applied_versions(&client).await,
+        (1..=17).collect::<Vec<_>>()
+    );
 }
 
 #[tokio::test]
@@ -1354,7 +1485,7 @@ async fn migration_13_adds_sync_claim_indexes_to_an_existing_schema() {
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=16).collect::<Vec<_>>()
+        (1..=17).collect::<Vec<_>>()
     );
     let indexes: Vec<String> = client
         .query(
@@ -1444,15 +1575,15 @@ async fn readiness_rejects_an_unsupported_migration_version() {
         matches!(
             refusal,
             StoreError::SchemaNewer {
-                found: 17,
-                supported: 16
+                found: 18,
+                supported: 17
             }
         ),
         "a newer schema is not reported as corrupt data: {refusal:?}"
     );
     assert_eq!(
         refusal.to_string(),
-        "the Casework database schema version 17 is newer than this binary supports (16); run a casework release that supports it"
+        "the Casework database schema version 18 is newer than this binary supports (17); run a casework release that supports it"
     );
 }
 
@@ -1465,7 +1596,7 @@ async fn migration_refuses_a_schema_newer_than_this_binary_and_writes_nothing() 
         .expect("migrate to the current schema");
     client
         .execute(
-            "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(17,now())",
+            "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(18,now())",
             &[],
         )
         .await
@@ -1480,8 +1611,8 @@ async fn migration_refuses_a_schema_newer_than_this_binary_and_writes_nothing() 
         matches!(
             refusal,
             StoreError::SchemaNewer {
-                found: 17,
-                supported: 16
+                found: 18,
+                supported: 17
             }
         ),
         "{refusal:?}"
@@ -1532,49 +1663,6 @@ async fn directory_readiness_requires_service_for_every_expected_queue() {
             .expect("check complete directory readiness"),
         "every expected queue has a serving team"
     );
-}
-
-#[tokio::test]
-async fn retrying_an_audit_publication_preserves_its_original_timestamp() {
-    let (store, client, _schema) = isolated_schema("audit_publication_retry").await;
-    store.migrate().await.expect("migrate");
-    let event_id = uuid::Uuid::new_v4();
-    client
-        .execute(
-            "INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)",
-            &[&event_id, &serde_json::json!({"event": "casework.test"})],
-        )
-        .await
-        .expect("insert a pending audit record");
-
-    store
-        .mark_audit_published(event_id)
-        .await
-        .expect("mark the pending audit record as published");
-    let published_at: chrono::DateTime<chrono::Utc> = client
-        .query_one(
-            "SELECT published_at FROM casework_audit_outbox WHERE event_id=$1",
-            &[&event_id],
-        )
-        .await
-        .expect("read the original publication timestamp")
-        .get(0);
-
-    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    store
-        .mark_audit_published(event_id)
-        .await
-        .expect("retry marking the audit record as published");
-    let retried_at: chrono::DateTime<chrono::Utc> = client
-        .query_one(
-            "SELECT published_at FROM casework_audit_outbox WHERE event_id=$1",
-            &[&event_id],
-        )
-        .await
-        .expect("read the publication timestamp after the retry")
-        .get(0);
-
-    assert_eq!(retried_at, published_at);
 }
 
 #[tokio::test]
@@ -1655,6 +1743,27 @@ async fn a_resubmitted_proposal_supersedes_the_earlier_application_item() {
     assert_eq!(current.state, OccurrenceState::WaitingApplication);
 }
 
+/// The correlations of request entries no response entry answers.
+fn unpaired_requests(entries: &[serde_json::Value]) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|entry| entry["phase"] == "request")
+        .filter(|request| {
+            !entries.iter().any(|entry| {
+                entry["phase"] == "response"
+                    && entry["schema"] == request["schema"]
+                    && entry["correlation"] == request["correlation"]
+            })
+        })
+        .map(|request| {
+            request["correlation"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect()
+}
+
 const SETTLEMENT_REASON: &str =
     "The source refused the saved evidence version; the registrar confirmed no change was made.";
 const SETTLEMENT_DECIDED_BY: &str = "Registrar duty officer, ticket OPS-4411";
@@ -1665,6 +1774,7 @@ const MARKING_REASON: &str =
 /// a saved-evidence version the binary refuses leaves it.
 struct SettlementFixture {
     store: PostgresStore,
+    audit: registry_casework::AuditCapture,
     client: tokio_postgres::Client,
     holder: ActorContext,
     item_id: uuid::Uuid,
@@ -1673,8 +1783,22 @@ struct SettlementFixture {
     binding_reference: String,
 }
 
-async fn settlement_fixture(prefix: &str, mark_uncertain: bool) -> SettlementFixture {
-    let (store, client, _schema) = isolated_schema(prefix).await;
+/// One open item in a schema of its own, audited into a capture, and the
+/// staff member who may claim it.
+struct OpenItemFixture {
+    store: PostgresStore,
+    audit: registry_casework::AuditCapture,
+    client: tokio_postgres::Client,
+    schema: String,
+    holder: ActorContext,
+    item_id: uuid::Uuid,
+    revision: i64,
+}
+
+async fn open_item_fixture(prefix: &str) -> OpenItemFixture {
+    let (store, client, schema) = isolated_schema(prefix).await;
+    let (audit, audit_capture) = registry_casework::CaseworkAudit::capture();
+    let store = store.with_audit(audit);
     store.migrate().await.expect("migrate");
     let admin = actor("admin", CaseworkRole::Administrator, "administrator");
     let holder = actor("officer-1", CaseworkRole::Staff, "staff");
@@ -1715,8 +1839,29 @@ async fn settlement_fixture(prefix: &str, mark_uncertain: bool) -> SettlementFix
         .await
         .expect("initial observation")
         .expect("item opened");
+    OpenItemFixture {
+        store,
+        audit: audit_capture,
+        client,
+        schema,
+        holder,
+        item_id: item.item_id,
+        revision: item.revision,
+    }
+}
+
+async fn settlement_fixture(prefix: &str, mark_uncertain: bool) -> SettlementFixture {
+    let OpenItemFixture {
+        store,
+        audit,
+        client,
+        holder,
+        item_id,
+        revision,
+        ..
+    } = open_item_fixture(prefix).await;
     let claimed = store
-        .claim(&holder, item.item_id, item.revision, "claim-settlement")
+        .claim(&holder, item_id, revision, "claim-settlement")
         .await
         .expect("holder claims the item");
     let prepared = PreparedSourceAttempt {
@@ -1747,6 +1892,7 @@ async fn settlement_fixture(prefix: &str, mark_uncertain: bool) -> SettlementFix
     }
     SettlementFixture {
         store,
+        audit,
         client,
         holder,
         item_id: claimed.item_id,
@@ -1786,17 +1932,57 @@ impl SettlementFixture {
             .expect("lapse the execution lease");
     }
 
-    /// Every row a settlement may write, so a refusal or a preview can be
-    /// shown to have written nothing.
+    /// Every row and audit response a settlement may write, so a refusal or
+    /// a preview can be shown to have written nothing.
     async fn snapshot(&self) -> serde_json::Value {
-        self.client
+        let mut snapshot: serde_json::Value = self
+            .client
             .query_one(
-                "SELECT jsonb_build_object('history',(SELECT count(*) FROM casework_history),'events',(SELECT count(*) FROM casework_events),'audit',(SELECT count(*) FROM casework_audit_outbox),'attempt',(SELECT to_jsonb(a) FROM casework_attempts a WHERE attempt_id=$1),'item',(SELECT to_jsonb(i) FROM casework_items i WHERE item_id=$2),'subject',(SELECT to_jsonb(s) FROM casework_subjects s WHERE source_id='source-a' AND subject_kind='request-a' AND subject_id='subject-a'))",
+                "SELECT jsonb_build_object('history',(SELECT count(*) FROM casework_history),'events',(SELECT count(*) FROM casework_events),'attempt',(SELECT to_jsonb(a) FROM casework_attempts a WHERE attempt_id=$1),'item',(SELECT to_jsonb(i) FROM casework_items i WHERE item_id=$2),'subject',(SELECT to_jsonb(s) FROM casework_subjects s WHERE source_id='source-a' AND subject_kind='request-a' AND subject_id='subject-a'))",
                 &[&self.attempt_id, &self.item_id],
             )
             .await
             .expect("settlement snapshot")
-            .get(0)
+            .get(0);
+        // A refusal pairs its request entry with an `unfinished` response;
+        // only a response recording a committed change counts as a write.
+        snapshot["auditResponses"] = serde_json::json!(self
+            .audit
+            .entries()
+            .iter()
+            .filter(|entry| {
+                entry["phase"] == "response" && entry["record"]["outcome"] != "unfinished"
+            })
+            .count());
+        let unpaired = unpaired_requests(&self.audit.entries());
+        assert!(
+            unpaired.is_empty(),
+            "unpaired request entries: {unpaired:?}"
+        );
+        snapshot["unpairedRequests"] = serde_json::json!(unpaired);
+        snapshot
+    }
+
+    /// The single response entry recording `event_id`, after checking that
+    /// the operation's request entry was written first under its correlation.
+    fn audited_response(&self, event: &str, event_id: uuid::Uuid) -> serde_json::Value {
+        let entries = self.audit.entries();
+        let position = entries
+            .iter()
+            .position(|entry| {
+                entry["phase"] == "response" && entry["record"]["eventId"] == event_id.to_string()
+            })
+            .expect("the durable event has an audit response entry");
+        let response = &entries[position];
+        assert_eq!(response["schema"], "registry-casework-audit/v1");
+        assert_eq!(response["record"]["event"], format!("casework.{event}"));
+        let correlation = &response["correlation"];
+        let request = entries[..position]
+            .iter()
+            .find(|entry| entry["phase"] == "request" && entry["correlation"] == *correlation)
+            .expect("the request entry precedes the response under one correlation");
+        assert_eq!(request["record"]["event"], format!("casework.{event}"));
+        response["record"].clone()
     }
 
     async fn attempt_row(&self) -> (String, Option<serde_json::Value>) {
@@ -1840,17 +2026,16 @@ impl SettlementFixture {
         let durable = self
             .client
             .query_one(
-                "SELECT e.event_kind,e.detail,a.audit_record FROM casework_events e JOIN casework_audit_outbox a USING(event_id) WHERE e.event_id=$1",
+                "SELECT event_kind,detail FROM casework_events WHERE event_id=$1",
                 &[&settled.event_id],
             )
             .await
-            .expect("the settlement is a durable event with an audit record");
+            .expect("the settlement is a durable event");
         assert_eq!(durable.get::<_, String>(0), "attempt_settled");
         assert_eq!(durable.get::<_, serde_json::Value>(1), settled.detail);
-        let audit: serde_json::Value = durable.get(2);
-        assert_eq!(audit["event"], "casework.attempt_settled");
+        let audit = self.audited_response("attempt_settled", settled.event_id);
         assert_eq!(audit["itemRevision"], item_revision);
-        assert!(audit["actor"].is_null());
+        assert!(audit.get("principalPseudonym").is_none());
     }
 }
 
@@ -1961,6 +2146,261 @@ async fn an_applied_settlement_completes_the_attempt_without_a_receipt_and_await
     fixture
         .assert_settlement_recorded("applied", after.revision)
         .await;
+}
+
+#[tokio::test]
+async fn a_refused_audit_request_opens_no_settlement_transaction() {
+    let fixture = settlement_fixture("settle_audit_request_refused", true).await;
+    let before = fixture.snapshot().await;
+    fixture.audit.refuse_after(fixture.audit.entries().len());
+
+    let refusal = fixture
+        .store
+        .settle_attempt(&fixture.settlement(AttemptSettlementOutcome::Applied))
+        .await
+        .expect_err("a settlement whose request entry is refused must not run");
+
+    assert!(
+        matches!(
+            refusal,
+            AttemptSettlementError::Store(StoreError::AuditUnavailable)
+        ),
+        "{refusal:?}"
+    );
+    assert_eq!(fixture.snapshot().await, before, "nothing was written");
+    assert_eq!(fixture.attempt_row().await, ("uncertain".to_owned(), None));
+}
+
+#[tokio::test]
+async fn a_refused_audit_response_reports_unavailable_after_the_settlement_commits() {
+    let fixture = settlement_fixture("settle_audit_response_refused", true).await;
+    let before = fixture
+        .store
+        .item(fixture.item_id)
+        .await
+        .expect("wedged item");
+    let written = fixture.audit.entries().len();
+    fixture.audit.refuse_after(written + 1);
+
+    let refusal = fixture
+        .store
+        .settle_attempt(&fixture.settlement(AttemptSettlementOutcome::Applied))
+        .await
+        .expect_err("a settlement whose response entry is refused reports it");
+
+    assert!(
+        matches!(
+            refusal,
+            AttemptSettlementError::Store(StoreError::AuditUnavailable)
+        ),
+        "{refusal:?}"
+    );
+    assert_eq!(
+        fixture.attempt_row().await,
+        ("completed".to_owned(), None),
+        "the settlement stays committed"
+    );
+    let after = fixture
+        .store
+        .item(fixture.item_id)
+        .await
+        .expect("settled item");
+    assert_eq!(after.revision, before.revision + 1);
+    let entries = fixture.audit.entries();
+    assert_eq!(
+        entries.len(),
+        written + 1,
+        "only the request entry was accepted"
+    );
+    assert_eq!(entries[written]["phase"], "request");
+    assert_eq!(
+        entries[written]["record"]["event"],
+        "casework.attempt_settled"
+    );
+}
+
+#[tokio::test]
+async fn a_refusal_after_the_request_entry_pairs_it_with_an_unfinished_response() {
+    let fixture = settlement_fixture("refusal_pairs_request", true).await;
+    let written = fixture.audit.entries().len();
+    let missing = fixture
+        .store
+        .claim(&fixture.holder, uuid::Uuid::new_v4(), 1, "claim-missing")
+        .await;
+    assert!(matches!(missing, Err(StoreError::NotFound)), "{missing:?}");
+    let item = fixture.store.item(fixture.item_id).await.expect("item");
+    let again = fixture
+        .store
+        .claim(&fixture.holder, item.item_id, item.revision, "claim-again")
+        .await;
+    assert!(
+        matches!(again, Err(StoreError::AlreadyClaimed)),
+        "{again:?}"
+    );
+
+    let entries = fixture.audit.entries()[written..].to_vec();
+    assert_eq!(entries.len(), 4, "{entries:#?}");
+    for pair in entries.chunks(2) {
+        assert_eq!(pair[0]["phase"], "request");
+        assert_eq!(pair[1]["phase"], "response");
+        assert_eq!(pair[1]["schema"], pair[0]["schema"]);
+        assert_eq!(pair[1]["correlation"], pair[0]["correlation"]);
+        assert_eq!(
+            pair[1]["record"],
+            serde_json::json!({"event": "casework.claimed", "outcome": "unfinished"})
+        );
+    }
+}
+
+/// A claim whose `COMMIT` took effect but whose acknowledgment never arrived
+/// is read back as committed: the caller gets the claim, and its response
+/// entry records the claim rather than an unfinished outcome.
+#[tokio::test]
+async fn a_claim_whose_commit_acknowledgment_is_lost_is_read_back_as_committed() {
+    let fixture = open_item_fixture("claim_lost_ack").await;
+    let written = fixture.audit.entries().len();
+    fixture.audit.lose_next_commit_acknowledgment();
+    let claimed = fixture
+        .store
+        .claim(
+            &fixture.holder,
+            fixture.item_id,
+            fixture.revision,
+            "claim-lost-ack",
+        )
+        .await
+        .expect("the committed claim is answered");
+    assert_eq!(claimed.revision, fixture.revision + 1);
+    let current = fixture.store.item(fixture.item_id).await.expect("item");
+    assert_eq!(current.revision, claimed.revision);
+
+    let entries = fixture.audit.entries()[written..].to_vec();
+    assert_eq!(entries.len(), 2, "{entries:#?}");
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[1]["correlation"], entries[0]["correlation"]);
+    assert_eq!(entries[1]["record"]["event"], "casework.claimed");
+    assert!(
+        entries[1]["record"].get("outcome").is_none(),
+        "{entries:#?}"
+    );
+    assert!(unpaired_requests(&fixture.audit.entries()).is_empty());
+}
+
+/// A claim whose `COMMIT` itself is refused rolls back, and the read-back
+/// finds it rolled back: the caller gets the error and the request entry is
+/// paired with an unfinished response, never with the claim.
+#[tokio::test]
+async fn a_claim_refused_at_commit_is_read_back_as_not_committed() {
+    let fixture = open_item_fixture("claim_refused_at_commit").await;
+    fixture
+        .client
+        .batch_execute(
+            "CREATE FUNCTION refuse_at_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RAISE EXCEPTION 'refused at commit'; END $$;
+             CREATE CONSTRAINT TRIGGER refuse_claim_at_commit AFTER UPDATE ON casework_items
+             DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION refuse_at_commit();",
+        )
+        .await
+        .expect("install a trigger that refuses the claim at COMMIT");
+    let written = fixture.audit.entries().len();
+    let refused = fixture
+        .store
+        .claim(
+            &fixture.holder,
+            fixture.item_id,
+            fixture.revision,
+            "claim-refused-at-commit",
+        )
+        .await;
+    assert!(
+        matches!(refused, Err(StoreError::Postgres(_))),
+        "{refused:?}"
+    );
+    let current = fixture.store.item(fixture.item_id).await.expect("item");
+    assert_eq!(current.revision, fixture.revision, "the claim rolled back");
+
+    let entries = fixture.audit.entries()[written..].to_vec();
+    assert_eq!(entries.len(), 2, "{entries:#?}");
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[1]["correlation"], entries[0]["correlation"]);
+    assert_eq!(
+        entries[1]["record"],
+        serde_json::json!({"event": "casework.claimed", "outcome": "unfinished"})
+    );
+}
+
+/// A claim whose future is dropped while it waits inside its transaction
+/// pairs its request entry with exactly one unfinished response and changes
+/// nothing.
+#[tokio::test]
+async fn a_claim_dropped_inside_its_transaction_writes_one_unfinished_response() {
+    let fixture = open_item_fixture("claim_dropped").await;
+    let written = fixture.audit.entries().len();
+    let mut locker = connect_scoped(&fixture.schema).await;
+    let lock = locker.transaction().await.expect("lock transaction");
+    lock.execute(
+        "SELECT 1 FROM casework_items WHERE item_id=$1 FOR UPDATE",
+        &[&fixture.item_id],
+    )
+    .await
+    .expect("hold the item row");
+    let locker_pid: i32 = lock
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .expect("lock holder pid")
+        .get(0);
+
+    let store = fixture.store.clone();
+    let holder = fixture.holder.clone();
+    let (item_id, revision) = (fixture.item_id, fixture.revision);
+    let claim = tokio::spawn(async move {
+        store
+            .claim(&holder, item_id, revision, "claim-dropped")
+            .await
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let waiting: i64 = fixture
+            .client
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))",
+                &[&locker_pid],
+            )
+            .await
+            .expect("read lock waits")
+            .get(0);
+        if waiting > 0 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the claim never waited on the item row"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    claim.abort();
+    assert!(claim
+        .await
+        .expect_err("the claim was dropped")
+        .is_cancelled());
+    lock.rollback().await.expect("release the item row");
+
+    let entries = fixture.audit.entries()[written..].to_vec();
+    assert_eq!(entries.len(), 2, "{entries:#?}");
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[1]["correlation"], entries[0]["correlation"]);
+    assert_eq!(
+        entries[1]["record"],
+        serde_json::json!({"event": "casework.claimed", "outcome": "unfinished"})
+    );
+    let current = fixture.store.item(fixture.item_id).await.expect("item");
+    assert_eq!(
+        current.revision, fixture.revision,
+        "the dropped claim changed nothing"
+    );
 }
 
 #[tokio::test]
@@ -2262,18 +2702,17 @@ async fn an_operator_marks_an_expired_pending_attempt_uncertain_naming_both_part
     let durable = fixture
         .client
         .query_one(
-            "SELECT e.event_kind,e.detail,a.audit_record FROM casework_events e JOIN casework_audit_outbox a USING(event_id) WHERE e.event_id=$1",
+            "SELECT event_kind,detail FROM casework_events WHERE event_id=$1",
             &[&marked.event_id],
         )
         .await
-        .expect("the decision is a durable event with an audit record");
+        .expect("the decision is a durable event");
     assert_eq!(durable.get::<_, String>(0), "attempt_uncertain");
     assert_eq!(durable.get::<_, serde_json::Value>(1), marked.detail);
-    let audit: serde_json::Value = durable.get(2);
-    assert_eq!(audit["event"], "casework.attempt_uncertain");
+    let audit = fixture.audited_response("attempt_uncertain", marked.event_id);
     assert_eq!(audit["itemRevision"], after.revision);
     assert_eq!(audit["profileId"], "system:operator");
-    assert!(audit["actor"].is_null());
+    assert!(audit.get("principalPseudonym").is_none());
 
     // The executor that held the lapsed lease can no longer finish the attempt.
     let receipt = SourceReceipt {

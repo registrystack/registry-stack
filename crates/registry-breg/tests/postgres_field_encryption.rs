@@ -382,6 +382,11 @@ fn write_runtime_config(booted: &BootedDatabase, field_encryption: Option<String
     );
     let field_encryption = field_encryption.unwrap_or_default();
     let path = booted.directory.join("runtime.yaml");
+    let audit_path = secrets
+        .with_file_name("audit")
+        .join("audit.jsonl")
+        .display()
+        .to_string();
     fs::write(
         &path,
         format!(
@@ -439,6 +444,7 @@ authentication:
     purpose: purpose
 audit:
   hashKeyRef: secret:file/audit-key
+  path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
   maxAgeSeconds: 300

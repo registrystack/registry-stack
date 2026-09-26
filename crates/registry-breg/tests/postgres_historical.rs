@@ -72,7 +72,7 @@ async fn snapshot_http_reconstructs_before_filters_and_keeps_pages_pinned() {
         database.compiled.clone(),
         database.identity.clone(),
         database.lock_key,
-        database.audit_profile.clone(),
+        database.database.audit(database.audit_profile.clone()),
         database.cursors.clone(),
         None,
     );
@@ -225,7 +225,7 @@ async fn snapshot_valid_at_bounds_are_start_inclusive_end_exclusive_and_optional
         database.compiled.clone(),
         database.identity.clone(),
         database.lock_key,
-        database.audit_profile.clone(),
+        database.database.audit(database.audit_profile.clone()),
         database.cursors.clone(),
         None,
     );
@@ -314,7 +314,7 @@ async fn snapshot_timestamp_valid_at_requires_utc_timestamp_and_filters_pg_rows(
         database.compiled.clone(),
         database.identity.clone(),
         database.lock_key,
-        database.audit_profile.clone(),
+        database.database.audit(database.audit_profile.clone()),
         database.cursors.clone(),
         None,
     );
@@ -369,7 +369,7 @@ async fn snapshot_row_authority_uses_selected_historical_row_values() {
         database.compiled.clone(),
         database.identity.clone(),
         database.lock_key,
-        database.audit_profile.clone(),
+        database.database.audit(database.audit_profile.clone()),
         database.cursors.clone(),
         None,
     );
@@ -440,7 +440,7 @@ async fn snapshot_count_filter_probe_stays_bounded_and_pinned() {
         database.compiled.clone(),
         database.identity.clone(),
         database.lock_key,
-        database.audit_profile.clone(),
+        database.database.audit(database.audit_profile.clone()),
         database.cursors.clone(),
         None,
     );
@@ -509,7 +509,7 @@ async fn snapshot_refuses_derived_fields_missing_descriptors_and_terminal_audit_
         database.compiled.clone(),
         database.identity.clone(),
         database.lock_key,
-        database.audit_profile.clone(),
+        database.database.audit(database.audit_profile.clone()),
         database.cursors.clone(),
         None,
     );
@@ -570,7 +570,7 @@ async fn snapshot_refuses_derived_fields_missing_descriptors_and_terminal_audit_
         database.compiled.clone(),
         database.identity.clone(),
         database.lock_key,
-        database.audit_profile.clone(),
+        database.database.audit(database.audit_profile.clone()),
         database.cursors.clone(),
         Some(registry_breg::postgres::SnapshotReadFaultPoint::HistoricalStatementTimeout),
     );
@@ -608,7 +608,7 @@ async fn snapshot_refuses_derived_fields_missing_descriptors_and_terminal_audit_
         database.compiled.clone(),
         database.identity.clone(),
         database.lock_key,
-        database.audit_profile.clone(),
+        database.database.audit(database.audit_profile.clone()),
         database.cursors.clone(),
         Some(registry_breg::postgres::SnapshotReadFaultPoint::BeforeTerminalAudit),
     );
@@ -639,7 +639,7 @@ async fn snapshot_omits_erased_revisions_without_failing_the_page() {
         database.compiled.clone(),
         database.identity.clone(),
         database.lock_key,
-        database.audit_profile.clone(),
+        database.database.audit(database.audit_profile.clone()),
         database.cursors.clone(),
         None,
     );
@@ -678,7 +678,7 @@ async fn snapshot_reads_a_later_optional_field_as_null_under_older_descriptors()
         database.compiled.clone(),
         database.identity.clone(),
         database.lock_key,
-        database.audit_profile.clone(),
+        database.database.audit(database.audit_profile.clone()),
         database.cursors.clone(),
         None,
     );
@@ -758,7 +758,7 @@ async fn snapshot_valid_at_does_not_depend_on_the_database_time_zone() {
         database.compiled.clone(),
         database.identity.clone(),
         database.lock_key,
-        database.audit_profile.clone(),
+        database.database.audit(database.audit_profile.clone()),
         database.cursors.clone(),
         None,
     );
@@ -913,7 +913,7 @@ fn snapshot_router(
     registry: Arc<registry_breg::CompiledRegistry>,
     identity: ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
-    profile: AuditProfile,
+    profile: registry_breg::audit::RegistryAudit,
     cursors: Arc<CursorCodec>,
     fault: Option<registry_breg::postgres::SnapshotReadFaultPoint>,
 ) -> axum::Router {

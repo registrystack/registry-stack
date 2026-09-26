@@ -138,14 +138,27 @@ pub trait DeliverySeams: Send + Sync + 'static {
     ) -> Result<Option<ProposalOutcome>, DeliveryError>;
 
     /// Record one neutral delivery-audit event in the product's audit
-    /// journal, inside the transaction the worker is about to commit. Every
-    /// audited occurrence and every audited field of the moved worker arrives
-    /// here.
-    async fn record_audit(
-        &self,
-        transaction: &Transaction<'_>,
-        record: DeliveryAuditRecord<'_>,
-    ) -> Result<(), DeliveryError>;
+    /// journal. Every audited occurrence and every audited field of the
+    /// moved worker arrives here, in an order that keeps the journal from
+    /// claiming more than the database committed:
+    ///
+    /// - An attempt's start is its request, recorded inside the lease
+    ///   transaction immediately before that transaction commits, so it is
+    ///   on record before the request can leave the process and a refusal
+    ///   rolls the lease back. If that commit then fails, the worker records
+    ///   the attempt's `WorkerInterrupted` terminal, so the request is
+    ///   answered and no egress follows.
+    /// - A terminal disposition and a payload expiry are recorded only after
+    ///   the transaction that made them commits, so an entry never stands
+    ///   for a transition that rolled back.
+    /// - An operator replay is a request, `ReplayRequested`, recorded before
+    ///   the reset, and a response recorded after it: `ReplayCommitted` once
+    ///   the reset commits, `ReplayRefused` when it does not.
+    ///
+    /// A refused append after a commit leaves that committed transition
+    /// without its entry; the writer then refuses every later entry until
+    /// the operator repairs the destination, which readiness reports.
+    async fn record_audit(&self, record: DeliveryAuditRecord<'_>) -> Result<(), DeliveryError>;
 
     /// Report one operational event through the product's vocabulary.
     fn operational_event(&self, event: DeliveryOperationalEvent);
@@ -415,7 +428,13 @@ pub enum DeliveryAuditOutcome {
     PayloadRefused,
     PayloadExpired,
     WorkerInterrupted,
+    /// An operator asked for a dead-lettered delivery to be replayed: the
+    /// request of a replay.
     ReplayRequested,
+    /// The replay's reset committed, and the delivery is pending again.
+    ReplayCommitted,
+    /// The replay's reset did not commit; the delivery stays dead-lettered.
+    ReplayRefused,
 }
 
 impl DeliveryAuditOutcome {

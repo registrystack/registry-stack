@@ -253,7 +253,7 @@ semantics:
 ```
 
 All three roles are the registrar here because one institution holds all three. They are separate
-keys because in a real deployment they often are not the same body, and the audit chain is only
+keys because in a real deployment they often are not the same body, and the audit log is only
 meaningful when someone is named as answerable for it.
 
 Next, the vocabularies this contract classifies against:
@@ -405,7 +405,7 @@ Then why the register is doing this at all:
 ```
 
 A processing description binds an operation to a purpose, an audience, and a legal basis on file.
-Its identifier is what the audit chain records against each released answer, so a released field
+Its identifier is what the audit log records against each released answer, so a released field
 can always be traced back to the stated reason for releasing it.
 
 Finally, what a caller may read about the register itself:
@@ -616,7 +616,7 @@ server: {bind: "127.0.0.1:8080"}
 packagePath: package
 sources: {registry: {path: registry.sqlite}}
 authentication: {issuer: null}
-audit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/RELAY_AUDIT_KEY}
+audit: {destination: file, path: var/audit.jsonl}
 limits: {requestTimeoutMilliseconds: 1500, concurrentQueries: 8}
 ```
 
@@ -624,18 +624,16 @@ limits: {requestTimeoutMilliseconds: 1500, concurrentQueries: 8}
 public. Add one protected profile and Relay refuses to start without a reachable token issuer,
 even for requests that would have been anonymous.
 
-Create the audit directory and the integrity key, then start the service:
+Create the audit directory, then start the service:
 
 ```sh
 mkdir -m 700 var
-export RELAY_AUDIT_KEY="$(openssl rand -base64 32)"
 relay serve --runtime runtime.yaml
 ```
 
 Mode `700` is required, not tidiness. The audit directory must be owner-only, and Relay refuses
-to start when any group or other bit is set on it. Keep the key for the life of the deployment,
-too. The chain is bound to it, so a new key against an existing `var/audit.jsonl` is a startup
-failure rather than a fresh start.
+to start when any group or other bit is set on it. Only one Relay process may write
+`var/audit.jsonl` at a time: a second one started against the same file refuses to start.
 
 Relay writes line-delimited JSON to standard output. It logs `relay startup began`, and then
 `relay service listening` with the bound address once the port is actually held. If the second
@@ -755,8 +753,11 @@ The line is one JSON object. Abridged to the fields this step is about:
 
 ```json
 {
-  "envelope_id": "<envelope-id>",
-  "prev_hash": null,
+  "schema": "registry.relay.audit/v2alpha2",
+  "eventId": "<event-id>",
+  "time": "<time>",
+  "phase": "request",
+  "correlation": "<operation-id>",
   "record": {
     "operationIdentifier": "registered-business.read",
     "resourceIdentifier": "registered-business",
@@ -768,14 +769,13 @@ The line is one JSON object. Abridged to the fields this step is about:
     "contractRevision": "sha256:<contract-revision>",
     "sourceRevision": {"profile": "snapshot", "status": "versioned", "value": "sha256:<digest>"},
     "phase": "attempt"
-  },
-  "record_hash": "<record-hash>"
+  }
 }
 ```
 
-The envelope also carries `timestamp_unix_ms`. The full `record` carries more than is shown: the
-registry identifier, the revision of the access rules that were applied, the operation surface
-and wire format, the trace identifier shared with the log line, and the handling levels the
+The full `record` carries more than is shown: the registry identifier, the operation identifier
+repeated as `operationId`, the revision of the access rules that were applied, the operation
+surface and wire format, the trace identifier shared with the log line, and the handling levels the
 answer was released under. None of them is a field value either.
 
 Read what is not there. The line records that an anonymous caller reached the
@@ -783,18 +783,18 @@ Read what is not there. The line records that an anonymous caller reached the
 `legalName` and `legalForm` under the `consultation` processing description. It does not record
 what the values were.
 
-Read the phase too. `attempt` is written before Relay reads the source, so this line proves the
-request was accepted and scoped, not that it was answered. The matching `terminal` line carries
-the outcome, and a refusal is written as `refusal` instead. `prev_hash` is `null` on the first
-line and links each subsequent line to the one before it, which is what the integrity key
-protects.
+Read the phase too. The envelope's `request` phase and the record's `attempt` phase are written
+before Relay reads the source, so this line proves the request was accepted and scoped, not that
+it was answered. The next line with the same `correlation` is a `response` entry whose record
+phase is `terminal`, carrying the outcome; a refusal is written as `refusal` instead. The lines are
+not chained or signed, so a deployment ships them to append-only storage to make them
+tamper-evident.
 
 ## Clean up
 
 ```sh
 cd ..
 rm -rf business-registry
-unset RELAY_AUDIT_KEY
 ```
 
 ## What you built
@@ -806,7 +806,7 @@ unset RELAY_AUDIT_KEY
 - A production gate that refused the register until a named reviewer, a date, a rationale, and a
   digest of the exact inventory they reviewed were on file.
 - A caller who can narrow an answer and cannot widen it.
-- An audit chain that records which properties were released, to whom, under which contract
+- An audit log that records which properties were released, to whom, under which contract
   revision, without recording the values.
 
 ## Troubleshooting
@@ -820,7 +820,7 @@ unset RELAY_AUDIT_KEY
 | `source.schema_fingerprint_mismatch` | The contract holds a fingerprint from a different schema, usually because the SQL was retyped rather than copied | Run `relayctl inspect registry.sqlite` again and paste the current value. |
 | `metadata.reference_visibility_invalid` | A public audience cannot resolve the schema or vocabulary the answer points at | Set `metadataVisibility.resources` and `.semantics` to `public` when any access profile is public. |
 | `classification.review_inventory_stale` | The contract changed after the review was recorded | Run `relayctl generate .` again and copy the new digest from `generated/governance/classification-review-starter.yaml`. |
-| `the required audit sink is not ready` at startup | `var/` is not owner-only, or `RELAY_AUDIT_KEY` differs from the key that started the existing chain | `chmod 700 var`, and either restore the original key or remove `var/audit.jsonl` to start a new chain. |
+| `the required audit destination is not ready` at startup | `var/` is not owner-only, or another Relay process already writes `var/audit.jsonl` | `chmod 700 var`, and stop the other process. |
 
 ## Next
 

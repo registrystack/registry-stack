@@ -10,20 +10,21 @@
 //!
 //! Operators remain responsible for saved exports, downstream consumers that
 //! already received event payloads, and database backup lifecycle. This path
-//! records that responsibility in the maintenance audit record; it does not
+//! records that responsibility in the maintenance audit entry; it does not
 //! claim automatic deletion outside this database.
 
 use std::fmt;
 
-use registry_platform_audit::AuditProfile;
+use registry_platform_audit::AuditEntry;
 use serde_json::{json, Value};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+use crate::audit::RegistryAudit;
 use crate::history_commit::{lock_history_head, HistoryCommitError};
 use crate::history_maintenance::{
-    append_audit_envelope, profile_is_keyed, set_local_timeouts, verify_ready_identity,
-    HistoryMaintenanceError,
+    append_maintenance_entries, begin_maintenance_request, profile_is_keyed, set_local_timeouts,
+    verify_ready_identity, HistoryMaintenanceError,
 };
 use crate::idempotency::{tombstone_erased_cached_responses, IdempotencyError};
 use crate::postgres::{
@@ -38,6 +39,8 @@ const MAX_OPERATOR_REFERENCE_BYTES: usize = 512;
 const MAX_REASON_BYTES: usize = 1024;
 pub(crate) const MAX_ERASURE_REVISIONS: i64 = 10_000;
 const AUDIT_OPERATION_ID: &str = "history-erasure-maintenance";
+/// The audit schema of the per-record history erasure entry.
+pub const HISTORY_ERASURE_AUDIT_SCHEMA: &str = "breg-history-erasure-audit/v2";
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct RecordHistoryErasureTarget<'a> {
@@ -73,7 +76,7 @@ pub struct HistoryErasureRequest<'a> {
     pub migration_role: &'a SqlIdentifier,
     pub lock_key: RegistryLockKey,
     pub timeouts: HistoryErasureTimeouts,
-    pub audit_profile: &'a AuditProfile,
+    pub audit: &'a RegistryAudit,
     pub operator_reference: &'a str,
     pub reason: &'a str,
     pub target: RecordHistoryErasureTarget<'a>,
@@ -166,7 +169,9 @@ pub async fn erase_record_history_with_connection(
 
 /// Run one targeted historical erasure through an already opened migration
 /// connection. The transaction uses the exclusive Registry advisory lock, then
-/// the commit-head row, then the audit head, preserving the runtime lock order.
+/// the commit-head row, preserving the runtime lock order. The erasure's
+/// `request` entry is accepted before the transaction opens, and its
+/// `response` entry is appended after the transaction commits.
 pub async fn erase_record_history(
     client: &mut Client,
     request: HistoryErasureRequest<'_>,
@@ -174,8 +179,8 @@ pub async fn erase_record_history(
     erase_record_history_scoped(client, request, None).await
 }
 
-/// Run the ordinary bounded erasure while correlating its durable audit record
-/// to a parent maintenance lifecycle. The public generic erasure API remains
+/// Run the ordinary bounded erasure while correlating its audit entry and its
+/// durable lifecycle progress to a parent maintenance lifecycle. The public generic erasure API remains
 /// unscoped; only product-owned compound maintenance uses this marker.
 pub(crate) async fn erase_record_history_for_lifecycle(
     client: &mut Client,
@@ -195,6 +200,16 @@ async fn erase_record_history_scoped(
 ) -> Result<HistoryErasureOutcome, HistoryErasureError> {
     validate_request(&request)?;
     verify_migration_role(client, request.migration_role).await?;
+    // A standalone erasure's request entry is accepted before its
+    // transaction opens, so an audit outage erases nothing. A lifecycle
+    // erasure runs under the request entry its parent lifecycle appended.
+    let _attempt = match lifecycle_reference {
+        None => Some(
+            begin_maintenance_request(request.audit, history_erasure_request_entry(&request)?)
+                .await?,
+        ),
+        Some(_) => None,
+    };
 
     let transaction = client
         .transaction()
@@ -269,11 +284,24 @@ async fn erase_record_history_scoped(
         scrubbed_request_proposal_count,
         removed_descriptor_count,
     };
-    append_history_erasure_audit(&transaction, &request, &outcome, lifecycle_reference).await?;
+    let entry = history_erasure_entry(&request, &outcome, lifecycle_reference)?;
+    match lifecycle_reference {
+        Some(lifecycle_reference) => {
+            record_lifecycle_erasure_progress(
+                &transaction,
+                &request,
+                lifecycle_reference,
+                &outcome,
+            )
+            .await?;
+        }
+        None => record_standalone_erasure_coverage(&transaction, &outcome).await?,
+    }
     transaction
         .commit()
         .await
         .map_err(|_| HistoryErasureError::Unavailable)?;
+    append_maintenance_entries(request.audit, vec![entry]).await?;
     Ok(outcome)
 }
 
@@ -513,24 +541,105 @@ async fn update_coverage(
     Ok(())
 }
 
-async fn append_history_erasure_audit(
+/// Record the coverage a standalone erasure left ready, in the same commit as
+/// the erasure. A successor apply admits a ready head with an unavailable
+/// position only when this row names that position; a lifecycle erasure
+/// records no row, so it still freezes successors until a rebaseline.
+async fn record_standalone_erasure_coverage(
+    transaction: &tokio_postgres::Transaction<'_>,
+    outcome: &HistoryErasureOutcome,
+) -> Result<(), HistoryErasureError> {
+    let (true, Some(unavailable_after_position)) =
+        (outcome.coverage_ready, outcome.unavailable_after_position)
+    else {
+        return Ok(());
+    };
+    transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_history_erasure_coverage
+                    (unavailable_after_position)
+             VALUES ($1)
+             ON CONFLICT (unavailable_after_position) DO NOTHING",
+            &[&unavailable_after_position],
+        )
+        .await
+        .map_err(|_| HistoryErasureError::Unavailable)?;
+    Ok(())
+}
+
+/// Record one lifecycle-correlated erasure's counts, in the same commit as the
+/// erasure, so the closing lifecycle step aggregates durable state rather
+/// than audit output.
+async fn record_lifecycle_erasure_progress(
     transaction: &tokio_postgres::Transaction<'_>,
     request: &HistoryErasureRequest<'_>,
+    lifecycle_reference: &str,
     outcome: &HistoryErasureOutcome,
-    lifecycle_reference: Option<&str>,
 ) -> Result<(), HistoryErasureError> {
-    if !profile_is_keyed(request.audit_profile) {
+    let target_record_reference = lifecycle_target_record_reference(request)?;
+    let count = |value: u64| i64::try_from(value).map_err(|_| HistoryErasureError::Unavailable);
+    transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_field_encryption_lifecycle_progress
+                    (lifecycle_reference, progress_kind, target_record_reference,
+                     erased_revision_count, erased_commit_member_count,
+                     scrubbed_change_context_count, scrubbed_outbox_payload_count,
+                     scrubbed_cached_response_count, removed_descriptor_count)
+             VALUES ($1, 'record-erasure', $2, $3, $4, $5, $6, $7, $8)",
+            &[
+                &lifecycle_reference,
+                &target_record_reference,
+                &count(outcome.erased_revision_count)?,
+                &count(outcome.erased_commit_member_count)?,
+                &count(outcome.scrubbed_change_context_count)?,
+                &count(outcome.scrubbed_outbox_payload_count)?,
+                &count(outcome.scrubbed_cached_response_count)?,
+                &count(outcome.removed_descriptor_count)?,
+            ],
+        )
+        .await
+        .map_err(|_| HistoryErasureError::Unavailable)?;
+    Ok(())
+}
+
+fn lifecycle_target_record_reference(
+    request: &HistoryErasureRequest<'_>,
+) -> Result<String, HistoryErasureError> {
+    request
+        .audit
+        .profile()
+        .key_hasher()
+        .audit_reference_hash(
+            "breg-history-erasure-target-record-v1",
+            &request.expected.package_revision,
+            &format!("{}:{}", request.target.entity_id, request.target.record_id),
+        )
+        .map_err(|_| HistoryErasureError::InvalidInput)
+}
+
+/// The keyed operator, target, and reason references one erasure's entries
+/// carry instead of the values they name.
+struct ErasureReferences {
+    operator: String,
+    target: String,
+    reason: String,
+}
+
+fn erasure_references(
+    request: &HistoryErasureRequest<'_>,
+) -> Result<ErasureReferences, HistoryErasureError> {
+    if !profile_is_keyed(request.audit.profile()) {
         return Err(HistoryErasureError::InvalidInput);
     }
-    let key_hasher = request.audit_profile.key_hasher();
-    let operator_reference = key_hasher
+    let key_hasher = request.audit.profile().key_hasher();
+    let operator = key_hasher
         .audit_reference_hash(
             "breg-history-erasure-operator-v1",
             &request.expected.package_revision,
             request.operator_reference,
         )
         .map_err(|_| HistoryErasureError::InvalidInput)?;
-    let target_reference = key_hasher
+    let target = key_hasher
         .audit_reference_hash(
             "breg-history-erasure-target-v1",
             &request.expected.package_revision,
@@ -542,15 +651,55 @@ async fn append_history_erasure_audit(
             ),
         )
         .map_err(|_| HistoryErasureError::InvalidInput)?;
-    let reason_reference = key_hasher
+    let reason = key_hasher
         .audit_reference_hash(
             "breg-history-erasure-reason-v1",
             &request.expected.package_revision,
             request.reason,
         )
         .map_err(|_| HistoryErasureError::InvalidInput)?;
+    Ok(ErasureReferences {
+        operator,
+        target,
+        reason,
+    })
+}
+
+/// Build a standalone erasure's `request` entry, correlated by its keyed
+/// target reference as its `response` entry is. It names only the references
+/// that response entry already records.
+fn history_erasure_request_entry(
+    request: &HistoryErasureRequest<'_>,
+) -> Result<AuditEntry, HistoryErasureError> {
+    let references = erasure_references(request)?;
+    Ok(AuditEntry::request(
+        HISTORY_ERASURE_AUDIT_SCHEMA,
+        references.target.clone(),
+        json!({
+            "phase": "attempt",
+            "outcome": "started",
+            "operationId": AUDIT_OPERATION_ID,
+            "packageRevision": request.expected.package_revision,
+            "operatorReference": references.operator,
+            "targetReference": references.target,
+            "reasonReference": references.reason,
+        }),
+    ))
+}
+
+/// Build the erasure's `response` entry, correlated by the parent lifecycle
+/// reference or, for a standalone erasure, by its keyed target reference.
+fn history_erasure_entry(
+    request: &HistoryErasureRequest<'_>,
+    outcome: &HistoryErasureOutcome,
+    lifecycle_reference: Option<&str>,
+) -> Result<AuditEntry, HistoryErasureError> {
+    let ErasureReferences {
+        operator: operator_reference,
+        target: target_reference,
+        reason: reason_reference,
+    } = erasure_references(request)?;
     let mut record = json!({
-        "schema": "breg-history-erasure-audit/v1",
         "phase": "terminal",
         "outcome": "committed",
         "operationId": AUDIT_OPERATION_ID,
@@ -573,17 +722,13 @@ async fn append_history_erasure_audit(
         "operatorResponsibility": "saved_exports_event_consumers_and_backups",
         "stubPolicy": "commit_position_and_minimized_origin_retained_context_removed",
     });
+    let correlation = lifecycle_reference
+        .map_or_else(|| target_reference.clone(), std::borrow::ToOwned::to_owned);
     if let Some(lifecycle_reference) = lifecycle_reference {
         let object = record
             .as_object_mut()
             .ok_or(HistoryErasureError::Unavailable)?;
-        let target_record_reference = key_hasher
-            .audit_reference_hash(
-                "breg-history-erasure-target-record-v1",
-                &request.expected.package_revision,
-                &format!("{}:{}", request.target.entity_id, request.target.record_id),
-            )
-            .map_err(|_| HistoryErasureError::InvalidInput)?;
+        let target_record_reference = lifecycle_target_record_reference(request)?;
         object.insert(
             "lifecycleReference".to_owned(),
             Value::String(lifecycle_reference.to_owned()),
@@ -593,8 +738,11 @@ async fn append_history_erasure_audit(
             Value::String(target_record_reference),
         );
     }
-    append_audit_envelope(transaction, request.audit_profile, record).await?;
-    Ok(())
+    Ok(AuditEntry::response(
+        HISTORY_ERASURE_AUDIT_SCHEMA,
+        correlation,
+        record,
+    ))
 }
 
 fn validate_request(request: &HistoryErasureRequest<'_>) -> Result<(), HistoryErasureError> {
@@ -609,7 +757,7 @@ fn validate_request(request: &HistoryErasureRequest<'_>) -> Result<(), HistoryEr
         || request.reason.is_empty()
         || request.reason.len() > MAX_REASON_BYTES
         || request.reason.chars().any(char::is_control)
-        || !profile_is_keyed(request.audit_profile)
+        || !profile_is_keyed(request.audit.profile())
     {
         return Err(HistoryErasureError::InvalidInput);
     }

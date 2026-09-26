@@ -17,6 +17,7 @@ use base64::Engine as _;
 use hmac::{Hmac, KeyInit, Mac};
 use postgres_harness::TestDatabase;
 use rcgen::{generate_simple_self_signed, CertifiedKey};
+use registry_breg::audit::WEBHOOK_AUDIT_SCHEMA;
 use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{parse_project_json, ModuleAssetSource};
 use registry_breg::event_destination::ActivatedEventDestinationRegistry;
@@ -114,7 +115,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
     let service = WebhookDeliveryService::new(
@@ -125,7 +126,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         identity.clone(),
         lock_key,
         Duration::from_secs(2),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
     );
     let plan = MutationPlan::from_compiled(&compiled, "records.case.create")
         .expect("create plan retains the exact compiler delivery");
@@ -352,14 +353,38 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     )
     .await;
 
-    service
-        .replay(
-            timeout_event.event_id,
-            &timeout_event.compiled_delivery_id,
-            1,
+    // The operator stops waiting while the reset's commit is in flight:
+    // the replay still runs to its response, so its accepted request is
+    // answered once the reset commits.
+    slow_delivery_state_commit(&database, "pending").await;
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(300),
+            service.replay(
+                timeout_event.event_id,
+                &timeout_event.compiled_delivery_id,
+                1,
+            ),
         )
         .await
-        .expect("compiled operator replay resets one terminal generation");
+        .is_err(),
+        "the caller leaves before the reset commits"
+    );
+    allow_delivery_state_commit(&database).await;
+    let mut answered = Vec::new();
+    for _ in 0..50 {
+        answered = audit_outcomes(&database, &audit_profile, &timeout_event, 2, 0, "replay").await;
+        if answered.len() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        answered,
+        ["replay_requested", "replay_committed"],
+        "a replay whose caller left is still answered"
+    );
+    assert_eq!(delivery_state(&database, &timeout_event).await.0, 2);
     assert_eq!(
         service
             .replay(
@@ -383,16 +408,13 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         header(&replay_request, "idempotency-key"),
         "operator replay changes the deterministic generation binding"
     );
-    assert_exact_audit_outcome(
-        &database,
-        &audit_profile,
-        &timeout_event,
-        2,
-        0,
-        "replay",
-        "replay_requested",
-    )
-    .await;
+    // The replay is a request before its reset and a response once the
+    // reset commits, under one correlation.
+    assert_eq!(
+        audit_outcomes(&database, &audit_profile, &timeout_event, 2, 0, "replay").await,
+        ["replay_requested", "replay_committed"],
+        "an operator replay is answered once its reset commits"
+    );
     assert_exact_audit_outcome(
         &database,
         &audit_profile,
@@ -753,7 +775,9 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         "audit",
     )
     .await;
-    revoke_audit_insert(&database).await;
+    // A destination that refuses the attempt entry: the lease rolls back with
+    // it and nothing leaves the process.
+    database.audit_capture().fail_after(0);
     assert_eq!(
         service.deliver_once().await,
         Err(WebhookDeliveryError::Unavailable)
@@ -763,7 +787,19 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         delivery_state(&database, &audit_refused).await,
         (1, "pending".to_owned(), 0)
     );
-    grant_audit_insert(&database).await;
+    // The refused writer stays failed; a worker opened over the recovered
+    // destination delivers the same work.
+    database.audit_capture().restore();
+    let service = WebhookDeliveryService::new(
+        pool.clone(),
+        Arc::clone(&destinations),
+        hook_handlers(&compiled, &identity.package_revision),
+        Arc::new(compiled.clone()),
+        identity.clone(),
+        lock_key,
+        Duration::from_secs(2),
+        database.audit(audit_profile.clone()),
+    );
     receiver.enqueue(ResponsePlan::Status(204)).await;
     assert_eq!(
         service.deliver_once().await,
@@ -784,6 +820,100 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         "delivered",
     )
     .await;
+    // A disposition whose commit fails is never recorded as done: the
+    // journal keeps only the attempt, and expiry recovery answers it.
+    let commit_egress_before = receiver.count().await;
+    receiver.enqueue(ResponsePlan::Status(204)).await;
+    let commit_refused = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "delivery-terminal-commit-refused",
+        "terminal-commit",
+    )
+    .await;
+    refuse_delivery_state_commit(&database, "delivered").await;
+    assert_eq!(
+        service.deliver_once().await,
+        Err(WebhookDeliveryError::Unavailable)
+    );
+    allow_delivery_state_commit(&database).await;
+    receiver.wait_for_count(commit_egress_before + 1).await;
+    assert_eq!(
+        delivery_state(&database, &commit_refused).await,
+        (1, "leased".to_owned(), 1),
+        "the rolled-back disposition leaves the lease for expiry recovery"
+    );
+    assert_no_audit_outcome(&database, &audit_profile, &commit_refused, 1, 1, "terminal").await;
+    expire_lease(&database, &commit_refused).await;
+    service
+        .deliver_once()
+        .await
+        .expect("expiry recovery answers the interrupted attempt");
+    assert_exact_audit_outcome(
+        &database,
+        &audit_profile,
+        &commit_refused,
+        1,
+        1,
+        "terminal",
+        "worker_interrupted",
+    )
+    .await;
+
+    // A lease whose commit fails after its attempt was recorded sends
+    // nothing, and its attempt is answered as interrupted.
+    let lease_egress_before = receiver.count().await;
+    let lease_refused = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "delivery-lease-commit-refused",
+        "lease-commit",
+    )
+    .await;
+    refuse_delivery_state_commit(&database, "leased").await;
+    assert_eq!(
+        service.deliver_once().await,
+        Err(WebhookDeliveryError::Unavailable)
+    );
+    allow_delivery_state_commit(&database).await;
+    assert_eq!(receiver.count().await, lease_egress_before, "no egress");
+    assert_eq!(
+        delivery_state(&database, &lease_refused).await,
+        (1, "pending".to_owned(), 0)
+    );
+    assert_exact_audit_outcome(
+        &database,
+        &audit_profile,
+        &lease_refused,
+        1,
+        1,
+        "attempt",
+        "attempt_started",
+    )
+    .await;
+    assert_exact_audit_outcome(
+        &database,
+        &audit_profile,
+        &lease_refused,
+        1,
+        1,
+        "terminal",
+        "worker_interrupted",
+    )
+    .await;
+    receiver.enqueue(ResponsePlan::Status(204)).await;
+    assert_eq!(
+        service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Delivered),
+        "the refused lease is claimed again once the commit succeeds"
+    );
+
     let terminal_egress_before = receiver.count().await;
     let terminal_response_release = Arc::new(Notify::new());
 
@@ -806,17 +936,20 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     let service_for_terminal_fault = service.clone();
     let attempt = tokio::spawn(async move { service_for_terminal_fault.deliver_once().await });
     receiver.wait_for_count(terminal_egress_before + 1).await;
-    revoke_audit_insert(&database).await;
+    database.audit_capture().fail_after(0);
     terminal_response_release.notify_one();
     assert_eq!(
         attempt.await.expect("terminal audit fault task joins"),
         Err(WebhookDeliveryError::Unavailable)
     );
-    grant_audit_insert(&database).await;
+    database.audit_capture().restore();
+    // The terminal is recorded only after its disposition commits, so the
+    // refused entry leaves the committed disposition without it: the writer
+    // then refuses every later entry until the destination is repaired.
     assert_eq!(
         delivery_state(&database, &terminal_audit_refused).await,
-        (1, "leased".to_owned(), 1),
-        "terminal audit refusal leaves the committed lease for expiry recovery"
+        (1, "delivered".to_owned(), 1),
+        "the terminal entry follows the committed disposition"
     );
     assert_no_audit_outcome(
         &database,
@@ -835,6 +968,82 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     drop(pool);
     receiver.stop().await;
     database.cleanup().await;
+}
+
+/// Make the commit of any delivery transition into `state` fail, after
+/// every statement in its transaction succeeded.
+async fn refuse_delivery_state_commit(database: &TestDatabase, state: &str) {
+    database
+        .admin
+        .batch_execute(&format!(
+            "CREATE OR REPLACE FUNCTION public.test_refuse_delivery_commit()
+               RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN
+               IF NEW.state = '{state}' THEN
+                 RAISE EXCEPTION 'test refuses this delivery commit';
+               END IF;
+               RETURN NEW;
+             END $$;
+             GRANT EXECUTE ON FUNCTION public.test_refuse_delivery_commit() TO PUBLIC;
+             CREATE CONSTRAINT TRIGGER test_refuse_delivery_commit
+               AFTER UPDATE ON registry_internal.registry_webhook_delivery_state
+               DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+               EXECUTE FUNCTION public.test_refuse_delivery_commit();"
+        ))
+        .await
+        .expect("administrator installs the commit refusal");
+}
+
+/// Hold the commit of any delivery transition into `state` for a second,
+/// after every statement in its transaction succeeded.
+async fn slow_delivery_state_commit(database: &TestDatabase, state: &str) {
+    database
+        .admin
+        .batch_execute(&format!(
+            "CREATE OR REPLACE FUNCTION public.test_refuse_delivery_commit()
+               RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN
+               IF NEW.state = '{state}' THEN
+                 PERFORM pg_sleep(1);
+               END IF;
+               RETURN NEW;
+             END $$;
+             GRANT EXECUTE ON FUNCTION public.test_refuse_delivery_commit() TO PUBLIC;
+             CREATE CONSTRAINT TRIGGER test_refuse_delivery_commit
+               AFTER UPDATE ON registry_internal.registry_webhook_delivery_state
+               DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+               EXECUTE FUNCTION public.test_refuse_delivery_commit();"
+        ))
+        .await
+        .expect("administrator installs the commit delay");
+}
+
+async fn allow_delivery_state_commit(database: &TestDatabase) {
+    database
+        .admin
+        .batch_execute(
+            "DROP TRIGGER test_refuse_delivery_commit
+               ON registry_internal.registry_webhook_delivery_state;
+             DROP FUNCTION public.test_refuse_delivery_commit();",
+        )
+        .await
+        .expect("administrator removes the commit refusal");
+}
+
+async fn expire_lease(database: &TestDatabase, event: &CapturedEvent) {
+    database
+        .admin
+        .execute(
+            // Move the whole lease into the past, keeping its captured length.
+            "UPDATE registry_internal.registry_webhook_delivery_state
+                SET attempt_started_at = attempt_started_at
+                        - (lease_expires_at - attempt_started_at) - interval '1 second',
+                    lease_expires_at = attempt_started_at - interval '1 second'
+              WHERE event_id = $1 AND state = 'leased'",
+            &[&event.event_id],
+        )
+        .await
+        .expect("administrator expires the lease");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -870,7 +1079,7 @@ async fn real_postgres_webhook_delivery_finishes_prior_package_work_after_compat
         lock_key,
         Duration::from_secs(2),
         original_identity.clone(),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
     let plan = MutationPlan::from_compiled(&compiled, "records.case.create")
@@ -927,7 +1136,7 @@ async fn real_postgres_webhook_delivery_finishes_prior_package_work_after_compat
         successor_identity,
         lock_key,
         Duration::from_secs(2),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
     );
     service
         .verify_retained_bindings()
@@ -1007,7 +1216,7 @@ async fn real_postgres_webhook_delivery_reap_refuses_an_out_of_bounds_captured_a
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
     let plan = MutationPlan::from_compiled(&compiled, "records.case.create")
@@ -1036,7 +1245,7 @@ async fn real_postgres_webhook_delivery_reap_refuses_an_out_of_bounds_captured_a
         identity,
         lock_key,
         Duration::from_secs(2),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
     );
 
     // deployed_attempt_timeout_ms is bound by a database check constraint
@@ -1215,7 +1424,7 @@ async fn real_postgres_local_hook_delivery_runs_in_process_and_records_its_answe
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
     let service = WebhookDeliveryService::new(
@@ -1226,7 +1435,7 @@ async fn real_postgres_local_hook_delivery_runs_in_process_and_records_its_answe
         identity.clone(),
         lock_key,
         Duration::from_secs(2),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
     );
     let plan = MutationPlan::from_compiled(&compiled, "records.case.create")
         .expect("create plan retains the exact compiler delivery");
@@ -1369,7 +1578,7 @@ async fn real_postgres_url_hook_delivery_records_its_answer_and_refuses_one_over
         lock_key,
         Duration::from_secs(2),
         identity.clone(),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
     let service = WebhookDeliveryService::new(
@@ -1380,7 +1589,7 @@ async fn real_postgres_url_hook_delivery_records_its_answer_and_refuses_one_over
         identity.clone(),
         lock_key,
         Duration::from_secs(2),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
     );
     let plan = MutationPlan::from_compiled(&compiled, "records.case.create")
         .expect("create plan retains the exact compiler delivery");
@@ -1783,28 +1992,6 @@ async fn wait_until_retry_is_due(database: &TestDatabase, event: &CapturedEvent)
     .expect("the scheduled retry becomes claimable");
 }
 
-async fn revoke_audit_insert(database: &TestDatabase) {
-    database
-        .admin
-        .batch_execute(&format!(
-            "REVOKE INSERT ON registry_internal.registry_audit FROM \"{}\";",
-            database.runtime_role.as_str()
-        ))
-        .await
-        .expect("administrator injects an audit write fault");
-}
-
-async fn grant_audit_insert(database: &TestDatabase) {
-    database
-        .admin
-        .batch_execute(&format!(
-            "GRANT INSERT ON registry_internal.registry_audit TO \"{}\";",
-            database.runtime_role.as_str()
-        ))
-        .await
-        .expect("administrator restores audit write authority");
-}
-
 async fn assert_exact_audit_outcome(
     database: &TestDatabase,
     profile: &AuditProfile,
@@ -1854,22 +2041,12 @@ async fn audit_outcomes(
         )
         .expect("test can derive the keyed event reference");
     database
-        .admin
-        .query(
-            "SELECT envelope
-             FROM registry_internal.registry_audit
-             ORDER BY created_at, envelope_id",
-            &[],
-        )
-        .await
-        .expect("administrator can inspect minimized audit envelopes")
+        .audit_entries()
         .into_iter()
-        .filter_map(|row| serde_json::from_slice::<Value>(&row.get::<_, Vec<u8>>(0)).ok())
-        .filter_map(|envelope| envelope.get("record").cloned())
+        .filter(|entry| entry["schema"] == WEBHOOK_AUDIT_SCHEMA)
+        .filter_map(|entry| entry.get("record").cloned())
         .filter(|record| {
-            record.get("schema").and_then(Value::as_str) == Some("breg-webhook-audit/v1")
-                && record.get("eventReference").and_then(Value::as_str)
-                    == Some(event_reference.as_str())
+            record.get("eventReference").and_then(Value::as_str) == Some(event_reference.as_str())
                 && record.get("generation").and_then(Value::as_i64) == Some(generation)
                 && record.get("attempt").and_then(Value::as_i64) == Some(attempt)
                 && record.get("phase").and_then(Value::as_str) == Some(phase)
@@ -1885,16 +2062,10 @@ async fn audit_outcomes(
 
 async fn assert_webhook_audits_are_closed_and_value_free(database: &TestDatabase) {
     let audits = database
-        .admin
-        .query(
-            "SELECT convert_from(envelope, 'UTF8') FROM registry_internal.registry_audit",
-            &[],
-        )
-        .await
-        .expect("administrator can inspect minimized audit envelopes")
+        .audit_entries()
         .into_iter()
-        .map(|row| row.get::<_, String>(0))
-        .filter(|envelope| envelope.contains("breg-webhook-audit/v1"))
+        .filter(|entry| entry["schema"] == WEBHOOK_AUDIT_SCHEMA)
+        .map(|entry| entry.to_string())
         .collect::<Vec<_>>();
     assert!(!audits.is_empty());
     let joined = audits.join("\n");
@@ -2205,6 +2376,12 @@ impl DestinationFixture {
     }
 
     fn runtime_config(&self, event_destinations: &str) -> String {
+        let audit_path = self
+            .secret_root
+            .with_file_name("audit")
+            .join("audit.jsonl")
+            .display()
+            .to_string();
         format!(
             r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
 kind: BRegRuntimeConfig
@@ -2259,6 +2436,7 @@ authentication:
     purpose: registry_purpose
 audit:
   hashKeyRef: secret:file/audit-key
+  path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
   maxAgeSeconds: 300

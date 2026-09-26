@@ -1,19 +1,116 @@
 {
   "$defs": {
-    "AuditRuntime": {
-      "additionalProperties": false,
-      "properties": {
-        "integrityKeyRef": {
+    "AuditDestinationKind": {
+      "description": "The configured audit destination kind, as written in product configuration.",
+      "oneOf": [
+        {
+          "const": "file",
+          "description": "Durable, rotated JSON Lines file.",
           "type": "string"
         },
-        "sink": {
+        {
+          "const": "stdout",
+          "description": "One JSON line per entry on standard output, flushed per entry.",
           "type": "string"
         }
+      ]
+    },
+    "AuditRuntime": {
+      "additionalProperties": false,
+      "description": "Where Relay writes its audit lines, in the shape every Registry Stack\nproduct shares. A relative `path` is resolved against the runtime file's\ndirectory at startup.",
+      "else": {
+        "properties": {
+          "path": {
+            "pattern": "\\S",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ]
       },
-      "required": [
-        "sink",
-        "integrityKeyRef"
-      ],
+      "if": {
+        "properties": {
+          "destination": {
+            "const": "stdout"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
+      "properties": {
+        "destination": {
+          "$ref": "#/$defs/AuditDestinationKind",
+          "default": "file"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retainDays": {
+          "format": "uint32",
+          "maximum": 36500,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "rotateBytes": {
+          "format": "uint64",
+          "maximum": 4294967295,
+          "minimum": 1048576,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "properties": {
+                "path": {
+                  "not": {
+                    "type": "null"
+                  }
+                }
+              },
+              "required": [
+                "path"
+              ]
+            },
+            {
+              "properties": {
+                "rotateBytes": {
+                  "not": {
+                    "type": "null"
+                  }
+                }
+              },
+              "required": [
+                "rotateBytes"
+              ]
+            },
+            {
+              "properties": {
+                "retainDays": {
+                  "not": {
+                    "type": "null"
+                  }
+                }
+              },
+              "required": [
+                "retainDays"
+              ]
+            }
+          ]
+        }
+      },
       "type": "object"
     },
     "AuthenticationRuntime": {

@@ -504,6 +504,11 @@ impl TestPackage {
             .to_owned()
         };
         let path = self.directory.join("runtime.yaml");
+        let audit_path = secrets
+            .with_file_name("audit")
+            .join("audit.jsonl")
+            .display()
+            .to_string();
         fs::write(
             &path,
             format!(
@@ -561,6 +566,7 @@ authentication:
     purpose: purpose
 audit:
   hashKeyRef: secret:file/audit-key
+  path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
   maxAgeSeconds: 300

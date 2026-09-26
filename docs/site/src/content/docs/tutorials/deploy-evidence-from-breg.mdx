@@ -341,8 +341,12 @@ consumed lookup meaning or question semantics:
 
 If a check fails, keep traffic paused. Follow the BReg recovery plan and restore
 a mutually compatible provider, Evidence candidate and consumer contract before
-resuming. Keep audit history and verify completed journals after their writers
-stop.
+resuming. Preserve the audit streams from both runtimes and the BReg operator
+commands. For file destinations, collect the final active files after their writers
+stop, along with the sealed segments. Confirm receipt of every collected file in
+your append-only archive before local retention deletes it; the runtimes provide
+no local chain-verification command. Follow the
+[audit shipping procedure](../../operate/retention-and-persistent-state/#ship-evidence-gateway-audit-records-off-host).
 
 :::caution[A migration may not reverse]
 Database migrations may constrain reversal, so activating the new BReg package is

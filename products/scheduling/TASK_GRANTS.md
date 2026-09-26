@@ -98,15 +98,17 @@ the grant deadline passes. Keep grant deadlines short. Re-checking the full
 bounds inside the capacity transaction is a recorded deferral, not a promise
 this milestone keeps.
 
-## What the audit journal records
+## What the audit records
 
-Every commitment and every refused commitment writes one authorization record
-under `authorization.allowed` or `authorization.refused`, and so does a
-permission the service refuses before any commitment is reached. The principal,
-client, grant, and approver are keyed pseudonyms scoped to the request's
-reference class, the purpose is recorded as presence only and never as a
-value, and the record adds the grant's source issuer and its deadline. No
-bound value, service, location, or action appears in the journal.
+Every commitment writes a `request` entry before its capacity transaction opens
+and a `response` entry carrying its authorization decision, under
+`authorization.allowed` or `authorization.refused`, once the transaction
+commits or rolls back. A permission the service refuses before any commitment
+is reached writes one `response` entry. The principal, client, grant, and
+approver are keyed pseudonyms scoped to the request's reference class, the
+purpose is recorded as presence only and never as a value, and the record adds
+the grant's source issuer and its deadline. No bound value, service, location,
+or action appears in the audit.
 
 ## Where a grant comes from
 

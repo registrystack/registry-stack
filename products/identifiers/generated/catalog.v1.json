@@ -2759,7 +2759,7 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "da421a45c81d34a937235fa085261c51554e14302362c9a9ed9dd025329b40f7"
+        "sha256": "b40afc555ae360d052fa96f80bf6994f07ef8897d7012eb7bfe3c64b287b67c9"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
@@ -2777,7 +2777,7 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "da421a45c81d34a937235fa085261c51554e14302362c9a9ed9dd025329b40f7"
+        "sha256": "b40afc555ae360d052fa96f80bf6994f07ef8897d7012eb7bfe3c64b287b67c9"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
@@ -2795,11 +2795,11 @@
       "description": "Base Registry Engine runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "da421a45c81d34a937235fa085261c51554e14302362c9a9ed9dd025329b40f7"
+        "sha256": "b40afc555ae360d052fa96f80bf6994f07ef8897d7012eb7bfe3c64b287b67c9"
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "4e1226cffe6761f035aebde2c1f07f88a35251b537725aab532dbf4500e8ed30",
+        "sha256": "60455b8f63171c1799cb62bfd96b1251d7bd8340e23e1e0d16864a48ecb71f3f",
         "mediaType": "application/schema+json"
       }
     },
@@ -2813,11 +2813,11 @@
       "description": "Registry Casework runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-casework/src/schema.rs",
-        "sha256": "0917963cbe609c32a44c84631dbf482ea6955eeea56a3bddc3129f0166dfed37"
+        "sha256": "bcf6e53c4e1be205bec1b8a2ed59839f0c0e09eaf394ca5ae49bfecee8a3e647"
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "9a548eca02ffea6d52eb89546a2a99286f19bbf5d20b272741f633728762171c",
+        "sha256": "99e5a7edf483bf571a2043723d3efd3fdd7b3428e1386bd21cdaf9ae1b8ebee1",
         "mediaType": "application/schema+json"
       }
     },
@@ -2858,20 +2858,20 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/registry-relay/audit-event/v2alpha1",
+      "uri": "https://id.registrystack.org/schemas/registry-relay/audit-event/v2alpha2",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v2alpha1",
+      "compatibilityLine": "v2alpha2",
       "owner": "relay-v2",
-      "title": "Registry Relay value-free audit event",
+      "title": "Registry Relay value-free audit line",
       "description": "Relay V2 generated public JSON Schema.",
       "source": {
         "path": "crates/registry-relay-v2/src/artifacts.rs",
-        "sha256": "7feb222632ac997903c8809e190fa0c008bf17790e39fa075fc10c3fd3e0bec1"
+        "sha256": "6ef5d788f9e2f8bdf03a7f002094aa037b1ab2c94b810b0e16c41205ff53d3d7"
       },
       "artifact": {
-        "path": "products/identifiers/generated/artifacts/registry-relay/audit-event/v2alpha1.json",
-        "sha256": "e2b2be3baabb1c5f147a4095eade0d85702d814ec93049b62208fdd7ab1265b8",
+        "path": "products/identifiers/generated/artifacts/registry-relay/audit-event/v2alpha2.json",
+        "sha256": "1da61c9cea7ebaa96a0b5c0fdd5dc797080a7bd435cdf265d3f6b293ce6c7590",
         "mediaType": "application/schema+json"
       }
     },
@@ -2903,11 +2903,11 @@
       "description": "Relay V2 authoring JSON Schema.",
       "source": {
         "path": "crates/registry-relayctl/schemas/authoring/runtime.schema.json",
-        "sha256": "9beeda053e86d8ffa67755e91883efd0d2205026ee7d0aa7f38cecef7a6f781b"
+        "sha256": "fe03e4bd463fc48bad5c6fc3ddd1161dfe37d2a06f74cfa350539b20ca900b2b"
       },
       "artifact": {
         "path": "crates/registry-relayctl/schemas/authoring/runtime.schema.json",
-        "sha256": "9beeda053e86d8ffa67755e91883efd0d2205026ee7d0aa7f38cecef7a6f781b",
+        "sha256": "fe03e4bd463fc48bad5c6fc3ddd1161dfe37d2a06f74cfa350539b20ca900b2b",
         "mediaType": "application/schema+json"
       }
     },
@@ -2921,11 +2921,11 @@
       "description": "Registry Scheduling runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-scheduling/src/schema.rs",
-        "sha256": "99d43221904847661cf4331d1d5b4fd7c936bbb60ead987509bcb6c3f83b61c5"
+        "sha256": "d5b25e3328e1c60a4224f5f4b411d17090152a8aaf0ae3510f21c8620286007b"
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "2158f213b60c1da4498818dc6ac456d937ac965984552a0007ad6bd5dfba4938",
+        "sha256": "be9422ec5c6e554917fae519b17827acdaf54c7d2347db43505ab0937d349599",
         "mediaType": "application/schema+json"
       }
     },
@@ -2991,7 +2991,7 @@
       "description": "Ordered Relay V2 technical handling levels: public, internal, confidential, and restricted.",
       "source": {
         "path": "products/relay-v2/CONCEPT.md",
-        "sha256": "96445c1c324519d02890b5c24a46d5b66dfa2e17fcc23b33e0978bf8f5ab3a4e"
+        "sha256": "ee3a1f88f87331e3601469ae7f23ecd0c3249168d2f6d199de8250892b24dccc"
       }
     },
     {

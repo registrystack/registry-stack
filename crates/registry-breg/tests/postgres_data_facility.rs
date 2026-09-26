@@ -374,7 +374,7 @@ struct Counts {
     current: i64,
     revisions: i64,
     outbox: i64,
-    audit: i64,
+    audit: usize,
     idempotency: i64,
 }
 
@@ -389,7 +389,6 @@ async fn effect_counts(harness: &PilotHarness) -> Counts {
                    (SELECT count(*) FROM registry_data.\"{table}\"),
                    (SELECT count(*) FROM registry_internal.registry_revisions),
                    (SELECT count(*) FROM registry_internal.registry_outbox),
-                   (SELECT count(*) FROM registry_internal.registry_audit),
                    (SELECT count(*) FROM registry_internal.registry_idempotency)"
             ),
             &[],
@@ -400,8 +399,8 @@ async fn effect_counts(harness: &PilotHarness) -> Counts {
         current: row.get(0),
         revisions: row.get(1),
         outbox: row.get(2),
-        audit: row.get(3),
-        idempotency: row.get(4),
+        audit: harness.audit_entry_count(),
+        idempotency: row.get(3),
     }
 }
 

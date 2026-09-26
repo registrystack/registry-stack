@@ -32,8 +32,7 @@ activates the signed package and runs the server. One person may hold all three 
 the commands stay the same. Every command reads `--help`. Paths given to `--runtime-config`,
 `--credentials`, `--output`, and `--package` must be absolute.
 
-Many operator paths are resolved through held directory descriptors rather than by name: audit
-export output, data export output and checkpoint, data import state and checkpoint, test receipt
+Many operator paths are resolved through held directory descriptors rather than by name: data export output and checkpoint, data import state and checkpoint, test receipt
 output and the credentials file `bregctl test` reads, package inputs and outputs, history request
 files, the reviewed migrations tree, project migrate writes, and authoring sources, including each
 module's SQL assets and planner scripts, which are read through the module directory the listing
@@ -52,8 +51,7 @@ for a platform that offers no equivalent kernel-enforced resolution refuses each
 falling back to resolution by pathname; the diagnostic code depends on the command, since each
 surface reports the refusal under its own code rather than one shared across all of them.
 
-{/* Evidence: crates/registry-bregctl/src/audit_lifecycle.rs, create_export_file();
-    crates/registry-bregctl/src/data_lifecycle.rs, resolve_write_destination();
+{/* Evidence: crates/registry-bregctl/src/data_lifecycle.rs, resolve_write_destination();
     crates/registry-bregctl/src/test_lifecycle.rs, preflight_output() and read_credentials();
     crates/registry-bregctl/src/package_lifecycle.rs;
     crates/registry-bregctl/src/history_erasure_lifecycle.rs and history_rebaseline_lifecycle.rs;
@@ -71,50 +69,50 @@ surface reports the refusal under its own code rather than one shared across all
 
 ## Obtain the runtime
 
-Install `breg` and `bregctl` from the release assets of the pinned tag, so the tool that packages
-and the runtime that serves carry the same version, and so the binary a deployment tested is the
-binary it runs:
+This source-preview page uses the unreleased shared audit writer. Use `breg` and `bregctl` built
+from the same reviewed checkout as this configuration. The older published binaries do not
+implement this audit contract; for a released deployment, use the documentation archive matching
+its release.
+
+With the checkout's pinned Rust toolchain and Python 3 installed, build both binaries from its root
+using the [maintained build helper](https://github.com/registrystack/registry-stack/blob/main/scripts/cargo-runtime-library-path.sh).
+The helper also sets the dynamic-library search path needed to run these binaries directly on macOS:
 
 ```sh
-curl -fsSL https://github.com/registrystack/registry-stack/releases/download/v0.26.1/breg-v0.26.1-install.sh | bash
-bregctl --version
+. ./scripts/cargo-runtime-library-path.sh
+registry_cargo_build "$PWD" --locked -p registry-breg \
+  --features registry-breg/runtime -p registry-bregctl --bins
 ```
 
-```text
-bregctl 0.26.1
-```
+Keep using this shell and put that checkout's `target/debug` directory on your `PATH` for the
+commands on this page.
+Testing, packaging, activation, and serving must use this same build. Record the checkout revision
+alongside the candidate: an unreleased binary's version string alone does not identify its source.
+The [source quickstart prerequisites](https://github.com/registrystack/registry-stack/blob/main/products/breg/quickstart/README.md)
+also describe the local smoke journey. Release installation and authenticity checks belong to the
+[release verification procedure](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)
+for the selected release.
 
-The installer accepts the platforms in
-[platform support](../../explanation/known-limitations/#platform-support), and refuses any other
-platform rather than guessing. It verifies every downloaded binary against the release `SHA256SUMS`
-before anything reaches the install directory, and installs `breg` and `bregctl` together or not at all. It does not verify
-release authenticity. The signed checksum chain that does, and the checks behind it, are recorded in
-[OpenSSF and release trust](../../security/openssf-evidence/). Replace `| bash` with `| less` to read
-the installer before you run it on a host you operate. For a higher-assurance installation, follow
-[release verification](https://github.com/registrystack/registry-stack/blob/v0.26.1/release/VERIFY.md)
-for the pinned tag, then rerun the installer with `BREG_ASSET_DIR` pointing at the verified
-directory. `BREG_INSTALL_DIR` selects the install directory; the default is `~/.local/bin`.
+For containers, obtain a matching candidate image from the maintained
+[release build procedure](https://github.com/registrystack/registry-stack/blob/main/release/OPERATIONS.md).
+Use its recorded image digest as `BREG_IMAGE` in [Serve the container image](#serve-the-container-image);
+an older public image tag cannot serve this configuration. The release image is built on
+distroless nonroot for `linux/amd64`; see
+[platform support](../../explanation/known-limitations/#platform-support) for the artifact matrix.
+Its entrypoint is `/usr/local/bin/breg`, its default arguments are
+`--config /etc/breg/runtime.yaml`, and it exposes port 8080. The image carries no shell, no writable
+directory, no healthcheck subcommand, and no `bregctl`. Mount a writable volume for the file audit
+destination; mount the runtime configuration and its package and secret files read-only under
+`/etc/breg`. The orchestrator probes `GET /health` or `GET /healthz` for liveness and `GET /ready`
+for readiness. Activation runs on a separate operator host with the matching `bregctl`.
 
-Testing, packaging, activation, and serving must use one release: `--version` on each binary
-prints it, and the installer keeps the set together, so reinstalling replaces all three. The release
-also publishes `breg-install.sh` as a movable alias of the pinned installer.
-
-The container image is `ghcr.io/registrystack/breg:v0.26.1`, built on distroless nonroot for
-`linux/amd64` only; see [platform support](../../explanation/known-limitations/#platform-support)
-for the rest of the artifact matrix. Its
-entrypoint is `/usr/local/bin/breg`, its default arguments are `--config /etc/breg/runtime.yaml`,
-and it exposes port 8080. The image carries no shell, no writable directory, no healthcheck
-subcommand, and no `bregctl`: the audit journal lives in PostgreSQL, the runtime configuration and
-the files it names are mounted read-only under `/etc/breg`, and the orchestrator probes
-`GET /health` or `GET /healthz` over HTTP for liveness while readiness stays with `GET /ready`, as
-[Activate and serve](#activate-and-serve) records. Because the image carries no `bregctl`,
-activation always happens from a separate host, and the container's own runtime document differs
-from that host's; see [Serve the container image](#serve-the-container-image). The release
-manifest published beside the binaries, `registry-stack-v0.26.1-release-manifest.json`, records
-the promoted digest of each image; pin that digest instead of the movable tag.
-
-{/* Evidence: crates/registry-breg/install.sh; release/docker/Dockerfile.breg;
+{/* Evidence: scripts/cargo-runtime-library-path.sh, registry_cargo_build();
+    products/breg/scripts/test-adopter-workflow.sh;
+    products/breg/quickstart/run.sh;
+    products/breg/quickstart/README.md;
+    release/docker/Dockerfile.breg;
     release/scripts/build-release-image.sh;
+    release/OPERATIONS.md;
     crates/registry-breg/src/api/mod.rs; release/VERIFY.md. */}
 
 ## Provision PostgreSQL
@@ -336,6 +334,8 @@ authentication:
     purpose: registry_purpose
 audit:
   hashKeyRef: secret:file/audit-key
+  destination: file
+  path: /var/lib/breg/audit/breg.jsonl
 cursor:
   secretRef: secret:file/cursor-key
 eventDestinations: {}
@@ -353,7 +353,7 @@ configured prefix and never derive their authority from request headers.
 | `database` | Secret references for the runtime and migration connection URLs, pool bounds, and the two role names the package's policies are written for. |
 | `package` | The activated package directory, the trust anchor, the source revision the project declares as `package.sourceRevision`, and the active revision and sequence. |
 | `authentication` | The OpenID Connect verifier and the names of the claims that carry the caller's principal and purpose. |
-| `audit` and `cursor` | The key that chains the audit journal and the secret that signs pagination cursors. Loss of either key invalidates existing chains or cursors. |
+| `audit` and `cursor` | The audit destination and keyed-reference secret, and the secret that signs pagination cursors. Changing the audit key changes future pseudonyms; changing the cursor secret invalidates existing cursors. |
 | `eventDestinations` and `eventDelivery` | One binding per webhook destination the package declares, and payload retention; see [Bind webhook receivers](../breg-webhooks/). |
 | `evidenceProviders` | One binding per Evidence provider the package declares, keyed by provider ID: `baseUrl`, `trustBindingId`, `trustedJwksRef`, `revokedKeyIds`, optional `caBundleRef`, and exactly one of `tokenRef` or a refreshing `privateKeyJwt` credential. The script cannot replace these bindings; see [Governed registry actions](../../explanation/governed-registry-actions/). |
 | `fieldEncryption` | Key custody for encrypted fields; declare it when the project encrypts a field. The optional `provider` binding's `kind` member selects the custodian. `kind: transit` requires `unixSocketPath`, `mount`, and `keyName`, with an optional `timeoutMilliseconds` (default 5000, at most 30000). `kind: localFile` requires `dekRef`, a `secret:file/<name>` reference to one base64 data-key file, and is for local assurance only. The model and its limits are in [Field encryption for restricted fields](../../explanation/breg-field-encryption/). |
@@ -720,7 +720,7 @@ breg --config /etc/breg/runtime.yaml
 trust anchor and identity, and reports the registry id, version, and revision plus inventory
 counts. It does not say whether the database is on that package; the `apply` report and readiness
 do. `doctor` opens every startup dependency without binding the listener: the runtime file, the
-package, the database connection and its readiness, the audit key, the cursor key, the OIDC
+package, the database connection and its readiness, the audit key and destination writability, the cursor key, the OIDC
 verifier's key material, the event destination bindings, the retained review authority and
 executor bindings, the authentication profile's claim mapping, accepted algorithms, and audience
 against the package this runtime serves, and the field-encryption provider and its stored key. It
@@ -958,7 +958,9 @@ package:
 Nothing restricts `listener.bind` to a loopback or private address the way `metricsListener.bind`
 is restricted, so the container can bind `0.0.0.0` and accept traffic from outside its network
 namespace; a host process that only ever serves `127.0.0.1` has no reason to. Mount the four
-inputs the image needs, all read-only, and publish the listener port:
+configuration inputs read-only, add a writable audit volume owned by the container's non-root
+user, and publish the listener port. Set `BREG_IMAGE` to the digest of your matching candidate image
+from [Obtain the runtime](#obtain-the-runtime) before running:
 
 ```sh
 docker run --rm \
@@ -967,7 +969,8 @@ docker run --rm \
   -v /var/lib/breg/build-1/package:/var/lib/breg/package:ro \
   -v /etc/breg/package-trust-anchor.json:/etc/breg/package-trust-anchor.json:ro \
   -v /etc/breg/container-secrets:/etc/breg/secrets:ro \
-  ghcr.io/registrystack/breg:v0.26.1
+  -v /var/lib/breg/audit:/var/lib/breg/audit:rw \
+  "$BREG_IMAGE"
 ```
 
 Run `bregctl verify` and `bregctl doctor` against this exact runtime document from a host that
@@ -1059,11 +1062,11 @@ behind an upstream rate limit.
 - [Change an active registry](../breg-changes/) for the successor package, its diff, and its
   migration evidence.
 - [Retain, erase, and audit](../breg-retention/) for the maintenance commands that erase history,
-  erase expired Evidence uses, and prove the audit journal.
+  erase expired Evidence uses, and retain the audit stream.
 - [Harden a production deployment](../../security/hardening-checklist/) for the controls around
   the listener, the secret root, and the migration credential.
-- [Evidence deployment targets](https://github.com/registrystack/registry-stack/tree/v0.26.1/products/evidence/reference/deployment-targets)
+- [Evidence deployment targets](https://github.com/registrystack/registry-stack/tree/main/products/evidence/reference/deployment-targets)
   and the
-  [Evidence Compose adapter](https://github.com/registrystack/registry-stack/blob/v0.26.1/docker/compose/docker-compose.yaml)
+  [Evidence Compose adapter](https://github.com/registrystack/registry-stack/blob/main/docker/compose/docker-compose.yaml)
   cover Evidence deployment shapes, not Base Registry Engine; read them when this deployment also
   runs Evidence alongside the registry.

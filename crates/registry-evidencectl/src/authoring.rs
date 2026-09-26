@@ -3747,10 +3747,8 @@ fn render_local_bundle(
             "revokedKeyIds": [],
         },
         "audit": {
-            "format": "keyed-jsonl",
-            "hashSecretRef": "secret:file/audit-hmac-key",
+            "hashKeyRef": "secret:file/audit-hmac-key",
             "hashKeyVersion": 1,
-            "failClosed": true,
         },
         "subjectBinding": {
             "secretRef": "secret:file/subject-binding-hmac-key",
@@ -4084,9 +4082,8 @@ fn write_plan(
             "kind": "local-jwk",
             "privateKeyRef": format!("secret:file/{LOCAL_SIGNING_PRIVATE_FILENAME}"),
         },
-        "auditStorage": {
+        "audit": {
             "path": canonical_staging.join("audit/evidence.jsonl").to_string_lossy(),
-            "maximumFileBytes": 1073741824_u64,
         },
         "outboundTls": outbound_tls,
     });

@@ -59,7 +59,8 @@ Software guarantees include:
   records.
 - Signed, stateless Evidence Gateway assertions, serialized as a flattened JWS or, under
   Evidence Gateway's frozen profile, as an SD-JWT VC response.
-- Hash-chained audit records emitted by runtime services.
+- Minimized, fail-closed audit records emitted by runtime services, for the operator to ship to
+  append-only storage.
 - Release workflow support for an authenticated checksum chain, exact image
   digests, a consolidated SPDX SBOM, image-specific SBOM and Grype evidence,
   and attestations for the exact candidate manifest and bundle.

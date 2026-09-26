@@ -67,6 +67,7 @@ Defined terms are used per [RS-TERMS](../rs-terms/).
 | 0.6.0 | 2026-08-08 | draft | Added Section 7.3, the holder-bound subject binding mode, its batch release envelope, and relying-party presentation verification (REQ-PR-EVIDENCE-060 through REQ-PR-EVIDENCE-069). Scoped REQ-PR-EVIDENCE-024, REQ-PR-EVIDENCE-037, REQ-PR-EVIDENCE-038, REQ-PR-EVIDENCE-040, and REQ-PR-EVIDENCE-041 to the audience-scoped mode without renumbering them. |
 | 0.7.0 | 2026-08-09 | draft | Added Section 7.4, the bounded multi-subject request batch, ordered signed-JWS outcomes, atomic admission and release, and the optional source-batch optimization (REQ-PR-EVIDENCE-070 through REQ-PR-EVIDENCE-075). |
 | 0.8.0 | 2026-08-14 | draft | Added the exact packaged public provider advertisement, distinguished it from requester-scoped definition discovery and verifier trust, and aligned the primary and private metrics listener route inventories. |
+| 0.8.1 | 2026-09-25 | draft | Replaced the chain-head recovery and `evidence verify-audit` obligations in REQ-PR-EVIDENCE-051 with the single-writer, fail-closed audit writer and operator shipping to append-only storage. |
 
 ## 1. Scope and references
 
@@ -719,17 +720,15 @@ credentials or make a source request. Authentication, malformed-request, and inv
 failures MUST NOT create a native audit event
 (`products/evidence/contracts/audit-event.schema.yaml`, invariant `V1-I39`).
 
-REQ-PR-EVIDENCE-051: At startup and after restart, Evidence Gateway MUST recover the prior chain head from
-the newest sealed segment, when one exists, and MUST verify the complete active segment from that
-head before serving.
-Startup and readiness MUST NOT rescan sealed history.
-External replacement or modification of the active segment or lock file MUST fail readiness and
-close future appends for the process lifetime.
-The operator MUST run `evidence verify-audit` to verify complete retained history across every
-available sealed segment and, when the writer is stopped, the active segment.
-Mutation within older sealed history is detected by that complete out-of-band verification, not by
-serving-process startup or readiness
-(`products/evidence/contracts/audit-event.schema.yaml`,
+REQ-PR-EVIDENCE-051: Exactly one Evidence Gateway process MUST write a given audit file, holding a
+lock beside it for the process lifetime.
+External replacement or modification of the active audit file or its lock file MUST fail readiness
+and close future appends for the process lifetime, and a failed durable append MUST close future
+appends until the process restarts.
+Audit entries are not chained, and startup and readiness MUST NOT read sealed audit files.
+Tamper evidence and completeness of retained history belong to the append-only storage the operator
+ships audit entries to, not to the serving process
+(`products/evidence/contracts/security-invariant-matrix.yaml`,
 `products/evidence/OPERATOR-CONTRACT.md`).
 
 ## 10. Immutability of deployment input
@@ -929,8 +928,8 @@ An Evidence Gateway deployment conforms to this specification when it:
   REQ-PR-EVIDENCE-043, REQ-PR-EVIDENCE-044, REQ-PR-EVIDENCE-045);
 - audits at the refusal and authorized-material durable gates, validates every event against its
   closed operation schema, records response protection only for authorized material, records a minimal refusal
-  before `403`, returns `503` if that append fails, records no protected value, and verifies the
-  keyed chain (REQ-PR-EVIDENCE-046,
+  before `403`, returns `503` if that append fails, records no protected value, and keeps one
+  writer per audit file (REQ-PR-EVIDENCE-046,
   REQ-PR-EVIDENCE-047, REQ-PR-EVIDENCE-048, REQ-PR-EVIDENCE-049, REQ-PR-EVIDENCE-050,
   REQ-PR-EVIDENCE-051);
 - treats deployment input as immutable, restricts the runtime file to process-local bindings, fails

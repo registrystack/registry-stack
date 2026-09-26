@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
+mod audit_lines;
+
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use audit_lines::AuditLines;
 use axum::body::{to_bytes, Body};
 use http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, LINK};
 use http::{Method, Request, StatusCode};
 use jsonschema::{Draft, JSONSchema};
-use registry_platform_audit::{AuditChainHasher, AuditEnvelope, AuditError, AuditSink, ChainState};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier};
 use registry_platform_sqlite::{
@@ -259,55 +261,6 @@ struct Fixture {
     artifacts: Arc<ArtifactSet>,
 }
 
-#[derive(Default)]
-struct RecordingAuditSink {
-    envelopes: Mutex<Vec<AuditEnvelope>>,
-}
-
-impl RecordingAuditSink {
-    fn records(&self) -> Vec<Value> {
-        self.envelopes
-            .lock()
-            .expect("audit recorder lock")
-            .iter()
-            .map(|envelope| envelope.record.clone())
-            .collect()
-    }
-}
-
-#[async_trait::async_trait]
-impl AuditSink for RecordingAuditSink {
-    async fn write(&self, envelope: &AuditEnvelope) -> Result<(), AuditError> {
-        self.envelopes
-            .lock()
-            .expect("audit recorder lock")
-            .push(envelope.clone());
-        Ok(())
-    }
-
-    #[allow(deprecated)]
-    async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
-        Ok(self
-            .envelopes
-            .lock()
-            .expect("audit recorder lock")
-            .last()
-            .map(|envelope| envelope.record_hash))
-    }
-
-    async fn tail_hash_with_hasher(
-        &self,
-        _hasher: &AuditChainHasher,
-    ) -> Result<Option<[u8; 32]>, AuditError> {
-        Ok(self
-            .envelopes
-            .lock()
-            .expect("audit recorder lock")
-            .last()
-            .map(|envelope| envelope.record_hash))
-    }
-}
-
 #[test]
 fn compiler_keeps_every_multi_resource_operation_boundary_local() {
     let fixture = compile_fixture();
@@ -439,12 +392,8 @@ fn compiler_keeps_every_multi_resource_operation_boundary_local() {
 #[tokio::test]
 async fn real_router_keeps_related_public_and_protected_resources_isolated() {
     let fixture = compile_fixture();
-    let sink = Arc::new(RecordingAuditSink::default());
-    let chain = Arc::new(
-        ChainState::bootstrap_unkeyed_dev_only(sink.as_ref())
-            .await
-            .expect("audit chain starts"),
-    );
+    let sink = AuditLines::recording();
+    let writer = sink.writer();
     let idp = MockIdp::start().await;
     let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         idp.jwks_uri(),
@@ -482,7 +431,7 @@ async fn real_router_keeps_related_public_and_protected_resources_isolated() {
         Arc::clone(&fixture.artifacts),
         Arc::clone(&sqlite),
         Some(authenticator),
-        RelayAudit::new(Arc::clone(&chain), sink.clone()),
+        RelayAudit::new(writer.clone()),
         Some(Arc::new(
             CursorKey::new(vec![7; 32]).expect("fixture cursor key is valid"),
         )),
@@ -504,7 +453,7 @@ async fn real_router_keeps_related_public_and_protected_resources_isolated() {
             audience.into(),
             Duration::from_secs(30),
         )),
-        RelayAudit::new(Arc::clone(&chain), sink.clone()),
+        RelayAudit::new(writer.clone()),
         Some(Arc::new(
             CursorKey::new(vec![8; 32]).expect("fixture cursor key is valid"),
         )),
@@ -938,7 +887,7 @@ async fn real_router_keeps_related_public_and_protected_resources_isolated() {
     .await;
     assert_concealed_equivalence(insufficient, unknown);
 
-    let audits = sink.records();
+    let audits = sink.values();
     assert_audit_boundary(
         &audits,
         "00000000000000000000000000000005",

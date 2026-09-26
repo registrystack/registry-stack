@@ -1300,7 +1300,7 @@ mod tests {
         let database = TestDatabase::create(1).await;
         let (migration, migration_task) = database.connect_migration().await;
         for _ in 0..2 {
-            install_mutation_schema(&migration, &database.runtime_role)
+            install_mutation_schema(&migration, &database.runtime_role, false)
                 .await
                 .expect("request store schema installs repeatably");
         }
@@ -1522,7 +1522,7 @@ mod tests {
             .await
             .expect("legacy decisions fixture installs");
         assert_eq!(
-            install_mutation_schema(&migration, &database.runtime_role).await,
+            install_mutation_schema(&migration, &database.runtime_role, false).await,
             Err(MutationError::LegacyReviewDataPresent)
         );
         migration_task.abort();
@@ -1550,7 +1550,7 @@ mod tests {
                 .await
                 .expect("legacy state fixture installs");
             assert_eq!(
-                install_mutation_schema(&migration, &database.runtime_role).await,
+                install_mutation_schema(&migration, &database.runtime_role, false).await,
                 Err(MutationError::LegacyReviewDataPresent),
                 "{legacy_state}"
             );

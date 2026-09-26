@@ -19,9 +19,8 @@ signer:
   keyName: evidence-signing
   keyVersion: 7
   timeoutMilliseconds: 2000
-auditStorage:
+audit:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
-  maximumFileBytes: 1073741824
 # The registry API this project reads is presented over ordinary public TLS,
 # so no private trust profile is declared and the source names none. A
 # deployment whose registry API sits behind an internal CA adds a profile here

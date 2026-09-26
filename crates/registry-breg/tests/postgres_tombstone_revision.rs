@@ -81,7 +81,7 @@ async fn tombstone_revisions_survive_package_upgrade_and_replay_exactly() {
         fixture.lock_key,
         Duration::from_secs(2),
         upgraded_identity,
-        fixture.profile.clone(),
+        fixture.database.audit(fixture.profile.clone()),
     );
     let package_two_etag = response_etag(
         &fixture.profile,
@@ -337,7 +337,8 @@ async fn tombstone_refusals_faults_and_concurrency_have_no_duplicate_effects() {
         assert_eq!(
             durable_counts(&fixture.database, &fixture.table).await,
             DurableCounts {
-                audit: before.audit + 1,
+                // The attempt and the unfinished answer to it.
+                audit: before.audit + 2,
                 ..before
             }
         );
@@ -504,7 +505,7 @@ impl Fixture {
             lock_key,
             Duration::from_secs(2),
             identity.clone(),
-            profile.clone(),
+            database.audit(profile.clone()),
         );
         let table = compiled.entities()["widget"].physical_table.clone();
         Self {
@@ -833,7 +834,6 @@ async fn durable_counts(database: &TestDatabase, table: &str) -> DurableCounts {
                    (SELECT count(*) FROM registry_data.\"{table}\"),
                    (SELECT count(*) FROM registry_internal.registry_revisions),
                    (SELECT count(*) FROM registry_internal.registry_outbox),
-                   (SELECT count(*) FROM registry_internal.registry_audit),
                    (SELECT count(*) FROM registry_internal.registry_idempotency)"
             ),
             &[],
@@ -844,8 +844,8 @@ async fn durable_counts(database: &TestDatabase, table: &str) -> DurableCounts {
         current: row.get(0),
         revisions: row.get(1),
         outbox: row.get(2),
-        audit: row.get(3),
-        idempotency: row.get(4),
+        audit: i64::try_from(database.audit_entries().len()).expect("audit count fits i64"),
+        idempotency: row.get(3),
     }
 }
 
@@ -1022,14 +1022,10 @@ async fn assert_revision_provenance_is_keyed(database: &TestDatabase) {
 }
 
 async fn assert_audit_excludes_raw_values(database: &TestDatabase, forbidden: &[&str]) {
-    let rows = database
-        .admin
-        .query("SELECT envelope FROM registry_internal.registry_audit", &[])
-        .await
-        .expect("administrator can inspect audit");
-    let audit_text = rows
+    let audit_text = database
+        .audit_entries()
         .iter()
-        .map(|row| String::from_utf8(row.get::<_, Vec<u8>>(0)).expect("audit is UTF-8"))
+        .map(Value::to_string)
         .collect::<Vec<_>>()
         .join("\n");
     for value in forbidden {

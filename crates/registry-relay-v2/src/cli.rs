@@ -27,14 +27,15 @@ pub enum Command {
         /// Strict deployment binding for the sealed package and local resources.
         #[arg(long, env = "RELAY_RUNTIME", default_value = DEFAULT_RUNTIME_PATH)]
         runtime: PathBuf,
-        /// Also prove the configured audit sink resolves inside this absolute
+        /// Also prove the configured audit file resolves inside this absolute
         /// directory, which the deployment declares persistent.
         ///
         /// The declared root is a storage boundary, not a second audit setting.
-        /// Relay resolves the runtime audit binding exactly as startup resolves
-        /// it and refuses when the result is not at or below the root, which is
+        /// Relay resolves the runtime audit path exactly as startup resolves it
+        /// and refuses when the result is not at or below the root, which is
         /// what stops a container from mounting durable storage at the
-        /// conventional prefix while writing the chain somewhere ephemeral.
+        /// conventional prefix while writing audit somewhere ephemeral. A
+        /// `stdout` audit destination has no path to prove and is refused.
         #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
         require_audit_under: Option<PathBuf>,
     },

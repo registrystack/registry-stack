@@ -162,7 +162,8 @@ fn app_with_client(
     fault: Option<MutationFaultPoint>,
 ) -> (axum::Router, RuntimePool) {
     let pool = database.runtime_config.build_pool().unwrap();
-    let audit = AuditProfile::production_from_secret_bytes(vec![0x42; 32].into()).unwrap();
+    let audit =
+        database.audit(AuditProfile::production_from_secret_bytes(vec![0x42; 32].into()).unwrap());
     let lock = RegistryLockKey::derive(PACKAGE).unwrap();
     let cursors = Arc::new(
         CursorCodec::new(Zeroizing::new(vec![0x63; 32]), Duration::from_secs(300)).unwrap(),
@@ -567,6 +568,7 @@ async fn signed_evidence_actions_release_postgres_and_commit_atomic_transcripts(
         committed,
         "retention failure rolls back all operation material"
     );
+    database.assert_every_audit_request_answered_once();
     database.cleanup().await;
 }
 
@@ -593,6 +595,7 @@ async fn caught_failed_helper_cannot_commit_or_make_another_disclosure() {
     );
     assert_eq!(counts(&database, &registry).await, vec![0, 0, 0, 0, 0, 0]);
     assert!(!failed.1.to_string().contains("FR-12345"));
+    database.assert_every_audit_request_answered_once();
     database.cleanup().await;
 }
 
@@ -679,6 +682,7 @@ async fn concurrent_receipt_overrides_failed_acquisition_and_recovers_ambiguous_
         "ambiguous commit recovery uses retained receipt"
     );
     assert_eq!(counts(&database, &registry).await, committed);
+    database.assert_every_audit_request_answered_once();
     database.cleanup().await;
 }
 
@@ -731,6 +735,7 @@ async fn verified_acquisition_expiring_during_sql_wait_cannot_commit() {
         2,
         "only a later caller attempt obtains fresh evidence"
     );
+    database.assert_every_audit_request_answered_once();
     database.cleanup().await;
 }
 
@@ -876,5 +881,6 @@ async fn real_evidence_service_resolves_exact_selector_and_commits_verified_post
     );
     assert_eq!(provider.requests().len(), calls + 1);
     assert_eq!(counts(&database, &registry).await, committed);
+    database.assert_every_audit_request_answered_once();
     database.cleanup().await;
 }

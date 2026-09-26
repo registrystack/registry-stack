@@ -75,6 +75,12 @@ pub enum MigrationError {
     ActiveRequestProposals,
     #[error("destructive backup evidence is invalid")]
     BackupEvidence,
+    /// A pre-simplification audit table (`registry_audit` or
+    /// `registry_audit_head`) still carries rows that installing this
+    /// schema would discard, and the caller did not acknowledge discarding
+    /// them.
+    #[error("a retired audit table still carries rows that were not acknowledged for discard")]
+    RetiredAuditRowsPresent,
 }
 
 pub type Result<T> = std::result::Result<T, MigrationError>;
@@ -327,6 +333,7 @@ pub struct ApplyVerifiedPackageRequest<'a> {
     event_destination_compatibility_inventory: Option<&'a EventDestinationCompatibilityInventory>,
     field_encryption: Option<AppliedFieldEncryptionKeySource<'a>>,
     fault_after_committed_chunks: Option<u64>,
+    acknowledge_retired_audit_discard: bool,
 }
 
 /// The key source one apply resolves field-encryption data keys through. It
@@ -368,6 +375,7 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
             event_destination_compatibility_inventory: None,
             field_encryption: None,
             fault_after_committed_chunks: None,
+            acknowledge_retired_audit_discard: false,
         }
     }
 
@@ -429,6 +437,16 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
         key_source: AppliedFieldEncryptionKeySource<'a>,
     ) -> Self {
         self.field_encryption = Some(key_source);
+        self
+    }
+
+    /// Acknowledge discarding rows retained in a pre-simplification
+    /// `registry_audit` or `registry_audit_head` table. Without this, apply
+    /// refuses rather than silently dropping those retained audit entries
+    /// when installing the current schema.
+    #[must_use]
+    pub fn with_acknowledge_retired_audit_discard(mut self, acknowledge: bool) -> Self {
+        self.acknowledge_retired_audit_discard = acknowledge;
         self
     }
 
@@ -724,12 +742,15 @@ pub async fn apply_verified_package(
                 return fail_with_error_and_release(connection, &target, &ledger, error).await;
             }
         }
-        if connection
-            .reconcile_runtime_acl(request.package.registry(), request.roles.runtime)
+        if let Err(error) = connection
+            .reconcile_runtime_acl(
+                request.package.registry(),
+                request.roles.runtime,
+                request.acknowledge_retired_audit_discard,
+            )
             .await
-            .is_err()
         {
-            return fail_and_release(connection, &target, &ledger).await;
+            return fail_with_error_and_release(connection, &target, &ledger, error).await;
         }
         if connection
             .activate_verified_package(
@@ -741,7 +762,6 @@ pub async fn apply_verified_package(
                     migration_role: request.roles.migration,
                     runtime_role: request.roles.runtime,
                 },
-                None,
             )
             .await
             .is_err()
@@ -756,7 +776,11 @@ pub async fn apply_verified_package(
     }
 
     if connection
-        .reconcile_runtime_acl(request.package.registry(), request.roles.runtime)
+        .reconcile_runtime_acl(
+            request.package.registry(),
+            request.roles.runtime,
+            request.acknowledge_retired_audit_discard,
+        )
         .await
         .is_ok()
         && connection
@@ -769,7 +793,6 @@ pub async fn apply_verified_package(
                     migration_role: request.roles.migration,
                     runtime_role: request.roles.runtime,
                 },
-                None,
             )
             .await
             .is_ok()
@@ -797,6 +820,7 @@ pub async fn apply_verified_package(
                 &statements,
                 request.roles.runtime,
                 request.timeouts.statement,
+                request.acknowledge_retired_audit_discard,
             )
             .await
     };
@@ -804,10 +828,14 @@ pub async fn apply_verified_package(
         return fail_with_error_and_release(connection, &target, &ledger, error).await;
     }
     let acl_result = connection
-        .reconcile_runtime_acl(request.package.registry(), request.roles.runtime)
+        .reconcile_runtime_acl(
+            request.package.registry(),
+            request.roles.runtime,
+            request.acknowledge_retired_audit_discard,
+        )
         .await;
-    if acl_result.is_err() {
-        return fail_and_release(connection, &target, &ledger).await;
+    if let Err(error) = acl_result {
+        return fail_with_error_and_release(connection, &target, &ledger, error).await;
     }
     let activation_result = connection
         .activate_verified_package(
@@ -819,7 +847,6 @@ pub async fn apply_verified_package(
                 migration_role: request.roles.migration,
                 runtime_role: request.roles.runtime,
             },
-            None,
         )
         .await;
     if activation_result.is_err() {
@@ -882,6 +909,9 @@ async fn fail_with_error_and_release(
             entity_id,
             field_id,
         },
+        crate::postgres::PostgresKernelError::RetiredAuditRowsPresent => {
+            MigrationError::RetiredAuditRowsPresent
+        }
         _ => MigrationError::ApplyFailed,
     })
 }

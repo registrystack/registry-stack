@@ -396,7 +396,7 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: disclosure_audit_failure_prevents_signed_response_release}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: disclosure_audit_failure_prevents_unsigned_response_release}
       - {file: crates/registry-evidence/src/audit.rs, name: frozen_audit_fixture_matches_native_event_shape_and_phase_rules}
-      - {file: crates/registry-evidence/src/audit.rs, name: invalid_release_shape_and_size_limit_fail_closed}
+      - {file: crates/registry-evidence/src/audit.rs, name: invalid_release_shape_fails_closed_before_any_write}
       - {file: crates/registry-evidence/src/audit.rs, name: audit_is_durable_keyed_and_redacted}
   - id: acceptance-row-60
     summary: All four coequal definitions pass signed and explicitly authorized unsigned paths through the same router, source executor, derivation, output gate, subject binding, minimization, and audit logic without domain branches.
@@ -467,7 +467,7 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: the_holder_bound_acceptance_bundle_differs_from_its_twin_only_by_binding_mode}
   - id: acceptance-row-69
-    summary: Every coequal definition in the tracked holder-bound bundle issues over the served path bound to the presented holder key, declaring the mode it was derived under, naming no relying party and echoing no request nonce, with every subject binding distinct and neither holder key material nor any released binding in the audit chain.
+    summary: Every coequal definition in the tracked holder-bound bundle issues over the served path bound to the presented holder key, declaring the mode it was derived under, naming no relying party and echoing no request nonce, with every subject binding distinct and neither holder key material nor any released binding in the audit log.
     tests:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: every_coequal_definition_issues_under_the_holder_bound_mode}
   - id: acceptance-row-70

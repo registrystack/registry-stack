@@ -637,10 +637,13 @@ script downloads the previous published release's binaries for those products,
 authenticates `SHA256SUMS` with its protected-main Sigstore identity, and checks
 each asset against it as `release/VERIFY.md` describes. It writes a signed
 registry package with records and revisions, a Casework queue with answered
-and in-flight work, and an Evidence audit chain with the old binaries, using a
+and in-flight work, and an Evidence audit stream with the old binaries, using a
 disposable loopback PostgreSQL container. It then runs the documented upgrade
 steps with the PR's binaries and fails when any captured view is served
-differently or any table holds fewer rows. Require that run to succeed before
+differently or any retained table holds fewer rows. BReg rebuilds and applies
+a signed successor before serving with the new catalog; its package-bound ETags
+change, while record data and stored revisions must remain identical. Require
+that run to succeed before
 merging the release PR. To rehearse without a release PR, dispatch it by hand:
 
 ```sh
@@ -653,10 +656,23 @@ The promise starts at `v0.33.0`. v0.32 to v0.33 has no forward state path,
 because no adopter ran v0.32, so the script refuses to start from any earlier
 release rather than skipping the check. Scheduling state is not rehearsed.
 
-Schema and migration code refuses when it would drop rows; it never drops them
-silently. When the rehearsal reports a row loss, fix the migration so that it
-refuses with an error naming what it would lose, or keeps the rows. Do not
-accept the loss or narrow the comparison to make the run pass.
+The audit-writer transition intentionally retires BReg's `registry_audit` and
+`registry_audit_head` tables and Casework's `casework_audit_outbox`. The rehearsal
+exports every row of those exact tables to private JSON Lines archives and
+checks their row counts before allowing removal; `bregctl apply` itself refuses
+to drop either BReg table while it still holds rows unless the caller passes
+`--acknowledge-retired-audit-discard`, which the rehearsal does only after that
+archive and count check succeeds. It waits for the old Casework
+publisher to drain before stopping it. Old Casework and Evidence audit files
+move to separate archives before the new writer starts; Evidence's new stream
+must contain valid current envelopes after the upgraded request. The old
+Evidence bundle and runtime audit blocks are rewritten to the new configuration
+shape while retaining the same key reference and version.
+
+Every other table remains subject to the row-preservation check. When the
+rehearsal reports a row loss, fix the migration so that it refuses with an error
+naming what it would lose, or keeps the rows. Do not accept the loss or narrow
+the comparison to make the run pass.
 
 This control guards against a release that loses or stops serving state its
 predecessor wrote. The release operator owns it for each release. Remove it

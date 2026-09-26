@@ -85,7 +85,7 @@ impl MutationCoordinator {
         compiled_delivery_id: &str,
     ) -> Result<String, UncertainApply> {
         let idempotency_key = hook_proposal_idempotency_key(event_id, compiled_delivery_id);
-        resolve_hook_key_reference(&self.audit_profile, &idempotency_key)
+        resolve_hook_key_reference(self.audit.profile(), &idempotency_key)
             .map_err(|_| UncertainApply)
     }
 
@@ -161,7 +161,7 @@ impl MutationCoordinator {
         fault: FaultControl,
         deadline: tokio::time::Instant,
     ) -> Result<MutationOutcome, MutationError> {
-        if !profile_is_keyed(&self.audit_profile) {
+        if !profile_is_keyed(self.audit.profile()) {
             return Err(MutationError::Unavailable);
         }
         let action = action_for_route(
@@ -173,18 +173,13 @@ impl MutationCoordinator {
         validate_action_claims(action, claims, Operation::Invoke)?;
         let normalized_input = validate_action_input(action, input.input)?;
         validate_precondition_set(action, &input.preconditions)?;
-        self.record_action_boundary_audit(
-            client,
-            claims,
-            input.route_id,
-            input.correlation,
-            PreIoAuditKind::Attempt,
-        )
-        .await?;
+        let _attempt = self
+            .begin_action_boundary_audit(claims, input.route_id, input.correlation)
+            .await?;
         let request_digest =
             canonical_action_request_digest(action, &normalized_input, &input.preconditions)?;
         let binding = resolve_action_binding(
-            &self.audit_profile,
+            self.audit.profile(),
             &ActionIdempotencyBinding {
                 key: input.idempotency_key,
                 context: claims,
@@ -235,7 +230,6 @@ impl MutationCoordinator {
         };
         if result.is_err() && !fault.is_enabled() {
             self.record_action_boundary_audit(
-                client,
                 claims,
                 input.route_id,
                 input.correlation,
@@ -375,7 +369,7 @@ impl MutationCoordinator {
         client: &(impl tokio_postgres::GenericClient + Sync),
         idempotency_key: &str,
     ) -> Result<Option<HookProposalReceipt>, UncertainApply> {
-        let key_reference = resolve_hook_key_reference(&self.audit_profile, idempotency_key)
+        let key_reference = resolve_hook_key_reference(self.audit.profile(), idempotency_key)
             .map_err(|_| UncertainApply)?;
         client
             .query_opt(
@@ -675,7 +669,7 @@ impl MutationCoordinator {
             );
         };
         let binding = match resolve_hook_action_binding(
-            &self.audit_profile,
+            self.audit.profile(),
             &ActionIdempotencyBinding {
                 key: idempotency_key,
                 context: &claims,
@@ -714,15 +708,10 @@ impl MutationCoordinator {
         };
         let application_id = Uuid::new_v4();
         let correlation = RequestCorrelation::breg_created();
-        self.record_action_boundary_audit(
-            client,
-            &claims,
-            &route_id,
-            &correlation,
-            PreIoAuditKind::Attempt,
-        )
-        .await
-        .map_err(|_| UncertainApply)?;
+        let _attempt = self
+            .begin_action_boundary_audit(&claims, &route_id, &correlation)
+            .await
+            .map_err(|_| UncertainApply)?;
 
         let deadline = tokio::time::Instant::now() + HOOK_PROPOSAL_APPLY_BUDGET;
         let fault = FaultControl::Disabled;
@@ -761,7 +750,6 @@ impl MutationCoordinator {
         };
         if result.is_err() && !fault.is_enabled() {
             self.record_action_boundary_audit(
-                client,
                 &claims,
                 &route_id,
                 &correlation,
@@ -833,7 +821,7 @@ impl MutationCoordinator {
         claims: &ActionClaimContext,
         target_authority: &BTreeMap<String, Vec<RowBoundaryContext>>,
     ) -> Result<HeldReadResponse, MutationError> {
-        if !profile_is_keyed(&self.audit_profile) {
+        if !profile_is_keyed(self.audit.profile()) {
             return Err(MutationError::Unavailable);
         }
         let action = action_for_route(
@@ -844,14 +832,9 @@ impl MutationCoordinator {
         )?;
         validate_action_claims(action, claims, Operation::Invoke)?;
         let refs = validate_condition_inputs(action, input.input)?;
-        self.record_action_boundary_audit(
-            client,
-            claims,
-            input.route_id,
-            input.correlation,
-            PreIoAuditKind::Attempt,
-        )
-        .await?;
+        let _attempt = self
+            .begin_action_boundary_audit(claims, input.route_id, input.correlation)
+            .await?;
         let result = self
             .action_target_conditions_after_attempt(
                 client,
@@ -866,7 +849,6 @@ impl MutationCoordinator {
             .await;
         if result.is_err() {
             self.record_action_boundary_audit(
-                client,
                 claims,
                 input.route_id,
                 input.correlation,
@@ -877,21 +859,41 @@ impl MutationCoordinator {
         result
     }
 
+    /// Append the action's attempt and hold it until its terminal or refusal
+    /// entry answers it.
+    pub(crate) async fn begin_action_boundary_audit(
+        &self,
+        claims: &ActionClaimContext,
+        operation_id: &str,
+        correlation: &RequestCorrelation,
+    ) -> Result<AuditRequest, MutationError> {
+        Ok(begin_action_pre_io_audit(
+            &self.audit,
+            &self.expected,
+            claims,
+            PreIoAudit {
+                kind: PreIoAuditKind::Attempt,
+                method: HttpMethod::Post,
+                operation_id,
+                target_record: None,
+                refusal_reason: None,
+                correlation,
+            },
+        )
+        .await?)
+    }
+
     pub(crate) async fn record_action_boundary_audit(
         &self,
-        client: &mut Client,
         claims: &ActionClaimContext,
         operation_id: &str,
         correlation: &RequestCorrelation,
         kind: PreIoAuditKind,
     ) -> Result<(), MutationError> {
         record_action_pre_io_audit(
-            client,
-            self.lock_key,
-            self.lock_timeout,
+            &self.audit,
             &self.expected,
             claims,
-            &self.audit_profile,
             PreIoAudit {
                 kind,
                 method: HttpMethod::Post,
@@ -943,7 +945,7 @@ impl MutationCoordinator {
             .set_statement_budget(deadline.saturating_duration_since(tokio::time::Instant::now()))
             .await
             .map_err(|_| MutationError::Unavailable)?;
-        if let Some(outcome) = self
+        if let Some((outcome, entry)) = self
             .recover_action_receipt(
                 transaction.transaction(),
                 registry,
@@ -960,6 +962,7 @@ impl MutationCoordinator {
                 .commit()
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
+            self.audit.append(entry).await?;
             return Ok(outcome);
         }
         if let Some(frozen) = frozen {
@@ -1036,7 +1039,7 @@ impl MutationCoordinator {
         }
         let effects = candidate.as_ref().ok_or(MutationError::Unavailable)?;
         let application_reference = action_application_reference(
-            &self.audit_profile,
+            self.audit.profile(),
             &self.expected.package_revision,
             application_id,
         )?;
@@ -1097,7 +1100,7 @@ impl MutationCoordinator {
                 .await?;
             let effect = effects[0];
             let record_reference = record_reference(
-                &self.audit_profile,
+                self.audit.profile(),
                 &self.expected.package_revision,
                 &current.record_id,
             )?;
@@ -1184,9 +1187,8 @@ impl MutationCoordinator {
         )
         .map_err(|_| MutationError::Unavailable)?;
         fault.fail_at(MutationFaultPoint::BeforeTerminalAudit)?;
-        append_action_terminal_audit(
-            transaction.transaction(),
-            &self.audit_profile,
+        let entry = action_terminal_entry(
+            self.audit.profile(),
             TerminalAudit {
                 grant: None,
                 outcome: TerminalAuditOutcome::Committed,
@@ -1205,8 +1207,7 @@ impl MutationCoordinator {
                 correlation: correlation.clone(),
             },
             &application_reference,
-        )
-        .await?;
+        )?;
         fault.fail_at(MutationFaultPoint::BeforeIdempotency)?;
         insert_result(
             transaction.transaction(),
@@ -1243,6 +1244,7 @@ impl MutationCoordinator {
             .commit()
             .await
             .map_err(|_| MutationError::Unavailable)?;
+        self.audit.append(entry).await?;
         fault.fail_at(MutationFaultPoint::AfterCommitBeforeResponseRelease)?;
         Ok(MutationOutcome {
             response: held,
@@ -1250,6 +1252,8 @@ impl MutationCoordinator {
         })
     }
 
+    /// Recover a stored action answer. The caller commits the transaction,
+    /// then appends the returned `response` entry before releasing the answer.
     #[allow(clippy::too_many_arguments)]
     async fn recover_action_receipt(
         &self,
@@ -1261,7 +1265,7 @@ impl MutationCoordinator {
         binding: &crate::idempotency::ResolvedIdempotencyBinding,
         route_id: &str,
         correlation: &RequestCorrelation,
-    ) -> Result<Option<MutationOutcome>, MutationError> {
+    ) -> Result<Option<(MutationOutcome, AuditEntry)>, MutationError> {
         if let Some(stored) = lock_and_load(transaction, binding).await? {
             let StoredResultMetadata::ImmediateAction { result_count } = stored.metadata else {
                 return Err(MutationError::Unavailable);
@@ -1277,13 +1281,12 @@ impl MutationCoordinator {
             .await?;
             let application_reference = stored_action_application_reference(
                 transaction,
-                &self.audit_profile,
+                self.audit.profile(),
                 &binding.key_reference,
             )
             .await?;
-            append_action_terminal_audit(
-                transaction,
-                &self.audit_profile,
+            let entry = action_terminal_entry(
+                self.audit.profile(),
                 TerminalAudit {
                     grant: None,
                     outcome: TerminalAuditOutcome::Replayed,
@@ -1302,12 +1305,14 @@ impl MutationCoordinator {
                     correlation: correlation.clone(),
                 },
                 &application_reference,
-            )
-            .await?;
-            return Ok(Some(MutationOutcome {
-                response: stored.response,
-                replayed: true,
-            }));
+            )?;
+            return Ok(Some((
+                MutationOutcome {
+                    response: stored.response,
+                    replayed: true,
+                },
+                entry,
+            )));
         }
 
         Ok(None)
@@ -1620,7 +1625,7 @@ impl MutationCoordinator {
                 .map_err(map_database_error)?;
             let current = load_action_row(transaction, entity, &record_id, true).await?;
             let token = action_condition_token(
-                &self.audit_profile,
+                self.audit.profile(),
                 registry.registry_id(),
                 &action.id,
                 input_id,
@@ -1730,7 +1735,7 @@ impl MutationCoordinator {
                 input.api_name.clone(),
                 json!({
                     "ifMatch": action_condition_token(
-                        &self.audit_profile,
+                        self.audit.profile(),
                         registry.registry_id(),
                         &action.id,
                         input_id,
@@ -1743,9 +1748,8 @@ impl MutationCoordinator {
         }
         let held = HeldReadResponse::from_json(&json!({ "preconditions": conditions }))
             .map_err(|_| MutationError::Unavailable)?;
-        append_terminal_audit(
-            transaction.transaction(),
-            &self.audit_profile,
+        let entry = terminal_entry(
+            self.audit.profile(),
             TerminalAudit {
                 grant: None,
                 outcome: TerminalAuditOutcome::Returned,
@@ -1763,12 +1767,12 @@ impl MutationCoordinator {
                 field_set_reference: None,
                 correlation: correlation.clone(),
             },
-        )
-        .await?;
+        )?;
         transaction
             .commit()
             .await
             .map_err(|_| MutationError::Unavailable)?;
+        self.audit.append(entry).await?;
         Ok(held)
     }
 
@@ -2691,9 +2695,16 @@ pub(crate) struct PreparedEvidenceAction {
     binding: crate::idempotency::ResolvedIdempotencyBinding,
     reserved_creates: BTreeMap<String, Uuid>,
     application_id: Uuid,
+    /// The action's attempt, held across Evidence evaluation until the
+    /// finalize terminal or refusal answers it. Dropping the admission
+    /// before that answers the attempt as unfinished.
+    attempt: Option<AuditRequest>,
 }
 
 impl MutationCoordinator {
+    /// Admit an Evidence action, recording its refusal when admission fails
+    /// before the deadline. A successful admission carries the held attempt
+    /// to [`Self::finalize_evidence_action`]; a recovered receipt answers it.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn preflight_evidence_action(
         &self,
@@ -2704,7 +2715,52 @@ impl MutationCoordinator {
         target_authority: &BTreeMap<String, Vec<RowBoundaryContext>>,
         deadline: tokio::time::Instant,
     ) -> Result<Result<PreparedEvidenceAction, MutationOutcome>, MutationError> {
-        if !profile_is_keyed(&self.audit_profile) {
+        let route_id = input.route_id;
+        let correlation = input.correlation;
+        let mut attempt = None;
+        let result = self
+            .preflight_evidence_action_holding(
+                client,
+                registry,
+                input,
+                claims,
+                target_authority,
+                deadline,
+                &mut attempt,
+            )
+            .await;
+        if result.is_err() && tokio::time::Instant::now() < deadline {
+            self.record_action_boundary_audit(
+                claims,
+                route_id,
+                correlation,
+                PreIoAuditKind::Refusal,
+            )
+            .await?;
+        }
+        Ok(match result? {
+            Ok(mut prepared) => {
+                prepared.attempt = attempt;
+                Ok(prepared)
+            }
+            Err(receipt) => Err(receipt),
+        })
+    }
+
+    /// Admission itself. The attempt it begins is left in `attempt`, so the
+    /// caller answers it on every path.
+    #[allow(clippy::too_many_arguments)]
+    async fn preflight_evidence_action_holding(
+        &self,
+        client: &mut Client,
+        registry: &CompiledRegistry,
+        input: ImmediateActionInput<'_>,
+        claims: &ActionClaimContext,
+        target_authority: &BTreeMap<String, Vec<RowBoundaryContext>>,
+        deadline: tokio::time::Instant,
+        attempt: &mut Option<AuditRequest>,
+    ) -> Result<Result<PreparedEvidenceAction, MutationOutcome>, MutationError> {
+        if !profile_is_keyed(self.audit.profile()) {
             return Err(MutationError::Unavailable);
         }
         let action = action_for_route(
@@ -2716,16 +2772,12 @@ impl MutationCoordinator {
         validate_action_claims(action, claims, Operation::Invoke)?;
         let normalized = validate_action_input(action, input.input)?;
         validate_precondition_set(action, &input.preconditions)?;
-        self.record_action_boundary_audit(
-            client,
-            claims,
-            input.route_id,
-            input.correlation,
-            PreIoAuditKind::Attempt,
-        )
-        .await?;
+        *attempt = Some(
+            self.begin_action_boundary_audit(claims, input.route_id, input.correlation)
+                .await?,
+        );
         let binding = resolve_action_binding(
-            &self.audit_profile,
+            self.audit.profile(),
             &ActionIdempotencyBinding {
                 key: input.idempotency_key,
                 context: claims,
@@ -2757,7 +2809,7 @@ impl MutationCoordinator {
             .set_statement_budget(deadline.saturating_duration_since(tokio::time::Instant::now()))
             .await
             .map_err(|_| MutationError::Unavailable)?;
-        if let Some(outcome) = self
+        if let Some((outcome, entry)) = self
             .recover_action_receipt(
                 transaction.transaction(),
                 registry,
@@ -2774,6 +2826,7 @@ impl MutationCoordinator {
                 .commit()
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
+            self.audit.append(entry).await?;
             return Ok(Err(outcome));
         }
         // This transaction proves current admission only. Its locks and entire
@@ -2819,6 +2872,7 @@ impl MutationCoordinator {
             binding,
             reserved_creates: reserve_action_create_ids(action)?,
             application_id,
+            attempt: None,
         }))
     }
 
@@ -2872,7 +2926,6 @@ impl MutationCoordinator {
         };
         if result.is_err() && !fault.is_enabled() && tokio::time::Instant::now() < deadline {
             self.record_action_boundary_audit(
-                client,
                 claims,
                 route_id,
                 correlation,

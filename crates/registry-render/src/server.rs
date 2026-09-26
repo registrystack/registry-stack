@@ -1,7 +1,8 @@
 //! `registry-render serve`: the HTTP rendering API. One POST endpoint, one GET
 //! discovery endpoint, a private listener, API-key auth, bounded body,
-//! supervised worker renders, and an audit append before every render
-//! response — refusals included, whatever refusal class they are.
+//! supervised worker renders, an audit request entry accepted before every
+//! render starts, and an audit response entry accepted before every render
+//! response, refusals included, whatever refusal class they are.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -84,10 +85,9 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
             format!("API key rejected: {err}"),
         )
     })?;
-    let integrity_key = runtime::resolve_secret(runtime_path, &runtime.audit.integrity_key_ref)?;
     // The address is settled before the steps with side effects (opening
-    // the audit directory creates it), so a refused bind leaves nothing
-    // half-made behind.
+    // the audit destination creates its directory), so a refused bind
+    // leaves nothing half-made behind.
     let bind: SocketAddr = runtime.server.bind.parse().map_err(|err| {
         RenderProblem::new(
             ProblemKind::RuntimeInvalid,
@@ -101,12 +101,7 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     let bundle = Bundle::load_sealed(&runtime.bundle.path)?;
     crate::check::check_script_coverage(&bundle)?;
     crate::check::check_label_key_sets(&bundle)?;
-    let audit = RenderAudit::open(
-        &runtime.audit.directory,
-        integrity_key,
-        runtime.audit.max_segment_bytes,
-    )
-    .await?;
+    let audit = RenderAudit::open(runtime.audit.destination()?).await?;
     let service = Arc::new(Service {
         caller_fingerprint: registry_platform_authcommon::fingerprint_api_key(
             &String::from_utf8_lossy(&api_key),
@@ -252,9 +247,9 @@ fn router(service: Arc<Service>) -> Router {
 }
 
 /// Authentication as a layer: it runs before the handler (and so before
-/// the body extractor buffers anything), and every refusal is audited —
-/// with caller-controlled fields bounded and shape-checked first, because
-/// the ledger is immutable.
+/// the body extractor buffers anything), and every refusal is audited as
+/// one response entry, with caller-controlled fields bounded and
+/// shape-checked first, because the audit log is append-only.
 async fn require_bearer(
     State(service): State<Arc<Service>>,
     request: axum::extract::Request,
@@ -262,15 +257,17 @@ async fn require_bearer(
 ) -> Response {
     if !authorized(&service, request.headers()) {
         let target = sanitize_route_target(request.uri().path());
+        let correlation = correlation_id(request.headers());
         let event = RenderAuditEvent::refused(
             &target,
             &RenderProblem::new(ProblemKind::Unauthorized, "missing or wrong API key"),
             "unknown",
-            correlation_id(request.headers()).as_deref(),
+            correlation.as_deref(),
             trace_id(request.headers()).as_deref(),
         );
-        if let Err(audit_problem) = service.audit.append(event).await {
-            tracing::warn!(problem = %audit_problem, "401 audit append failed");
+        let envelope = crate::audit::correlation();
+        if let Err(audit_problem) = service.audit.response(&envelope, event).await {
+            tracing::error!(problem = %audit_problem, "401 audit append failed");
         }
         return problem_response(&RenderProblem::new(
             ProblemKind::Unauthorized,
@@ -317,15 +314,17 @@ async fn refuse_oversized_bodies(
         return next.run(request).await;
     };
     let target = sanitize_route_target(request.uri().path());
+    let correlation = correlation_id(request.headers());
     let event = RenderAuditEvent::refused(
         &target,
         &problem,
         &service.caller_fingerprint,
-        correlation_id(request.headers()).as_deref(),
+        correlation.as_deref(),
         trace_id(request.headers()).as_deref(),
     );
-    if let Err(audit_problem) = service.audit.append(event).await {
-        tracing::warn!(problem = %audit_problem, "413 audit append failed");
+    let envelope = crate::audit::correlation();
+    if let Err(audit_problem) = service.audit.response(&envelope, event).await {
+        tracing::error!(problem = %audit_problem, "413 audit append failed");
     }
     problem_response(&problem)
 }
@@ -583,6 +582,9 @@ async fn render_route(
     let document_type = sanitize_document_type(&document_type);
     let trace = trace_id(&headers);
     let correlation = correlation_id(&headers);
+    // One server-drawn envelope correlation joins this call's request and
+    // response entries; the caller's key is only echoed in the record.
+    let envelope = crate::audit::correlation();
     let caller = service.caller_fingerprint.clone();
     if method != Method::POST {
         return refuse(
@@ -590,6 +592,7 @@ async fn render_route(
             &document_type,
             RenderProblem::new(ProblemKind::InvalidArgument, "use POST"),
             &caller,
+            &envelope,
             correlation.as_deref(),
             trace.as_deref(),
         )
@@ -607,72 +610,105 @@ async fn render_route(
                 &document_type,
                 problem,
                 &caller,
+                &envelope,
                 correlation.as_deref(),
                 trace.as_deref(),
             )
             .await;
         }
     };
-    let outcome = handle_render(&service, &document_type, &body).await;
-    let event = match &outcome {
-        Ok(rendered) => RenderAuditEvent {
-            document_id: document_type.clone(),
-            document_version: rendered.document_version,
-            bundle_version: rendered.bundle_version,
-            bundle_hash: rendered.bundle_hash.clone(),
-            outcome: "rendered",
-            problem: None,
-            pdf_sha256: Some(rendered.pdf_sha256.clone()),
-            data_sha256: Some(rendered.data_sha256.clone()),
-            caller,
-            correlation_id: correlation.clone(),
-            trace_id: trace.clone(),
-            renderer_version: crate::display_version(),
-            typst_pin: crate::TYPST_PIN.to_owned(),
-        },
-        Err(problem) => RenderAuditEvent::refused(
-            &document_type,
-            problem,
-            &service.caller_fingerprint,
-            correlation.as_deref(),
-            trace.as_deref(),
-        ),
+    let (worker_request, document_version) = match prepare_render(&service, &document_type, &body) {
+        Ok(prepared) => prepared,
+        Err(problem) => {
+            return refuse(
+                &service,
+                &document_type,
+                problem,
+                &caller,
+                &envelope,
+                correlation.as_deref(),
+                trace.as_deref(),
+            )
+            .await;
+        }
     };
-    // Append before responding: audit failure fails closed.
-    if let Err(audit_problem) = service.audit.append(event).await {
+    let started = RenderAuditEvent::started(
+        &document_type,
+        document_version,
+        service.bundle.manifest.bundle_version,
+        &service.bundle.bundle_hash,
+        &caller,
+        correlation.as_deref(),
+        trace.as_deref(),
+    );
+    // The request entry is accepted before the render starts; a refused one
+    // means the render never starts and no response entry follows. A call
+    // dropped from here on writes its unfinished response.
+    let _request = match service.audit.request(&envelope, started.clone()).await {
+        Ok(request) => request,
+        Err(audit_problem) => return problem_response(&audit_problem),
+    };
+    // The answer is built before its response entry, so the entry records
+    // the outcome the caller actually receives.
+    let outcome = run_render(&service, worker_request)
+        .await
+        .and_then(|rendered| {
+            let event = RenderAuditEvent {
+                document_id: document_type.clone(),
+                document_version: rendered.document_version,
+                bundle_version: rendered.bundle_version,
+                bundle_hash: rendered.bundle_hash.clone(),
+                outcome: Some("rendered"),
+                problem: None,
+                pdf_sha256: Some(rendered.pdf_sha256.clone()),
+                data_sha256: Some(rendered.data_sha256.clone()),
+                caller,
+                correlation_id: correlation.clone(),
+                trace_id: trace.clone(),
+                renderer_version: crate::display_version(),
+                typst_pin: crate::TYPST_PIN.to_owned(),
+            };
+            Ok((event, respond_rendered(&headers, rendered)?))
+        });
+    let (event, outcome) = match outcome {
+        Ok((event, response)) => (event, Ok(response)),
+        Err(problem) => (started.refused_after_start(&problem), Err(problem)),
+    };
+    // The response entry is accepted before anything leaves: audit failure
+    // fails closed and withholds the document.
+    if let Err(audit_problem) = service.audit.response(&envelope, event).await {
         return problem_response(&audit_problem);
     }
     match outcome {
-        Ok(rendered) => match respond_rendered(&headers, rendered) {
-            Ok(mut response) => {
-                if let Some(correlation) = correlation
-                    .as_ref()
-                    .and_then(|c| header::HeaderValue::from_str(c).ok())
-                {
-                    response
-                        .headers_mut()
-                        .insert("idempotency-key", correlation);
-                }
+        Ok(mut response) => {
+            if let Some(correlation) = correlation
+                .as_ref()
+                .and_then(|c| header::HeaderValue::from_str(c).ok())
+            {
                 response
+                    .headers_mut()
+                    .insert("idempotency-key", correlation);
             }
-            Err(problem) => problem_response(&problem),
-        },
+            response
+        }
         Err(problem) => problem_response(&problem),
     }
 }
 
-/// Refuse one render call: audit the refusal (append-before-respond,
-/// failing closed), then answer with the problem document.
+/// Refuse one render call before any render starts: audit the refusal as
+/// one response entry (accepted before responding, failing closed), then
+/// answer with the problem document.
 async fn refuse(
     service: &Service,
     document_type: &str,
     problem: RenderProblem,
     caller: &str,
+    envelope: &str,
     correlation: Option<&str>,
     trace: Option<&str>,
 ) -> Response {
     let event = RenderAuditEvent::refused(document_type, &problem, caller, correlation, trace);
-    if let Err(audit_problem) = service.audit.append(event).await {
+    if let Err(audit_problem) = service.audit.response(envelope, event).await {
         return problem_response(&audit_problem);
     }
     problem_response(&problem)
@@ -696,11 +732,14 @@ fn body_rejection_problem(rejection: &axum::extract::rejection::BytesRejection) 
     }
 }
 
-async fn handle_render(
+/// Everything decided before a render starts: the request parses, carries
+/// an issuance time, and names a document the bundle declares. Returns the
+/// worker request and the document's declared version.
+fn prepare_render(
     service: &Service,
     document_type: &str,
     body: &[u8],
-) -> Result<WorkerRendered, RenderProblem> {
+) -> Result<(WorkerRequest, u32), RenderProblem> {
     let request: RenderHttpRequest = serde_json::from_slice(body).map_err(|err| {
         RenderProblem::new(ProblemKind::InvalidArgument, format!("request body: {err}"))
     })?;
@@ -716,8 +755,8 @@ async fn handle_render(
             "issuedAt is required; it is the document's issuance claim and the render clock",
         ));
     }
-    let document = service.bundle.document(document_type).cloned()?;
-    let _ = document; // existence check; the worker re-loads and re-checks
+    // Existence check; the worker re-loads and re-checks.
+    let document_version = service.bundle.document(document_type)?.spec.version;
     let worker_request = WorkerRequest {
         bundle: service.bundle_path.clone(),
         document: document_type.to_owned(),
@@ -730,6 +769,15 @@ async fn handle_render(
         max_output_bytes: service.limits.max_output_bytes,
         memory_limit_bytes: 512 * 1024 * 1024,
     };
+    Ok((worker_request, document_version))
+}
+
+/// Run one prepared render on a supervised worker, once a render slot is
+/// free.
+async fn run_render(
+    service: &Service,
+    worker_request: WorkerRequest,
+) -> Result<WorkerRendered, RenderProblem> {
     let permit = service
         .concurrency
         .clone()
@@ -754,8 +802,8 @@ async fn handle_render(
 }
 
 /// Route parameters are caller-controlled even before authentication, so
-/// anything that reaches the audit ledger is bounded and shape-checked
-/// first: the ledger is immutable and must not be a write oracle.
+/// anything that reaches the audit log is bounded and shape-checked first:
+/// the log is append-only and must not be a write oracle.
 fn sanitize_document_type(raw: &str) -> String {
     const MAX: usize = 64;
     let bounded: String = raw.chars().take(MAX).collect();
@@ -885,5 +933,262 @@ mod tests {
             .trim_end_matches(TRUNCATION_MARKER)
             .chars()
             .all(|c| c == 'é'));
+    }
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    use registry_platform_audit::AuditWriter;
+    use tower::ServiceExt as _;
+
+    const TEST_API_KEY: &str = "unit-key-0123456789abcdef0123456789abcdef";
+
+    /// An in-memory audit destination handed to the production writer. It
+    /// keeps every accepted line and refuses the Nth line (1-based) when
+    /// asked to, after which the writer stops as it would on a failed file.
+    #[derive(Clone)]
+    struct AuditLines {
+        accepted: Arc<Mutex<Vec<serde_json::Value>>>,
+        written: Arc<AtomicUsize>,
+        refuse_line: Option<usize>,
+    }
+
+    impl AuditLines {
+        fn new(refuse_line: Option<usize>) -> Self {
+            Self {
+                accepted: Arc::new(Mutex::new(Vec::new())),
+                written: Arc::new(AtomicUsize::new(0)),
+                refuse_line,
+            }
+        }
+
+        fn accepted(&self) -> Vec<serde_json::Value> {
+            self.accepted.lock().expect("audit lines").clone()
+        }
+    }
+
+    impl std::io::Write for AuditLines {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let line = self.written.fetch_add(1, Ordering::SeqCst) + 1;
+            if self.refuse_line == Some(line) {
+                return Err(std::io::Error::other("audit destination refused the line"));
+            }
+            let entry = serde_json::from_slice(buf).expect("one JSON line per write");
+            self.accepted.lock().expect("audit lines").push(entry);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A service over the sealed receipt bundle with `permits` render slots.
+    /// Zero slots means a render can never start: any request that reaches
+    /// the render step waits there forever.
+    fn service(lines: &AuditLines, permits: usize) -> Arc<Service> {
+        let bundle_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/render/bundles/receipt");
+        let bundle = Bundle::load_sealed(&bundle_path).expect("sealed receipt bundle");
+        Arc::new(Service {
+            bundle,
+            audit: RenderAudit::new(AuditWriter::from_line_sink(Box::new(lines.clone()))),
+            api_key: TEST_API_KEY.as_bytes().to_vec(),
+            caller_fingerprint: "caller-fingerprint".to_owned(),
+            limits: runtime::LimitsRuntime::default(),
+            bundle_path,
+            concurrency: Arc::new(tokio::sync::Semaphore::new(permits)),
+            max_concurrency: permits,
+        })
+    }
+
+    fn render_request(idempotency_key: Option<&str>) -> axum::extract::Request {
+        let data = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../products/render/bundles/receipt/fixtures/data.json"),
+        )
+        .expect("receipt fixture");
+        let body = format!(r#"{{"issuedAt":"2026-09-16T10:32:00Z","data":{data}}}"#);
+        let mut builder = axum::http::Request::builder()
+            .method(Method::POST)
+            .uri("/v1/render/receipt")
+            .header(header::AUTHORIZATION, format!("Bearer {TEST_API_KEY}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::CONTENT_LENGTH, body.len());
+        if let Some(key) = idempotency_key {
+            builder = builder.header("idempotency-key", key);
+        }
+        builder.body(axum::body::Body::from(body)).expect("request")
+    }
+
+    #[tokio::test]
+    async fn the_request_entry_is_accepted_before_the_render_starts() {
+        let lines = AuditLines::new(None);
+        let service = service(&lines, 0);
+        let pending = tokio::time::timeout(
+            Duration::from_millis(500),
+            router(Arc::clone(&service)).oneshot(render_request(Some("effect-1234"))),
+        )
+        .await;
+        assert!(
+            pending.is_err(),
+            "with no render slot free the request must be waiting at the render step"
+        );
+        service.audit.wait_for_detached_entries();
+        let accepted = lines.accepted();
+        // The call dropped while it waited for a render slot, as a canceled
+        // request is: its request entry is paired with an unfinished
+        // response, and nothing else was written.
+        assert_eq!(accepted.len(), 2, "{accepted:?}");
+        let entry = &accepted[0];
+        assert_eq!(entry["schema"], crate::audit::AUDIT_SCHEMA);
+        assert_eq!(entry["phase"], "request");
+        let correlation = entry["correlation"].as_str().expect("correlation");
+        assert_eq!(correlation.len(), 36, "a drawn correlation: {correlation}");
+        assert_eq!(accepted[1]["phase"], "response");
+        assert_eq!(accepted[1]["correlation"], correlation);
+        assert_eq!(accepted[1]["record"]["outcome"], "unfinished");
+        let record = &entry["record"];
+        assert!(
+            record.get("outcome").is_none(),
+            "a request entry carries no outcome: {record}"
+        );
+        assert_eq!(record["documentId"], "receipt");
+        assert_eq!(record["documentVersion"], 3);
+        assert_eq!(
+            record["bundleVersion"],
+            service.bundle.manifest.bundle_version
+        );
+        assert_eq!(record["bundleHash"], service.bundle.bundle_hash.as_str());
+        assert_eq!(record["caller"], "caller-fingerprint");
+        assert_eq!(record["correlationId"], "effect-1234");
+        assert_eq!(record["rendererVersion"], crate::display_version());
+        assert_eq!(record["typstPin"], crate::TYPST_PIN);
+    }
+
+    #[tokio::test]
+    async fn a_refused_request_entry_prevents_the_render() {
+        let lines = AuditLines::new(Some(1));
+        let service = service(&lines, 0);
+        // Zero render slots: reaching the render step would wait forever, so
+        // an answer inside the bound proves the render never started.
+        let response = tokio::time::timeout(
+            Duration::from_secs(5),
+            router(Arc::clone(&service)).oneshot(render_request(None)),
+        )
+        .await
+        .expect("a refused request entry answers without waiting for a render slot")
+        .expect("router");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("problem body");
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("audit-failed"), "{text}");
+        assert_eq!(
+            lines.written.load(Ordering::SeqCst),
+            1,
+            "no response entry follows a refused request entry"
+        );
+        assert!(lines.accepted().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_refusal_before_the_render_is_one_response_entry() {
+        let lines = AuditLines::new(None);
+        let service = service(&lines, 0);
+        let request = axum::http::Request::builder()
+            .method(Method::POST)
+            .uri("/v1/render/receipt")
+            .header(header::AUTHORIZATION, format!("Bearer {TEST_API_KEY}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header("idempotency-key", "effect-5678")
+            .body(axum::body::Body::from(r#"{"data":{}}"#))
+            .expect("request");
+        let response = router(service).oneshot(request).await.expect("router");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let accepted = lines.accepted();
+        assert_eq!(accepted.len(), 1, "{accepted:?}");
+        assert_eq!(accepted[0]["phase"], "response");
+        assert_ne!(accepted[0]["correlation"], "effect-5678");
+        assert_eq!(accepted[0]["record"]["correlationId"], "effect-5678");
+        assert_eq!(accepted[0]["record"]["outcome"], "refused");
+        assert_eq!(accepted[0]["record"]["problem"], "issued-at-missing");
+    }
+
+    #[tokio::test]
+    async fn a_refusal_after_the_render_starts_keeps_the_render_identity() {
+        let lines = AuditLines::new(None);
+        let service = service(&lines, 1);
+        // A closed latch fails the render step after the request entry.
+        service.concurrency.close();
+        let response = router(Arc::clone(&service))
+            .oneshot(render_request(Some("effect-9012")))
+            .await
+            .expect("router");
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let accepted = lines.accepted();
+        assert_eq!(accepted.len(), 2, "{accepted:?}");
+        let entry = &accepted[1];
+        assert_eq!(entry["phase"], "response");
+        assert_eq!(entry["correlation"], accepted[0]["correlation"]);
+        let record = &entry["record"];
+        assert_eq!(record["correlationId"], "effect-9012");
+        assert_eq!(record["outcome"], "refused");
+        assert_eq!(record["problem"], "internal");
+        assert_eq!(record["documentId"], "receipt");
+        assert_eq!(record["documentVersion"], 3);
+        assert_eq!(
+            record["bundleVersion"],
+            service.bundle.manifest.bundle_version
+        );
+        assert_eq!(record["bundleHash"], service.bundle.bundle_hash.as_str());
+    }
+
+    #[test]
+    fn the_envelope_correlation_is_always_drawn_by_the_server() {
+        let drawn = crate::audit::correlation();
+        assert_eq!(drawn.len(), 36, "a random UUID: {drawn}");
+        assert_ne!(drawn, crate::audit::correlation());
+    }
+
+    /// Two calls that carry the same caller key still pair unambiguously:
+    /// the key is the caller's own reference, never the journal's join.
+    #[tokio::test]
+    async fn concurrent_calls_sharing_an_idempotency_key_pair_their_own_entries() {
+        let lines = AuditLines::new(None);
+        let service = service(&lines, 2);
+        let (first, second) = tokio::join!(
+            router(Arc::clone(&service)).oneshot(render_request(Some("shared-key"))),
+            router(Arc::clone(&service)).oneshot(render_request(Some("shared-key"))),
+        );
+        // Whatever each call's outcome, both reach the render step.
+        assert_eq!(
+            first.expect("router").status(),
+            second.expect("router").status()
+        );
+        let accepted = lines.accepted();
+        assert_eq!(accepted.len(), 4, "{accepted:?}");
+        let mut correlations = std::collections::BTreeMap::<String, Vec<String>>::new();
+        for entry in &accepted {
+            assert_eq!(entry["record"]["correlationId"], "shared-key");
+            correlations
+                .entry(
+                    entry["correlation"]
+                        .as_str()
+                        .expect("correlation")
+                        .to_owned(),
+                )
+                .or_default()
+                .push(entry["phase"].as_str().expect("phase").to_owned());
+        }
+        assert_eq!(
+            correlations.len(),
+            2,
+            "one correlation per call: {correlations:?}"
+        );
+        for phases in correlations.values() {
+            assert_eq!(phases, &["request", "response"]);
+        }
     }
 }

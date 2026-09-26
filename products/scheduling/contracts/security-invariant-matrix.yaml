@@ -55,7 +55,7 @@ invariants:
       entry time.
     refusal: >-
       Refuse with operation.not-authorized and write the authorization.refused
-      audit row, leaving no claim behind.
+      response audit entry after the rollback, leaving no claim behind.
     partialNote: >-
       Only the grant's expiry is read again inside the transaction. The bounds
       themselves, the service, the location, the action, and the client, are
@@ -244,24 +244,43 @@ invariants:
       refusal cannot be attributed afterwards, and grant-scope enumeration
       against the edge passes unseen.
     enforcementPoint: >-
-      An authorization audit record built with a pseudonymized principal and
-      stamped with its identity exactly once, written for the allowed case,
-      for every commitment the capacity transaction refuses, and for every
-      permission mismatch the service refuses before that transaction opens.
-      A refused commitment is one the ledger decided: an admission refusal,
-      the hold ceiling, a lapsed grant, a stale observed revision, or a
-      cancellation past its cutoff. A failed transaction and a replaced
-      environment decided nothing and are not audited, and an idempotency key
-      refusal is carried by the attempt receipt instead. The match that
-      selects between them is exhaustive, so a new outcome states its side.
-      The journal is published in the order it was written, and the hash
-      chain continues across a restart from its verified tail.
+      An authorization record built with a pseudonymized principal and written
+      through the platform audit writer under registry-scheduling-audit/v1. A
+      commitment's request entry is accepted before the capacity transaction
+      opens, and its response entry, stamped with the request's correlation as
+      its identity exactly once, is written after the transaction commits for
+      the allowed case and after it rolls back for every commitment it
+      refuses. A permission mismatch the service refuses before that
+      transaction opens is one response entry. A refused commitment is one
+      the ledger decided: an admission refusal, the hold ceiling, a lapsed
+      grant, a stale observed revision, or a cancellation past its cutoff.
+      Every request entry is answered. A commitment nothing decided, because
+      its transaction rolled back on a failure, the environment records were
+      replaced under it, or its idempotency key was refused as reused or
+      expired, writes one response entry with the outcome unfinished and a
+      closed reason, and never an authorization verdict. A capacity commit
+      that is not acknowledged is read back by its transaction identifier on
+      a separate connection that mutates nothing: one that took effect is
+      answered and recorded as committed, one that rolled back is recorded
+      commitment.failed, and one whose status cannot be read is recorded
+      commitment.unfinished, never failed. One that returns or is canceled
+      before it answers writes the commitment.unfinished response when its
+      request handle is dropped. The match that selects between them is exhaustive,
+      so a new outcome states its side. A replayed receipt, including one a
+      concurrent identical request won, is answered only after its own
+      response entry is accepted, and that entry records the
+      decision the receipt carries: allowed for a success, denied with the
+      original reason for a refusal.
     refusal: >-
       Record authorization.allowed or authorization.refused as an audit reason,
-      never as a problem code, and never carry the caller's raw identifier.
+      never as a problem code, and never carry the caller's raw identifier. A
+      refused request entry opens no transaction, and a refused response entry
+      for a committed commitment, a replayed receipt, a refusal, or a
+      commitment nothing decided answers service.unavailable without releasing
+      the receipt, so no answer leaves without its audit.
     negativeTest:
-      path: crates/registry-scheduling/src/runtime.rs
-      name: a_pending_audit_record_is_stamped_with_its_identity_exactly_once
+      path: crates/registry-scheduling/tests/postgres_commitments.rs
+      name: a_replayed_receipt_is_released_only_after_its_response_entry_is_accepted
   - id: SCHEDULING-SEC-15
     state: enforced
     threat: >-
@@ -322,7 +341,7 @@ invariants:
     state: enforced
     threat: >-
       Caller strings stored verbatim in the ledger entry, the idempotency
-      receipt, and the audit journal are bounded only by the body ceiling, and
+      receipt, and the audit entries are bounded only by the body ceiling, and
       an unbounded duplicate key can be varied at will to slip the duplicate
       guard.
     enforcementPoint: >-
@@ -407,8 +426,9 @@ invariants:
       A closed policy compiler admitting only after-phase URL handlers for
       three appointment lifecycle triggers; product-owned projections that
       cannot name actor, credential, capacity, duplicate-key, or cancellation
-      reason fields; outbox capture in the appointment transaction; and a
-      delivery seam that refuses every proposal.
+      reason fields; outbox capture in the appointment transaction; an
+      attempt audit entry accepted before egress; and a delivery seam that
+      refuses every proposal.
     refusal: >-
       Refuse unsupported declarations before startup, fail the appointment
       transaction if its matching event cannot be captured, and record a
@@ -476,6 +496,35 @@ invariants:
     negativeTest:
       path: crates/registry-scheduling/tests/postgres_commitments.rs
       name: a_supply_identifier_may_not_anchor_both_a_pool_and_a_window
+  - id: SCHEDULING-SEC-28
+    state: enforced
+    threat: >-
+      A caller probes release_hold or confirm_appointment with an id it
+      chose. An id that names no claim at all, one whose claim is not a
+      hold, and a hold that exists but that the caller's grant does not
+      reach are three different facts about the store. If the first two
+      were refused before authorization ran, while the third waited for
+      require_permission and then answered with the same code a denied
+      grant already uses elsewhere, an unauthorized caller could read the
+      pre-authorization refusal as an oracle over which ids are live holds.
+    enforcementPoint: >-
+      release_hold and confirm_appointment resolve the claim through a
+      shared hold lookup before they name an offering or call
+      require_permission. That lookup answers None alike for an id that
+      resolves no claim and one whose claim is not a hold, and both
+      handlers turn that None into the same operation.not-authorized
+      problem require_permission already returns for a hold outside the
+      caller's grant. Whether an existing hold has already been released or
+      expired stays a decision the store makes deeper in the same
+      transaction, where it is authorized and auditable rather than
+      exposed ahead of permission.
+    refusal: >-
+      Refuse the request with operation.not-authorized (403) for an
+      unknown id, a non-hold id, and a hold outside the caller's grant
+      alike, and take no store action for any of the three.
+    negativeTest:
+      path: crates/registry-scheduling/tests/postgres_commitments.rs
+      name: release_hold_refuses_indistinguishably_for_missing_and_unauthorized_holds
 deferred:
   - id: SCHEDULING-DEF-01
     subject: Full task-grant bounds re-checked inside the capacity transaction
@@ -517,12 +566,13 @@ deferred:
       lie under different published opening revisions.
     recordedIn: products/scheduling/SECURITY-REVIEW-NOTES.md
   - id: SCHEDULING-DEF-06
-    subject: Appointment, history, outbox, and audit retention
+    subject: Appointment, history, and outbox retention
     state: deferred
     reason: >-
       Retention windows for committed scheduling data are a product question
       this milestone does not answer. Idempotency receipts do expire and
-      tombstone; nothing else is swept.
+      tombstone; nothing else in the database is swept. Rotated audit files
+      are removed after audit.retainDays.
     compensatingControl: >-
       The configuration reference says so explicitly rather than implying a
       sweep that does not run.

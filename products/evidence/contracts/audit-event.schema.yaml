@@ -1,10 +1,9 @@
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://registrystack.org/schemas/evidence/audit-event-v1.json
-title: Evidence native audit record union Version 1
+$id: https://registrystack.org/schemas/evidence/audit-event-v2.json
+title: Evidence native audit record union Version 2
 type: object
 additionalProperties: false
 required:
-  - schema
   - assuranceProfile
   - eventId
   - occurredAt
@@ -17,10 +16,6 @@ required:
   - reason
   - durationMilliseconds
 properties:
-  schema:
-    enum:
-      - registry.evidence.audit/v1
-      - registry.evidence.audit.authorization-refusal/v1
   assuranceProfile: {enum: [local, production, evidence-grade]}
   eventId: {type: string, format: uri, maxLength: 512}
   occurredAt: {type: string, format: date-time}
@@ -94,13 +89,11 @@ oneOf:
   - title: Authorized-material event
     required: [requirement, purpose, authority, subjects, responseProtection]
     properties:
-      schema: {const: registry.evidence.audit/v1}
       decision:
         enum: [authorized, released, no-match, ambiguous, unresolved, fact-missing, dependency-failure, evaluation-failure, signing-failure]
   - title: Authenticated authorization-refusal event
     required: [safeErrorCategory]
     properties:
-      schema: {const: registry.evidence.audit.authorization-refusal/v1}
       phase: {const: denial}
       decision: {const: not-authorized}
       safeErrorCategory: {const: not-authorized}
@@ -163,17 +156,16 @@ allOf:
   - if: {required: [sourceIds], properties: {sourceIds: {minItems: 5, maxItems: 5}}}
     then: {properties: {adapterIds: {minItems: 5, maxItems: 5}}}
 audit_rules:
+  envelope: Each record is the record member of one platform audit entry with the members schema, eventId, time, phase, correlation, and record, written as one JSON line by the shared platform audit writer to the operator-configured file or stdout destination. The entry schema is registry.evidence.audit/v2 for an authorized-material record and registry.evidence.audit.authorization-refusal/v2 for an authorization-refusal record; the record itself carries no schema member. The entry phase is request for access-attempt and response for disclosure-release, denial, and transient-failure. The entry correlation is the record's operation, so the access-attempt entries of a multi-stage acquisition share the correlation of the one terminal entry that closes it.
   authorization_refusal_gate: After successful authentication, an authorization refusal is durably accepted before the generic HTTP 403 is returned. Audit failure changes the outward result to service.unavailable with HTTP 503.
-  authorization_refusal_minimization: The refusal event contains only its chain and event identifiers, server-minted operation, timestamp and duration, assurance profile, bundle revision, actor kind, scoped requester and optional client, grant, or actor pseudonyms, and closed denial reason, category, and decision. The public trace identifier never becomes this operation identity. Pseudonym scope binds the operator trust domain, requested purpose, and authenticated audience, while those scope inputs remain omitted from the event. It omits the untrusted requested requirement, purpose, subjects, unmatched authority, selector information, response protection, and source or evaluation material.
+  authorization_refusal_minimization: The refusal event contains only its event identifier, server-minted operation, timestamp and duration, assurance profile, bundle revision, actor kind, scoped requester and optional client, grant, or actor pseudonyms, and closed denial reason, category, and decision. The public trace identifier never becomes this operation identity. Pseudonym scope binds the operator trust domain, requested purpose, and authenticated audience, while those scope inputs remain omitted from the event. It omits the untrusted requested requirement, purpose, subjects, unmatched authority, selector information, response protection, and source or evaluation material.
   access_gate: One access-attempt is durably accepted after authorization and before credential acquisition or source access for every actual source stage; search-then-fetch therefore records search access and, only after a unique validated match, fetch access, and search-then-fetch-set records search access followed by one access per declared fetch member in declared order, each reached only after every earlier stage resolved. A stage that is never reached records nothing.
   unresolved_decision: A configured exact source-level unresolved Problem Details outcome records the neutral denial decision unresolved only when it terminates a singular acquisition or search stage. It does not assert no-match or ambiguity, and the event records none of the upstream problem body, type, code, detail, or trace. The same outcome after a unique search is a dependency failure because the acquisition has already committed to a fetch or member reference.
-  release_gate: disclosure-release is durably accepted after the final immutable response bytes are serialized and before those exact bytes are released. One operation has exactly one terminal release event, whatever it released; a release carrying more than one assertion names the complete released set in evidenceIds, in release order, instead of naming a single assertion in evidenceId. Splitting a batch into one event per member is not available, because that would make one request either several operations or one operation with several terminal events, and the chain accepts neither.
-  request_batch_noninteraction: POST /v1/evidence/batch uses the distinct registry.evidence.audit.request-batch/v1 schema because one physical call may cover several independently authorized subject sets and its terminal release includes unavailable outcomes. This native union remains the singular operation and holder-bound issuance-batch audit contract; it never accepts itemIndices, itemGroups, outcomes, or terminal-failure.
+  release_gate: disclosure-release is durably accepted after the final immutable response bytes are serialized and before those exact bytes are released. One operation has exactly one terminal release event, whatever it released; a release carrying more than one assertion names the complete released set in evidenceIds, in release order, instead of naming a single assertion in evidenceId. Splitting a batch into one event per member is not available, because that would make one request either several operations or one operation with several terminal events, and the audit contract accepts neither.
+  request_batch_noninteraction: POST /v1/evidence/batch uses the distinct registry.evidence.audit.request-batch/v2 entry schema because one physical call may cover several independently authorized subject sets and its terminal release includes unavailable outcomes. This native union remains the singular operation and holder-bound issuance-batch audit contract; it never accepts itemIndices, itemGroups, outcomes, or terminal-failure.
   source_identity: Each access or failure event names the source and adapter for that stage; disclosure release names the final source and adapter that produced the derivation FactSet. A release closing an acquisition of three to five stages additionally lists every executed source in sourceIds and its adapter in adapterIds, in execution order and positionally aligned, with the last entry of each equal to the corresponding scalar; sourceIds is distinct while adapterIds is not, because two stages may read through one adapter. A release closing a one or two stage acquisition omits both arrays, so its shape is unchanged; an earlier stage of such an acquisition is read from its own access-attempt event, as it always has been. Stage identities are configuration, never a value obtained from a source.
   response_protection: Every authorized-material event records the closed non-secret responseProtection mode resolved with authorization. signingKeyId exists exactly for cryptographically protected disclosure release, which is the signed flattened JWS and the SD-JWT VC serialization, and is forbidden for unsigned output. An authorization-refusal event has no resolved response protection and omits both fields.
-  failure_policy: sink failure blocks the applicable step
-  chain_verification: At startup and after restart, the newest sealed segment supplies the prior chain head and the complete active segment is verified from that head. Complete retained-history verification is an out-of-band operator duty performed with evidence verify-audit across every available sealed segment and, when the writer is stopped, the active segment. Steady-state appends and readiness verify the pinned active-segment identity, modification fingerprint, expected length, verified tail, and lock-file identity without rescanning sealed history or the growing active segment.
-  external_mutation: Any external replacement or modification of the active segment or lock file fails readiness and future appends closed for the process lifetime. Mutation within older sealed history is detected by complete out-of-band verification, not by serving-process startup or readiness.
+  failure_policy: Audit writer failure blocks the applicable step. A file destination returns from an append only after the entry is durable; a failed durable write stops the writer for the process lifetime, so readiness and every later append fail closed. Tamper evidence after the fact belongs to the append-only store the operator ships audit to, not to the serving process.
   pre_authentication_and_validation_failure: Authentication, malformed-request, and invalid-selector failures remain operational-only because the core has no authenticated requester plus authorization decision from which to construct the minimal refusal event.
   pseudonym_domains: [requester, client, actor, grant, approver, subject]
   subject_scope: key version plus operator trust domain, purpose, the binding scope, role, profile, and complete canonical selector bundle. The binding scope is the authenticated audience for an audience-scoped requirement and the holder key thumbprint for a holder-bound one; the two are domain-separated, so no binding can be read as belonging to the other mode.

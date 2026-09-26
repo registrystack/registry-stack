@@ -13,6 +13,7 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::time::Duration;
 
+use registry_breg::audit::RegistryAudit;
 use registry_breg::history_erasure::{
     erase_record_history_with_connection, HistoryErasureError, HistoryErasureOutcome,
     HistoryErasureRequest, HistoryErasureTimeouts, RecordHistoryErasureTarget,
@@ -31,6 +32,8 @@ const MAX_ERASURE_REQUEST_BYTES: u64 = 16 * 1024;
 #[derive(Debug)]
 pub(crate) enum HistoryErasureLifecycleError {
     RuntimeConfigPath,
+    /// The companion audit destination could not be opened.
+    Audit,
     RequestFile,
     RequestDocument,
     RuntimeConfig(RuntimeConfigError),
@@ -93,7 +96,7 @@ pub(crate) fn run(
     let migration_connection = config
         .migration_database_connection_config()
         .map_err(|_| HistoryErasureLifecycleError::DatabaseConfiguration)?;
-    let audit_profile = config
+    config
         .audit_profile()
         .map_err(HistoryErasureLifecycleError::RuntimeConfig)?;
     let lock_key = RegistryLockKey::derive(&expected.package_id)
@@ -107,6 +110,9 @@ pub(crate) fn run(
         .enable_all()
         .build()
         .map_err(|_| HistoryErasureLifecycleError::Runtime)?;
+    let audit = runtime
+        .block_on(RegistryAudit::open_companion(&config))
+        .map_err(|_| HistoryErasureLifecycleError::Audit)?;
     let outcome = runtime
         .block_on(erase_record_history_with_connection(
             &migration_connection,
@@ -115,7 +121,7 @@ pub(crate) fn run(
                 migration_role: config.database().roles().migration(),
                 lock_key,
                 timeouts,
-                audit_profile: &audit_profile,
+                audit: &audit,
                 operator_reference: &erasure.operator_reference,
                 reason: &erasure.reason,
                 target: RecordHistoryErasureTarget::new(

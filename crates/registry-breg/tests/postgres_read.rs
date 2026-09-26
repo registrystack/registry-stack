@@ -20,6 +20,7 @@ use registry_breg::api::{
     router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
     VerifiedRequestClaims,
 };
+use registry_breg::audit::RegistryAudit;
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
@@ -28,7 +29,7 @@ use registry_breg::postgres::{
     ClaimContext, ExpectedManagedCatalog, PostgresRecordReadService, ReadFaultPoint,
     RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
 };
-use registry_platform_audit::{verify_jsonl_lines_with_hasher, AuditEnvelope, AuditProfile};
+use registry_platform_audit::AuditProfile;
 use serde_json::{json, Value};
 use tokio_postgres::Transaction;
 use tower::Service as _;
@@ -116,8 +117,10 @@ async fn benchmark_audited_record_read(workload: ReadBenchmark) {
     let pool = database.runtime_config.build_pool().expect("pool builds");
     let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
     seed_records(&database, &pool, lock_key, &identity, &compiled, false).await;
-    let profile = AuditProfile::production_from_secret_bytes(vec![0x7a; 32].into())
-        .expect("benchmark audit profile is keyed");
+    let profile = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x7a; 32].into())
+            .expect("benchmark audit profile is keyed"),
+    );
     let app = read_router(pool.clone(), compiled, identity, lock_key, profile, None);
     let expected_record = format!(
         "{{\"data\":{{\"domainData\":{{\"label\":\"label-001\"}},\"recordIdentifier\":\"{VISIBLE_RECORD}\",\"revisionIdentifier\":\"1\"}},\"meta\":{{\"datasetIdentifier\":\"test-dataset\",\"entityTypeIdentifier\":\"widget\",\"registryIdentifier\":\"read-registry\"}}}}"
@@ -252,8 +255,10 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock identity is bounded");
     seed_records(&database, &pool, lock_key, &identity, &compiled, false).await;
 
-    let profile = AuditProfile::production_from_secret_bytes(vec![0x7a; 32].into())
-        .expect("test owns a strongly keyed audit profile");
+    let profile = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x7a; 32].into())
+            .expect("test owns a strongly keyed audit profile"),
+    );
     let app = read_router(
         pool.clone(),
         compiled.clone(),
@@ -546,9 +551,9 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
 
     let before_fault = audit_count(&database).await;
     let faulting_app = read_router(
-        pool,
+        pool.clone(),
         compiled.clone(),
-        identity,
+        identity.clone(),
         lock_key,
         profile.clone(),
         Some(ReadFaultPoint::BeforeTerminalAudit),
@@ -565,12 +570,48 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     assert!(!faulted_body.to_string().contains("label-001"));
     assert_eq!(
         audit_count(&database).await,
-        before_fault + 1,
-        "a terminal audit fault releases no protected data and commits only the prior attempt"
+        before_fault + 2,
+        "a read ended before its terminal releases no protected data and answers its attempt \
+         as unfinished"
     );
 
-    assert_read_audit_is_ordered_chained_and_minimized(&database, &profile, &compiled).await;
-    assert_audit_insert_failure_is_closed_and_recovers(&database, &app, &profile).await;
+    // A failure after the rows were read, binding the strong entity tag,
+    // answers the attempt with the Refused terminal and releases nothing.
+    let before_etag_fault = audit_count(&database).await;
+    let etag_faulting_app = read_router(
+        pool.clone(),
+        compiled.clone(),
+        identity.clone(),
+        lock_key,
+        profile.clone(),
+        Some(ReadFaultPoint::StrongEtag),
+    );
+    let etag_faulted = send(
+        &etag_faulting_app,
+        &format!("/v1/records/widgets/{VISIBLE_RECORD}?$select=label"),
+        Some(read_claims(["zone-a"])),
+    )
+    .await;
+    assert_eq!(etag_faulted.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(!body_json(etag_faulted)
+        .await
+        .to_string()
+        .contains("label-001"));
+    assert_eq!(audit_count(&database).await, before_etag_fault + 2);
+
+    assert_read_audit_is_ordered_paired_and_minimized(&database, &compiled);
+    // A restarted process over the recovered destination. A writer that
+    // refused an append stays failed, so recovery is a fresh writer.
+    let recovered_app = read_router(
+        pool,
+        compiled.clone(),
+        identity,
+        lock_key,
+        database.audit(profile.profile().clone()),
+        None,
+    );
+    assert_audit_failure_is_closed_and_recovers(&database, &app, &recovered_app).await;
+    let app = recovered_app;
 
     let composite = send_lookup(
         &app,
@@ -633,8 +674,10 @@ async fn real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced() {
     let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock identity is bounded");
     seed_records(&database, &pool, lock_key, &identity, &compiled, true).await;
 
-    let profile = AuditProfile::production_from_secret_bytes(vec![0x6b; 32].into())
-        .expect("test owns a strongly keyed audit profile");
+    let profile = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x6b; 32].into())
+            .expect("test owns a strongly keyed audit profile"),
+    );
     let query_plan = Arc::new(std::sync::Mutex::new(Vec::new()));
     let app = read_router_with_cursor_codec(
         pool.clone(),
@@ -957,8 +1000,10 @@ async fn real_postgres_reads_do_not_depend_on_the_database_time_zone() {
         .expect("bounded runtime pool builds");
     let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock identity is bounded");
     seed_records(&database, &pool, lock_key, &identity, &compiled, true).await;
-    let profile = AuditProfile::production_from_secret_bytes(vec![0x6d; 32].into())
-        .expect("test owns a strongly keyed audit profile");
+    let profile = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x6d; 32].into())
+            .expect("test owns a strongly keyed audit profile"),
+    );
     let app = read_router(pool, compiled.clone(), identity, lock_key, profile, None);
 
     let current = send(
@@ -1017,7 +1062,7 @@ fn read_router(
     registry: Arc<registry_breg::CompiledRegistry>,
     identity: registry_breg::postgres::ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
-    profile: AuditProfile,
+    profile: RegistryAudit,
     fault: Option<ReadFaultPoint>,
 ) -> axum::Router {
     read_router_with_cursor_codec(
@@ -1039,7 +1084,7 @@ fn read_router_with_cursor_codec(
     registry: Arc<registry_breg::CompiledRegistry>,
     identity: registry_breg::postgres::ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
-    profile: AuditProfile,
+    profile: RegistryAudit,
     fault: Option<ReadFaultPoint>,
     cursors: Arc<CursorCodec>,
     http_identity: Option<ReadRuntimeIdentity>,
@@ -1566,89 +1611,70 @@ fn read_claims_with<const N: usize>(
 }
 
 async fn audit_count(database: &TestDatabase) -> i64 {
-    database
-        .admin
-        .query_one("SELECT count(*) FROM registry_internal.registry_audit", &[])
-        .await
-        .expect("administrator can inspect audit count")
-        .get(0)
+    i64::try_from(database.audit_entries().len()).expect("audit count fits i64")
 }
 
-async fn audit_head(database: &TestDatabase) -> Option<Vec<u8>> {
-    database
-        .admin
-        .query_one(
-            "SELECT last_hash FROM registry_internal.registry_audit_head WHERE singleton",
-            &[],
-        )
-        .await
-        .expect("administrator can inspect the audit head")
-        .get(0)
-}
-
-async fn assert_audit_insert_failure_is_closed_and_recovers(
+/// A destination that refuses the request entry keeps the read closed: the
+/// read never runs and nothing is released. A process opened over the
+/// recovered destination serves the same read with one request and one
+/// response entry sharing a correlation.
+async fn assert_audit_failure_is_closed_and_recovers(
     database: &TestDatabase,
-    app: &axum::Router,
-    profile: &AuditProfile,
+    refused_app: &axum::Router,
+    recovered_app: &axum::Router,
 ) {
     let before_count = audit_count(database).await;
-    let before_head = audit_head(database).await;
-    database
-        .admin
-        .batch_execute(&format!(
-            "REVOKE INSERT ON registry_internal.registry_audit FROM \"{}\"",
-            database.runtime_role.as_str(),
-        ))
-        .await
-        .expect("administrator injects a real audit insert failure");
+    database.audit_capture().fail_after(0);
     let uri = format!("/v1/records/widgets/{VISIBLE_RECORD}?$select=label");
-    let refused = send(app, &uri, Some(read_claims(["zone-a"]))).await;
+    let refused = send(refused_app, &uri, Some(read_claims(["zone-a"]))).await;
     assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body = body_json(refused).await;
     assert_eq!(body["code"], "source.unavailable");
     assert!(!body.to_string().contains("label-001"));
     assert_eq!(audit_count(database).await, before_count);
-    assert_eq!(audit_head(database).await, before_head);
 
-    database
-        .admin
-        .batch_execute(&format!(
-            "GRANT INSERT ON registry_internal.registry_audit TO \"{}\"",
-            database.runtime_role.as_str(),
-        ))
-        .await
-        .expect("administrator restores audit insert authority");
-    let recovered = send(app, &uri, Some(read_claims(["zone-a"]))).await;
+    database.audit_capture().restore();
+    let recovered = send(recovered_app, &uri, Some(read_claims(["zone-a"]))).await;
     assert_eq!(recovered.status(), StatusCode::OK);
     assert_eq!(
         body_json(recovered).await["data"]["domainData"]["label"],
         "label-001"
     );
     assert_eq!(audit_count(database).await, before_count + 2);
-    let envelopes = ordered_audit_envelopes(database, profile).await;
+    let entries = database.audit_entries();
+    let request = &entries[entries.len() - 2];
+    let response = &entries[entries.len() - 1];
+    assert_eq!(request["phase"], "request");
+    assert_eq!(response["phase"], "response");
     assert_eq!(
-        audit_head(database).await,
-        Some(
-            envelopes
-                .last()
-                .expect("recovered audit exists")
-                .record_hash
-                .to_vec()
-        ),
-        "recovery extends the verified chain from the unchanged head"
+        request["correlation"], response["correlation"],
+        "the recovered read's response shares its request's correlation"
     );
 }
 
-async fn assert_read_audit_is_ordered_chained_and_minimized(
+fn assert_read_audit_is_ordered_paired_and_minimized(
     database: &TestDatabase,
-    profile: &AuditProfile,
     registry: &registry_breg::CompiledRegistry,
 ) {
-    let envelopes = ordered_audit_envelopes(database, profile).await;
-    let records = envelopes
-        .iter()
-        .map(|envelope| envelope.record.clone())
-        .collect::<Vec<_>>();
+    let entries = database.audit_entries();
+    for entry in &entries {
+        let expected = if entry["record"]["phase"] == "attempt" {
+            "request"
+        } else {
+            "response"
+        };
+        assert_eq!(entry["phase"], expected, "{entry}");
+        assert_eq!(entry["schema"], registry_breg::audit::AUDIT_SCHEMA);
+    }
+    for pair in entries.windows(2) {
+        if pair[0]["phase"] == "request"
+            && (pair[1]["record"]["phase"] == "terminal"
+                || pair[1]["record"]["phase"] == "unfinished")
+        {
+            assert_eq!(pair[0]["correlation"], pair[1]["correlation"]);
+        }
+    }
+    let records = database.audit_records();
     let phases = records
         .iter()
         .map(|record| {
@@ -1690,6 +1716,9 @@ async fn assert_read_audit_is_ordered_chained_and_minimized(
             ("terminal", Some("empty")),
             ("refusal", None),
             ("attempt", None),
+            ("unfinished", None),
+            ("attempt", None),
+            ("terminal", Some("refused")),
         ],
         "durable read audit records bracket release in order"
     );
@@ -1743,42 +1772,6 @@ async fn assert_read_audit_is_ordered_chained_and_minimized(
     }
     assert!(audit_text.contains("principalReference"));
     assert!(audit_text.contains("recordReference"));
-}
-
-async fn ordered_audit_envelopes(
-    database: &TestDatabase,
-    profile: &AuditProfile,
-) -> Vec<AuditEnvelope> {
-    let rows = database
-        .admin
-        .query("SELECT envelope FROM registry_internal.registry_audit", &[])
-        .await
-        .expect("administrator can inspect audit envelopes");
-    let mut envelopes = rows
-        .iter()
-        .map(|row| {
-            serde_json::from_slice::<AuditEnvelope>(&row.get::<_, Vec<u8>>(0))
-                .expect("audit envelope is canonical platform JSON")
-        })
-        .collect::<Vec<_>>();
-    let mut ordered = Vec::with_capacity(envelopes.len());
-    let mut predecessor = None;
-    while !envelopes.is_empty() {
-        let position = envelopes
-            .iter()
-            .position(|envelope| envelope.prev_hash == predecessor)
-            .expect("database audit chain has one next envelope");
-        let envelope = envelopes.remove(position);
-        predecessor = Some(envelope.record_hash);
-        ordered.push(envelope);
-    }
-    let audit_lines = ordered
-        .iter()
-        .map(|envelope| serde_json::to_string(envelope).expect("audit envelope serializes"))
-        .collect::<Vec<_>>();
-    verify_jsonl_lines_with_hasher(audit_lines.iter(), &profile.chain_hasher())
-        .expect("database audit envelopes form one keyed platform chain");
-    ordered
 }
 
 fn quote_identifier(value: &str) -> String {

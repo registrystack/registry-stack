@@ -169,7 +169,7 @@ def main():
         "bindHost": "127.0.0.1", "port": port, "tlsTermination": "operator-controlled-upstream", "trustProxyIdentityHeaders": False,
         "maximumRequestBytes": 65536, "maximumConcurrentRequests": 16, "requestTimeoutMilliseconds": 10000, "shutdownGraceMilliseconds": 1000},
         "secretProviders": {"file": {"root": str(secrets)}}, "signer": {"kind": "local-jwk", "privateKeyRef": "secret:file/signing-key"},
-        "auditStorage": {"path": str(output / "audit.jsonl"), "maximumFileBytes": 10485760}, "outboundTls": {"systemRoots": True, "trustProfiles": {}}}
+        "audit": {"path": str(output / "audit.jsonl")}, "outboundTls": {"systemRoots": True, "trustProfiles": {}}}
     runtime_path = output / "runtime.yaml"
     runtime_path.write_text(yaml.safe_dump(runtime, sort_keys=False))
     runtime_path.chmod(0o444)

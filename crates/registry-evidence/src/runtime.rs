@@ -93,24 +93,25 @@ pub enum RuntimeInitializationError {
 
 /// Why the audit boundary refused to initialize.
 ///
-/// A mode an operator fixes with `chmod`, a chain that no longer verifies, and
-/// a second writer already holding the sink lock are three unrelated faults
-/// with three unrelated remedies. They are reported separately because from
-/// outside the process they are indistinguishable, and the wrong guess sends an
-/// operator hunting for tampering in what is a permission bit.
+/// A mode an operator fixes with `chmod` and a second writer already holding
+/// the destination lock are unrelated faults with unrelated remedies. They are
+/// reported separately because from outside the process they are
+/// indistinguishable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditInitializationFault {
-    /// `auditStorage` bounds or the audit key version are out of range.
+    /// The `audit` destination settings or the audit key version are out of
+    /// range.
     Configuration,
-    /// The audit hash secret is missing, unreadable, or too weak.
+    /// The audit hash key is missing, unreadable, or too weak.
     Secret,
     /// The audit file or lock is not owner-only and singly linked, or its
-    /// directory is not controlled by the service owner.
+    /// directory is unavailable or not controlled by the service owner.
     Storage,
-    /// Another writer already holds the sink's single-writer lock.
+    /// Another writer already holds the destination's single-writer lock.
     Locked,
-    /// A chain is present but its records do not verify against the head.
-    Chain,
+    /// The audit file's last entry was torn by an interrupted write, so the
+    /// writer refuses to reopen and append to it.
+    IncompleteEntry,
 }
 
 impl AuditInitializationFault {
@@ -119,13 +120,15 @@ impl AuditInitializationFault {
     /// has in the runtime file.
     pub fn cause(self) -> &'static str {
         match self {
-            Self::Configuration => "the audit storage configuration is out of range",
-            Self::Secret => "the audit hash secret is unusable",
+            Self::Configuration => "the audit destination configuration is out of range",
+            Self::Secret => "the audit hash key is unusable",
             Self::Storage => {
                 "the audit file or lock is not owner-only, or its directory is unavailable or not owner-controlled"
             }
-            Self::Locked => "another writer already holds the audit sink lock",
-            Self::Chain => "the existing audit chain did not verify",
+            Self::Locked => "another writer already holds the audit destination lock",
+            Self::IncompleteEntry => {
+                "the audit file ends in an incomplete entry; archive it and start on a fresh path"
+            }
         }
     }
 }
@@ -141,25 +144,24 @@ impl From<&EvidenceAuditError> for AuditInitializationFault {
         match error {
             EvidenceAuditError::Configuration => Self::Configuration,
             // Only stopped local inspection reports `NoOperation`; startup
-            // never does, so it joins the chain-state class.
+            // never does, so it joins the storage class.
             EvidenceAuditError::InvalidEvent
-            | EvidenceAuditError::SegmentMissing { .. }
-            | EvidenceAuditError::NoOperation => Self::Chain,
+            | EvidenceAuditError::Unavailable(_)
+            | EvidenceAuditError::NoOperation => Self::Storage,
             EvidenceAuditError::Audit(audit) => match audit {
-                AuditError::Io(error) if error.kind() == std::io::ErrorKind::InvalidData => {
-                    Self::Chain
-                }
-                AuditError::Io(_) => Self::Storage,
                 AuditError::SinkLocked { .. } => Self::Locked,
                 AuditError::EmptyEnvVarName
                 | AuditError::EnvVarUnavailable { .. }
                 | AuditError::EnvVarNotUnicode { .. }
                 | AuditError::EmptySecret { .. }
                 | AuditError::WeakSecret { .. } => Self::Secret,
-                // Everything else the sink can report at startup is a statement
-                // about chain state: a record that does not parse, a hash that
-                // does not match, or a head that cannot be read.
-                _ => Self::Chain,
+                // The writer's incomplete-final-entry refusal reports this
+                // exact kind; every other I/O failure opening a destination
+                // is about the file, its lock, or its directory.
+                AuditError::Io(io_error) if io_error.kind() == std::io::ErrorKind::InvalidData => {
+                    Self::IncompleteEntry
+                }
+                _ => Self::Storage,
             },
         }
     }
@@ -185,7 +187,7 @@ pub struct ValidatedVerificationMaterial {
 
 /// Resolve and validate the audit, subject-binding, and signing secret
 /// material a bundle names, with no side effects: nothing is written and no
-/// audit chain is opened. Startup builds its runtime state from the returned
+/// audit destination is opened. Startup builds its runtime state from the returned
 /// material, and `check` runs the same validation so a deployment whose
 /// mounted secrets the server would refuse fails check instead of first
 /// start. Source credentials are deliberately not resolved here: readiness
@@ -196,7 +198,7 @@ pub async fn validate_secret_material(
     secrets: &SecretResolver,
 ) -> Result<ValidatedSecretMaterial, RuntimeInitializationError> {
     let audit_secret = secrets
-        .resolve(bundle.config.audit.hash_secret_ref.as_str())
+        .resolve(bundle.config.audit.hash_key_ref.as_str())
         .map_err(|_| RuntimeInitializationError::Audit(AuditInitializationFault::Secret))?;
     AuditProfile::production_from_secret_bytes(Zeroizing::new(
         audit_secret.expose_secret().to_vec(),
@@ -479,9 +481,11 @@ impl EvidenceRuntime {
         );
 
         let material = validate_secret_material(&bundle, &runtime_config, &secrets).await?;
+        let destination = runtime_config.audit.destination().map_err(|_| {
+            RuntimeInitializationError::Audit(AuditInitializationFault::Configuration)
+        })?;
         let audit = EvidenceAuditLog::initialize(
-            &runtime_config.audit_storage.path,
-            runtime_config.audit_storage.maximum_file_bytes,
+            destination,
             material.audit_secret.expose_secret().to_vec(),
             bundle.config.audit.hash_key_version,
         )
@@ -577,15 +581,6 @@ impl EvidenceRuntime {
     /// every scrape.
     pub(crate) fn rate_limiter(&self) -> Arc<EvidenceRateLimiter> {
         Arc::clone(&self.rate_limiter)
-    }
-
-    /// The audit chain, for the capacity gauge.
-    ///
-    /// Shared for the same reason as the rate limiter: the metrics listener
-    /// samples the chain's on-disk footprint at scrape time rather than
-    /// caching a value taken at startup.
-    pub(crate) fn audit(&self) -> Arc<EvidenceAuditLog> {
-        Arc::clone(&self.audit)
     }
 
     #[cfg(test)]
@@ -3921,7 +3916,7 @@ fn authorization_refusal_audit_scope(trust_domain: &str, purpose: &str, audience
 /// The distinct `v1-holder:` prefix keeps the derivation domain-separated from
 /// the audience-scoped one, so no pseudonym can collide across the two modes
 /// even where trust domain and purpose agree. The holder key thumbprint is
-/// deliberately absent: a scope naming it would make the audit chain itself a
+/// deliberately absent: a scope naming it would make the audit log itself a
 /// place where one wallet key's activity can be picked out.
 fn audit_scope_holder_bound(trust_domain: &str, purpose: &str) -> String {
     format!(
@@ -4068,7 +4063,7 @@ mod tests {
         );
 
         // The scope is the same whichever holder asks, which is the whole
-        // point: the audit chain must not become a place where one wallet
+        // point: the audit log must not become a place where one wallet
         // key's activity can be picked out.
         let scope = audit_scope_holder_bound(trust_domain, purpose);
         assert!(!scope.contains(thumbprint));

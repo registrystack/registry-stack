@@ -121,7 +121,7 @@
       "sourcePath": "crates/registry-relay-v2/src/artifacts.rs",
       "owner": "relay-v2",
       "status": "active",
-      "compatibilityLine": "v2alpha1",
+      "compatibilityLine": "v2alpha2",
       "description": "Relay V2 generated public JSON Schema."
     },
     {

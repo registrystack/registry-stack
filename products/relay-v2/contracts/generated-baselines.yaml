@@ -2,7 +2,7 @@ schemaVersion: relay.registrystack.org/generated-baselines/v1alpha1
 product: relay-v2
 projects:
   social-assistance:
-    packageRevision: sha256:04441003a85d2120ff5dd8c77b7e714c78a30310f36ab65c0a21a063a8dc4a4d
+    packageRevision: sha256:e3cb876009d8816e404a48a1757e4f705d36ebf1441dde97d14d9a6ff47b24bf
     contractRevision: sha256:d05828ef947a78e3716e808b40fa60952c2179291c0d68402e3f9ce83b299454
     sourceSchemaFingerprints:
       assistance: sha256:936a90a03d06be67a76226d6999a830c04f6604a3ff8b340a62fdd378d8c6d91
@@ -190,7 +190,7 @@ projects:
       mediaType: application/schema+json
       operationIdentifier: null
       path: generated/artifacts/audit-event.schema.json
-      sha256: sha256:49d9aba681305df58f99ae9bc402d5e187c9b513dd7ca07748607cf3774aeed3
+      sha256: sha256:cf12f01bfff167eda60598c0e8b2e26312bc0c18ba7f20369bf9d9e156fac301
       visibility: operator-only
     - accessBinding: null
       id: capability-inventory-full
@@ -283,7 +283,7 @@ projects:
       size: 6630
       visibility: operator-only
   business-registry:
-    packageRevision: sha256:1dfb7aaa4d29303847f3060407d9d1d6831796c9b7a2c242ce4ead4c7051d6fd
+    packageRevision: sha256:3f9d63d7e88aefa5a2cdb7fc3a00491aba9a1a27e40e6d883389f578aff32432
     contractRevision: sha256:e7bce610dec7dd1d5227e7931950fce675804efdf9537b8f31346c749732b5ae
     sourceSchemaFingerprints:
       companies: sha256:dd62b98578f0fa7341eeeaaac4b34da9b79405ae067dc06e5edb004c2d4a38fe
@@ -293,7 +293,7 @@ projects:
       mediaType: application/schema+json
       operationIdentifier: null
       path: generated/artifacts/audit-event.schema.json
-      sha256: sha256:49d9aba681305df58f99ae9bc402d5e187c9b513dd7ca07748607cf3774aeed3
+      sha256: sha256:cf12f01bfff167eda60598c0e8b2e26312bc0c18ba7f20369bf9d9e156fac301
       visibility: operator-only
     - accessBinding: null
       id: capability-inventory-full
@@ -1021,7 +1021,7 @@ projects:
       size: 11451
       visibility: operator-only
   civil-event:
-    packageRevision: sha256:e6af773889e591e55eda436eca6317debd0e50ee9a2f2caf926da27d2e969019
+    packageRevision: sha256:613dfa9dd348c9f9a7f6b36bdecabd423d42c23e3dbdd382116751a3df66c059
     contractRevision: sha256:61632ff51324349d7fbb4c80738bf2d3a42cc5cb337882f13e2c67b492918a39
     sourceSchemaFingerprints:
       events: sha256:7f770d64cb19ec54caca2aa56378b13a43cd5edc206ff44b5fecc99ee9e63759
@@ -1031,7 +1031,7 @@ projects:
       mediaType: application/schema+json
       operationIdentifier: null
       path: generated/artifacts/audit-event.schema.json
-      sha256: sha256:49d9aba681305df58f99ae9bc402d5e187c9b513dd7ca07748607cf3774aeed3
+      sha256: sha256:cf12f01bfff167eda60598c0e8b2e26312bc0c18ba7f20369bf9d9e156fac301
       visibility: operator-only
     - accessBinding: null
       id: capability-inventory-full
@@ -1382,7 +1382,7 @@ projects:
       size: 8828
       visibility: operator-only
   labour-statistics:
-    packageRevision: sha256:b642dd6571de96a16bdcbe47d614c5f2c545524445a3b5cdb5929f45c6e30f5e
+    packageRevision: sha256:f943063b33b5d8a3d465477bf179c2ffb00d0a7dc74e4102458d3cd4f9da33c6
     contractRevision: sha256:5fa07359d1278ada6adaf24c6f838e8dfb7ac9e5d5b6774683d71c66c3f2ee0d
     sourceSchemaFingerprints:
       labour-statistics: sha256:21890387ccf8d33a95a4ba38d085b6eac79e4522b8a8b34a10a4a637711b4034
@@ -1392,7 +1392,7 @@ projects:
       mediaType: application/schema+json
       operationIdentifier: null
       path: generated/artifacts/audit-event.schema.json
-      sha256: sha256:49d9aba681305df58f99ae9bc402d5e187c9b513dd7ca07748607cf3774aeed3
+      sha256: sha256:cf12f01bfff167eda60598c0e8b2e26312bc0c18ba7f20369bf9d9e156fac301
       visibility: operator-only
     - accessBinding: null
       id: capability-inventory-full

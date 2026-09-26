@@ -145,8 +145,11 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
         .runtime_config
         .build_pool()
         .expect("bounded runtime pool builds");
-    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into())
-        .expect("test owns a strongly keyed audit profile");
+    let audit_profile = registry_breg::audit::test_support::capturing(
+        AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into())
+            .expect("test owns a strongly keyed audit profile"),
+    )
+    .0;
     let plan = MutationPlan::from_compiled(&compiled, "records.case.create")
         .expect("create plan retains the exact compiler delivery");
     let patch_plan = MutationPlan::from_compiled(&compiled, "records.case.patch")
@@ -432,7 +435,7 @@ async fn real_postgres_empty_pre_v1_webhook_schema_upgrades_idempotently() {
     let (migration, migration_task) = database.connect_migration().await;
     install_pre_v1_webhook_schema(&migration).await;
 
-    install_mutation_schema(&migration, &database.runtime_role)
+    install_mutation_schema(&migration, &database.runtime_role, false)
         .await
         .expect("empty pre-V1 webhook schema upgrades");
     let answer_constraint_oid = migration
@@ -457,7 +460,7 @@ async fn real_postgres_empty_pre_v1_webhook_schema_upgrades_idempotently() {
         .await
         .expect("the delivery answer constraint is installed")
         .get::<_, i64>(0);
-    install_mutation_schema(&migration, &database.runtime_role)
+    install_mutation_schema(&migration, &database.runtime_role, false)
         .await
         .expect("the internal schema upgrade is idempotent");
     let reinstalled_answer_constraint_oid = migration
@@ -640,7 +643,7 @@ async fn real_postgres_answer_constraint_upgrade_erases_legacy_handler_message()
         .await
         .expect("legacy delivered answer installs");
 
-    install_mutation_schema(&migration, &database.runtime_role)
+    install_mutation_schema(&migration, &database.runtime_role, false)
         .await
         .expect("legacy answer schema upgrades");
 
@@ -725,7 +728,7 @@ async fn real_postgres_pre_v1_webhook_history_refuses_silent_v1_reinterpretation
         .expect("pre-V1 webhook history installs");
 
     assert_eq!(
-        install_mutation_schema(&migration, &database.runtime_role).await,
+        install_mutation_schema(&migration, &database.runtime_role, false).await,
         Err(MutationError::Unavailable),
         "a missing captured data-schema binding is never synthesized"
     );
@@ -1414,6 +1417,12 @@ impl DestinationFixture {
         &self,
         compiled: &registry_breg::CompiledRegistry,
     ) -> ActivatedEventDestinationRegistry {
+        let audit_path = self
+            .secret_root
+            .with_file_name("audit")
+            .join("audit.jsonl")
+            .display()
+            .to_string();
         let raw = format!(
             r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
 kind: BRegRuntimeConfig
@@ -1468,6 +1477,7 @@ authentication:
     purpose: registry_purpose
 audit:
   hashKeyRef: secret:file/audit-key
+  path: {audit_path}
 cursor:
   secretRef: secret:file/cursor-key
   maxAgeSeconds: 300

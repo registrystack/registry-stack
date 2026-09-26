@@ -15,7 +15,7 @@ use chrono::{TimeDelta, Utc};
 use registry_casework::{
     dispatch_review_completions_once_for_test, validate_retained_completion_destinations_for_test,
     CaseworkService, DatabaseConfig, PostgresStore, ReviewResultRead, ReviewRuntimeError,
-    ReviewTaskDecisionRequest, RuntimeError,
+    ReviewTaskDecisionRequest, RuntimeError, StoreError,
 };
 use registry_casework_core::{
     AccessProfile, ActiveSubjectsPage, ActivityClockAnchor, ActorContext, AssignmentRequest,
@@ -24,15 +24,16 @@ use registry_casework_core::{
     ClockStepInstant, ContentDigest, DelegateRequest, DiscoveryCursor, ElapsedDuration,
     EphemeralCredential, EventRequest, ExecutePreparedRequest, HolidaySetDocument, HumanIdentity,
     InboxPolicy, IssuerPrincipal, OccurrenceKind, OccurrenceState, PrepareActionRequest,
-    PreparedSourceAttempt, QueuePolicy, ReviewCancelRequest, ReviewClockState,
-    ReviewCompletionDestinationPolicy, ReviewContext, ReviewContextStrategy, ReviewCreateRequest,
-    ReviewHistoryAudience, ReviewKindPolicy, ReviewKindPurpose, ReviewNoteRequest,
-    ReviewOutcomePolicy, ReviewOutcomeSettlement, ReviewProducerPolicy, ReviewRequestLifecycle,
-    ReviewResultStatus, ReviewRetentionPolicy, ReviewStagePolicy, ReviewTaskDraftInput,
-    ReviewTransition, ReviewValidationReason, ReviewerDecisionKind, ReviewerTaskState,
-    SourceAdapter, SourceAdapterError, SourceBinding, SourceContextBinding, SourceReceipt,
-    SubjectBinding, SubjectClockAnchor, SubjectClockCompletion, SubjectClockPause, SubjectRef,
-    TransitionHint, WorkingDaysAfter, WorkingWeekday, MAXIMUM_REVIEW_POLICY_SNAPSHOT_BYTES,
+    PreparedSourceAttempt, QueuePolicy, ReviewCancelRequest, ReviewCancelResponse,
+    ReviewClockState, ReviewCompletionDestinationPolicy, ReviewContext, ReviewContextStrategy,
+    ReviewCreateRequest, ReviewHistoryAudience, ReviewKindPolicy, ReviewKindPurpose,
+    ReviewNoteRequest, ReviewOutcomePolicy, ReviewOutcomeSettlement, ReviewProducerPolicy,
+    ReviewRequestLifecycle, ReviewResultStatus, ReviewRetentionPolicy, ReviewStagePolicy,
+    ReviewTaskDraftInput, ReviewTransition, ReviewValidationReason, ReviewerDecisionKind,
+    ReviewerTaskState, SourceAdapter, SourceAdapterError, SourceBinding, SourceContextBinding,
+    SourceReceipt, SubjectBinding, SubjectClockAnchor, SubjectClockCompletion, SubjectClockPause,
+    SubjectRef, TransitionHint, WorkingDaysAfter, WorkingWeekday,
+    MAXIMUM_REVIEW_POLICY_SNAPSHOT_BYTES,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::json;
@@ -495,10 +496,13 @@ async fn fixture() -> Fixture {
         trusted_root_certificate_ref: None,
         test_only_plaintext: true,
     };
-    let migration =
-        PostgresStore::connect_migration(&database_config, &secrets).expect("migration store");
+    let migration = PostgresStore::connect_migration(&database_config, &secrets)
+        .expect("migration store")
+        .with_audit(registry_casework::CaseworkAudit::capture().0);
     migration.migrate().await.expect("review migrations");
-    let store = PostgresStore::connect_runtime(&database_config, &secrets).expect("runtime store");
+    let store = PostgresStore::connect_runtime(&database_config, &secrets)
+        .expect("runtime store")
+        .with_audit(registry_casework::CaseworkAudit::capture().0);
     let database = connect_scoped(&scoped_url).await;
     database
         .batch_execute(
@@ -2856,17 +2860,92 @@ async fn retention_cleanup_skips_locked_rows_and_processes_one_bounded_batch() {
     );
 }
 
-#[tokio::test]
-async fn accountability_read_requires_live_retention_and_a_committed_audit() {
-    let fixture = fixture().await;
-    let project = answer_project(false);
-    project.check().expect("accountability test project");
+/// A review service over the fixture's database whose audit destination is
+/// a fresh capture, so a test can refuse entries without stopping the
+/// fixture's own writer.
+fn service_with_audit(
+    fixture: &Fixture,
+    project: CaseworkProject,
+) -> (CaseworkService, registry_casework::AuditCapture) {
+    let (audit, capture) = registry_casework::CaseworkAudit::capture();
     let service = CaseworkService::new(
-        fixture.store.clone(),
+        fixture.store.clone().with_audit(audit),
         project,
         Vec::<Arc<dyn SourceAdapter>>::new(),
     )
-    .expect("accountability test service");
+    .expect("audited review service");
+    (service, capture)
+}
+
+/// The single response entry for `event` naming `field`, after checking the
+/// operation wrote its request entry first under the same correlation.
+fn audited_response(
+    capture: &registry_casework::AuditCapture,
+    event: &str,
+    field: &str,
+    value: &str,
+) -> serde_json::Value {
+    let entries = capture.entries();
+    let matching: Vec<usize> = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| {
+            entry["phase"] == "response"
+                && entry["record"]["event"] == format!("casework.{event}")
+                && entry["record"][field] == value
+        })
+        .map(|(position, _)| position)
+        .collect();
+    assert_eq!(matching.len(), 1, "one {event} response entry");
+    let response = &entries[matching[0]];
+    assert_eq!(response["schema"], "registry-casework-audit/v1");
+    assert!(
+        entries[..matching[0]].iter().any(|entry| {
+            entry["phase"] == "request"
+                && entry["correlation"] == response["correlation"]
+                && entry["record"]["event"] == format!("casework.{event}")
+        }),
+        "the {event} request entry precedes its response under one correlation"
+    );
+    response["record"].clone()
+}
+
+/// The replayed operation wrote exactly its request entry and one response
+/// entry naming the replayed outcome, under one correlation.
+fn assert_replay_audited(capture: &registry_casework::AuditCapture, event: &str) {
+    let entries = capture.entries();
+    assert_eq!(
+        entries.len(),
+        2,
+        "one request and one response entry for the {event} replay"
+    );
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[0]["record"]["event"], format!("casework.{event}"));
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[1]["correlation"], entries[0]["correlation"]);
+    assert_eq!(
+        entries[1]["record"],
+        json!({"event": format!("casework.{event}"), "outcome": "replayed"})
+    );
+}
+
+async fn history_event(fixture: &Fixture, request_id: Uuid, task: Uuid, kind: &str) -> Uuid {
+    fixture
+        .database
+        .query_one(
+            "SELECT event_id FROM casework_review_history
+             WHERE request_id=$1 AND task_id=$2 AND kind=$3",
+            &[&request_id, &task, &kind],
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{kind} history event: {error}"))
+        .get(0)
+}
+
+#[tokio::test]
+async fn accountability_read_requires_live_retention_and_a_committed_audit() {
+    let fixture = fixture().await;
+    let (service, audit) = service_with_audit(&fixture, answer_project(false));
     let mut answer_request = request("accountability-record", "accountability-ref");
     answer_request.kind = "registry-answer".to_owned();
     let created = service
@@ -2922,67 +3001,47 @@ async fn accountability_read_requires_live_retention_and_a_committed_audit() {
         accountability.private_reason.as_deref(),
         Some("private accountability reason")
     );
-    let read_audit: serde_json::Value = fixture
-        .database
-        .query_one(
-            "SELECT audit_record FROM casework_audit_outbox
-             WHERE audit_record->>'event'='casework.review_accountability_read'
-               AND audit_record->>'accountabilityEventId'=$1",
-            &[&accountability_event.to_string()],
-        )
-        .await
-        .expect("committed accountability read audit")
-        .get(0);
+    let read_audit = audited_response(
+        &audit,
+        "review_accountability_read",
+        "accountabilityEventId",
+        &accountability_event.to_string(),
+    );
     assert_eq!(
-        read_audit["actor"]["subject"],
-        fixture.supervisor.principal.subject
+        read_audit["principalPseudonym"],
+        audit.principal(
+            &fixture.supervisor.principal.issuer,
+            &fixture.supervisor.principal.subject
+        )
     );
     assert_eq!(read_audit["profileId"], fixture.supervisor.profile_id);
+    let audit_text = serde_json::to_string(&audit.entries()).expect("audit entries");
+    assert!(!audit_text.contains("private accountability reason"));
+    assert!(!audit_text.contains(&fixture.reviewer_a.principal.subject));
 
-    fixture
-        .database
-        .batch_execute(
-            "CREATE FUNCTION reject_accountability_read_audit() RETURNS trigger
-             LANGUAGE plpgsql AS $$
-             BEGIN
-               IF NEW.audit_record->>'event'='casework.review_accountability_read' THEN
-                 RAISE EXCEPTION 'accountability audit unavailable';
-               END IF;
-               RETURN NEW;
-             END;
-             $$;
-             CREATE TRIGGER reject_accountability_read_audit
-             BEFORE INSERT ON casework_audit_outbox
-             FOR EACH ROW EXECUTE FUNCTION reject_accountability_read_audit();",
-        )
-        .await
-        .expect("install accountability audit failure");
+    // The request entry is refused: the protected record is never read.
+    let (refusing, refused) = service_with_audit(&fixture, answer_project(false));
+    refused.refuse_after(0);
     assert!(matches!(
-        service
+        refusing
             .review_accountability(&fixture.supervisor, accountability_event)
             .await,
-        Err(ReviewRuntimeError::Store(_))
+        Err(ReviewRuntimeError::Store(StoreError::AuditUnavailable))
     ));
-    let committed_reads: i64 = fixture
-        .database
-        .query_one(
-            "SELECT count(*) FROM casework_audit_outbox
-             WHERE audit_record->>'event'='casework.review_accountability_read'
-               AND audit_record->>'accountabilityEventId'=$1",
-            &[&accountability_event.to_string()],
-        )
-        .await
-        .expect("count committed accountability reads")
-        .get(0);
-    assert_eq!(committed_reads, 1);
-    fixture
-        .database
-        .batch_execute(
-            "DROP TRIGGER reject_accountability_read_audit ON casework_audit_outbox;
-             DROP FUNCTION reject_accountability_read_audit();",
-        )
-        .await
-        .expect("remove accountability audit failure");
+    assert!(refused.entries().is_empty());
+
+    // The response entry is refused: the record is read but not returned.
+    let (refusing, refused) = service_with_audit(&fixture, answer_project(false));
+    refused.refuse_after(1);
+    assert!(matches!(
+        refusing
+            .review_accountability(&fixture.supervisor, accountability_event)
+            .await,
+        Err(ReviewRuntimeError::Store(StoreError::AuditUnavailable))
+    ));
+    let entries = refused.entries();
+    assert_eq!(entries.len(), 1, "only the request entry was accepted");
+    assert_eq!(entries[0]["phase"], "request");
 
     let now = Utc::now();
     fixture
@@ -3004,31 +3063,18 @@ async fn accountability_read_requires_live_retention_and_a_committed_audit() {
             .await,
         Err(ReviewRuntimeError::NotFound)
     ));
-    let reads_after_expiry: i64 = fixture
-        .database
-        .query_one(
-            "SELECT count(*) FROM casework_audit_outbox
-             WHERE audit_record->>'event'='casework.review_accountability_read'
-               AND audit_record->>'accountabilityEventId'=$1",
-            &[&accountability_event.to_string()],
-        )
-        .await
-        .expect("count accountability reads after expiry")
-        .get(0);
-    assert_eq!(reads_after_expiry, 1);
+    let reads_after_expiry = audit
+        .responses("review_accountability_read")
+        .into_iter()
+        .filter(|record| record["accountabilityEventId"] == accountability_event.to_string())
+        .count();
+    assert_eq!(reads_after_expiry, 1, "an absent record discloses nothing");
 }
 
 #[tokio::test]
-async fn review_decisions_reach_the_audit_outbox_in_the_decision_transaction() {
+async fn review_decisions_are_audited_after_the_decision_commits() {
     let fixture = fixture().await;
-    let project = answer_project(false);
-    project.check().expect("decision audit test project");
-    let service = CaseworkService::new(
-        fixture.store.clone(),
-        project,
-        Vec::<Arc<dyn SourceAdapter>>::new(),
-    )
-    .expect("decision audit test service");
+    let (service, audit) = service_with_audit(&fixture, answer_project(false));
     let mut answer_request = request("decision-audit", "decision-audit-ref");
     answer_request.kind = "registry-answer".to_owned();
     let created = service
@@ -3074,35 +3120,39 @@ async fn review_decisions_reach_the_audit_outbox_in_the_decision_transaction() {
         .await
         .expect("decision accountability event")
         .get(0);
-    let decision_audit: serde_json::Value = fixture
-        .database
-        .query_one(
-            "SELECT audit_record FROM casework_audit_outbox
-             WHERE audit_record->>'event'='casework.review_decided'
-               AND audit_record->>'taskId'=$1",
-            &[&task.to_string()],
+    let decision_audit = audited_response(
+        &audit,
+        "review_decided",
+        "accountabilityEventId",
+        &accountability_event.to_string(),
+    );
+    assert_eq!(
+        decision_audit["eventId"],
+        history_event(
+            &fixture,
+            created.accepted.request_id,
+            task,
+            "review_decided"
         )
         .await
-        .expect("committed decision audit")
-        .get(0);
+        .to_string()
+    );
     assert_eq!(
-        decision_audit["actor"]["subject"],
-        fixture.reviewer_a.principal.subject
+        decision_audit["principalPseudonym"],
+        audit.principal(
+            &fixture.reviewer_a.principal.issuer,
+            &fixture.reviewer_a.principal.subject
+        )
     );
     assert_eq!(decision_audit["profileId"], fixture.reviewer_a.profile_id);
-    assert_eq!(decision_audit["decision"], "answer");
-    assert_eq!(
-        decision_audit["accountabilityEventId"],
-        accountability_event.to_string()
-    );
     // The audit trail carries who decided, not what they saw: the private
     // reason and the structured result stay in the protected accountability
     // record only.
-    assert!(decision_audit.get("reason").is_none());
-    assert!(decision_audit.get("result").is_none());
+    let audit_text = serde_json::to_string(&audit.entries()).expect("audit entries");
+    assert!(!audit_text.contains("private decision reason"));
+    assert!(!audit_text.contains("accountable answer"));
+    assert!(!audit_text.contains(&task.to_string()));
 
-    // The decision and its audit must commit or roll back together: reject
-    // the outbox insert and prove the whole decision disappears.
     let mut second_request = request("decision-audit-2", "decision-audit-2-ref");
     second_request.kind = "registry-answer".to_owned();
     let second_created = service
@@ -3121,43 +3171,42 @@ async fn review_decisions_reach_the_audit_outbox_in_the_decision_transaction() {
         )
         .await
         .expect("claim second decision audit review");
-    fixture
-        .database
-        .batch_execute(
-            "CREATE FUNCTION reject_decision_audit() RETURNS trigger
-             LANGUAGE plpgsql AS $$
-             BEGIN
-               IF NEW.audit_record->>'event'='casework.review_decided' THEN
-                 RAISE EXCEPTION 'decision audit unavailable';
-               END IF;
-               RETURN NEW;
-             END;
-             $$;
-             CREATE TRIGGER reject_decision_audit
-             BEFORE INSERT ON casework_audit_outbox
-             FOR EACH ROW EXECUTE FUNCTION reject_decision_audit();",
-        )
-        .await
-        .expect("install decision audit failure");
+    let second_decision = || ReviewTaskDecisionRequest {
+        decision: ReviewerDecisionKind::Answer {
+            outcome: "found".to_owned(),
+            reason: None,
+            result: Some(json!({"correction": "second answer"})),
+        },
+    };
+    let decided_history = || async {
+        fixture
+            .database
+            .query_one(
+                "SELECT count(*) FROM casework_review_history
+                 WHERE request_id=$1 AND kind='review_decided'",
+                &[&second_created.accepted.request_id],
+            )
+            .await
+            .expect("count decision history")
+            .get::<_, i64>(0)
+    };
+
+    // A refused request entry opens no decision transaction.
+    let (refusing, refused) = service_with_audit(&fixture, answer_project(false));
+    refused.refuse_after(0);
     assert!(matches!(
-        service
+        refusing
             .decide_review_task(
                 &fixture.reviewer_a,
                 second_task,
-                ReviewTaskDecisionRequest {
-                    decision: ReviewerDecisionKind::Answer {
-                        outcome: "found".to_owned(),
-                        reason: None,
-                        result: Some(json!({"correction": "second answer"})),
-                    },
-                },
+                second_decision(),
                 None,
                 "",
                 2,
                 "decide-decision-audit-2",
             )
             .await,
-        Err(ReviewRuntimeError::Store(_))
+        Err(ReviewRuntimeError::Store(StoreError::AuditUnavailable))
     ));
     assert_eq!(
         count_for_request(
@@ -3168,68 +3217,71 @@ async fn review_decisions_reach_the_audit_outbox_in_the_decision_transaction() {
         .await,
         0
     );
-    let second_decided_history: i64 = fixture
-        .database
-        .query_one(
-            "SELECT count(*) FROM casework_review_history
-             WHERE request_id=$1 AND kind='review_decided'",
-            &[&second_created.accepted.request_id],
+    assert_eq!(decided_history().await, 0);
+
+    // A refused response entry reports the destination unavailable while
+    // the committed decision stands.
+    let (refusing, refused) = service_with_audit(&fixture, answer_project(false));
+    refused.refuse_after(1);
+    assert!(matches!(
+        refusing
+            .decide_review_task(
+                &fixture.reviewer_a,
+                second_task,
+                second_decision(),
+                None,
+                "",
+                2,
+                "decide-decision-audit-2",
+            )
+            .await,
+        Err(ReviewRuntimeError::Store(StoreError::AuditUnavailable))
+    ));
+    assert_eq!(
+        count_for_request(
+            &fixture,
+            "casework_review_accountability",
+            second_created.accepted.request_id
         )
-        .await
-        .expect("count rolled back decision history")
-        .get(0);
-    assert_eq!(second_decided_history, 0);
-    fixture
-        .database
-        .batch_execute(
-            "DROP TRIGGER reject_decision_audit ON casework_audit_outbox;
-             DROP FUNCTION reject_decision_audit();",
-        )
-        .await
-        .expect("remove decision audit failure");
+        .await,
+        1
+    );
+    assert_eq!(decided_history().await, 1);
+    let entries = refused.entries();
+    assert_eq!(entries.len(), 1, "only the request entry was accepted");
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[0]["record"]["event"], "casework.review_decided");
+
+    // Retrying the same idempotency key replays the committed decision; it
+    // writes a request entry and a replayed outcome, never a second decision
+    // response.
+    let responses_before = audit.responses("review_decided");
     service
         .decide_review_task(
             &fixture.reviewer_a,
             second_task,
-            ReviewTaskDecisionRequest {
-                decision: ReviewerDecisionKind::Answer {
-                    outcome: "found".to_owned(),
-                    reason: None,
-                    result: Some(json!({"correction": "second answer"})),
-                },
-            },
+            second_decision(),
             None,
             "",
             2,
             "decide-decision-audit-2",
         )
         .await
-        .expect("decide second decision audit review after recovery");
-    let second_audits: i64 = fixture
-        .database
-        .query_one(
-            "SELECT count(*) FROM casework_audit_outbox
-             WHERE audit_record->>'event'='casework.review_decided'
-               AND audit_record->>'taskId'=$1",
-            &[&second_task.to_string()],
-        )
-        .await
-        .expect("count recovered decision audits")
-        .get(0);
-    assert_eq!(second_audits, 1);
+        .expect("a retried decision replays");
+    assert_eq!(decided_history().await, 1);
+    let responses_after = audit.responses("review_decided");
+    assert_eq!(responses_after.len(), responses_before.len() + 1);
+    assert_eq!(
+        responses_after[responses_before.len()],
+        json!({"event": "casework.review_decided", "outcome": "replayed"}),
+        "the replay appends only its terminal outcome"
+    );
 }
 
 #[tokio::test]
-async fn review_cancellation_reaches_the_audit_outbox_in_the_cancel_transaction() {
+async fn review_cancellation_is_audited_after_the_cancel_commits() {
     let fixture = fixture().await;
-    let project = answer_project(false);
-    project.check().expect("cancel audit test project");
-    let service = CaseworkService::new(
-        fixture.store.clone(),
-        project,
-        Vec::<Arc<dyn SourceAdapter>>::new(),
-    )
-    .expect("cancel audit test service");
+    let (service, audit) = service_with_audit(&fixture, answer_project(false));
     let mut create = request("cancel-audit", "cancel-audit-ref");
     create.kind = "registry-answer".to_owned();
     let created = service
@@ -3248,46 +3300,121 @@ async fn review_cancellation_reaches_the_audit_outbox_in_the_cancel_transaction(
         )
         .await
         .expect("cancel audit review");
-    let cancel_audit: serde_json::Value = fixture
-        .database
-        .query_one(
-            "SELECT audit_record FROM casework_audit_outbox
-             WHERE audit_record->>'event'='casework.review_cancelled'
-               AND audit_record->>'requestId'=$1",
-            &[&created.accepted.request_id.to_string()],
+    let cancellations = audit.responses("review_cancelled");
+    assert_eq!(cancellations.len(), 1, "one cancellation response");
+    let cancel_audit = &cancellations[0];
+    assert_eq!(
+        cancel_audit["principalPseudonym"],
+        audit.principal(
+            &fixture.producer.principal.issuer,
+            &fixture.producer.principal.subject
         )
-        .await
-        .expect("committed cancellation audit")
-        .get(0);
-    assert_eq!(
-        cancel_audit["actor"]["issuer"],
-        fixture.producer.principal.issuer
-    );
-    assert_eq!(
-        cancel_audit["actor"]["subject"],
-        fixture.producer.principal.subject
     );
     assert_eq!(cancel_audit["profileId"], fixture.producer.profile_id);
-    let result_id: Uuid = fixture
-        .database
-        .query_one(
-            "SELECT result_id FROM casework_review_results WHERE request_id=$1",
-            &[&created.accepted.request_id],
-        )
-        .await
-        .expect("cancelled result")
-        .get(0);
-    assert_eq!(cancel_audit["resultId"], result_id.to_string());
     // The audit trail carries who cancelled, not why: the private reason
     // stays in the review history row only.
-    assert!(cancel_audit.get("reason").is_none());
+    let audit_text = serde_json::to_string(&audit.entries()).expect("audit entries");
+    assert!(!audit_text.contains("private cancellation reason"));
+    assert!(!audit_text.contains(&created.accepted.request_id.to_string()));
 }
 
 #[tokio::test]
-async fn review_task_ownership_transitions_reach_the_audit_outbox() {
+async fn review_notes_are_audited_without_their_text() {
     let fixture = fixture().await;
-    let created = fixture
-        .service_v1
+    let (service, audit) = service_with_audit(&fixture, project("1"));
+    let created = service
+        .create_review_request(
+            &fixture.producer,
+            request("note-audit", "producer-ref-note-audit"),
+            "create-note-audit",
+        )
+        .await
+        .expect("create note audit review");
+    let request_id = created.accepted.request_id;
+    let note = |text: &str| ReviewNoteRequest {
+        audience: ReviewHistoryAudience::Requester,
+        note: text.to_owned(),
+    };
+    let added = service
+        .add_review_note(
+            &fixture.producer,
+            request_id,
+            None,
+            "producer-token",
+            note("a note that stays out of the audit"),
+            "note-audit",
+        )
+        .await
+        .expect("add note");
+    let record = audited_response(
+        &audit,
+        "review_note_added",
+        "eventId",
+        &added.event_id.to_string(),
+    );
+    let audit_text = serde_json::to_string(&audit.entries()).expect("audit JSON");
+    assert!(!audit_text.contains("stays out of the audit"));
+    assert!(!audit_text.contains(&request_id.to_string()));
+    assert!(record.get("principalPseudonym").is_some());
+    // The request entry names the review request only by its pseudonym.
+    let requested: Vec<_> = audit
+        .entries()
+        .into_iter()
+        .filter(|entry| {
+            entry["phase"] == "request" && entry["record"]["event"] == "casework.review_note_added"
+        })
+        .collect();
+    assert_eq!(requested.len(), 1, "{requested:?}");
+    assert_eq!(
+        requested[0]["record"]["reviewRequestPseudonym"],
+        audit.reference("reviewRequestId", &request_id.to_string())
+    );
+
+    let (replay_service, replay_audit) = service_with_audit(&fixture, project("1"));
+    replay_service
+        .add_review_note(
+            &fixture.producer,
+            request_id,
+            None,
+            "producer-token",
+            note("a note that stays out of the audit"),
+            "note-audit",
+        )
+        .await
+        .expect("replay note");
+    assert_replay_audited(&replay_audit, "review_note_added");
+
+    // A refused note still pairs the request entry it wrote.
+    let (refused_service, refused_audit) = service_with_audit(&fixture, project("1"));
+    assert!(matches!(
+        refused_service
+            .add_review_note(
+                &fixture.producer,
+                request_id,
+                None,
+                "producer-token",
+                note(" "),
+                "note-audit-refused",
+            )
+            .await,
+        Err(ReviewRuntimeError::Invalid)
+    ));
+    let entries = refused_audit.entries();
+    assert_eq!(entries.len(), 2, "{entries:?}");
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[1]["correlation"], entries[0]["correlation"]);
+    assert_eq!(
+        entries[1]["record"],
+        json!({"event": "casework.review_note_added", "outcome": "unfinished"})
+    );
+}
+
+#[tokio::test]
+async fn review_task_ownership_transitions_are_audited() {
+    let fixture = fixture().await;
+    let (service, audit) = service_with_audit(&fixture, project("1"));
+    let created = service
         .create_review_request(
             &fixture.producer,
             request("ownership-audit", "producer-ref-ownership-audit"),
@@ -3297,8 +3424,7 @@ async fn review_task_ownership_transitions_reach_the_audit_outbox() {
         .expect("create ownership audit review");
     let request_id = created.accepted.request_id;
     let task = task_id(&fixture, request_id, 0).await;
-    let assigned = fixture
-        .service_v1
+    let assigned = service
         .assign_review_task(
             &fixture.supervisor,
             task,
@@ -3313,8 +3439,7 @@ async fn review_task_ownership_transitions_reach_the_audit_outbox() {
         )
         .await
         .expect("assign ownership audit task");
-    let delegated = fixture
-        .service_v1
+    let delegated = service
         .delegate_review_task(
             &fixture.reviewer_a,
             task,
@@ -3329,8 +3454,7 @@ async fn review_task_ownership_transitions_reach_the_audit_outbox() {
         )
         .await
         .expect("delegate ownership audit task");
-    let released = fixture
-        .service_v1
+    let released = service
         .release_review_task(
             &fixture.reviewer_b,
             task,
@@ -3339,8 +3463,7 @@ async fn review_task_ownership_transitions_reach_the_audit_outbox() {
         )
         .await
         .expect("release ownership audit task");
-    fixture
-        .service_v1
+    service
         .claim_review_task(
             &fixture.reviewer_a,
             task,
@@ -3351,63 +3474,31 @@ async fn review_task_ownership_transitions_reach_the_audit_outbox() {
         )
         .await
         .expect("claim ownership audit task");
-    for (event, history_kind, actor, target) in [
-        (
-            "casework.task_assigned",
-            "task_assigned",
-            &fixture.supervisor,
-            Some(&fixture.reviewer_a),
-        ),
-        (
-            "casework.task_delegated",
-            "task_delegated",
-            &fixture.reviewer_a,
-            Some(&fixture.reviewer_b),
-        ),
-        (
-            "casework.task_released",
-            "task_released",
-            &fixture.reviewer_b,
-            None,
-        ),
-        (
-            "casework.task_claimed",
-            "task_claimed",
-            &fixture.reviewer_a,
-            None,
-        ),
+    for (event, actor) in [
+        ("task_assigned", &fixture.supervisor),
+        ("task_delegated", &fixture.reviewer_a),
+        ("task_released", &fixture.reviewer_b),
+        ("task_claimed", &fixture.reviewer_a),
     ] {
-        // The outbox row shares the protected history row's event id, so the
-        // external audit chain records who took or transferred responsibility
-        // even after the review history is erased at result expiry.
-        let audit: serde_json::Value = fixture
-            .database
-            .query_one(
-                "SELECT a.audit_record FROM casework_audit_outbox a
-                 JOIN casework_review_history h ON h.event_id=a.event_id
-                 WHERE a.audit_record->>'event'=$1
-                   AND h.request_id=$2 AND h.task_id=$3 AND h.kind=$4",
-                &[&event, &request_id, &task, &history_kind],
-            )
-            .await
-            .unwrap_or_else(|error| panic!("committed {event} audit: {error}"))
-            .get(0);
-        assert_eq!(audit["actor"]["issuer"], actor.principal.issuer);
-        assert_eq!(audit["actor"]["subject"], actor.principal.subject);
-        assert_eq!(audit["profileId"], actor.profile_id);
-        assert_eq!(audit["requestId"], request_id.to_string());
-        assert_eq!(audit["taskId"], task.to_string());
-        match target {
-            Some(target) => {
-                assert_eq!(audit["target"]["issuer"], target.principal.issuer);
-                assert_eq!(audit["target"]["subject"], target.principal.subject);
-            }
-            None => assert!(audit.get("target").is_none()),
-        }
-        // The audit trail carries who took or transferred responsibility,
-        // not the private reason recorded beside it.
-        assert!(audit.get("reason").is_none());
+        // The response entry names the protected history row's event id, so
+        // the audit destination records who took or transferred
+        // responsibility even after the review history is erased at result
+        // expiry.
+        let event_id = history_event(&fixture, request_id, task, event).await;
+        let audit_record = audited_response(&audit, event, "eventId", &event_id.to_string());
+        assert_eq!(
+            audit_record["principalPseudonym"],
+            audit.principal(&actor.principal.issuer, &actor.principal.subject)
+        );
+        assert_eq!(audit_record["profileId"], actor.profile_id);
     }
+    // The audit trail carries pseudonymous responsibility, not the private
+    // reason recorded beside it or a raw principal.
+    let audit_text = serde_json::to_string(&audit.entries()).expect("audit entries");
+    assert!(!audit_text.contains("nominate for the audit trail"));
+    assert!(!audit_text.contains("hand off for the audit trail"));
+    assert!(!audit_text.contains(&fixture.reviewer_b.principal.subject));
+    assert!(!audit_text.contains(&task.to_string()));
 }
 
 #[tokio::test]
@@ -4035,11 +4126,24 @@ async fn cancellation_and_final_decision_commit_exactly_one_terminal_result() {
         )
     );
 
+    // Either call may take the request lock first. A cancellation that loses
+    // the race still succeeds, reporting the decision's terminal result.
+    let cancellation_won = matches!(cancelled, Ok(ReviewCancelResponse::Cancelled { .. }));
     assert_eq!(
-        usize::from(cancelled.is_ok()) + usize::from(decided.is_ok()),
+        usize::from(cancellation_won) + usize::from(decided.is_ok()),
         1,
         "request lock must serialize cancellation and the final decision"
     );
+    if decided.is_ok() {
+        assert!(
+            matches!(
+                &cancelled,
+                Ok(ReviewCancelResponse::AlreadyTerminal { result })
+                    if result.status == ReviewResultStatus::Answered
+            ),
+            "a cancellation after the decision reports the answered result: {cancelled:?}"
+        );
+    }
     let result = service
         .review_result(&fixture.producer, request_id)
         .await
@@ -4047,7 +4151,7 @@ async fn cancellation_and_final_decision_commit_exactly_one_terminal_result() {
     assert!(matches!(
         result,
         ReviewResultRead::Available(result)
-            if (cancelled.is_ok() && result.status == ReviewResultStatus::Cancelled)
+            if (cancellation_won && result.status == ReviewResultStatus::Cancelled)
                 || (decided.is_ok() && result.status == ReviewResultStatus::Answered)
     ));
     assert_eq!(
@@ -4873,9 +4977,9 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
         Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
     ));
     set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
+    let (replay_service, replay_audit) = service_with_audit(&fixture, project("1"));
     assert_eq!(
-        fixture
-            .service_v1
+        replay_service
             .claim_review_task(
                 &fixture.reviewer_a,
                 task,
@@ -4888,6 +4992,7 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
             .expect("replay claim through restored staff authority"),
         claimed
     );
+    assert_replay_audited(&replay_audit, "task_claimed");
     let claim_history_count = fixture
         .database
         .query_one(
@@ -4960,9 +5065,9 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
         Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
     ));
     set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
+    let (replay_service, replay_audit) = service_with_audit(&fixture, project("1"));
     assert_eq!(
-        fixture
-            .service_v1
+        replay_service
             .release_review_task(
                 &fixture.reviewer_a,
                 task,
@@ -4973,6 +5078,7 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
             .expect("replay release through restored staff authority"),
         released
     );
+    assert_replay_audited(&replay_audit, "task_released");
     let release_history_count = fixture
         .database
         .query_one(
@@ -5078,8 +5184,9 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
         Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
     ));
     set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
+    let (replay_service, replay_audit) = service_with_audit(&fixture, answer_project(false));
     assert_eq!(
-        answer_service
+        replay_service
             .decide_review_task(
                 &fixture.reviewer_a,
                 answer_task,
@@ -5093,6 +5200,96 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
             .expect("replay terminal decision through restored staff authority"),
         decided
     );
+    assert_replay_audited(&replay_audit, "review_decided");
+}
+
+#[tokio::test]
+async fn a_retained_decision_replay_is_withheld_until_its_response_entry_is_accepted() {
+    let fixture = fixture().await;
+    let answer_service = CaseworkService::new(
+        fixture.store.clone(),
+        answer_project(false),
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("answer replay service");
+    let mut answer_request = request(
+        "record-withheld-decision-replay",
+        "producer-ref-withheld-decision-replay",
+    );
+    answer_request.kind = "registry-answer".to_owned();
+    let answer = answer_service
+        .create_review_request(
+            &fixture.producer,
+            answer_request,
+            "create-withheld-decision-replay",
+        )
+        .await
+        .expect("create withheld decision replay review");
+    let answer_task = task_id(&fixture, answer.accepted.request_id, 0).await;
+    answer_service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            answer_task,
+            None,
+            "",
+            1,
+            "claim-withheld-decision-replay",
+        )
+        .await
+        .expect("claim withheld decision replay task");
+    let decision = || ReviewTaskDecisionRequest {
+        decision: ReviewerDecisionKind::Answer {
+            outcome: "found".to_owned(),
+            reason: Some("private withheld replay reason".to_owned()),
+            result: Some(json!({"correction": "protected withheld replay result"})),
+        },
+    };
+    answer_service
+        .decide_review_task(
+            &fixture.reviewer_a,
+            answer_task,
+            decision(),
+            None,
+            "",
+            2,
+            "decide-withheld-decision-replay",
+        )
+        .await
+        .expect("settle withheld decision replay review");
+
+    // The writer accepts the replay's request entry and refuses its response
+    // entry: the retained transition is not returned.
+    let (refusing, refused) = service_with_audit(&fixture, answer_project(false));
+    refused.refuse_after(1);
+    assert!(matches!(
+        refusing
+            .decide_review_task(
+                &fixture.reviewer_a,
+                answer_task,
+                decision(),
+                None,
+                "",
+                2,
+                "decide-withheld-decision-replay",
+            )
+            .await,
+        Err(ReviewRuntimeError::Store(StoreError::AuditUnavailable))
+    ));
+    let entries = refused.entries();
+    assert_eq!(entries.len(), 1, "only the request entry was accepted");
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[0]["record"]["event"], "casework.review_decided");
+    let decided_events = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE request_id=$1 AND kind='review_decided'",
+            &[&answer.accepted.request_id],
+        )
+        .await
+        .expect("count decision history")
+        .get::<_, i64>(0);
+    assert_eq!(decided_events, 1, "a replay records no domain event");
 }
 
 #[tokio::test]

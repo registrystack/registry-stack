@@ -149,8 +149,8 @@ application audit event. Audit initialization may briefly hold its operational
 lock. The runtime remains the authority for startup. Route traffic only after
 `/ready`. For one approved
 synthetic deployment subject, retain the signed response, verify it against an
-independently prepared `production` policy and trusted keys, and run
-`evidence verify-audit` over the resulting audit chain.
+independently prepared `production` policy and trusted keys, and confirm that
+its access and disclosure audit entries reached the audit destination.
 
 Configure an HTTPS OIDC issuer independently of Evidence. Its client registration
 must bind the approved resource and scopes; the Evidence runtime pins issuer,
@@ -677,8 +677,9 @@ trace identifier is a bounded correlation value, not an audit identity, and
 caller `tracestate` is never echoed.
 
 Audit and operational logging are separate channels and operators must not
-confuse them. The audit chain is the accountability record: durable, complete,
-tamper-evident, and it has no severity levels and no way to turn records off.
+confuse them. The audit log is the accountability record: durable, complete,
+and it has no severity levels and no way to turn records off; tamper evidence
+comes from the append-only storage it is shipped to.
 Every authorized evidence evaluation writes one access-attempt event durable
 before each actual source read and the disclosure-release or terminal event
 required by its outcome. Every authenticated authorization refusal writes one
@@ -686,23 +687,22 @@ minimal denial event before its response. Those gates are pinned by frozen
 Version 1 security invariants and are not configurable. The `tracing` channel
 is the operational and diagnostic record: it has levels, it is buffered and
 lossy, and it is cheap. The rule for operators and integrators is:
-accountability facts belong in the audit chain and never only in tracing, and
-operational noise belongs in tracing and never in the audit chain. If an
+accountability facts belong in the audit log and never only in tracing, and
+operational noise belongs in tracing and never in the audit log. If an
 adopter needs more detail than the frozen audit record carries, which some
 regulators require, the correct shape is a separate operational log keyed by
-the audit record's `eventId`, not a verbosity setting on the chain.
+the audit entry's `eventId`, not a verbosity setting on the audit log.
 
-The refusal event uses the distinct
-`registry.evidence.audit.authorization-refusal/v1` discriminator in the same
-keyed envelope and chain as `registry.evidence.audit/v1`. Updated semantic
-readers accept both closed shapes. Opaque keyed-chain verification remains
-compatible because it does not interpret the event payload. Older Version 1
-schema validators and local audit readers reject or cannot display the refusal
-shape, so operators must update semantic audit readers and the service together
-before routing traffic to the changed runtime.
+The refusal event is written under the distinct
+`registry.evidence.audit.authorization-refusal/v2` entry schema, in the same
+envelope and destination as `registry.evidence.audit/v2`. A semantic reader
+selects the record shape by the envelope's `schema` member. Readers written for
+the chained `/v1` records do not read `/v2` entries, so operators must update
+semantic audit readers and the service together before routing traffic to the
+changed runtime.
 
 The request-batch route adds
-`registry.evidence.audit.request-batch/v1` to that same keyed chain. One access
+`registry.evidence.audit.request-batch/v2` entries to that same destination. One access
 event precedes every physical source call and names the bounded zero-based item
 indices it carries. `itemGroups` partition those indices by identical authority
 object and ordered pseudonymized subject set, so different grants and authority
@@ -717,7 +717,7 @@ response bodies, JWS protected headers, payloads, signatures, and signing
 material are forbidden from every batch-native event. The service serializes
 and size-checks the complete envelope, durably appends the release, and returns
 the same bytes. Operators must update semantic audit readers to recognize all
-three native discriminators before deploying the request-batch runtime.
+three entry schemas before deploying the request-batch runtime.
 
 The serving process writes those records as line-delimited JSON on standard
 output, one per served request, and `EVIDENCE_LOG` selects verbosity with a
@@ -741,203 +741,112 @@ value. Operators should still reach this listener only from their own network,
 since request rates per route are operational information. The series and
 labels it publishes are in [Metrics reference](#metrics-reference).
 
-The operator owns audit retention, backup, restore, access control, key
-rotation, and chain verification for the selected durable sink. A deployment
-profile may require more reviewed metadata or retention, but it cannot silently
-weaken the native privacy contract.
+The operator owns audit shipping, retention beyond `audit.retainDays`, backup,
+restore, access control, and key rotation for the selected destination. A
+deployment profile may require more reviewed metadata or retention, but it
+cannot silently weaken the native privacy contract.
 
-The audit master feeds two HKDF-separated subkeys: one for chain integrity and
-one for identifier pseudonyms. The subject-binding master is a separate secret
-reference and must resolve to different bytes. This separation prevents a
-pseudonym oracle or subject-binding use from becoming a chain-MAC oracle while
-keeping the operator ceremony to two independent masters.
+The audit master is expanded through HKDF into the key that computes
+identifier pseudonyms. The subject-binding master is a separate secret
+reference and must resolve to different bytes, so an audit pseudonym oracle
+never becomes a subject-binding oracle, and the operator ceremony stays at two
+independent masters.
 
-Exactly one Evidence process may write a given audit path. The sink takes an
-exclusive OS advisory lock on `<auditStorage.path>.lock` at startup; a second
-process pointed at the same path fails at startup with a sink-locked error
-rather than starting and corrupting the chain. The reason is structural, not
-defensive: the audit log is a keyed hash chain whose head is held in process
-memory, so two concurrent writers would interleave records and destroy tamper
-evidence. Deployment shape follows from this: one replica per audit path,
-active/passive rather than active/active. Use a readiness probe and
-restart-on-failure to recover from a crashed writer, never a second concurrent
-replica.
+Exactly one Evidence process may write a given audit file. The file
+destination takes an exclusive OS advisory lock on `<audit.path>.lock` at
+startup; a second process pointed at the same path fails at startup with a
+sink-locked error rather than interleaving its writes with the first. Run more
+than one replica by giving each its own `audit.path`, for example on a
+per-replica volume, or by choosing `destination: stdout` and letting the
+platform's log collector gather every replica's stream. Use a readiness probe
+and restart-on-failure to recover from a crashed writer.
 
-At process startup the runtime recovers the chain head from the newest sealed
-segment, if one exists, by reading only that segment's last record, then fully
-verifies only the active segment from that head. Restart time is therefore
-bounded by the active segment rather than by the volume of retained history:
-it does not grow as sealed segments accumulate. The accepted tradeoff is that
-corruption inside an already sealed segment is not detected at startup; only an
-out-of-band verification pass over the whole audit directory, sealed segments
-included, detects it. Steady-state appends and readiness probes validate the
-active segment's pinned identity and fingerprint plus the expected tail and
-length without rescanning the growing file. Any external replacement or
-modification of the active segment or the lock file makes readiness and future
-appends fail closed. Operators should run that out-of-band verification,
-`evidence verify-audit`, covering every segment, during backup, restore, and
-incident procedures, and on whatever cadence their audit retention policy
-requires; it is what proves sealed history was not tampered with.
+Appends and readiness probes check the pinned identity and modification
+fingerprint of the active file and the lock file without rescanning the
+growing file. Any external write, truncation, or replacement of either makes
+readiness and every later append fail closed. A failed durable write stops the
+writer for the life of the process: every later audited request is refused
+with the generic `503` until the process restarts.
 
-## Audit chain rotation and rollback
+## Audit destinations, rotation, and retention
 
-Audit-segment rotation, described later in this section, keeps one key and one
-continuous epoch. Rotating the audit master is different and always starts a
-new epoch:
+Every audit entry is one JSON line with exactly six members:
 
-1. Drain traffic and stop the sole writer.
-2. Run `evidence verify-audit`; record the old chain head, bundle revision,
-   runtime revision, path, and `hashKeyVersion` in the change record.
-3. Archive the old runtime, audit-master secret under its governed secret
-   controls, every segment, lock-file disposition, and recorded head together.
-4. Generate a fresh independent audit master, increment `hashKeyVersion`, and
-   select a fresh empty `auditStorage.path`. Do not rename or reuse the old
-   active path.
-5. Run `evidence check --require-runtime-dependencies` and the full handoff
-   checks, start the new process, and
-   route traffic only after readiness succeeds.
+| Member | Meaning |
+|---|---|
+| `schema` | The entry schema: `registry.evidence.audit/v2`, `registry.evidence.audit.request-batch/v2`, or `registry.evidence.audit.authorization-refusal/v2`. |
+| `eventId` | A random UUID the writer mints for this entry. |
+| `time` | The writer's RFC 3339 UTC timestamp for the append. |
+| `phase` | `request` for an access attempt, written before the source read it authorizes; `response` for every terminal record: a release, a denial, or a failure. |
+| `correlation` | The server-minted operation identifier, equal to `record.operation`, shared by every entry of one operation. |
+| `record` | The closed, minimized Evidence record described above. |
 
-Never append a new audit master to an existing chain. Startup with replacement
-master bytes against existing segments fails closed. Old and new epochs verify
-independently with their archived runtime and master; neither is a continuation
-of the other.
+Entries are not chained. Each one stands alone, so a reader can validate any
+line without the lines before it.
 
-`auditStorage.maximumFileBytes` is a per-segment rotation threshold, not a
-total ceiling on the chain. When an append would push the active segment past
-it, the runtime seals the active segment and opens a new one at the configured
-path, online, with no stop and no operator action. A deployment that reaches
-the threshold keeps serving: the next append rotates and continues. Total disk
-consumption is therefore unbounded, and retention, meaning how much sealed
-history stays on disk and for how long, is entirely the operator's
-responsibility; nothing in the runtime deletes or compacts a segment. The one
-exception is a single record larger than `maximumFileBytes` on its own: that
-record can never fit an empty segment, so it fails closed instead of rotating
-forever looking for room it will never find.
+`audit.destination: file`, the default, appends to `audit.path` and returns
+from an append only after the entry's bytes are synced to disk; appends that
+arrive during one durable write share the next one. When an append would push
+the active file past `audit.rotateBytes` (100 MiB by default), the writer
+renames it to `<audit.path>.<sequence>`, where `<sequence>` is an ascending,
+zero-padded, eight-digit number, and opens a fresh active file at
+`audit.path`, online and with no operator action. When the writer opens and
+each time it rotates, it deletes sealed files last modified more than
+`audit.retainDays` ago (90 by default); it never deletes the active file.
+Sequence numbers restart after retention has deleted every sealed file and the
+process restarts, so archives must not be keyed on the sealed file name alone.
+An entry larger than 1 MiB is refused, and the request it belongs to fails
+closed.
 
-Segments are named by where they sit in the chain, not by when they were made.
-The active segment, the one still being appended to, is always at the
-configured `<auditStorage.path>`. Each sealed segment is
-`<auditStorage.path>.<sequence>`, where `<sequence>` is an ascending,
-zero-padded, eight-digit number starting at 1, so `evidence.jsonl.00000001`
-precedes `evidence.jsonl.00000002` in both chain order and lexical order.
-`<auditStorage.path>.lock` is unchanged by any of this: it is the writer's
-advisory lock file, never a segment, and carries no chain state.
+Never rename, edit, or truncate the active file while the service runs; the
+writer treats that as tampering and stops. Copying a sealed file is safe at any
+time, since the writer reads no sealed file after it is sealed.
 
-The chain spans every seam between segments. The chain head lives in the
-running process's memory and survives rotation, so the first record written
-into a new active segment carries the previous segment's last record hash as
-its `prev_hash`, exactly as if no rotation had happened. A sealed segment is
-not an independently verifiable chain that starts at genesis; only the very
-first segment a deployment ever writes does that. Verifying a sealed segment on
-its own, without the head it continued from, cannot succeed and is not a
-supported operation.
+`audit.destination: stdout` writes each entry as one line on standard output
+and flushes it. The serving process's operational records share that stream;
+a collector tells them apart by the `schema` member, which only audit entries
+carry. Durability, rotation, and retention then belong to the collector, and
+an entry is accepted once the line is written to the stream. `evidence check
+--require-audit-under` refuses a `stdout` destination, because there is no
+local file to contain, and `evidencectl audit show` has nothing local to read.
 
-This makes the old stop-and-rename rotation procedure actively dangerous, and
-it must not be used. Renaming the active file to an arbitrary name such as
-`evidence-<utc-timestamp>.jsonl` moves it outside the
-`<auditStorage.path>.<sequence>` namespace the runtime recognizes, so the
-runtime never sees it as a segment of this chain. On restart, startup recovers
-the head from the newest segment still named `<auditStorage.path>.<sequence>`,
-which is now the segment before the one that got renamed away, and begins a new
-active segment continuing from that older head. The renamed-away file and the
-new active segment then both contain a record claiming the same predecessor: a
-silent fork, not a rotation, and the two branches are never reconciled.
+Stop the service with SIGTERM, which is what a service manager and a container
+runtime both send, or with Ctrl-C for an interactive process. The server stops
+accepting connections, finishes the evaluations already admitted, completes
+their audit writes, and exits successfully; `listener.shutdownGraceMilliseconds`
+is the operational target for that drain rather than a cancellation boundary.
+Exiting is also what releases the lock on `<audit.path>.lock`.
 
-To archive sealed history, copy or hard-link sealed segments out to cold
-storage, oldest sequence first, and never touch the active segment this way. A
-sealed segment can be copied or hard-linked safely while the service keeps
-running: the runtime opens the newest sealed segment exactly once, at startup,
-to recover the chain head, and never reopens an older sealed segment
-afterward. Do not rename a copy back into the `<auditStorage.path>.<sequence>`
-namespace at a sequence that still has a segment on disk; that would collide
-with, and could overwrite, real chain history. If a sealed segment is removed
-from the audit directory once it has been archived elsewhere, record which
-sequence was removed, its byte length, and its final record hash in the
-operator change record. A removed segment leaves a gap in the sealed sequence,
-and the offline verifier reports that gap explicitly rather than treating it as
-silent history loss, but only if there is a record of what should be there to
-compare against.
+### Ship audit to append-only storage
 
-Prefer archiving older sealed segments and leaving the newest one in place. The
-newest sealed segment is what a restart reads to recover the chain head, so
-removing it changes what the next start believes the chain continued from. In
-the ordinary case that is caught: the active segment's first record names a
-predecessor the remaining sealed tail does not match, and startup refuses to
-begin on a fork. In the one case where it is not caught, the newest sealed
-segment and the active segment are both gone, startup recovers from an older
-sealed tail and allocates the next sequence from what is still on disk, so a
-future rotation can seal a different segment under a sequence number the
-archived one already used. Restoring that archive afterward collides with live
-history. If the newest sealed segment must be archived and removed, treat
-restoring it as part of the same procedure rather than optional cleanup.
+Tamper evidence belongs to where audit entries end up, not to the file the
+service writes. Ship sealed files, or the `stdout` stream, to storage the
+Evidence host cannot rewrite: object storage with an object lock, a
+write-once archive, or a log pipeline whose retention the Evidence operator
+account cannot change. Ship each sealed file before `audit.retainDays` deletes
+it, and confirm that the entries reached the store as part of backup, restore,
+and incident procedures. Restore audit history into that store, never back
+into the live audit directory.
 
-Out-of-band verification replays every segment across every seam. It is
-`evidence verify-audit`, and it reads both the audit storage path and the hash
-secret from the same runtime document and file secret provider the serving
-process uses. The command takes no path and no secret flags of its own, only
-the global `--runtime` (equivalently `REGISTRY_EVIDENCE_RUNTIME`), so it can
-never be pointed at an audit chain the deployment does not own and never takes
-a secret on a command line:
+### Audit key rotation
 
-```sh
-evidence --runtime /etc/registry-evidence/runtime.yaml verify-audit
-```
+Every pseudonym carries the governed `audit.hashKeyVersion` in its
+`hmac-sha256:v<version>:` prefix, so entries written under different key
+material stay distinguishable in one log and rotation needs no fresh audit
+path. The runtime cannot tell a replacement master from the one it replaces:
+replacing the master bytes without incrementing `hashKeyVersion` silently
+changes every pseudonym under an unchanged prefix. Rotate the audit master
+only this way:
 
-A pass exits zero and prints `segments`, `records`, `sealed-sequence`, `head`,
-and `active-segment`; `sealed-sequence` is the inclusive range of sealed
-segment numbers, or `none` before the first rotation. The counts and the head
-hash carry no request content, so the report is safe to capture into an
-incident record. Any failure exits non-zero.
-
-Run against a running service, the command verifies sealed history only and
-says so in `active-segment`, because reading the active segment while a writer
-may be mid-append would race the write and risk reporting a partially written
-final record as corruption; that is expected and is not itself a finding. To
-prove the active segment too, stop the service first, as under Rollback.
-A gap in the sealed sequence, for example sequence 3 archived and removed while
-1, 2, and 4 remain, is reported as a distinct missing-segment result naming the
-absent sequence and stating that it is not corruption, so an operator can tell
-deliberate archival apart from tampering. A genuine hash break, in the head
-continuity between two adjacent sealed segments or within one segment's
-records, is reported as chain verification failure and means exactly what it
-always has. The same check is available to governed tooling built on the
-runtime as the library call `verify_audit_chain`, which reports the equivalent
-`first_sequence`, `last_sequence`, and `active_verified` fields directly.
-
-Rollback divides into restoring sealed history and restoring the active
-segment, and only the second needs the service stopped. If a sealed segment was
-archived and removed and needs to come back, copy or hard-link it back to its
-original `<auditStorage.path>.<sequence>` name, unmodified; this is safe to do
-live, for the same reason archiving is, since the runtime does not reopen old
-sealed segments after startup. Restore from a copy whose byte length and final
-record hash match what was recorded when it was archived, and re-run the
-offline verifier afterward to confirm the gap has closed. Restoring or
-replacing the active segment is different, because the running writer pins that
-file by identity and inode: any replacement underneath a live process is
-rejected by the sink's own pinned-identity check, and readiness and the next
-append both fail closed rather than continuing on a file the process no longer
-recognizes. To do it safely, stop the service first, with SIGTERM, which is
-what a service manager and a container runtime both send, or with Ctrl-C for an
-interactive process; the server stops accepting connections, finishes the
-evaluations already admitted, completes their audit writes, and exits
-successfully, and `listener.shutdownGraceMilliseconds` is the operational
-target for that drain rather than a cancellation boundary. Confirm the process
-has exited, which is also what releases the exclusive advisory lock on
-`<auditStorage.path>.lock`; that lock is why only one Evidence process can ever
-write this chain, still held for the writer's whole life, and it is the
-structural reason a second writer is refused rather than merely discouraged.
-With the service stopped, replace the file at `<auditStorage.path>` with the
-restored content, preserving owner and mode `0600`, and start the service
-again. Startup recovers the head from the newest sealed segment's tail as
-always and verifies only the restored active segment against it, which proves
-the restored file continues the chain correctly but proves nothing about sealed
-history; run `evidence verify-audit` over the whole audit directory before
-restoring traffic if the incident could plausibly have touched a sealed segment
-too, while the service is still stopped so the active segment is proven as
-well. Never restore an active segment that a later process has already
-appended to: its first record's `prev_hash` would no longer match the sealed
-tail, and the runtime refuses to start on the resulting fork rather than
-silently accepting it.
+1. Generate a fresh independent audit master into a new secret file.
+2. Build a governed bundle revision whose `audit.hashKeyRef` names it and
+   whose `audit.hashKeyVersion` is one higher, and record the change, the
+   bundle revision, and both versions in the change record.
+3. Run `evidence check --require-runtime-dependencies` and the full handoff
+   checks, restart the service, and route traffic only after readiness
+   succeeds.
+4. Keep the previous master under its governed secret controls for as long as
+   pseudonyms from its epoch must be recomputable for an investigation.
 
 ## Listener placement
 
@@ -1053,19 +962,16 @@ policy, and the operator owns that control.
 describe the HTTP boundary only. Version 1 publishes no source-call, signing,
 or credential-acquisition series. A slow or failing upstream source is visible
 only as evidence-request duration and as the problem code the boundary
-returned; signing, audit-chain, and
+returned; signing, audit-writer, and
 source-credential health are reported by `/ready` rather than by telemetry.
 
-Three unlabeled gauges are published on the same listener. None carries any of
-the four request-boundary labels, since each reports a process-wide or on-disk
-fact rather than a per-request outcome, and each is resampled immediately
-before every scrape:
+One unlabeled gauge is published on the same listener. It carries none of the
+four request-boundary labels, since it reports a process-wide fact rather than
+a per-request outcome, and it is resampled immediately before every scrape:
 
 | Series | Type | Meaning |
 |---|---|---|
 | `evidence_rate_limiter_tracked_keys` | gauge | Pseudonym keys currently tracked by the rate limiter |
-| `evidence_audit_segments` | gauge | Audit chain segments on disk, sealed and active |
-| `evidence_audit_bytes` | gauge | Bytes occupied by the audit chain across every segment |
 
 Operators should alert on `evidence_rate_limiter_tracked_keys` approaching the
 100,000-key ceiling described under
@@ -1073,13 +979,9 @@ Operators should alert on `evidence_rate_limiter_tracked_keys` approaching the
 deployment at that ceiling refuses new principals with a capacity error rather
 than degrading gracefully.
 
-The two audit gauges are computed by walking the audit directory rather than by
-counting appends, so they fall when an operator archives sealed segments and
-rise again as the chain grows. Rotation never deletes a sealed segment, so
-nothing in the runtime bounds that growth, and audit bytes that grow without
-bound are the signal that whatever archives or ships them has stopped. Neither
-gauge observes an external receiver: both report what is on local disk, never
-what any off-host copy accepted.
+Evidence publishes no audit series. Audit writer health is reported by
+`/ready`, and disk use in the audit directory is bounded by
+`audit.rotateBytes` and `audit.retainDays` and belongs to host monitoring.
 
 ## Startup and readiness
 
@@ -1128,14 +1030,14 @@ nonzero version, and bounded timeout. Transit metadata must report
 `ecdsa-p256`, signing enabled, `derived=false`, `exportable=false`, and
 `allow_plaintext_backup=false`, and its public key must exactly match the
 governed active public JWK. Only active and published non-revoked public keys
-appear at the JWKS endpoint. The audit JSONL path must be on storage whose
-append durability, permissions, capacity, backup, restore, retention, and keyed
-chain verification the operator owns.
+appear at the JWKS endpoint. A file audit destination must be on storage whose
+append durability, permissions, capacity, backup, and restore the operator
+owns, and the operator ships its sealed files to append-only storage.
 
 `evidence check` validates and compiles the complete bundle, and resolves and
 validates the mounted audit, subject-binding, and signer exactly as startup
 does, including the asynchronous provider sign-and-verify test, without
-opening the audit chain. A deployment whose secret or provider material
+opening the audit destination. A deployment whose secret or provider material
 startup would refuse, including a signer whose public key differs from
 `signing.activePublicJwkFile`, fails check. Source credentials are not
 resolved by check; readiness owns them. Fixture evaluation
@@ -1151,13 +1053,14 @@ preflight does not change normal
 serving readiness, which retains its bounded issuer-outage behavior.
 
 Adding `--require-audit-under <absolute-directory>` proves one further
-property: that `auditStorage.path` resolves at or below a directory the
+property: that the file destination `audit.path` resolves at or below a directory the
 deployment declares persistent. Evidence canonicalizes the declared root and
 the deepest existing ancestor of the configured destination before comparing,
 so a destination outside the root, and a symlink inside the root that leads to
 ephemeral storage, both fail closed. The option requires
 `--require-runtime-dependencies` and relaxes nothing: the audit writer still
-has to open, lock, and verify. Whether the declared root is durable storage is
+has to open and lock. A `stdout` destination fails the option, since it has no
+local file to contain. Whether the declared root is durable storage is
 the deployment's responsibility, not Evidence's; Evidence resolves its own
 configured destination and never inspects mounts. Failures name which side
 failed and no path.
@@ -1191,8 +1094,8 @@ evidence serve
 Startup confirms that the immutable bundle compiled, runtime ownership and
 every local path/trust binding validated, mounted secret files and signer
 metadata parsed, the active public key matched, the signer completed its
-sign-and-verify test, and the audit chain opened and verified. Readiness
-rechecks the subject-binding key, signing provider, pinned audit sink, and every source
+sign-and-verify test, and the audit writer opened. Readiness
+rechecks the subject-binding key, signing provider, pinned audit writer, and every source
 credential. Basic, static Authorization header, and static API-key credentials
 are checked locally. OAuth client-credentials readiness performs its bounded token
 bootstrap against the configured token endpoint.
@@ -1312,7 +1215,7 @@ deployed bundle's audience; a grant matches the requested requirement, purpose,
 and subject roles; the grant carries the claimed authority; and, only for an
 unsigned request, both the bundle and that grant permit
 `application/vnd.registrystack.evidence-unsigned+json`. Before returning that
-problem, the keyed audit chain durably records the minimal refusal event under
+problem, the audit writer durably records the minimal refusal event under
 its server-minted operation identifier. It proves that the authenticated requester
 was refused without recording which request field or authority check failed.
 The caller never sees the event. If the audit append fails, Evidence returns
@@ -1322,60 +1225,66 @@ create this event.
 
 ## Measured throughput
 
-One end-to-end measurement is kept in the repository so capacity planning
-starts from a number rather than an estimate. It drives the real router over
-real sockets, and every request in it runs token verification, rate limiting,
-Rhai request preparation, one outbound source call, Rhai extraction, evidence
-construction, in-process ES256 signing, and both durable audit appends for each
-successful request. It does not model the latency or availability of an
-external Transit deployment.
+This end-to-end measurement drives the real router over real sockets. Every
+request runs token verification, rate limiting, Rhai request preparation, one
+outbound source call, Rhai extraction, evidence construction, in-process ES256
+signing, and both durable file audit appends. It does not model an external
+Transit deployment's latency or availability.
+
+The test copies `products/evidence/fixtures/acceptance/all-definitions` into a
+temporary deployment and drives its adult-status request. It uses a local
+signer, a preconfigured test authenticator, and the actual file-backed audit
+writer with group commit, writing a temporary `audit.jsonl`. No audit sink is
+injected. The fixed upstream JSON and raised fixture limits below make this a
+controlled local journey, not a production workload.
+
+These figures come from a shared development machine and are directional,
+not deployment capacity claims. Unrelated compilation overlapped this run;
+they do not establish a performance change from earlier measurements.
 
 | Measurement | Value |
 |---|---|
-| Sustained rate | 7057 requests/second |
-| Audit appends | 14 115 appends/second (two per request) |
-| Latency p50 / p95 / p99 | 17.89 / 21.37 / 23.03 ms |
-| Non-2xx responses | 0 |
+| Sustained rate | 5,461 requests/second |
+| Audit appends | 10,923 appends/second (two per request, independently rounded) |
+| Latency p50 / p95 / p99 | 20.07 / 44.82 / 64.75 ms |
+| Non-2xx responses and failures | 0 |
 | Offered concurrency | 128 requests in flight, 128 principals |
 | Window | 10 s measured, after a 3 s unmeasured warm-up |
 | Host | Apple M5 Max, 18 logical cores, macOS 26.4.1, optimized build |
-| Date | 2026-08-03 |
+| Host load averages, start / end (1, 5, 15 min) | 31.11, 28.39, 23.68 / 45.46, 32.14, 25.17 |
+| Unrelated compiler processes, start / end | 1 Cargo and 17 rustc / 1 Cargo and 8 rustc |
+| Source revision | `8821b3a67` |
+| Date | 2026-09-25 |
 
 Reproduce with:
 
 ```bash
-cargo test --release -p registry-evidence --lib -- \
+cargo test --locked --release -p registry-evidence --lib -- \
   --ignored --nocapture sustained_load_holds_one_thousand_requests_per_second
 ```
 
-The row records one run. An independent repeat of it on the same host measured
-6976 requests/second at a p50 of 17.75 ms, so treat the rate as carrying about
-a percent of run-to-run variation rather than as an exact figure. The same
-check passes on an unoptimized build at 3183 requests/second with a p50 of
-40.11 ms.
+The release test was compiled before the timed window. The check passed and
+verified one access-attempt and one disclosure-release audit record for every
+released assertion. Absolute rate and latency on this shared host remain
+directional observations, not acceptance gates for the audit simplification.
 
-The measurement is only meaningful if the upstream source is not the thing
-being measured, so the harness serves it from a minimal in-process handler
-returning one constant JSON body and measures that handler's own standalone
-ceiling in the same run, under the same client, worker count, header set, and
-window. That ceiling was 145 273 requests/second, 20.6 times the Evidence
-rate. The check refuses to report a pass or a failure below 5 times, and
-reports the run as inconclusive instead.
+The harness serves the upstream source from a minimal in-process handler
+returning one constant JSON body. It measures that handler's standalone
+ceiling in the same run, with the same client, worker count, header set, and
+window. The source sustained 130,722 requests/second with no failures, 23.9
+times the Evidence rate. Below five times the Evidence rate, the check reports
+an inconclusive result because the source harness may be the bottleneck.
 
-Latency here is a closed-loop consequence of the offered concurrency: 128
-requests in flight at 7057 requests/second is about 18 ms each. A deployment
-offering less concurrency sees lower latency and a lower rate. The audit sink
-commits in groups, so its rate rises with the number of appends in flight and
-falls sharply when few are; a deployment that expects high throughput must let
-requests overlap.
+Latency is a closed-loop consequence of the offered concurrency. A deployment
+with fewer requests in flight sees a different latency and rate. The audit
+writer commits in groups, so concurrent appends can share a write and fsync;
+this measurement does not represent the per-record cost at low concurrency.
 
-The harness lifts four production-meaningful defaults that would otherwise
-become the thing measured, and lifts them only in its own temporary copy of
-the fixture bundle: the per-principal rate limits, `maximumConcurrentRequests`,
-each source's outbound `concurrencyLimit`, and the audit segment's
-`maximumFileBytes`. Those raised values are measurement scaffolding, not a
-recommended deployment posture. Keep the shipped defaults and tune from
-observed traffic.
+The harness raises four defaults only in its temporary fixture bundle: the
+per-principal rate limits, `maximumConcurrentRequests`, each source's outbound
+`concurrencyLimit`, and the audit file's `rotateBytes`. Those values are
+measurement scaffolding, not a recommended deployment posture. Keep the
+shipped defaults and tune from observed traffic.
 
 ## Capacity planning
 

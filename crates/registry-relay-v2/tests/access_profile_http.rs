@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
+mod audit_lines;
+
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use audit_lines::AuditLines;
 use axum::body::{to_bytes, Body};
 use http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH, LINK};
 use http::{Method, Request, StatusCode};
-use registry_platform_audit::{AuditChainHasher, AuditEnvelope, AuditError, AuditSink, ChainState};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier};
 use registry_platform_sqlite::{
@@ -80,69 +82,6 @@ SELECT record_id, revision, lifecycle, recorded_at, public_name, prederived_mask
 FROM source_records;
 "#;
 
-#[derive(Default)]
-struct RecordingSink {
-    records: Mutex<Vec<AuditEnvelope>>,
-    fail_after: Option<usize>,
-}
-
-impl RecordingSink {
-    fn failing_after(successes: usize) -> Self {
-        Self {
-            records: Mutex::new(Vec::new()),
-            fail_after: Some(successes),
-        }
-    }
-
-    fn values(&self) -> Vec<Value> {
-        self.records
-            .lock()
-            .expect("audit lock")
-            .iter()
-            .map(|envelope| envelope.record.clone())
-            .collect()
-    }
-}
-
-#[async_trait::async_trait]
-impl AuditSink for RecordingSink {
-    async fn write(&self, envelope: &AuditEnvelope) -> Result<(), AuditError> {
-        let mut records = self.records.lock().expect("audit lock");
-        if self
-            .fail_after
-            .is_some_and(|maximum| records.len() >= maximum)
-        {
-            return Err(AuditError::Io(std::io::Error::other(
-                "controlled audit failure",
-            )));
-        }
-        records.push(envelope.clone());
-        Ok(())
-    }
-
-    #[allow(deprecated)]
-    async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
-        Ok(self
-            .records
-            .lock()
-            .expect("audit lock")
-            .last()
-            .map(|envelope| envelope.record_hash))
-    }
-
-    async fn tail_hash_with_hasher(
-        &self,
-        _hasher: &AuditChainHasher,
-    ) -> Result<Option<[u8; 32]>, AuditError> {
-        Ok(self
-            .records
-            .lock()
-            .expect("audit lock")
-            .last()
-            .map(|envelope| envelope.record_hash))
-    }
-}
-
 struct Harness {
     app: axum::Router,
     database: std::path::PathBuf,
@@ -152,13 +91,13 @@ struct Harness {
 }
 
 impl Harness {
-    async fn open(quota: Option<QuotaConfig>, sink: Arc<RecordingSink>) -> Self {
+    async fn open(quota: Option<QuotaConfig>, sink: AuditLines) -> Self {
         Self::open_with_fixture(quota, sink, FIXTURE_SQL).await
     }
 
     async fn open_with_fixture(
         quota: Option<QuotaConfig>,
-        sink: Arc<RecordingSink>,
+        sink: AuditLines,
         fixture_sql: &str,
     ) -> Self {
         Self::open_with_fixture_and_list_order(quota, sink, fixture_sql, &["record_id"]).await
@@ -166,7 +105,7 @@ impl Harness {
 
     async fn open_with_fixture_and_list_order(
         quota: Option<QuotaConfig>,
-        sink: Arc<RecordingSink>,
+        sink: AuditLines,
         fixture_sql: &str,
         list_order: &[&str],
     ) -> Self {
@@ -225,18 +164,12 @@ impl Harness {
             AUDIENCE.into(),
             Duration::from_secs(30),
         );
-        let sink_object: Arc<dyn AuditSink> = sink.clone();
-        let chain = Arc::new(
-            ChainState::bootstrap_unkeyed_dev_only(sink_object.as_ref())
-                .await
-                .expect("audit chain starts"),
-        );
         let service = Arc::new(RelayService::new(
             registry,
             Arc::clone(&artifacts),
             sqlite,
             Some(authenticator),
-            RelayAudit::new(chain, sink_object),
+            RelayAudit::new(sink.writer()),
             Some(Arc::new(
                 CursorKey::new(vec![0x5a; 32]).expect("cursor key"),
             )),
@@ -338,8 +271,8 @@ impl Harness {
 
 #[tokio::test]
 async fn access_profile_selection_authenticates_then_authorizes_the_exact_profile() {
-    let sink = Arc::new(RecordingSink::default());
-    let harness = Harness::open(None, Arc::clone(&sink)).await;
+    let sink = AuditLines::recording();
+    let harness = Harness::open(None, sink.clone()).await;
     let limited = harness.token(&["registry:limited"], "review", "area-a");
 
     let (status, _, body) = harness
@@ -402,8 +335,8 @@ async fn access_profile_selection_authenticates_then_authorizes_the_exact_profil
 
 #[tokio::test]
 async fn anonymous_explicit_protected_access_profile_conceals_known_and_unknown_routes() {
-    let sink = Arc::new(RecordingSink::default());
-    let harness = Harness::open(None, Arc::clone(&sink)).await;
+    let sink = AuditLines::recording();
+    let harness = Harness::open(None, sink.clone()).await;
 
     for (method, known, unknown) in [
         (
@@ -457,8 +390,8 @@ async fn anonymous_explicit_protected_access_profile_conceals_known_and_unknown_
 
 #[tokio::test]
 async fn malformed_explicit_access_profile_is_identical_for_known_and_unknown_routes() {
-    let sink = Arc::new(RecordingSink::default());
-    let harness = Harness::open(None, Arc::clone(&sink)).await;
+    let sink = AuditLines::recording();
+    let harness = Harness::open(None, sink.clone()).await;
 
     for (method, known, unknown) in [
         (
@@ -521,8 +454,8 @@ async fn malformed_explicit_access_profile_is_identical_for_known_and_unknown_ro
 
 #[tokio::test]
 async fn retired_representation_selector_is_invalid_for_every_data_route() {
-    let sink = Arc::new(RecordingSink::default());
-    let harness = Harness::open(None, Arc::clone(&sink)).await;
+    let sink = AuditLines::recording();
+    let harness = Harness::open(None, sink.clone()).await;
 
     for (method, known, unknown) in [
         (
@@ -577,7 +510,7 @@ async fn retired_representation_selector_is_invalid_for_every_data_route() {
 
 #[tokio::test]
 async fn unknown_route_access_profile_preflight_preserves_authentication_precedence() {
-    let harness = Harness::open(None, Arc::new(RecordingSink::default())).await;
+    let harness = Harness::open(None, AuditLines::recording()).await;
 
     for (method, known, unknown) in [
         (
@@ -627,7 +560,7 @@ async fn unknown_route_access_profile_preflight_preserves_authentication_precede
 
 #[tokio::test]
 async fn oversized_uri_still_conceals_exact_access_profile_authorization() {
-    let harness = Harness::open(None, Arc::new(RecordingSink::default())).await;
+    let harness = Harness::open(None, AuditLines::recording()).await;
     let limited = harness.token(&["registry:limited"], "review", "area-a");
     let padding = "x".repeat(20_000);
 
@@ -644,8 +577,8 @@ async fn oversized_uri_still_conceals_exact_access_profile_authorization() {
 
 #[tokio::test]
 async fn oversized_unknown_route_preserves_access_profile_preflight_ordering() {
-    let sink = Arc::new(RecordingSink::default());
-    let harness = Harness::open(None, Arc::clone(&sink)).await;
+    let sink = AuditLines::recording();
+    let harness = Harness::open(None, sink.clone()).await;
     let padding = "x".repeat(20_000);
 
     for (method, known, unknown) in [
@@ -736,8 +669,8 @@ async fn oversized_unknown_route_preserves_access_profile_preflight_ordering() {
 
 #[tokio::test]
 async fn preflight_refusals_do_not_reach_source_and_attempt_audit_precedes_source_access() {
-    let sink = Arc::new(RecordingSink::default());
-    let harness = Harness::open(None, Arc::clone(&sink)).await;
+    let sink = AuditLines::recording();
+    let harness = Harness::open(None, sink.clone()).await;
     let limited = harness.token(&["registry:limited"], "review", "area-a");
 
     std::fs::rename(&harness.database, harness.database.with_extension("moved"))
@@ -816,7 +749,7 @@ async fn preflight_refusals_do_not_reach_source_and_attempt_audit_precedes_sourc
 
 #[tokio::test]
 async fn fields_only_minimize_the_selected_access_profile() {
-    let harness = Harness::open(None, Arc::new(RecordingSink::default())).await;
+    let harness = Harness::open(None, AuditLines::recording()).await;
     let limited = harness.token(&["registry:limited"], "review", "area-a");
     let (status, _, body) = harness
         .send(
@@ -855,10 +788,10 @@ async fn fields_only_minimize_the_selected_access_profile() {
 
 #[tokio::test]
 async fn cursor_and_etag_are_bound_to_selected_access_profile() {
-    let sink = Arc::new(RecordingSink::default());
+    let sink = AuditLines::recording();
     let valid_core_fixture = FIXTURE_SQL.replace("'not-a-core-date'", "'2026-08-01T12:00:00Z'");
     assert_ne!(valid_core_fixture, FIXTURE_SQL);
-    let harness = Harness::open_with_fixture(None, Arc::clone(&sink), &valid_core_fixture).await;
+    let harness = Harness::open_with_fixture(None, sink.clone(), &valid_core_fixture).await;
     let all = harness.token(
         &["registry:limited", "registry:caseworker"],
         "review",
@@ -1045,12 +978,8 @@ async fn cursor_and_etag_are_bound_to_selected_access_profile() {
 #[tokio::test]
 async fn public_cursor_pages_are_not_cacheable() {
     let valid_core_fixture = FIXTURE_SQL.replace("'not-a-core-date'", "'2026-08-01T12:00:00Z'");
-    let harness = Harness::open_with_fixture(
-        None,
-        Arc::new(RecordingSink::default()),
-        &valid_core_fixture,
-    )
-    .await;
+    let harness =
+        Harness::open_with_fixture(None, AuditLines::recording(), &valid_core_fixture).await;
     let (status, headers, body) = harness
         .send(
             Method::GET,
@@ -1094,8 +1023,8 @@ async fn public_cursor_pages_are_not_cacheable() {
 
 #[tokio::test]
 async fn malformed_list_lookahead_fails_atomically_without_value_disclosure() {
-    let sink = Arc::new(RecordingSink::default());
-    let harness = Harness::open(None, Arc::clone(&sink)).await;
+    let sink = AuditLines::recording();
+    let harness = Harness::open(None, sink.clone()).await;
 
     let (status, _, body) = harness
         .send(
@@ -1138,8 +1067,8 @@ async fn malformed_list_lookahead_fails_atomically_without_value_disclosure() {
 
 #[tokio::test]
 async fn accept_negotiation_uses_quality_and_json_tie_break_without_leaking_values() {
-    let sink = Arc::new(RecordingSink::default());
-    let harness = Harness::open(None, Arc::clone(&sink)).await;
+    let sink = AuditLines::recording();
+    let harness = Harness::open(None, sink.clone()).await;
 
     for (accept, expected_type, expects_context) in [
         (
@@ -1287,8 +1216,8 @@ async fn record_response_budget_refuses_oversized_json_and_json_ld_before_serial
          SET public_name = replace(hex(zeroblob(480000)), '0', 'A'),\n\
              prederived_mask = replace(hex(zeroblob(480000)), '0', 'A');"
     );
-    let sink = Arc::new(RecordingSink::default());
-    let harness = Harness::open_with_fixture(None, Arc::clone(&sink), &oversized_fixture).await;
+    let sink = AuditLines::recording();
+    let harness = Harness::open_with_fixture(None, sink.clone(), &oversized_fixture).await;
 
     for accept in [None, Some("application/ld+json")] {
         let headers = accept
@@ -1340,10 +1269,10 @@ async fn duplicate_identifier_fails_read_and_page_boundary_but_lookup_stays_unre
          FROM source_records WHERE record_id = 'record-1';",
     );
     assert_ne!(duplicate_fixture, FIXTURE_SQL);
-    let sink = Arc::new(RecordingSink::default());
+    let sink = AuditLines::recording();
     let harness = Harness::open_with_fixture_and_list_order(
         None,
-        Arc::clone(&sink),
+        sink.clone(),
         &duplicate_fixture,
         &["recorded_at", "record_id"],
     )
@@ -1425,7 +1354,7 @@ async fn duplicate_identifier_fails_read_and_page_boundary_but_lookup_stays_unre
 
 #[tokio::test]
 async fn metadata_and_artifacts_authorize_each_access_profile_exactly() {
-    let harness = Harness::open(None, Arc::new(RecordingSink::default())).await;
+    let harness = Harness::open(None, AuditLines::recording()).await;
     let (status, _, body) = harness.send(Method::GET, "/v2", None, None, &[]).await;
     assert_eq!(status, StatusCode::OK);
     let text = String::from_utf8(body).expect("metadata is UTF-8");
@@ -1462,8 +1391,8 @@ async fn metadata_and_artifacts_authorize_each_access_profile_exactly() {
 
 #[tokio::test]
 async fn malformed_registry_core_fails_closed_and_list_release_is_atomic() {
-    let sink = Arc::new(RecordingSink::default());
-    let harness = Harness::open(None, Arc::clone(&sink)).await;
+    let sink = AuditLines::recording();
+    let harness = Harness::open(None, sink.clone()).await;
 
     for uri in [
         "/v2/resources/record/records/record-1a",
@@ -1526,8 +1455,8 @@ async fn malformed_registry_core_fails_closed_and_list_release_is_atomic() {
 
 #[tokio::test]
 async fn transforms_are_bounded_value_free_and_terminal_audit_gates_exact_bytes() {
-    let sink = Arc::new(RecordingSink::default());
-    let harness = Harness::open(None, Arc::clone(&sink)).await;
+    let sink = AuditLines::recording();
+    let harness = Harness::open(None, sink.clone()).await;
     let limited = harness.token(&["registry:limited"], "review", "area-a");
     let (status, _, body) = harness
         .send(
@@ -1620,7 +1549,7 @@ async fn transforms_are_bounded_value_free_and_terminal_audit_gates_exact_bytes(
         .expect("problem UTF-8")
         .contains("not-a-date"));
 
-    let failing = Harness::open(None, Arc::new(RecordingSink::failing_after(1))).await;
+    let failing = Harness::open(None, AuditLines::failing_after(1)).await;
     let token = failing.token(&["registry:limited"], "review", "area-a");
     let (status, _, body) = failing
         .send(
@@ -1649,7 +1578,7 @@ async fn quotas_remain_operation_scoped_across_access_profiles() {
             requests_per_minute: 1,
             burst: 1,
         }),
-        Arc::new(RecordingSink::default()),
+        AuditLines::recording(),
     )
     .await;
     let all = harness.token(
@@ -1868,7 +1797,10 @@ fn compiled_registry(fingerprint: String) -> CompiledRegistry {
         },
     };
     CompiledRegistry {
-        contract_revision: "sha256:contract".into(),
+        // Compiled contracts always carry a digest revision; the published
+        // audit schema holds every recorded line to that shape.
+        contract_revision:
+            "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".into(),
         contract_id: "access-profile-tests".into(),
         contract_version: "1".into(),
         registry_identifier: "urn:example:registry:access-profiles".into(),

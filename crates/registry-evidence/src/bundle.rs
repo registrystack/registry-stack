@@ -2503,7 +2503,7 @@ fn validate_runtime_bindings(
             "runtime signer kind does not match the bundle assurance profile",
         ));
     }
-    let audit_ref = &bundle.audit.hash_secret_ref;
+    let audit_ref = &bundle.audit.hash_key_ref;
     let subject_ref = &bundle.subject_binding.secret_ref;
     if let Some(signing_ref) = runtime.signer.private_key_ref() {
         if signing_ref == audit_ref || signing_ref == subject_ref {
@@ -2513,23 +2513,24 @@ fn validate_runtime_bindings(
         }
     }
     let secret_root = Path::new(&runtime.secret_providers.file.root);
-    let audit_path = Path::new(&runtime.audit_storage.path);
-    let configured_secret_paths = [
-        Some(audit_ref),
-        Some(subject_ref),
-        runtime.signer.private_key_ref(),
-    ]
-    .into_iter()
-    .flatten()
-    .filter_map(|reference| reference.as_str().strip_prefix("secret:file/"))
-    .map(|name| secret_root.join(name));
-    if configured_secret_paths
+    if let Some(audit_path) = runtime.audit.path.as_deref().map(Path::new) {
+        let configured_secret_paths = [
+            Some(audit_ref),
+            Some(subject_ref),
+            runtime.signer.private_key_ref(),
+        ]
         .into_iter()
-        .any(|path| path == audit_path)
-    {
-        return Err(invalid_artifact(
-            "the audit storage path must not resolve to configured secret material",
-        ));
+        .flatten()
+        .filter_map(|reference| reference.as_str().strip_prefix("secret:file/"))
+        .map(|name| secret_root.join(name));
+        if configured_secret_paths
+            .into_iter()
+            .any(|path| path == audit_path)
+        {
+            return Err(invalid_artifact(
+                "the audit file path must not resolve to configured secret material",
+            ));
+        }
     }
     // The binding is exact in both directions, but the two directions are
     // different repairs in different files: a profile the bundle names and the
@@ -4660,7 +4661,7 @@ mod tests {
         fs::write(
             &runtime_path,
             format!(
-                "version: 1\nbundleDirectory: /etc/registry-evidence/bundle\nlistener:\n  bindHost: 127.0.0.1\n  port: 8080\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 30000\nsecretProviders:\n  file: {{root: {}}}\nsigner:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000\nauditStorage:\n  path: /var/lib/registry-evidence/audit/evidence.jsonl\n  maximumFileBytes: 1073741824\noutboundTls:\n  systemRoots: true\n  trustProfiles:\n    internal-pki: {{caBundleFile: {}}}\n",
+                "version: 1\nbundleDirectory: /etc/registry-evidence/bundle\nlistener:\n  bindHost: 127.0.0.1\n  port: 8080\n  tlsTermination: operator-controlled-upstream\n  trustProxyIdentityHeaders: false\n  maximumRequestBytes: 65536\n  maximumConcurrentRequests: 64\n  requestTimeoutMilliseconds: 10000\n  shutdownGraceMilliseconds: 30000\nsecretProviders:\n  file: {{root: {}}}\nsigner:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000\naudit:\n  path: /var/lib/registry-evidence/audit/evidence.jsonl\noutboundTls:\n  systemRoots: true\n  trustProfiles:\n    internal-pki: {{caBundleFile: {}}}\n",
                 secret_root.display(),
                 ca_path.display()
             ),
@@ -4723,9 +4724,8 @@ signer:
   keyName: evidence-signing
   keyVersion: 7
   timeoutMilliseconds: 2000
-auditStorage:
+audit:
   path: /var/lib/registry-evidence/audit/evidence.jsonl
-  maximumFileBytes: 1073741824
 outboundTls:
   systemRoots: true
   trustProfiles: {}
@@ -4877,7 +4877,7 @@ outboundTls:
         )
         .expect("the runtime revision computes");
         assert_eq!(
-            revision, "sha256:1693e61df2bdad3835fefb03ca6a3990045d77e8f8468e84f68e547596039fe3",
+            revision, "sha256:b83a1f816b4201e5d12c14c9c8677354d3adab3827735eb22688e2bf54be48fc",
             "an operator who adopted nothing must keep the revision they published"
         );
 

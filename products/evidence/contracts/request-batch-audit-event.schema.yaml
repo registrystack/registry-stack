@@ -1,10 +1,9 @@
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://registrystack.org/schemas/evidence/request-batch-audit-event-v1.json
-title: Evidence multi-subject request batch audit event Version 1
+$id: https://registrystack.org/schemas/evidence/request-batch-audit-event-v2.json
+title: Evidence multi-subject request batch audit event Version 2
 type: object
 additionalProperties: false
 required:
-  - schema
   - assuranceProfile
   - eventId
   - occurredAt
@@ -20,7 +19,6 @@ required:
   - reason
   - durationMilliseconds
 properties:
-  schema: {const: registry.evidence.audit.request-batch/v1}
   assuranceProfile: {enum: [local, production, evidence-grade]}
   eventId: {type: string, format: uri, maxLength: 512}
   occurredAt: {type: string, format: date-time}
@@ -159,6 +157,7 @@ allOf:
     then: {required: [signingKeyId]}
     else: {not: {required: [signingKeyId]}}
 audit_rules:
+  envelope: Each record is the record member of one platform audit entry with the members schema, eventId, time, phase, correlation, and record, written as one JSON line by the shared platform audit writer to the operator-configured file or stdout destination. The entry schema is registry.evidence.audit.request-batch/v2 and the record itself carries no schema member. The entry phase is request for access-attempt and response for disclosure-release and terminal-failure. The entry correlation is the record's operation, so every physical access entry of one outer request shares the correlation of its one terminal entry.
   item_indices: Every itemIndices array is strictly increasing. Indices are zero-based positions in the outer request.
   item_group_partition: itemGroups are ordered by their first index. Their itemIndices are non-overlapping and partition the event's relevant item set exactly. An access event's relevant set is its top-level itemIndices. A release event's relevant set is every item index from zero through outcomes.length minus one.
   item_group_equivalence: Items share a group exactly when their complete authority object, including grant and approver pseudonyms when present, and ordered pseudonymized subjects array are identical. Items resolving through different grants, approvers, or authority kinds are never forced into one group and do not invalidate the outer request.
@@ -166,7 +165,7 @@ audit_rules:
   outcome_order: outcomes contains one member for every request item in exact request order. itemIndex values are the contiguous sequence beginning at zero. evidenceId is required exactly for evidence and forbidden for evidence-not-available. signingKeyId is required exactly when at least one outcome is evidence and is forbidden for an all-unavailable release, because no assertion was signed.
   release_gate: The exact complete response envelope is serialized and checked against its 1048576-byte ceiling, then one disclosure-release event is durably accepted, then those same bytes are returned unchanged. There is exactly one terminal event for an authorized outer request and never one release per item.
   terminal_failure: Any non-singular-unavailable failure after authorization produces one terminal-failure event before the existing safe outer Problem Details response. It carries only common request metadata and safeErrorCategory, with no item, authority, subject, source, outcome, evidence, signing, or disclosure material.
-  pre_source_refusal: Authentication, malformed-request, invalid-selector, and authorization-refusal behavior remains governed by the existing native audit contract. In particular, an authenticated authorization refusal uses registry.evidence.audit.authorization-refusal/v1 and occurs before source access.
+  pre_source_refusal: Authentication, malformed-request, invalid-selector, and authorization-refusal behavior remains governed by the existing native audit contract. In particular, an authenticated authorization refusal uses the registry.evidence.audit.authorization-refusal/v2 entry schema and occurs before source access.
   never_record:
     - request nonces
     - raw selectors, source values, facts, or bodies

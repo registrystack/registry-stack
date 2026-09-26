@@ -78,12 +78,23 @@ bound to `authentication.issuer.trustedIssuer` when that explicit field is
 present, independent of the transport hostname.
 
 Adding `--require-audit-under <absolute-directory>` proves that the configured
-audit sink resolves at or below a directory the deployment declares persistent.
-Relay resolves `audit.sink` exactly as startup resolves it, against the runtime
-file's directory when the binding is relative, then canonicalizes the declared
-root and the deepest existing ancestor of the sink before comparing. A sink
+audit file resolves at or below a directory the deployment declares persistent.
+Relay resolves `audit.path` exactly as startup resolves it, against the runtime
+file's directory when the path is relative, then canonicalizes the declared
+root and the deepest existing ancestor of the file before comparing. A file
 outside the root, and a symlink inside the root that leads out of it, both fail
-closed. The proof is additive: the readiness check above still has to pass.
+closed. A `stdout` audit destination has no path to prove, so the flag refuses
+it. The proof is additive: the readiness check above still has to pass.
 Storage durability belongs to the deployment that mounts the root; Relay only
-proves where its own configured sink resolves, and its diagnostics name the
-side that failed rather than any path.
+proves where its own configured audit file resolves, and its diagnostics name
+the side that failed rather than any path.
+
+Relay writes audit through the shared Registry Stack audit writer. Each line is
+one envelope, `{schema, eventId, time, phase, correlation, record}`, with schema
+`registry.relay.audit/v2alpha2`. The attempt written before source access is a
+`request` entry; the refusal or terminal outcome is a `response` entry; both
+carry the operation id as `correlation`. The `record` is Relay's closed,
+value-free event. The log carries no hash chain or signature, so it is not
+tamper-evident on the host; ship it to append-only storage when that matters.
+The package artifact `generated/artifacts/audit-event.schema.json` describes
+one line.

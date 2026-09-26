@@ -11,7 +11,7 @@
 
 use std::fmt;
 
-use registry_platform_audit::AuditProfile;
+use registry_platform_audit::AuditEntry;
 use registry_platform_canonical_json::parse_json_strict;
 use serde_json::{json, Value};
 use tokio_postgres::GenericClient;
@@ -1177,17 +1177,129 @@ pub(crate) async fn scrub_receipts_for_records(
     Ok(changed)
 }
 
-/// Append one value-free ingestion-run lifecycle record to the chained audit
-/// journal. Digests and counts are hashes and integers; no source row, chunk
-/// body, or bearer material ever appears.
+/// The audit schema of every ingestion-run lifecycle and receipt-disclosure
+/// entry.
+pub const INGESTION_AUDIT_SCHEMA: &str = "breg-ingestion-audit/v1";
+
+/// Append one value-free ingestion-run lifecycle or receipt-disclosure record
+/// as a `response` entry. Digests and counts are hashes and integers; no source
+/// row, chunk body, or bearer material ever appears. Callers append after the
+/// transaction that decided the record commits, and release nothing to the
+/// caller until the append is accepted. The entry correlates by the record's
+/// request correlation, or by its run id when the transition had no request.
 pub(crate) async fn append_run_audit(
-    transaction: &tokio_postgres::Transaction<'_>,
-    profile: &AuditProfile,
+    audit: &crate::audit::RegistryAudit,
     record: Value,
 ) -> Result<(), IngestionStoreError> {
-    crate::audit::append_envelope(transaction, profile, record)
+    let correlation = record
+        .get("correlation")
+        .or_else(|| record.get("runId"))
+        .and_then(Value::as_str)
+        .ok_or(IngestionStoreError::InvalidInput)?
+        .to_owned();
+    audit
+        .append(AuditEntry::response(
+            INGESTION_AUDIT_SCHEMA,
+            correlation,
+            record,
+        ))
         .await
         .map_err(|_| IngestionStoreError::Unavailable)
+}
+
+/// The request a run transition is about to serve: what its `request` entry
+/// names before the transition's first protected read or write.
+pub(crate) struct RunRequest<'a> {
+    /// `create`, `cancel`, `submitChunk`, or `chunkReceipt`.
+    pub(crate) transition: &'a str,
+    pub(crate) run_id: Option<Uuid>,
+    pub(crate) chunk_index: Option<i64>,
+    pub(crate) package_revision: &'a str,
+    pub(crate) entity_id: &'a str,
+    pub(crate) profile_id: &'a str,
+    pub(crate) principal_reference: &'a str,
+    pub(crate) correlation: &'a str,
+}
+
+/// The accepted `request` entry of one run transition, which owes its
+/// `response` in the ingestion schema.
+pub(crate) struct RunAttempt {
+    request: registry_platform_audit::AuditRequest,
+    record: Value,
+}
+
+impl RunAttempt {
+    /// Whether the transition's `response` entry was accepted.
+    pub(crate) fn is_answered(&self) -> bool {
+        self.request.is_answered()
+    }
+
+    /// Answer the request with the refusal the transition ended in,
+    /// reporting whether the destination accepted it.
+    pub(crate) async fn refuse(mut self) -> bool {
+        let record = outcome_record(&self.record, "refused");
+        self.request.respond(record).await.is_ok()
+    }
+
+    /// Answer the request as unfinished: the transition's commit returned
+    /// an error, which does not prove it rolled back, so its outcome is
+    /// unknown. Reports whether the destination accepted the answer.
+    pub(crate) async fn abandon(mut self) -> bool {
+        let record = outcome_record(&self.record, "unfinished");
+        self.request.respond(record).await.is_ok()
+    }
+}
+
+fn outcome_record(request: &Value, outcome: &str) -> Value {
+    let mut record = request.clone();
+    record["phase"] = json!("terminal");
+    record["outcome"] = json!(outcome);
+    record
+}
+
+/// Append the value-free `request` entry of one run transition, correlated by
+/// the request that drives it, and return the handle that owes its
+/// `response`. Callers append it before the transition's first protected
+/// write and perform none unless it is accepted; the transition's `response`
+/// entry, appended after commit, shares the correlation and answers it. A
+/// transition that ends without one writes the `unfinished` outcome when the
+/// handle is dropped. The entry names only what that response entry already
+/// records.
+pub(crate) async fn begin_run_request(
+    audit: &crate::audit::RegistryAudit,
+    request: RunRequest<'_>,
+) -> Result<RunAttempt, IngestionStoreError> {
+    if !crate::audit::profile_is_keyed(audit.profile()) {
+        return Err(IngestionStoreError::Unavailable);
+    }
+    let mut record = json!({
+        "kind": "ingestionRun",
+        "phase": "attempt",
+        "transition": request.transition,
+        "packageRevision": request.package_revision,
+        "entityId": request.entity_id,
+        "selectedAccessProfile": request.profile_id,
+        "principalReference": request.principal_reference,
+        "correlation": request.correlation,
+    });
+    if let Some(run_id) = request.run_id {
+        record["runId"] = json!(run_id.to_string());
+    }
+    if let Some(chunk_index) = request.chunk_index {
+        record["chunkIndex"] = json!(chunk_index);
+    }
+    let request = audit
+        .begin(
+            AuditEntry::request(
+                INGESTION_AUDIT_SCHEMA,
+                request.correlation.to_owned(),
+                record.clone(),
+            ),
+            outcome_record(&record, "unfinished"),
+        )
+        .await
+        .map_err(|_| IngestionStoreError::Unavailable)?;
+    Ok(RunAttempt { request, record })
 }
 
 /// The canonical lifecycle record for one run transition.

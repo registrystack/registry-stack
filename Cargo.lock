@@ -5555,6 +5555,7 @@ dependencies = [
  "registry-evidence-authoring",
  "registry-evidence-client",
  "registry-language-server",
+ "registry-platform-audit",
  "registry-platform-buildinfo",
  "registry-platform-crypto",
  "registry-thunderid-tooling",
@@ -5633,21 +5634,18 @@ dependencies = [
 name = "registry-platform-audit"
 version = "0.34.0"
 dependencies = [
- "async-trait",
  "hmac 0.13.0",
- "registry-platform-canonical-json",
  "rustix 1.1.5",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "subtle",
  "tempfile",
  "thiserror 2.0.20",
  "time",
  "tokio",
  "tracing",
- "tracing-subscriber",
- "ulid",
+ "uuid",
  "zeroize",
 ]
 
@@ -5865,7 +5863,6 @@ dependencies = [
 name = "registry-platform-testing"
 version = "0.34.0"
 dependencies = [
- "async-trait",
  "axum",
  "base64 0.22.1",
  "bytes",
@@ -5955,7 +5952,6 @@ version = "0.34.0"
 name = "registry-relay-v2"
 version = "0.34.0"
 dependencies = [
- "async-trait",
  "axum",
  "base64 0.22.1",
  "bytes",
@@ -6042,7 +6038,6 @@ dependencies = [
  "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-httpsec",
- "registry-platform-testing",
  "rustix 1.1.5",
  "serde",
  "serde_json",
@@ -6059,7 +6054,7 @@ dependencies = [
  "typst",
  "typst-assets",
  "typst-pdf",
- "zeroize",
+ "uuid",
 ]
 
 [[package]]
@@ -6106,6 +6101,7 @@ dependencies = [
  "deadpool-postgres",
  "futures",
  "http",
+ "jsonschema",
  "jsonwebtoken",
  "registry-platform-audit",
  "registry-platform-authcommon",

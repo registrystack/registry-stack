@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+- Add `AuditWriter::begin`, which appends a `request` entry and returns an
+  `AuditRequest` that owes its `response`. A response the handle writes, or
+  one appended under the same schema and correlation, answers it; a handle
+  dropped unanswered, by an early return, a panic, or a canceled future,
+  writes the product's `unfinished` record as the response, so no request
+  entry stays unpaired. A file destination flushes that line on the runtime,
+  or when the last reference to the writer is dropped at shutdown.
+
+- Refuse to reopen an audit file ending in an incomplete JSONL entry, preserving
+  its bytes for operator archival before starting a fresh stream.
+- Keep queued stream appends stopped after an earlier write fails, and finish
+  accepted file writes when their request task is canceled. Group commits retain
+  every waiting entry and update the pinned file state before accepting later
+  writes.
+
+- Add `AuditWriter`, the one audit writer every product uses. It appends a
+  plain JSON envelope (`schema`, `eventId`, `time`, `phase`, `correlation`,
+  `record`) to an owner-only file with fsync and group commit, size rotation,
+  and age-based retention, or writes one flushed line to stdout. A failed write
+  stops the writer until restart so the caller fails closed. The file
+  destination refuses a second writer on the same path and a directory that is
+  group- or world-writable.
+- BREAKING: remove the audit hash chain. Tamper evidence is now a deployment
+  concern: ship the audit stream to append-only storage. Removed from
+  `registry-platform-audit`: `ChainState`, `AuditChainHasher`,
+  `AuditChainProfile`, `AuditProfile::chain_hasher`,
+  `AuditProfile::bootstrap_or_start_empty`, `AuditEnvelope`, `AuditSink`,
+  `JsonlFileSink`, `JsonlStdoutSink`, `SyslogSink`, `DurableSegmentedJsonlSink`,
+  `DurableSegmentedAuditLog`, `SegmentedAuditSummary`,
+  `verify_segmented_audit_chain`, `visit_stopped_segmented_audit_chain`,
+  `segmented_audit_paths`, `verify_chain`, `verify_jsonl_lines`,
+  `verify_jsonl_lines_with_hasher`, `quarantine_and_recover_chain`,
+  `ChainRecoveryOutcome`, `CHAIN_BREAK_EVENT`, `ChainBreakRecord`,
+  `OptionalHashHex`, `ChainVerification`, `ChainVerificationError`, and the
+  `AuditError` variants `InvalidHashHex`, `NonTailableSink`, `HashMismatch`,
+  `ChainVerification`, `ChainForkDetected`, and `SegmentMissing`. Removed from
+  `registry-platform-testing`: `assert_chain_integrity` and
+  `ChainAssertionError`. Keyed audit references from `AuditProfile` and
+  `AuditKeyHasher` are unchanged byte for byte.
+
 ## v0.34.0 - 2026-09-25
 
 - The shared platform crates have no user-visible changes in this release.

@@ -13,8 +13,7 @@ use std::time::Duration;
 use axum::Router;
 use jsonwebtoken::Algorithm;
 use registry_platform_audit::{
-    require_audit_under, AuditChainProfile, AuditSink, ChainState, DurableSegmentedJsonlSink,
-    PersistentRootFault,
+    require_audit_under, AuditDestination, AuditWriter, PersistentRootFault,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_httputil::FetchUrlPolicy;
@@ -25,7 +24,6 @@ use registry_platform_oidc::{
 use thiserror::Error;
 use tokio::net::TcpListener;
 use url::Url;
-use zeroize::Zeroizing;
 
 use crate::audit::RelayAudit;
 use crate::auth::RelayAuthenticator;
@@ -42,7 +40,6 @@ use crate::server::{
 use crate::source_observation::observe_sources;
 use crate::sqlite_runtime::{RuntimeSourceBinding, SqliteRuntime, SqliteRuntimeLimits};
 
-const MAXIMUM_AUDIT_SEGMENT_BYTES: u64 = 64 * 1024 * 1024;
 const DEFAULT_CURSOR_MAXIMUM_AGE: Duration = Duration::from_secs(300);
 const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 const ISSUER_NETWORK_TIMEOUT: Duration = Duration::from_secs(5);
@@ -64,13 +61,17 @@ pub enum StartupError {
     SourceInvalid,
     #[error("the configured issuer is not ready")]
     IssuerUnavailable,
-    #[error("the required audit sink is not ready")]
+    #[error("the required audit destination is not ready")]
     AuditUnavailable,
-    /// The configured audit sink was not proven to resolve inside the
+    /// The configured audit file was not proven to resolve inside the
     /// operator-declared persistent root. The fault names the side that
-    /// failed and never the configured sink or the declared root.
+    /// failed and never the configured path or the declared root.
     #[error("the audit destination check failed: {0}")]
     AuditRoot(PersistentRootFault),
+    /// A persistent audit root was declared for a runtime whose audit
+    /// destination is `stdout`, which has no path to prove.
+    #[error("the audit destination check applies only when audit.destination is file")]
+    AuditRootRequiresFile,
     #[error("a required secret is unavailable")]
     SecretUnavailable,
     #[error("the cursor configuration is invalid")]
@@ -156,12 +157,7 @@ async fn prepare_loaded(loaded: LoadedRuntime) -> Result<PreparedRelay, StartupE
     );
 
     let authenticator = build_authenticator(runtime.authentication.issuer.as_ref()).await?;
-    let audit = build_audit(
-        &runtime_root,
-        &runtime.audit.integrity_key_ref,
-        &paths.audit,
-    )
-    .await?;
+    let audit = build_audit(paths.audit).await?;
     let (cursor_key, cursor_maximum_age) = build_cursor(&runtime_root, &runtime)?;
     let quota = runtime.quotas.as_ref().map(|quota| QuotaConfig {
         requests_per_minute: quota.requests_per_minute,
@@ -210,13 +206,13 @@ pub async fn check(
     require_audit_root: Option<&Path>,
 ) -> Result<(), StartupError> {
     // The deployment owns storage persistence and declares the root it mounts;
-    // Relay owns where the sink resolves. Proving containment first keeps the
-    // two boundaries separate, and the readiness proof below still has to pass.
-    // The runtime is read once, so the sink proven here is the sink prepared
-    // below whatever the pathname names by then.
+    // Relay owns where the audit file resolves. Proving containment first
+    // keeps the two boundaries separate, and the readiness proof below still
+    // has to pass. The runtime is read once, so the file proven here is the
+    // file prepared below whatever the pathname names by then.
     let loaded = LoadedRuntime::load(runtime_path)?;
     if let Some(root) = require_audit_root {
-        require_persistent_audit_sink(&loaded, root)?;
+        require_persistent_audit_file(&loaded, root)?;
     }
     let prepared = prepare_loaded(loaded).await?;
     if !prepared.service.is_ready().await {
@@ -225,10 +221,19 @@ pub async fn check(
     Ok(())
 }
 
-/// Prove the audit sink of a loaded runtime resolves inside `root`. The sink
-/// is the binding `LoadedRuntime::load` resolved, the one preparation opens.
-fn require_persistent_audit_sink(loaded: &LoadedRuntime, root: &Path) -> Result<(), StartupError> {
-    require_audit_under(&loaded.paths.audit, root).map_err(StartupError::AuditRoot)
+/// Prove the audit file of a loaded runtime resolves inside `root`. The file
+/// is the one `LoadedRuntime::load` resolved, the one preparation opens. A
+/// `stdout` destination leaves persistence to whatever collects the stream,
+/// so declaring a persistent root for it is refused rather than passed.
+fn require_persistent_audit_file(loaded: &LoadedRuntime, root: &Path) -> Result<(), StartupError> {
+    match &loaded.paths.audit {
+        AuditDestination::File(file) => {
+            require_audit_under(file.path(), root).map_err(StartupError::AuditRoot)
+        }
+        AuditDestination::Stdout | AuditDestination::Stderr => {
+            Err(StartupError::AuditRootRequiresFile)
+        }
+    }
 }
 
 /// Prepare atomically, bind only after readiness, and serve until SIGINT or
@@ -468,7 +473,7 @@ fn safe_runtime_permissions(_metadata: &fs::Metadata) -> bool {
 struct RuntimePaths {
     package: PathBuf,
     sources: BTreeMap<String, RuntimeSourceBinding>,
-    audit: PathBuf,
+    audit: AuditDestination,
 }
 
 impl RuntimePaths {
@@ -481,8 +486,23 @@ impl RuntimePaths {
             reject_existing_symlink_components(&path)?;
             sources.insert(identifier.to_owned(), RuntimeSourceBinding { path });
         }
-        let audit = resolve_binding(root, &runtime.audit.sink)?;
-        reject_existing_symlink_components(&audit)?;
+        // A relative audit path resolves against the runtime directory like
+        // every other binding, so the writer only ever sees an absolute path.
+        let audit_path = match runtime.audit.path.as_deref() {
+            Some(path) => {
+                let path = resolve_binding(root, path)?;
+                reject_existing_symlink_components(&path)?;
+                Some(path)
+            }
+            None => None,
+        };
+        let audit = AuditDestination::from_settings(
+            runtime.audit.destination,
+            audit_path,
+            runtime.audit.rotate_bytes,
+            runtime.audit.retain_days,
+        )
+        .map_err(|_| StartupError::RuntimeInvalid)?;
         Ok(Self {
             package,
             sources,
@@ -668,36 +688,11 @@ fn verifier_issuer_profile(issuer: &IssuerRuntime) -> Result<IssuerProfile, Star
     issuer.profile().ok_or(StartupError::RuntimeInvalid)
 }
 
-async fn build_audit(
-    runtime_root: &Path,
-    reference: &str,
-    path: &Path,
-) -> Result<RelayAudit, StartupError> {
-    let secret = resolve_secret(runtime_root, reference)?;
-    let hasher = AuditChainProfile::production_from_secret_bytes(Zeroizing::new(
-        secret.expose_secret().to_vec(),
-    ))
-    .map_err(|_| StartupError::SecretUnavailable)?;
-    let hasher = hasher.hasher();
-    let sink = Arc::new(
-        DurableSegmentedJsonlSink::open(path, MAXIMUM_AUDIT_SEGMENT_BYTES)
-            .map_err(|_| StartupError::AuditUnavailable)?,
-    );
-    let chain = Arc::new(
-        ChainState::bootstrap_or_start_empty(sink.as_ref(), hasher.clone())
-            .await
-            .map_err(|_| StartupError::AuditUnavailable)?,
-    );
-    let probe_sink = Arc::clone(&sink);
-    let probe_hasher = hasher.clone();
-    let sink_for_events: Arc<dyn AuditSink> = sink;
-    Ok(
-        RelayAudit::new(chain, sink_for_events).with_readiness_check(move || {
-            let sink = Arc::clone(&probe_sink);
-            let hasher = probe_hasher.clone();
-            async move { sink.tail_hash_with_hasher(&hasher).await.is_ok() && sink.ready().await }
-        }),
-    )
+async fn build_audit(destination: AuditDestination) -> Result<RelayAudit, StartupError> {
+    let writer = AuditWriter::open(destination)
+        .await
+        .map_err(|_| StartupError::AuditUnavailable)?;
+    Ok(RelayAudit::new(writer))
 }
 
 fn build_cursor(
@@ -798,7 +793,7 @@ mod tests {
             b"synthetic-test-key-material-32-bytes-long"
         );
 
-        let path = temporary.path().join("audit-integrity-key");
+        let path = temporary.path().join("cursor-integrity-key");
         fs::write(&path, b"synthetic-file-key-material-32-bytes-long").expect("secret writes");
         #[cfg(unix)]
         {
@@ -807,7 +802,7 @@ mod tests {
                 .expect("secret becomes owner-only");
         }
         assert_eq!(
-            resolve_secret(temporary.path(), "secret:file/audit-integrity-key")
+            resolve_secret(temporary.path(), "secret:file/cursor-integrity-key")
                 .expect("file secret")
                 .expose_secret(),
             b"synthetic-file-key-material-32-bytes-long"
@@ -818,7 +813,7 @@ mod tests {
             use std::os::unix::fs::PermissionsExt as _;
             fs::set_permissions(&path, fs::Permissions::from_mode(0o640))
                 .expect("secret becomes unsafe");
-            assert!(resolve_secret(temporary.path(), "secret:file/audit-integrity-key").is_err());
+            assert!(resolve_secret(temporary.path(), "secret:file/cursor-integrity-key").is_err());
         }
     }
 
@@ -997,13 +992,20 @@ mod tests {
 
     #[tokio::test]
     async fn audit_path_replacement_revokes_readiness() {
-        const VARIABLE: &str = "RELAY_V2_STARTUP_TEST_AUDIT_KEY";
-        std::env::set_var(VARIABLE, "synthetic-test-key-material-32-bytes-long");
         let temporary = tempfile::tempdir().expect("temporary root");
-        let path = temporary.path().join("audit").join("events.jsonl");
-        let audit = build_audit(temporary.path(), &format!("secret:env/{VARIABLE}"), &path)
-            .await
-            .expect("audit initializes");
+        let root = temporary
+            .path()
+            .canonicalize()
+            .expect("canonical temporary root");
+        let path = root.join("audit").join("events.jsonl");
+        let destination = AuditDestination::from_settings(
+            registry_platform_audit::AuditDestinationKind::File,
+            Some(path.clone()),
+            None,
+            None,
+        )
+        .expect("file destination");
+        let audit = build_audit(destination).await.expect("audit initializes");
         assert!(audit.ready().await);
 
         fs::remove_file(&path).expect("remove temporary active file");
@@ -1027,7 +1029,7 @@ mod tests {
         fs::write(
             &path,
             format!(
-                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '{address}'}}\npackagePath: missing-package\nsources: {{db: {{path: source.sqlite}}}}\nauthentication: {{issuer: null}}\naudit: {{sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 1}}\n"
+                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '{address}'}}\npackagePath: missing-package\nsources: {{db: {{path: source.sqlite}}}}\nauthentication: {{issuer: null}}\naudit: {{path: var/audit.jsonl}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 1}}\n"
             ),
         )
         .expect("write runtime");
@@ -1094,7 +1096,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
             "{read: {defaultAccessProfile: default, accessProfiles: {default: {access: {scope: registry:record:read}, disclosureProfile: default}}}}",
         );
         let protected_runtime = RelayRuntime::parse_yaml(
-            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18081'}\npackagePath: package\nsources: {records: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
+            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18081'}\npackagePath: package\nsources: {records: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {path: var/audit.jsonl}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
         )
         .expect("closed runtime");
         assert_eq!(
@@ -1122,7 +1124,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
             serde_norway::from_str("{scope: registry:statistics:read}")
                 .expect("protected statistical access");
         let protected_statistics_runtime = RelayRuntime::parse_yaml(
-            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18084'}\npackagePath: package\nsources: {db: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
+            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18084'}\npackagePath: package\nsources: {db: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {path: var/audit.jsonl}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
         )
         .expect("closed runtime");
         assert_eq!(
@@ -1134,7 +1136,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
             "{list: {defaultAccessProfile: default, accessProfiles: {default: {access: public, disclosureProfile: default}}, filters: [], allowUnfiltered: true, orderBy: [id], pagination: {defaultPageSize: 10, maximumPageSize: 20}}}",
         );
         let list_runtime = RelayRuntime::parse_yaml(
-            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18082'}\npackagePath: package\nsources: {records: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
+            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18082'}\npackagePath: package\nsources: {records: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {path: var/audit.jsonl}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
         )
         .expect("closed runtime");
         assert_eq!(
@@ -1146,7 +1148,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
             "{lookups: [{id: by-label, requestBody: {maximumBytes: 128, selectors: {label: {sourceColumn: label, type: string, minimumBytes: 1, maximumBytes: 32}}}, defaultAccessProfile: default, accessProfiles: {default: {access: public, disclosureProfile: default}}}]}",
         );
         let mut lookup_runtime = RelayRuntime::parse_yaml(
-            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18083'}\npackagePath: package\nsources: {records: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
+            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18083'}\npackagePath: package\nsources: {records: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {path: var/audit.jsonl}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
         )
         .expect("closed runtime");
         assert_eq!(
@@ -1168,7 +1170,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
         second_resource.id = "second-record".into();
         contract.resources.push(second_resource);
         let mut runtime = RelayRuntime::parse_yaml(
-            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18084'}\npackagePath: package\nsources: {db: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
+            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18084'}\npackagePath: package\nsources: {db: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {path: var/audit.jsonl}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
         )
         .expect("closed runtime");
 
@@ -1208,46 +1210,113 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
         assert_eq!(validate_runtime_contract(&runtime, &contract), Ok(()));
     }
 
-    /// Write one loadable runtime whose audit sink is `sink`.
-    fn runtime_with_audit_sink(root: &Path, sink: &str) -> PathBuf {
+    /// Write one loadable runtime whose audit mapping is `audit`.
+    fn runtime_with_audit(root: &Path, audit: &str) -> PathBuf {
         let path = root.join("runtime.yaml");
         fs::write(
             &path,
             format!(
-                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:0'}}\npackagePath: package\nsources: {{db: {{path: source.sqlite}}}}\nauthentication: {{issuer: null}}\naudit: {{sink: {sink}, integrityKeyRef: secret:env/KEY}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 1}}\n"
+                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:0'}}\npackagePath: package\nsources: {{db: {{path: source.sqlite}}}}\nauthentication: {{issuer: null}}\naudit: {audit}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 1}}\n"
             ),
         )
         .expect("write runtime");
         path
     }
 
+    /// Write one loadable runtime whose audit file is `path`.
+    fn runtime_with_audit_path(root: &Path, path: &str) -> PathBuf {
+        runtime_with_audit(root, &format!("{{path: '{path}'}}"))
+    }
+
+    fn audit_file_path(loaded: &LoadedRuntime) -> &Path {
+        match &loaded.paths.audit {
+            AuditDestination::File(file) => file.path(),
+            AuditDestination::Stdout | AuditDestination::Stderr => {
+                panic!("a file audit destination")
+            }
+        }
+    }
+
     #[test]
-    fn a_relative_audit_sink_is_proven_against_the_resolved_runtime_binding() {
+    fn a_relative_audit_path_resolves_to_an_absolute_file_destination() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let root = temporary
+            .path()
+            .canonicalize()
+            .expect("canonical temporary root");
+        let path = runtime_with_audit(
+            &root,
+            "{path: var/audit.jsonl, rotateBytes: 1048576, retainDays: 7}",
+        );
+        let loaded = LoadedRuntime::load(&path).expect("loadable runtime");
+        let AuditDestination::File(file) = &loaded.paths.audit else {
+            panic!("a file audit destination");
+        };
+        assert_eq!(file.path(), root.join("var/audit.jsonl"));
+        assert_eq!(file.rotate_bytes(), 1_048_576);
+        assert_eq!(file.retain_days(), 7);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_audit_path_is_rejected() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let root = temporary
+            .path()
+            .canonicalize()
+            .expect("canonical temporary root");
+        let elsewhere = tempfile::tempdir().expect("temporary elsewhere");
+        std::os::unix::fs::symlink(elsewhere.path(), root.join("var")).expect("symlink");
+        let path = runtime_with_audit_path(&root, "var/audit.jsonl");
+        assert_eq!(
+            LoadedRuntime::load(&path).err(),
+            Some(StartupError::RuntimeInvalid)
+        );
+    }
+
+    #[test]
+    fn a_stdout_audit_destination_cannot_be_proven_persistent() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let root = temporary
+            .path()
+            .canonicalize()
+            .expect("canonical temporary root");
+        let path = runtime_with_audit(&root, "{destination: stdout}");
+        let loaded = LoadedRuntime::load(&path).expect("loadable runtime");
+        assert_eq!(loaded.paths.audit, AuditDestination::Stdout);
+        assert_eq!(
+            Err(StartupError::AuditRootRequiresFile),
+            require_persistent_audit_file(&loaded, &root)
+        );
+    }
+
+    #[test]
+    fn a_relative_audit_path_is_proven_against_the_resolved_runtime_binding() {
         let temporary = tempfile::tempdir().expect("temporary root");
         let root = temporary
             .path()
             .canonicalize()
             .expect("canonical temporary root");
         let ephemeral = tempfile::tempdir().expect("temporary ephemeral root");
-        let path = runtime_with_audit_sink(&root, "var/audit.jsonl");
+        let path = runtime_with_audit_path(&root, "var/audit.jsonl");
         let loaded = LoadedRuntime::load(&path).expect("loadable runtime");
 
-        // The sink is configured relative to the runtime file, so proving it
+        // The path is configured relative to the runtime file, so proving it
         // against the runtime directory is what shows Relay compared the
         // destination its own binding resolution produced.
-        assert_eq!(Ok(()), require_persistent_audit_sink(&loaded, &root));
+        assert_eq!(Ok(()), require_persistent_audit_file(&loaded, &root));
         assert_eq!(
             Err(StartupError::AuditRoot(PersistentRootFault::Outside)),
-            require_persistent_audit_sink(&loaded, ephemeral.path())
+            require_persistent_audit_file(&loaded, ephemeral.path())
         );
         assert_eq!(
             Err(StartupError::AuditRoot(PersistentRootFault::Root)),
-            require_persistent_audit_sink(&loaded, Path::new("var/lib/relay/audit"))
+            require_persistent_audit_file(&loaded, Path::new("var/lib/relay/audit"))
         );
     }
 
     #[test]
-    fn an_absolute_audit_sink_outside_the_declared_root_is_refused() {
+    fn an_absolute_audit_path_outside_the_declared_root_is_refused() {
         let temporary = tempfile::tempdir().expect("temporary root");
         let root = temporary
             .path()
@@ -1262,7 +1331,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
             .expect("canonical ephemeral root");
         let declared = root.join("audit");
         fs::create_dir(&declared).expect("declared persistent root");
-        let path = runtime_with_audit_sink(
+        let path = runtime_with_audit_path(
             &root,
             &ephemeral_root.join("events.jsonl").display().to_string(),
         );
@@ -1270,7 +1339,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
 
         assert_eq!(
             Err(StartupError::AuditRoot(PersistentRootFault::Outside)),
-            require_persistent_audit_sink(&loaded, &declared)
+            require_persistent_audit_file(&loaded, &declared)
         );
     }
 
@@ -1286,23 +1355,24 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
             .path()
             .canonicalize()
             .expect("canonical ephemeral root");
-        let path = runtime_with_audit_sink(&root, "var/audit.jsonl");
+        let path = runtime_with_audit_path(&root, "var/audit.jsonl");
         let loaded = LoadedRuntime::load(&path).expect("loadable runtime");
 
-        // The pathname now names a runtime whose sink leaves the root. The
-        // proof binds to what was loaded, which is also what `check` goes on
-        // to prepare, so the replacement never becomes the sink that passed;
-        // a fresh load of the pathname sees the replacement and is refused.
-        runtime_with_audit_sink(
+        // The pathname now names a runtime whose audit file leaves the root.
+        // The proof binds to what was loaded, which is also what `check` goes
+        // on to prepare, so the replacement never becomes the file that
+        // passed; a fresh load of the pathname sees the replacement and is
+        // refused.
+        runtime_with_audit_path(
             &root,
             &ephemeral_root.join("events.jsonl").display().to_string(),
         );
-        assert_eq!(Ok(()), require_persistent_audit_sink(&loaded, &root));
-        assert_eq!(loaded.paths.audit, root.join("var/audit.jsonl"));
+        assert_eq!(Ok(()), require_persistent_audit_file(&loaded, &root));
+        assert_eq!(audit_file_path(&loaded), root.join("var/audit.jsonl"));
         let replaced = LoadedRuntime::load(&path).expect("loadable replacement");
         assert_eq!(
             Err(StartupError::AuditRoot(PersistentRootFault::Outside)),
-            require_persistent_audit_sink(&replaced, &root)
+            require_persistent_audit_file(&replaced, &root)
         );
     }
 
@@ -1313,7 +1383,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
         let mut file = fs::File::create(&path).expect("runtime file");
         writeln!(
             file,
-            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:0'}}\npackagePath: package\nsources: {{db: {{path: source.sqlite}}}}\nauthentication: {{issuer: null}}\naudit: {{sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 1}}\nunknown: true"
+            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:0'}}\npackagePath: package\nsources: {{db: {{path: source.sqlite}}}}\nauthentication: {{issuer: null}}\naudit: {{path: var/audit.jsonl}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 1}}\nunknown: true"
         )
         .expect("write runtime");
         assert_eq!(load_runtime(&path), Err(StartupError::RuntimeInvalid));

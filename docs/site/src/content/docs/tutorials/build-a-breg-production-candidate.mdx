@@ -36,6 +36,10 @@ from there.
 
 ## Before you start
 
+The runtime configuration in this source-preview tutorial uses the unreleased shared audit writer.
+Use the [matching source-built tool pair](../../operate/breg/#obtain-the-runtime) before continuing;
+the released installer from the earlier tutorial does not supply this contract.
+
 Open a terminal in the directory that holds `tutorial-work`, or in any directory you want to work
 in. Create the project this tutorial builds from:
 
@@ -277,6 +281,8 @@ authentication:
     purpose: registry_purpose
 audit:
   hashKeyRef: secret:file/audit-key
+  destination: file
+  path: $PWD/tutorial-work/candidate/audit/breg.jsonl
 cursor:
   secretRef: secret:file/cursor-key
 EOF

@@ -10,9 +10,9 @@ use serde_json::{json, Value};
 const PSEUDONYM: &str =
     "hmac-sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const FAILURE: &str = "error[evidence.audit.inspection-failed] local audit history $: \
-    Evidence could not verify the stopped local audit history.\n  \
+    Evidence could not read the stopped local audit history.\n  \
     next: Stop the local session with evidencectl dev stop and rerun audit show; \
-    if it is already stopped, its retained audit history did not verify.\n";
+    if it is already stopped, its retained audit history could not be read.\n";
 
 #[test]
 fn audit_help_is_nested_required_and_hides_test_seams() {
@@ -115,6 +115,34 @@ fn access_only_view_prints_authorized_without_claiming_release() {
         format!("ACCESS AUTHORIZED adult-status age-check requester={PSEUDONYM}\n")
     );
     assert!(!String::from_utf8_lossy(&output.stdout).contains("RELEASE"));
+}
+
+#[test]
+fn multi_stage_view_prints_one_access_line_per_source_call() {
+    let fixture = Fixture::new();
+    let mut view = successful_view();
+    let events = view["events"].as_array_mut().expect("events");
+    let mut fetch = events[0].clone();
+    fetch["occurredAt"] = json!("2026-08-04T00:00:01.500Z");
+    events.insert(1, fetch);
+    fixture.write_core_json(&view);
+    let output = fixture.show();
+    assert_success(&output);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!(
+            "ACCESS AUTHORIZED adult-status age-check requester={PSEUDONYM}\n\
+             ACCESS AUTHORIZED adult-status age-check requester={PSEUDONYM}\n\
+             DISCLOSURE RELEASED is_adult\n"
+        )
+    );
+
+    let mut view = successful_view();
+    let events = view["events"].as_array_mut().expect("events");
+    let access = events[0].clone();
+    events.push(access);
+    fixture.write_core_json(&view);
+    assert_closed_failure(&fixture.show(), "access after release");
 }
 
 #[test]
@@ -808,11 +836,11 @@ fn damaged_retained_session_state_is_not_reported_as_no_session() {
     );
 }
 
-/// A stopped session that answered no request leaves a verified chain with
-/// no operation. The core reports that with its own exit status, and the
-/// refusal names it instead of the closed inspection failure.
+/// A stopped session that answered no request leaves a read local audit
+/// history with no operation. The core reports that with its own exit
+/// status, and the refusal names it instead of the closed inspection failure.
 #[test]
-fn a_verified_history_without_an_operation_is_named() {
+fn a_read_history_without_an_operation_is_named() {
     let fixture = Fixture::new();
     fs::write(fixture.evidence.with_extension("empty"), b"").expect("empty marker");
 

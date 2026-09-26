@@ -2,7 +2,7 @@
 //!
 //! Evidence refuses, at startup, any deployment artifact whose permissions or
 //! ownership are wrong: a bundle it could write to, a secret readable past its
-//! owner, an audit chain another user could edit. Each refusal is correct and
+//! owner, an audit file another user could edit. Each refusal is correct and
 //! each names one artifact, so an operator who has just run `chmod -R` over a
 //! project discovers them one restart at a time.
 //!
@@ -37,6 +37,7 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
+use registry_platform_audit::{AuditDestination, AuditDestinationKind};
 use serde::{Deserialize, Serialize};
 use serde_norway::Value as YamlValue;
 
@@ -371,36 +372,133 @@ fn check_signer(project: &Path, runtime: &YamlValue, runtime_path: &Path) -> Che
     run.finish()
 }
 
-/// The audit chain and its lock companion, when they exist. Absence is not a
-/// finding: the service creates both on first write.
+/// The audit destination, held to the settings rules the service applies and,
+/// for a file, to the rule the audit writer applies when it opens, and its lock
+/// companion when it exists. Absence of the file is not a finding: the service
+/// creates both on first write. A `stdout` destination leaves nothing on this
+/// host to inspect.
 fn check_audit(project: &Path, runtime: &YamlValue, runtime_path: &Path) -> Check {
     let mut run = CheckRun::new("audit", project);
-    let Some(path) = runtime
-        .get("auditStorage")
-        .and_then(|storage| storage.get("path"))
-        .and_then(YamlValue::as_str)
-    else {
+    let Some(audit) = runtime.get("audit") else {
         return run.finish();
     };
-    let path = resolve_against(runtime_path, project, Path::new(path));
-    let lock = lock_companion(&path);
-    for candidate in [path, lock] {
-        if !candidate.exists() {
-            continue;
+    let kind = match audit.get("destination").map(YamlValue::as_str) {
+        None | Some(Some("file")) => AuditDestinationKind::File,
+        Some(Some("stdout")) => AuditDestinationKind::Stdout,
+        Some(_) => {
+            run.refuse(
+                runtime_path,
+                "declares an audit destination that is neither file nor stdout".to_owned(),
+            );
+            return run.finish();
         }
-        let Some(metadata) = run.stat(&candidate) else {
-            continue;
+    };
+    let declared_path = match audit.get("path").map(YamlValue::as_str) {
+        None => None,
+        Some(Some(path)) => Some(resolve_against(runtime_path, project, Path::new(path))),
+        Some(None) => {
+            run.refuse(
+                runtime_path,
+                "declares an audit path that is not a string".to_owned(),
+            );
+            return run.finish();
+        }
+    };
+    let Some(rotate_bytes) = audit_setting(&mut run, runtime_path, audit, "rotateBytes") else {
+        return run.finish();
+    };
+    let Some(retain_days) = audit_setting(&mut run, runtime_path, audit, "retainDays") else {
+        return run.finish();
+    };
+    let Ok(retain_days) = retain_days.map(u32::try_from).transpose() else {
+        run.refuse(
+            runtime_path,
+            "declares audit retainDays out of range".to_owned(),
+        );
+        return run.finish();
+    };
+    // The writer holds only absolute paths; a current-directory project
+    // resolves a relative one against the working directory.
+    let absolute = match declared_path
+        .as_deref()
+        .map(std::path::absolute)
+        .transpose()
+    {
+        Ok(absolute) => absolute,
+        Err(error) => {
+            let path = declared_path.as_deref().unwrap_or(runtime_path);
+            run.refuse(
+                path,
+                format!("cannot be resolved to an absolute path: {error}"),
+            );
+            return run.finish();
+        }
+    };
+    let destination =
+        match AuditDestination::from_settings(kind, absolute, rotate_bytes, retain_days) {
+            Ok(destination) => destination,
+            Err(error) => {
+                run.refuse(
+                    runtime_path,
+                    format!("declares audit settings the service refuses: {error}"),
+                );
+                return run.finish();
+            }
         };
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            run.refuse(&candidate, "is not a regular file".to_owned());
-            continue;
-        }
-        if metadata.permissions().mode() & 0o077 != 0 {
-            run.refuse(&candidate, group_or_other(&metadata, 0o600));
-        }
-        require_sole_owner(&mut run, &candidate, &metadata);
+    let (AuditDestination::File(_), Some(path)) = (&destination, declared_path) else {
+        run.note(
+            "stdout destination: the collector reading the service's standard output owns \
+             durability, rotation, and retention"
+                .to_owned(),
+        );
+        return run.finish();
+    };
+    run.read_declaration();
+    if let Err(error) = destination.check_writable() {
+        run.refuse(
+            &path,
+            format!("is a destination the audit writer refuses: {error}"),
+        );
     }
+    let lock = lock_companion(&path);
+    if !lock.exists() {
+        return run.finish();
+    }
+    let Some(metadata) = run.stat(&lock) else {
+        return run.finish();
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        run.refuse(&lock, "is not a regular file".to_owned());
+        return run.finish();
+    }
+    if metadata.permissions().mode() & 0o077 != 0 {
+        run.refuse(&lock, group_or_other(&metadata, 0o600));
+    }
+    require_sole_owner(&mut run, &lock, &metadata);
     run.finish()
+}
+
+/// An optional unsigned audit setting, or `None` after refusing one that is
+/// not an unsigned integer.
+fn audit_setting(
+    run: &mut CheckRun,
+    runtime_path: &Path,
+    audit: &YamlValue,
+    name: &str,
+) -> Option<Option<u64>> {
+    match audit.get(name) {
+        None => Some(None),
+        Some(value) => match value.as_u64() {
+            Some(value) => Some(Some(value)),
+            None => {
+                run.refuse(
+                    runtime_path,
+                    format!("declares audit {name} that is not an unsigned integer"),
+                );
+                None
+            }
+        },
+    }
 }
 
 /// One requirement's declared acquisition, projected far enough to say what the

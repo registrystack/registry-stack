@@ -3,12 +3,21 @@
 
 use std::{path::Path, time::Duration};
 
+use registry_platform_audit::AuditEntry;
+use serde_json::{json, Value};
+use uuid::Uuid;
+
+use crate::audit::RegistryAudit;
 use crate::mutation::{erase_expired_action_evidence, MutationError};
 use crate::postgres::{
     verify_catalog_identity_for_catalog, verify_migration_role, ConnectionConfig,
     ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey, SqlIdentifier,
 };
 use crate::runtime_config::load_runtime_config;
+
+/// Schema of the request and response entries of one expired-Evidence
+/// erasure.
+pub const EVIDENCE_RETENTION_AUDIT_SCHEMA: &str = "breg-evidence-retention-audit/v1";
 
 /// Package-bound authority for erasing expired protected Evidence material.
 /// The migration identity, actual target catalog and registry interlock are
@@ -22,6 +31,7 @@ pub struct ActionEvidenceRetentionOperatorService {
     runtime_role: SqlIdentifier,
     lock_timeout: Duration,
     statement_timeout: Duration,
+    audit: RegistryAudit,
 }
 
 impl ActionEvidenceRetentionOperatorService {
@@ -56,6 +66,9 @@ impl ActionEvidenceRetentionOperatorService {
             runtime_role: config.database().roles().runtime().clone(),
             lock_timeout: config.operational_timeouts().migration_lock,
             statement_timeout: config.operational_timeouts().migration_statement,
+            audit: RegistryAudit::open_companion(&config)
+                .await
+                .map_err(|_| MutationError::Unavailable)?,
         })
     }
 
@@ -68,6 +81,7 @@ impl ActionEvidenceRetentionOperatorService {
         migration_connection: ConnectionConfig,
         migration_role: SqlIdentifier,
         runtime_role: SqlIdentifier,
+        audit: RegistryAudit,
     ) -> Self {
         Self {
             expected,
@@ -78,9 +92,16 @@ impl ActionEvidenceRetentionOperatorService {
             runtime_role,
             lock_timeout: Duration::from_secs(5),
             statement_timeout: Duration::from_secs(10),
+            audit,
         }
     }
 
+    /// Erase the retained Evidence material whose expiry is before `before`.
+    ///
+    /// The request entry, naming the threshold, is accepted before the
+    /// erasure transaction opens, so an audit outage erases nothing. Its
+    /// response records the erased count once the transaction commits, or
+    /// the failure when it does not.
     pub async fn erase_expired(
         &self,
         before: chrono::DateTime<chrono::Utc>,
@@ -88,6 +109,108 @@ impl ActionEvidenceRetentionOperatorService {
         if before > chrono::Utc::now() {
             return Err(MutationError::InvalidRequest);
         }
+        let correlation = Uuid::new_v4().to_string();
+        let record = |phase: &str, outcome: &str| -> Value {
+            json!({
+                "kind": "evidenceRetention",
+                "phase": phase,
+                "outcome": outcome,
+                "packageRevision": self.expected.package_revision,
+                "actor": "breg:evidence-retention-operator",
+                "before": before.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                "correlation": correlation,
+            })
+        };
+        let mut attempt = self
+            .audit
+            .begin(
+                AuditEntry::request(
+                    EVIDENCE_RETENTION_AUDIT_SCHEMA,
+                    correlation.clone(),
+                    record("attempt", "started"),
+                ),
+                record("terminal", "unfinished"),
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        let erased = match self.erase_in_transaction(before).await {
+            Ok(Erasure::Committed(erased)) => Ok(erased),
+            // A commit that returned an error may still have committed, so
+            // the outcome recorded for this destructive operation is the one
+            // the database holds, read on a fresh connection.
+            Ok(Erasure::Unacknowledged { erased, cutoff }) => {
+                match self.expired_evidence_remains(cutoff).await {
+                    Some(false) => Ok(erased),
+                    resolved => {
+                        let outcome = if resolved == Some(true) {
+                            "failed"
+                        } else {
+                            "unfinished"
+                        };
+                        if attempt.respond(record("terminal", outcome)).await.is_err() {
+                            tracing::error!(
+                                "the unacknowledged Evidence retention's response audit entry was not recorded"
+                            );
+                        }
+                        return Err(MutationError::Unavailable);
+                    }
+                }
+            }
+            Err(error) => Err(error),
+        };
+        match erased {
+            Ok(erased) => {
+                let mut response = record("terminal", "erased");
+                response["erased"] = json!(erased);
+                // The erasure committed; a refused entry reports the command
+                // unavailable, and the writer then refuses every later entry.
+                attempt
+                    .respond(response)
+                    .await
+                    .map_err(|_| MutationError::Unavailable)?;
+                Ok(erased)
+            }
+            Err(error) => {
+                if attempt.respond(record("terminal", "failed")).await.is_err() {
+                    tracing::error!(
+                        "the failed Evidence retention's response audit entry was not recorded"
+                    );
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Whether retained Evidence expiring at or before `cutoff` remains, read
+    /// on a fresh connection after an erasure commit returned an error.
+    /// `None` when it cannot be read.
+    async fn expired_evidence_remains(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> Option<bool> {
+        let pool = self.migration_connection.build_pool().ok()?;
+        let client = pool.get().await.ok()?;
+        let row = client
+            .query_one(
+                "SELECT EXISTS (SELECT 1 FROM registry_internal.registry_action_evidence_uses
+                                 WHERE expires_at <= $1)
+                     OR EXISTS (SELECT 1 FROM registry_internal.registry_request_evidence_uses
+                                 WHERE expires_at <= $1)",
+                &[&cutoff],
+            )
+            .await
+            .ok()?;
+        row.try_get(0).ok()
+    }
+
+    /// Erase the expired material in one transaction. A commit that returned
+    /// an error, which does not prove the transaction rolled back, is
+    /// reported with the count it would have erased and the cutoff it erased
+    /// through; every earlier error is returned as one.
+    async fn erase_in_transaction(
+        &self,
+        before: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Erasure, MutationError> {
         let pool = self
             .migration_connection
             .build_pool()
@@ -127,13 +250,27 @@ impl ActionEvidenceRetentionOperatorService {
         if !ready {
             return Err(MutationError::Unavailable);
         }
-        let erased = erase_expired_action_evidence(&transaction, before).await?;
-        transaction
-            .commit()
+        // The cutoff the deletion applies, fixed by the transaction's start.
+        let cutoff: chrono::DateTime<chrono::Utc> = transaction
+            .query_one("SELECT LEAST($1, CURRENT_TIMESTAMP)", &[&before])
             .await
-            .map_err(|_| MutationError::Unavailable)?;
-        Ok(erased)
+            .map_err(|_| MutationError::Unavailable)?
+            .get(0);
+        let erased = erase_expired_action_evidence(&transaction, before).await?;
+        if transaction.commit().await.is_err() {
+            return Ok(Erasure::Unacknowledged { erased, cutoff });
+        }
+        Ok(Erasure::Committed(erased))
     }
+}
+
+/// How an erasure transaction ended once every statement in it succeeded.
+enum Erasure {
+    Committed(u64),
+    Unacknowledged {
+        erased: u64,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    },
 }
 
 /// Erase only material whose declared expiry has passed. Diagnostics contain

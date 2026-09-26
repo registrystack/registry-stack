@@ -6,7 +6,9 @@ use axum::http::{header, HeaderValue, Method, Request, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Router;
-use registry_platform_audit::{ChainState, JsonlFileSink};
+use registry_platform_audit::{
+    AuditDestination, AuditEntry, AuditPhase, AuditWriter, FileDestination,
+};
 use registry_platform_httpsec::{
     body_limit_problem_response, corp_conditional, request_body_limit, security_headers,
     CorsPolicy, CspBuilder, Problem,
@@ -15,12 +17,12 @@ use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
     fetch_discovery_with_policy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifier,
 };
-use registry_platform_testing::{assert_chain_integrity, oidc_verifier_config, MockIdp};
+use registry_platform_testing::{assert_json_absent_strings, oidc_verifier_config, MockIdp};
 use serde_json::json;
 use tower::{service_fn, Layer, ServiceExt};
 
 #[tokio::test]
-async fn sample_axum_app_wires_middleware_oidc_and_audit_chain() {
+async fn sample_axum_app_wires_middleware_oidc_and_audit_writer() {
     let app = Router::new()
         .route("/ok", get(|| async { "ok" }))
         .route(
@@ -157,19 +159,51 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_chain() {
     idp.stop().await;
 
     let dir = tempfile::tempdir().expect("tempdir creates");
-    let sink = JsonlFileSink::with_rotation(dir.path().join("audit.jsonl"), 0, 1);
-    let chain = ChainState::bootstrap_unkeyed_dev_only(&sink)
+    let destination =
+        FileDestination::new(dir.path().join("audit").join("audit.jsonl")).expect("absolute path");
+    let path = destination.path().to_path_buf();
+    let writer = AuditWriter::open(AuditDestination::File(destination))
         .await
-        .expect("empty sink bootstraps");
-    let first = chain
-        .append(&sink, json!({ "event": "first" }))
+        .expect("file destination opens");
+    let correlation = "request-1";
+    writer
+        .append(AuditEntry::request(
+            "registry.test.audit/v1",
+            correlation,
+            json!({ "operationId": "echo" }),
+        ))
         .await
-        .expect("first audit append");
-    let mut second = chain
-        .append(&sink, json!({ "event": "second" }))
+        .expect("request entry is accepted");
+    writer
+        .append(AuditEntry::response(
+            "registry.test.audit/v1",
+            correlation,
+            json!({ "operationId": "echo", "outcome": "success" }),
+        ))
         .await
-        .expect("second audit append");
-    assert_chain_integrity(&[first.clone(), second.clone()]).expect("chain verifies");
-    second.record["event"] = json!("tampered");
-    assert!(assert_chain_integrity(&[first, second]).is_err());
+        .expect("response entry is accepted");
+    assert!(writer.ready().await);
+
+    let entries: Vec<serde_json::Value> = std::fs::read_to_string(&path)
+        .expect("audit file reads")
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("each audit line is json"))
+        .collect();
+    assert_eq!(entries.len(), 2);
+    let phases: Vec<AuditPhase> = entries
+        .iter()
+        .map(|entry| serde_json::from_value(entry["phase"].clone()).expect("phase parses"))
+        .collect();
+    assert_eq!(phases, vec![AuditPhase::Request, AuditPhase::Response]);
+    for entry in &entries {
+        assert_eq!(entry["correlation"], correlation);
+        assert_json_absent_strings(entry, ["subject-1", "client-a", token.as_str()])
+            .expect("audit entries carry no principal, client, or token");
+        for chain_field in ["prev_hash", "record_hash", "prevHash", "recordHash"] {
+            assert!(
+                entry.get(chain_field).is_none(),
+                "{chain_field} must not appear"
+            );
+        }
+    }
 }

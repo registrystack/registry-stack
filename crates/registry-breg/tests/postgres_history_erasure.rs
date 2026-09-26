@@ -86,10 +86,11 @@ use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_project_json, FieldTypeSource};
 use registry_breg::field_encryption_backfill::{
     erase_field_encryption_history, FieldEncryptionHistoryErasureError,
-    FieldEncryptionHistoryErasureRequest,
+    FieldEncryptionHistoryErasureRequest, FIELD_ENCRYPTION_AUDIT_SCHEMA,
 };
 use registry_breg::history_erasure::{
-    erase_record_history, HistoryErasureRequest, HistoryErasureTimeouts, RecordHistoryErasureTarget,
+    erase_record_history, HistoryErasureError, HistoryErasureRequest, HistoryErasureTimeouts,
+    RecordHistoryErasureTarget, HISTORY_ERASURE_AUDIT_SCHEMA,
 };
 use registry_breg::mutation::install_mutation_schema;
 use registry_breg::postgres::{
@@ -260,7 +261,7 @@ async fn audited_erasure_deletes_targeted_history_and_makes_bookmark_unavailable
             lock_key,
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
                 .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: OPERATOR_CANARY,
             reason: REASON_CANARY,
             target: RecordHistoryErasureTarget::new(ENTITY, record_id, 1),
@@ -380,14 +381,14 @@ async fn audited_erasure_deletes_targeted_history_and_makes_bookmark_unavailable
         "a consumed erased key answers with a terminal conflict"
     );
     transaction.commit().await.expect("resolution commits");
-    assert_erasure_audit_is_minimized(&database, &audit_profile).await;
+    assert_erasure_audit_is_minimized(&database);
 
     let http = snapshot_client_http(
         &database,
         &migration,
         Arc::new(registry),
         expected.clone(),
-        audit_profile.clone(),
+        database.audit(audit_profile.clone()),
     )
     .await;
     let request = |reference: SnapshotReference| {
@@ -515,7 +516,7 @@ async fn erasure_preserves_change_request_target_and_proposal_payloads() {
             lock_key,
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
                 .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: OPERATOR_CANARY,
             reason: REASON_CANARY,
             target: RecordHistoryErasureTarget::new(ENTITY, erased_record, 1),
@@ -562,14 +563,9 @@ async fn erasure_preserves_change_request_target_and_proposal_payloads() {
         "a request targeting a kept record keeps its proposal snapshot"
     );
 
-    assert_erasure_audit_is_minimized(&database, &audit_profile).await;
-    let envelopes = database
-        .admin
-        .query("SELECT envelope FROM registry_internal.registry_audit", &[])
-        .await
-        .expect("administrator can inspect audit");
-    for row in &envelopes {
-        let text = String::from_utf8(row.get::<_, Vec<u8>>(0)).expect("audit is utf8");
+    assert_erasure_audit_is_minimized(&database);
+    for entry in database.audit_entries() {
+        let text = entry.to_string();
         assert!(!text.contains("cr-scrub-canary"));
         assert!(!text.contains("cr-kept-canary"));
     }
@@ -868,7 +864,7 @@ async fn field_encryption_erasure_scrubs_orphan_create_and_preserves_post_flip_s
             lock_key,
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
                 .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: "field-encryption-operator",
             reason: "destroy pre-flip request snapshots",
             registry: &registry,
@@ -985,7 +981,7 @@ async fn field_encryption_erasure_uses_flip_provenance_for_structured_plaintext(
             lock_key,
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
                 .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: "field-encryption-operator",
             reason: "erase structured pre-flip plaintext",
             registry: &registry,
@@ -1056,7 +1052,7 @@ async fn field_encryption_erasure_uses_flip_provenance_for_structured_plaintext(
             lock_key,
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
                 .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: "generic-erasure-operator",
             reason: "unrelated generic erasure",
             target: RecordHistoryErasureTarget::new(ENTITY, unrelated_record_id, 1),
@@ -1073,7 +1069,7 @@ async fn field_encryption_erasure_uses_flip_provenance_for_structured_plaintext(
             lock_key,
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
                 .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: "field-encryption-operator",
             reason: "must not repair unrelated coverage",
             registry: &registry,
@@ -1087,13 +1083,7 @@ async fn field_encryption_erasure_uses_flip_provenance_for_structured_plaintext(
     );
     let replay_state = migration
         .query_one(
-            "SELECT unavailable_after_position IS NOT NULL,
-                    (SELECT count(*)::bigint
-                       FROM registry_internal.registry_audit
-                      WHERE convert_from(envelope, 'UTF8')::jsonb #>> '{record,schema}'
-                                = 'breg-field-encryption-audit/v1'
-                        AND convert_from(envelope, 'UTF8')::jsonb #>> '{record,phase}'
-                                = 'terminal')
+            "SELECT unavailable_after_position IS NOT NULL
                FROM registry_internal.registry_commit_head
               WHERE singleton",
             &[],
@@ -1101,7 +1091,15 @@ async fn field_encryption_erasure_uses_flip_provenance_for_structured_plaintext(
         .await
         .expect("completed lifecycle replay state resolves");
     assert!(replay_state.get::<_, bool>(0));
-    assert_eq!(replay_state.get::<_, i64>(1), 1);
+    assert_eq!(field_encryption_terminal_entries(&database).len(), 1);
+    // The refused replay still answers the lifecycle request it wrote.
+    let last = database
+        .audit_entries()
+        .pop()
+        .expect("the replay's entries");
+    assert_eq!(last["schema"], FIELD_ENCRYPTION_AUDIT_SCHEMA);
+    assert_eq!(last["phase"], "response");
+    assert_eq!(last["record"]["outcome"], "unfinished");
 
     migration_task.abort();
     database.cleanup().await;
@@ -1227,7 +1225,7 @@ async fn field_encryption_erasure_resumes_rebaseline_after_final_erase_crash() {
             lock_key,
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
                 .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: "field-encryption-operator",
             reason: "must not repair generic coverage",
             registry: &registry,
@@ -1257,20 +1255,62 @@ async fn field_encryption_erasure_resumes_rebaseline_after_final_erase_crash() {
     insert_erase_field_flip(&transaction, "household").await;
     transaction.commit().await.expect("flip marker persists");
 
-    database
-        .admin
-        .batch_execute(
-            "ALTER TABLE registry_internal.registry_audit
-                 ADD CONSTRAINT registry_audit_refuse_field_terminal_for_test
-                 CHECK (
-                     convert_from(envelope, 'UTF8')::jsonb #>> '{record,schema}'
-                         <> 'breg-field-encryption-audit/v1'
-                     OR convert_from(envelope, 'UTF8')::jsonb #>> '{record,phase}'
-                         <> 'terminal'
-                 )",
+    // The destination refuses the lifecycle's request entry. It is appended
+    // before the first scrub, so no request snapshot, record history,
+    // lifecycle progress, or coverage changes.
+    let entries_before_refusal = database.audit_entries().len();
+    database.audit_capture().fail_after(0);
+    let request_refusal = erase_field_encryption_history(
+        &mut migration,
+        FieldEncryptionHistoryErasureRequest {
+            expected: &expected,
+            migration_role: &database.migration_role,
+            lock_key,
+            timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
+                .unwrap(),
+            audit: &database.audit(audit_profile.clone()),
+            operator_reference: "field-encryption-operator",
+            reason: "request audit precedes the first scrub",
+            registry: &registry,
+        },
+    )
+    .await
+    .expect_err("a refused field request entry stops the lifecycle");
+    database.audit_capture().restore();
+    assert_eq!(
+        request_refusal,
+        FieldEncryptionHistoryErasureError::Unavailable
+    );
+    assert_eq!(database.audit_entries().len(), entries_before_refusal);
+    let untouched = migration
+        .query_one(
+            "SELECT
+                 (SELECT count(*) FROM registry_internal.registry_field_encryption_lifecycle_progress)::bigint,
+                 (SELECT count(*) FROM registry_internal.registry_request_targets
+                   WHERE erased_at IS NULL AND base_snapshot IS NOT NULL)::bigint,
+                 (SELECT count(*) FROM registry_internal.registry_request_proposals
+                   WHERE erased_at IS NULL AND snapshot IS NOT NULL)::bigint,
+                 (SELECT count(*) FROM registry_internal.registry_revisions
+                   WHERE erased_at IS NULL AND snapshot IS NOT NULL)::bigint,
+                 (SELECT unavailable_after_position IS NOT NULL
+                    FROM registry_internal.registry_commit_head WHERE singleton)",
+            &[],
         )
         .await
-        .expect("test refusal constraint installs");
+        .expect("refused lifecycle state reads");
+    assert_eq!(untouched.get::<_, i64>(0), 0);
+    assert_eq!(untouched.get::<_, i64>(1), 1);
+    assert_eq!(untouched.get::<_, i64>(2), 1);
+    assert_eq!(untouched.get::<_, i64>(3), 1);
+    assert!(untouched.get::<_, bool>(4));
+
+    // The destination refuses the lifecycle's terminal entry. It is appended
+    // after the closing commit, so the lifecycle answers an outage over
+    // committed coverage: the documented crash gap, in which the closing
+    // commit carries no terminal entry.
+    database
+        .audit_capture()
+        .fail_on(FIELD_ENCRYPTION_AUDIT_SCHEMA, "terminal");
     let audit_failure = erase_field_encryption_history(
         &mut migration,
         FieldEncryptionHistoryErasureRequest {
@@ -1279,87 +1319,49 @@ async fn field_encryption_erasure_resumes_rebaseline_after_final_erase_crash() {
             lock_key,
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
                 .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: "field-encryption-operator",
-            reason: "terminal audit must share the coverage commit",
+            reason: "terminal audit follows the coverage commit",
             registry: &registry,
         },
     )
     .await
-    .expect_err("field terminal audit refusal rolls the rebaseline back");
+    .expect_err("a refused field terminal entry answers an outage");
+    database.audit_capture().restore();
     assert_eq!(
         audit_failure,
         FieldEncryptionHistoryErasureError::Unavailable
     );
-    let rolled_back = migration
-        .query_one(
-            "SELECT coverage_ready,
-                    unavailable_after_position IS NOT NULL,
-                    (SELECT count(*)::bigint
-                       FROM registry_internal.registry_revision_commits
-                      WHERE establishes_baseline)
-               FROM registry_internal.registry_commit_head
-              WHERE singleton",
-            &[],
-        )
-        .await
-        .expect("rolled-back coverage state resolves");
-    assert!(!rolled_back.get::<_, bool>(0));
-    assert!(rolled_back.get::<_, bool>(1));
-    assert_eq!(rolled_back.get::<_, i64>(2), 1);
-    database
-        .admin
-        .batch_execute(
-            "ALTER TABLE registry_internal.registry_audit
-                 DROP CONSTRAINT registry_audit_refuse_field_terminal_for_test",
-        )
-        .await
-        .expect("test refusal constraint drops");
-
-    let outcome = erase_field_encryption_history(
-        &mut migration,
-        FieldEncryptionHistoryErasureRequest {
-            expected: &expected,
-            migration_role: &database.migration_role,
-            lock_key,
-            timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
-                .unwrap(),
-            audit_profile: &audit_profile,
-            operator_reference: "field-encryption-operator",
-            reason: "resume closing rebaseline",
-            registry: &registry,
-        },
-    )
-    .await
-    .expect("retry rebaselines even though no plaintext target remains");
-    assert_eq!(outcome.erased_record_count, 1);
-    assert_eq!(outcome.erased_revision_count, 1);
-    assert_eq!(outcome.erased_commit_member_count, 1);
-    assert_eq!(outcome.scrubbed_request_target_count, 1);
-    assert_eq!(outcome.scrubbed_request_proposal_count, 1);
-    let terminal_counts = migration
+    assert!(
+        field_encryption_terminal_entries(&database).is_empty(),
+        "the refused terminal entry is not recorded"
+    );
+    let lifecycle_counts = migration
         .query_one(
             "SELECT
-                 (convert_from(envelope, 'UTF8')::jsonb #>>
-                     '{record,erasedRecordCount}')::bigint,
-                 (convert_from(envelope, 'UTF8')::jsonb #>>
-                     '{record,erasedRevisionCount}')::bigint,
-                 (convert_from(envelope, 'UTF8')::jsonb #>>
-                     '{record,scrubbedRequestTargetCount}')::bigint,
-                 (convert_from(envelope, 'UTF8')::jsonb #>>
-                     '{record,scrubbedRequestProposalCount}')::bigint
-               FROM registry_internal.registry_audit
-              WHERE convert_from(envelope, 'UTF8')::jsonb #>> '{record,schema}'
-                        = 'breg-field-encryption-audit/v1'
-                AND convert_from(envelope, 'UTF8')::jsonb #>> '{record,phase}' = 'terminal'",
+                 count(DISTINCT target_record_reference) FILTER (
+                     WHERE progress_kind = 'record-erasure'
+                 )::bigint,
+                 COALESCE(sum(erased_revision_count) FILTER (
+                     WHERE progress_kind = 'record-erasure'
+                 ), 0)::bigint,
+                 COALESCE(sum(scrubbed_request_target_count) FILTER (
+                     WHERE progress_kind = 'request-scrub'
+                 ), 0)::bigint,
+                 COALESCE(sum(scrubbed_request_proposal_count) FILTER (
+                     WHERE progress_kind = 'request-scrub'
+                 ), 0)::bigint,
+                 count(*) FILTER (WHERE progress_kind = 'terminal')::bigint
+               FROM registry_internal.registry_field_encryption_lifecycle_progress",
             &[],
         )
         .await
-        .expect("field-encryption terminal audit resolves");
-    assert_eq!(terminal_counts.get::<_, i64>(0), 1);
-    assert_eq!(terminal_counts.get::<_, i64>(1), 1);
-    assert_eq!(terminal_counts.get::<_, i64>(2), 1);
-    assert_eq!(terminal_counts.get::<_, i64>(3), 1);
+        .expect("committed lifecycle progress resolves");
+    assert_eq!(lifecycle_counts.get::<_, i64>(0), 1);
+    assert_eq!(lifecycle_counts.get::<_, i64>(1), 1);
+    assert_eq!(lifecycle_counts.get::<_, i64>(2), 1);
+    assert_eq!(lifecycle_counts.get::<_, i64>(3), 1);
+    assert_eq!(lifecycle_counts.get::<_, i64>(4), 1);
     let coverage_ready: bool = migration
         .query_one(
             "SELECT coverage_ready AND unavailable_after_position IS NULL
@@ -1462,7 +1464,7 @@ async fn erasure_uses_migration_authority_without_runtime_journal_mutation_grant
             lock_key,
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
                 .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: "operator-run-2",
             reason: "test retention request",
             target: RecordHistoryErasureTarget::new(ENTITY, record_id, 1),
@@ -1510,7 +1512,7 @@ async fn erasing_baseline_member_marks_all_history_coverage_unready_and_allows_l
             lock_key,
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
                 .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: "operator-run-3",
             reason: "baseline retention request",
             target: RecordHistoryErasureTarget::new(ENTITY, record_id, 1),
@@ -1571,7 +1573,7 @@ async fn erasing_baseline_member_marks_all_history_coverage_unready_and_allows_l
             lock_key,
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
                 .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: "operator-run-3",
             reason: "follow-up retention request",
             target: RecordHistoryErasureTarget::new(ENTITY, record_id, 2),
@@ -1615,7 +1617,7 @@ async fn prebaseline_unindexed_revision_is_erased_and_marks_coverage_unready() {
             lock_key,
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
                 .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: "operator-run-4",
             reason: "prebaseline retention request",
             target: RecordHistoryErasureTarget::new(ENTITY, record_id, 1),
@@ -1627,6 +1629,86 @@ async fn prebaseline_unindexed_revision_is_erased_and_marks_coverage_unready() {
     assert_eq!(outcome.unavailable_after_position, None);
     assert_eq!(outcome.affected_commit_count, 0);
     assert_eq!(outcome.erased_revision_count, 1);
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+/// A standalone erasure appends its request entry before its transaction
+/// opens: a writer that refuses that entry answers an outage and deletes,
+/// scrubs, and narrows nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn erasure_changes_nothing_when_the_audit_writer_refuses_its_request_entry() {
+    let database = TestDatabase::create(4).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let registry = compiled_registry();
+    let expected = install_ready_history_registry(&database, &mut migration, &registry).await;
+    let lock_key = RegistryLockKey::derive(&expected.package_id).expect("lock key derives");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x75; 32].into())
+        .expect("test owns a keyed audit profile");
+    let record_id = Uuid::parse_str("018feaa0-68f9-4a45-b9e3-58436df07afb").unwrap();
+
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("migration can begin transaction");
+    insert_revision(&transaction, record_id, 1, OLD_PACKAGE, "migration").await;
+    transaction.commit().await.expect("revision commits");
+    let coverage_before: (bool, Option<i64>) = {
+        let row = migration
+            .query_one(
+                "SELECT coverage_ready, unavailable_after_position
+                   FROM registry_internal.registry_commit_head WHERE singleton",
+                &[],
+            )
+            .await
+            .expect("coverage head reads");
+        (row.get(0), row.get(1))
+    };
+
+    database.audit_capture().fail_after(0);
+    let refused = erase_record_history(
+        &mut migration,
+        HistoryErasureRequest {
+            expected: &expected,
+            migration_role: &database.migration_role,
+            lock_key,
+            timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
+                .unwrap(),
+            audit: &database.audit(audit_profile.clone()),
+            operator_reference: "operator-run-refused",
+            reason: "refused retention request",
+            target: RecordHistoryErasureTarget::new(ENTITY, record_id, 1),
+        },
+    )
+    .await
+    .expect_err("a refused request entry refuses the erasure");
+    database.audit_capture().restore();
+    assert_eq!(refused, HistoryErasureError::Unavailable);
+
+    let retained: i64 = migration
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_revisions
+              WHERE entity_id = $1 AND record_id = $2",
+            &[&ENTITY, &record_id],
+        )
+        .await
+        .expect("retained revisions count")
+        .get(0);
+    assert_eq!(retained, 1);
+    let coverage_after: (bool, Option<i64>) = {
+        let row = migration
+            .query_one(
+                "SELECT coverage_ready, unavailable_after_position
+                   FROM registry_internal.registry_commit_head WHERE singleton",
+                &[],
+            )
+            .await
+            .expect("coverage head reads");
+        (row.get(0), row.get(1))
+    };
+    assert_eq!(coverage_after, coverage_before);
+    assert!(database.audit_entries().is_empty());
 
     migration_task.abort();
     database.cleanup().await;
@@ -1661,7 +1743,7 @@ async fn sparse_high_revision_number_erases_when_actual_target_count_is_bounded(
             lock_key,
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
                 .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: "operator-run-5",
             reason: "sparse high revision request",
             target: RecordHistoryErasureTarget::new(ENTITY, record_id, 10_001),
@@ -1705,7 +1787,7 @@ async fn erasure_refuses_more_than_ten_thousand_actual_target_revisions() {
             lock_key,
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
                 .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: "operator-run-6",
             reason: "oversized actual revision request",
             target: RecordHistoryErasureTarget::new(ENTITY, record_id, 10_001),
@@ -1787,7 +1869,7 @@ async fn field_encryption_erasure_chunks_sparse_oversized_record_history() {
             lock_key,
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(30), Duration::from_secs(30))
                 .unwrap(),
-            audit_profile: &audit_profile,
+            audit: &database.audit(audit_profile.clone()),
             operator_reference: "field-encryption-operator",
             reason: "erase oversized sparse pre-flip history",
             registry: &registry,
@@ -1800,23 +1882,23 @@ async fn field_encryption_erasure_chunks_sparse_oversized_record_history() {
 
     let state = migration
         .query_one(
-            "SELECT
-                 (SELECT count(*)::bigint
-                    FROM registry_internal.registry_revisions
-                   WHERE entity_id = $1 AND record_id = $2),
-                 (SELECT count(*)::bigint
-                    FROM registry_internal.registry_audit
-                   WHERE convert_from(envelope, 'UTF8')::jsonb #>> '{record,schema}'
-                             = 'breg-history-erasure-audit/v1'
-                     AND convert_from(envelope, 'UTF8')::jsonb #>> '{record,lifecycleReference}'
-                             IS NOT NULL)",
+            "SELECT count(*)::bigint
+               FROM registry_internal.registry_revisions
+              WHERE entity_id = $1 AND record_id = $2",
             &[&ENTITY, &record_id],
         )
         .await
         .expect("chunked erasure state resolves");
     assert_eq!(state.get::<_, i64>(0), 0);
     assert_eq!(
-        state.get::<_, i64>(1),
+        database
+            .audit_entries()
+            .iter()
+            .filter(|entry| {
+                entry["schema"] == HISTORY_ERASURE_AUDIT_SCHEMA
+                    && !entry["record"]["lifecycleReference"].is_null()
+            })
+            .count(),
         2,
         "the lifecycle uses two bounded generic erasure transactions"
     );
@@ -1890,7 +1972,7 @@ async fn erasure_reports_an_unreadable_cached_response_rather_than_an_outage() {
                     Duration::from_secs(5),
                 )
                 .unwrap(),
-                audit_profile: &audit_profile,
+                audit: &database.audit(audit_profile.clone()),
                 operator_reference: OPERATOR_CANARY,
                 reason: REASON_CANARY,
                 target: RecordHistoryErasureTarget::new(ENTITY, record_id, 1),
@@ -1998,7 +2080,7 @@ async fn install_ready_history_registry(
     retain_descriptor(migration, registry, CURRENT_PACKAGE)
         .await
         .expect("current descriptor is retained");
-    install_mutation_schema(migration, &database.runtime_role)
+    install_mutation_schema(migration, &database.runtime_role, false)
         .await
         .expect("mutation and history commit schema are installed");
     let transaction = migration
@@ -2285,29 +2367,35 @@ async fn insert_idempotency_response_bytes(
         .expect("idempotency response inserts");
 }
 
-async fn assert_erasure_audit_is_minimized(database: &TestDatabase, profile: &AuditProfile) {
-    let rows = database
-        .admin
-        .query(
-            "SELECT record_hash, envelope FROM registry_internal.registry_audit",
-            &[],
-        )
-        .await
-        .expect("administrator can inspect audit");
-    assert_eq!(rows.len(), 1);
-    let envelope_value =
-        registry_platform_canonical_json::parse_json_strict(&rows[0].get::<_, Vec<u8>>(1))
-            .expect("audit envelope is canonical JSON");
-    let envelope: registry_platform_audit::AuditEnvelope =
-        serde_json::from_value(envelope_value).expect("audit envelope shape is valid");
-    registry_platform_audit::verify_chain(std::slice::from_ref(&envelope), &profile.chain_hasher())
-        .expect("single-envelope chain verifies");
+fn field_encryption_terminal_entries(database: &TestDatabase) -> Vec<serde_json::Value> {
+    database
+        .audit_entries()
+        .into_iter()
+        .filter(|entry| {
+            entry["schema"] == FIELD_ENCRYPTION_AUDIT_SCHEMA
+                && entry["record"]["phase"] == "terminal"
+                && entry["record"]["outcome"] != "unfinished"
+        })
+        .collect()
+}
+
+/// An erasure writes one request entry before its transaction and one
+/// response entry after its commit, under one correlation, and neither
+/// carries an erased value, reason, or operator.
+fn assert_erasure_audit_is_minimized(database: &TestDatabase) {
+    let entries = database.audit_entries();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["schema"], HISTORY_ERASURE_AUDIT_SCHEMA);
+    assert_eq!(entries[0]["phase"], "request");
+    assert_eq!(entries[0]["record"]["phase"], "attempt");
+    assert_eq!(entries[1]["schema"], HISTORY_ERASURE_AUDIT_SCHEMA);
+    assert_eq!(entries[1]["phase"], "response");
+    assert_eq!(entries[0]["correlation"], entries[1]["correlation"]);
     assert_eq!(
-        rows[0].get::<_, Vec<u8>>(0),
-        envelope.record_hash.as_slice()
+        entries[0]["record"]["targetReference"],
+        entries[1]["record"]["targetReference"]
     );
-    let audit_text = String::from_utf8(rows[0].get::<_, Vec<u8>>(1)).expect("audit is utf8");
-    assert!(audit_text.contains("breg-history-erasure-audit/v1"));
+    let audit_text = serde_json::Value::Array(entries).to_string();
     assert!(audit_text.contains("history-erasure-maintenance"));
     assert!(audit_text.contains("saved_exports_event_consumers_and_backups"));
     assert!(!audit_text.contains(RECORD_CANARY));
@@ -2321,7 +2409,7 @@ async fn snapshot_client_http(
     key_store: &tokio_postgres::Client,
     registry: Arc<registry_breg::CompiledRegistry>,
     identity: ExpectedRegistryIdentity,
-    audit: AuditProfile,
+    audit: registry_breg::audit::RegistryAudit,
 ) -> client_http::ClientHttp {
     use registry_breg::api::{HttpService, ReadRuntimeIdentity};
     use registry_breg::cursor::CursorCodec;

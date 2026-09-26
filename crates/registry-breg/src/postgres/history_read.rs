@@ -20,8 +20,8 @@ use crate::api::{
     SnapshotReadRequest, SnapshotReadService,
 };
 use crate::audit::{
-    append_read_terminal_audit, profile_is_keyed, record_pre_io_audit, PreIoAudit, PreIoAuditKind,
-    ReadTerminalAudit, TerminalAudit, TerminalAuditOutcome,
+    begin_pre_io_audit, profile_is_keyed, read_terminal_entry, record_pre_io_audit, PreIoAudit,
+    PreIoAuditKind, ReadTerminalAudit, RegistryAudit, TerminalAudit, TerminalAuditOutcome,
 };
 use crate::contract::{FieldTypeSource, Operation};
 use crate::cursor::{
@@ -67,7 +67,7 @@ pub struct PostgresSnapshotReadService {
     expected: ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
     lock_timeout: Duration,
-    audit_profile: AuditProfile,
+    audit: RegistryAudit,
     cursors: Arc<CursorCodec>,
     field_encryption: Option<SharedFieldEncryptionService>,
     fault: SnapshotReadFaultControl,
@@ -81,7 +81,7 @@ impl PostgresSnapshotReadService {
         expected: ExpectedRegistryIdentity,
         lock_key: RegistryLockKey,
         lock_timeout: Duration,
-        audit_profile: AuditProfile,
+        audit: RegistryAudit,
         cursors: Arc<CursorCodec>,
     ) -> Self {
         Self {
@@ -90,7 +90,7 @@ impl PostgresSnapshotReadService {
             expected,
             lock_key,
             lock_timeout,
-            audit_profile,
+            audit,
             cursors,
             field_encryption: None,
             fault: SnapshotReadFaultControl::Disabled,
@@ -118,7 +118,7 @@ impl PostgresSnapshotReadService {
         &self,
         request: SnapshotReadRequest,
     ) -> Result<SnapshotReadResult, ReadServiceError> {
-        if !profile_is_keyed(&self.audit_profile) {
+        if !profile_is_keyed(self.audit.profile()) {
             return Err(ReadServiceError::Unavailable);
         }
         let mut client = self
@@ -136,12 +136,9 @@ impl PostgresSnapshotReadService {
             Ok(plan) => plan,
             Err(()) => {
                 record_pre_io_audit(
-                    &mut client,
-                    self.lock_key,
-                    self.lock_timeout,
+                    &self.audit,
                     &self.expected,
                     &claims,
-                    &self.audit_profile,
                     PreIoAudit {
                         kind: PreIoAuditKind::Refusal,
                         method: request.method,
@@ -157,13 +154,10 @@ impl PostgresSnapshotReadService {
             }
         };
 
-        record_pre_io_audit(
-            &mut client,
-            self.lock_key,
-            self.lock_timeout,
+        let _attempt = begin_pre_io_audit(
+            &self.audit,
             &self.expected,
             &claims,
-            &self.audit_profile,
             PreIoAudit {
                 kind: PreIoAuditKind::Attempt,
                 method: request.method,
@@ -180,26 +174,18 @@ impl PostgresSnapshotReadService {
         let materialized = match materialized {
             Ok(materialized) => materialized,
             Err(error) => {
-                let _ = self
-                    .record_terminal(
-                        &mut client,
-                        &claims,
-                        &request,
-                        &plan,
-                        None,
-                        TerminalAuditOutcome::Refused,
-                        0,
-                    )
-                    .await;
-                return Err(error);
+                return Err(self.refused(&claims, &request, &plan, error).await);
             }
         };
-        let held = SnapshotReadResult::from_materialized(
+        let held = match SnapshotReadResult::from_materialized(
             &self.registry,
             &plan.entity,
             request.plan.cursor_binding.representation,
             materialized,
-        )?;
+        ) {
+            Ok(held) => held,
+            Err(error) => return Err(self.refused(&claims, &request, &plan, error).await),
+        };
         self.fault
             .fail_at(SnapshotReadFaultPoint::BeforeTerminalAudit)?;
         let outcome = if held.result_count == 0 {
@@ -208,7 +194,6 @@ impl PostgresSnapshotReadService {
             TerminalAuditOutcome::Returned
         };
         self.record_terminal(
-            &mut client,
             &claims,
             &request,
             &plan,
@@ -219,6 +204,34 @@ impl PostgresSnapshotReadService {
         .await
         .map_err(|_| ReadServiceError::Unavailable)?;
         Ok(held)
+    }
+
+    /// Record the Refused terminal of a read that failed after its attempt,
+    /// then hand back the failure. A terminal the destination refuses is
+    /// logged: the read already fails, and its held attempt then writes the
+    /// unfinished response instead.
+    async fn refused(
+        &self,
+        claims: &ClaimContext,
+        request: &SnapshotReadRequest,
+        plan: &SnapshotReadPlan,
+        error: ReadServiceError,
+    ) -> ReadServiceError {
+        if self
+            .record_terminal(
+                claims,
+                request,
+                plan,
+                None,
+                TerminalAuditOutcome::Refused,
+                0,
+            )
+            .await
+            .is_err()
+        {
+            tracing::error!("the refused history read's terminal audit entry was not recorded");
+        }
+        error
     }
 
     async fn read_rows(
@@ -433,10 +446,10 @@ impl PostgresSnapshotReadService {
             .map_err(|_| ReadServiceError::Unavailable)
     }
 
-    #[allow(clippy::too_many_arguments)] // Keep request authority and audit outcome explicit.
+    /// Append the read's `response` entry. The caller releases the result
+    /// only after this returns `Ok`.
     async fn record_terminal(
         &self,
-        client: &mut deadpool_postgres::Client,
         claims: &ClaimContext,
         request: &SnapshotReadRequest,
         plan: &SnapshotReadPlan,
@@ -444,7 +457,7 @@ impl PostgresSnapshotReadService {
         outcome: TerminalAuditOutcome,
         result_count: usize,
     ) -> Result<(), crate::audit::RegistryAuditError> {
-        let key_hasher = self.audit_profile.key_hasher();
+        let key_hasher = self.audit.profile().key_hasher();
         let principal_reference = claims
             .principal()
             .map(|principal| {
@@ -457,22 +470,12 @@ impl PostgresSnapshotReadService {
             .transpose()
             .map_err(|_| crate::audit::RegistryAuditError::InvalidContext)?;
         let field_set_reference = field_set_reference(
-            &self.audit_profile,
+            self.audit.profile(),
             &self.expected.package_revision,
             &request.selected_fields,
         )?;
-        let transaction = begin_record_transaction(
-            client,
-            self.lock_key,
-            self.lock_timeout,
-            &self.expected,
-            claims,
-        )
-        .await
-        .map_err(|_| crate::audit::RegistryAuditError::Unavailable)?;
-        append_read_terminal_audit(
-            transaction.transaction(),
-            &self.audit_profile,
+        let entry = read_terminal_entry(
+            self.audit.profile(),
             ReadTerminalAudit {
                 terminal: TerminalAudit {
                     grant: None,
@@ -495,12 +498,8 @@ impl PostgresSnapshotReadService {
                 row_boundary_reference: binding
                     .map(|binding| binding.row_boundary_reference.clone()),
             },
-        )
-        .await?;
-        transaction
-            .commit()
-            .await
-            .map_err(|_| crate::audit::RegistryAuditError::Unavailable)
+        )?;
+        self.audit.append(entry).await
     }
 }
 
@@ -517,17 +516,9 @@ impl SnapshotReadService for PostgresSnapshotReadService {
         request: RecordReadRefusal,
     ) -> ServiceFuture<'_, Result<(), ReadServiceError>> {
         Box::pin(async move {
-            let mut client = self
-                .pool
-                .get()
-                .await
-                .map_err(|_| ReadServiceError::Unavailable)?;
             crate::audit::record_http_refusal_audit(
-                &mut client,
-                self.lock_key,
-                self.lock_timeout,
+                &self.audit,
                 &self.expected,
-                &self.audit_profile,
                 crate::audit::HttpRefusalAudit {
                     grant: None,
                     method: request.method,

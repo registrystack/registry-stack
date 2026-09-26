@@ -1,42 +1,45 @@
-//! The render audit ledger: one keyed, hash-chained, sealed-segment JSONL
-//! event per service render — appended before the response is sent, failing
-//! closed. Failed attempts (validation, timeout, panic, 401) are audited
-//! too, so the ledger can distinguish "no attempt" from "erased".
+//! The render audit: value-free lines written through the shared platform
+//! audit writer. A render writes a `request` entry before the worker starts
+//! and a `response` entry carrying the outcome before the document leaves;
+//! both fail closed. A refusal decided before any render (validation, 401,
+//! 413) is one `response` entry, so the log distinguishes "no attempt" from
+//! a refused one. A render whose call ends before its outcome is written, a
+//! caller that disconnects included, writes an `unfinished` response, so no
+//! request entry stays unpaired. The pairing correlation is drawn by the
+//! server for every call; the caller's `Idempotency-Key` is only echoed in
+//! the record as `correlationId`. The log carries no hash chain or signature.
 //!
 //! Events carry no data values and no asset bytes: identifiers, versions,
 //! hashes, outcomes, caller, trace and correlation ids only.
 
-use std::path::Path;
-use std::sync::Arc;
-
 use serde::Serialize;
-use zeroize::Zeroizing;
 
-use registry_platform_audit::{
-    require_audit_under, verify_segmented_audit_chain, AuditChainProfile, AuditSink, ChainState,
-    DurableSegmentedJsonlSink,
-};
+use registry_platform_audit::{AuditDestination, AuditEntry, AuditRequest, AuditWriter};
 
 use crate::problem::{ProblemKind, RenderProblem};
 
+/// The schema id every Render audit line carries in its envelope.
+pub const AUDIT_SCHEMA: &str = "render.registrystack.org/audit/v1";
+
+#[derive(Clone, Debug)]
 pub struct RenderAudit {
-    chain: Arc<ChainState>,
-    sink: Arc<DurableSegmentedJsonlSink>,
-    #[allow(dead_code)]
-    hasher: registry_platform_audit::AuditChainHasher,
+    writer: AuditWriter,
 }
 
 /// One value-free audit event. Field set is closed; adding a field is a
 /// reviewed change.
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RenderAuditEvent {
     pub document_id: String,
     pub document_version: u32,
     pub bundle_version: u32,
     pub bundle_hash: String,
-    /// "rendered" or "refused".
-    pub outcome: &'static str,
+    /// "rendered", "refused", or "unfinished" for a call that ended before
+    /// its outcome; absent on the request entry written before the render
+    /// starts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<&'static str>,
     /// Problem slug for refusals.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub problem: Option<String>,
@@ -55,6 +58,44 @@ pub struct RenderAuditEvent {
 }
 
 impl RenderAuditEvent {
+    /// The request entry for a render about to start: its identity, with
+    /// no outcome yet.
+    pub fn started(
+        document_id: &str,
+        document_version: u32,
+        bundle_version: u32,
+        bundle_hash: &str,
+        caller: &str,
+        correlation_id: Option<&str>,
+        trace_id: Option<&str>,
+    ) -> Self {
+        Self {
+            document_id: document_id.to_owned(),
+            document_version,
+            bundle_version,
+            bundle_hash: bundle_hash.to_owned(),
+            outcome: None,
+            problem: None,
+            pdf_sha256: None,
+            data_sha256: None,
+            caller: caller.to_owned(),
+            correlation_id: correlation_id.map(str::to_owned),
+            trace_id: trace_id.map(str::to_owned),
+            renderer_version: crate::display_version(),
+            typst_pin: crate::TYPST_PIN.to_owned(),
+        }
+    }
+
+    /// The response entry for a render that failed after it started: the
+    /// request entry's identity, refused with `problem`.
+    pub fn refused_after_start(self, problem: &RenderProblem) -> Self {
+        Self {
+            outcome: Some("refused"),
+            problem: Some(problem.kind.slug().to_owned()),
+            ..self
+        }
+    }
+
     pub fn refused(
         document_id: &str,
         problem: &RenderProblem,
@@ -67,7 +108,7 @@ impl RenderAuditEvent {
             document_version: 0,
             bundle_version: 0,
             bundle_hash: String::new(),
-            outcome: "refused",
+            outcome: Some("refused"),
             problem: Some(problem.kind.slug().to_owned()),
             pdf_sha256: None,
             data_sha256: None,
@@ -80,103 +121,87 @@ impl RenderAuditEvent {
     }
 }
 
+/// The envelope correlation for one call: a fresh random id the server
+/// draws. The caller's `Idempotency-Key` is not unique to one call, so it is
+/// never the value that pairs a call's entries.
+pub fn correlation() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
 impl RenderAudit {
-    /// Open (or bootstrap) the ledger with the production keyed profile.
-    pub async fn open(
-        directory: &Path,
-        integrity_key: Vec<u8>,
-        max_segment_bytes: u64,
-    ) -> Result<Self, RenderProblem> {
-        let problem = |detail: String| RenderProblem::new(ProblemKind::AuditFailed, detail);
-        if !directory.exists() {
-            std::fs::create_dir(directory)
-                .map_err(|err| problem(format!("cannot create audit directory: {err}")))?;
-        }
-        // The sink policy requires an owner-only ledger directory; when we
-        // create it ourselves we create it compliant.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(directory)
-                .map(|m| m.permissions().mode())
-                .unwrap_or(0o755);
-            if mode & 0o077 != 0 {
-                std::fs::set_permissions(directory, std::fs::Permissions::from_mode(mode & 0o700))
-                    .map_err(|err| problem(format!("cannot tighten audit directory: {err}")))?;
-            }
-        }
-        require_audit_under(directory, directory)
-            .map_err(|err| problem(format!("audit directory not owner-controlled: {err}")))?;
-        let hasher = AuditChainProfile::production_from_secret_bytes(Zeroizing::new(integrity_key))
-            .map_err(|err| problem(format!("audit integrity key rejected: {err}")))?
-            .hasher();
-        let ledger = directory.join("ledger.jsonl");
-        let sink = Arc::new(
-            DurableSegmentedJsonlSink::open(&ledger, max_segment_bytes)
-                .map_err(|err| problem(format!("cannot open audit ledger: {err}")))?,
-        );
-        let chain = ChainState::bootstrap_or_start_empty(sink.as_ref(), hasher.clone())
-            .await
-            .map_err(|err| problem(format!("audit chain bootstrap: {err}")))?;
-        let chain = Arc::new(chain);
-        Ok(Self {
-            chain,
-            sink,
-            hasher,
-        })
+    /// Open the configured destination. A file destination takes the
+    /// single-writer lock and creates an owner-only parent directory.
+    pub async fn open(destination: AuditDestination) -> Result<Self, RenderProblem> {
+        let writer = AuditWriter::open(destination).await.map_err(|err| {
+            RenderProblem::new(
+                ProblemKind::AuditFailed,
+                format!("cannot open audit destination: {err}"),
+            )
+        })?;
+        Ok(Self::new(writer))
     }
 
-    /// Append one event. The write must succeed before the caller responds.
-    pub async fn append(&self, event: RenderAuditEvent) -> Result<(), RenderProblem> {
-        let record = serde_json::to_value(event).map_err(|err| {
-            RenderProblem::new(ProblemKind::Internal, format!("audit event: {err}"))
+    pub fn new(writer: AuditWriter) -> Self {
+        Self { writer }
+    }
+
+    /// Append the request entry and return the handle that owes its
+    /// response. It must be accepted before the render starts. A call that
+    /// ends before it responds writes `unfinished` as the response.
+    pub async fn request(
+        &self,
+        correlation: &str,
+        event: RenderAuditEvent,
+    ) -> Result<AuditRequest, RenderProblem> {
+        let mut unfinished = record(RenderAuditEvent {
+            outcome: Some("unfinished"),
+            ..event.clone()
         })?;
-        self.chain
-            .append(self.sink.as_ref() as &dyn AuditSink, record)
+        if let Some(fields) = unfinished.as_object_mut() {
+            fields.remove("pdfSha256");
+            fields.remove("dataSha256");
+        }
+        let record = record(event)?;
+        self.writer
+            .begin(AUDIT_SCHEMA, correlation, record, unfinished)
             .await
-            .map(|_| ())
             .map_err(|err| {
                 RenderProblem::new(ProblemKind::AuditFailed, format!("audit append: {err}"))
             })
     }
 
-    /// Readiness: the sink must answer a keyed tail read.
+    /// Append the response entry. It must be accepted before the caller
+    /// receives anything but an audit failure.
+    pub async fn response(
+        &self,
+        correlation: &str,
+        event: RenderAuditEvent,
+    ) -> Result<(), RenderProblem> {
+        let record = record(event)?;
+        self.append(AuditEntry::response(AUDIT_SCHEMA, correlation, record))
+            .await
+    }
+
+    async fn append(&self, entry: AuditEntry) -> Result<(), RenderProblem> {
+        self.writer.append(entry).await.map_err(|err| {
+            RenderProblem::new(ProblemKind::AuditFailed, format!("audit append: {err}"))
+        })
+    }
+
+    /// Wait for the unfinished response entries dropped calls handed to a
+    /// stream destination.
+    #[cfg(test)]
+    pub(crate) fn wait_for_detached_entries(&self) {
+        self.writer.wait_for_detached_entries();
+    }
+
+    /// Readiness: the destination still accepts entries.
     pub async fn ready(&self) -> bool {
-        self.sink.ready().await
+        self.writer.ready().await
     }
 }
 
-/// `registry-render audit-verify`: prove a retained ledger end to end.
-pub fn verify_chain(
-    runtime_path: &Path,
-    directory: &Path,
-    key_ref: &str,
-) -> Result<i32, RenderProblem> {
-    let key = crate::runtime::resolve_secret(runtime_path, key_ref)?;
-    let hasher = AuditChainProfile::production_from_secret_bytes(Zeroizing::new(key))
-        .map_err(|err| {
-            RenderProblem::new(ProblemKind::AuditFailed, format!("integrity key: {err}"))
-        })?
-        .hasher();
-    let ledger = directory.join("ledger.jsonl");
-    let summary = verify_segmented_audit_chain(&ledger, &hasher).map_err(|err| {
-        RenderProblem::new(
-            ProblemKind::AuditFailed,
-            format!("chain verification: {err}"),
-        )
-    })?;
-    println!(
-        "audit chain verified: {} record(s) across {} segment(s)",
-        summary.records, summary.segments
-    );
-    if summary.records == 0 {
-        let non_empty = std::fs::metadata(&ledger).is_ok_and(|m| m.len() > 0);
-        if non_empty {
-            println!(
-                "note: no records verified although {} is non-empty; a running serve holds the active segment and verification skips it, so verify again after shutdown",
-                ledger.display()
-            );
-        }
-    }
-    Ok(0)
+fn record(event: RenderAuditEvent) -> Result<serde_json::Value, RenderProblem> {
+    serde_json::to_value(event)
+        .map_err(|err| RenderProblem::new(ProblemKind::Internal, format!("audit event: {err}")))
 }

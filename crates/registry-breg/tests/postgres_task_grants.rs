@@ -328,7 +328,8 @@ fn app_with_services(
 ) -> Router {
     let pool = db.runtime_config.build_pool().unwrap();
     let lock = RegistryLockKey::derive(PACKAGE).unwrap();
-    let audit = AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into()).unwrap();
+    let audit =
+        db.audit(AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into()).unwrap());
     let cursors = Arc::new(
         CursorCodec::new(Zeroizing::new(vec![0x49; 32]), Duration::from_secs(300)).unwrap(),
     );
@@ -618,15 +619,8 @@ async fn counts(db: &TestDatabase) -> Vec<i64> {
     counts
 }
 async fn apply_refusals(db: &TestDatabase) -> usize {
-    db.admin
-        .query(
-            "SELECT convert_from(envelope, 'UTF8') FROM registry_internal.registry_audit",
-            &[],
-        )
-        .await
-        .unwrap()
-        .iter()
-        .map(|row| serde_json::from_str::<Value>(row.get(0)).unwrap()["record"].clone())
+    db.audit_records()
+        .into_iter()
         .filter(|record| {
             record["phase"] == "refusal"
                 && record["operationId"]
@@ -664,18 +658,7 @@ async fn assert_grant_audit(db: &TestDatabase, grant: &str, phase: &str, outcome
     let pseudonym = hasher
         .audit_reference_hash("breg-grant-v1", REVISION, grant)
         .unwrap();
-    let rows = db
-        .admin
-        .query(
-            "SELECT convert_from(envelope, 'UTF8') FROM registry_internal.registry_audit",
-            &[],
-        )
-        .await
-        .unwrap();
-    let records: Vec<Value> = rows
-        .iter()
-        .map(|row| serde_json::from_str::<Value>(row.get(0)).unwrap()["record"].clone())
-        .collect();
+    let records = db.audit_records();
     let record = records
         .iter()
         .find(|record| {

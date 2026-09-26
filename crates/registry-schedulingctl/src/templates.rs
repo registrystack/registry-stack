@@ -664,6 +664,11 @@ authentication:
     #   kind: static
     #   documentRef: secret:file/jwks.json
 audit:
+  # One single-writer destination. `file`, the default, appends to the
+  # absolute path, rotates at rotateBytes (default 100 MiB), and deletes
+  # rotated files after retainDays (default 90); `stdout` hands each entry to
+  # the process supervisor and takes neither path nor the rotation keys.
+  destination: file
   path: /var/lib/registry-scheduling/audit.ndjson
   hashKeyRef: secret:file/scheduling-audit-key
 destinations: {}
@@ -683,8 +688,9 @@ destinations: {}
   #     maximumAttempts: 8
 retention:
   # Attempt receipts/listing cursors and hook delivery payloads have separate
-  # bounded lifetimes. Appointment, reminder, history, and audit retention are
-  # deferred. Seven days is a default, not a jurisdictional recommendation.
+  # bounded lifetimes. Appointment, reminder, and history retention are
+  # deferred; audit.retainDays bounds rotated audit files. Seven days is a
+  # default, not a jurisdictional recommendation.
   attemptReceiptDays: 7
   hookPayloadDays: 7
 "#;

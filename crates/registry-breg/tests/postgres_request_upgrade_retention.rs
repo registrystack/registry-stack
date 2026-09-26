@@ -1179,8 +1179,10 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
     seed_active_draft_without_proposal(&migration).await;
     restore_row_level_security(&migration, &registry).await;
 
-    let audit = AuditProfile::production_from_secret_bytes(vec![0x51; 32].into())
-        .expect("test audit profile is keyed");
+    let audit = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x51; 32].into())
+            .expect("test audit profile is keyed"),
+    );
     let service = RequestRetentionOperatorService::new_for_test(
         registry.clone(),
         identity.clone(),
@@ -1393,14 +1395,17 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
         request_table_force_rls(&migration, &registry).await,
         "operator erasure restores FORCE ROW LEVEL SECURITY"
     );
-    let audit_rows = migration
-        .query_one("SELECT count(*) FROM registry_internal.registry_audit", &[])
-        .await
-        .expect("audit table remains readable")
-        .get::<_, i64>(0);
+    let audit_entries = database.audit_entries();
     assert_eq!(
-        audit_rows, 1,
-        "operator erasure appends one durable audit record"
+        audit_entries.len(),
+        2,
+        "operator erasure appends a request entry and a response entry"
+    );
+    assert_eq!(audit_entries[0]["phase"], "request");
+    assert_eq!(audit_entries[1]["phase"], "response");
+    assert_eq!(
+        audit_entries[0]["correlation"], audit_entries[1]["correlation"],
+        "the erasure response shares its request's correlation"
     );
 
     let active_scope = RequestDetailErasureScope {
@@ -1418,25 +1423,38 @@ async fn operator_retention_service_counts_pages_erases_under_forced_rls_and_aud
     assert_eq!(cleanup.pending_external_deletions, 0);
     assert_eq!(cleanup.external_deletion_tombstones, 0);
     assert_eq!(service.dry_run(active_scope).await.unwrap(), before_cleanup);
-    let cleanup_audits: i64 = migration
-        .query_one("SELECT count(*) FROM registry_internal.registry_audit", &[])
-        .await
-        .unwrap()
-        .get(0);
+    let audit_entries = database.audit_entries();
     assert_eq!(
-        cleanup_audits, 3,
-        "cleanup persists an attempt and terminal audit independently of erasure eligibility"
+        audit_entries.len(),
+        6,
+        "the refused erasure answers its request, and cleanup appends a request and a \
+         response entry independently of erasure eligibility"
+    );
+    assert_eq!(audit_entries[2]["phase"], "request");
+    assert_ne!(
+        audit_entries[2]["correlation"], audit_entries[1]["correlation"],
+        "each erasure invocation has its own correlation"
+    );
+    assert_eq!(audit_entries[3]["phase"], "response");
+    assert_eq!(audit_entries[3]["record"]["outcome"], "refused");
+    assert_eq!(
+        audit_entries[2]["correlation"], audit_entries[3]["correlation"],
+        "the refusal answers the erasure's request"
+    );
+    assert_eq!(audit_entries[4]["phase"], "request");
+    assert_eq!(audit_entries[5]["phase"], "response");
+    assert_eq!(
+        audit_entries[4]["correlation"], audit_entries[5]["correlation"],
+        "the cleanup response shares its request's correlation"
+    );
+    assert_eq!(
+        audit_entries[4]["schema"],
+        "breg-attachment-cleanup-audit/v1"
     );
 
-    let audit_contains_reason = migration
-        .query_one(
-            "SELECT EXISTS (SELECT 1 FROM registry_internal.registry_audit a
-                         WHERE to_jsonb(a)::text LIKE '%' || $1::text || '%')",
-            &[&reason_canary],
-        )
-        .await
-        .expect("audit redaction check")
-        .get::<_, bool>(0);
+    let audit_contains_reason = audit_entries
+        .iter()
+        .any(|entry| entry.to_string().contains(reason_canary));
     assert!(!audit_contains_reason);
 
     migration_task.abort();

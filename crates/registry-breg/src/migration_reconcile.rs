@@ -13,8 +13,9 @@
 //! migration lock an apply holds, so it cannot observe a half-applied package,
 //! and it compares the live managed catalog with the exact verification an
 //! activation performs. Execution performs only the one transition the
-//! assessment named, through the same interlock an apply uses, and records it
-//! in the chained audit journal inside the transition's own transaction.
+//! assessment named, through the same interlock an apply uses. Its request
+//! entry is accepted by the audit journal before the transition runs, and its
+//! response entry once the transition's own transaction commits.
 //!
 //! This is not a repair tool. It never writes DDL, never edits catalog
 //! objects, never rewrites a ledger row, and never decides that a mismatched
@@ -24,8 +25,11 @@
 
 use std::time::Duration;
 
-use registry_platform_audit::{AuditChainHasher, AuditKeyHasher, AuditProfile};
-use serde_json::json;
+use registry_platform_audit::{AuditEntry, AuditRequest};
+use serde_json::{json, Value};
+
+use crate::audit::RegistryAudit;
+use crate::history_maintenance::profile_is_keyed;
 
 use crate::migration::{
     compiler_statement_checksums, package_ledger_entry, target_package_identity,
@@ -34,16 +38,17 @@ use crate::migration::{
 use crate::model::CompiledRegistry;
 use crate::package::VerifiedPackage;
 use crate::postgres::{
-    ConnectionConfig, ExpectedManagedCatalog, ExpectedRegistryIdentity, MaintenanceAuditRecord,
-    MaintenanceSnapshot, MaintenanceTransition, MigrationLedgerEntry, MigrationPlanKind,
-    PostgresKernelError, RegistryLockKey, ReviewedMigrationProgress, SqlIdentifier,
-    VerifiedPackageApplyConnection,
+    ConnectionConfig, ExpectedManagedCatalog, ExpectedRegistryIdentity, MaintenanceSnapshot,
+    MaintenanceTransition, MigrationLedgerEntry, MigrationPlanKind, PostgresKernelError,
+    RegistryLockKey, ReviewedMigrationProgress, SqlIdentifier, VerifiedPackageApplyConnection,
 };
 
 const MAX_LOCK_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_STATEMENT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const MAX_OPERATOR_REFERENCE_BYTES: usize = 512;
 const AUDIT_OPERATION_ID: &str = "migration-reconcile-maintenance";
+/// The audit schema of the reconciliation entry.
+pub const MIGRATION_RECONCILE_AUDIT_SCHEMA: &str = "breg-migration-reconcile-audit/v2";
 
 /// Why a pinned target can be neither completed nor abandoned. Every reason is
 /// a fixed sentence: no database or package value crosses this boundary.
@@ -89,7 +94,7 @@ pub struct ReconcileRequest<'a> {
     pub migration_role: &'a SqlIdentifier,
     pub runtime_role: &'a SqlIdentifier,
     pub timeouts: ReconcileTimeouts,
-    pub audit_profile: &'a AuditProfile,
+    pub audit: &'a RegistryAudit,
     pub operator_reference: &'a str,
     /// Perform the single safe transition the assessment names. Assessment
     /// alone writes nothing.
@@ -183,7 +188,8 @@ impl From<PostgresKernelError> for ReconcileError {
             | PostgresKernelError::PoolBuild
             | PostgresKernelError::CatalogInvariant(_)
             | PostgresKernelError::RegistryUnavailable
-            | PostgresKernelError::HistoryCoverageIncomplete => Self::Unavailable,
+            | PostgresKernelError::HistoryCoverageIncomplete
+            | PostgresKernelError::RetiredAuditRowsPresent => Self::Unavailable,
         }
     }
 }
@@ -201,7 +207,8 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::FieldEncryptionLookupCollision { .. }
             | MigrationError::FieldEncryptionRetainedRequestSnapshots { .. }
             | MigrationError::ActiveRequestProposals
-            | MigrationError::BackupEvidence => Self::Unavailable,
+            | MigrationError::BackupEvidence
+            | MigrationError::RetiredAuditRowsPresent => Self::Unavailable,
         }
     }
 }
@@ -336,8 +343,9 @@ async fn reconcile_under_lock(
     }
     match report.outcome {
         ReconcileOutcome::Completable => {
-            let audit = audit_record(request, target, ledger, "completed", &report)?;
-            connection
+            let entry = audit_entry(request, target, ledger, "completed", &report)?;
+            let mut attempt = begin_request(request, target, ledger, "completed").await?;
+            let transition = connection
                 .activate_verified_package(
                     Some(request.current),
                     target,
@@ -347,13 +355,23 @@ async fn reconcile_under_lock(
                         migration_role: request.migration_role,
                         runtime_role: request.runtime_role,
                     },
-                    Some(audit),
                 )
-                .await?;
+                .await;
+            if let Err(error) = transition {
+                let landed =
+                    transition_landed(connection, |snapshot| snapshot.identity == *target).await;
+                if landed != Some(true) {
+                    respond_unlanded(&mut attempt, request, target, ledger, "completed", landed)
+                        .await;
+                    return Err(error.into());
+                }
+            }
+            append_after_commit(request.audit, entry).await?;
         }
         ReconcileOutcome::Revertible => {
-            let audit = audit_record(request, target, ledger, "reverted", &report)?;
-            connection
+            let entry = audit_entry(request, target, ledger, "reverted", &report)?;
+            let mut attempt = begin_request(request, target, ledger, "reverted").await?;
+            let transition = connection
                 .revert_failed_package(
                     request.current,
                     &target.package_revision,
@@ -363,9 +381,19 @@ async fn reconcile_under_lock(
                         migration_role: request.migration_role,
                         runtime_role: request.runtime_role,
                     },
-                    audit,
                 )
-                .await?;
+                .await;
+            if let Err(error) = transition {
+                let landed =
+                    transition_landed(connection, |snapshot| snapshot.identity == *request.current)
+                        .await;
+                if landed != Some(true) {
+                    respond_unlanded(&mut attempt, request, target, ledger, "reverted", landed)
+                        .await;
+                    return Err(error.into());
+                }
+            }
+            append_after_commit(request.audit, entry).await?;
         }
         outcome @ (ReconcileOutcome::Ready
         | ReconcileOutcome::InProgress
@@ -410,28 +438,142 @@ fn unresolvable_reason(progress: Option<ReviewedMigrationProgress>) -> &'static 
     }
 }
 
+/// Append the reconciliation's request entry before its transition runs and
+/// return the handle that owes its response. A refused entry reports the
+/// reconciliation unavailable and leaves the pinned target exactly as the
+/// assessment found it. A reconciliation that ends without a response
+/// writes the `unfinished` outcome when the handle is dropped.
+async fn begin_request(
+    request: &ReconcileRequest<'_>,
+    target: &ExpectedRegistryIdentity,
+    ledger: &MigrationLedgerEntry,
+    action: &'static str,
+) -> Result<AuditRequest, ReconcileError> {
+    request
+        .audit
+        .begin(
+            request_entry(request, target, ledger, action)?,
+            outcome_record(request, target, ledger, action, "unfinished")?,
+        )
+        .await
+        .map_err(|_| ReconcileError::Unavailable)
+}
+
+/// Whether a transition that returned an error nonetheless landed: the
+/// maintenance target is cleared and the active identity is the one
+/// `landed` expects. An error does not prove the transaction rolled back, so
+/// the durable state decides; `None` when it cannot be read.
+async fn transition_landed(
+    connection: &mut VerifiedPackageApplyConnection,
+    landed: impl FnOnce(&MaintenanceSnapshot) -> bool,
+) -> Option<bool> {
+    let snapshot = connection.maintenance_snapshot().await.ok()?;
+    Some(snapshot.maintenance_target_revision.is_none() && landed(&snapshot))
+}
+
+/// Answer the request entry of a transition that did not land: `failed`
+/// when the durable state shows it did not, `unfinished` when that state
+/// could not be read. The reconciliation already failed, so a refused entry
+/// is only logged; the held request then writes its `unfinished` outcome
+/// instead.
+async fn respond_unlanded(
+    attempt: &mut AuditRequest,
+    request: &ReconcileRequest<'_>,
+    target: &ExpectedRegistryIdentity,
+    ledger: &MigrationLedgerEntry,
+    action: &'static str,
+    landed: Option<bool>,
+) {
+    let outcome = if landed == Some(false) {
+        "failed"
+    } else {
+        "unfinished"
+    };
+    let recorded = match outcome_record(request, target, ledger, action, outcome) {
+        Ok(record) => attempt.respond(record).await.is_ok(),
+        Err(_) => false,
+    };
+    if !recorded {
+        tracing::error!("the failed reconciliation's response audit entry was not recorded");
+    }
+}
+
+/// The `response` of a transition that did not commit: the request's
+/// identities and plan shape with the outcome, and no count or finding.
+fn outcome_record(
+    request: &ReconcileRequest<'_>,
+    target: &ExpectedRegistryIdentity,
+    ledger: &MigrationLedgerEntry,
+    action: &'static str,
+    outcome: &'static str,
+) -> Result<Value, ReconcileError> {
+    Ok(json!({
+        "phase": "terminal",
+        "outcome": outcome,
+        "operationId": AUDIT_OPERATION_ID,
+        "action": action,
+        "packageRevision": request.current.package_revision,
+        "targetPackageRevision": target.package_revision,
+        "packageSequence": target.package_sequence,
+        "planKind": ledger.plan_kind.as_str(),
+        "operatorReference": operator_reference(request)?,
+    }))
+}
+
+/// Append the reconciliation's response entry after its transition committed.
+/// A refused entry reports the reconciliation unavailable even though the
+/// transition is durable; a rerun then finds the Registry ready.
+async fn append_after_commit(
+    audit: &RegistryAudit,
+    entry: AuditEntry,
+) -> Result<(), ReconcileError> {
+    audit
+        .append(entry)
+        .await
+        .map_err(|_| ReconcileError::Unavailable)
+}
+
+/// Records the transition about to run: identities, the plan shape, and the
+/// keyed operator reference, and nothing the response entry does not also
+/// record. It shares the response entry's correlation.
+fn request_entry(
+    request: &ReconcileRequest<'_>,
+    target: &ExpectedRegistryIdentity,
+    ledger: &MigrationLedgerEntry,
+    action: &'static str,
+) -> Result<AuditEntry, ReconcileError> {
+    Ok(AuditEntry::request(
+        MIGRATION_RECONCILE_AUDIT_SCHEMA,
+        target.package_revision.clone(),
+        json!({
+            "phase": "attempt",
+            "outcome": "started",
+            "operationId": AUDIT_OPERATION_ID,
+            "action": action,
+            "packageRevision": request.current.package_revision,
+            "targetPackageRevision": target.package_revision,
+            "packageSequence": target.package_sequence,
+            "planKind": ledger.plan_kind.as_str(),
+            "operatorReference": operator_reference(request)?,
+        }),
+    ))
+}
+
 /// Records identities, the plan shape, and counts. The operator's reference is
-/// a keyed hash, and no catalog, package, or record value is written.
-fn audit_record<'a>(
-    request: &ReconcileRequest<'a>,
+/// a keyed hash, and no catalog, package, or record value is written. The
+/// entry is correlated by the target package revision it resolves.
+fn audit_entry(
+    request: &ReconcileRequest<'_>,
     target: &ExpectedRegistryIdentity,
     ledger: &MigrationLedgerEntry,
     action: &'static str,
     report: &ReconcileReport,
-) -> Result<MaintenanceAuditRecord<'a>, ReconcileError> {
-    let operator_reference = request
-        .audit_profile
-        .key_hasher()
-        .audit_reference_hash(
-            "breg-migration-reconcile-operator-v1",
-            &request.current.package_revision,
-            request.operator_reference,
-        )
-        .map_err(|_| ReconcileError::InvalidInput)?;
-    Ok(MaintenanceAuditRecord {
-        profile: request.audit_profile,
-        record: json!({
-            "schema": "breg-migration-reconcile-audit/v1",
+) -> Result<AuditEntry, ReconcileError> {
+    let operator_reference = operator_reference(request)?;
+    Ok(AuditEntry::response(
+        MIGRATION_RECONCILE_AUDIT_SCHEMA,
+        target.package_revision.clone(),
+        json!({
             "phase": "terminal",
             "outcome": "committed",
             "operationId": AUDIT_OPERATION_ID,
@@ -447,7 +589,20 @@ fn audit_record<'a>(
             "targetCatalogVerified": report.target_catalog_finding.is_none(),
             "activeCatalogVerified": report.active_catalog_finding.is_none(),
         }),
-    })
+    ))
+}
+
+fn operator_reference(request: &ReconcileRequest<'_>) -> Result<String, ReconcileError> {
+    request
+        .audit
+        .profile()
+        .key_hasher()
+        .audit_reference_hash(
+            "breg-migration-reconcile-operator-v1",
+            &request.current.package_revision,
+            request.operator_reference,
+        )
+        .map_err(|_| ReconcileError::InvalidInput)
 }
 
 fn validate_request(request: &ReconcileRequest<'_>) -> Result<(), ReconcileError> {
@@ -455,16 +610,11 @@ fn validate_request(request: &ReconcileRequest<'_>) -> Result<(), ReconcileError
     if request.operator_reference.is_empty()
         || request.operator_reference.len() > MAX_OPERATOR_REFERENCE_BYTES
         || request.operator_reference.chars().any(char::is_control)
-        || !profile_is_keyed(request.audit_profile)
+        || !profile_is_keyed(request.audit.profile())
     {
         return Err(ReconcileError::InvalidInput);
     }
     Ok(())
-}
-
-fn profile_is_keyed(profile: &AuditProfile) -> bool {
-    matches!(profile.chain_hasher(), AuditChainHasher::Keyed(_))
-        && matches!(profile.key_hasher(), AuditKeyHasher::Keyed(_))
 }
 
 #[cfg(test)]

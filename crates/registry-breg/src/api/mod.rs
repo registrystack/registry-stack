@@ -4729,8 +4729,8 @@ fn method_name(method: crate::model::HttpMethod) -> &'static str {
 ///
 /// A caller with no principal names nobody the journal could hold
 /// accountable, and an unauthenticated caller that could append would grow
-/// the hash chain without bound and serialize every audited write behind its
-/// head lock. The refusal keeps its operational signal as a bounded counter
+/// the journal without bound. The refusal keeps its operational signal as a
+/// bounded counter
 /// and a debug line; refusals of an authenticated principal are unaffected
 /// and still append.
 fn anonymous_refusal(mut response: Response, reason: AnonymousRefusalReason) -> Response {
@@ -5385,12 +5385,14 @@ fn mutation_problem(error: MutationError) -> Response {
             "The idempotency key is bound to another request.",
         ),
         MutationError::IngestionRefusal(refusal) => ingestion::batch_refusal_problem(refusal),
-        // Only a schema install still carrying pre-migration review data can
-        // produce this cause; request handling never reaches it, but the
-        // match stays exhaustive over the whole closed vocabulary.
+        // Only a schema install still carrying pre-migration review data or
+        // retired audit rows can produce these two causes; request handling
+        // never reaches them, but the match stays exhaustive over the whole
+        // closed vocabulary.
         MutationError::Unavailable
         | MutationError::RetryableConflict
-        | MutationError::LegacyReviewDataPresent => fixed_problem(
+        | MutationError::LegacyReviewDataPresent
+        | MutationError::RetiredAuditRowsPresent => fixed_problem(
             StatusCode::SERVICE_UNAVAILABLE,
             "service.unavailable",
             "The Registry mutation service is unavailable.",
