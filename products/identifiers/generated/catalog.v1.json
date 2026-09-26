@@ -2799,7 +2799,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "6d527a06f2db5377b611ee5613a47a01414bf289338d14f411351c8edb9b2831",
+        "sha256": "f75317190ca7be1c5354612a08b213495e6fd41ddf5db565e01106760da318b2",
         "mediaType": "application/schema+json"
       }
     },
@@ -2817,7 +2817,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "3eb913e1529098a2fcf2a34a53285055470bcb03d6b8ed77a621e863a9bd9470",
+        "sha256": "8dbf377a18ec92abef929c991509e72ee33657b652f4b34222fcc46839e391c7",
         "mediaType": "application/schema+json"
       }
     },
@@ -2903,11 +2903,11 @@
       "description": "Relay V2 authoring JSON Schema.",
       "source": {
         "path": "crates/registry-relayctl/schemas/authoring/runtime.schema.json",
-        "sha256": "71d36fb0cbda780aed077e113169691b27b31f2876bb3724dabb9efa6046a2e8"
+        "sha256": "08e6bacc0adb91489e6d85b6366c9d43536d6b8d36ded8175d491c1ac9503c6b"
       },
       "artifact": {
         "path": "crates/registry-relayctl/schemas/authoring/runtime.schema.json",
-        "sha256": "71d36fb0cbda780aed077e113169691b27b31f2876bb3724dabb9efa6046a2e8",
+        "sha256": "08e6bacc0adb91489e6d85b6366c9d43536d6b8d36ded8175d491c1ac9503c6b",
         "mediaType": "application/schema+json"
       }
     },
@@ -2925,7 +2925,7 @@
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "b394c77d974a6a414afe3762a7d125ba74ddf78c3a651c1df33ec5d26e7ef399",
+        "sha256": "3df3a8ea822cc2db0b82c15815490620a5e5b6b7882f0306588c7829828eb120",
         "mediaType": "application/schema+json"
       }
     },

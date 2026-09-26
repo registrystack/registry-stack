@@ -14,7 +14,10 @@
 use std::{
     fs::{self, File, OpenOptions, TryLockError},
     io::{self, ErrorKind, Write},
-    os::unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+    os::unix::{
+        ffi::OsStrExt,
+        fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+    },
     path::{Component, Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -45,9 +48,10 @@ pub const MAX_AUDIT_RETAIN_DAYS: u32 = 36_500;
 pub const AUDIT_PATH_SEGMENT_PATTERN: &str = r"(?:[^/.][^/]*|\.(?:[^/.][^/]*|\.[^/]+)?)";
 
 /// The JSON Schema pattern of a path [`FileDestination::new`] accepts: an
-/// absolute path with no `..` segment, stated for runtime configuration
-/// schemas so an editor refuses what startup refuses.
-pub const ABSOLUTE_AUDIT_PATH_PATTERN: &str = r"^/+(?:(?:[^/.][^/]*|\.(?:[^/.][^/]*|\.[^/]+)?)(?:/+(?:[^/.][^/]*|\.(?:[^/.][^/]*|\.[^/]+)?))*)?/*$";
+/// absolute path with no `..` segment that ends in a file name, stated for
+/// runtime configuration schemas so an editor refuses what startup refuses.
+pub const ABSOLUTE_AUDIT_PATH_PATTERN: &str =
+    r"^/+(?:(?:[^/.][^/]*|\.(?:[^/.][^/]*|\.[^/]+)?)/+)*(?:[^/.][^/]*|\.(?:[^/.][^/]*|\.[^/]+))$";
 
 const MAX_ENTRY_BYTES: usize = 1024 * 1024;
 const MAX_SCHEMA_BYTES: usize = 128;
@@ -241,6 +245,8 @@ pub enum AuditDestinationError {
     RelativePath,
     #[error("audit.path must not contain a `.` or `..` component")]
     InvalidPathComponent,
+    #[error("audit.path must end in a file name, not `/` or a `.` segment")]
+    NoFileName,
     #[error("audit.{field} applies only when audit.destination is file")]
     FileOnlyField { field: &'static str },
     #[error("audit.rotateBytes must be between {minimum} and {maximum}")]
@@ -290,6 +296,16 @@ impl FileDestination {
             )
         }) {
             return Err(AuditDestinationError::InvalidPathComponent);
+        }
+        // `Path` drops a trailing `/` or `.`, so `/a/b/` and `/a/b/.` would
+        // be checked as the file `b` in `/a` and then fail to open as one.
+        let name = path
+            .as_os_str()
+            .as_bytes()
+            .rsplit(|byte| *byte == b'/')
+            .next();
+        if matches!(name, None | Some(b"" | b".")) {
+            return Err(AuditDestinationError::NoFileName);
         }
         Ok(Self {
             path,
@@ -2996,6 +3012,23 @@ mod tests {
             .expect("another task made progress while the stream append was blocked");
         release.send(()).expect("release the blocked write");
         runtime_thread.join().expect("runtime thread joined");
+    }
+
+    #[test]
+    fn a_path_that_does_not_end_in_a_file_name_is_refused() {
+        for path in [
+            "/",
+            "//",
+            "/var/lib/audit/events.jsonl/",
+            "/var/lib/audit/.",
+        ] {
+            assert_eq!(
+                FileDestination::new(path),
+                Err(AuditDestinationError::NoFileName),
+                "{path:?}"
+            );
+        }
+        assert!(FileDestination::new("/var/lib/./audit/.events.jsonl").is_ok());
     }
 
     #[test]
