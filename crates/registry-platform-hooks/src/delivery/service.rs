@@ -40,6 +40,10 @@ impl From<tokio_postgres::Error> for DeliveryError {
 
 const LEASE_FINALIZATION_ALLOWANCE: Duration = Duration::from_secs(5);
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// The waits between the read-backs of a transition whose commit returned an
+/// error: one fewer than the read-backs, and short, since a caller is failing
+/// while they run.
+const READ_BACK_BACKOFF: [Duration; 2] = [Duration::from_millis(50), Duration::from_millis(100)];
 pub const MAX_DELIVERY_STATUS_RESULTS: u16 = 100;
 
 /// The product-supplied constants the worker cannot derive.
@@ -391,24 +395,34 @@ impl<S: DeliverySeams> DeliveryService<S> {
             disposition: DeliveryAuditDisposition::ReplayPending,
         };
         self.seams.record_audit(replay.record()).await?;
-        let mut reset = self
-            .reset_for_replay(transaction, event_id, compiled_delivery_id, generation)
-            .await;
-        if reset.is_err()
-            && self
-                .transition_committed(
-                    &PendingAudit {
-                        outcome: DeliveryAuditOutcome::ReplayCommitted,
-                        ..replay.clone()
-                    },
-                    None,
-                )
-                .await
-                == Some(true)
+        let reset = match self
+            .reset_for_replay(&transaction, event_id, compiled_delivery_id, generation)
+            .await
         {
-            // The reset committed although its acknowledgement was lost.
-            reset = Ok(());
-        }
+            // A reset that failed or changed no row did not commit.
+            Err(error) => Err(error),
+            Ok(()) => match transaction.commit().await {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    // The commit's acknowledgement may be all that was lost.
+                    if self
+                        .transition_committed(
+                            &PendingAudit {
+                                outcome: DeliveryAuditOutcome::ReplayCommitted,
+                                ..replay.clone()
+                            },
+                            None,
+                        )
+                        .await
+                        == Some(true)
+                    {
+                        Ok(())
+                    } else {
+                        Err(error.into())
+                    }
+                }
+            },
+        };
         let (outcome, disposition) = if reset.is_ok() {
             (
                 DeliveryAuditOutcome::ReplayCommitted,
@@ -436,11 +450,11 @@ impl<S: DeliverySeams> DeliveryService<S> {
         Ok(next_generation)
     }
 
-    /// Reset one dead-lettered delivery to pending under its next generation
-    /// and commit.
+    /// Reset one dead-lettered delivery to pending under its next generation,
+    /// leaving the commit to the caller.
     async fn reset_for_replay(
         &self,
-        transaction: Transaction<'_>,
+        transaction: &Transaction<'_>,
         event_id: Uuid,
         compiled_delivery_id: &str,
         generation: i64,
@@ -479,7 +493,6 @@ impl<S: DeliverySeams> DeliveryService<S> {
         if changed != 1 {
             return Err(DeliveryError::Unavailable);
         }
-        transaction.commit().await?;
         Ok(())
     }
 
@@ -634,13 +647,15 @@ impl<S: DeliverySeams> DeliveryService<S> {
         if transaction.commit().await.is_err() {
             self.refused(DeliveryTransitionCode::ClaimCommitFailed);
             // A failed commit acknowledgement does not prove a rollback, so
-            // read what the database holds. A lease that did commit sends
-            // nothing from here and is answered when it expires; one that
-            // rolled back, or one whose fate cannot be read, is answered now,
-            // since a second interrupted answer is harmless and none is not.
-            if self.transition_committed(&started, Some(lease_token)).await == Some(true) {
-                self.record_resolved(committed).await;
-            } else {
+            // read what the database holds. Each recovered or expired
+            // delivery is recorded if it reads back as durable, whatever the
+            // lease's own fate. A lease that did commit sends nothing from
+            // here and is answered when it expires; one that rolled back, or
+            // one whose fate cannot be read, is answered now, since a second
+            // interrupted answer is harmless and none is not.
+            let lease_committed = self.transition_committed(&started, Some(lease_token)).await;
+            self.record_resolved(committed).await;
+            if lease_committed != Some(true) {
                 let interrupted = PendingAudit {
                     phase: DeliveryAuditPhase::Terminal,
                     outcome: DeliveryAuditOutcome::WorkerInterrupted,
@@ -1415,8 +1430,24 @@ impl<S: DeliverySeams> DeliveryService<S> {
             // terminal row is never reaped, so a disposition that did commit
             // is recorded here or never. One that rolled back leaves the
             // lease for expiry recovery, which answers the attempt.
-            if self.transition_committed(&terminal, None).await != Some(true) {
-                return Err(error.into());
+            match self.transition_committed(&terminal, None).await {
+                Some(true) => {}
+                Some(false) => return Err(error.into()),
+                None => {
+                    // The disposition's fate cannot be read, and one that
+                    // did commit is never answered by expiry recovery, so the
+                    // attempt is answered now as interrupted: a second
+                    // interrupted answer is harmless and none is not.
+                    let interrupted = PendingAudit {
+                        outcome: DeliveryAuditOutcome::WorkerInterrupted,
+                        disposition: DeliveryAuditDisposition::RetryPending,
+                        ..terminal
+                    };
+                    // A refused entry has already stopped the product's
+                    // writer, which reports it; finalize fails either way.
+                    let _ = self.seams.record_audit(interrupted.record()).await;
+                    return Err(error.into());
+                }
             }
         }
         // Recorded once the disposition committed, so the journal never
@@ -1447,7 +1478,13 @@ impl<S: DeliverySeams> DeliveryService<S> {
         event: &PendingAudit,
         lease_token: Option<Uuid>,
     ) -> Option<bool> {
-        for _ in 0..3 {
+        for read_back in 0..=READ_BACK_BACKOFF.len() {
+            if let Some(wait) = read_back
+                .checked_sub(1)
+                .and_then(|index| READ_BACK_BACKOFF.get(index))
+            {
+                tokio::time::sleep(*wait).await;
+            }
             let Ok(client) = self.seams.connection().await else {
                 continue;
             };
@@ -1601,10 +1638,11 @@ fn transition_holds(
                 && observed.lease_token.is_some()
                 && observed.lease_token == lease_token
         }
-        // Only a replay's reset writes a generation, so the replacement
-        // generation proves the reset committed whatever state the worker
-        // has since moved it to.
-        (DeliveryAuditPhase::Replay, _) => current,
+        // Only a replay's reset writes a generation, and generations only
+        // grow, so the replacement generation or a later one proves the reset
+        // committed whatever state the worker or a later replay has since
+        // moved it to.
+        (DeliveryAuditPhase::Replay, _) => observed.generation >= event.generation,
         (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::Expired) => {
             current && observed.expired
         }
@@ -2332,6 +2370,10 @@ mod tests {
                 "the replacement generation proves the reset in state {state}"
             );
         }
+        assert!(
+            transition_holds(&replay, &observed("pending", 3, 0), None),
+            "a later replay's generation proves this reset committed before it"
+        );
         assert!(
             !transition_holds(&replay, &observed("dead_lettered", 1, 2), None),
             "the prior generation proves the reset rolled back"
@@ -3078,23 +3120,89 @@ mod tests {
         client
     }
 
+    type RecordedAudit = (
+        DeliveryAuditPhase,
+        DeliveryAuditOutcome,
+        DeliveryAuditDisposition,
+    );
+
+    /// A local handler that only answers to its reviewed digest, so a replay
+    /// can find the binding its row was written against.
+    struct DigestHandler(String);
+
+    #[async_trait::async_trait]
+    impl HookHandler for DigestHandler {
+        fn handler_digest(&self) -> &str {
+            &self.0
+        }
+
+        fn attempt_timeout(&self) -> Duration {
+            Duration::ZERO
+        }
+
+        fn maximum_attempts(&self) -> u8 {
+            1
+        }
+
+        async fn run(
+            &self,
+            _envelope: &[u8],
+            _remaining: Duration,
+        ) -> Result<Vec<u8>, crate::delivery::HandlerRunFailure> {
+            unreachable!("no real-database test runs a handler")
+        }
+    }
+
     /// A seam set that opens its own connection against a real PostgreSQL
-    /// test database and counts every audit record it is given, so a test can
-    /// prove no record was written for a transition that never happened.
+    /// test database and records every audit record it is given, so a test can
+    /// prove which transitions were written. Connections are numbered from
+    /// one in the order they are opened: a test may refuse chosen ones, and
+    /// may run one statement on a chosen one before the service uses it, to
+    /// stand for another session acting at that moment.
     struct RealDbSeams {
         url: String,
-        audit_calls: Arc<Mutex<u32>>,
+        audit: Arc<Mutex<Vec<RecordedAudit>>>,
+        connections: Mutex<u32>,
+        refused_connections: Vec<u32>,
+        interleave: Option<(u32, String)>,
+        handler_digest: Option<String>,
+    }
+
+    impl RealDbSeams {
+        fn new(url: &str, audit: &Arc<Mutex<Vec<RecordedAudit>>>) -> Self {
+            Self {
+                url: url.to_owned(),
+                audit: Arc::clone(audit),
+                connections: Mutex::new(0),
+                refused_connections: Vec::new(),
+                interleave: None,
+                handler_digest: None,
+            }
+        }
     }
 
     #[async_trait::async_trait]
     impl DeliverySeams for RealDbSeams {
         type Destination = UnusedDestination;
-        type Handler = UnusedHandler;
+        type Handler = DigestHandler;
 
         async fn connection(&self) -> Result<DeliveryConnection, DeliveryError> {
-            Ok(Box::new(DirectClient(
-                connect_test_database(&self.url).await,
-            )))
+            let number = {
+                let mut connections = self.connections.lock().expect("connections lock");
+                *connections += 1;
+                *connections
+            };
+            if self.refused_connections.contains(&number) {
+                return Err(DeliveryError::Unavailable);
+            }
+            let client = connect_test_database(&self.url).await;
+            if let Some((_, statement)) = self.interleave.as_ref().filter(|(at, _)| *at == number) {
+                client
+                    .batch_execute(statement)
+                    .await
+                    .expect("the interleaved statement runs");
+            }
+            Ok(Box::new(DirectClient(client)))
         }
 
         async fn verify_transaction(
@@ -3108,15 +3216,19 @@ mod tests {
             None
         }
 
-        fn handler(&self, _binding: HookHandlerBinding<'_>) -> Option<Self::Handler> {
-            None
+        fn handler(&self, binding: HookHandlerBinding<'_>) -> Option<Self::Handler> {
+            self.handler_digest
+                .as_deref()
+                .filter(|digest| *digest == binding.handler_digest)
+                .map(|digest| DigestHandler(digest.to_owned()))
         }
 
-        async fn record_audit(
-            &self,
-            _record: DeliveryAuditRecord<'_>,
-        ) -> Result<(), DeliveryError> {
-            *self.audit_calls.lock().expect("audit calls lock") += 1;
+        async fn record_audit(&self, record: DeliveryAuditRecord<'_>) -> Result<(), DeliveryError> {
+            self.audit.lock().expect("audit lock").push((
+                record.phase,
+                record.outcome,
+                record.disposition,
+            ));
             Ok(())
         }
 
@@ -3252,12 +3364,9 @@ mod tests {
             .expect("simulate an active lease");
         assert_eq!(changed, 1, "the inserted delivery state row exists");
 
-        let audit_calls = Arc::new(Mutex::new(0u32));
+        let audit = Arc::new(Mutex::new(Vec::new()));
         let service = DeliveryService::new(
-            RealDbSeams {
-                url: url.clone(),
-                audit_calls: Arc::clone(&audit_calls),
-            },
+            RealDbSeams::new(&url, &audit),
             DeliveryConfig {
                 schema: schema.to_owned(),
                 idempotency_domain: b"hooks-delivery-lease-test-v1".to_vec(),
@@ -3288,9 +3397,367 @@ mod tests {
             "a lease-guarded update that changes zero rows must fail closed"
         );
         assert_eq!(
-            *audit_calls.lock().expect("audit calls lock"),
-            0,
+            *audit.lock().expect("audit lock"),
+            Vec::<RecordedAudit>::new(),
             "no audit entry for a transition that did not happen"
+        );
+    }
+
+    const REAL_DELIVERY_ID: &str = "events.permit.granted.webhook";
+    const REAL_PACKAGE_REVISION: &str =
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const REAL_HANDLER_DIGEST: &str =
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const REAL_SCHEMA_FINGERPRINT: &str =
+        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    const OTHER_EVENT_ID: &str = "9b1c3a5e-2d4f-4e6a-8b0c-1d3e5f7a9b2c";
+
+    fn real_database_url() -> String {
+        std::env::var("HOOKS_TEST_DATABASE_URL")
+            .expect("HOOKS_TEST_DATABASE_URL is required for the real PostgreSQL tests")
+    }
+
+    /// Install the delivery schema afresh under `schema` and return an
+    /// administrative connection to the test database.
+    async fn fresh_delivery_schema(url: &str, schema: &str) -> tokio_postgres::Client {
+        let client = connect_test_database(url).await;
+        client
+            .batch_execute(&format!(
+                "DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema};"
+            ))
+            .await
+            .expect("reset the test schema");
+        delivery_schema::install(&client, schema)
+            .await
+            .expect("install the delivery schema");
+        client
+    }
+
+    /// Insert one pending local-handler delivery of `event_id` whose stored
+    /// payload expires after `payload_lifetime`, a PostgreSQL interval.
+    async fn insert_real_delivery(
+        client: &mut tokio_postgres::Client,
+        schema: &str,
+        event_id: Uuid,
+        payload_lifetime: &str,
+        operator_replay: bool,
+    ) {
+        client
+            .execute(
+                &format!(
+                    "INSERT INTO {schema}.registry_outbox
+                     (event_id, event_type, trigger, entity_id, record_reference,
+                      record_revision, package_revision, schema_fingerprint, payload,
+                      payload_expires_at)
+                     VALUES ($1, 'permit.granted', 'test', 'permit', $2, 3, $3, $4, $5,
+                             transaction_timestamp() + interval '{payload_lifetime}')",
+                ),
+                &[
+                    &event_id,
+                    &"8f14e45fceea467a9cc18b2a4b9e2a1103b41d5ad4c88c8f2a0a9ac4f4c0d2b7",
+                    &REAL_PACKAGE_REVISION,
+                    &REAL_SCHEMA_FINGERPRINT,
+                    &b"{}".as_slice(),
+                ],
+            )
+            .await
+            .expect("insert the outbox row");
+        let transaction = client.transaction().await.expect("insert transaction");
+        insert_delivery(
+            &transaction,
+            schema,
+            event_id,
+            DeliveryCapture {
+                compiled_delivery_id: REAL_DELIVERY_ID,
+                handler_kind: HookHandlerKind::Rhai,
+                logical_destination_id: None,
+                destination_binding_digest: REAL_HANDLER_DIGEST,
+                package_revision: REAL_PACKAGE_REVISION,
+                schema_fingerprint: REAL_SCHEMA_FINGERPRINT,
+                data_schema: STORED_DATA_SCHEMA,
+                classification_ceiling: "public",
+                authentication_profile: "hmac_sha256_v1",
+                delivery_mode: "after_commit",
+                attempt_timeout_ms: 5_000,
+                initial_backoff_ms: 1_000,
+                maximum_backoff_ms: 60_000,
+                exponential_backoff_multiplier: 2,
+                maximum_attempts: 3,
+                retry_delays_ms: &[1_000, 2_000],
+                maximum_payload_bytes: 1_024,
+                payload: b"{}",
+                deployed_attempt_timeout_ms: 5_000,
+                deployed_maximum_attempts: 3,
+                dead_letter: "required",
+                operator_replay,
+            },
+        )
+        .await
+        .expect("insert the delivery row");
+        transaction.commit().await.expect("commit the insert");
+    }
+
+    fn real_service(seams: RealDbSeams, schema: &str) -> DeliveryService<RealDbSeams> {
+        DeliveryService::new(
+            seams,
+            DeliveryConfig {
+                schema: schema.to_owned(),
+                idempotency_domain: b"hooks-delivery-real-test-v1".to_vec(),
+                delivery_source: STORED_SOURCE.to_owned(),
+            },
+        )
+    }
+
+    /// A replay whose reset changed no row did not commit, so its response
+    /// is a refusal even when the row reads back under the generation the
+    /// replay would have written, here because another replay wrote it.
+    #[tokio::test]
+    #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
+    async fn a_replay_whose_reset_changed_no_row_is_refused() {
+        let url = real_database_url();
+        let schema = "hooks_delivery_replay_refused_test";
+        let mut client = fresh_delivery_schema(&url, schema).await;
+        let event_id = Uuid::parse_str(STORED_EVENT_ID).expect("event id");
+        insert_real_delivery(&mut client, schema, event_id, "1 day", true).await;
+        client
+            .batch_execute(&format!(
+                "UPDATE {schema}.registry_webhook_delivery_state
+                    SET state = 'dead_lettered', attempt = 3, next_attempt_at = NULL,
+                        dead_lettered_at = transaction_timestamp();
+                 CREATE FUNCTION {schema}.skip_reset() RETURNS trigger
+                 LANGUAGE plpgsql AS $$
+                 BEGIN
+                     IF current_setting('hooks_test.allow_reset', true) = 'on' THEN
+                         RETURN NEW;
+                     END IF;
+                     RETURN NULL;
+                 END $$;
+                 CREATE TRIGGER skip_reset
+                     BEFORE UPDATE ON {schema}.registry_webhook_delivery_state
+                     FOR EACH ROW WHEN (NEW.generation > OLD.generation)
+                     EXECUTE FUNCTION {schema}.skip_reset();"
+            ))
+            .await
+            .expect("make the reset change no row");
+
+        let audit = Arc::new(Mutex::new(Vec::new()));
+        let service = real_service(
+            RealDbSeams {
+                handler_digest: Some(REAL_HANDLER_DIGEST.to_owned()),
+                // The first connection after the replay's own stands for a
+                // concurrent replay that commits the next generation.
+                interleave: Some((
+                    2,
+                    format!(
+                        "SET hooks_test.allow_reset = 'on';
+                         UPDATE {schema}.registry_webhook_delivery_state
+                            SET generation = 2, state = 'pending', attempt = 0,
+                                next_attempt_at = transaction_timestamp(),
+                                dead_lettered_at = NULL"
+                    ),
+                )),
+                ..RealDbSeams::new(&url, &audit)
+            },
+            schema,
+        );
+
+        let result = service.replay_in(event_id, REAL_DELIVERY_ID, 1).await;
+
+        assert!(
+            matches!(result, Err(DeliveryError::Unavailable)),
+            "a reset that changed no row fails: {result:?}"
+        );
+        assert_eq!(
+            *audit.lock().expect("audit lock"),
+            vec![
+                (
+                    DeliveryAuditPhase::Replay,
+                    DeliveryAuditOutcome::ReplayRequested,
+                    DeliveryAuditDisposition::ReplayPending,
+                ),
+                (
+                    DeliveryAuditPhase::Replay,
+                    DeliveryAuditOutcome::ReplayRefused,
+                    DeliveryAuditDisposition::DeadLettered,
+                ),
+            ]
+        );
+    }
+
+    /// A claim whose lease commit failed still records every transition of
+    /// that transaction that reads back as durable, even when the lease's
+    /// own fate cannot be read.
+    #[tokio::test]
+    #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
+    async fn a_claim_whose_lease_commit_failed_records_its_durable_transitions() {
+        let url = real_database_url();
+        let schema = "hooks_delivery_claim_commit_test";
+        let mut client = fresh_delivery_schema(&url, schema).await;
+        let expiring = Uuid::parse_str(STORED_EVENT_ID).expect("event id");
+        let claimable = Uuid::parse_str(OTHER_EVENT_ID).expect("event id");
+        insert_real_delivery(&mut client, schema, expiring, "-1 second", false).await;
+        insert_real_delivery(&mut client, schema, claimable, "1 day", false).await;
+        client
+            .batch_execute(&format!(
+                "CREATE FUNCTION {schema}.refuse_lease() RETURNS trigger
+                 LANGUAGE plpgsql AS $$
+                 BEGIN
+                     RAISE EXCEPTION 'lease commit refused';
+                 END $$;
+                 CREATE CONSTRAINT TRIGGER refuse_lease
+                     AFTER UPDATE ON {schema}.registry_webhook_delivery_state
+                     DEFERRABLE INITIALLY DEFERRED
+                     FOR EACH ROW WHEN (NEW.state = 'leased')
+                     EXECUTE FUNCTION {schema}.refuse_lease();"
+            ))
+            .await
+            .expect("make the lease commit fail");
+
+        let audit = Arc::new(Mutex::new(Vec::new()));
+        let service = real_service(
+            RealDbSeams {
+                // Every read-back of the lease fails, so its fate is unknown.
+                refused_connections: vec![2, 3, 4],
+                // The next connection reads back the payload expiry, which
+                // this stands for having committed.
+                interleave: Some((
+                    5,
+                    format!(
+                        "UPDATE {schema}.registry_webhook_delivery_state
+                            SET state = 'expired', next_attempt_at = NULL,
+                                expired_at = transaction_timestamp()
+                          WHERE event_id = '{expiring}';
+                         UPDATE {schema}.registry_outbox SET payload = NULL
+                          WHERE event_id = '{expiring}'"
+                    ),
+                )),
+                ..RealDbSeams::new(&url, &audit)
+            },
+            schema,
+        );
+
+        let result = service.claim().await;
+
+        assert!(
+            matches!(result, Err(DeliveryError::Unavailable)),
+            "a claim whose commit failed fails"
+        );
+        let recorded = audit.lock().expect("audit lock").clone();
+        assert_eq!(
+            recorded.first(),
+            Some(&(
+                DeliveryAuditPhase::Attempt,
+                DeliveryAuditOutcome::AttemptStarted,
+                DeliveryAuditDisposition::Leased,
+            ))
+        );
+        assert!(
+            recorded.contains(&(
+                DeliveryAuditPhase::Terminal,
+                DeliveryAuditOutcome::PayloadExpired,
+                DeliveryAuditDisposition::Expired,
+            )),
+            "the durable expiry is recorded: {recorded:?}"
+        );
+        assert!(
+            recorded.contains(&(
+                DeliveryAuditPhase::Terminal,
+                DeliveryAuditOutcome::WorkerInterrupted,
+                DeliveryAuditDisposition::RetryPending,
+            )),
+            "the attempt of unknown fate is answered: {recorded:?}"
+        );
+        assert_eq!(recorded.len(), 3, "{recorded:?}");
+    }
+
+    /// A terminal transition whose commit failed and whose fate cannot be
+    /// read back still answers the attempt, after a bounded backoff between
+    /// the read-backs.
+    #[tokio::test]
+    #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
+    async fn finalize_answers_an_attempt_whose_commit_cannot_be_read_back() {
+        let url = real_database_url();
+        let schema = "hooks_delivery_finalize_unknown_test";
+        let mut client = fresh_delivery_schema(&url, schema).await;
+        let event_id = Uuid::parse_str(STORED_EVENT_ID).expect("event id");
+        insert_real_delivery(&mut client, schema, event_id, "1 day", false).await;
+        let lease_token = Uuid::new_v4();
+        let changed = client
+            .execute(
+                &format!(
+                    "UPDATE {schema}.registry_webhook_delivery_state
+                     SET state = 'leased',
+                         attempt = 1,
+                         next_attempt_at = NULL,
+                         attempt_started_at = transaction_timestamp(),
+                         lease_expires_at = transaction_timestamp() + interval '30 seconds',
+                         lease_token = $1
+                     WHERE event_id = $2",
+                ),
+                &[&lease_token, &event_id],
+            )
+            .await
+            .expect("lease the delivery");
+        assert_eq!(changed, 1);
+        client
+            .batch_execute(&format!(
+                "CREATE FUNCTION {schema}.refuse_delivered() RETURNS trigger
+                 LANGUAGE plpgsql AS $$
+                 BEGIN
+                     RAISE EXCEPTION 'terminal commit refused';
+                 END $$;
+                 CREATE CONSTRAINT TRIGGER refuse_delivered
+                     AFTER UPDATE ON {schema}.registry_webhook_delivery_state
+                     DEFERRABLE INITIALLY DEFERRED
+                     FOR EACH ROW WHEN (NEW.state = 'delivered')
+                     EXECUTE FUNCTION {schema}.refuse_delivered();"
+            ))
+            .await
+            .expect("make the terminal commit fail");
+
+        let audit = Arc::new(Mutex::new(Vec::new()));
+        let service = real_service(
+            RealDbSeams {
+                refused_connections: vec![2, 3, 4],
+                ..RealDbSeams::new(&url, &audit)
+            },
+            schema,
+        );
+        let claim = DeliveryClaim {
+            event_id,
+            compiled_delivery_id: REAL_DELIVERY_ID.to_owned(),
+            generation: 1,
+            attempt: 1,
+            attempt_started_at: SystemTime::now(),
+            lease_token,
+            deployed_maximum_attempts: 3,
+            retry_delays_ms: vec![1_000, 2_000],
+            package_revision: REAL_PACKAGE_REVISION.to_owned(),
+            handler_kind: HookHandlerKind::Rhai,
+        };
+
+        let started = Instant::now();
+        let result = service
+            .finalize(&claim, AttemptResult::from(DeliveryAuditOutcome::Delivered))
+            .await;
+        let elapsed = started.elapsed();
+
+        assert!(
+            matches!(result, Err(DeliveryError::Unavailable)),
+            "a terminal commit that failed fails: {result:?}"
+        );
+        assert_eq!(
+            *audit.lock().expect("audit lock"),
+            vec![(
+                DeliveryAuditPhase::Terminal,
+                DeliveryAuditOutcome::WorkerInterrupted,
+                DeliveryAuditDisposition::RetryPending,
+            )]
+        );
+        let backoff: Duration = READ_BACK_BACKOFF.iter().sum();
+        assert!(
+            elapsed >= backoff,
+            "the read-backs wait {backoff:?} between them, took {elapsed:?}"
         );
     }
 }
