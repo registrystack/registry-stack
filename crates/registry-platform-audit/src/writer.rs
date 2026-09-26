@@ -311,7 +311,8 @@ impl FileDestination {
     /// Check, without taking the writer lock or writing an entry, that a
     /// writer could open this destination: the directory exists or can be
     /// created, is owned by this user and not group- or world-writable, and
-    /// any existing active file is an owner-only regular file.
+    /// any existing active file is an owner-only regular file whose final
+    /// entry is complete.
     pub fn check_writable(&self) -> Result<(), AuditError> {
         let parent = parent(&self.path)?;
         match fs::symlink_metadata(parent) {
@@ -356,7 +357,13 @@ impl FileDestination {
                         ErrorKind::PermissionDenied,
                         "audit file is not readable and writable",
                     ))
-                })
+                })?;
+                let active = OpenOptions::new()
+                    .read(true)
+                    .custom_flags(open_flags())
+                    .open(&self.path)
+                    .map_err(AuditError::Io)?;
+                require_complete_final_entry(&active)
             }
             Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
             Err(error) => Err(AuditError::Io(error)),
@@ -769,19 +776,7 @@ impl SegmentedFile {
         let created = !path.exists();
         let active = open_append(&path)?;
         validate_active_file(&active)?;
-        let length = active.metadata().map_err(AuditError::Io)?.len();
-        if length > 0 {
-            let mut last = [0];
-            active
-                .read_exact_at(&mut last, length - 1)
-                .map_err(AuditError::Io)?;
-            if last[0] != b'\n' {
-                return Err(AuditError::Io(io::Error::new(
-                    ErrorKind::InvalidData,
-                    "audit file has an incomplete final entry; archive it and restart with a fresh path",
-                )));
-            }
-        }
+        require_complete_final_entry(&active)?;
         active.sync_all().map_err(AuditError::Io)?;
         if created || lock_created {
             sync_directory(&parent)?;
@@ -1044,6 +1039,24 @@ fn lock_path(path: &Path) -> PathBuf {
     let mut value = path.as_os_str().to_os_string();
     value.push(".lock");
     PathBuf::from(value)
+}
+
+/// Refuse an active file whose last entry was torn by an interrupted write.
+fn require_complete_final_entry(active: &File) -> Result<(), AuditError> {
+    let length = active.metadata().map_err(AuditError::Io)?.len();
+    if length > 0 {
+        let mut last = [0];
+        active
+            .read_exact_at(&mut last, length - 1)
+            .map_err(AuditError::Io)?;
+        if last[0] != b'\n' {
+            return Err(AuditError::Io(io::Error::new(
+                ErrorKind::InvalidData,
+                "audit file has an incomplete final entry; archive it and restart with a fresh path",
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn open_append(path: &Path) -> Result<File, AuditError> {
@@ -2051,6 +2064,24 @@ mod tests {
         destination
             .check_writable()
             .expect_err("read-only audit file");
+    }
+
+    #[test]
+    fn check_writable_refuses_an_existing_file_with_an_incomplete_final_entry() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path.parent().expect("parent"))
+            .expect("audit directory");
+        fs::write(&path, "{}\n").expect("file");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("mode");
+        destination.check_writable().expect("complete final entry");
+        fs::write(&path, "{}\n{").expect("torn file");
+        destination
+            .check_writable()
+            .expect_err("incomplete final entry");
     }
 
     #[test]
