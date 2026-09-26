@@ -15,7 +15,7 @@ use std::{
     fs::{self, File, OpenOptions, TryLockError},
     io::{self, ErrorKind, Write},
     os::unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt, PermissionsExt},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex as StdMutex,
@@ -39,6 +39,15 @@ pub const DEFAULT_AUDIT_RETAIN_DAYS: u32 = 90;
 pub const MIN_AUDIT_ROTATE_BYTES: u64 = 1024 * 1024;
 /// Largest accepted retention, in days.
 pub const MAX_AUDIT_RETAIN_DAYS: u32 = 36_500;
+
+/// One path segment other than `..`: the segments a [`FileDestination`] path
+/// may use. A `.` segment is allowed because it names no component.
+pub const AUDIT_PATH_SEGMENT_PATTERN: &str = r"(?:[^/.][^/]*|\.(?:[^/.][^/]*|\.[^/]+)?)";
+
+/// The JSON Schema pattern of a path [`FileDestination::new`] accepts: an
+/// absolute path with no `..` segment, stated for runtime configuration
+/// schemas so an editor refuses what startup refuses.
+pub const ABSOLUTE_AUDIT_PATH_PATTERN: &str = r"^/+(?:(?:[^/.][^/]*|\.(?:[^/.][^/]*|\.[^/]+)?)(?:/+(?:[^/.][^/]*|\.(?:[^/.][^/]*|\.[^/]+)?))*)?/*$";
 
 const MAX_ENTRY_BYTES: usize = 1024 * 1024;
 const MAX_SCHEMA_BYTES: usize = 128;
@@ -271,6 +280,16 @@ impl FileDestination {
         let path = path.into();
         if !path.is_absolute() {
             return Err(AuditDestinationError::RelativePath);
+        }
+        // A `..` component would put the file outside the hierarchy the
+        // configured path appears to name.
+        if !path.components().all(|component| {
+            matches!(
+                component,
+                Component::RootDir | Component::Prefix(_) | Component::Normal(_)
+            )
+        }) {
+            return Err(AuditDestinationError::InvalidPathComponent);
         }
         Ok(Self {
             path,
@@ -2980,6 +2999,33 @@ mod tests {
     }
 
     #[test]
+    fn the_schema_path_pattern_accepts_exactly_the_file_destination_paths() {
+        let pattern = regex::Regex::new(ABSOLUTE_AUDIT_PATH_PATTERN).expect("pattern compiles");
+        let segment = regex::Regex::new(&format!("^{AUDIT_PATH_SEGMENT_PATTERN}$"))
+            .expect("segment pattern compiles");
+        let segments = ["a", ".", "..", "...", ".a", "..a", "a..", "a.b", " "];
+        let mut paths = vec![String::new(), "/".to_owned(), "//".to_owned()];
+        for first in segments {
+            assert_eq!(segment.is_match(first), first != "..", "{first:?}");
+            paths.push(first.to_owned());
+            paths.push(format!("/{first}"));
+            paths.push(format!("/{first}/"));
+            for second in segments {
+                paths.push(format!("/{first}/{second}"));
+                paths.push(format!("/{first}//{second}/"));
+                paths.push(format!("{first}/{second}"));
+            }
+        }
+        for path in paths {
+            assert_eq!(
+                pattern.is_match(&path),
+                FileDestination::new(&path).is_ok(),
+                "{path:?}"
+            );
+        }
+    }
+
+    #[test]
     fn settings_apply_defaults_and_refuse_file_only_keys_on_stdout() {
         let path = PathBuf::from("/var/lib/registry/audit.jsonl");
         let AuditDestination::File(file) = AuditDestination::from_settings(
@@ -3007,6 +3053,15 @@ mod tests {
                 None
             ),
             Err(AuditDestinationError::RelativePath)
+        );
+        assert_eq!(
+            AuditDestination::from_settings(
+                AuditDestinationKind::File,
+                Some(PathBuf::from("/var/lib/audit/../tmp/audit.jsonl")),
+                None,
+                None
+            ),
+            Err(AuditDestinationError::InvalidPathComponent)
         );
         assert!(matches!(
             AuditDestination::from_settings(

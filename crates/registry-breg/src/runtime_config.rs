@@ -3019,7 +3019,10 @@ fn install_schema_constraints(schema: &mut Value) {
             "else".to_owned(),
             serde_json::json!({
                 "required": ["path"],
-                "properties": {"path": {"type": "string", "pattern": "^/"}}
+                "properties": {"path": {
+                    "type": "string",
+                    "pattern": registry_platform_audit::ABSOLUTE_AUDIT_PATH_PATTERN
+                }}
             }),
         );
     }

@@ -64,6 +64,7 @@ url.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+regex.workspace = true
 futures.workspace = true
 jsonschema.workspace = true
 oxjsonld = "0.2.5"

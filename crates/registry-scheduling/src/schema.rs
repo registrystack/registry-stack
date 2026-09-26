@@ -65,7 +65,6 @@ fn install_runtime_constraints(schema: &mut Value) {
     for (definition, property) in [
         ("RuntimePackageConfig", "root"),
         ("FileSecretProviderConfig", "root"),
-        ("AuditConfig", "path"),
     ] {
         set_definition_property(
             schema,
@@ -75,6 +74,14 @@ fn install_runtime_constraints(schema: &mut Value) {
             Value::String("^/".to_owned()),
         );
     }
+    // The audit file is also refused with a `..` segment.
+    set_definition_property(
+        schema,
+        "AuditConfig",
+        "path",
+        "pattern",
+        Value::String(registry_platform_audit::ABSOLUTE_AUDIT_PATH_PATTERN.to_owned()),
+    );
     for (definition, property) in [
         ("DatabaseConfig", "runtimeUrlRef"),
         ("DatabaseConfig", "migrationUrlRef"),
@@ -346,13 +353,17 @@ mod tests {
         for (definition, property) in [
             ("RuntimePackageConfig", "root"),
             ("FileSecretProviderConfig", "root"),
-            ("AuditConfig", "path"),
         ] {
             assert_eq!(
                 document["$defs"][definition]["properties"][property]["pattern"], "^/",
                 "{definition}.{property} must be absolute"
             );
         }
+        assert_eq!(
+            document["$defs"]["AuditConfig"]["properties"]["path"]["pattern"],
+            registry_platform_audit::ABSOLUTE_AUDIT_PATH_PATTERN,
+            "the audit path must be absolute with no `..` segment"
+        );
         for (definition, property) in [
             ("DatabaseConfig", "runtimeUrlRef"),
             ("DatabaseConfig", "migrationUrlRef"),
