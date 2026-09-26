@@ -87,7 +87,7 @@ evidencectl check "<editable-project>" \
 ```
 
 This applies the target's declared production or evidence-grade assurance profile and validates
-its governance, runtime structure, public keys, source connections, and governed bundle. It does
+its governance, runtime structure, public keys, source connections, and governed package. It does
 not require target-host paths or secrets to exist, run fixtures, or prove live readiness.
 
 {/* Evidence: crates/registry-evidencectl/src/check.rs, check() and explain();
@@ -95,9 +95,9 @@ not require target-host paths or secrets to exist, run fixtures, or prove live r
 
 ## The runtime file
 
-`runtime.yaml` binds one governed bundle to one process: where the bundle lives, what the
+`runtime.yaml` binds one governed package to one process: where the package lives, what the
 listener binds to, where secrets sit, where audit entries go, and which private CA files a source or the
-access-token issuer may trust. It is process-local operator configuration, not part of the reviewed bundle, and
+access-token issuer may trust. It is process-local operator configuration, not part of the reviewed package, and
 `products/evidence/contracts/runtime.schema.yaml` is its schema of record.
 
 Top-level required fields:
@@ -106,7 +106,7 @@ Top-level required fields:
 | --- | --- |
 | `apiVersion` | Fixed at `registry.registrystack.org/evidence-runtime/v1alpha1`. |
 | `kind` | Fixed at `EvidenceRuntimeConfig`. |
-| `package` | `root`, the absolute path to the governed `bundle/` directory, plus an optional `expectedDigest` the loaded bundle revision must match. |
+| `package` | `root`, the stable absolute path to the governed package directory, plus an optional `expectedDigest` that must match the digest of its verified `SHA256SUMS` file. |
 | `listener` | `bind` as one `host:port` value (loopback, private IPv4, or unique-local IPv6 only; an IPv6 host goes in brackets), `tlsTermination` (fixed at `operator-controlled-upstream`: TLS terminates ahead of Evidence Gateway), `trustProxyIdentityHeaders` (fixed `false`: proxy-supplied identity is never trusted), plus request-size, concurrency, timeout, and shutdown-grace bounds. |
 | `secretProviders` | The secret providers the deployment enables, at least one. `file.root` is the owner-only directory every `secret:file/<name>` reference resolves beneath; `environment: {}` enables `secret:env/<NAME>` references to operator-named variables, and any reference in the reviewed bundle may then name any variable in the process environment; prefer the file provider, or give the process a dedicated environment holding only the secrets it needs. A reference to a provider that is not declared is refused. |
 | `audit` | `destination` (`file` by default, or `stdout`); for `file`, the absolute `path` of the active audit file, `rotateBytes` (100 MiB by default), and `retainDays` (90 by default). |
@@ -116,12 +116,12 @@ An optional `metricsListener` (`bind`) serves `GET /metrics` on a second private
 binding; absent by default, it is documented in `products/evidence/OPERATOR-CONTRACT.md` under
 Metrics reference rather than in the public Evidence Gateway contract.
 
-`runtime.yaml` cannot override anything the bundle governs. The schema's `ownership` block closes
-the allowed set to the bundle package root and optional expected revision, listener binding and
+`runtime.yaml` cannot override anything the package governs. The schema's `ownership` block closes
+the allowed set to the package root and optional expected digest, listener binding and
 process limits, the optional metrics listener binding, the enabled secret providers and file-secret
 root, the audit destination with its path, rotation size, and retention, and logical
 private-CA file bindings. Every other field, including service identity, authentication,
-authority, sources, disclosure, and signing policy, belongs to the bundle alone.
+authority, sources, disclosure, and signing policy, belongs to the package alone.
 
 ## The bundle
 
@@ -210,8 +210,8 @@ outboundTls:
 The CA file is trusted beside the system roots for the `jwksSource.uri` connection alone; it widens no
 source connection and no other process. Hostname verification stays on, and there is no setting
 that disables verification. The file follows the same rules as a source CA file: an absolute path,
-no write permission for anyone, a bounded PEM bundle, and part of the runtime revision, so changing
-it requires a restart. The binding is exact in both directions, so a runtime file that binds the
+no write permission for anyone, and a bounded PEM bundle. Changing it requires a restart but does
+not change the package digest. The binding is exact in both directions, so a runtime file that binds the
 profile without the bundle naming it, or the reverse, is refused. A source and the issuer may share
 one profile. A local HTTP `jwksSource.uri` cannot name a profile. `evidence check
 --require-runtime-dependencies` fetches the key set through the profile, so a missing or wrong CA

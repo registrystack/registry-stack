@@ -1263,7 +1263,7 @@ fn a_fresh_local_target_journey_checks_and_explains_without_a_pretargets_directo
             "exit 0\n",
         ),
         version = registry_platform_buildinfo::DISPLAY_VERSION,
-        report = r#"{"bundleRevision":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","requirements":[{"id":"urn:example:requirement:record-status:v1","configurationRevision":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}"#,
+        report = r#"{"packageDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","requirements":[{"id":"urn:example:requirement:record-status:v1","configurationRevision":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}"#,
     );
     fs::write(&stub, stub_script).expect("write check stub");
     let mut permissions = fs::metadata(&stub).expect("stat stub").permissions();

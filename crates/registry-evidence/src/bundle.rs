@@ -8,6 +8,10 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 use jsonschema::{Draft, JSONSchema};
+use registry_platform_config::{
+    package::is_envelope_file, sha256_uri, verify_package, PackageError, PackageLimits,
+    VerifiedPackage, SUM_FILE,
+};
 use registry_platform_crypto::{
     canonicalize_json, PublicJwk, SigningAlgorithm as ProviderSigningAlgorithm,
 };
@@ -35,8 +39,6 @@ pub const MAX_PUBLIC_JWK_BYTES: u64 = 64 * 1024;
 const CONFIG_FILE: &str = "evidence.yaml";
 pub const DISCOVERY_DESCRIPTION_FILE: &str = "catalog.jsonld";
 const RUNTIME_FILE: &str = "runtime.yaml";
-const REVISION_DOMAIN: &[u8] = b"registry.evidence.bundle-revision/v1\0";
-const RUNTIME_REVISION_DOMAIN: &[u8] = b"registry.evidence.runtime-revision/v1\0";
 const REQUIREMENT_REVISION_DOMAIN: &[u8] = b"registry.evidence.requirement-revision/v1\0";
 /// Path the canonical configuration projection takes inside a requirement's
 /// closure. An artifact path can hold no `#`, so this can never collide with a
@@ -81,6 +83,8 @@ pub enum BundleError {
     UnknownFile(ArtifactFault),
     #[error("the Evidence deployment bundle exceeds a Version 1 size bound")]
     TooLarge,
+    #[error("{0}")]
+    Package(PackageError),
     #[error("the Evidence deployment configuration is invalid: {0}")]
     Config(ArtifactFault),
     #[error("an Evidence bundle artifact is invalid: {0}")]
@@ -101,6 +105,7 @@ impl BundleError {
             | Self::InvalidScript(fault)
             | Self::NotImmutable(fault)
             | Self::UnknownFile(fault) => Some(fault),
+            Self::Package(_) => None,
             _ => None,
         }
     }
@@ -115,6 +120,7 @@ impl BundleError {
             Self::InvalidArtifact(fault) => Self::InvalidArtifact(fault.bind(artifact)),
             Self::InvalidScript(fault) => Self::InvalidScript(fault.bind(artifact)),
             Self::NotImmutable(fault) => Self::NotImmutable(fault.bind(artifact)),
+            Self::Package(error) => Self::Package(error),
             other => other,
         }
     }
@@ -278,16 +284,16 @@ impl Codelist {
     }
 }
 
-/// One fully captured, validated bundle revision.
+/// One fully captured, validated Evidence package.
 ///
 /// Runtime consumers use these captured bytes and compiled artifacts. They do
-/// not reopen the deployment directory, which prevents a later filesystem
-/// change from partially replacing the revision used by a serving process.
+/// not reopen the package directory, which prevents a later filesystem change
+/// from partially replacing the package used by a serving process.
 #[derive(Debug, Clone)]
 pub struct Bundle {
     root: PathBuf,
     pub config: EvidenceConfig,
-    revision: String,
+    package_digest: String,
     requirement_revisions: BTreeMap<String, String>,
     files: BTreeMap<String, Vec<u8>>,
     discovery_description: Option<Vec<u8>>,
@@ -302,13 +308,12 @@ pub struct Bundle {
 /// One captured operator runtime configuration and its bound trust anchors.
 ///
 /// Secret values and audit contents are deliberately not captured. The
-/// runtime digest covers the reviewed runtime YAML, the private-CA bytes, and
-/// the digest of every process-local extract the document binds.
+/// reviewed runtime YAML and private-CA bytes are captured, while every
+/// process-local extract is bound by a digest and stable file identity.
 #[derive(Debug, Clone)]
 pub struct RuntimeDocument {
     path: PathBuf,
     pub config: RuntimeConfig,
-    revision: String,
     bytes: Vec<u8>,
     pub ca_bundles: BTreeMap<String, Vec<u8>>,
     pub source_extracts: BTreeMap<String, SourceExtract>,
@@ -369,7 +374,7 @@ impl SourceExtract {
     /// symlink refusal, not the regular-file refusal, and not the writability
     /// refusal that is what makes `immutable=1` a checked fact. Checking here
     /// keeps a refresh landing mid-startup a startup failure rather than a
-    /// deployment answering from bytes its runtime revision does not name.
+    /// deployment answering from extract bytes that were never validated.
     ///
     /// Narrowing rather than proof: a path renamed away and back inside the
     /// window still passes, and anyone who can write the containing directory
@@ -449,16 +454,9 @@ impl RuntimeDocument {
                 .map_err(|error| error.in_artifact(&source_extract_artifact(profile)))?;
             source_extracts.insert(profile.to_owned(), extract);
         }
-        let revision = compute_runtime_revision(
-            &bytes,
-            &loaded.effective_digest,
-            &ca_bundles,
-            &source_extracts,
-        )?;
         Ok(Self {
             path: path.to_path_buf(),
             config,
-            revision,
             bytes,
             ca_bundles,
             source_extracts,
@@ -467,10 +465,6 @@ impl RuntimeDocument {
 
     pub fn path(&self) -> &Path {
         &self.path
-    }
-
-    pub fn revision(&self) -> &str {
-        &self.revision
     }
 
     pub fn bytes(&self) -> &[u8] {
@@ -501,18 +495,12 @@ pub struct DeploymentInputs {
 impl DeploymentInputs {
     pub fn load(runtime_path: impl AsRef<Path>) -> Result<Self, BundleError> {
         let runtime = RuntimeDocument::load(runtime_path)?;
-        let bundle = Bundle::load(&runtime.config.package.root)?;
-        if runtime
+        let verified = runtime
             .config
             .package
-            .verify_digest(bundle.revision())
-            .is_err()
-        {
-            return Err(invalid_artifact(
-                "package.expectedDigest does not match the revision of the bundle at package.root",
-            )
-            .in_artifact(RUNTIME_FILE));
-        }
+            .verify_package(&evidence_package_limits(), "evidencectl package")
+            .map_err(package_error)?;
+        let bundle = Bundle::load_verified(&runtime.config.package.root, &verified)?;
         validate_runtime_bindings(&bundle.config, &runtime.config)?;
         Ok(Self { bundle, runtime })
     }
@@ -536,7 +524,13 @@ pub type EvidenceBundle = Bundle;
 impl Bundle {
     pub fn load(root: impl AsRef<Path>) -> Result<Self, BundleError> {
         let root = root.as_ref();
-        let files = capture_bundle_files(root)?;
+        let verified = verify_package(root, &evidence_package_limits(), "evidencectl package")
+            .map_err(package_error)?;
+        Self::load_verified(root, &verified)
+    }
+
+    fn load_verified(root: &Path, verified: &VerifiedPackage) -> Result<Self, BundleError> {
+        let files = capture_bundle_files(root, verified)?;
         let config_bytes = files.get(CONFIG_FILE).ok_or(BundleError::Unavailable)?;
         let config = EvidenceConfig::parse_yaml(config_bytes)
             .map_err(|error| BundleError::Config(ArtifactFault::new(CONFIG_FILE, error.fault())))?;
@@ -571,13 +565,12 @@ impl Bundle {
         validate_codelist_references(&config, &codelists)?;
         let fixtures = load_fixtures(&config, &files)?;
         let (active_public_jwk, published_public_jwks) = load_public_jwks(&config, &files)?;
-        let revision = compute_revision(&files)?;
         let requirement_revisions = compute_requirement_revisions(&config, &files)?;
 
         Ok(Self {
             root: root.to_path_buf(),
             config,
-            revision,
+            package_digest: verified.digest().to_owned(),
             requirement_revisions,
             files,
             discovery_description,
@@ -607,13 +600,13 @@ impl Bundle {
             .map(String::as_str)
     }
 
-    /// The digest of every file in the deployment bundle.
+    /// The digest of the package's `SHA256SUMS` file.
     ///
     /// This is the deployment's own identity, for audit, status, and operator
     /// diagnostics. It is not what an assertion carries: see
     /// [`Bundle::configuration_revision`].
-    pub fn revision(&self) -> &str {
-        &self.revision
+    pub fn package_digest(&self) -> &str {
+        &self.package_digest
     }
 
     pub fn artifact(&self, path: &str) -> Option<&[u8]> {
@@ -646,7 +639,24 @@ pub fn load_bundle(root: impl AsRef<Path>) -> Result<Bundle, BundleError> {
     Bundle::load(root)
 }
 
-fn capture_bundle_files(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, BundleError> {
+pub(crate) fn evidence_package_limits() -> PackageLimits {
+    PackageLimits {
+        max_files: MAX_BUNDLE_FILES,
+        max_file_bytes: MAX_ARTIFACT_BYTES,
+        max_total_bytes: MAX_BUNDLE_BYTES,
+        max_depth: 3,
+        max_path_bytes: 128,
+    }
+}
+
+fn package_error(error: PackageError) -> BundleError {
+    BundleError::Package(error.naming_root_as("package.root"))
+}
+
+fn capture_bundle_files(
+    root: &Path,
+    verified: &VerifiedPackage,
+) -> Result<BTreeMap<String, Vec<u8>>, BundleError> {
     let root_metadata = fs::symlink_metadata(root).map_err(|_| BundleError::Unavailable)?;
     if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
         return Err(BundleError::InvalidPath);
@@ -672,6 +682,7 @@ fn capture_bundle_files(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, Bundle
     }
 
     let mut files = BTreeMap::new();
+    let mut uncaptured = verified.files().map(str::to_owned).collect::<BTreeSet<_>>();
     let mut total = 0_u64;
     for (relative, path, scanned_metadata) in paths {
         let cap = file_size_cap(&relative);
@@ -689,7 +700,32 @@ fn capture_bundle_files(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, Bundle
         if total > MAX_BUNDLE_BYTES {
             return Err(BundleError::TooLarge);
         }
-        files.insert(relative, bytes);
+        if relative == SUM_FILE {
+            if sha256_uri(&bytes) != verified.digest() {
+                return Err(
+                    not_immutable("SHA256SUMS was replaced after package verification")
+                        .in_artifact(SUM_FILE),
+                );
+            }
+            continue;
+        }
+        let digest = sha256_uri(&bytes);
+        if verified.file_digest(&relative).as_deref() != Some(digest.as_str()) {
+            return Err(not_immutable(
+                "the package artifact was replaced after package verification",
+            )
+            .in_artifact(&relative));
+        }
+        uncaptured.remove(&relative);
+        if !is_envelope_file(&relative) {
+            files.insert(relative, bytes);
+        }
+    }
+    if let Some(missing) = uncaptured.into_iter().next() {
+        return Err(
+            not_immutable("the package artifact disappeared after package verification")
+                .in_artifact(&missing),
+        );
     }
     if !files.contains_key(CONFIG_FILE) {
         return Err(BundleError::Unavailable);
@@ -738,7 +774,9 @@ fn collect_paths(
                 if !ALLOWED_DIRECTORIES.contains(&top) {
                     return Err(BundleError::InvalidPath);
                 }
-            } else if !matches!(relative.as_str(), CONFIG_FILE | DISCOVERY_DESCRIPTION_FILE) {
+            } else if !matches!(relative.as_str(), CONFIG_FILE | DISCOVERY_DESCRIPTION_FILE)
+                && !is_envelope_file(&relative)
+            {
                 return Err(unknown_file(
                     &relative,
                     "bundle root contains a file other than the configuration",
@@ -2747,41 +2785,6 @@ fn validate_ca_bundle(bytes: &[u8]) -> Result<(), BundleError> {
     Ok(())
 }
 
-fn compute_runtime_revision(
-    runtime_bytes: &[u8],
-    effective_digest: &str,
-    ca_bundles: &BTreeMap<String, Vec<u8>>,
-    source_extracts: &BTreeMap<String, SourceExtract>,
-) -> Result<String, BundleError> {
-    // The authored bytes and the configuration they became after `${NAME}`
-    // substitution both enter the revision, so one file started under two
-    // environments reports two revisions.
-    let mut files = BTreeMap::from([
-        ("runtime.yaml".to_owned(), runtime_bytes.to_vec()),
-        (
-            "runtime.effective".to_owned(),
-            effective_digest.as_bytes().to_vec(),
-        ),
-    ]);
-    for (profile, bytes) in ca_bundles {
-        files.insert(format!("trust-profile/{profile}.pem"), bytes.clone());
-    }
-    // An extract enters the revision as its digest rather than its bytes. The
-    // revision still covers every byte that was read, because a digest changes
-    // whenever the file it was taken over changes.
-    for (profile, extract) in source_extracts {
-        files.insert(
-            format!("source-extract/{profile}"),
-            extract.digest().as_bytes().to_vec(),
-        );
-    }
-    compute_named_revision(RUNTIME_REVISION_DOMAIN, &files)
-}
-
-fn compute_revision(files: &BTreeMap<String, Vec<u8>>) -> Result<String, BundleError> {
-    compute_named_revision(REVISION_DOMAIN, files)
-}
-
 /// One configuration revision per configured requirement.
 ///
 /// Each digest covers exactly what can change that requirement's assertions:
@@ -2827,7 +2830,7 @@ fn compute_requirement_revisions(
 /// bounded acquisition names, and the codelists of the selector profiles its subject roles and
 /// grants use. The active and published public signing keys are not in any
 /// requirement's closure: they are trust a relying party takes from the JWKS,
-/// and the bundle revision still covers them.
+/// and the package digest still covers them.
 fn requirement_artifact_paths(
     config: &EvidenceConfig,
     requirement: &RequirementConfig,
@@ -3268,7 +3271,7 @@ mod tests {
     }
 
     #[test]
-    fn revision_binds_paths_and_exact_bytes_deterministically() {
+    fn package_digest_binds_paths_and_exact_bytes_deterministically() {
         let first = BTreeMap::from([
             ("evidence.yaml".to_owned(), b"version: 1\n".to_vec()),
             ("schemas/facts.yaml".to_owned(), b"type: object\n".to_vec()),
@@ -3277,13 +3280,124 @@ mod tests {
             ("schemas/facts.yaml".to_owned(), b"type: object\n".to_vec()),
             ("evidence.yaml".to_owned(), b"version: 1\n".to_vec()),
         ]);
-        assert_eq!(compute_revision(&first), compute_revision(&same));
+        let digest = |files: &BTreeMap<String, Vec<u8>>| {
+            registry_platform_config::plan_package(
+                Path::new("evidence-package"),
+                files,
+                None,
+                &evidence_package_limits(),
+                "evidencectl package",
+            )
+            .expect("the package digest plans")
+        };
+        assert_eq!(digest(&first), digest(&same));
 
         let renamed = BTreeMap::from([
             ("evidence.yaml".to_owned(), b"version: 1\n".to_vec()),
             ("schemas/other.yaml".to_owned(), b"type: object\n".to_vec()),
         ]);
-        assert_ne!(compute_revision(&first), compute_revision(&renamed));
+        assert_ne!(digest(&first), digest(&renamed));
+    }
+
+    #[cfg(unix)]
+    fn refresh_package_envelope(root: &Path) {
+        for reserved in [SUM_FILE, registry_platform_config::REVISION_FILE] {
+            let path = root.join(reserved);
+            if path.exists() {
+                fs::remove_file(path).expect("remove the prior package envelope");
+            }
+        }
+        registry_platform_config::write_sum_file(
+            root,
+            None,
+            &evidence_package_limits(),
+            "evidencectl package",
+        )
+        .expect("refresh the package envelope");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn package_verification_names_changed_missing_and_extra_files() {
+        type MutationCase = (&'static str, fn(&Path), &'static str);
+        let cases: [MutationCase; 3] = [
+            (
+                "changed",
+                |root: &Path| {
+                    fs::write(
+                        root.join("derivations/adult-status.rhai"),
+                        "fn derive(_) { no_match() }\n",
+                    )
+                    .expect("change a listed artifact");
+                },
+                "changed: derivations/adult-status.rhai",
+            ),
+            (
+                "missing",
+                |root: &Path| {
+                    fs::remove_file(root.join("derivations/adult-status.rhai"))
+                        .expect("remove a listed artifact");
+                },
+                "missing: derivations/adult-status.rhai",
+            ),
+            (
+                "extra",
+                |root: &Path| {
+                    fs::write(root.join("schemas/unlisted.yaml"), "type: object\n")
+                        .expect("add an unlisted artifact");
+                },
+                "extra: schemas/unlisted.yaml",
+            ),
+        ];
+        for (case, mutate, expected) in cases {
+            let directory = tempfile::tempdir().expect("temporary package");
+            copy_acceptance_bundle("adult-status", directory.path());
+            mutate(directory.path());
+            set_tree_mode(directory.path(), 0o555, 0o444);
+            let error = Bundle::load(directory.path()).expect_err(case);
+            assert!(error.to_string().contains(expected), "{error}");
+            set_tree_mode(directory.path(), 0o755, 0o644);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn package_digest_is_repeatable_and_unpinned_packages_are_verified() {
+        let directory = tempfile::tempdir().expect("temporary package");
+        copy_acceptance_bundle("adult-status", directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let first = Bundle::load(directory.path()).expect("the unpinned package loads");
+        let again = Bundle::load(directory.path()).expect("the same package reloads");
+        assert_eq!(first.package_digest(), again.package_digest());
+        assert!(first.package_digest().starts_with("sha256:"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn consumer_capture_refuses_bytes_replaced_after_package_verification() {
+        let directory = tempfile::tempdir().expect("temporary package");
+        copy_acceptance_bundle("adult-status", directory.path());
+        let verified = verify_package(
+            directory.path(),
+            &evidence_package_limits(),
+            "evidencectl package",
+        )
+        .expect("the package verifies");
+        fs::write(
+            directory.path().join("derivations/adult-status.rhai"),
+            "fn derive(_) { no_match() }\n",
+        )
+        .expect("replace a verified artifact");
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let error = capture_bundle_files(directory.path(), &verified)
+            .expect_err("consumer capture refuses replaced bytes");
+        let fault = error.artifact_fault().expect("the artifact is named");
+        assert_eq!(fault.artifact(), "derivations/adult-status.rhai");
+        assert_eq!(
+            fault.fault().cause(),
+            "the package artifact was replaced after package verification"
+        );
+        set_tree_mode(directory.path(), 0o755, 0o644);
     }
 
     /// The revision every configured requirement carries, keyed by requirement.
@@ -3314,11 +3428,13 @@ mod tests {
     ) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
         let directory = tempfile::tempdir().expect("temporary bundle");
         copy_acceptance_bundle("all-definitions", directory.path());
+        refresh_package_envelope(directory.path());
         set_tree_mode(directory.path(), 0o555, 0o444);
         let before = requirement_revisions(directory.path());
 
         set_tree_mode(directory.path(), 0o755, 0o644);
         edit(directory.path());
+        refresh_package_envelope(directory.path());
         set_tree_mode(directory.path(), 0o555, 0o444);
         let after = requirement_revisions(directory.path());
         (before, after)
@@ -3443,10 +3559,11 @@ mod tests {
         )
         .expect("batch response schema writes");
 
+        refresh_package_envelope(directory.path());
         set_tree_mode(directory.path(), 0o555, 0o444);
         let before = Bundle::load(directory.path()).expect("batch bundle loads");
         let requirement_id = before.config.requirements[0].id.clone();
-        let before_bundle = before.revision().to_owned();
+        let before_package = before.package_digest().to_owned();
         let before_requirement = before
             .configuration_revision(&requirement_id)
             .expect("requirement revision exists")
@@ -3460,9 +3577,10 @@ mod tests {
             format!("{source}\n// reviewed batch edit\n"),
         )
         .expect("batch preparation changes");
+        refresh_package_envelope(directory.path());
         set_tree_mode(directory.path(), 0o555, 0o444);
         let after = Bundle::load(directory.path()).expect("edited batch bundle loads");
-        assert_ne!(before_bundle, after.revision());
+        assert_ne!(before_package, after.package_digest());
         assert_ne!(
             before_requirement,
             after
@@ -3571,7 +3689,7 @@ mod tests {
     /// relying party takes from the JWKS, not through the revision it pins.
     /// Every step of a planned rotation (publish the next key, activate it,
     /// retire the previous one) therefore leaves each requirement revision
-    /// alone, while the bundle revision still records every step.
+    /// alone, while the package digest still records every step.
     #[cfg(unix)]
     #[test]
     fn a_planned_signing_key_rotation_leaves_every_requirement_revision_alone() {
@@ -3590,11 +3708,12 @@ mod tests {
             fs::write(&path, text.replace(from, to)).expect("the configuration writes");
         };
         let observe = || {
+            refresh_package_envelope(directory.path());
             set_tree_mode(directory.path(), 0o555, 0o444);
             let bundle = Bundle::load(directory.path()).expect("the rotated bundle loads");
             let revisions = requirement_revisions(directory.path());
             set_tree_mode(directory.path(), 0o755, 0o644);
-            (bundle.revision().to_owned(), revisions)
+            (bundle.package_digest().to_owned(), revisions)
         };
         let (initial_bundle, initial) = observe();
 
@@ -3627,23 +3746,23 @@ mod tests {
         assert_eq!(published, initial, "publishing a key keeps every revision");
         assert_eq!(activated, initial, "activating a key keeps every revision");
         assert_eq!(retired, initial, "retiring a key keeps every revision");
-        let bundle_revisions = BTreeSet::from([
+        let package_digests = BTreeSet::from([
             initial_bundle,
             published_bundle,
             activated_bundle,
             retired_bundle,
         ]);
         assert_eq!(
-            bundle_revisions.len(),
+            package_digests.len(),
             4,
-            "the bundle revision still records every rotation step"
+            "the package digest still records every rotation step"
         );
     }
 
     /// An emergency revocation denies a key through the JWKS and the denylist a
     /// relying party's policy carries, not through the revision it pins, so
-    /// revoking a key leaves each requirement revision alone while the bundle
-    /// revision still records it.
+    /// revoking a key leaves each requirement revision alone while the package
+    /// digest still records it.
     #[cfg(unix)]
     #[test]
     fn revoking_a_signing_key_leaves_every_requirement_revision_alone() {
@@ -3653,11 +3772,12 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary bundle");
         copy_acceptance_bundle("all-definitions", directory.path());
         let observe = || {
+            refresh_package_envelope(directory.path());
             set_tree_mode(directory.path(), 0o555, 0o444);
             let bundle = Bundle::load(directory.path()).expect("the bundle loads");
             let revisions = requirement_revisions(directory.path());
             set_tree_mode(directory.path(), 0o755, 0o644);
-            (bundle.revision().to_owned(), revisions)
+            (bundle.package_digest().to_owned(), revisions)
         };
         let (initial_bundle, initial) = observe();
 
@@ -3675,14 +3795,14 @@ mod tests {
         assert_eq!(revoked, initial, "revoking a key keeps every revision");
         assert_ne!(
             revoked_bundle, initial_bundle,
-            "the bundle revision still records the revocation"
+            "the package digest still records the revocation"
         );
     }
 
     /// Revoking an identity-provider key changes which caller tokens Evidence
     /// accepts, not what any assertion means, and a relying party never
     /// verifies those tokens. The revocation therefore leaves each requirement
-    /// revision alone while the bundle revision still records it.
+    /// revision alone while the package digest still records it.
     #[cfg(unix)]
     #[test]
     fn revoking_a_caller_token_key_leaves_every_requirement_revision_alone() {
@@ -3692,11 +3812,12 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary bundle");
         copy_acceptance_bundle("all-definitions", directory.path());
         let observe = || {
+            refresh_package_envelope(directory.path());
             set_tree_mode(directory.path(), 0o555, 0o444);
             let bundle = Bundle::load(directory.path()).expect("the bundle loads");
             let revisions = requirement_revisions(directory.path());
             set_tree_mode(directory.path(), 0o755, 0o644);
-            (bundle.revision().to_owned(), revisions)
+            (bundle.package_digest().to_owned(), revisions)
         };
         let (initial_bundle, initial) = observe();
 
@@ -3717,7 +3838,7 @@ mod tests {
         );
         assert_ne!(
             revoked_bundle, initial_bundle,
-            "the bundle revision still records the revocation"
+            "the package digest still records the revocation"
         );
     }
 
@@ -3876,6 +3997,9 @@ mod tests {
         fs::write(&config_path, local).expect("local configuration writes");
         fs::remove_file(directory.path().join("fixtures/cases.yaml"))
             .expect("unreferenced fixture is removed");
+        fs::remove_dir(directory.path().join("fixtures"))
+            .expect("empty fixture directory is removed");
+        refresh_package_envelope(directory.path());
         set_tree_mode(directory.path(), 0o555, 0o444);
 
         let bundle = Bundle::load(directory.path()).expect("local bundle loads without fixtures");
@@ -3891,6 +4015,7 @@ mod tests {
                     &format!("assuranceProfile: {profile}"),
                 );
             fs::write(&config_path, candidate).expect("strict configuration writes");
+            refresh_package_envelope(directory.path());
             set_tree_mode(directory.path(), 0o555, 0o444);
             assert!(
                 Bundle::load(directory.path()).is_err(),
@@ -3904,6 +4029,7 @@ mod tests {
                     "assuranceProfile: local",
                 );
             fs::write(&config_path, reset).expect("local configuration restores");
+            refresh_package_envelope(directory.path());
         }
     }
 
@@ -3931,6 +4057,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n");
             fs::write(&fixtures_path, fixtures).expect("partial fixtures write");
+            refresh_package_envelope(directory.path());
             set_tree_mode(directory.path(), 0o555, 0o444);
 
             let error = Bundle::load(directory.path()).expect_err(&format!(
@@ -4070,6 +4197,7 @@ mod tests {
             "type: object\nadditionalProperties: false\nrequired: []\nproperties: {}\n",
         )
         .unwrap();
+        refresh_package_envelope(directory.path());
         set_tree_mode(directory.path(), 0o555, 0o444);
         Bundle::load(directory.path()).expect("a closed empty startup contract loads");
         set_tree_mode(directory.path(), 0o755, 0o644);
@@ -4101,6 +4229,7 @@ mod tests {
         );
         fs::write(directory.path().join("schemas/structured.yaml"), schema)
             .expect("write reviewed schema");
+        refresh_package_envelope(directory.path());
         set_tree_mode(directory.path(), 0o555, 0o444);
         let bundle = Bundle::load(directory.path()).expect("reviewed schema resolves");
         assert!(bundle.fact_schemas.contains_key("schemas/structured.yaml"));
@@ -4122,6 +4251,7 @@ mod tests {
                 ),
             )
             .expect("write invalid reviewed schema");
+            refresh_package_envelope(directory.path());
             set_tree_mode(directory.path(), 0o555, 0o444);
             assert!(
                 matches!(
@@ -4136,6 +4266,7 @@ mod tests {
         fs::write(&schema_path, schema).expect("restore reviewed schema");
         fs::write(directory.path().join("schemas/duplicate.yaml"), schema)
             .expect("write duplicate schema");
+        refresh_package_envelope(directory.path());
         set_tree_mode(directory.path(), 0o555, 0o444);
         let ambiguous = Bundle::load(directory.path()).expect_err("duplicate schema is rejected");
         assert!(matches!(ambiguous, BundleError::InvalidArtifact(_)));
@@ -4612,6 +4743,7 @@ mod tests {
             b"synthetic_only: true\n",
         )
         .expect("write unknown artifact");
+        refresh_package_envelope(unknown.path());
         set_tree_mode(unknown.path(), 0o555, 0o444);
         let unreferenced = Bundle::load(unknown.path()).expect_err("unknown artifact is rejected");
         assert!(matches!(unreferenced, BundleError::UnknownFile(_)));
@@ -4627,6 +4759,9 @@ mod tests {
         copy_acceptance_bundle("adult-status", missing.path());
         fs::remove_file(missing.path().join("derivations/adult-status.rhai"))
             .expect("remove referenced derivation");
+        fs::remove_dir(missing.path().join("derivations"))
+            .expect("empty derivation directory is removed");
+        refresh_package_envelope(missing.path());
         set_tree_mode(missing.path(), 0o555, 0o444);
         let absent = Bundle::load(missing.path()).expect_err("missing artifact is rejected");
         let fault = absent.artifact_fault().expect("closure names a file");
@@ -4645,6 +4780,7 @@ mod tests {
         copy_acceptance_bundle("adult-status", missing.path());
         fs::remove_file(missing.path().join(DISCOVERY_DESCRIPTION_FILE))
             .expect("remove packaged description");
+        refresh_package_envelope(missing.path());
         set_tree_mode(missing.path(), 0o555, 0o444);
         let error = Bundle::load(missing.path()).expect_err("missing description fails closed");
         assert_eq!(
@@ -4657,6 +4793,7 @@ mod tests {
         copy_acceptance_bundle("adult-status", drifted.path());
         fs::write(drifted.path().join(DISCOVERY_DESCRIPTION_FILE), b"{}\n")
             .expect("drift packaged description");
+        refresh_package_envelope(drifted.path());
         set_tree_mode(drifted.path(), 0o555, 0o444);
         let error = Bundle::load(drifted.path()).expect_err("drifted description fails closed");
         let fault = error.artifact_fault().expect("artifact fault");
@@ -4678,6 +4815,7 @@ mod tests {
             .join("\n")
             + "\n";
         fs::write(&config_path, without_publication).expect("remove publication declaration");
+        refresh_package_envelope(unconfigured.path());
         set_tree_mode(unconfigured.path(), 0o555, 0o444);
         let error = Bundle::load(unconfigured.path())
             .expect_err("an unconfigured packaged description fails closed");
@@ -4702,16 +4840,17 @@ mod tests {
         fs::remove_file(&adapter).expect("remove copied adapter");
         symlink(outside.path(), adapter).expect("create symlink");
         set_tree_mode(directory.path(), 0o555, 0o444);
-        assert!(matches!(
-            Bundle::load(directory.path()),
-            Err(BundleError::InvalidPath)
-        ));
+        let error = Bundle::load(directory.path()).expect_err("a symlink is refused");
+        assert!(
+            error.to_string().contains("adapters/source-a.rhai"),
+            "{error}"
+        );
         set_tree_mode(directory.path(), 0o755, 0o444);
     }
 
     #[cfg(unix)]
     #[test]
-    fn runtime_and_ca_bytes_are_captured_under_an_independent_read_only_revision() {
+    fn runtime_and_ca_bytes_are_captured_from_independent_read_only_inputs() {
         use std::os::unix::fs::PermissionsExt as _;
 
         let directory = tempfile::tempdir().expect("temporary runtime root");
@@ -4746,8 +4885,6 @@ mod tests {
         fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444))
             .expect("lock runtime document");
         let runtime = RuntimeDocument::load(&runtime_path).expect("runtime loads");
-        assert!(runtime.revision().starts_with("sha256:"));
-        assert_eq!(runtime.revision().len(), 71);
         assert_eq!(runtime.ca_bundles.len(), 1);
         assert_eq!(
             runtime.bytes(),
@@ -5039,35 +5176,10 @@ outboundTls:
         );
     }
 
-    /// The runtime revision of a runtime document read with no environment and
-    /// no CA bundles or source extracts.
-    fn runtime_revision_of(bytes: &[u8]) -> String {
-        let loaded =
-            RuntimeConfig::parse_yaml_with(bytes, |_| None).expect("the runtime document parses");
-        compute_runtime_revision(
-            bytes,
-            &loaded.effective_digest,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-        )
-        .expect("the runtime revision computes")
-    }
-
-    /// New operator surface must not move the revision of a deployment that did
-    /// not ask for it. The runtime revision digests the exact runtime.yaml
-    /// bytes and the digest of the document after substitution, so a file
-    /// that does not name the acquisition gate keeps the revision it already
-    /// published; the pinned digest is what proves the digest is still taken
-    /// over those inputs and not over a serialization that grew a member. The absent list also projects to nothing, so the same
-    /// deployment would keep its revision either way.
+    /// A deployment that does not opt into a capability must not acquire one
+    /// through serde defaults or the serialized runtime projection.
     #[test]
-    fn an_absent_acquisition_capability_list_leaves_the_runtime_revision_byte_identical() {
-        let revision = runtime_revision_of(OPERATOR_RUNTIME_DOCUMENT.as_bytes());
-        assert_eq!(
-            revision, "sha256:425e5f8f4ba8511948ac69048c30a8e5fac6805d915afdfc11530fce2ee66de0",
-            "an operator who adopted nothing must keep the revision they published"
-        );
-
+    fn an_absent_acquisition_capability_list_projects_to_nothing() {
         let config = RuntimeConfig::parse_yaml(OPERATOR_RUNTIME_DOCUMENT.as_bytes())
             .expect("the operator runtime document parses");
         assert!(config.acquisition_capabilities.is_empty());
@@ -5076,21 +5188,6 @@ outboundTls:
                 .expect("the runtime configuration projects")
                 .contains("acquisitionCapabilities"),
             "an absent capability list must serialize to nothing at all"
-        );
-
-        // Recording the operator's decision is an edit to the file the digest
-        // covers, so the deployment that adopted the kind says so in its
-        // revision.
-        let adopted = format!(
-            "{OPERATOR_RUNTIME_DOCUMENT}acquisitionCapabilities: [search-then-fetch-set]\n"
-        );
-        assert_ne!(runtime_revision_of(adopted.as_bytes()), revision);
-        let source_batch =
-            format!("{OPERATOR_RUNTIME_DOCUMENT}acquisitionCapabilities: [source-batch]\n");
-        assert_ne!(
-            runtime_revision_of(source_batch.as_bytes()),
-            revision,
-            "the operator's source-batch authorization must affect runtime identity"
         );
     }
 
@@ -5163,6 +5260,7 @@ outboundTls:
             .expect("remove the displaced adapter-parameter schema");
         fs::create_dir(destination.join("queries")).expect("create the statement directory");
         fs::write(destination.join(STATEMENT_PATH), statement).expect("the statement writes");
+        refresh_package_envelope(destination);
     }
 
     /// A statement is reviewed, bounded, executable text, so it is bounded like
@@ -5242,6 +5340,7 @@ outboundTls:
             b"SELECT 1;\n",
         )
         .expect("write an unreferenced statement");
+        refresh_package_envelope(directory.path());
         set_tree_mode(directory.path(), 0o555, 0o444);
         let unreferenced =
             Bundle::load(directory.path()).expect_err("an unreferenced statement is refused");
@@ -5279,6 +5378,7 @@ outboundTls:
             b"SELECT total, date_of_birth FROM residents WHERE id = :record_reference LIMIT 1;\n",
         )
         .expect("the statement rewrites");
+        refresh_package_envelope(directory.path());
         set_tree_mode(directory.path(), 0o555, 0o444);
         let after = Bundle::load(directory.path())
             .expect("the edited statement bundle loads")
@@ -5351,12 +5451,11 @@ outboundTls:
     }
 
     /// An extract is bound by digest, never by its bytes: a register-sized file
-    /// does not belong in a serving process's memory. The digest still has to
-    /// reach the runtime revision, or a deployment could answer from different
-    /// data under a revision it already published.
+    /// does not belong in a serving process's memory. The captured digest and
+    /// file identity still have to change when its bytes change.
     #[cfg(unix)]
     #[test]
-    fn an_extract_reaches_the_runtime_revision_as_a_digest_of_its_bytes() {
+    fn an_extract_is_bound_as_a_digest_of_its_bytes() {
         let directory = tempfile::tempdir().expect("temporary runtime root");
         let extract = directory.path().join("residence-register.sqlite");
         locked_extract(&extract, b"extract-content-one");
@@ -5375,9 +5474,17 @@ outboundTls:
             sha256_label(hasher).expect("the expected digest computes"),
             "the digest is taken over the extract's bytes and nothing else"
         );
+        let first_digest = bound.digest().to_owned();
 
         let again = RuntimeDocument::load(&runtime_path).expect("the runtime document reloads");
-        assert_eq!(first.revision(), again.revision());
+        assert_eq!(
+            again
+                .source_extracts
+                .get(EXTRACT_PROFILE)
+                .expect("the reloaded extract is captured")
+                .digest(),
+            first_digest
+        );
         assert_eq!(
             first.bytes(),
             again.bytes(),
@@ -5387,11 +5494,18 @@ outboundTls:
         locked_extract(&extract, b"extract-content-two");
         let replaced =
             RuntimeDocument::load(&runtime_path).expect("the replaced extract still loads");
-        assert_ne!(replaced.revision(), first.revision());
+        assert_ne!(
+            replaced
+                .source_extracts
+                .get(EXTRACT_PROFILE)
+                .expect("the replaced extract is captured")
+                .digest(),
+            first_digest
+        );
         assert_eq!(
             replaced.bytes(),
             first.bytes(),
-            "only the extract changed, so only its digest can have moved the revision"
+            "the runtime document itself did not change"
         );
     }
 
@@ -5527,8 +5641,8 @@ outboundTls:
     /// The capture and the SQLite open are not the same moment: the bundle is
     /// read, the kernel is compiled, and the audit log is initialized in
     /// between. A publisher who refreshes the bound path inside that window
-    /// gets a startup failure rather than a deployment serving bytes its
-    /// runtime revision does not name.
+    /// gets a startup failure rather than a deployment serving extract bytes
+    /// that were never validated.
     ///
     /// The replacement is a different length for the reason the test above
     /// gives.

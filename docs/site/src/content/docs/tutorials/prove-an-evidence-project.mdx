@@ -192,7 +192,8 @@ Build and hand off only when these facts are recorded together:
    codelists, purposes, audiences, and privacy expectations.
 4. The environment supplies a governed public signing key and matching Transit binding, plus
    independent owner-only subject-binding and audit secrets.
-5. The deployed bundle revision matches the reviewed candidate.
+5. The deployed package digest matches the reviewed candidate and the runtime pins it with
+   `package.expectedDigest`.
 6. Readiness passes, followed by one authorized HTTP-path check using synthetic data.
 
 Build a complete governed bundle for each environment. Each target owns its identities, endpoints,

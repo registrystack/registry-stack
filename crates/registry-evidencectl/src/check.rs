@@ -145,7 +145,7 @@ fn check_and_capture_target(
 
     let mut target_documents = None;
     let mut assurance_profile = None;
-    let mut bundle_revision = None;
+    let mut package_digest = None;
     if let Some(target) = target {
         match build::read_target_documents(target) {
             Ok(documents) => {
@@ -201,7 +201,7 @@ fn check_and_capture_target(
             };
             match checked {
                 Ok(checked) => {
-                    bundle_revision = Some(checked.bundle_revision);
+                    package_digest = Some(checked.package_digest);
                 }
                 Err(error) => {
                     return Err(classify_compiler_error(
@@ -226,7 +226,7 @@ fn check_and_capture_target(
         "status": if complete { "complete" } else { "incomplete" },
         "proof": if complete && target.is_some() { "deployment-closure" } else { "authoring" },
         "assuranceProfile": assurance_profile,
-        "bundleRevision": bundle_revision,
+        "packageDigest": package_digest,
         "fixtureProof": false,
         "findings": findings,
         "offline": true,
@@ -315,7 +315,7 @@ fn explain_captured(project: &Path, target: Option<&Path>, checked: CheckOutcome
         "target": target,
         "status": validation["status"],
         "proof": validation["proof"],
-        "bundleRevision": validation["bundleRevision"],
+        "packageDigest": validation["packageDigest"],
         "findings": validation["findings"],
         "questions": inventory.questions,
         "sources": inventory.sources,
@@ -494,7 +494,7 @@ fn write_list(out: &mut dyn io::Write, label: &str, value: &Value) -> io::Result
 }
 
 struct CheckedBundle {
-    bundle_revision: String,
+    package_digest: String,
 }
 
 fn check_project_only(project: &Path, display_project: &Path) -> Result<CheckedBundle> {
@@ -509,7 +509,7 @@ fn check_project_only(project: &Path, display_project: &Path) -> Result<CheckedB
     let report =
         build::check_compiled_bundle(&evidence_bin, &compiled.bundle_path, display_project)?;
     Ok(CheckedBundle {
-        bundle_revision: report.bundle_revision,
+        package_digest: report.package_digest,
     })
 }
 
@@ -525,12 +525,13 @@ fn check_with_target(
         .context("creating private target-check staging")?;
     fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o700))
         .context("setting private target-check staging permissions")?;
-    let compiled = build::compile_with_target(project, documents, staging.path(), &evidence_bin)?;
+    let compiled =
+        build::compile_with_target(project, documents, staging.path(), &evidence_bin, None)?;
     build::reject_review_markers(&compiled.bundle_path)?;
     let report =
         build::check_compiled_bundle(&evidence_bin, &compiled.bundle_path, display_project)?;
     Ok(CheckedBundle {
-        bundle_revision: report.bundle_revision,
+        package_digest: report.package_digest,
     })
 }
 
@@ -1620,7 +1621,7 @@ factSchema: schemas/record-status-facts.schema.yaml
 
         assert_eq!(report["status"], "incomplete");
         assert_eq!(report["proof"], "authoring");
-        assert_eq!(report["bundleRevision"], Value::Null);
+        assert_eq!(report["packageDigest"], Value::Null);
         assert_eq!(report["findings"].as_array().unwrap().len(), 1);
         assert_eq!(
             report["findings"][0]["code"],

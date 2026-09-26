@@ -281,8 +281,7 @@ where
 {
     let listener_config = runtime.runtime_config().listener.clone();
     let metrics_config = runtime.runtime_config().metrics_listener.clone();
-    let bundle_revision = runtime.bundle().revision().to_owned();
-    let runtime_revision = runtime.runtime_revision().to_owned();
+    let package_digest = runtime.bundle().package_digest().to_owned();
     let listener = bind(listener_config.bind.socket_addr()).await?;
     let startup_runtime = Arc::clone(&runtime);
     let (app, evaluations, metrics) = build_app_with_tracker(runtime);
@@ -302,8 +301,7 @@ where
     // that won the port.
     tracing::info!(
         target: "registry_evidence::startup",
-        bundle_revision,
-        runtime_revision,
+        package_digest,
         bind = %listener_config.bind.socket_addr(),
         metrics = metrics_config.is_some(),
         "evidence service listening"

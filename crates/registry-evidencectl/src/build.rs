@@ -3,9 +3,9 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
-    io::{Read as _, Write as _},
-    os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
+    fs::{self, File},
+    io::Read as _,
+    os::unix::fs::{MetadataExt as _, PermissionsExt as _},
     path::{Component, Path, PathBuf},
     process::{Command, ExitCode, ExitStatus, Stdio},
     sync::{
@@ -48,6 +48,10 @@ pub struct BuildArgs {
     /// New candidate directory to create. It must not already exist.
     #[arg(long)]
     pub output: PathBuf,
+
+    /// Optional source or review revision recorded in `REVISION`.
+    #[arg(long)]
+    pub revision: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,21 +152,15 @@ impl TargetGovernance {
     }
 }
 
-pub(crate) fn run_with_format(args: BuildArgs, format: OutputFormat) -> Result<ExitCode> {
-    let interruption = BuildInterruption::install()?;
-    run_inner(args, &interruption, format, false)
-}
-
 pub(crate) fn run_package_with_format(args: BuildArgs, format: OutputFormat) -> Result<ExitCode> {
     let interruption = BuildInterruption::install()?;
-    run_inner(args, &interruption, format, true)
+    run_inner(args, &interruption, format)
 }
 
 fn run_inner(
     args: BuildArgs,
     interruption: &BuildInterruption,
     format: OutputFormat,
-    require_deployable_assurance: bool,
 ) -> Result<ExitCode> {
     interruption.check()?;
     let _project_lock = ProjectLock::acquire(&args.project)
@@ -171,12 +169,11 @@ fn run_inner(
     // before the output location: a local target is named as such rather
     // than hidden behind an output refusal.
     let target = read_target_documents(&args.target)?;
-    if require_deployable_assurance
-        && target
-            .governed_bundle
-            .get("assuranceProfile")
-            .and_then(Value::as_str)
-            == Some("local")
+    if target
+        .governed_bundle
+        .get("assuranceProfile")
+        .and_then(Value::as_str)
+        == Some("local")
     {
         return Err(TargetDocumentDiagnostic {
             code: "evidence.package.production-profile-required",
@@ -198,9 +195,7 @@ fn run_inner(
     if candidate.starts_with(&project) {
         bail!("candidate output must remain outside the editable project");
     }
-    if require_deployable_assurance {
-        verify_package_root_matches_candidate(&target.runtime, &candidate)?;
-    }
+    verify_stable_package_root(&target.runtime, &candidate)?;
     let evidence_bin = crate::evidence_binary::resolve_matching(None)?;
 
     interruption.check()?;
@@ -216,8 +211,9 @@ fn run_inner(
         staging.path(),
         &evidence_bin,
         interruption,
+        args.revision.as_deref(),
     );
-    let (revision, secret_references) = match result {
+    let (package_digest, secret_references) = match result {
         Ok(result) => result,
         Err(error) => {
             close_candidate_staging(staging)?;
@@ -239,21 +235,25 @@ fn run_inner(
                 "project": args.project,
                 "target": args.target,
                 "output": args.output,
-                "bundleRevision": revision,
+                "packageDigest": package_digest,
+                "revision": args.revision,
                 "requiredSecrets": secret_references,
                 "proofBoundary": "offline deployment candidate compilation and fixture validation"
             }))?
         );
         return Ok(ExitCode::SUCCESS);
     }
-    println!("Bundle revision: {revision}");
-    println!("Candidate: {}", args.output.display());
+    println!("Package digest: {package_digest}");
+    if let Some(revision) = &args.revision {
+        println!("Revision: {revision}");
+    }
+    println!("Package: {}", args.output.display());
     for reference in secret_references {
         println!("Provision {SECRET_PREFIX}{reference}");
     }
     println!(
-        "Target runtime paths and deployment secret material remain unverified until `evidencectl doctor --runtime-config {}/runtime.yaml`.",
-        args.output.display(),
+        "Target runtime paths and deployment secret material remain unverified until `evidencectl doctor --runtime-config {}`.",
+        args.target.join("runtime.yaml").display(),
     );
     Ok(ExitCode::SUCCESS)
 }
@@ -309,7 +309,7 @@ pub(crate) fn compile_target_fixture_project(
         .context("sealing private target fixture compilation staging")?;
     let staging_path = fs::canonicalize(staging.path())
         .context("resolving private target fixture compilation staging")?;
-    let compiled = compile_with_target(project, &target, &staging_path, evidence_bin)?;
+    let compiled = compile_with_target(project, &target, &staging_path, evidence_bin, None)?;
     Ok(TargetFixtureProject {
         bundle_path: compiled.bundle_path,
         fixture_paths: compiled.fixture_paths,
@@ -433,13 +433,15 @@ pub(crate) fn compile_with_target(
     target: &TargetDocuments,
     staging_root: &Path,
     evidence_bin: &Path,
+    revision: Option<&str>,
 ) -> Result<TargetCompilation> {
-    let compiled = authoring::compile_target_project(
+    let compiled = authoring::compile_target_project_with_revision(
         project,
         &target.root,
         staging_root,
         target.governed_bundle.clone(),
         evidence_bin,
+        revision,
     )?;
     Ok(TargetCompilation {
         bundle_path: compiled.bundle_path,
@@ -462,18 +464,15 @@ fn prepare_candidate(
     staging_root: &Path,
     evidence_bin: &Path,
     interruption: &BuildInterruption,
+    revision: Option<&str>,
 ) -> Result<(String, Vec<String>)> {
-    let compiled = compile_with_target(project, target, staging_root, evidence_bin)?;
+    let compiled = compile_with_target(project, target, staging_root, evidence_bin, revision)?;
     interruption.check()?;
     reject_review_markers(&compiled.bundle_path)?;
     reject_review_markers_in_bytes(&target.runtime, "runtime.yaml")?;
-    let runtime_path = staging_root.join("runtime.yaml");
-    write_new_file(&runtime_path, &target.runtime, 0o600)?;
-    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o400))
-        .context("sealing the copied deployment runtime")?;
-
     let secret_references = secret_references(&compiled.bundle)?;
-    let revision = run_bundle_check(evidence_bin, &compiled.bundle_path, project, interruption)?;
+    let package_digest =
+        run_bundle_check(evidence_bin, &compiled.bundle_path, project, interruption)?;
     for fixture in &compiled.fixture_paths {
         interruption.check()?;
         run_bundle_fixture(
@@ -484,36 +483,34 @@ fn prepare_candidate(
             interruption,
         )?;
     }
-    Ok((revision, secret_references))
+    Ok((package_digest, secret_references))
 }
 
-/// Refuse a packaged candidate whose deployment runtime would load a bundle
+/// Refuse a package whose deployment runtime would load a package
 /// left behind by a different `package` invocation. `package.root` is the
-/// one path the running process trusts at startup, so a candidate that copies
-/// a `runtime.yaml` naming another directory would report this build's bundle
-/// revision while quietly serving whatever bundle already sits at that other
-/// path. This check only compares the value against the candidate this
+/// one path the running process trusts at startup, so a runtime path nested in
+/// one generated output could never remain stable across installations. This
+/// check only compares the value against the package this
 /// invocation is producing; it leaves full runtime shape validation to
 /// `evidencectl doctor --runtime-config` and the `evidence` binary itself, so
 /// a runtime document that is otherwise malformed is still caught there
 /// rather than reported twice.
-fn verify_package_root_matches_candidate(runtime_bytes: &[u8], candidate: &Path) -> Result<()> {
+fn verify_stable_package_root(runtime_bytes: &[u8], candidate: &Path) -> Result<()> {
     let Ok(document) = serde_norway::from_slice::<Value>(runtime_bytes) else {
         return Ok(());
     };
     let Some(package_root) = document.pointer("/package/root").and_then(Value::as_str) else {
         return Ok(());
     };
-    let expected = candidate.join("bundle");
-    if Path::new(package_root) == expected {
+    if Path::new(package_root) != candidate && !Path::new(package_root).starts_with(candidate) {
         return Ok(());
     }
     Err(TargetDocumentDiagnostic {
-        code: "evidence.package.root-mismatch",
+        code: "evidence.package.root-unstable",
         path: "runtime.yaml:/package/root".to_owned(),
         message: format!(
-            "deployment runtime package.root {package_root} does not resolve to this candidate's own bundle path {}",
-            expected.display()
+            "deployment runtime package.root {package_root} is inside this one package output; select a stable installed package path outside {}",
+            candidate.display()
         ),
     }
     .into())
@@ -525,7 +522,7 @@ fn run_bundle_check(
     project: &Path,
     interruption: &BuildInterruption,
 ) -> Result<String> {
-    Ok(run_bundle_check_report(evidence_bin, bundle, project, interruption)?.bundle_revision)
+    Ok(run_bundle_check_report(evidence_bin, bundle, project, interruption)?.package_digest)
 }
 
 fn run_bundle_check_report(
@@ -555,7 +552,7 @@ fn run_bundle_check_report(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct BundleCheckReport {
-    pub(crate) bundle_revision: String,
+    pub(crate) package_digest: String,
     pub(crate) requirements: Vec<BundleCheckRequirement>,
 }
 
@@ -581,8 +578,8 @@ pub(crate) fn check_compiled_bundle(
 
 fn parse_bundle_check_report(stdout: &[u8]) -> Result<BundleCheckReport> {
     let report: BundleCheckReport = serde_json::from_slice(stdout)
-        .context("Evidence check returned an invalid bundle revision report")?;
-    validate_digest(&report.bundle_revision, "bundleRevision")?;
+        .context("Evidence check returned an invalid package digest report")?;
+    validate_digest(&report.package_digest, "packageDigest")?;
     if report.requirements.is_empty() {
         bail!("Evidence check returned no requirement revisions");
     }
@@ -992,18 +989,6 @@ fn read_plain_file(path: &Path, maximum: u64, description: &str) -> Result<Vec<u
     Ok(bytes)
 }
 
-fn write_new_file(path: &Path, contents: &[u8], mode: u32) -> Result<()> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(mode)
-        .open(path)
-        .with_context(|| format!("creating {}", path.display()))?;
-    file.write_all(contents)?;
-    file.sync_all()?;
-    Ok(())
-}
-
 fn make_tree_removable(root: &Path) -> Result<()> {
     for entry in fs::read_dir(root)? {
         let path = entry?.path();
@@ -1032,12 +1017,26 @@ fn close_candidate_staging(staging: tempfile::TempDir) -> Result<()> {
 }
 
 fn publish(staging: tempfile::TempDir, output: &Path) -> Result<()> {
-    let staged = staging.keep();
-    if let Err(error) = rename_noreplace(&staged, output) {
-        let _ = make_tree_removable(&staged);
-        let _ = fs::remove_dir_all(&staged);
+    let staged_root = staging.keep();
+    let staged_package = staged_root.join("bundle");
+    // macOS refuses RENAME_EXCL for a directory whose own write bit has been
+    // removed, even though both parent directories remain writable. Restore
+    // owner access only on the package root for the atomic move; every package
+    // file and child directory remains sealed throughout publication.
+    fs::set_permissions(&staged_package, fs::Permissions::from_mode(0o700))
+        .context("preparing the sealed package root for atomic publication")?;
+    if let Err(error) = rename_noreplace(&staged_package, output) {
+        let _ = make_tree_removable(&staged_root);
+        let _ = fs::remove_dir_all(&staged_root);
         return Err(error).context("publishing the deployment candidate without replacement");
     }
+    if let Err(error) = fs::set_permissions(output, fs::Permissions::from_mode(0o500)) {
+        let _ = make_tree_removable(output);
+        let _ = fs::remove_dir_all(output);
+        let _ = fs::remove_dir(&staged_root);
+        return Err(error).context("sealing the published package root");
+    }
+    fs::remove_dir(&staged_root).context("removing empty package staging directory")?;
     Ok(())
 }
 
@@ -1176,10 +1175,10 @@ authorityProfiles:
     }
 
     #[test]
-    fn revision_report_and_secret_reference_parsing_are_closed() {
+    fn package_report_and_secret_reference_parsing_are_closed() {
         let report = parse_bundle_check_report(
             serde_json::json!({
-                "bundleRevision": format!("sha256:{}", "b".repeat(64)),
+                "packageDigest": format!("sha256:{}", "b".repeat(64)),
                 "requirements": [
                     {"id": "registry-status", "configurationRevision": format!("sha256:{}", "c".repeat(64))}
                 ]
@@ -1188,14 +1187,14 @@ authorityProfiles:
             .as_bytes(),
         )
         .expect("bundle-check JSON report");
-        assert_eq!(report.bundle_revision, format!("sha256:{}", "b".repeat(64)));
+        assert_eq!(report.package_digest, format!("sha256:{}", "b".repeat(64)));
         assert_eq!(
             report.requirements[0].configuration_revision,
             format!("sha256:{}", "c".repeat(64))
         );
         assert!(parse_bundle_check_report(
             serde_json::json!({
-                "bundleRevision": format!("sha256:{}", "b".repeat(64)),
+                "packageDigest": format!("sha256:{}", "b".repeat(64)),
                 "requirements": [
                     {"id": "registry-status", "configurationRevision": format!("sha256:{}", "C".repeat(64))}
                 ]
@@ -1205,7 +1204,7 @@ authorityProfiles:
         )
         .is_err());
         assert!(parse_bundle_check_report(
-            br#"{"bundleRevision":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","requirements":[{"id":"dup","configurationRevision":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},{"id":"dup","configurationRevision":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}]}"#
+            br#"{"packageDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","requirements":[{"id":"dup","configurationRevision":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},{"id":"dup","configurationRevision":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}]}"#
         )
         .is_err());
 

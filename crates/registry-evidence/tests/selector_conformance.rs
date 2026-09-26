@@ -113,7 +113,7 @@ impl PreparedService {
             operation.to_owned(),
             AuditPhase::AccessAttempt,
             request.requirement.clone(),
-            self.bundle.revision().to_owned(),
+            self.bundle.package_digest().to_owned(),
             request.purpose.clone(),
             requester.clone(),
             authority.clone(),
@@ -237,7 +237,7 @@ impl PreparedService {
             operation.to_owned(),
             AuditPhase::DisclosureRelease,
             request.requirement.clone(),
-            self.bundle.revision().to_owned(),
+            self.bundle.package_digest().to_owned(),
             request.purpose.clone(),
             requester,
             authority,
@@ -1139,6 +1139,7 @@ async fn prepare_service_for_actor(
         write_secret(&secret_root, "source-token", SOURCE_TOKEN.as_bytes());
     }
     write_runtime(&runtime_path, &bundle_root, &secret_root, &audit_path);
+    refresh_package_envelope(&bundle_root);
     make_read_only(&bundle_root);
     #[cfg(unix)]
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444))
@@ -1146,11 +1147,7 @@ async fn prepare_service_for_actor(
 
     let deployment =
         DeploymentInputs::load(&runtime_path).expect("closed selector deployment inputs load");
-    assert_ne!(
-        deployment.bundle().revision(),
-        deployment.runtime().revision(),
-        "governed bundle and runtime have independent revisions"
-    );
+    assert!(deployment.bundle().package_digest().starts_with("sha256:"));
     let bundle = Arc::new(deployment.into_parts().0);
     let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("selector kernel compiles");
     let secrets = Arc::new(
@@ -1685,6 +1682,7 @@ fn assert_invalid_bundle(mutate: impl FnOnce(&mut String)) {
     let mut config = fs::read_to_string(&config_path).expect("bundle config is readable");
     mutate(&mut config);
     fs::write(config_path, config).expect("invalid config mutation writes");
+    refresh_package_envelope(&bundle_root);
     make_read_only(&bundle_root);
     assert!(matches!(
         Bundle::load(&bundle_root),
@@ -1782,6 +1780,31 @@ fn copy_tree(source: &Path, target: &Path) {
             fs::copy(entry.path(), destination).expect("selector fixture file is copied");
         }
     }
+}
+
+fn refresh_package_envelope(root: &Path) {
+    for reserved in [
+        registry_platform_config::SUM_FILE,
+        registry_platform_config::REVISION_FILE,
+    ] {
+        let path = root.join(reserved);
+        if path.exists() {
+            fs::remove_file(path).expect("prior package envelope is removed");
+        }
+    }
+    registry_platform_config::write_sum_file(
+        root,
+        None,
+        &registry_platform_config::PackageLimits {
+            max_files: 1_024,
+            max_file_bytes: 1024 * 1024,
+            max_total_bytes: 16 * 1024 * 1024,
+            max_depth: 3,
+            max_path_bytes: 128,
+        },
+        "evidencectl package",
+    )
+    .expect("package envelope is refreshed");
 }
 
 #[cfg(unix)]

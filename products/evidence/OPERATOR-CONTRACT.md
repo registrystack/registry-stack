@@ -113,26 +113,24 @@ not an approval, promotion, deployment, key-generation, caller-registration,
 or service-start command. It runs the real `evidence` binary through its
 bundle-only validation entry point and evaluates every referenced fixture
 without generating a temporary signing key or other validation secret. It then
-atomically publishes a candidate with a copied `runtime.yaml` and one closed
-`bundle/`. The candidate contains no production private key, credential, token,
+atomically publishes one closed package with `SHA256SUMS` and an optional
+`REVISION`. Runtime configuration remains in the deployment target. The package contains no production private key, credential, token,
 local request, audit entry, or source response.
 
-The operator reviews and transfers the exact candidate, records its bundle
-revision, and independently provisions the signing key, audit HMAC key,
+The operator reviews and transfers the exact package, records its package
+digest, and independently provisions the signing key, audit HMAC key,
 subject-binding HMAC key, and source credentials below the runtime's secret
 root. Secret ownership and mode requirements remain unchanged: each referenced
 secret is a regular owner-only file accepted by the eventual service identity.
-The bundle and runtime must be non-writable to that identity. The copied
-runtime is target-specific; its revision and bound private-CA bytes are not the
-bundle revision, and signed assertions continue to carry only a configuration
+The package and runtime must be non-writable to that identity. The
+runtime is target-specific and remains outside the package. Signed assertions continue to carry only a configuration
 revision as `configurationRevision`. That value is scoped to the one requirement
-the assertion answers, not to the whole deployment, so it is neither the runtime
-revision nor the bundle revision. The public signing keys and
+the assertion answers, not to the whole package digest. The public signing keys and
 `signing.revokedKeyIds` are outside it: publishing, activating, retiring, or
-revoking a key changes the bundle revision and the JWKS but no
+revoking a key changes the package digest and the JWKS but no
 `configurationRevision`. So is `authentication.revokedKeyIds`: revoking an
-identity-provider key changes which caller tokens are accepted and the bundle
-revision, but no `configurationRevision`.
+identity-provider key changes which caller tokens are accepted and the package
+digest, but no `configurationRevision`.
 
 Run the following grouped handoff after provisioning and whenever candidate
 bytes, runtime bindings, trust files, or secrets change:
@@ -222,7 +220,7 @@ Discovery uses five separately trusted surfaces:
 | RFC 9728 protected-resource metadata | Binds the exact configured public Evidence origin to one authorization-server issuer, the Evidence JWKS location, and header-only bearer transport. | It contains no requester-scoped definition or entitlement data and does not replace HTTPS or an out-of-band trust pin. |
 | Generated Evidence OpenAPI | Describes `GET /v1/evidence-definitions`, `POST /v1/evidence`, `POST /v1/evidence/batch`, operational routes, envelopes, media types, and safe problems. | It contains no deployment definitions or entitlements. |
 | Public provider advertisement | Serves the exact packaged `catalog.jsonld` bytes at `GET /catalog.jsonld`, with public service identity and one distinct binding for each exact Evidence Type and compatible response profile. | It contains no requester-specific request shape, entitlement, source configuration, credential, or trust decision. |
-| Authenticated definition response | Lists the exact complete request shapes available to this verified token at this bundle revision, each with the configuration revision an assertion for that one requirement carries. | It performs no provider access, does not grant authority, and is not a global catalog. |
+| Authenticated definition response | Lists the exact complete request shapes available to this verified token from the loaded package, each with the configuration revision an assertion for that one requirement carries. | It performs no provider access, does not grant authority, and is not a global catalog. |
 | Static onboarding material | Gives an approved consumer token-acquisition instructions, human descriptions, legal context, endpoint trust, and verifier policy through the existing API catalog, developer portal, configuration repository, or bilateral process. | It is not accepted by the runtime and grants no authority. |
 | Evidence JWKS | Publishes the active and retained public verification keys. | It is not a trust anchor and contains no definition or entitlement metadata. |
 
@@ -268,7 +266,7 @@ The publication workflow is:
 
 1. Review the complete bundle and its combined disclosure surface.
 2. Run `evidence check` and every referenced fixture, and record the exact
-   governed bundle revision.
+   governed package digest.
 3. Run the production `evidencectl package` flow, which generates and seals
    `catalog.jsonld`, then publish the generic OpenAPI, provider advertisement,
    and static onboarding material. Configure token issuance and verifier trust

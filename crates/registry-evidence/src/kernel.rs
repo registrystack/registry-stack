@@ -1,7 +1,7 @@
 //! Generic offline Evidence evaluation and core-owned output projection.
 //!
 //! This module deliberately knows nothing about an acceptance case or source
-//! product. It joins one captured bundle revision to the hardened Rhai runtime,
+//! product. It joins one captured verified package to the hardened Rhai runtime,
 //! validates the complete declared Supported Value set, and constructs the
 //! unsigned Evidence payload that the production release path later signs.
 
@@ -476,7 +476,7 @@ impl std::fmt::Debug for OfflineKernel {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("OfflineKernel")
-            .field("bundle_revision", &self.bundle.revision())
+            .field("package_digest", &self.bundle.package_digest())
             .field("source_count", &self.extractions.len())
             .field("requirement_count", &self.derivations.len())
             .finish()

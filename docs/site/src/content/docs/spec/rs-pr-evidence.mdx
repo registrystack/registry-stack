@@ -711,7 +711,8 @@ Identity MUST travel only as domain-separated keyed pseudonyms (invariant `V1-I1
 
 REQ-PR-EVIDENCE-050: Every authorization refusal after successful authentication MUST durably append
 exactly one standalone minimal native event before Evidence Gateway returns the generic `403`.
-That event MUST identify the event and operation, assurance profile, bundle revision, requester
+That event MUST identify the event and operation, assurance profile, package digest in the frozen
+`bundleRevision` field, requester
 pseudonym, optional actor pseudonym, closed denial category and decision, timestamp, and duration.
 It MUST NOT contain the requested requirement, purpose, subjects, unmatched authority, selector
 information, response protection, source, or evaluation material. If the event cannot be durably
@@ -734,7 +735,7 @@ ships audit entries to, not to the serving process
 ## 10. Immutability of deployment input
 
 REQ-PR-EVIDENCE-052: Configuration MUST be immutable for the serving process lifetime.
-Evidence Gateway MUST load one read-only atomic governed bundle and one separately digested closed runtime
+Evidence Gateway MUST verify and load one read-only atomic governed package plus one closed runtime
 file at startup; runtime override, reload, merge, fallback, and mutation paths MUST NOT exist
 (invariant `V1-I18`, `products/evidence/contracts/runtime.schema.yaml`).
 
@@ -743,17 +744,18 @@ REQ-PR-EVIDENCE-053: The runtime file MUST own only the process-local bindings e
 governed semantics or source authority.
 Unknown keys MUST be rejected at every level.
 
-REQ-PR-EVIDENCE-054: A missing, writable, or unreviewed bundle MUST NOT be treated as trusted
+REQ-PR-EVIDENCE-054: A missing, writable, unverified, or unreviewed package MUST NOT be treated as trusted
 configuration.
 Version 1 has no in-bundle trust override, and absence or a failed immutability check MUST fail
 readiness (`products/evidence/contracts/security-invariant-matrix.yaml`, cross-cutting config trust).
 
 REQ-PR-EVIDENCE-055: One process MUST serve one operator-controlled trust domain, with one service
-trust domain, issuer governance boundary, bundle lifecycle, signer, and audit boundary
+trust domain, issuer governance boundary, package lifecycle, signer, and audit boundary
 (invariant `V1-I19`).
 
-REQ-PR-EVIDENCE-056: The bundle revision MUST be a digest over the complete atomic bundle bytes and
-layout manifest and MUST be carried in every native audit event.
+REQ-PR-EVIDENCE-056: The package digest MUST be the digest of the deterministic `SHA256SUMS` file
+covering the complete atomic package and MUST be carried in every native audit event through the
+frozen `bundleRevision` field.
 Every assertion MUST instead carry the configuration revision for its requirement, computed over
 that requirement's configuration and artifact closure and published with the requirement through
 authenticated definition discovery, in the forms fixed by
@@ -933,7 +935,7 @@ An Evidence Gateway deployment conforms to this specification when it:
   REQ-PR-EVIDENCE-047, REQ-PR-EVIDENCE-048, REQ-PR-EVIDENCE-049, REQ-PR-EVIDENCE-050,
   REQ-PR-EVIDENCE-051);
 - treats deployment input as immutable, restricts the runtime file to process-local bindings, fails
-  readiness on an untrusted bundle, serves one trust domain, carries the bundle revision in every
+  readiness on an untrusted package, serves one trust domain, carries the package digest in every
   native audit event, and carries the requirement-scoped configuration revision in every assertion
   (REQ-PR-EVIDENCE-052, REQ-PR-EVIDENCE-053, REQ-PR-EVIDENCE-054, REQ-PR-EVIDENCE-055,
   REQ-PR-EVIDENCE-056);

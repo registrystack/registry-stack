@@ -254,6 +254,7 @@ impl ReferenceProject {
     fn sealed<T>(&self, run: impl FnOnce(&Path) -> T) -> T {
         let bundle = self.root.path().join("bundle");
         let runtime = self.root.path().join("runtime.yaml");
+        refresh_package_envelope(&bundle);
         set_tree_mode(&bundle, 0o555, 0o444);
         fs::set_permissions(&runtime, fs::Permissions::from_mode(0o444))
             .expect("set immutable runtime mode");
@@ -807,6 +808,7 @@ fn check_refuses_an_already_stale_bound_extract_with_only_the_governed_source() 
         );
     let runtime_path = root.path().join("runtime.yaml");
     fs::write(&runtime_path, runtime).expect("stage runtime");
+    refresh_package_envelope(&bundle);
     set_tree_mode(&bundle, 0o555, 0o444);
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444)).expect("seal runtime");
 
@@ -2036,7 +2038,7 @@ fn failure_cases() -> Vec<FailureCase> {
             break_deployment: |deployment| {
                 deployment.append("runtime.yaml", &format!("bundleDirectory: /{CANARY}\n"));
             },
-            prefix: "evidence: deployment configuration is invalid: artifact runtime.yaml: key is no longer accepted at bundleDirectory; declare package.root as the absolute path of the bundle directory\n",
+            prefix: "evidence: deployment configuration is invalid: artifact runtime.yaml: key is no longer accepted at bundleDirectory; declare package.root as the absolute path of the package directory\n",
             suffix: "",
             needs_runtime: true,
         },
@@ -2179,6 +2181,7 @@ fn bundle_check_names_a_safe_artifact_and_a_value_free_cause_for_a_broken_statem
     )
     .expect("write broken statement");
 
+    refresh_package_envelope(&bundle);
     set_tree_mode(&bundle, 0o555, 0o444);
     let output = invoke_bundle_check(&bundle);
     set_tree_mode(&bundle, 0o755, 0o644);
@@ -3713,6 +3716,7 @@ outboundTls:
     }
 
     fn seal(&self) {
+        refresh_package_envelope(&self.path("bundle"));
         set_tree_mode(&self.path("bundle"), 0o555, 0o444);
         fs::set_permissions(self.path("runtime.yaml"), fs::Permissions::from_mode(0o444))
             .expect("seal runtime");
@@ -3723,6 +3727,31 @@ outboundTls:
         fs::set_permissions(self.path("runtime.yaml"), fs::Permissions::from_mode(0o644))
             .expect("unseal runtime");
     }
+}
+
+fn refresh_package_envelope(root: &Path) {
+    for reserved in [
+        registry_platform_config::SUM_FILE,
+        registry_platform_config::REVISION_FILE,
+    ] {
+        let path = root.join(reserved);
+        if path.exists() {
+            fs::remove_file(path).expect("prior package envelope is removed");
+        }
+    }
+    registry_platform_config::write_sum_file(
+        root,
+        None,
+        &registry_platform_config::PackageLimits {
+            max_files: 1_024,
+            max_file_bytes: 1024 * 1024,
+            max_total_bytes: 16 * 1024 * 1024,
+            max_depth: 3,
+            max_path_bytes: 128,
+        },
+        "evidencectl package",
+    )
+    .expect("package envelope is refreshed");
 }
 
 impl Drop for Deployment {

@@ -13,6 +13,7 @@ if [ ! -d "$committed_root" ]; then
 fi
 
 cd "$repository_root"
+python3 products/evidence/scripts/generate-package-sums.py
 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
   cargo test --locked --quiet -p registry-evidence --test security_contract_traceability
 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \

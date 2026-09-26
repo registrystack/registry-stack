@@ -5559,6 +5559,7 @@ dependencies = [
  "registry-language-server",
  "registry-platform-audit",
  "registry-platform-buildinfo",
+ "registry-platform-config",
  "registry-platform-crypto",
  "registry-thunderid-tooling",
  "rhai",
