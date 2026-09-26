@@ -127,3 +127,55 @@ test('the breg toolset refuses a relative binary path', async () => {
     assert.match(output, /BREG_BIN must be an absolute path: breg/u);
   });
 });
+
+test('a test-edit block changes the file it names, relative to where the reader stands', async () => {
+  const body =
+    '## Setup\n\n' +
+    fence('sh', "mkdir work\ncd work\nprintf 'a: 1\\n  b: 2\\n' >conf.yaml") +
+    '## Edit\n\n' +
+    fence('diff title="conf.yaml" test-edit', '-b: 2\n+b: 3') +
+    fence('sh', 'cat conf.yaml') +
+    fence('text test-expect', 'a: 1\n  b: 3');
+  await withPage(body, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 0, output);
+    assert.match(output, /edited conf\.yaml/u);
+    assert.match(output, /tutorial PASS/u);
+  });
+});
+
+test('an edit that cannot be applied stops the journey and names its block', async () => {
+  const body = '## Edit\n\n' + fence('sh', 'echo "a: 1" >conf.yaml') + fence('diff title="conf.yaml" test-edit', '-b: 2\n+b: 3');
+  await withPage(body, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 1, output);
+    assert.match(output, /the edit at line 11 \(Edit\) failed/u);
+    assert.match(output, /conf\.yaml: its lines match no place in the file/u);
+  });
+});
+
+test('test-exit expects a refusal, and a command that succeeds instead fails the journey', async () => {
+  const refused = '## Check\n\n' + fence('sh test-exit="3"', "echo 'check refused.'\nsh -c 'exit 3'") + fence('text test-expect', 'check refused.');
+  await withPage(refused, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 0, output);
+    assert.match(output, /tutorial PASS/u);
+  });
+  const accepted = '## Check\n\n' + fence('sh test-exit="3"', 'echo accepted');
+  await withPage(accepted, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 1, output);
+    assert.match(output, /the sh fence at line 7 \(Check\) exited 0; the page expects 3/u);
+  });
+});
+
+test('pages given together replay in one reader directory, each in a fresh shell', async () => {
+  await withPage('## First\n\n' + fence('sh', 'mkdir work\nshared=yes\ncd work'), async ({ dir, page }) => {
+    const second = join(dir, 'second.mdx');
+    await writeFile(second, '---\ntitle: s\n---\n\n## Second\n\n' + fence('sh', 'ls\necho "shared=${shared:-unset}"') + fence('text test-expect', 'work\nshared=unset'));
+    const { code, output } = await run([page, second]);
+    assert.equal(code, 0, output);
+    assert.match(output, /==> page\.mdx line 7 \(First\)/u);
+    assert.match(output, /expect second\.mdx line 12: ok/u);
+  });
+});
