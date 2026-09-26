@@ -760,23 +760,20 @@ impl DeliverySeams for SchedulingDeliverySeams {
         Ok(None)
     }
 
-    /// The platform worker calls this inside the transaction it is about to
-    /// commit, so the entry is written to the audit destination before that
-    /// commit: an attempt is on record before its request can leave the
-    /// process, and a destination that refuses it fails the transition, which
-    /// rolls back without egress. A transaction that rolls back after the
-    /// entry was accepted leaves an entry naming a transition that did not
-    /// commit, and a later pass that takes the transition writes its own.
+    /// The platform worker records an attempt's start inside the lease
+    /// transaction before it commits, so an attempt is on record before its
+    /// request can leave the process and a destination that refuses it rolls
+    /// the lease back without egress; a lease whose commit then fails is
+    /// answered with a worker interruption. A terminal disposition, an
+    /// expiry, and a replay's outcome are recorded only after the transition
+    /// commits, so no entry names a transition that rolled back.
     ///
-    /// An attempt's start is its `request` entry; its terminal disposition
-    /// and an operator replay are `response` entries. One attempt's entries
-    /// share a correlation built from the hook event, the compiled delivery,
-    /// the generation, and the attempt.
-    async fn record_audit(
-        &self,
-        _transaction: &Transaction<'_>,
-        record: DeliveryAuditRecord<'_>,
-    ) -> Result<(), DeliveryError> {
+    /// An attempt's start and an operator's replay request are `request`
+    /// entries; the terminal disposition and the replay's committed or
+    /// refused reset are `response` entries. One attempt's entries share a
+    /// correlation built from the hook event, the compiled delivery, the
+    /// generation, and the attempt.
+    async fn record_audit(&self, record: DeliveryAuditRecord<'_>) -> Result<(), DeliveryError> {
         let audit = json!({
             "event": "scheduling.hook-delivery",
             "hookEventId": record.event_id,
@@ -792,11 +789,12 @@ impl DeliverySeams for SchedulingDeliverySeams {
             "{}/{}/{}/{}",
             record.event_id, record.compiled_delivery_id, record.generation, record.attempt
         );
-        let entry = match record.phase {
-            DeliveryAuditPhase::Attempt => {
+        let entry = match (record.phase, record.outcome) {
+            (DeliveryAuditPhase::Attempt, _)
+            | (DeliveryAuditPhase::Replay, DeliveryAuditOutcome::ReplayRequested) => {
                 AuditEntry::request(SCHEDULING_AUDIT_SCHEMA, correlation, audit)
             }
-            DeliveryAuditPhase::Terminal | DeliveryAuditPhase::Replay => {
+            (DeliveryAuditPhase::Terminal | DeliveryAuditPhase::Replay, _) => {
                 AuditEntry::response(SCHEDULING_AUDIT_SCHEMA, correlation, audit)
             }
         };
@@ -1089,6 +1087,8 @@ fn audit_outcome(value: DeliveryAuditOutcome) -> &'static str {
         DeliveryAuditOutcome::PayloadExpired => "payload_expired",
         DeliveryAuditOutcome::WorkerInterrupted => "worker_interrupted",
         DeliveryAuditOutcome::ReplayRequested => "replay_requested",
+        DeliveryAuditOutcome::ReplayCommitted => "replay_committed",
+        DeliveryAuditOutcome::ReplayRefused => "replay_refused",
     }
 }
 

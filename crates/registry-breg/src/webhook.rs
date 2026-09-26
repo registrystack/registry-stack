@@ -403,17 +403,12 @@ impl DeliverySeams for BregDeliverySeams {
         self.handlers.handler(binding)
     }
 
-    /// The platform worker calls this seam only after the guarded transition
-    /// the entry reports has already succeeded, immediately before it commits
-    /// the transaction: a refused append still rolls that transition back,
-    /// but a failed commit after an accepted append leaves an entry for a
-    /// transition that did not happen, since this durable append cannot be
-    /// rolled back with the transaction.
-    async fn record_audit(
-        &self,
-        _transaction: &Transaction<'_>,
-        record: DeliveryAuditRecord<'_>,
-    ) -> Result<(), DeliveryError> {
+    /// The platform worker records an attempt's start before its lease
+    /// commits, answering it with a worker interruption if that commit
+    /// fails, and records a terminal disposition, an expiry, and a replay's
+    /// outcome only after the transition commits, so an entry never stands
+    /// for a transition that rolled back.
+    async fn record_audit(&self, record: DeliveryAuditRecord<'_>) -> Result<(), DeliveryError> {
         let entry = webhook_entry(
             self.audit.profile(),
             WebhookAudit {
@@ -696,6 +691,8 @@ fn audit_outcome(outcome: DeliveryAuditOutcome) -> WebhookAuditOutcome {
         DeliveryAuditOutcome::PayloadExpired => WebhookAuditOutcome::PayloadExpired,
         DeliveryAuditOutcome::WorkerInterrupted => WebhookAuditOutcome::WorkerInterrupted,
         DeliveryAuditOutcome::ReplayRequested => WebhookAuditOutcome::ReplayRequested,
+        DeliveryAuditOutcome::ReplayCommitted => WebhookAuditOutcome::ReplayCommitted,
+        DeliveryAuditOutcome::ReplayRefused => WebhookAuditOutcome::ReplayRefused,
         DeliveryAuditOutcome::HandlerBindingRefused => WebhookAuditOutcome::HandlerBindingRefused,
         DeliveryAuditOutcome::HandlerDeadline => WebhookAuditOutcome::HandlerDeadline,
         DeliveryAuditOutcome::HandlerResource => WebhookAuditOutcome::HandlerResource,

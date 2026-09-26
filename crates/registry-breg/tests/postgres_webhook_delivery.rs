@@ -384,16 +384,13 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         header(&replay_request, "idempotency-key"),
         "operator replay changes the deterministic generation binding"
     );
-    assert_exact_audit_outcome(
-        &database,
-        &audit_profile,
-        &timeout_event,
-        2,
-        0,
-        "replay",
-        "replay_requested",
-    )
-    .await;
+    // The replay is a request before its reset and a response once the
+    // reset commits, under one correlation.
+    assert_eq!(
+        audit_outcomes(&database, &audit_profile, &timeout_event, 2, 0, "replay").await,
+        ["replay_requested", "replay_committed"],
+        "an operator replay is answered once its reset commits"
+    );
     assert_exact_audit_outcome(
         &database,
         &audit_profile,
@@ -799,6 +796,100 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         "delivered",
     )
     .await;
+    // A disposition whose commit fails is never recorded as done: the
+    // journal keeps only the attempt, and expiry recovery answers it.
+    let commit_egress_before = receiver.count().await;
+    receiver.enqueue(ResponsePlan::Status(204)).await;
+    let commit_refused = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "delivery-terminal-commit-refused",
+        "terminal-commit",
+    )
+    .await;
+    refuse_delivery_state_commit(&database, "delivered").await;
+    assert_eq!(
+        service.deliver_once().await,
+        Err(WebhookDeliveryError::Unavailable)
+    );
+    allow_delivery_state_commit(&database).await;
+    receiver.wait_for_count(commit_egress_before + 1).await;
+    assert_eq!(
+        delivery_state(&database, &commit_refused).await,
+        (1, "leased".to_owned(), 1),
+        "the rolled-back disposition leaves the lease for expiry recovery"
+    );
+    assert_no_audit_outcome(&database, &audit_profile, &commit_refused, 1, 1, "terminal").await;
+    expire_lease(&database, &commit_refused).await;
+    service
+        .deliver_once()
+        .await
+        .expect("expiry recovery answers the interrupted attempt");
+    assert_exact_audit_outcome(
+        &database,
+        &audit_profile,
+        &commit_refused,
+        1,
+        1,
+        "terminal",
+        "worker_interrupted",
+    )
+    .await;
+
+    // A lease whose commit fails after its attempt was recorded sends
+    // nothing, and its attempt is answered as interrupted.
+    let lease_egress_before = receiver.count().await;
+    let lease_refused = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "delivery-lease-commit-refused",
+        "lease-commit",
+    )
+    .await;
+    refuse_delivery_state_commit(&database, "leased").await;
+    assert_eq!(
+        service.deliver_once().await,
+        Err(WebhookDeliveryError::Unavailable)
+    );
+    allow_delivery_state_commit(&database).await;
+    assert_eq!(receiver.count().await, lease_egress_before, "no egress");
+    assert_eq!(
+        delivery_state(&database, &lease_refused).await,
+        (1, "pending".to_owned(), 0)
+    );
+    assert_exact_audit_outcome(
+        &database,
+        &audit_profile,
+        &lease_refused,
+        1,
+        1,
+        "attempt",
+        "attempt_started",
+    )
+    .await;
+    assert_exact_audit_outcome(
+        &database,
+        &audit_profile,
+        &lease_refused,
+        1,
+        1,
+        "terminal",
+        "worker_interrupted",
+    )
+    .await;
+    receiver.enqueue(ResponsePlan::Status(204)).await;
+    assert_eq!(
+        service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Delivered),
+        "the refused lease is claimed again once the commit succeeds"
+    );
+
     let terminal_egress_before = receiver.count().await;
     let terminal_response_release = Arc::new(Notify::new());
 
@@ -828,10 +919,13 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         Err(WebhookDeliveryError::Unavailable)
     );
     database.audit_capture().restore();
+    // The terminal is recorded only after its disposition commits, so the
+    // refused entry leaves the committed disposition without it: the writer
+    // then refuses every later entry until the destination is repaired.
     assert_eq!(
         delivery_state(&database, &terminal_audit_refused).await,
-        (1, "leased".to_owned(), 1),
-        "terminal audit refusal leaves the committed lease for expiry recovery"
+        (1, "delivered".to_owned(), 1),
+        "the terminal entry follows the committed disposition"
     );
     assert_no_audit_outcome(
         &database,
@@ -850,6 +944,58 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     drop(pool);
     receiver.stop().await;
     database.cleanup().await;
+}
+
+/// Make the commit of any delivery transition into `state` fail, after
+/// every statement in its transaction succeeded.
+async fn refuse_delivery_state_commit(database: &TestDatabase, state: &str) {
+    database
+        .admin
+        .batch_execute(&format!(
+            "CREATE OR REPLACE FUNCTION public.test_refuse_delivery_commit()
+               RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN
+               IF NEW.state = '{state}' THEN
+                 RAISE EXCEPTION 'test refuses this delivery commit';
+               END IF;
+               RETURN NEW;
+             END $$;
+             GRANT EXECUTE ON FUNCTION public.test_refuse_delivery_commit() TO PUBLIC;
+             CREATE CONSTRAINT TRIGGER test_refuse_delivery_commit
+               AFTER UPDATE ON registry_internal.registry_webhook_delivery_state
+               DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+               EXECUTE FUNCTION public.test_refuse_delivery_commit();"
+        ))
+        .await
+        .expect("administrator installs the commit refusal");
+}
+
+async fn allow_delivery_state_commit(database: &TestDatabase) {
+    database
+        .admin
+        .batch_execute(
+            "DROP TRIGGER test_refuse_delivery_commit
+               ON registry_internal.registry_webhook_delivery_state;
+             DROP FUNCTION public.test_refuse_delivery_commit();",
+        )
+        .await
+        .expect("administrator removes the commit refusal");
+}
+
+async fn expire_lease(database: &TestDatabase, event: &CapturedEvent) {
+    database
+        .admin
+        .execute(
+            // Move the whole lease into the past, keeping its captured length.
+            "UPDATE registry_internal.registry_webhook_delivery_state
+                SET attempt_started_at = attempt_started_at
+                        - (lease_expires_at - attempt_started_at) - interval '1 second',
+                    lease_expires_at = attempt_started_at - interval '1 second'
+              WHERE event_id = $1 AND state = 'leased'",
+            &[&event.event_id],
+        )
+        .await
+        .expect("administrator expires the lease");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
