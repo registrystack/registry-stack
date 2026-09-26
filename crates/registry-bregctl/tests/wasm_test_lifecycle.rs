@@ -33,13 +33,56 @@ const JOURNEY_ID: &str = "wasm-fixed-output";
 #[test]
 #[ignore = "requires BREG_TEST_DATABASE_URL and a PostgreSQL administrator"]
 fn public_bregctl_test_executes_fixed_output_wasm_and_emits_receipt() {
+    let (output, receipt) = run_schema_test(FixtureAudit::File);
+
+    assert_command_succeeded(&output);
+    let stdout =
+        serde_json::from_slice::<Value>(&output.stdout).expect("successful command output is JSON");
+    assert_eq!(stdout["command"], "test");
+    assert_eq!(stdout["successfulJourneyIds"], json!([JOURNEY_ID]));
+    let receipt = receipt.expect("the successful schema test publishes its receipt");
+    assert_eq!(receipt["kind"], "SchemaTestReceipt");
+    assert_eq!(receipt["successfulJourneyIds"], json!([JOURNEY_ID]));
+}
+
+#[test]
+#[ignore = "requires BREG_TEST_DATABASE_URL and a PostgreSQL administrator"]
+fn public_bregctl_test_keeps_stdout_for_its_report_when_audit_goes_to_stdout() {
+    let (output, receipt) = run_schema_test(FixtureAudit::Stdout);
+
+    assert_command_succeeded(&output);
+    // The whole of stdout is the one JSON report; the companion audit
+    // entries go to stderr instead.
+    let stdout = serde_json::from_slice::<Value>(&output.stdout)
+        .expect("stdout holds exactly one JSON document");
+    assert_eq!(stdout["command"], "test");
+    assert_eq!(stdout["successfulJourneyIds"], json!([JOURNEY_ID]));
+    let audit_lines: Vec<Value> = String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry.get("phase").is_some())
+        .collect();
+    assert!(
+        !audit_lines.is_empty(),
+        "the schema test writes its audit entries to stderr"
+    );
+    assert!(receipt.is_some(), "the schema test publishes its receipt");
+}
+
+#[derive(Clone, Copy)]
+enum FixtureAudit {
+    File,
+    Stdout,
+}
+
+fn run_schema_test(audit: FixtureAudit) -> (Output, Option<Value>) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("test runtime builds");
     let mut database = runtime.block_on(TestDatabase::create());
     let idp = runtime.block_on(MockIdp::start());
-    let project = ProjectFixture::write(&database, &idp);
+    let project = ProjectFixture::write(&database, &idp, audit);
 
     let output = Command::new(env!("CARGO_BIN_EXE_bregctl"))
         .args([
@@ -59,21 +102,13 @@ fn public_bregctl_test_executes_fixed_output_wasm_and_emits_receipt() {
         .output()
         .expect("bregctl test starts in a fresh process");
 
-    let stdout = serde_json::from_slice::<Value>(&output.stdout);
     let receipt = fs::read(&project.receipt)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
 
     runtime.block_on(idp.stop());
     runtime.block_on(database.cleanup());
-
-    assert_command_succeeded(&output);
-    let stdout = stdout.expect("successful command output is JSON");
-    assert_eq!(stdout["command"], "test");
-    assert_eq!(stdout["successfulJourneyIds"], json!([JOURNEY_ID]));
-    let receipt = receipt.expect("the successful schema test publishes its receipt");
-    assert_eq!(receipt["kind"], "SchemaTestReceipt");
-    assert_eq!(receipt["successfulJourneyIds"], json!([JOURNEY_ID]));
+    (output, receipt)
 }
 
 fn assert_command_succeeded(output: &Output) {
@@ -94,7 +129,7 @@ struct ProjectFixture {
 }
 
 impl ProjectFixture {
-    fn write(database: &TestDatabase, idp: &MockIdp) -> Self {
+    fn write(database: &TestDatabase, idp: &MockIdp, audit: FixtureAudit) -> Self {
         let root = tempfile::tempdir().expect("fixture directory creates");
         let root_path = root.path().canonicalize().expect("fixture path resolves");
         let handlers = root_path.join("handlers");
@@ -149,7 +184,14 @@ impl ProjectFixture {
         let runtime_config = root_path.join("runtime.yaml");
         fs::write(
             &runtime_config,
-            runtime_source(&secrets, &empty_package, &trust_anchor, database, idp),
+            runtime_source(
+                &secrets,
+                &empty_package,
+                &trust_anchor,
+                database,
+                idp,
+                audit,
+            ),
         )
         .expect("runtime configuration writes");
         set_private(&runtime_config);
@@ -275,12 +317,15 @@ fn runtime_source(
     trust_anchor: &Path,
     database: &TestDatabase,
     idp: &MockIdp,
+    audit: FixtureAudit,
 ) -> String {
-    let audit_path = root
-        .with_file_name("audit")
-        .join("audit.jsonl")
-        .display()
-        .to_string();
+    let audit_target = match audit {
+        FixtureAudit::File => {
+            let audit_path = root.with_file_name("audit").join("audit.jsonl");
+            format!("path: {}", audit_path.display())
+        }
+        FixtureAudit::Stdout => "destination: stdout".to_owned(),
+    };
     format!(
         r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
 kind: BRegRuntimeConfig
@@ -330,7 +375,7 @@ authentication:
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose
-audit: {{hashKeyRef: secret:file/audit-key, path: {audit_path}}}
+audit: {{hashKeyRef: secret:file/audit-key, {audit_target}}}
 cursor: {{secretRef: secret:file/cursor-key, maxAgeSeconds: 300}}
 wasmExecution:
   backend: pulley

@@ -230,7 +230,9 @@ fn require_persistent_audit_file(loaded: &LoadedRuntime, root: &Path) -> Result<
         AuditDestination::File(file) => {
             require_audit_under(file.path(), root).map_err(StartupError::AuditRoot)
         }
-        AuditDestination::Stdout => Err(StartupError::AuditRootRequiresFile),
+        AuditDestination::Stdout | AuditDestination::Stderr => {
+            Err(StartupError::AuditRootRequiresFile)
+        }
     }
 }
 
@@ -1229,7 +1231,9 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
     fn audit_file_path(loaded: &LoadedRuntime) -> &Path {
         match &loaded.paths.audit {
             AuditDestination::File(file) => file.path(),
-            AuditDestination::Stdout => panic!("a file audit destination"),
+            AuditDestination::Stdout | AuditDestination::Stderr => {
+                panic!("a file audit destination")
+            }
         }
     }
 

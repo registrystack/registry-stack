@@ -455,7 +455,9 @@ mod tests {
                 assert_eq!(file.rotate_bytes(), 1_048_576);
                 assert_eq!(file.retain_days(), 30);
             }
-            AuditDestination::Stdout => panic!("file is the default destination"),
+            AuditDestination::Stdout | AuditDestination::Stderr => {
+                panic!("file is the default destination")
+            }
         }
         let stdout = load_yaml_with_audit("  destination: stdout\n", "")
             .expect("a stdout destination loads");
