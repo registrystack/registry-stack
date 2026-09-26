@@ -86,6 +86,11 @@ rebaseline, or reconciliation finds the state the first run committed rather
 than replaying its terminal entry. Both recoveries are operational, not a
 second audit mechanism.
 
+`BREG-V1-27` is `partial`: most caller-requested operations pair their
+audit request entry with a response entry, but the paths its `gap` lists can
+still leave a request entry unpaired or write no entry, so the row makes no
+completion claim until they do.
+
 The HTTP record contract is also explicit: caller-filtered and generated
 OpenAPI artifacts assign every record-related route to the shared single or
 collection Registry Record profile, or to a named BReg-specific shape.
