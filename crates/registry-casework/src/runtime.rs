@@ -677,8 +677,17 @@ pub async fn open_audit(
 /// path the operator did not configure.
 fn describe_audit_destination_failure(error: &AuditError) -> String {
     match error {
-        AuditError::SinkLocked { .. } => "another process holds the single-writer lock beside \
-             audit.path; stop it before starting this one"
+        // A companion destination's lock can only be held by another
+        // invocation of that same one-shot command; the running service
+        // never opens this sibling file.
+        AuditError::SinkLocked {
+            role: Some(role), ..
+        } => format!(
+            "another {role} invocation holds the single-writer lock on its companion audit \
+             file; wait for it to finish before starting this one"
+        ),
+        AuditError::SinkLocked { role: None, .. } => "another process holds the single-writer \
+             lock beside audit.path; stop it before starting this one"
             .to_owned(),
         AuditError::Io(io) if io.kind() == std::io::ErrorKind::PermissionDenied => format!(
             "{io}; the audit directory must belong to the runtime user and not be group- or \
@@ -1089,6 +1098,28 @@ mod tests {
         assert!(operational_log_level(Some("trace")).is_err());
         assert!(operational_log_level(Some("registry_casework=trace")).is_err());
         assert!(operational_log_level(Some("")).is_err());
+    }
+
+    #[test]
+    fn a_companion_lock_collision_names_the_colliding_role_and_says_to_wait() {
+        let error = AuditError::SinkLocked {
+            path: "/var/lib/casework/audit.caseworkctl.jsonl.lock".to_owned(),
+            role: Some("caseworkctl".to_owned()),
+        };
+        let message = describe_audit_destination_failure(&error);
+        assert!(message.contains("caseworkctl"), "{message}");
+        assert!(message.contains("wait"), "{message}");
+        assert!(!message.contains("stop it"), "{message}");
+    }
+
+    #[test]
+    fn a_service_lock_collision_says_to_stop_the_other_process() {
+        let error = AuditError::SinkLocked {
+            path: "/var/lib/casework/audit.jsonl.lock".to_owned(),
+            role: None,
+        };
+        let message = describe_audit_destination_failure(&error);
+        assert!(message.contains("stop it"), "{message}");
     }
 }
 

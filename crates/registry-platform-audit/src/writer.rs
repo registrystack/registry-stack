@@ -258,6 +258,10 @@ pub struct FileDestination {
     path: PathBuf,
     rotate_bytes: u64,
     retain_days: u32,
+    /// Set by [`AuditDestination::for_process`] to the companion role this
+    /// destination is the sibling file for. `None` for the destination the
+    /// service opens directly.
+    role: Option<String>,
 }
 
 impl FileDestination {
@@ -271,6 +275,7 @@ impl FileDestination {
             path,
             rotate_bytes: DEFAULT_AUDIT_ROTATE_BYTES,
             retain_days: DEFAULT_AUDIT_RETAIN_DAYS,
+            role: None,
         })
     }
 
@@ -508,6 +513,7 @@ impl AuditDestination {
                     path: file.path.with_file_name(name),
                     rotate_bytes: file.rotate_bytes,
                     retain_days: file.retain_days,
+                    role: Some(role.to_owned()),
                 }))
             }
             Self::Stdout | Self::Stderr => Ok(Self::Stderr),
@@ -809,6 +815,7 @@ impl SegmentedFile {
             path,
             rotate_bytes,
             retain_days,
+            role,
         } = destination;
         let parent = parent(&path)?.to_path_buf();
         create_directory(&parent)?;
@@ -823,6 +830,7 @@ impl SegmentedFile {
             Err(TryLockError::WouldBlock) => {
                 return Err(AuditError::SinkLocked {
                     path: lock_path.display().to_string(),
+                    role,
                 });
             }
             Err(TryLockError::Error(error)) => return Err(AuditError::Io(error)),
@@ -1796,8 +1804,33 @@ mod tests {
         let second = AuditWriter::open(AuditDestination::File(destination))
             .await
             .expect_err("second writer");
+        // `role` is `None` for the service's own destination: whoever holds
+        // this lock can only be another instance of the service itself.
         assert!(
-            matches!(second, AuditError::SinkLocked { .. }),
+            matches!(second, AuditError::SinkLocked { role: None, .. }),
+            "{second:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_second_companion_writer_on_the_same_role_names_that_role() {
+        let directory = directory();
+        let destination = AuditDestination::File(file_destination(&directory))
+            .for_process("caseworkctl")
+            .expect("companion destination");
+        let _first = AuditWriter::open(destination.clone())
+            .await
+            .expect("first companion writer");
+        let second = AuditWriter::open(destination)
+            .await
+            .expect_err("second companion writer");
+        // The lock is on the companion sibling file, so only another
+        // `caseworkctl` invocation can be holding it, never the service.
+        assert!(
+            matches!(
+                second,
+                AuditError::SinkLocked { role: Some(ref role), .. } if role == "caseworkctl"
+            ),
             "{second:?}"
         );
     }
