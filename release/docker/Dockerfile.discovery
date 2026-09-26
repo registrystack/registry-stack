@@ -9,10 +9,10 @@ ADD --checksum=sha256:967aa62605721081c3eb2a17650611a792aa802d76a6511d1840242623
 ADD --checksum=sha256:8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8aa688cc https://snapshot.debian.org/archive/debian/20260913T000000Z/pool/main/g/glibc/libc6_2.41-12+deb13u4_arm64.deb /workspace/runtime-packages/libc6_2.41-12+deb13u4_arm64.deb
 
 # Discovery serves one immutable index and writes nothing, so the image
-# pre-owns no managed state or audit directory. The runtime file and the index
-# it names are startup-only deployment artifacts mounted read-only together
-# under /etc/registry-discovery: the index path is resolved relative to the
-# runtime file's own directory.
+# pre-owns no managed state or audit directory. Mount runtime.yaml read-only
+# under /etc/registry-discovery and mount the complete package directory that
+# its absolute package.root names. The runtime verifies SHA256SUMS before it
+# consumes discovery-index.json.
 RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
     --mount=type=bind,source=LICENSE,target=/workspace/LICENSE \
     --mount=type=bind,source=release/scripts/install-runtime-libc6.sh,target=/workspace/install-runtime-libc6.sh,readonly \
@@ -36,7 +36,7 @@ EXPOSE 8080
 
 # Discovery serves GET /health for the platform's HTTP probe. The Distroless
 # image has no shell or HTTP client, and Discovery has no healthcheck
-# subcommand. It also reads no environment variable, so the command is what
-# binds the runtime file.
+# subcommand. The command binds the runtime file; that file may use the shared
+# loader's explicit environment substitutions.
 ENTRYPOINT ["/usr/local/bin/discovery"]
 CMD ["--runtime-config", "/etc/registry-discovery/runtime.yaml"]

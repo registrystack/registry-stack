@@ -114,16 +114,18 @@ if ! curl --fail --silent --output /dev/null "http://127.0.0.1:38090/relay.jsonl
 	exit 1
 fi
 
-build_output=$("$DISCOVERYCTL_BIN" build \
+package_output=$("$DISCOVERYCTL_BIN" package \
 	--project "$work_root" \
-	--output "$work_root/discovery-index.json" \
+	--output "$work_root/package" \
+	--revision tutorial-source \
 	--allow-loopback)
-if [[ ! "$build_output" =~ ^built\ catalogRevision=sha256:[0-9a-f]{64}\ mappingRevision=sha256:[0-9a-f]{64}$ ]]; then
-	printf 'unexpected discoveryctl build output: %s\n' "$build_output" >&2
+if [[ ! "$package_output" =~ ^packaged\ packageDigest=sha256:[0-9a-f]{64}\ catalogRevision=sha256:[0-9a-f]{64}\ mappingRevision=sha256:[0-9a-f]{64}$ ]]; then
+	printf 'unexpected discoveryctl package output: %s\n' "$package_output" >&2
 	exit 1
 fi
-printf '[operator] explicit build: %s\n' "$build_output"
+printf '[operator] explicit package: %s\n' "$package_output"
 
+DISCOVERY_PACKAGE_ROOT="$work_root/package" \
 "$DISCOVERY_BIN" --runtime-config "$work_root/runtime.yaml" \
 	>"$work_root/discovery.log" 2>&1 &
 discovery_pid=$!

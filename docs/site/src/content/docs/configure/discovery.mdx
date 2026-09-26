@@ -1,11 +1,11 @@
 ---
-title: Build and run a Registry Discovery index
-description: Build a bounded Registry Discovery index from approved provider descriptions and run its read-only service.
+title: Package and run a Registry Discovery index
+description: Package a bounded Registry Discovery index from approved provider descriptions and run its read-only service.
 status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-14"
+last_reviewed: "2026-09-26"
 doc_type: how-to
 locale: en
 standards_referenced:
@@ -16,12 +16,12 @@ standards_referenced:
 ---
 
 Use this guide when you operate a Registry Discovery catalog for known Evidence Gateway and
-Registry Relay providers. You maintain provider URLs and evidence-type mappings, build one immutable
-index on demand, then restart the read-only service with that index.
+Registry Relay providers. You maintain provider URLs and evidence-type mappings, package one
+immutable index on demand, then restart the read-only service with that package.
 
 {/* Evidence: products/discovery/README.md describes the operator flow as offline `check`, one
-    explicit `build`, immutable-index deployment, then restart. `crates/registry-discoveryctl/src/lib.rs`
-    exposes only `check` and `build`; `crates/registry-discovery/src/server.rs` fixes the public routes. */}
+    explicit `package`, immutable-package deployment, then restart. `crates/registry-discoveryctl/src/lib.rs`
+    exposes only `check` and `package`; `crates/registry-discovery/src/server.rs` fixes the public routes. */}
 
 ## When to use this
 
@@ -40,8 +40,8 @@ You need these inputs:
 
 - A provider-supplied public description URL, such as
   `https://<provider-host>/catalog.jsonld`. Record the URL out of band with the provider.
-- A local directory for the catalog project and a separate deployment directory for the index and
-  runtime file.
+- A local directory for the catalog project, a new output directory for the package, and a separate
+  deployment runtime file.
 - The `discoveryctl` and `discovery` binaries.
 
 The provider description uses the closed Registry Discovery JSON-LD profile. The profile is a
@@ -55,7 +55,7 @@ It does not claim complete DCAT-AP or BRegDCAT-AP conformance.
 
 ## Add the approved provider URLs
 
-Create `<discovery-project>/origins.yaml`. Each enabled origin is fetched only during a build.
+Create `<discovery-project>/origins.yaml`. Each enabled origin is fetched only during packaging.
 
 ```yaml
 schemaVersion: registry-discovery/origins/v1alpha1
@@ -101,7 +101,7 @@ declares one.
 
 ## Check the authoring project
 
-Run the offline check before any build.
+Run the offline check before packaging.
 
 ```sh
 discoveryctl check --project "<discovery-project>"
@@ -119,43 +119,52 @@ The check reads the two authoring inputs but does not contact the provider URL.
     `crates/registry-discoveryctl/src/project.rs`, test
     `check_is_offline_and_accepts_an_unreachable_https_origin`, proves that validation is offline. */}
 
-## Build one bounded index
+## Package one bounded index
 
-Build into the deployment directory when the approved provider descriptions are available.
+Package into a new directory when the approved provider descriptions are available.
 
 ```sh
-discoveryctl build \
+discoveryctl package \
   --project "<discovery-project>" \
-  --output "<deployment-directory>/discovery-index.json"
+  --output "<deployment-directory>/discovery-package" \
+  --revision "<source-revision>"
 ```
 
-Expected output reports independent semantic revisions:
+Expected output reports the package digest and independent semantic revisions:
 
 ```text
-built catalogRevision=sha256:<64-lowercase-hex-digits> mappingRevision=sha256:<64-lowercase-hex-digits>
+packaged packageDigest=sha256:<64-lowercase-hex-digits> catalogRevision=sha256:<64-lowercase-hex-digits> mappingRevision=sha256:<64-lowercase-hex-digits>
 ```
 
-The build fetches every enabled origin once, records the exact fetched-byte digest and fetch time,
-and records `builtAt` after every origin has been collected and the semantic revisions compile.
-The builder validates and syncs the complete file before replacing the active index, then syncs the
-deployment directory. Run the build again only when you intend to publish a new index revision.
+The command fetches every enabled origin once, records the exact fetched-byte digest and fetch time,
+and records `builtAt` after every origin has been collected and the semantic revisions compile. It
+writes `discovery-index.json`, optional `REVISION`, and `SHA256SUMS` into a directory that must not
+already exist. The package digest is the SHA-256 digest of the exact `SHA256SUMS` bytes.
 
-{/* Evidence: `crates/registry-discoveryctl/src/build.rs`, `fetch_origins()` and `atomic_replace()`;
+Packaging the same compiled index bytes and revision twice produces the same package digest. A new
+collection records new `originFetchedAt` and `builtAt` provenance, so its package digest may change
+even when `catalogRevision` and `mappingRevision` stay the same. Build a new directory and deploy it
+as a unit. Do not edit a package in place.
+
+{/* Evidence: `crates/registry-discoveryctl/src/build.rs`, `fetch_origins()`, `write_index_package()`,
+    and `packaging_the_same_compiled_index_twice_is_repeatable`;
     `crates/registry-discoveryctl/tests/build.rs`,
-    `build_fetches_each_origin_once_and_preserves_semantic_revisions` and
-    `production_build_time_is_captured_after_origin_collection`; the production `atomic_replace()`
-    path calls `sync_all()` for the staged file and its parent directory. */}
+    `package_fetches_each_origin_once_and_preserves_semantic_revisions` and
+    `production_package_time_is_captured_after_origin_collection`. */}
 
 ## Deploy and restart the service
 
-Place this `runtime.yaml` beside `discovery-index.json` in the deployment directory.
+Place this `runtime.yaml` outside the package directory. Set `package.root` to its absolute path and
+copy the reported package digest into `package.expectedDigest` when you want to pin the deployment.
 
 ```yaml
 apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1
 kind: DiscoveryRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
-indexPath: discovery-index.json
+package:
+  root: /srv/registry-discovery/package
+  expectedDigest: sha256:<digest-of-SHA256SUMS>
 limits:
   maximumRequestBytes: 65536
   maximumResponseBytes: 1048576
@@ -166,7 +175,7 @@ limits:
 logLevel: info
 ```
 
-Start the new revision after replacing the runtime directory contents.
+Start the new revision after deploying the complete package directory.
 
 ```sh
 discovery --runtime-config "<absolute-deployment-directory>/runtime.yaml"
@@ -176,10 +185,12 @@ The runtime file is read through the shared runtime configuration loader, as the
 Stack runtimes read theirs. Its path must be absolute and free of symbolic links, `listener.bind` is
 required and takes an IP address host, and a string value may name an environment variable as
 `${NAME}`, `${NAME:-default}`, or `${NAME:?message}`. A key from the earlier grammar, such as
-`schemaVersion` or `listener.address`, is refused with the name of its replacement.
+`schemaVersion`, `listener.address`, or `indexPath`, is refused with the name of its replacement.
 
-The process remains running and serves the index named by the relative `indexPath`. Verify readiness
-from a network location that can reach the listener.
+Before binding the listener, the runtime recomputes every `SHA256SUMS` entry, refuses changed,
+missing, or extra files by name, checks `package.expectedDigest` when set, then parses the exact
+verified `discovery-index.json` bytes. The process remains running with that captured index. Verify
+readiness from a network location that can reach the listener.
 
 ```sh
 curl --fail-with-body "http://127.0.0.1:8080/ready"
@@ -189,7 +200,7 @@ curl --fail-with-body "http://127.0.0.1:8080/ready"
 {"status":"ready"}
 ```
 
-The runtime accepts only its listener, relative index path, limits, and log level. It does not carry
+The runtime accepts only its listener, package location and optional pin, limits, and log level. It does not carry
 provider credentials, origin-fetch configuration, mappings, or application trust configuration.
 The runtime acquires one of four request-body permits before reading a body and holds the permit
 through request handling. It also rejects malformed percent escapes, invalid UTF-8 query values,
@@ -198,8 +209,10 @@ duplicate media-type headers, and request media parameters other than UTF-8 JSON
 {/* Evidence: `crates/registry-discovery/src/startup.rs`, `RuntimeConfig`, `load_runtime()`, and
     tests `runtime_is_closed_and_contains_no_origin_mapping_trust_or_fetch_configuration`,
     `the_runtime_file_is_read_through_the_shared_loader`,
-    `removed_runtime_keys_name_their_replacements`, and
-    `the_listener_bind_is_required_and_substitutes_from_the_environment`;
+    `removed_runtime_keys_name_their_replacements`,
+    `the_listener_bind_is_required_and_substitutes_from_the_environment`,
+    `startup_verifies_package_and_refuses_expected_digest_mismatch_with_common_shape`, and
+    `exact_consumed_index_bytes_remain_bound_to_the_verified_package`;
     `crates/registry-discovery/src/server.rs`, tests
     `request_body_capacity_is_acquired_before_buffering_and_recovers` and
     `request_media_type_accepts_only_bare_or_utf8_json`; `crates/registry-discovery/src/query.rs`,
@@ -262,7 +275,9 @@ credentials or native request data to Registry Discovery.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `discoveryctl check` fails | The origins or mapping document is not in the closed authoring shape. | Correct the schema version, identifiers, and duplicate values, then run the offline check again. |
-| `discoveryctl build` fails | An enabled provider URL could not be fetched safely or did not return the exact profile media type. | Confirm the URL with the provider and its public description deployment. Keep the previous index running until a complete build succeeds. |
+| `discoveryctl package` fails | An enabled provider URL could not be fetched safely, did not return the exact profile media type, or the output directory already exists. | Confirm the provider's public description deployment and choose a new output directory. Keep the previous package running until packaging succeeds. |
+| Startup says the package does not match `SHA256SUMS` | A listed file changed, is missing, or an extra file appeared in the package directory. | Redeploy the whole directory produced by `discoveryctl package`. |
+| Startup reports different expected and found package digests | `package.expectedDigest` pins a different package. | Deploy the pinned package or update the pin to the reviewed `packageDigest`. |
 | A search returns no items | The index contains no advertisement that matches every supplied filter. | Inspect the advertised capability IDs and use a narrower or correct filter set. |
 | Native connection is refused | The application did not accept the selected provider under its local product trust configuration. | Resolve the native Evidence Gateway or Registry Relay trust decision before retrying the direct connection. |
 

@@ -49,13 +49,22 @@
       "binding": {"path": "crates/registry-discovery/src/model.rs", "name": "records_from_distinct_origins_never_merge"}
     },
     {
-      "id": "sec-atomic-index-build",
+      "id": "sec-atomic-index-package",
       "status": "enforced",
-      "threat": "A failure during fetch, parse, normalization, mapping, serialization, or write exposes a partial index.",
-      "enforcementPoint": "discoveryctl staged build and atomic activation.",
-      "requiredNegativeBehavior": "Leave the previous index unchanged and create no visible replacement.",
-      "negativeTest": "failed-build-leaves-no-new-visible-index",
+      "threat": "A failure during fetch, parse, normalization, mapping, serialization, or write exposes a partial package or changes an existing output.",
+      "enforcementPoint": "discoveryctl package construction through the shared package writer.",
+      "requiredNegativeBehavior": "Leave an existing output unchanged and remove a newly created incomplete package directory.",
+      "negativeTest": "failed-package-leaves-no-new-visible-package",
       "binding": {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "failed_origin_fetch_leaves_the_previous_output_untouched"}
+    },
+    {
+      "id": "sec-package-integrity",
+      "status": "enforced",
+      "threat": "Discovery serves index bytes that differ from the verified package, accepts a changed, missing, or extra package file, or starts on a package other than the optional deployment pin.",
+      "enforcementPoint": "Runtime package verification and exact index-byte capture before listener binding.",
+      "requiredNegativeBehavior": "Refuse startup by file name or with the shared expected and found digest shape before constructing the query directory.",
+      "negativeTest": "package-envelope-pin-and-consumed-index-bytes-are-bound",
+      "binding": {"path": "crates/registry-discovery/src/startup.rs", "name": "startup_verifies_package_and_refuses_expected_digest_mismatch_with_common_shape"}
     },
     {
       "id": "sec-discovery-not-trust",

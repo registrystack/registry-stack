@@ -1,28 +1,37 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Strict startup-only runtime and immutable-index activation.
 
+use std::collections::BTreeSet;
 use std::fs;
 #[cfg(unix)]
 use std::future::Future;
+use std::io::Read as _;
 use std::net::SocketAddr;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
-use registry_platform_config::{ListenerConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope};
+use registry_platform_config::package::is_envelope_file;
+use registry_platform_config::{
+    sha256_uri, ListenerConfig, PackageConfig, PackageError, PackageLimits, RemovedKey,
+    RuntimeConfigLoader, RuntimeEnvelope, VerifiedPackage,
+};
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use crate::model::{
-    parse_index, DiscoveryIndex, MAXIMUM_HTTP_BODY_BYTES, MAXIMUM_IDENTIFIER_CHARACTERS,
-    MAXIMUM_INDEX_BYTES, MAXIMUM_RESULT_ALTERNATIVES, MAXIMUM_RESULT_RECORDS,
-    MINIMUM_HTTP_RESPONSE_BYTES,
+    parse_index, DiscoveryIndex, MAXIMUM_HTTP_BODY_BYTES, MAXIMUM_INDEX_BYTES,
+    MAXIMUM_RESULT_ALTERNATIVES, MAXIMUM_RESULT_RECORDS, MINIMUM_HTTP_RESPONSE_BYTES,
 };
 use crate::query::Directory;
 use crate::server::{router, DiscoveryService};
+use crate::{
+    INDEX_FILE, MAXIMUM_PACKAGE_BYTES, MAXIMUM_PACKAGE_DEPTH, MAXIMUM_PACKAGE_FILES,
+    PACKAGE_COMMAND,
+};
 
 pub use registry_platform_config::MAX_LISTENER_BIND_CHARACTERS as MAXIMUM_LISTENER_BIND_CHARACTERS;
 
@@ -43,6 +52,10 @@ const REMOVED_RUNTIME_KEYS: &[RemovedKey] = &[
     RemovedKey {
         path: "listener.address",
         replacement: "declare listener.bind instead",
+    },
+    RemovedKey {
+        path: "indexPath",
+        replacement: "declare package.root instead and build it with `discoveryctl package`",
     },
 ];
 
@@ -66,7 +79,7 @@ pub struct RuntimeConfig {
     pub api_version: String,
     pub kind: String,
     pub listener: ListenerConfig,
-    pub index_path: String,
+    pub package: PackageConfig,
     pub limits: RuntimeLimits,
     pub log_level: LogLevel,
 }
@@ -88,6 +101,23 @@ pub enum StartupError {
     RuntimeRefused(String),
     #[error("the Discovery runtime configuration is invalid")]
     RuntimeInvalid,
+    #[error("{0}")]
+    Package(#[from] PackageError),
+    #[error(
+        "the Discovery package at package.root has invalid contents{details}; rebuild it with \
+         `discoveryctl package`"
+    )]
+    PackageContents { details: String },
+    #[error(
+        "the Discovery package file {path} changed after package verification; redeploy the whole \
+         directory built by `discoveryctl package`"
+    )]
+    PackageFileChanged { path: String },
+    #[error(
+        "the Discovery package file discovery-index.json is invalid; rebuild the package with \
+         `discoveryctl package`"
+    )]
+    PackageIndexInvalid,
     #[error("the Discovery index could not be loaded")]
     IndexLoad,
     #[error("the Discovery index is invalid")]
@@ -116,9 +146,17 @@ impl PreparedDiscovery {
 }
 
 pub fn prepare(runtime_path: &Path) -> Result<PreparedDiscovery, StartupError> {
-    let (root, runtime) = load_runtime(runtime_path)?;
-    let index_path = safe_existing_file(&root, &runtime.index_path)?;
-    let index = load_index(&index_path)?;
+    let (_, runtime) = load_runtime(runtime_path)?;
+    let verified = runtime
+        .package
+        .verify_package(&package_limits(), PACKAGE_COMMAND)
+        .map_err(|error| error.naming_root_as("package.root"))?;
+    let index = load_verified_index(&runtime.package.root, &verified)?;
+    tracing::info!(
+        target: "registry_discovery::startup",
+        package_digest = verified.digest(),
+        "Discovery package accepted"
+    );
     let directory = Directory::new(
         index,
         runtime.limits.maximum_result_records,
@@ -217,8 +255,7 @@ fn map_server_result(
 }
 
 /// Load the runtime file through the shared runtime configuration loader.
-/// Returns the directory holding the file, which `indexPath` is resolved
-/// against, and the validated configuration.
+/// Returns the directory holding the file and the validated configuration.
 pub fn load_runtime(path: &Path) -> Result<(PathBuf, RuntimeConfig), StartupError> {
     let runtime = RuntimeConfigLoader::new(RUNTIME_ENVELOPE)
         .removed_keys(REMOVED_RUNTIME_KEYS)
@@ -238,18 +275,129 @@ pub fn load_index(path: &Path) -> Result<DiscoveryIndex, StartupError> {
     parse_index(&bytes).map_err(|_| StartupError::IndexInvalid)
 }
 
+/// The bounds for the one-index Discovery package and optional revision.
+#[must_use]
+pub fn package_limits() -> PackageLimits {
+    PackageLimits {
+        max_files: MAXIMUM_PACKAGE_FILES,
+        max_file_bytes: MAXIMUM_INDEX_BYTES,
+        max_total_bytes: MAXIMUM_PACKAGE_BYTES,
+        max_depth: MAXIMUM_PACKAGE_DEPTH,
+        ..PackageLimits::default()
+    }
+}
+
+/// Capture and parse the exact index bytes named by an already verified
+/// package. The second digest check binds the bytes consumed by the directory
+/// to the `SHA256SUMS` entry retained in `verified`.
+pub fn load_verified_index(
+    root: &Path,
+    verified: &VerifiedPackage,
+) -> Result<DiscoveryIndex, StartupError> {
+    let expected = BTreeSet::from([INDEX_FILE.to_owned()]);
+    let found = verified
+        .files()
+        .filter(|path| !is_envelope_file(path))
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    if found != expected {
+        let mut details = String::new();
+        let missing = expected.difference(&found).cloned().collect::<Vec<_>>();
+        let extra = found.difference(&expected).cloned().collect::<Vec<_>>();
+        if !missing.is_empty() {
+            details.push_str(&format!("; missing: {}", missing.join(", ")));
+        }
+        if !extra.is_empty() {
+            details.push_str(&format!("; extra: {}", extra.join(", ")));
+        }
+        return Err(StartupError::PackageContents { details });
+    }
+    let path = root.join(INDEX_FILE);
+    let bytes = bounded_regular_file(&path, MAXIMUM_INDEX_BYTES).map_err(|_| {
+        StartupError::PackageFileChanged {
+            path: INDEX_FILE.to_owned(),
+        }
+    })?;
+    if verified.file_digest(INDEX_FILE).as_deref() != Some(sha256_uri(&bytes).as_str()) {
+        return Err(StartupError::PackageFileChanged {
+            path: INDEX_FILE.to_owned(),
+        });
+    }
+    parse_index(&bytes).map_err(|_| StartupError::PackageIndexInvalid)
+}
+
 fn bounded_regular_file(path: &Path, maximum: u64) -> Result<Vec<u8>, StartupError> {
-    let metadata = fs::symlink_metadata(path).map_err(|_| StartupError::IndexLoad)?;
-    if !metadata.file_type().is_file() || metadata.len() == 0 || metadata.len() > maximum {
+    let scanned = fs::symlink_metadata(path).map_err(|_| StartupError::IndexLoad)?;
+    if scanned.file_type().is_symlink()
+        || !scanned.is_file()
+        || scanned.len() == 0
+        || scanned.len() > maximum
+    {
         return Err(StartupError::IndexLoad);
     }
-    fs::read(path).map_err(|_| StartupError::IndexLoad)
+    let file = fs::File::open(path).map_err(|_| StartupError::IndexLoad)?;
+    let opened = file.metadata().map_err(|_| StartupError::IndexLoad)?;
+    let current = fs::symlink_metadata(path).map_err(|_| StartupError::IndexLoad)?;
+    if current.file_type().is_symlink()
+        || !current.is_file()
+        || !same_file(&scanned, &opened)
+        || !same_file(&opened, &current)
+    {
+        return Err(StartupError::IndexLoad);
+    }
+    read_opened_regular_file(file, &opened, maximum)
+}
+
+fn read_opened_regular_file(
+    file: fs::File,
+    opened: &fs::Metadata,
+    maximum: u64,
+) -> Result<Vec<u8>, StartupError> {
+    let capacity = usize::try_from(opened.len()).map_err(|_| StartupError::IndexLoad)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve(capacity)
+        .map_err(|_| StartupError::IndexLoad)?;
+    let mut reader = file.take(maximum.saturating_add(1));
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|_| StartupError::IndexLoad)?;
+    let after = reader
+        .get_ref()
+        .metadata()
+        .map_err(|_| StartupError::IndexLoad)?;
+    if bytes.is_empty()
+        || u64::try_from(bytes.len()).map_or(true, |length| length > maximum)
+        || !same_file(opened, &after)
+        || u64::try_from(bytes.len()).ok() != Some(after.len())
+    {
+        return Err(StartupError::IndexLoad);
+    }
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+}
+
+#[cfg(not(unix))]
+fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
 
 fn validate_runtime(runtime: &RuntimeConfig) -> Result<(), StartupError> {
-    if runtime.index_path.is_empty()
-        || runtime.index_path.chars().count() > MAXIMUM_IDENTIFIER_CHARACTERS
-        || runtime.limits.maximum_request_bytes == 0
+    runtime
+        .package
+        .check()
+        .map_err(|error| StartupError::RuntimeRefused(error.to_string()))?;
+    if runtime.limits.maximum_request_bytes == 0
         || runtime.limits.maximum_request_bytes > MAXIMUM_HTTP_BODY_BYTES
         || runtime.limits.maximum_response_bytes < MINIMUM_HTTP_RESPONSE_BYTES
         || runtime.limits.maximum_response_bytes > MAXIMUM_HTTP_BODY_BYTES
@@ -267,41 +415,13 @@ fn validate_runtime(runtime: &RuntimeConfig) -> Result<(), StartupError> {
     Ok(())
 }
 
-fn safe_existing_file(root: &Path, value: &str) -> Result<PathBuf, StartupError> {
-    let path = Path::new(value);
-    if value.is_empty()
-        || path.is_absolute()
-        || path
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        return Err(StartupError::RuntimeInvalid);
-    }
-    let mut resolved = root.to_path_buf();
-    for component in path.components() {
-        let Component::Normal(component) = component else {
-            return Err(StartupError::RuntimeInvalid);
-        };
-        resolved.push(component);
-        let metadata = fs::symlink_metadata(&resolved).map_err(|_| StartupError::IndexLoad)?;
-        if metadata.file_type().is_symlink() {
-            return Err(StartupError::RuntimeInvalid);
-        }
-    }
-    if !fs::symlink_metadata(&resolved)
-        .map_err(|_| StartupError::IndexLoad)?
-        .file_type()
-        .is_file()
-    {
-        return Err(StartupError::IndexInvalid);
-    }
-    Ok(resolved)
-}
-
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use crate::model::{canonical_index_bytes, tests::example_index};
+    use registry_platform_config::write_package;
 
     #[test]
     fn startup_loads_one_canonical_index_and_rejects_noncanonical_input() {
@@ -326,7 +446,8 @@ mod tests {
 apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1
 kind: DiscoveryRuntimeConfig
 listener: { bind: 127.0.0.1:8080 }
-indexPath: discovery-index.json
+package:
+  root: /tmp/registry-discovery-package
 limits:
   maximumRequestBytes: 65536
   maximumResponseBytes: 1048576
@@ -345,6 +466,13 @@ logLevel: info
         let path = directory.join("runtime.yaml");
         fs::write(&path, text).unwrap();
         path
+    }
+
+    fn prepare_error(path: &Path) -> StartupError {
+        match prepare(path) {
+            Ok(_) => panic!("expected Discovery startup to fail"),
+            Err(error) => error,
+        }
     }
 
     fn refusal(text: &str) -> String {
@@ -410,6 +538,14 @@ logLevel: info
                 .contains("listener.address is no longer accepted; declare listener.bind instead"),
             "{message}"
         );
+        let message = refusal(&RUNTIME.replace(
+            "package:\n  root: /tmp/registry-discovery-package",
+            "indexPath: discovery-index.json",
+        ));
+        assert!(
+            message.contains("indexPath is no longer accepted; declare package.root instead"),
+            "{message}"
+        );
     }
 
     #[test]
@@ -438,27 +574,178 @@ logLevel: info
         let (_, runtime) = load_runtime(&path).expect("shipped runtime fixture validates");
         assert_eq!(runtime.api_version, RUNTIME_API_VERSION);
         assert_eq!(runtime.kind, RUNTIME_KIND);
-        assert_eq!(runtime.index_path, "discovery-index.json");
+        assert!(runtime.package.root.is_absolute());
     }
 
     #[test]
-    fn runtime_paths_cannot_escape_or_follow_symlinks() {
-        let temporary = tempfile::tempdir().unwrap();
-        let root = temporary.path();
-        fs::write(root.join("index.json"), b"index").unwrap();
-        for value in ["", "/etc/passwd", "../index.json", "nested/../index.json"] {
-            assert!(safe_existing_file(root, value).is_err(), "{value}");
+    fn package_root_must_be_absolute_and_normalized() {
+        for value in ["package", "../package", "/tmp/../package"] {
+            let message = refusal(&RUNTIME.replace("/tmp/registry-discovery-package", value));
+            assert!(message.contains("package.root"), "{value}: {message}");
         }
-        assert_eq!(
-            safe_existing_file(root, "index.json").unwrap(),
-            root.join("index.json")
-        );
+    }
 
+    fn package_files(index: &DiscoveryIndex) -> BTreeMap<String, Vec<u8>> {
+        BTreeMap::from([(INDEX_FILE.to_owned(), canonical_index_bytes(index).unwrap())])
+    }
+
+    fn write_index_package(root: &Path) -> registry_platform_config::VerifiedPackage {
+        write_package(
+            root,
+            &package_files(&example_index()),
+            None,
+            &package_limits(),
+            PACKAGE_COMMAND,
+        )
+        .unwrap()
+    }
+
+    fn runtime_for(package_root: &Path, expected_digest: Option<&str>) -> String {
+        let pin = expected_digest
+            .map(|digest| format!("\n  expectedDigest: {digest}"))
+            .unwrap_or_default();
+        RUNTIME.replace(
+            "/tmp/registry-discovery-package",
+            &format!("{}{pin}", package_root.display()),
+        )
+    }
+
+    #[test]
+    fn startup_verifies_package_and_refuses_expected_digest_mismatch_with_common_shape() {
+        let temporary = canonical_tempdir();
+        let package_root = temporary.path().join("package");
+        let package = write_index_package(&package_root);
+        let runtime_path = write_runtime(
+            temporary.path(),
+            &runtime_for(&package_root, Some(package.digest())),
+        );
+        prepare(&runtime_path).expect("matching pinned package starts");
+
+        let expected = format!("sha256:{}", "0".repeat(64));
+        let runtime_path = write_runtime(
+            temporary.path(),
+            &runtime_for(&package_root, Some(&expected)),
+        );
+        let message = prepare_error(&runtime_path).to_string();
+        assert!(
+            message.contains(&format!(
+                "package.expectedDigest is {expected} but the package at package.root is {}",
+                package.digest()
+            )),
+            "{message}"
+        );
+        assert!(
+            message.contains("deploy the pinned package or update package.expectedDigest"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn startup_refuses_changed_missing_and_extra_package_files_by_name() {
+        for (case, expected) in [
+            ("changed", "changed: discovery-index.json"),
+            ("extra", "extra: note.txt"),
+        ] {
+            let temporary = canonical_tempdir();
+            let package_root = temporary.path().join("package");
+            write_index_package(&package_root);
+            let target = if case == "changed" {
+                package_root.join(INDEX_FILE)
+            } else {
+                package_root.join("note.txt")
+            };
+            fs::write(&target, b"replacement").unwrap();
+            let runtime_path = write_runtime(temporary.path(), &runtime_for(&package_root, None));
+            let message = prepare_error(&runtime_path).to_string();
+            assert!(message.contains(expected), "{case}: {message}");
+        }
+
+        let temporary = canonical_tempdir();
+        let package_root = temporary.path().join("package");
+        write_index_package(&package_root);
+        fs::remove_file(package_root.join(INDEX_FILE)).unwrap();
+        let runtime_path = write_runtime(temporary.path(), &runtime_for(&package_root, None));
+        let message = prepare_error(&runtime_path).to_string();
+        assert!(
+            message.contains("missing: discovery-index.json"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn startup_refuses_a_hash_covered_non_index_file_by_name() {
+        let temporary = canonical_tempdir();
+        let package_root = temporary.path().join("package");
+        let mut files = package_files(&example_index());
+        files.insert("note.txt".to_owned(), b"not part of Discovery".to_vec());
+        write_package(
+            &package_root,
+            &files,
+            None,
+            &package_limits(),
+            PACKAGE_COMMAND,
+        )
+        .unwrap();
+        let runtime_path = write_runtime(temporary.path(), &runtime_for(&package_root, None));
+        let message = prepare_error(&runtime_path).to_string();
+        assert!(message.contains("extra: note.txt"), "{message}");
+    }
+
+    #[test]
+    fn exact_consumed_index_bytes_remain_bound_to_the_verified_package() {
+        let temporary = canonical_tempdir();
+        let package_root = temporary.path().join("package");
+        let package = write_index_package(&package_root);
+        let mut replacement = example_index();
+        replacement.built_at = "2026-09-26T00:00:00Z".to_owned();
+        fs::write(
+            package_root.join(INDEX_FILE),
+            canonical_index_bytes(&replacement).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            load_verified_index(&package_root, &package),
+            Err(StartupError::PackageFileChanged {
+                path: INDEX_FILE.to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn index_capture_refuses_growth_beyond_the_read_limit() {
+        use std::io::Write as _;
+
+        let temporary = canonical_tempdir();
+        let path = temporary.path().join(INDEX_FILE);
+        fs::write(&path, b"12").unwrap();
+        let file = fs::File::open(&path).unwrap();
+        let opened = file.metadata().unwrap();
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"3")
+            .unwrap();
+
+        assert_eq!(
+            read_opened_regular_file(file, &opened, 2),
+            Err(StartupError::IndexLoad)
+        );
+    }
+
+    #[test]
+    fn package_root_symlink_is_refused_before_index_consumption() {
         #[cfg(unix)]
         {
-            use std::os::unix::fs::symlink;
-            symlink(root.join("index.json"), root.join("linked.json")).unwrap();
-            assert!(safe_existing_file(root, "linked.json").is_err());
+            let temporary = canonical_tempdir();
+            let package_root = temporary.path().join("package");
+            write_index_package(&package_root);
+            let linked = temporary.path().join("linked-package");
+            std::os::unix::fs::symlink(&package_root, &linked).unwrap();
+            let runtime_path = write_runtime(temporary.path(), &runtime_for(&linked, None));
+            let message = prepare_error(&runtime_path).to_string();
+            assert!(message.contains("symbolic link"), "{message}");
         }
     }
 
