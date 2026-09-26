@@ -24,15 +24,16 @@ use registry_casework_core::{
     ClockStepInstant, ContentDigest, DelegateRequest, DiscoveryCursor, ElapsedDuration,
     EphemeralCredential, EventRequest, ExecutePreparedRequest, HolidaySetDocument, HumanIdentity,
     InboxPolicy, IssuerPrincipal, OccurrenceKind, OccurrenceState, PrepareActionRequest,
-    PreparedSourceAttempt, QueuePolicy, ReviewCancelRequest, ReviewClockState,
-    ReviewCompletionDestinationPolicy, ReviewContext, ReviewContextStrategy, ReviewCreateRequest,
-    ReviewHistoryAudience, ReviewKindPolicy, ReviewKindPurpose, ReviewNoteRequest,
-    ReviewOutcomePolicy, ReviewOutcomeSettlement, ReviewProducerPolicy, ReviewRequestLifecycle,
-    ReviewResultStatus, ReviewRetentionPolicy, ReviewStagePolicy, ReviewTaskDraftInput,
-    ReviewTransition, ReviewValidationReason, ReviewerDecisionKind, ReviewerTaskState,
-    SourceAdapter, SourceAdapterError, SourceBinding, SourceContextBinding, SourceReceipt,
-    SubjectBinding, SubjectClockAnchor, SubjectClockCompletion, SubjectClockPause, SubjectRef,
-    TransitionHint, WorkingDaysAfter, WorkingWeekday, MAXIMUM_REVIEW_POLICY_SNAPSHOT_BYTES,
+    PreparedSourceAttempt, QueuePolicy, ReviewCancelRequest, ReviewCancelResponse,
+    ReviewClockState, ReviewCompletionDestinationPolicy, ReviewContext, ReviewContextStrategy,
+    ReviewCreateRequest, ReviewHistoryAudience, ReviewKindPolicy, ReviewKindPurpose,
+    ReviewNoteRequest, ReviewOutcomePolicy, ReviewOutcomeSettlement, ReviewProducerPolicy,
+    ReviewRequestLifecycle, ReviewResultStatus, ReviewRetentionPolicy, ReviewStagePolicy,
+    ReviewTaskDraftInput, ReviewTransition, ReviewValidationReason, ReviewerDecisionKind,
+    ReviewerTaskState, SourceAdapter, SourceAdapterError, SourceBinding, SourceContextBinding,
+    SourceReceipt, SubjectBinding, SubjectClockAnchor, SubjectClockCompletion, SubjectClockPause,
+    SubjectRef, TransitionHint, WorkingDaysAfter, WorkingWeekday,
+    MAXIMUM_REVIEW_POLICY_SNAPSHOT_BYTES,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::json;
@@ -4033,11 +4034,24 @@ async fn cancellation_and_final_decision_commit_exactly_one_terminal_result() {
         )
     );
 
+    // Either call may take the request lock first. A cancellation that loses
+    // the race still succeeds, reporting the decision's terminal result.
+    let cancellation_won = matches!(cancelled, Ok(ReviewCancelResponse::Cancelled { .. }));
     assert_eq!(
-        usize::from(cancelled.is_ok()) + usize::from(decided.is_ok()),
+        usize::from(cancellation_won) + usize::from(decided.is_ok()),
         1,
         "request lock must serialize cancellation and the final decision"
     );
+    if decided.is_ok() {
+        assert!(
+            matches!(
+                &cancelled,
+                Ok(ReviewCancelResponse::AlreadyTerminal { result })
+                    if result.status == ReviewResultStatus::Answered
+            ),
+            "a cancellation after the decision reports the answered result: {cancelled:?}"
+        );
+    }
     let result = service
         .review_result(&fixture.producer, request_id)
         .await
@@ -4045,7 +4059,7 @@ async fn cancellation_and_final_decision_commit_exactly_one_terminal_result() {
     assert!(matches!(
         result,
         ReviewResultRead::Available(result)
-            if (cancelled.is_ok() && result.status == ReviewResultStatus::Cancelled)
+            if (cancellation_won && result.status == ReviewResultStatus::Cancelled)
                 || (decided.is_ok() && result.status == ReviewResultStatus::Answered)
     ));
     assert_eq!(
