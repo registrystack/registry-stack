@@ -442,15 +442,11 @@ startup:
     `${NAME}` and `${NAME:-default}` expressions in string values are substituted from the
     process environment after parsing; they are refused inside secret references and inside
     secretProviders
-  digest: >-
-    independent SHA-256 revision over exact runtime.yaml bytes, the canonical digest of the
-    document after substitution, logical trust-profile names and exact CA bytes
   trust_profiles: >-
     names must exactly equal the logical tlsTrustProfile names the governed bundle's sources
     and authentication use
   secrets: >-
-    values and provider tokens are never parsed into or included in the runtime document or
-    digest
+    values and provider tokens are never parsed into or included in the runtime document
   signer: >-
     local assurance requires local-jwk; production and evidence-grade require Transit through
     an absolute Unix socket. Transit key version is pinned and no provider token is supplied

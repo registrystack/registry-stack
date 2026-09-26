@@ -56,8 +56,8 @@ HTTP 406.
 Run the candidate checks and deploy the exact reviewed revision:
 
 ```sh
-evidencectl test "<evidence-project>"
-evidence check --runtime-config <evidence-project>/runtime.yaml
+evidencectl test "<editable-project>" --target "<deployment-target>"
+evidence check --runtime-config "<deployment-target>/runtime.yaml"
 ```
 
 ## Choose root or structured disclosures
