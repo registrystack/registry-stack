@@ -724,6 +724,10 @@ const VERIFY_MALFORMED: CliError = CliError("stored response verification failed
 const LOCAL_RELYING_PROCEDURE_FAILED: CliError =
     CliError("local relying procedure preparation failed");
 const LOCAL_AUDIT_FAILED: CliError = CliError("local audit inspection failed");
+/// Exit status, with nothing written, for a stopped local chain that verified
+/// and retains no operation. It is a verified answer, not a failure, so it
+/// stays apart from the one collapsed failure class.
+const LOCAL_AUDIT_NO_OPERATION_EXIT_CODE: u8 = 3;
 
 /// Close trusted local procedure metadata and exact request-origin bindings.
 ///
@@ -810,7 +814,8 @@ fn write_canonical_json_line<T: serde::Serialize>(
 
 /// Inspect the last local audit operation only after the writer has stopped.
 ///
-/// Every failure is deliberately collapsed to one value-free class. The view
+/// Every failure is deliberately collapsed to one value-free class. A chain
+/// that verified and holds no operation exits with its own status. The view
 /// is written only after the entire retained chain and its native events have
 /// verified, so stdout can never contain a partial or unverified operation.
 fn local_audit_last_operation_command(runtime_path: &Path) -> Result<ExitCode, CommandError> {
@@ -828,11 +833,16 @@ fn local_audit_last_operation_command(runtime_path: &Path) -> Result<ExitCode, C
         .map_err(|_| LOCAL_AUDIT_FAILED)?;
     let master_secret =
         derived_audit_chain_secret(audit_secret.expose_secret()).map_err(|_| LOCAL_AUDIT_FAILED)?;
-    let view = verified_last_local_audit_operation(
+    let view = match verified_last_local_audit_operation(
         Path::new(&deployment.runtime().config.audit_storage.path),
         &master_secret,
-    )
-    .map_err(|_| LOCAL_AUDIT_FAILED)?;
+    ) {
+        Ok(view) => view,
+        Err(EvidenceAuditError::NoOperation) => {
+            return Ok(ExitCode::from(LOCAL_AUDIT_NO_OPERATION_EXIT_CODE))
+        }
+        Err(_) => return Err(LOCAL_AUDIT_FAILED.into()),
+    };
     write_canonical_json_line(&view, LOCAL_AUDIT_FAILED)?;
     Ok(ExitCode::SUCCESS)
 }

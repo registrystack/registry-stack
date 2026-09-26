@@ -6,7 +6,7 @@ use std::{
     process::{Command, ExitCode, Stdio},
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use chrono::DateTime;
 use clap::{ArgGroup, Args, Subcommand};
 use serde::{Deserialize, Deserializer};
@@ -16,7 +16,9 @@ use crate::{dev, OutputFormat};
 
 const CORE_VIEW_SCHEMA: &str = "registry.evidence.local-audit-operation/v1";
 const MAX_CORE_OUTPUT_BYTES: usize = 256 * 1024;
-const AUDIT_FAILED: &str = "local audit inspection failed";
+/// The core's exit status, with nothing written, for a stopped chain that
+/// verified and retains no operation.
+const CORE_NO_OPERATION_EXIT_CODE: i32 = 3;
 
 #[derive(Debug, Subcommand)]
 pub enum AuditCommand {
@@ -53,6 +55,9 @@ pub fn run(command: AuditCommand, format: OutputFormat) -> Result<ExitCode> {
 fn show(args: ShowArgs, format: OutputFormat) -> Result<ExitCode> {
     if !args.last_operation {
         return Err(failed());
+    }
+    if no_local_session(&args.project) {
+        return Err(no_stopped_session());
     }
     let stopped = dev::load_stopped_state(&args.project).map_err(|_| failed())?;
     let evidence = dev::resolve_tool_binary(
@@ -124,6 +129,9 @@ fn inspect_core(evidence: &Path, runtime: &Path) -> Result<Vec<u8>> {
         return Err(failed());
     }
     let status = child.wait().map_err(|_| failed())?;
+    if status.code() == Some(CORE_NO_OPERATION_EXIT_CODE) && bytes.is_empty() {
+        return Err(no_operation());
+    }
     if !status.success() {
         return Err(failed());
     }
@@ -312,8 +320,56 @@ fn valid_uri(value: &str) -> bool {
     !value.is_empty() && value.len() <= 512 && url::Url::parse(value).is_ok()
 }
 
+/// Whether the project has never held a local session, so there is no
+/// stopped audit history to inspect. Any other state goes through the full
+/// stopped-state validation.
+fn no_local_session(project: &Path) -> bool {
+    matches!(
+        std::fs::symlink_metadata(project.join(".evidence/dev/state.json")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    )
+}
+
+fn no_stopped_session() -> anyhow::Error {
+    refusal(
+        "evidence.audit.no-stopped-session",
+        "local development project",
+        "This project has no stopped local session, so it has no local audit history to show.",
+        "Run evidencectl dev start, send a request, run evidencectl dev stop, then rerun audit show.",
+    )
+}
+
+fn no_operation() -> anyhow::Error {
+    refusal(
+        "evidence.audit.no-operation",
+        "local audit history",
+        "The stopped local audit history verified and records no operation.",
+        "Send a request to a local session started with evidencectl dev start, run evidencectl dev stop, then rerun audit show.",
+    )
+}
+
+/// The one closed class for every other failure. It names no cause, because
+/// the detail may come from protected audit or deployment state.
 fn failed() -> anyhow::Error {
-    anyhow!(AUDIT_FAILED)
+    refusal(
+        "evidence.audit.inspection-failed",
+        "local audit history",
+        "Evidence could not verify the stopped local audit history.",
+        "Stop the local session with evidencectl dev stop and rerun audit show; if it is already stopped, its retained audit history did not verify.",
+    )
+}
+
+fn refusal(code: &str, artifact: &str, message: &str, suggested_action: &str) -> anyhow::Error {
+    crate::SafeCliFailure {
+        operational: false,
+        code: code.to_owned(),
+        artifact: artifact.to_owned(),
+        path: "$".to_owned(),
+        message: message.to_owned(),
+        suggested_action: suggested_action.to_owned(),
+        cause: None,
+    }
+    .into()
 }
 
 #[derive(Debug, Deserialize)]

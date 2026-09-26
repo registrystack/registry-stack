@@ -9,7 +9,10 @@ use serde_json::{json, Value};
 
 const PSEUDONYM: &str =
     "hmac-sha256:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const FAILURE: &str = "evidencectl: local audit inspection failed\n";
+const FAILURE: &str = "error[evidence.audit.inspection-failed] local audit history $: \
+    Evidence could not verify the stopped local audit history.\n  \
+    next: Stop the local session with evidencectl dev stop and rerun audit show; \
+    if it is already stopped, its retained audit history did not verify.\n";
 
 #[test]
 fn audit_help_is_nested_required_and_hides_test_seams() {
@@ -602,7 +605,7 @@ impl Fixture {
         let evidence = temporary.path().join("evidence-stub");
         executable(
             &evidence,
-            b"#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.args\"\nif [ -f \"$0.fail\" ]; then\n  printf 'person-123 token-canary source-canary\\n' >&2\n  exit 41\nfi\ncat \"$0.output\"\n",
+            b"#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.args\"\nif [ -f \"$0.empty\" ]; then\n  exit 3\nfi\nif [ -f \"$0.fail\" ]; then\n  printf 'person-123 token-canary source-canary\\n' >&2\n  exit 41\nfi\ncat \"$0.output\"\n",
         );
         Self {
             _temporary: temporary,
@@ -735,8 +738,79 @@ fn json_mode_embeds_the_validated_core_view_and_keeps_failures_value_free() {
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("one JSON failure document");
     assert_eq!(report["status"], "domain-refusal");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "evidence.audit.inspection-failed"
+    );
+    assert!(
+        report["diagnostics"][0].get("cause").is_none(),
+        "a closed refusal carries no cause: {report}"
+    );
     let rendered = report.to_string();
     for protected in ["person-123", "token-canary"] {
         assert!(!rendered.contains(protected), "leaked {protected}");
     }
+}
+
+/// A project that never ran a local session has no audit history. The
+/// refusal says so by name instead of the closed inspection failure, and
+/// never delegates to the core.
+#[test]
+fn a_project_without_a_local_session_names_the_missing_session() {
+    let fixture = Fixture::new();
+    fs::remove_file(fixture.root.join(".evidence/dev/state.json")).expect("remove state");
+    fixture.write_core_json(&successful_view());
+
+    let output = fixture.show();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let message = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        message.starts_with("error[evidence.audit.no-stopped-session]"),
+        "{message}"
+    );
+
+    let output = fixture.show_json();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    let report: Value = serde_json::from_slice(&output.stdout).expect("one JSON refusal");
+    assert_eq!(report["status"], "domain-refusal");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "evidence.audit.no-stopped-session"
+    );
+    assert!(report["diagnostics"][0].get("cause").is_none());
+    assert!(
+        !fixture.evidence.with_extension("args").exists(),
+        "the core was consulted without a stopped session"
+    );
+}
+
+/// A stopped session that answered no request leaves a verified chain with
+/// no operation. The core reports that with its own exit status, and the
+/// refusal names it instead of the closed inspection failure.
+#[test]
+fn a_verified_history_without_an_operation_is_named() {
+    let fixture = Fixture::new();
+    fs::write(fixture.evidence.with_extension("empty"), b"").expect("empty marker");
+
+    let output = fixture.show();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let message = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        message.starts_with("error[evidence.audit.no-operation]"),
+        "{message}"
+    );
+
+    let output = fixture.show_json();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    let report: Value = serde_json::from_slice(&output.stdout).expect("one JSON refusal");
+    assert_eq!(report["status"], "domain-refusal");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "evidence.audit.no-operation"
+    );
+    assert!(report["diagnostics"][0].get("cause").is_none());
 }
