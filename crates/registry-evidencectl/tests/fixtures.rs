@@ -283,12 +283,13 @@ fn fixture_selection_refuses_non_exact_names_without_rendering_them() {
     assert!(!output.status.success());
     let stdout = stdout_of(&output);
     let stderr = stderr_of(&output);
-    assert!(stdout.is_empty(), "unexpected report: {stdout}");
-    assert!(
-        stderr.contains("selected fixture is not referenced by the project"),
-        "{stderr}"
+    assert!(stderr.is_empty(), "--json wrote prose: {stderr}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).expect("one JSON refusal");
+    assert_eq!(
+        report["diagnostics"][0]["cause"],
+        "selected fixture is not referenced by the project"
     );
-    assert!(!stderr.contains(unreferenced), "selector leaked: {stderr}");
+    assert!(!stdout.contains(unreferenced), "selector leaked: {stdout}");
     assert!(
         read_argv_log(&argv_log).is_empty(),
         "an invalid selection must not reach Evidence"
