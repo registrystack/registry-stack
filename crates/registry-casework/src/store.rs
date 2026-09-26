@@ -319,6 +319,7 @@ impl PostgresStore {
             .ok_or(StoreError::AuditUnavailable)?
             .begin_background()
             .await
+            .map(|operation| operation.with_read_back(self.pool.clone()))
     }
 
     /// Append the `request` entry of one audited operation. Call it before
@@ -332,6 +333,7 @@ impl PostgresStore {
             .ok_or(StoreError::AuditUnavailable)?
             .begin(request)
             .await
+            .map(|operation| operation.with_read_back(self.pool.clone()))
     }
 
     /// Start an audited operation that a caller requested when `actor` names
