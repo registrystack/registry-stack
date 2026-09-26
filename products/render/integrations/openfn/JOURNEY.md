@@ -19,7 +19,7 @@ re-walking it reproduces them against the current pinned values.
 | --- | --- |
 | OpenFn CLI | 1.40.1 (`openfn execute`, kit-style flags: `--no-autoinstall --no-expand-adaptors --no-cache-steps`) |
 | Adaptor | `@openfn/language-common` 3.3.4 (`util.request`, `parseAs: "json"`) |
-| registry-render | this repo's binary, `registry-render serve` on loopback: sealed receipt bundle, API key + audit key in owner-only files |
+| registry-render | this repo's binary, `registry-render serve` on loopback: verified receipt package, API key in an owner-only file, audit to an owner-only file |
 | breg | v0.32.0 dev stack (`bregctl dev`: PostgreSQL + ThunderID issuer + registry, all loopback) |
 | job | `receipt-job.js` (this directory), notify.js idiom |
 

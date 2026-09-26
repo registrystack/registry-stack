@@ -1,6 +1,6 @@
 ---
 title: Render your first document
-description: Scaffold a Registry Render bundle, render offline, seal it, serve it on loopback, render over HTTP, and check that both renders are the same bytes.
+description: Scaffold Registry Render source, render offline, package it, serve it on loopback, render over HTTP, and check that both renders are the same bytes.
 status: draft
 owner: registry-docs
 source_repos:
@@ -14,7 +14,7 @@ standards_referenced: []
 ---
 
 If you are evaluating Registry Render as the renderer for your registry's printed documents, start
-with one bundle and one letter. You will scaffold a working bundle, render it offline, seal it,
+with one bundle and one letter. You will scaffold working source, render it offline, package it,
 serve it on your machine, render the same document over HTTP, and check that the served PDF is
 byte-identical to the offline one. Along the way you will see the two hashes worth storing on a
 record and the audit trail the service keeps.
@@ -77,33 +77,42 @@ the output line with both hashes:
 wrote render-work/letter.pdf (13292 bytes, pdf sha256 1e2dc9c981d19ef62549c3100395a106bc8fb30e01bef21c26844e45a0c29f9f, data sha256 ad8d63dc40da68da4b3bc96144969c6ec85000cb460d9cbfe37c82688a944523)
 ```
 
-The compile also prints a note that the bundle is unsealed. That is expected while authoring:
-compile accepts unsealed bundles, serve does not. If it fails instead, the problem names the file
-and the line, with exit code 12.
+Raw source is expected here: compile, validate, and check are authoring commands as well as package
+inspection commands. Serve is the boundary that always requires the shared package envelope. If
+compile fails, the problem names the file and the line, with exit code 12.
 
 {/* Evidence: crates/registry-render/src/cli.rs, Compile and parse_issued_at;
     crates/registry-render/src/problem.rs, exit_code. */}
 
-## Seal the bundle
+## Build the package
 
 ```sh
-target/release/registry-render seal --bundle render-work/bundle
 target/release/registry-render check --bundle render-work/bundle
+target/release/registry-render package \
+  --bundle render-work/bundle \
+  --output render-work/package \
+  --revision tutorial-1
+target/release/registry-render check --bundle render-work/package
 ```
 
-`registry-render seal` writes a per-file sha256 for every governed file into the bundle's
-manifest, and `registry-render check` verifies structure, hashes, label script coverage, and
-label key sets. You know both worked when check prints the document line and the bundle line:
+The first check verifies manifest structure, label script coverage, and label key sets before you
+package anything. `registry-render package` copies those exact validated source files into a new
+directory and writes sorted `SHA256SUMS`; `--revision` adds operator metadata that is hashed like
+every other package file. The package command prints its `sha256:` digest. The second check
+verifies that envelope before inspecting the same product content. You know it worked when check
+prints the document line and the bundle line:
 
 ```text
 document letter           v1  entry templates/letter.typ  labels [en]  pdf plain
-bundle render-work/bundle v1 hash 1c15a689885df6ac (19 fonts, 1 documents, 14 governed files)
+bundle render-work/package v1 hash <digest prefix> (19 fonts, 1 documents, 14 governed files)
 ```
 
-The seal is what serve trusts, not the directory listing: after sealing, a changed file is refused
-by name. Seal again after any intentional template edit.
+The shared envelope is what serve trusts, not the directory listing: a changed, missing, or extra
+file is refused by name. After an intentional template edit, build a new output directory. The
+package command refuses to replace an existing directory.
 
-{/* Evidence: crates/registry-render/src/bundle.rs, seal and load_sealed;
+{/* Evidence: crates/registry-render/src/cli.rs, Package;
+    crates/registry-render/src/bundle.rs, load_package and bind_verified_snapshot;
     crates/registry-render/src/check.rs, run. */}
 
 ## Serve on your machine
@@ -129,7 +138,7 @@ kind: RenderRuntimeConfig
 listener:
   bind: 127.0.0.1:64123
 package:
-  root: $work/bundle
+  root: $work/package
 secretProviders:
   file:
     root: $work/deploy
@@ -153,14 +162,14 @@ target/release/registry-render serve --runtime-config "$work/deploy/runtime.yaml
 curl -s http://127.0.0.1:64123/health
 ```
 
-You know it is serving when health answers with the bundle hash and the renderer version:
+You know it is serving when health answers with the package hash and the renderer version:
 
 ```text
-{"bundleHash":"1c15a689885df6ac2e0d0fd35f3a58a960a00ba7cd6a6b731c8a7c9516af6ffe","bundleVersion":1,"rendererVersion":"0.32.0-dev (typst 0.15.1)","status":"ok","typstPin":"0.15.1"}
+{"bundleHash":"<package digest without sha256:>","bundleVersion":1,"rendererVersion":"<version> (typst 0.15.1)","status":"ok","typstPin":"0.15.1"}
 ```
 
 If startup fails instead, the refusal names the file and the field: check that `package.root` is
-the sealed bundle directory and that the API key file sits under `secretProviders.file.root`.
+the package directory and that the API key file sits under `secretProviders.file.root`.
 
 {/* Evidence: crates/registry-render/src/runtime.rs, RenderRuntime and validate_bind;
     crates/registry-render/src/audit.rs, RenderAudit. */}

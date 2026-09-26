@@ -16,7 +16,7 @@ brief must carry `agreed` rows for:
 - the reliance/verification wording printed next to the QR;
 - where the QR points (the host's public origin, the
   `registry-public-check` answer contract on the verify page);
-- who signs off each bundle version (`registry-render seal` + review).
+- who signs off each package version (`registry-render package` + review).
 
 ## Config (host, `taskDispatch` precedent)
 
@@ -37,7 +37,7 @@ from files at load, mirroring the kit's task-dispatch configuration:
 }
 ```
 
-The bundle lives under `project/deployment/render/bundle/` so the kit's
+The package lives under `project/deployment/render/package/` so the kit's
 writes-stay-in-`project/` boundary holds; `deployment/local.py` supervises
 `registry-render serve` beside breg and casework.
 

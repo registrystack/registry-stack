@@ -1,5 +1,5 @@
 //! The serve runtime: one strict YAML file with everything a deployment
-//! owns: listener, sealed bundle package, secret providers, caller key,
+//! owns: listener, verified bundle package, secret providers, caller key,
 //! limits, audit. Nothing here can override governed (bundle) behavior.
 //!
 //! The file is read through the shared Registry Stack runtime configuration
@@ -33,7 +33,7 @@ const RENDER_REMOVED_KEYS: &[RemovedKey] = &[
     },
     RemovedKey {
         path: "bundle",
-        replacement: "declare package.root as the absolute path of the sealed bundle directory",
+        replacement: "declare package.root as the absolute path of the package directory",
     },
     RemovedKey {
         path: "audit.directory",
@@ -55,7 +55,7 @@ pub struct RenderRuntime {
     pub api_version: String,
     pub kind: String,
     pub listener: ListenerRuntime,
-    /// The sealed bundle directory Render serves.
+    /// The verified bundle package Render serves.
     pub package: PackageConfig,
     pub secret_providers: SecretProvidersConfig,
     pub auth: AuthRuntime,
@@ -254,14 +254,32 @@ pub fn load(path: &Path) -> Result<(RenderRuntime, String), RenderProblem> {
     Ok((runtime, loaded.effective_digest))
 }
 
-/// Compare the sealed bundle found at `package.root` with the optional
-/// `package.expectedDigest` pin, as `sha256:<bundle hash>`.
-pub fn verify_package(runtime: &RenderRuntime, bundle_hash: &str) -> Result<(), RenderProblem> {
-    let found = format!("sha256:{bundle_hash}");
-    runtime
+/// Verify the shared package envelope, apply the optional digest pin, then
+/// bind the exact captured product bytes that rendering will consume.
+pub fn load_package(runtime: &RenderRuntime) -> Result<crate::Bundle, RenderProblem> {
+    let verified = runtime
         .package
-        .verify_digest(&found)
-        .map_err(|error| invalid(error.to_string()))
+        .verify_package(&package_limits(), "registry-render package")
+        .map_err(package_problem)?;
+    crate::Bundle::load_package(&runtime.package.root, &verified)
+}
+
+/// Product bounds for authored and deployed Render packages.
+pub fn package_limits() -> registry_platform_config::package::PackageLimits {
+    registry_platform_config::package::PackageLimits::default()
+}
+
+pub(crate) fn package_problem(
+    error: registry_platform_config::package::PackageError,
+) -> RenderProblem {
+    use registry_platform_config::package::PackageErrorKind;
+
+    let kind = match error.kind() {
+        PackageErrorKind::SumFileMissing => ProblemKind::BundleUnsealed,
+        PackageErrorKind::DigestMismatch(_) => ProblemKind::RuntimeInvalid,
+        _ => ProblemKind::BundleTampered,
+    };
+    RenderProblem::new(kind, error.to_string())
 }
 
 /// Resolve a secret reference under the providers the runtime declares.
@@ -546,26 +564,6 @@ mod tests {
         std::fs::write(path, bytes).expect("secret file");
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
             .expect("secret mode");
-    }
-
-    #[test]
-    fn a_pinned_package_digest_must_match_the_sealed_bundle() {
-        let (_dir, home) = home();
-        let hash = "a".repeat(64);
-        let pinned = minimal(&home).replace(
-            "  root: /srv/render/package\n",
-            &format!("  root: /srv/render/package\n  expectedDigest: sha256:{hash}\n"),
-        );
-        let runtime = load_text(&home, &pinned).expect("pinned runtime loads");
-        verify_package(&runtime, &hash).expect("the pinned bundle");
-        let error = verify_package(&runtime, &"b".repeat(64)).expect_err("another bundle");
-        assert!(
-            error.detail.contains("package.expectedDigest"),
-            "{}",
-            error.detail
-        );
-        let unpinned = load_text(&home, &minimal(&home)).expect("unpinned runtime loads");
-        verify_package(&unpinned, &"b".repeat(64)).expect("no pin, no check");
     }
 
     #[test]

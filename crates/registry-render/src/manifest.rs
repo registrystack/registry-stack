@@ -2,9 +2,8 @@
 //! directory of Typst files, fonts, labels, schemas, and packages into
 //! governed content.
 
-use std::collections::BTreeMap;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -132,15 +131,26 @@ pub struct Manifest {
     pub bundle_version: u32,
     #[serde(default, rename = "documents")]
     pub documents: Vec<DocumentSpec>,
-    /// Per-file sha256 hex digests, relative to the bundle root, slash
-    /// separated. Present iff the bundle is sealed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hashes: Option<BTreeMap<String, String>>,
 }
 
 impl Manifest {
     /// Parse and structurally validate manifest bytes.
     pub fn parse(bytes: &[u8]) -> Result<Self, RenderProblem> {
+        let value: serde_norway::Value = serde_norway::from_slice(bytes).map_err(|err| {
+            RenderProblem::new(
+                ProblemKind::ManifestInvalid,
+                format!("manifest.yaml is not valid: {err}"),
+            )
+        })?;
+        if value
+            .as_mapping()
+            .is_some_and(|mapping| mapping.contains_key("hashes"))
+        {
+            return Err(RenderProblem::new(
+                ProblemKind::ManifestInvalid,
+                "manifest.yaml key hashes is no longer accepted; remove it and build a deployment package with `registry-render package --bundle <source> --output <directory>`",
+            ));
+        }
         let manifest: Manifest = serde_norway::from_slice(bytes).map_err(|err| {
             RenderProblem::new(
                 ProblemKind::ManifestInvalid,
@@ -219,7 +229,7 @@ impl Manifest {
                 ));
             }
             // The schema gets the same containment rule as the entry: a
-            // schema outside the bundle would sit outside the seal.
+            // schema outside the bundle would sit outside package governance.
             if let Some(schema) = doc.schema.as_ref() {
                 let schema = schema.to_string_lossy();
                 if schema.is_empty()
@@ -263,81 +273,6 @@ impl Manifest {
             )
         })
     }
-
-    pub fn is_sealed(&self) -> bool {
-        self.hashes.as_ref().is_some_and(|h| !h.is_empty())
-    }
-
-    /// Compute the per-file sha256 map over every governed file in the
-    /// bundle. `manifest.yaml` itself is excluded: it carries the hashes
-    /// and cannot hash itself; the bundle id is the sha256 of the sealed
-    /// manifest bytes. Deterministic: sorted relative paths,
-    /// slash-separated.
-    pub fn compute_hashes(root: &Path) -> Result<BTreeMap<String, String>, RenderProblem> {
-        let mut map = BTreeMap::new();
-        let mut stack = vec![root.to_path_buf()];
-        while let Some(dir) = stack.pop() {
-            let entries = std::fs::read_dir(&dir).map_err(|err| {
-                RenderProblem::new(
-                    ProblemKind::ManifestInvalid,
-                    format!("cannot read bundle directory {}: {err}", dir.display()),
-                )
-            })?;
-            for entry in entries {
-                let entry = entry.map_err(|err| {
-                    RenderProblem::new(
-                        ProblemKind::ManifestInvalid,
-                        format!("cannot read bundle directory {}: {err}", dir.display()),
-                    )
-                })?;
-                let path = entry.path();
-                let meta = std::fs::symlink_metadata(&path).map_err(|err| {
-                    RenderProblem::new(
-                        ProblemKind::ManifestInvalid,
-                        format!("cannot stat {}: {err}", path.display()),
-                    )
-                })?;
-                let file_type = meta.file_type();
-                if file_type.is_symlink() {
-                    // A symlink inside the bundle could point outside the
-                    // root; the render world refuses it, so a seal that
-                    // silently hashed its target would produce a bundle
-                    // that verifies but cannot render.
-                    return Err(RenderProblem::new(
-                        ProblemKind::ManifestInvalid,
-                        format!(
-                            "bundle contains a symlink, which cannot be sealed: {}",
-                            path.display()
-                        ),
-                    ));
-                }
-                if file_type.is_dir() {
-                    stack.push(path);
-                } else {
-                    let bytes = std::fs::read(&path).map_err(|err| {
-                        RenderProblem::new(
-                            ProblemKind::ManifestInvalid,
-                            format!("cannot read {}: {err}", path.display()),
-                        )
-                    })?;
-                    let rel = path
-                        .strip_prefix(root)
-                        .expect("walk stays under root")
-                        .to_string_lossy()
-                        .replace('\\', "/");
-                    // Only the bundle's own root manifest is excluded (it
-                    // carries these hashes); a nested manifest.yaml is
-                    // ordinary governed content.
-                    if rel == MANIFEST_FILE {
-                        continue;
-                    }
-                    let digest = crate::hash::sha256_hex(&bytes);
-                    map.insert(rel, digest);
-                }
-            }
-        }
-        Ok(map)
-    }
 }
 
 #[cfg(test)]
@@ -354,7 +289,7 @@ mod tests {
 
     #[test]
     fn schema_path_is_validated_like_the_entry() {
-        // A schema outside the bundle sits outside the seal; the entry rule
+        // A schema outside the bundle sits outside the package; the entry rule
         // (no `..`, no absolute, correct suffix) applies to it too.
         let doc = |schema: &str| {
             format!("apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: d\n    version: 1\n    entry: templates/d.typ\n    schema: {schema}\n")
@@ -371,8 +306,15 @@ mod tests {
         let m = Manifest::parse(good).expect("parses");
         assert_eq!(m.documents.len(), 1);
         assert_eq!(m.documents[0].labels, vec!["ar", "fr"]);
-        assert!(!m.is_sealed());
         assert_eq!(m.documents[0].pdf_standard.map(|s| s.to_string()), None);
+    }
+
+    #[test]
+    fn retired_manifest_hashes_name_the_package_replacement() {
+        let manifest = b"apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments: []\nhashes:\n  templates/a.typ: aaaa\n";
+        let problem = Manifest::parse(manifest).expect_err("self-hashing manifest is retired");
+        assert!(problem.detail.contains("hashes"));
+        assert!(problem.detail.contains("registry-render package"));
     }
 
     #[test]

@@ -13,7 +13,7 @@ standards_referenced: []
 
 If you print registry data on paper, or hand a PDF to a person who was never one of your systems,
 Registry Render turns that data into a governed document. Render is a deterministic PDF renderer:
-the same sealed template bundle and the same request produce the same PDF bytes, every time, with
+the same verified template package and the same request produce the same PDF bytes, every time, with
 the hashes and the audit trail an institution needs to stand behind the printed artifact.
 
 {/* Evidence: crates/registry-render/src/lib.rs, render and RenderRequest;
@@ -26,7 +26,7 @@ different documents for one decision. [How Registry Render stays
 byte-stable](../../explanation/render-determinism/) explains the mechanisms behind that promise.
 
 Render holds no database and makes no outbound calls. Everything a template can read comes from two
-places: the sealed bundle on disk (templates, labels, schemas, fonts, vendored packages) and the
+places: the verified package on disk (templates, labels, schemas, fonts, vendored packages) and the
 request itself (the data, the images, and the issuance time). The issuance time, `issuedAt`, is the
 document's own claim about when it was issued and is the only clock a render ever sees; nothing in
 the output depends on the machine's wall clock.
@@ -60,15 +60,15 @@ mode](../../operate/registry-render/) covers the deployment contract for the ser
 Render renders documents; it does not govern records. It is not a document store, an e-signature
 or verifiable-credential issuer, an HTML converter, or an imposition engine, and it makes no
 authorization decisions about who may see which field. The field list a template prints is a
-disclosure decision that belongs to the bundle author: everything placed on paper leaves every
+disclosure decision that belongs to the template author: everything placed on paper leaves every
 access profile behind, and the QR a template prints can point a member of the public at a
-verification page. Render's own surface is the rendering contract, sealed and audited.
+verification page. Render's own surface is the rendering contract, packaged and audited.
 
 {/* Evidence: products/render/DEFINITION-OF-DONE.md;
     products/render/integrations/app-kit/README.md. */}
 
-Templates are plain Typst, authored with upstream tooling, and sealed into a bundle with
-per-file hashes before serving. A bundle plus a render binary is the whole deployment surface:
+Templates are plain Typst, authored with upstream tooling, and built into the shared Registry
+Stack package envelope before serving. A package plus a render binary is the whole deployment surface:
 no migration, no broker, no cache.
 
 ## Next

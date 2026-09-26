@@ -14,9 +14,9 @@ pub enum ProblemKind {
     InvalidArgument,
     /// The bundle manifest is missing or structurally invalid.
     ManifestInvalid,
-    /// A sealed bundle's file hashes do not match the manifest.
+    /// A package does not match its shared checksum envelope.
     BundleTampered,
-    /// An operation requires a sealed bundle and the bundle is unsealed.
+    /// A runtime package lacks the shared checksum envelope.
     BundleUnsealed,
     /// A requested document type or locale is not in the bundle.
     UnknownDocument,

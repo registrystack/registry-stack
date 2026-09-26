@@ -1,7 +1,8 @@
-//! Bundle loading, verification, and sealing. A bundle is a directory: one
-//! `manifest.yaml` plus the templates, labels, schemas, fonts, and vendored
-//! packages it governs. Sealing hashes every governed file; serving requires
-//! a sealed bundle, compiling does not.
+//! Bundle loading and package binding. An authored bundle is a directory with
+//! one `manifest.yaml` plus the templates, labels, schemas, fonts, and
+//! vendored Typst packages it governs. A deployment package adds the shared
+//! `SHA256SUMS` envelope. Runtime loads bind the exact captured bytes back to
+//! that verified envelope before parsing or rendering any product content.
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -29,8 +30,7 @@ pub struct LoadedDocument {
     pub schema: Option<Value>,
 }
 
-/// A loaded bundle. `Bundle::load` accepts unsealed bundles (for compile and
-/// authoring); `Bundle::load_sealed` is what `serve` uses.
+/// A loaded authored bundle or verified deployment package.
 #[derive(Debug, Clone)]
 pub struct Bundle {
     /// Retained only to redact any host path a future diagnostic might
@@ -39,15 +39,17 @@ pub struct Bundle {
     pub manifest: Manifest,
     /// Exact bytes of the loaded `manifest.yaml`.
     pub manifest_bytes: Vec<u8>,
-    /// sha256 of the manifest bytes; identifies the sealed content set.
+    /// Hex SHA-256 identity. For a deployment package this is the shared
+    /// package digest without its `sha256:` label; raw authoring loads use the
+    /// manifest digest only for preview output.
     pub bundle_hash: String,
     pub documents: BTreeMap<String, LoadedDocument>,
     /// The binary's baseline set (`typst-assets` order) first, then bundle
     /// fonts sorted by path — the same book order the Typst CLI builds, so
     /// library and CLI renders agree byte for byte.
     pub fonts: Vec<typst::text::Font>,
-    /// Immutable bytes read once and, for a sealed bundle, verified against
-    /// the manifest before any consumer parses or renders them.
+    /// Immutable bytes read once and, for a deployment package, bound to the
+    /// shared package envelope before any consumer parses or renders them.
     pub(crate) snapshot: BundleSnapshot,
 }
 
@@ -60,10 +62,7 @@ pub(crate) struct BundleSnapshot {
 }
 
 impl BundleSnapshot {
-    fn load(
-        root: &Path,
-        require_sealed: bool,
-    ) -> Result<(Self, Manifest, Vec<u8>, std::fs::File), RenderProblem> {
+    fn load(root: &Path) -> Result<(Self, Manifest, Vec<u8>), RenderProblem> {
         #[cfg(any(target_os = "linux", target_vendor = "apple"))]
         {
             use std::ffi::OsStr;
@@ -75,12 +74,6 @@ impl BundleSnapshot {
                 &root.join(MANIFEST_FILE),
             )?;
             let manifest = Manifest::parse(&manifest_bytes)?;
-            if require_sealed && !manifest.is_sealed() {
-                return Err(RenderProblem::new(
-                    ProblemKind::BundleUnsealed,
-                    "serve requires a sealed bundle; run `registry-render seal` first",
-                ));
-            }
 
             let mut files = BTreeMap::new();
             files.insert(MANIFEST_FILE.to_owned(), Bytes::new(manifest_bytes.clone()));
@@ -91,13 +84,11 @@ impl BundleSnapshot {
                 },
                 manifest,
                 manifest_bytes,
-                directory,
             ))
         }
 
         #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
         {
-            let _ = require_sealed;
             Err(RenderProblem::new(
                 ProblemKind::ManifestInvalid,
                 format!(
@@ -108,14 +99,41 @@ impl BundleSnapshot {
         }
     }
 
-    fn hashes(&self) -> BTreeMap<String, String> {
-        let mut files = BTreeMap::new();
-        for (path, bytes) in self.iter() {
-            if path != MANIFEST_FILE {
-                files.insert(path.clone(), sha256_hex(bytes.as_slice()));
-            }
+    /// Capture a package without interpreting product bytes. The caller
+    /// binds this snapshot to shared verification before parsing the
+    /// manifest or constructing any other product consumer.
+    fn load_unparsed(root: &Path) -> Result<(Self, Vec<u8>), RenderProblem> {
+        #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+        {
+            use std::ffi::OsStr;
+
+            let directory = open_bundle_root(root)?;
+            let manifest_bytes = read_bundle_file(
+                &directory,
+                OsStr::new(MANIFEST_FILE),
+                &root.join(MANIFEST_FILE),
+            )?;
+            let mut files = BTreeMap::new();
+            files.insert(MANIFEST_FILE.to_owned(), Bytes::new(manifest_bytes.clone()));
+            capture_bundle_directory(&directory, Path::new(""), root, &mut files)?;
+            Ok((
+                Self {
+                    files: Arc::new(files),
+                },
+                manifest_bytes,
+            ))
         }
-        files
+
+        #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+        {
+            Err(RenderProblem::new(
+                ProblemKind::ManifestInvalid,
+                format!(
+                    "cannot securely snapshot bundle {} on this platform",
+                    root.display()
+                ),
+            ))
+        }
     }
 
     pub(crate) fn get(&self, path: &str) -> Option<Bytes> {
@@ -129,6 +147,25 @@ impl BundleSnapshot {
 
     fn iter(&self) -> impl Iterator<Item = (&String, &Bytes)> {
         self.files.iter()
+    }
+
+    fn product_files(&self) -> Self {
+        let files = self
+            .files
+            .iter()
+            .filter(|(path, _)| !registry_platform_config::package::is_envelope_file(path))
+            .map(|(path, bytes)| (path.clone(), bytes.clone()))
+            .collect();
+        Self {
+            files: Arc::new(files),
+        }
+    }
+
+    fn package_inputs(&self) -> BTreeMap<String, Vec<u8>> {
+        self.files
+            .iter()
+            .map(|(path, bytes)| (path.clone(), bytes.to_vec()))
+            .collect()
     }
 }
 
@@ -315,21 +352,79 @@ fn capture_bundle_directory(
 }
 
 impl Bundle {
-    /// Load a bundle without requiring it to be sealed. If it is sealed, the
-    /// hashes are verified.
+    /// Load raw authoring source. Deployment envelope files are refused so an
+    /// already-built package cannot silently become the source of another.
     pub fn load(root: &Path) -> Result<Self, RenderProblem> {
-        let (snapshot, manifest, manifest_bytes, _directory) = BundleSnapshot::load(root, false)?;
-        if manifest.is_sealed() {
-            verify_hashes(&snapshot, &manifest)?;
+        let (snapshot, manifest, manifest_bytes) = BundleSnapshot::load(root)?;
+        if let Some(path) = snapshot
+            .iter()
+            .map(|(path, _)| path.as_str())
+            .find(|path| registry_platform_config::package::is_envelope_file(path))
+        {
+            return Err(RenderProblem::new(
+                ProblemKind::InvalidArgument,
+                format!(
+                    "authoring bundle contains package envelope file {path}; edit the source bundle and build a new directory with `registry-render package --bundle <source> --output <directory>`"
+                ),
+            ));
         }
-        Self::assemble(root, manifest, manifest_bytes, snapshot)
+        let bundle_hash = sha256_hex(&manifest_bytes);
+        Self::assemble(root, manifest, manifest_bytes, snapshot, bundle_hash)
     }
 
-    /// Load a bundle and require a verified seal.
-    pub fn load_sealed(root: &Path) -> Result<Self, RenderProblem> {
-        let (snapshot, manifest, manifest_bytes, _directory) = BundleSnapshot::load(root, true)?;
-        verify_hashes(&snapshot, &manifest)?;
-        Self::assemble(root, manifest, manifest_bytes, snapshot)
+    /// Load source for authoring commands, or verify and load a current
+    /// package when the directory has the shared envelope. This lets an
+    /// operator inspect or compile the exact package they will deploy while
+    /// keeping `package` itself source-only and write-once.
+    pub fn load_for_preview(root: &Path) -> Result<Self, RenderProblem> {
+        match std::fs::symlink_metadata(root.join(registry_platform_config::package::SUM_FILE)) {
+            Ok(_) => {
+                let verified = registry_platform_config::package::verify_package(
+                    root,
+                    &crate::runtime::package_limits(),
+                    "registry-render package",
+                )
+                .map_err(crate::runtime::package_problem)?;
+                Self::load_package(root, &verified)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Self::load(root),
+            Err(error) => Err(RenderProblem::new(
+                ProblemKind::ManifestInvalid,
+                format!(
+                    "cannot inspect package envelope {}: {error}",
+                    root.join(registry_platform_config::package::SUM_FILE)
+                        .display()
+                ),
+            )),
+        }
+    }
+
+    /// Capture a package once, prove those consumed bytes are the bytes the
+    /// shared verifier accepted, and assemble only product-owned content.
+    pub fn load_package(
+        root: &Path,
+        verified: &registry_platform_config::package::VerifiedPackage,
+    ) -> Result<Self, RenderProblem> {
+        let (snapshot, manifest_bytes) = BundleSnapshot::load_unparsed(root)?;
+        bind_verified_snapshot(&snapshot, verified)?;
+        let manifest = Manifest::parse(&manifest_bytes)?;
+        let bundle_hash = verified
+            .digest()
+            .strip_prefix("sha256:")
+            .expect("the shared verifier returns a sha256 label")
+            .to_owned();
+        Self::assemble(
+            root,
+            manifest,
+            manifest_bytes,
+            snapshot.product_files(),
+            bundle_hash,
+        )
+    }
+
+    /// Exact authored files supplied to the shared package writer.
+    pub(crate) fn package_inputs(&self) -> BTreeMap<String, Vec<u8>> {
+        self.snapshot.package_inputs()
     }
 
     fn assemble(
@@ -337,8 +432,8 @@ impl Bundle {
         manifest: Manifest,
         manifest_bytes: Vec<u8>,
         snapshot: BundleSnapshot,
+        bundle_hash: String,
     ) -> Result<Self, RenderProblem> {
-        let bundle_hash = sha256_hex(&manifest_bytes);
         let mut documents = BTreeMap::new();
         for spec in manifest.documents.clone() {
             let mut labels = BTreeMap::new();
@@ -432,113 +527,57 @@ impl Bundle {
             )
         })
     }
-
-    /// Compute and write per-file hashes into the bundle's manifest, making
-    /// it sealed. Returns the new manifest.
-    pub fn seal(root: &Path) -> Result<Manifest, RenderProblem> {
-        let (snapshot, mut manifest, _, directory) = BundleSnapshot::load(root, false)?;
-        manifest.hashes = Some(snapshot.hashes());
-        let serialized = serde_norway::to_string(&manifest).map_err(|err| {
-            RenderProblem::new(
-                ProblemKind::Internal,
-                format!("cannot serialize manifest: {err}"),
-            )
-        })?;
-        write_manifest(&directory, root, serialized.as_bytes())?;
-        Ok(manifest)
-    }
 }
 
-#[cfg(any(target_os = "linux", target_vendor = "apple"))]
-fn write_manifest(
-    directory: &std::fs::File,
-    root: &Path,
-    bytes: &[u8],
+fn bind_verified_snapshot(
+    snapshot: &BundleSnapshot,
+    verified: &registry_platform_config::package::VerifiedPackage,
 ) -> Result<(), RenderProblem> {
-    use std::io::Write as _;
-
-    use rustix::fs::{openat, Mode, OFlags};
-
-    let flags = OFlags::WRONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
-    let descriptor = openat(directory, MANIFEST_FILE, flags, Mode::empty()).map_err(|err| {
-        RenderProblem::new(
-            ProblemKind::ManifestInvalid,
-            format!(
-                "cannot open {} for writing: {err}",
-                root.join(MANIFEST_FILE).display()
-            ),
-        )
-    })?;
-    let mut file = std::fs::File::from(descriptor);
-    let metadata = file.metadata().map_err(|err| {
-        RenderProblem::new(
-            ProblemKind::ManifestInvalid,
-            format!(
-                "cannot inspect bundle entry {}: {err}",
-                root.join(MANIFEST_FILE).display()
-            ),
-        )
-    })?;
-    if !metadata.is_file() {
-        return Err(RenderProblem::new(
-            ProblemKind::ManifestInvalid,
-            format!(
-                "bundle entry is not a regular file: {}",
-                root.join(MANIFEST_FILE).display()
-            ),
-        ));
-    }
-    file.set_len(0)
-        .and_then(|()| file.write_all(bytes))
-        .map_err(|err| {
-            RenderProblem::new(
-                ProblemKind::ManifestInvalid,
-                format!("cannot write {}: {err}", root.join(MANIFEST_FILE).display()),
-            )
-        })
-}
-
-#[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
-fn write_manifest(
-    _directory: &std::fs::File,
-    root: &Path,
-    _bytes: &[u8],
-) -> Result<(), RenderProblem> {
-    Err(RenderProblem::new(
-        ProblemKind::ManifestInvalid,
-        format!(
-            "cannot securely seal bundle {} on this platform",
-            root.display()
-        ),
-    ))
-}
-
-fn verify_hashes(snapshot: &BundleSnapshot, manifest: &Manifest) -> Result<(), RenderProblem> {
-    let declared = manifest.hashes.as_ref().expect("caller checked is_sealed");
-    let mut mismatches = Vec::new();
-    for (rel, want) in declared {
-        match snapshot.get(rel) {
-            Some(bytes) if sha256_hex(bytes.as_slice()) == *want => {}
-            Some(_) => mismatches.push(format!("{rel} (content changed)")),
-            None => mismatches.push(format!("{rel} (missing)")),
-        }
-    }
-    for (rel, _) in snapshot.iter() {
-        if rel != MANIFEST_FILE && !declared.contains_key(rel) {
-            mismatches.push(format!("{rel} (not covered by the manifest)"));
-        }
-    }
-    if !mismatches.is_empty() {
+    let sums = snapshot.get(registry_platform_config::package::SUM_FILE);
+    let captured_digest = sums
+        .as_ref()
+        .map(|bytes| registry_platform_config::sha256_uri(bytes.as_slice()));
+    if captured_digest.as_deref() != Some(verified.digest()) {
         return Err(RenderProblem::new(
             ProblemKind::BundleTampered,
+            "SHA256SUMS changed after package verification; rebuild the package with `registry-render package` and deploy the whole directory",
+        )
+        .with_locations(vec![registry_platform_config::package::SUM_FILE.to_owned()]));
+    }
+
+    let captured_files = snapshot
+        .iter()
+        .map(|(path, _)| path.as_str())
+        .filter(|path| *path != registry_platform_config::package::SUM_FILE)
+        .collect::<std::collections::BTreeSet<_>>();
+    let verified_files = verified.files().collect::<std::collections::BTreeSet<_>>();
+    let mut mismatches = captured_files
+        .symmetric_difference(&verified_files)
+        .map(|path| (*path).to_owned())
+        .collect::<Vec<_>>();
+    for path in verified.files() {
+        let Some(bytes) = snapshot.get(path) else {
+            continue;
+        };
+        let captured = registry_platform_config::sha256_uri(bytes.as_slice());
+        if verified.file_digest(path).as_deref() != Some(captured.as_str()) {
+            mismatches.push(path.to_owned());
+        }
+    }
+    mismatches.sort();
+    mismatches.dedup();
+    if mismatches.is_empty() {
+        Ok(())
+    } else {
+        Err(RenderProblem::new(
+            ProblemKind::BundleTampered,
             format!(
-                "sealed bundle does not match its manifest: {}",
-                mismatches.join("; ")
+                "package content changed after verification: {}; rebuild the package with `registry-render package` and deploy the whole directory",
+                mismatches.join(", ")
             ),
         )
-        .with_locations(mismatches));
+        .with_locations(mismatches))
     }
-    Ok(())
 }
 
 fn require_string_map(table: &Value, locale: &str) -> Result<Value, RenderProblem> {
@@ -659,9 +698,7 @@ mod tests {
         let direct_link = base.join("current");
         symlink(&direct_target, &direct_link).unwrap();
         let trailing_slash = PathBuf::from(format!("{}/", direct_link.display()));
-        let error = BundleSnapshot::load(&trailing_slash, false).unwrap_err();
-        assert_eq!(error.kind, ProblemKind::ManifestInvalid);
-        let error = Bundle::seal(&trailing_slash).unwrap_err();
+        let error = BundleSnapshot::load(&trailing_slash).unwrap_err();
         assert_eq!(error.kind, ProblemKind::ManifestInvalid);
 
         let ancestor_target = base.join("ancestor-target");
@@ -669,15 +706,13 @@ mod tests {
         let ancestor_link = base.join("deploy");
         symlink(&ancestor_target, &ancestor_link).unwrap();
         let ancestor_bundle = ancestor_link.join("bundle");
-        let error = BundleSnapshot::load(&ancestor_bundle, false).unwrap_err();
-        assert_eq!(error.kind, ProblemKind::ManifestInvalid);
-        let error = Bundle::seal(&ancestor_bundle).unwrap_err();
+        let error = BundleSnapshot::load(&ancestor_bundle).unwrap_err();
         assert_eq!(error.kind, ProblemKind::ManifestInvalid);
     }
 
     #[cfg(any(target_os = "linux", target_vendor = "apple"))]
     #[test]
-    fn sealed_load_checks_the_manifest_before_capturing_descendants() {
+    fn source_load_checks_the_manifest_before_capturing_descendants() {
         use std::os::unix::fs::symlink;
 
         let dir = tempfile::tempdir().unwrap();
@@ -685,12 +720,12 @@ mod tests {
         let root = root_path.as_path();
         symlink(root, root.join("descendant-link")).unwrap();
 
-        let missing = Bundle::load_sealed(root).unwrap_err();
+        let missing = Bundle::load(root).unwrap_err();
         assert_eq!(missing.kind, ProblemKind::ManifestInvalid);
         assert!(missing.detail.contains(MANIFEST_FILE));
 
         std::fs::write(root.join(MANIFEST_FILE), "not: [valid").unwrap();
-        let malformed = Bundle::load_sealed(root).unwrap_err();
+        let malformed = Bundle::load(root).unwrap_err();
         assert_eq!(malformed.kind, ProblemKind::ManifestInvalid);
         assert!(malformed.detail.contains("manifest.yaml is not valid"));
 
@@ -699,8 +734,9 @@ mod tests {
             "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments: []\n",
         )
         .unwrap();
-        let unsealed = Bundle::load_sealed(root).unwrap_err();
-        assert_eq!(unsealed.kind, ProblemKind::BundleUnsealed);
+        let unsafe_entry = Bundle::load(root).unwrap_err();
+        assert_eq!(unsafe_entry.kind, ProblemKind::ManifestInvalid);
+        assert!(unsafe_entry.detail.contains("without following links"));
     }
 
     #[test]
@@ -728,10 +764,7 @@ mod tests {
             include_bytes!("../assets/starter-fonts/NotoSans-Regular.ttf"),
         )
         .unwrap();
-        Bundle::seal(root).unwrap();
-
-        let (snapshot, manifest, manifest_bytes, _directory) =
-            BundleSnapshot::load(root, false).unwrap();
+        let (snapshot, manifest, manifest_bytes) = BundleSnapshot::load(root).unwrap();
         let expected_hash = sha256_hex(&manifest_bytes);
 
         // Every path used by assembly changes after capture. Assembly must
@@ -742,7 +775,14 @@ mod tests {
         std::fs::write(&schema, "not json").unwrap();
         std::fs::write(&font, "not a font").unwrap();
 
-        let bundle = Bundle::assemble(root, manifest, manifest_bytes, snapshot).unwrap();
+        let bundle = Bundle::assemble(
+            root,
+            manifest,
+            manifest_bytes,
+            snapshot,
+            expected_hash.clone(),
+        )
+        .unwrap();
         let document = bundle.document("notice").unwrap();
         assert_eq!(document.labels["en"]["title"], "Captured");
         assert_eq!(document.schema.as_ref().unwrap()["type"], "object");
@@ -771,9 +811,7 @@ mod tests {
             r#"{"type":"object"}"#,
         )
         .unwrap();
-        Bundle::seal(root).unwrap();
-
-        let bundle = Bundle::load_sealed(root).unwrap();
+        let bundle = Bundle::load(root).unwrap();
         let document = bundle.document("notice").unwrap();
         let request = crate::render::RenderRequest {
             locale: None,
@@ -785,5 +823,68 @@ mod tests {
 
         assert_eq!(rendered.deps, vec!["templates/notice.typ"]);
         assert_eq!(document.schema.as_ref().unwrap()["type"], "object");
+    }
+
+    #[test]
+    fn package_load_refuses_bytes_replaced_after_shared_verification() {
+        let source = tempfile::tempdir().unwrap();
+        std::fs::create_dir(source.path().join("templates")).unwrap();
+        std::fs::write(
+            source.path().join(MANIFEST_FILE),
+            "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: notice\n    version: 1\n    entry: templates/notice.typ\n",
+        )
+        .unwrap();
+        std::fs::write(source.path().join("templates/notice.typ"), "= Accepted").unwrap();
+        let source_root = source.path().canonicalize().unwrap();
+        let authored = Bundle::load(&source_root).unwrap();
+
+        let parent = tempfile::tempdir().unwrap();
+        let package = parent.path().canonicalize().unwrap().join("package");
+        registry_platform_config::package::write_package(
+            &package,
+            &authored.package_inputs(),
+            None,
+            &crate::runtime::package_limits(),
+            "registry-render package",
+        )
+        .unwrap();
+        let verified = registry_platform_config::package::verify_package(
+            &package,
+            &crate::runtime::package_limits(),
+            "registry-render package",
+        )
+        .unwrap();
+        std::fs::write(package.join("templates/notice.typ"), "= Replaced").unwrap();
+
+        let problem = Bundle::load_package(&package, &verified)
+            .expect_err("captured replacement must not be consumed");
+        assert_eq!(problem.kind, ProblemKind::BundleTampered);
+        assert!(problem.detail.contains("templates/notice.typ"));
+
+        let manifest_package = parent
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("manifest-package");
+        registry_platform_config::package::write_package(
+            &manifest_package,
+            &authored.package_inputs(),
+            None,
+            &crate::runtime::package_limits(),
+            "registry-render package",
+        )
+        .unwrap();
+        let verified = registry_platform_config::package::verify_package(
+            &manifest_package,
+            &crate::runtime::package_limits(),
+            "registry-render package",
+        )
+        .unwrap();
+        std::fs::write(manifest_package.join(MANIFEST_FILE), "not: [valid").unwrap();
+
+        let problem = Bundle::load_package(&manifest_package, &verified)
+            .expect_err("manifest replacement must be bound before it is parsed");
+        assert_eq!(problem.kind, ProblemKind::BundleTampered);
+        assert!(problem.detail.contains(MANIFEST_FILE));
     }
 }
