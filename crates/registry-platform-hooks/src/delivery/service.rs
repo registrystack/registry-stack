@@ -61,6 +61,35 @@ pub struct DeliveryConfig {
     pub delivery_source: String,
 }
 
+/// A delivery-audit event held by the worker until it is recorded, such as
+/// one whose transition must commit first.
+#[derive(Clone)]
+struct PendingAudit {
+    event_id: Uuid,
+    compiled_delivery_id: String,
+    package_revision: String,
+    generation: i64,
+    attempt: i16,
+    phase: DeliveryAuditPhase,
+    outcome: DeliveryAuditOutcome,
+    disposition: DeliveryAuditDisposition,
+}
+
+impl PendingAudit {
+    fn record(&self) -> DeliveryAuditRecord<'_> {
+        DeliveryAuditRecord {
+            event_id: self.event_id,
+            compiled_delivery_id: &self.compiled_delivery_id,
+            package_revision: &self.package_revision,
+            generation: self.generation,
+            attempt: self.attempt,
+            phase: self.phase,
+            outcome: self.outcome,
+            disposition: self.disposition,
+        }
+    }
+}
+
 /// The delivery worker over one product's seams.
 #[derive(Clone)]
 pub struct DeliveryService<S: DeliverySeams> {
@@ -326,6 +355,76 @@ impl<S: DeliverySeams> DeliveryService<S> {
         let next_generation = generation
             .checked_add(1)
             .ok_or(DeliveryError::Unavailable)?;
+        // The replay's request is on record before the reset, and its
+        // response records whether the reset committed.
+        let replay = PendingAudit {
+            event_id,
+            compiled_delivery_id: compiled_delivery_id.to_owned(),
+            package_revision: package_revision.clone(),
+            generation: next_generation,
+            attempt: 0,
+            phase: DeliveryAuditPhase::Replay,
+            outcome: DeliveryAuditOutcome::ReplayRequested,
+            disposition: DeliveryAuditDisposition::ReplayPending,
+        };
+        self.seams.record_audit(replay.record()).await?;
+        let mut reset = self
+            .reset_for_replay(transaction, event_id, compiled_delivery_id, generation)
+            .await;
+        if reset.is_err()
+            && self
+                .transition_committed(
+                    &PendingAudit {
+                        outcome: DeliveryAuditOutcome::ReplayCommitted,
+                        ..replay.clone()
+                    },
+                    None,
+                )
+                .await
+                == Some(true)
+        {
+            // The reset committed although its acknowledgement was lost.
+            reset = Ok(());
+        }
+        let (outcome, disposition) = if reset.is_ok() {
+            (
+                DeliveryAuditOutcome::ReplayCommitted,
+                DeliveryAuditDisposition::ReplayPending,
+            )
+        } else {
+            (
+                DeliveryAuditOutcome::ReplayRefused,
+                DeliveryAuditDisposition::DeadLettered,
+            )
+        };
+        let recorded = self
+            .seams
+            .record_audit(
+                PendingAudit {
+                    outcome,
+                    disposition,
+                    ..replay
+                }
+                .record(),
+            )
+            .await;
+        reset?;
+        recorded?;
+        Ok(next_generation)
+    }
+
+    /// Reset one dead-lettered delivery to pending under its next generation
+    /// and commit.
+    async fn reset_for_replay(
+        &self,
+        transaction: Transaction<'_>,
+        event_id: Uuid,
+        compiled_delivery_id: &str,
+        generation: i64,
+    ) -> Result<(), DeliveryError> {
+        let next_generation = generation
+            .checked_add(1)
+            .ok_or(DeliveryError::Unavailable)?;
         let changed = transaction
             .execute(
                 &self.sql(
@@ -357,23 +456,8 @@ impl<S: DeliverySeams> DeliveryService<S> {
         if changed != 1 {
             return Err(DeliveryError::Unavailable);
         }
-        self.seams
-            .record_audit(
-                &transaction,
-                DeliveryAuditRecord {
-                    event_id,
-                    compiled_delivery_id,
-                    package_revision: &package_revision,
-                    generation: next_generation,
-                    attempt: 0,
-                    phase: DeliveryAuditPhase::Replay,
-                    outcome: DeliveryAuditOutcome::ReplayRequested,
-                    disposition: DeliveryAuditDisposition::ReplayPending,
-                },
-            )
-            .await?;
         transaction.commit().await?;
-        Ok(next_generation)
+        Ok(())
     }
 
     async fn claim(&self) -> Result<Option<DeliveryClaim>, DeliveryError> {
@@ -383,11 +467,19 @@ impl<S: DeliverySeams> DeliveryService<S> {
             self.refused(DeliveryTransitionCode::ClaimIdentityRefused);
             return Err(DeliveryError::Unavailable);
         }
-        if self.reap_expired_leases(&transaction).await.is_err() {
+        // Recovered and expired deliveries are recorded once this
+        // transaction commits.
+        let mut committed = Vec::new();
+        if self
+            .reap_expired_leases(&transaction, &mut committed)
+            .await
+            .is_err()
+        {
             self.refused(DeliveryTransitionCode::ClaimRecoveryFailed);
             return Err(DeliveryError::Unavailable);
         }
-        self.expire_retained_payload(&transaction).await?;
+        self.expire_retained_payload(&transaction, &mut committed)
+            .await?;
         let row = transaction
             .query_opt(
                 &self.sql(
@@ -421,7 +513,11 @@ impl<S: DeliverySeams> DeliveryService<S> {
                 DeliveryError::Unavailable
             })?;
         let Some(row) = row else {
-            transaction.commit().await?;
+            if let Err(error) = transaction.commit().await {
+                self.record_resolved(committed).await;
+                return Err(error.into());
+            }
+            self.record_committed(committed).await?;
             return Ok(None);
         };
         let event_id = row.try_get::<_, Uuid>(0)?;
@@ -498,31 +594,43 @@ impl<S: DeliverySeams> DeliveryService<S> {
             .query_one("SELECT transaction_timestamp()", &[])
             .await?
             .try_get::<_, SystemTime>(0)?;
-        if self
-            .seams
-            .record_audit(
-                &transaction,
-                DeliveryAuditRecord {
-                    event_id,
-                    compiled_delivery_id: &compiled_delivery_id,
-                    package_revision: &package_revision,
-                    generation,
-                    attempt,
-                    phase: DeliveryAuditPhase::Attempt,
-                    outcome: DeliveryAuditOutcome::AttemptStarted,
-                    disposition: DeliveryAuditDisposition::Leased,
-                },
-            )
-            .await
-            .is_err()
-        {
+        let started = PendingAudit {
+            event_id,
+            compiled_delivery_id: compiled_delivery_id.clone(),
+            package_revision: package_revision.clone(),
+            generation,
+            attempt,
+            phase: DeliveryAuditPhase::Attempt,
+            outcome: DeliveryAuditOutcome::AttemptStarted,
+            disposition: DeliveryAuditDisposition::Leased,
+        };
+        if self.seams.record_audit(started.record()).await.is_err() {
             self.refused(DeliveryTransitionCode::ClaimAuditFailed);
             return Err(DeliveryError::Unavailable);
         }
-        transaction.commit().await.map_err(|_| {
+        if transaction.commit().await.is_err() {
             self.refused(DeliveryTransitionCode::ClaimCommitFailed);
-            DeliveryError::Unavailable
-        })?;
+            // A failed commit acknowledgement does not prove a rollback, so
+            // read what the database holds. A lease that did commit sends
+            // nothing from here and is answered when it expires; one that
+            // rolled back, or one whose fate cannot be read, is answered now,
+            // since a second interrupted answer is harmless and none is not.
+            if self.transition_committed(&started, Some(lease_token)).await == Some(true) {
+                self.record_resolved(committed).await;
+            } else {
+                let interrupted = PendingAudit {
+                    phase: DeliveryAuditPhase::Terminal,
+                    outcome: DeliveryAuditOutcome::WorkerInterrupted,
+                    disposition: DeliveryAuditDisposition::RetryPending,
+                    ..started
+                };
+                // A refused entry has already stopped the product's writer,
+                // which reports it; the claim fails either way.
+                let _ = self.seams.record_audit(interrupted.record()).await;
+            }
+            return Err(DeliveryError::Unavailable);
+        }
+        self.record_committed(committed).await?;
         Ok(Some(DeliveryClaim {
             event_id,
             compiled_delivery_id,
@@ -540,6 +648,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
     async fn reap_expired_leases(
         &self,
         transaction: &Transaction<'_>,
+        committed: &mut Vec<PendingAudit>,
     ) -> Result<(), DeliveryError> {
         let row = transaction
             .query_opt(
@@ -672,31 +781,27 @@ impl<S: DeliverySeams> DeliveryService<S> {
         if changed != 1 {
             return Err(DeliveryError::Unavailable);
         }
-        self.seams
-            .record_audit(
-                transaction,
-                DeliveryAuditRecord {
-                    event_id,
-                    compiled_delivery_id: &compiled_delivery_id,
-                    package_revision: &package_revision,
-                    generation,
-                    attempt,
-                    phase: DeliveryAuditPhase::Terminal,
-                    outcome: DeliveryAuditOutcome::WorkerInterrupted,
-                    disposition: if dead_lettered {
-                        DeliveryAuditDisposition::DeadLettered
-                    } else {
-                        DeliveryAuditDisposition::RetryPending
-                    },
-                },
-            )
-            .await?;
+        committed.push(PendingAudit {
+            event_id,
+            compiled_delivery_id,
+            package_revision,
+            generation,
+            attempt,
+            phase: DeliveryAuditPhase::Terminal,
+            outcome: DeliveryAuditOutcome::WorkerInterrupted,
+            disposition: if dead_lettered {
+                DeliveryAuditDisposition::DeadLettered
+            } else {
+                DeliveryAuditDisposition::RetryPending
+            },
+        });
         Ok(())
     }
 
     async fn expire_retained_payload(
         &self,
         transaction: &Transaction<'_>,
+        committed: &mut Vec<PendingAudit>,
     ) -> Result<(), DeliveryError> {
         let row = transaction
             .query_opt(
@@ -762,21 +867,16 @@ impl<S: DeliverySeams> DeliveryService<S> {
         if state_changed != 1 || payload_changed != 1 {
             return Err(DeliveryError::Unavailable);
         }
-        self.seams
-            .record_audit(
-                transaction,
-                DeliveryAuditRecord {
-                    event_id,
-                    compiled_delivery_id: &compiled_delivery_id,
-                    package_revision: &package_revision,
-                    generation,
-                    attempt,
-                    phase: DeliveryAuditPhase::Terminal,
-                    outcome: DeliveryAuditOutcome::PayloadExpired,
-                    disposition: DeliveryAuditDisposition::Expired,
-                },
-            )
-            .await?;
+        committed.push(PendingAudit {
+            event_id,
+            compiled_delivery_id,
+            package_revision,
+            generation,
+            attempt,
+            phase: DeliveryAuditPhase::Terminal,
+            outcome: DeliveryAuditOutcome::PayloadExpired,
+            disposition: DeliveryAuditDisposition::Expired,
+        });
         Ok(())
     }
 
@@ -1277,23 +1377,116 @@ impl<S: DeliverySeams> DeliveryService<S> {
                 return Err(DeliveryError::Unavailable);
             }
         }
-        self.seams
-            .record_audit(
-                &transaction,
-                DeliveryAuditRecord {
-                    event_id: claim.event_id,
-                    compiled_delivery_id: &claim.compiled_delivery_id,
-                    package_revision: &claim.package_revision,
-                    generation: claim.generation,
-                    attempt: claim.attempt,
-                    phase: DeliveryAuditPhase::Terminal,
-                    outcome,
-                    disposition,
-                },
-            )
-            .await?;
-        transaction.commit().await?;
+        let terminal = PendingAudit {
+            event_id: claim.event_id,
+            compiled_delivery_id: claim.compiled_delivery_id.clone(),
+            package_revision: claim.package_revision.clone(),
+            generation: claim.generation,
+            attempt: claim.attempt,
+            phase: DeliveryAuditPhase::Terminal,
+            outcome,
+            disposition,
+        };
+        if let Err(error) = transaction.commit().await {
+            // A lost acknowledgement does not prove a rollback, and a
+            // terminal row is never reaped, so a disposition that did commit
+            // is recorded here or never. One that rolled back leaves the
+            // lease for expiry recovery, which answers the attempt.
+            if self.transition_committed(&terminal, None).await != Some(true) {
+                return Err(error.into());
+            }
+        }
+        // Recorded once the disposition committed, so the journal never
+        // names a disposition the database does not hold.
+        self.seams.record_audit(terminal.record()).await?;
         Ok(work_outcome)
+    }
+
+    /// Record the events of a transaction whose commit returned an error,
+    /// each only if the transition it names is durable.
+    async fn record_resolved(&self, events: Vec<PendingAudit>) {
+        for event in events {
+            // A refused entry has already stopped the product's writer,
+            // which reports it; the caller is failing either way.
+            if self.transition_committed(&event, None).await == Some(true) {
+                let _ = self.seams.record_audit(event.record()).await;
+            }
+        }
+    }
+
+    /// Whether the transition `event` records is durable, read on a fresh
+    /// connection after its commit returned an error, since a failed commit
+    /// acknowledgement does not prove the transaction rolled back. `None`
+    /// when the state cannot be read. An attempt's lease is matched on the
+    /// token this worker wrote.
+    async fn transition_committed(
+        &self,
+        event: &PendingAudit,
+        lease_token: Option<Uuid>,
+    ) -> Option<bool> {
+        for _ in 0..3 {
+            let Ok(client) = self.seams.connection().await else {
+                continue;
+            };
+            let Ok(row) = client
+                .query_opt(
+                    &self.sql(
+                        "SELECT state, generation, attempt, lease_token, expired_at IS NOT NULL
+                           FROM {schema}.registry_webhook_delivery_state
+                          WHERE event_id = $1 AND compiled_delivery_id = $2",
+                    ),
+                    &[&event.event_id, &event.compiled_delivery_id],
+                )
+                .await
+            else {
+                continue;
+            };
+            let Some(row) = row else {
+                return Some(false);
+            };
+            let (Ok(state), Ok(generation), Ok(attempt), Ok(token), Ok(expired)) = (
+                row.try_get::<_, String>(0),
+                row.try_get::<_, i64>(1),
+                row.try_get::<_, i16>(2),
+                row.try_get::<_, Option<Uuid>>(3),
+                row.try_get::<_, bool>(4),
+            ) else {
+                return None;
+            };
+            let current = generation == event.generation;
+            let at_attempt = current && attempt == event.attempt;
+            return Some(match (event.phase, event.disposition) {
+                (DeliveryAuditPhase::Attempt, _) => {
+                    at_attempt && state == "leased" && token.is_some() && token == lease_token
+                }
+                (DeliveryAuditPhase::Replay, _) => current && state == "pending",
+                (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::Expired) => {
+                    current && expired
+                }
+                (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::Delivered) => {
+                    at_attempt && state == "delivered"
+                }
+                (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::DeadLettered) => {
+                    at_attempt && state == "dead_lettered"
+                }
+                (DeliveryAuditPhase::Terminal, DeliveryAuditDisposition::RetryPending) => {
+                    at_attempt && state == "pending" && token.is_none()
+                }
+                (
+                    DeliveryAuditPhase::Terminal,
+                    DeliveryAuditDisposition::Leased | DeliveryAuditDisposition::ReplayPending,
+                ) => false,
+            });
+        }
+        None
+    }
+
+    /// Record the events of a transaction that has committed.
+    async fn record_committed(&self, committed: Vec<PendingAudit>) -> Result<(), DeliveryError> {
+        for event in committed {
+            self.seams.record_audit(event.record()).await?;
+        }
+        Ok(())
     }
 
     async fn update_terminal_state(
@@ -1926,7 +2119,6 @@ mod tests {
 
         async fn record_audit(
             &self,
-            _transaction: &Transaction<'_>,
             _record: DeliveryAuditRecord<'_>,
         ) -> Result<(), DeliveryError> {
             Err(DeliveryError::Unavailable)
@@ -2406,7 +2598,6 @@ mod tests {
 
         async fn record_audit(
             &self,
-            _transaction: &Transaction<'_>,
             _record: DeliveryAuditRecord<'_>,
         ) -> Result<(), DeliveryError> {
             Err(DeliveryError::Unavailable)
@@ -2770,7 +2961,6 @@ mod tests {
 
         async fn record_audit(
             &self,
-            _transaction: &Transaction<'_>,
             _record: DeliveryAuditRecord<'_>,
         ) -> Result<(), DeliveryError> {
             *self.audit_calls.lock().expect("audit calls lock") += 1;
