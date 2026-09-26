@@ -118,6 +118,34 @@ fn access_only_view_prints_authorized_without_claiming_release() {
 }
 
 #[test]
+fn multi_stage_view_prints_one_access_line_per_source_call() {
+    let fixture = Fixture::new();
+    let mut view = successful_view();
+    let events = view["events"].as_array_mut().expect("events");
+    let mut fetch = events[0].clone();
+    fetch["occurredAt"] = json!("2026-08-04T00:00:01.500Z");
+    events.insert(1, fetch);
+    fixture.write_core_json(&view);
+    let output = fixture.show();
+    assert_success(&output);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!(
+            "ACCESS AUTHORIZED adult-status age-check requester={PSEUDONYM}\n\
+             ACCESS AUTHORIZED adult-status age-check requester={PSEUDONYM}\n\
+             DISCLOSURE RELEASED is_adult\n"
+        )
+    );
+
+    let mut view = successful_view();
+    let events = view["events"].as_array_mut().expect("events");
+    let access = events[0].clone();
+    events.push(access);
+    fixture.write_core_json(&view);
+    assert_closed_failure(&fixture.show(), "access after release");
+}
+
+#[test]
 fn standalone_authorization_refusal_prints_only_the_safe_reason() {
     let fixture = Fixture::new();
     fixture.write_core_json(&refusal_view());

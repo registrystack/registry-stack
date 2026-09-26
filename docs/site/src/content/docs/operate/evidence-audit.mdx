@@ -144,9 +144,10 @@ ACCESS REFUSED requester=<pseudonym> reason=not_authorized
 ```
 
 The command takes the writer's lock, so it refuses while Evidence Gateway still runs. It reads the
-retained local audit files in order, checks that every entry is well formed and that each access
-attempt pairs with a coherent terminal record, then renders the operation of the physically last
-entry. Concurrent requests can complete in a different order from their admission order, so "last"
+retained local audit files in order, checks that every entry is well formed and that each
+operation's access attempts, one per source call, share one context and pair with a coherent
+terminal record, then renders the operation of the physically last entry. A multi-stage acquisition,
+such as `search-then-fetch`, prints one `ACCESS AUTHORIZED` line per source call. Concurrent requests can complete in a different order from their admission order, so "last"
 does not mean the most recently admitted request. The command is not a production audit browser
 and has no `--all`, subject filter, or export mode. An access-only operation prints only the
 authorized line rather than claiming a release that did not occur.
