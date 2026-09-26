@@ -121,6 +121,11 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     ("Cargo deny", "run: cargo deny check"),
     (
+        "Standalone Cargo lockfiles",
+        "cargo update --workspace --locked \\\n"
+        '              --manifest-path "$(dirname "${lock}")/Cargo.toml"',
+    ),
+    (
         "Platform path filter",
         "platform: ${{ steps.filter.outputs.platform }}",
     ),
