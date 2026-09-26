@@ -23,6 +23,9 @@ use registry_breg::package::{
 };
 use registry_breg::CompiledRegistry;
 use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_config::package::{
+    write_sum_file, PackageLimits as SharedPackageLimits, REVISION_FILE, SUM_FILE,
+};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -476,6 +479,7 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
         b"SELECT 'source-path-record-sql-canary'",
     )
     .expect("tamper reviewed SQL");
+    refresh_shared_package_envelope(&package);
     assert_eq!(
         inspect_package_integrity(&package).err(),
         Some(PackageError::Integrity),
@@ -1302,4 +1306,29 @@ fn digest(bytes: &[u8]) -> String {
         write!(&mut result, "{byte:02x}").expect("writing to String cannot fail");
     }
     result
+}
+
+/// Republish the shared package envelope over a test-authored change, so the
+/// refusal under test comes from the registry package check rather than from
+/// the checksum file.
+fn refresh_shared_package_envelope(root: &std::path::Path) {
+    let revision_path = root.join(REVISION_FILE);
+    let revision = revision_path.exists().then(|| {
+        fs::read_to_string(&revision_path)
+            .expect("shared package revision reads")
+            .strip_suffix('\n')
+            .expect("shared package revision has one trailing newline")
+            .to_owned()
+    });
+    fs::remove_file(root.join(SUM_FILE)).expect("old shared package checksum file removes");
+    if revision.is_some() {
+        fs::remove_file(revision_path).expect("old shared package revision file removes");
+    }
+    write_sum_file(
+        root,
+        revision.as_deref(),
+        &SharedPackageLimits::default(),
+        "bregctl package",
+    )
+    .expect("test-authored shared package envelope republishes");
 }

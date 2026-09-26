@@ -34,6 +34,10 @@ use registry_breg::package::{
 use registry_breg::CompiledRegistry;
 use registry_platform_canonical_json::canonicalize_json;
 #[cfg(feature = "tooling")]
+use registry_platform_config::{
+    write_sum_file, PackageLimits as SharedPackageLimits, REVISION_FILE, SUM_FILE,
+};
+#[cfg(feature = "tooling")]
 use serde::Serialize;
 #[cfg(feature = "tooling")]
 use serde_json::json;
@@ -181,6 +185,7 @@ fn project_rhai_planner_package_is_deterministic_and_rederives_exact_source() {
         b"fn plan(ctx) { #{ disposition: \"apply\", effects: [] } }\n",
     )
     .unwrap();
+    refresh_shared_package_envelope(&tampered_package);
     assert_eq!(
         inspect_package_integrity(&tampered_package)
             .err()
@@ -208,6 +213,7 @@ fn project_rhai_planner_package_is_deterministic_and_rederives_exact_source() {
         .role = PackageFileRole::SourceModulePlannerScript;
     envelope.signed.package_revision = derive_package_revision(&envelope.signed).unwrap();
     fs::write(&manifest_path, canonical(&envelope)).unwrap();
+    refresh_shared_package_envelope(&role_swapped_package);
     assert_eq!(
         inspect_package_integrity(&role_swapped_package)
             .err()
@@ -2696,6 +2702,32 @@ fn inspect_prepared(
         .publish_to_directory(&package, Vec::new())
         .expect("package publishes");
     inspect_package_integrity(&package).expect("package inspects")
+}
+
+/// Republish the shared package envelope over a test-authored change, so the
+/// refusal under test comes from the registry package check rather than from
+/// the checksum file.
+#[cfg(feature = "tooling")]
+fn refresh_shared_package_envelope(root: &std::path::Path) {
+    let revision_path = root.join(REVISION_FILE);
+    let revision = revision_path.exists().then(|| {
+        fs::read_to_string(&revision_path)
+            .expect("shared package revision reads")
+            .strip_suffix('\n')
+            .expect("shared package revision has one trailing newline")
+            .to_owned()
+    });
+    fs::remove_file(root.join(SUM_FILE)).expect("old shared package checksum file removes");
+    if revision.is_some() {
+        fs::remove_file(revision_path).expect("old shared package revision file removes");
+    }
+    write_sum_file(
+        root,
+        revision.as_deref(),
+        &SharedPackageLimits::default(),
+        "bregctl package",
+    )
+    .expect("test-authored shared package envelope republishes");
 }
 
 #[cfg(feature = "tooling")]
