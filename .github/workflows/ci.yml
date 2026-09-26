@@ -408,6 +408,22 @@ jobs:
       - name: Cargo deny
         run: cargo deny check
 
+      - name: Standalone Cargo lockfiles
+        # Fuzz, SDK and editor workspaces keep their own Cargo.lock, and most
+        # build root crates by path, so a root change can leave one stale.
+        # Resolving with --locked fails on a stale lock and reads only the
+        # registry index, not crate sources.
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t locks < <(git ls-files '*/Cargo.lock')
+          (( ${#locks[@]} > 0 ))
+          for lock in "${locks[@]}"; do
+            echo "Checking ${lock}"
+            cargo update --workspace --locked \
+              --manifest-path "$(dirname "${lock}")/Cargo.toml"
+          done
+
   rust-quality:
     name: Rust format and clippy
     needs:
