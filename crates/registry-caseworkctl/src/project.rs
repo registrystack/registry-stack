@@ -916,6 +916,7 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
     check_source_descriptions(&package_root)?;
     let resolver = secret_resolver(&config).context("configuring Casework secret providers")?;
     let secret_files = secret_file_checks(&config, &resolver)?;
+    let runtime = async_runtime()?;
     // Resolve the audit key as a readiness check without retaining or reporting
     // its bytes. Database references are resolved inside PostgresStore.
     resolver
@@ -927,7 +928,7 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
         .context("the Casework audit destination is invalid")?
         .check_writable()
         .context("the Casework audit destination is not writable by this user")?;
-    let runtime = async_runtime()?;
+    check_operator_audit_companion(&config, &resolver, &runtime)?;
     let policy = load_and_check_policy(&package_root)?;
     if config.sources.len() != policy.sources.len() {
         bail!("operator source bindings do not exactly match the authored Casework sources");
@@ -1306,6 +1307,29 @@ fn with_operator_audit(
         .block_on(open_audit(config, resolver, Some("caseworkctl")))
         .context("opening the Casework operator audit destination")?;
     Ok(store.with_audit(audit))
+}
+
+/// Confirm the operator audit companion that `retention_erase`, `attempt_settle`,
+/// and `attempt_mark_uncertain` each open via `with_operator_audit` is currently
+/// available. `check_writable` deliberately never takes the writer lock, so it
+/// cannot see a lock another process already holds; opening the companion for
+/// real and releasing it immediately is the only way to prove that, and it
+/// costs nothing this check does not already accept, since a stuck operator
+/// command would hold the same lock indefinitely.
+fn check_operator_audit_companion(
+    config: &RuntimeConfig,
+    resolver: &SecretResolver,
+    runtime: &tokio::runtime::Runtime,
+) -> Result<()> {
+    drop(
+        runtime
+            .block_on(open_audit(config, resolver, Some("caseworkctl")))
+            .context(
+                "the Casework operator audit destination is not writable, \
+                 or another caseworkctl invocation already holds its lock",
+            )?,
+    );
+    Ok(())
 }
 
 fn async_runtime() -> Result<tokio::runtime::Runtime> {
@@ -1996,6 +2020,63 @@ mod tests {
             ),
             "{error:#}"
         );
+    }
+
+    /// Build a runtime config for a fresh standalone project with a resolvable
+    /// audit key and environment-provided database references, so `doctor`
+    /// reaches the operator audit companion check without a live database.
+    fn runtime_config_for_audit_companion_tests(project: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        init(project, "standalone-decision").unwrap();
+        let secrets = project.join("secrets");
+        fs::create_dir(&secrets).unwrap();
+        let audit_key = secrets.join("casework-audit-key");
+        fs::write(&audit_key, "0".repeat(64)).unwrap();
+        fs::set_permissions(&audit_key, fs::Permissions::from_mode(0o600)).unwrap();
+        let runtime_config = project.join("runtime.example.yaml");
+        let mut document: Value =
+            serde_norway::from_str(&runtime_example(project, false).unwrap()).unwrap();
+        document["secretProviders"]["environment"] = json!({});
+        document["database"]["runtimeUrlRef"] = json!("secret:env/CASEWORK_DATABASE_URL");
+        document["database"]["migrationUrlRef"] =
+            json!("secret:env/CASEWORK_MIGRATION_DATABASE_URL");
+        fs::write(&runtime_config, serde_norway::to_string(&document).unwrap()).unwrap();
+        runtime_config
+    }
+
+    #[test]
+    fn doctor_refuses_a_locked_operator_audit_companion() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("standalone");
+        let runtime_config = runtime_config_for_audit_companion_tests(&project);
+        let config = RuntimeConfig::load(&runtime_config).unwrap();
+        let resolver = secret_resolver(&config).unwrap();
+
+        // Hold the operator companion open for the rest of this test, exactly as
+        // a stuck retention_erase, attempt_settle, or attempt_mark_uncertain
+        // invocation would.
+        let held_runtime = async_runtime().unwrap();
+        let _held = held_runtime
+            .block_on(open_audit(&config, &resolver, Some("caseworkctl")))
+            .expect("hold the operator audit companion lock");
+
+        let refusal = format!("{:#}", doctor(&runtime_config).unwrap_err());
+        assert!(refusal.contains("operator audit destination"), "{refusal}");
+        assert!(refusal.contains("already holds its lock"), "{refusal}");
+    }
+
+    #[test]
+    fn doctor_accepts_an_available_operator_audit_companion() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("standalone");
+        let runtime_config = runtime_config_for_audit_companion_tests(&project);
+        let config = RuntimeConfig::load(&runtime_config).unwrap();
+        let resolver = secret_resolver(&config).unwrap();
+        let runtime = async_runtime().unwrap();
+
+        check_operator_audit_companion(&config, &resolver, &runtime)
+            .expect("the operator audit companion is available");
     }
 
     #[test]
