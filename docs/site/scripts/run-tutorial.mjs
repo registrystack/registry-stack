@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Replay a tutorial page the way a reader follows it.
 //
-//   node scripts/run-tutorial.mjs [--dry-run] [--toolset breg|casework|none] <page.mdx>...
-//   node scripts/run-tutorial.mjs [--dry-run] --gate breg|casework
+//   node scripts/run-tutorial.mjs [--dry-run] [--toolset breg|casework|evidence|none] <page.mdx>...
+//   node scripts/run-tutorial.mjs [--dry-run] --gate breg|casework|evidence
 //
 // The page is the specification (see tutorial-runner/page.mjs): its sh fences
 // run in document order in one bash shell, from an empty reader directory

@@ -13,6 +13,9 @@ persona:
 locale: en
 standards_referenced:
   - sd-jwt-vc
+tutorial_test:
+  toolset: evidence
+  after: tutorials/first-evidence-assertion
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
@@ -53,13 +56,13 @@ concept URI. Omitting `responseFormats` keeps the project at signed JWS only.
 
 In one terminal, return to the `first-evidence-assertion` directory and serve the checked cases again:
 
-```sh
+```sh test-cwd="first-evidence-assertion" test-background="http://127.0.0.1:4010/people/person-123"
 evidencectl source mock serve --config adult-status/mocks/source.yaml
 ```
 
 Leave it running. In another terminal, enter the existing Evidence Gateway project:
 
-```sh
+```sh test-cwd="first-evidence-assertion"
 cd adult-status
 ```
 
@@ -80,7 +83,7 @@ Start a fresh local generation:
 evidencectl dev start .
 ```
 
-```text
+```text test-excerpt
 Evidence ready at http://127.0.0.1:8080
 Issuer ready at http://127.0.0.1:8081
 ```
@@ -110,7 +113,7 @@ curl --silent --show-error --fail-with-body \
   --write-out 'HTTP %{http_code}\n'
 ```
 
-```text
+```text test-expect
 HTTP 200
 ```
 
@@ -123,7 +126,7 @@ evidencectl verify scalar.sd-jwt \
   --output scalar.verified.json
 ```
 
-```text
+```text test-expect
 VERIFIED
 ```
 
@@ -156,7 +159,7 @@ for disclosure in (part for part in parts[1:] if part):
 PY
 ```
 
-```text
+```text test-expect
 typ: dc+sd-jwt
 vct: urn:registrystack:evidence:local:evidence-type:adult-status
 disclosure: urn:registrystack:evidence:local:concept:adult-status:is_adult
@@ -200,13 +203,13 @@ PY
 
 Verification must fail and must not create trusted output:
 
-```sh
+```sh test-exit="1"
 evidencectl verify scalar-tampered.sd-jwt \
   --context .evidence/requests/scalar-vc/verification.json \
   --output scalar-tampered.verified.json
 ```
 
-```text
+```text test-expect
 evidencectl: Evidence response verification failed
 ```
 
@@ -221,7 +224,7 @@ evaluated against. This is a second governed question, not a request-time option
 
 Create `schemas/adult-assessment.yaml`:
 
-```yaml
+```yaml title="schemas/adult-assessment.yaml" test-file
 $schema: https://json-schema.org/draft/2020-12/schema
 $id: urn:registrystack:evidence:local:schema:adult-assessment:v1
 type: object
@@ -237,7 +240,7 @@ properties:
 
 Create `questions/adult-assessment.yaml`:
 
-```yaml
+```yaml title="questions/adult-assessment.yaml" test-file
 id: adult-assessment
 question: What adult assessment applies to this person?
 purpose: age-assessment-review
@@ -271,7 +274,7 @@ object would remain one atomic direct-field disclosure.
 
 Create `derivations/adult-assessment.rhai`:
 
-```rhai
+```rhai title="derivations/adult-assessment.rhai" test-file
 fn answer(facts, selectors, context) {
     let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
     let adult_on = add_calendar_years(born, 18);
@@ -326,7 +329,7 @@ evidencectl verify structured.sd-jwt \
   --output structured.verified.json
 ```
 
-```text
+```text test-expect
 VERIFIED
 ```
 
@@ -349,7 +352,7 @@ for name in sorted(names):
 PY
 ```
 
-```text
+```text test-expect
 disclosure: criterion
 disclosure: isAdult
 ```
@@ -369,7 +372,7 @@ evidencectl audit show --last-operation
 evidencectl dev clean
 ```
 
-```text
+```text test-expect
 Local Evidence stopped
 ACCESS AUTHORIZED adult-assessment age-assessment-review requester=<pseudonym>
 DISCLOSURE RELEASED adult_assessment

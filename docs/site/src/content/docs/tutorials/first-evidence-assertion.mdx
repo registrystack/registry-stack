@@ -11,6 +11,8 @@ persona:
   - assertion provider
 locale: en
 standards_referenced: []
+tutorial_test:
+  toolset: evidence
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
@@ -52,7 +54,7 @@ released assertion contains only the governed answer and an opaque subject bindi
 
 Install the latest Evidence Gateway toolset:
 
-```sh
+```sh test-skip="installs the released toolset; the replay serves the binaries under test"
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash
 evidencectl --version
 ```
@@ -77,7 +79,7 @@ cd first-evidence-assertion
 
 Open `tutorial-source.openapi.yaml` in your editor and add this OpenAPI description:
 
-```yaml
+```yaml title="tutorial-source.openapi.yaml" test-file
 openapi: 3.1.0
 info:
   title: Tutorial registry
@@ -136,11 +138,11 @@ Three details connect this contract to Evidence Gateway:
 
 Start a write-free preview directly from the OpenAPI description:
 
-```sh
+```sh test-background="http://127.0.0.1:4010/people/person-123"
 evidencectl source mock serve --openapi tutorial-source.openapi.yaml
 ```
 
-```text
+```text test-excerpt
 Source mock ready: mode=ephemeral origin=http://127.0.0.1:4010 contract=evidencectl-source-mock-v1 seed=0 asOf=2025-01-01 digest=sha256:<digest> served=1 skipped=0
 Next: evidencectl source mock generate --openapi <file>
 ```
@@ -155,7 +157,7 @@ curl -s http://127.0.0.1:4010/people/person-123 | python3 -c \
   'import json,sys; print(sorted(json.load(sys.stdin)))'
 ```
 
-```text
+```text test-expect
 ['date_of_birth', 'name', 'person_id']
 ```
 
@@ -201,7 +203,7 @@ Later institution integrations use the reusable source, selector, adapter, and s
 
 Open `questions/adult-status.yaml` in your editor and add the question definition:
 
-```yaml
+```yaml title="questions/adult-status.yaml" test-file
 id: adult-status
 question: Is the person at least 18 years old?
 purpose: age-check
@@ -244,7 +246,7 @@ matching the purpose declared here.
 Open `derivations/adult-status.rhai` in your editor and add the answer logic. Rhai is the bounded
 scripting language Evidence Gateway uses for requirement-specific derivations:
 
-```rhai
+```rhai title="derivations/adult-status.rhai" test-file
 fn answer(facts, selectors, context) {
     let born = parse_date(required(facts.date_of_birth, "date_of_birth_missing"));
     let adult_on = add_calendar_years(born, 18);
@@ -275,7 +277,7 @@ mkdir -p mocks/cases
 
 Open `mocks/source.yaml` and add the three request cases:
 
-```yaml
+```yaml title="mocks/source.yaml" test-file
 version: 1
 openapi: ../source.openapi.yaml
 operations:
@@ -304,7 +306,7 @@ Add the exact synthetic bodies.
 
 ### `mocks/cases/person-123.json`
 
-```json
+```json title="mocks/cases/person-123.json" test-file
 {
   "person_id": "person-123",
   "name": "Amina Example",
@@ -314,7 +316,7 @@ Add the exact synthetic bodies.
 
 ### `mocks/cases/person-456.json`
 
-```json
+```json title="mocks/cases/person-456.json" test-file
 {
   "person_id": "person-456",
   "name": "Mateo Example",
@@ -324,7 +326,7 @@ Add the exact synthetic bodies.
 
 ### `mocks/cases/person-789.json`
 
-```json
+```json title="mocks/cases/person-789.json" test-file
 {
   "person_id": "person-789",
   "name": "Noor Example",
@@ -338,7 +340,7 @@ Check the plan and every authored body offline:
 evidencectl source mock check --config mocks/source.yaml
 ```
 
-```text
+```text test-expect
 Mock plan valid: operations=1 cases=3
 ```
 
@@ -350,11 +352,11 @@ checked bytes.
 
 Start the materialized source and leave it running:
 
-```sh
+```sh test-background="http://127.0.0.1:4010/people/person-123"
 evidencectl source mock serve --config mocks/source.yaml
 ```
 
-```text
+```text test-excerpt
 Source mock ready: mode=materialized origin=http://127.0.0.1:4010 served=3 skipped=0
 ```
 
@@ -364,7 +366,7 @@ Start Evidence Gateway and the pinned local issuer:
 evidencectl dev start .
 ```
 
-```text
+```text test-excerpt
 Evidence ready at http://127.0.0.1:8080
 Issuer ready at http://127.0.0.1:8081
 ```
@@ -391,7 +393,7 @@ before a response exists. `evidencectl` separately asks the local issuer for sho
 authorization. It sends no HTTP request to Evidence Gateway and does not contact the registry. The
 command creates exactly these owner-only artifacts:
 
-```text
+```text test-expect
 Prepared request: .evidence/requests/first-assertion/request.json
 Prepared verification context: .evidence/requests/first-assertion/verification.json
 Prepared authorization: .evidence/requests/first-assertion/authorization.curl
@@ -417,7 +419,7 @@ curl --silent --show-error --fail-with-body \
   --write-out 'HTTP %{http_code}\n'
 ```
 
-```text
+```text test-expect
 HTTP 200
 ```
 
@@ -438,7 +440,7 @@ evidencectl verify assertion.jws.json \
   --output verified.json
 ```
 
-```text
+```text test-expect
 VERIFIED
 ```
 
@@ -451,13 +453,13 @@ python3 -m json.tool verified.json
 The verified document contains generated identifiers, timestamps, and a pseudonymous subject
 binding. The fields relevant to this question look like this excerpt:
 
-```json
+```json test-excerpt
 {
   "assuranceProfile": "local",
   "purpose": "age-check",
   "subjects": [
     {
-      "binding": "urn:evidence:subject:v1_…",
+      "binding": "urn:evidence:subject:v1_<binding>",
       "role": "person"
     }
   ],
@@ -496,7 +498,7 @@ evidencectl request prepare adult-status \
   --name first-vc
 ```
 
-```text
+```text test-expect
 Prepared request: .evidence/requests/first-vc/request.json
 Prepared verification context: .evidence/requests/first-vc/verification.json
 Prepared authorization: .evidence/requests/first-vc/authorization.curl
@@ -516,7 +518,7 @@ curl --silent --show-error --fail-with-body \
   --write-out 'HTTP %{http_code}\n'
 ```
 
-```text
+```text test-expect
 HTTP 200
 ```
 
@@ -528,7 +530,7 @@ evidencectl verify assertion.sd-jwt \
   --output verified-vc.json
 ```
 
-```text
+```text test-expect
 VERIFIED
 ```
 
@@ -553,7 +555,7 @@ Stop Evidence Gateway and the local issuer before reading the completed audit ch
 evidencectl dev stop
 ```
 
-```text
+```text test-expect
 Local Evidence stopped
 ```
 
@@ -565,7 +567,7 @@ Verify the completed audit chain and show its last operation:
 evidencectl audit show --last-operation
 ```
 
-```text
+```text test-expect
 ACCESS AUTHORIZED adult-status age-check requester=<pseudonym>
 DISCLOSURE RELEASED is_adult
 ```
@@ -578,7 +580,7 @@ record or access token.
 
 Choose two different unused ports when you start the local services:
 
-```sh
+```sh test-skip="the alternative for busy ports; the replay uses the default ports"
 evidencectl dev --evidence-port 8180 --issuer-port 8181 start .
 ```
 
@@ -603,7 +605,7 @@ Remove the stopped local generation, including the sealed bundle that Evidence G
 evidencectl dev clean
 ```
 
-```text
+```text test-expect
 Removed stopped local Evidence state
 ```
 

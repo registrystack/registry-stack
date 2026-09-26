@@ -178,46 +178,45 @@ RELAY_TUTORIAL_INPUTS = (
     "docs/site/src/content/docs/tutorials/publish-governed-sqlite-registry.mdx",
 )
 
-# Every input the Evidence tutorial gate replays or is built from. The tutorial
-# pages and helper scripts here must stay in step with the gate's own registry
-# and the helpers it invokes, which test_ci_changes.py enforces: a tutorial or
-# helper CI does not watch is one that rots silently.
-EVIDENCE_TUTORIAL_INPUTS = frozenset(
-    {
-        "Cargo.lock",
-        "Cargo.toml",
-        "docs/site/package-lock.json",
-        "docs/site/package.json",
-        "docs/site/scripts/check-evidence-tutorials.sh",
-        "docs/site/scripts/check-evidence-tutorials.test.mjs",
-        "docs/site/scripts/evidence-tutorial-fence.sh",
-        "docs/site/scripts/fixtures/fhir-tutorial-mock.py",
-        "docs/site/src/content/docs/tutorials/assert-a-role-bound-relationship.mdx",
-        "docs/site/src/content/docs/tutorials/connect-a-sqlite-extract.mdx",
-        "docs/site/src/content/docs/tutorials/control-who-can-request-evidence.mdx",
-        "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
-        "docs/site/src/content/docs/tutorials/issue-fhir-evidence-as-vcs.mdx",
-        "docs/site/src/content/docs/tutorials/refuse-unsafe-evidence-requests.mdx",
-        "docs/site/src/content/docs/tutorials/request-evidence-as-sd-jwt-vc.mdx",
-        "docs/site/src/content/docs/tutorials/request-evidence-from-an-application.mdx",
-        "docs/site/src/content/docs/tutorials/run-oid4vci-interoperability-checks.mdx",
-        "docs/site/src/content/docs/tutorials/return-a-governed-value.mdx",
-        "docs/site/src/content/docs/tutorials/verify-an-assertion-as-a-consumer.mdx",
-        "products/evidence/fixtures/interoperability/inji-oid4vci/profile.json",
-        "products/evidence/fixtures/interoperability/inji-oid4vci/receipt.json",
-        "products/evidence/scripts/compat/inji-oid4vci-upstream.sh",
-        "products/evidence/scripts/compat/inji-oid4vci.sh",
-        # The application tutorial imports the maintained client package, and
-        # the job assembles that package from this commit with these scripts
-        # and this pinned build tool. A change to any of them changes what the
-        # replay imports.
-        "release/requirements/maturin-1.9.6.txt",
-        "release/scripts/assemble-registry-client-packages.py",
-        "release/scripts/assemble-registry-client-wheel.py",
-        "release/scripts/build-linux-python-client",
-        "release/scripts/zig-glibc-compiler",
-        "release/scripts/smoke-registry-client-package.py",
-    }
+# Every input the Evidence tutorial gate replays or is built from: the page
+# runner, the pages whose frontmatter it replays, the source mock the toolset
+# starts, and the build inputs of what the pages run. The replayed pages here
+# must stay in step with their tutorial_test frontmatter, which
+# test_ci_changes.py enforces: a tutorial CI does not watch is one that rots
+# silently.
+EVIDENCE_TUTORIAL_INPUTS = (
+    "Cargo.lock",
+    "Cargo.toml",
+    "docs/site/package-lock.json",
+    "docs/site/package.json",
+    "docs/site/scripts/run-tutorial.mjs",
+    "docs/site/scripts/tutorial-runner/**",
+    "docs/site/scripts/fixtures/fhir-tutorial-mock.py",
+    "docs/site/src/content/docs/tutorials/assert-a-role-bound-relationship.mdx",
+    "docs/site/src/content/docs/tutorials/connect-a-sqlite-extract.mdx",
+    "docs/site/src/content/docs/tutorials/control-who-can-request-evidence.mdx",
+    "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
+    "docs/site/src/content/docs/tutorials/issue-fhir-evidence-as-vcs.mdx",
+    "docs/site/src/content/docs/tutorials/refuse-unsafe-evidence-requests.mdx",
+    "docs/site/src/content/docs/tutorials/request-evidence-as-sd-jwt-vc.mdx",
+    "docs/site/src/content/docs/tutorials/request-evidence-from-an-application.mdx",
+    "docs/site/src/content/docs/tutorials/run-oid4vci-interoperability-checks.mdx",
+    "docs/site/src/content/docs/tutorials/return-a-governed-value.mdx",
+    "docs/site/src/content/docs/tutorials/verify-an-assertion-as-a-consumer.mdx",
+    "products/evidence/fixtures/interoperability/inji-oid4vci/profile.json",
+    "products/evidence/fixtures/interoperability/inji-oid4vci/receipt.json",
+    "products/evidence/scripts/compat/inji-oid4vci-upstream.sh",
+    "products/evidence/scripts/compat/inji-oid4vci.sh",
+    # The application tutorial imports the maintained client package, and
+    # the job assembles that package from this commit with these scripts
+    # and this pinned build tool. A change to any of them changes what the
+    # replay imports.
+    "release/requirements/maturin-1.9.6.txt",
+    "release/scripts/assemble-registry-client-packages.py",
+    "release/scripts/assemble-registry-client-wheel.py",
+    "release/scripts/build-linux-python-client",
+    "release/scripts/zig-glibc-compiler",
+    "release/scripts/smoke-registry-client-package.py",
 )
 
 # Every input the Base Registry Engine tutorial gate replays or is built from:
@@ -1216,7 +1215,7 @@ def classify(
 
     evidence_tutorial = (
         complete
-        or any(path in EVIDENCE_TUTORIAL_INPUTS for path in paths)
+        or any(matches(path, *EVIDENCE_TUTORIAL_INPUTS) for path in paths)
         or bool(
             affected & (EVIDENCE_TUTORIAL_PACKAGES | ASSEMBLED_PYTHON_CLIENT_PACKAGES)
         )

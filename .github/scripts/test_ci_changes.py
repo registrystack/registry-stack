@@ -829,52 +829,35 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("registry-breg", outputs["rust_packages"])
         self.assertIn("registry-manifest-core", outputs["rust_packages"])
 
-    def test_evidence_tutorial_inputs_cover_every_registered_tutorial(self) -> None:
-        # The gate's registry is the source of truth for which tutorials exist.
-        # A tutorial missing here would not trigger the job that replays it, so
-        # it could break without any pull request noticing.
-        gate = (
-            Path(__file__).resolve().parents[2]
-            / "docs/site/scripts/check-evidence-tutorials.sh"
-        )
-        registry = re.search(
-            r"^EVIDENCE_TUTORIALS=\((.*?)^\)", gate.read_text(), re.DOTALL | re.MULTILINE
-        )
-        if registry is None:
-            self.fail("the gate must declare EVIDENCE_TUTORIALS")
-        slugs = registry.group(1).split()
-        self.assertTrue(slugs, "the gate must register at least one tutorial")
+    def test_evidence_tutorial_inputs_cover_every_replayed_tutorial(self) -> None:
+        # Each page's tutorial_test frontmatter is the source of truth for
+        # which tutorials the gate replays. A replayed page missing here would
+        # not trigger the job that replays it, so it could break without any
+        # pull request noticing.
+        docs = Path(__file__).resolve().parents[2] / "docs/site/src/content/docs"
+        slugs = []
+        for section in ("start", "tutorials"):
+            for page in sorted((docs / section).glob("*.mdx")):
+                frontmatter = yaml.safe_load(page.read_text().split("---\n")[1])
+                declaration = frontmatter.get("tutorial_test") or {}
+                if declaration.get("toolset") == "evidence" and "skip" not in declaration:
+                    slugs.append(f"{section}/{page.stem}")
+        self.assertIn("tutorials/first-evidence-assertion", slugs)
         for slug in slugs:
             with self.subTest(slug=slug):
-                self.assertIn(
-                    f"docs/site/src/content/docs/tutorials/{slug}.mdx",
-                    EVIDENCE_TUTORIAL_INPUTS,
+                page = f"docs/site/src/content/docs/{slug}.mdx"
+                self.assertTrue(
+                    any(
+                        fnmatch.fnmatchcase(page, pattern)
+                        for pattern in EVIDENCE_TUTORIAL_INPUTS
+                    )
                 )
-
-    def test_evidence_tutorial_inputs_cover_every_helper_the_gate_invokes(self) -> None:
-        # Same reasoning as the tutorial registry above, one layer down. The gate
-        # delegates to sibling scripts, and a change to one of those changes what
-        # every tutorial replay does. A helper missing here routes the change
-        # past the job that would have caught it.
-        gate = (
-            Path(__file__).resolve().parents[2]
-            / "docs/site/scripts/check-evidence-tutorials.sh"
-        )
-        helpers = set(
-            re.findall(
-                r"\$SITE_ROOT/scripts/([A-Za-z0-9._/-]+\.(?:mjs|py|sh))",
-                gate.read_text(),
-            )
-        )
-        self.assertTrue(helpers, "the gate must invoke at least one helper")
-        for helper in sorted(helpers):
-            with self.subTest(helper=helper):
-                self.assertIn(f"docs/site/scripts/{helper}", EVIDENCE_TUTORIAL_INPUTS)
 
     def test_evidence_tutorial_routing(self) -> None:
         infrastructure = (
-            "docs/site/scripts/check-evidence-tutorials.sh",
-            "docs/site/scripts/check-evidence-tutorials.test.mjs",
+            "docs/site/scripts/run-tutorial.mjs",
+            "docs/site/scripts/tutorial-runner/toolsets.mjs",
+            "docs/site/scripts/fixtures/fhir-tutorial-mock.py",
             "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
             "docs/site/package.json",
         )
