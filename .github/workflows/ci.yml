@@ -784,14 +784,14 @@ jobs:
               -- --ignored --exact \
               task_grants::native_exchange_tests::approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid \
               | tee "${RUNNER_TEMP}/casework-task-approval.log"
-          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/casework-task-approval.log"
+          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/casework-task-approval.log" || { echo "::error::expected exactly one passing test for approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid"; exit 1; }
           cargo build --locked -p registry-casework -p registry-caseworkctl
           cargo test --locked -p registry-casework \
             --features postgres-test --lib \
             -- --ignored --exact \
             task_grants::local_session_tests::source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer \
             | tee "${RUNNER_TEMP}/casework-local-session.log"
-          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/casework-local-session.log"
+          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/casework-local-session.log" || { echo "::error::expected exactly one passing test for source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer"; exit 1; }
 
   scheduling-contracts:
     name: Scheduling product contracts
@@ -1527,7 +1527,7 @@ jobs:
             dev::examples::tests::native_create_recovers_after_process_exit_without_duplicate_records \
             -- --ignored --exact \
             | tee "${RUNNER_TEMP}/breg-example-recovery.log"
-          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/breg-example-recovery.log"
+          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/breg-example-recovery.log" || { echo "::error::expected exactly one passing test for native_create_recovers_after_process_exit_without_duplicate_records"; exit 1; }
 
       - name: Execute the Base Registry Engine tutorials from a reader directory
         shell: bash

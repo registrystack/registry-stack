@@ -958,7 +958,9 @@ class CiChangesTest(unittest.TestCase):
         # A renamed test would otherwise leave the step running zero tests.
         self.assertIn(
             "grep -q 'test result: ok\\. 1 passed' "
-            '"${RUNNER_TEMP}/breg-example-recovery.log"',
+            '"${RUNNER_TEMP}/breg-example-recovery.log" || '
+            '{ echo "::error::expected exactly one passing test for '
+            f'{test.rsplit("::", 1)[1]}"; exit 1; }}',
             breg_job,
         )
         source = (
@@ -999,7 +1001,9 @@ class CiChangesTest(unittest.TestCase):
                 )
                 self.assertIn(
                     "grep -q 'test result: ok\\. 1 passed' "
-                    f'"${{RUNNER_TEMP}}/{log}"',
+                    f'"${{RUNNER_TEMP}}/{log}" || '
+                    '{ echo "::error::expected exactly one passing test for '
+                    f'{test.rsplit("::", 1)[1]}"; exit 1; }}',
                     casework_job,
                 )
                 module, name = test.rsplit("::", 2)[1:]
