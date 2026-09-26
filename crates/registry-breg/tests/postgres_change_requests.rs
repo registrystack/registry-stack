@@ -2277,9 +2277,8 @@ async fn real_postgres_attachment_verification_quarantines_exact_bytes_and_survi
     database.admin.execute("UPDATE registry_internal.registry_attachment_verification SET lease_id=$1,lease_expires_at=transaction_timestamp()-interval '1 second' WHERE verdict='pending'", &[&Uuid::new_v4()]).await.unwrap();
     mode.store(0, Ordering::SeqCst);
     // The attempt entry is accepted and the terminal entry refused. The
-    // verdict committed before the terminal append, so the worker answers an
-    // outage over a committed approval: the documented crash gap, in which
-    // the attempt entry has no response entry.
+    // terminal entry gates the verdict commit, so the approval rolls back
+    // and the job stays pending until its lease expires.
     let entries_before = verification_audit(&database).len();
     database.audit_capture().fail_after(1);
     assert!(worker.run_once().await.is_err());
@@ -2291,9 +2290,29 @@ async fn real_postgres_attachment_verification_quarantines_exact_bytes_and_survi
     assert_eq!(
         get_record(&app, &record_uri, submitter.clone()).await.body["data"]["evidence"]
             ["verificationStatus"],
+        "pending",
+        "a refused terminal entry leaves no committed verdict"
+    );
+    database.admin.batch_execute("UPDATE registry_internal.registry_attachment_verification SET lease_expires_at=transaction_timestamp()-interval '1 second' WHERE lease_id IS NOT NULL").await.unwrap();
+    let worker = open_worker();
+    assert!(worker.clone().run_once().await.unwrap());
+    let retried = verification_audit(&database);
+    assert_eq!(
+        retried[entries_before + 1..]
+            .iter()
+            .map(|entry| (
+                entry["record"]["phase"].as_str().unwrap(),
+                entry["record"]["outcome"].as_str().unwrap()
+            ))
+            .collect::<Vec<_>>(),
+        [("attempt", "started"), ("terminal", "approved")],
+        "the retried verification records its verdict"
+    );
+    assert_eq!(
+        get_record(&app, &record_uri, submitter.clone()).await.body["data"]["evidence"]
+            ["verificationStatus"],
         "approved"
     );
-    let worker = open_worker();
     assert!(
         !worker.clone().run_once().await.unwrap(),
         "a committed verdict leaves no verification work behind"
