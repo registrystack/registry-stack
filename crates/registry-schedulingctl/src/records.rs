@@ -136,7 +136,6 @@ fn record_refused(
             "operation": "records.apply",
             "outcome": "refused",
             "reason": "records.replace-failed",
-            "detail": format!("{error:#}"),
             "counts": counts,
         }),
     );

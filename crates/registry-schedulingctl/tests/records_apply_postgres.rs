@@ -424,12 +424,31 @@ async fn records_apply_rejects_a_different_deployment_identity_without_writing()
     assert_eq!(refused[1]["record"]["outcome"], "refused");
     assert_eq!(refused[1]["record"]["reason"], "records.replace-failed");
     assert_eq!(refused[1]["record"]["eventId"], refused[1]["correlation"]);
+    // The store's refusal can name records and carry driver diagnostics, so
+    // it reaches the command's error, never the closed audit record.
+    let mut keys: Vec<&str> = refused[1]["record"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "actorKind",
+            "counts",
+            "eventId",
+            "operation",
+            "outcome",
+            "reason"
+        ]
+    );
+    let text =
+        std::fs::read_to_string(root.path().join("other-audit.schedulingctl.ndjson")).unwrap();
     assert!(
-        refused[1]["record"]["detail"]
-            .as_str()
-            .unwrap()
-            .contains("the Scheduling database belongs to another deployment"),
-        "{refused:?}"
+        !text.contains("belongs to another deployment"),
+        "the store's refusal leaked into the audit stream: {text}"
     );
 
     // An audit destination that cannot be opened refuses the apply before
