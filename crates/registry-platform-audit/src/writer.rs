@@ -520,7 +520,7 @@ pub struct AuditWriter {
 
 enum WriterInner {
     File(Arc<GroupCommitFile>),
-    Stream(LineStream),
+    Stream(Arc<LineStream>),
 }
 
 impl std::fmt::Debug for AuditWriter {
@@ -548,10 +548,10 @@ impl AuditWriter {
                 WriterInner::File(Arc::new(GroupCommitFile::new(opened)))
             }
             AuditDestination::Stdout => {
-                WriterInner::Stream(LineStream::new(Box::new(io::stdout())))
+                WriterInner::Stream(Arc::new(LineStream::new(Box::new(io::stdout()))))
             }
             AuditDestination::Stderr => {
-                WriterInner::Stream(LineStream::new(Box::new(io::stderr())))
+                WriterInner::Stream(Arc::new(LineStream::new(Box::new(io::stderr()))))
             }
         };
         Ok(Self {
@@ -564,7 +564,7 @@ impl AuditWriter {
     #[must_use]
     pub fn from_line_sink(sink: Box<dyn Write + Send>) -> Self {
         Self {
-            inner: Arc::new(WriterInner::Stream(LineStream::new(sink))),
+            inner: Arc::new(WriterInner::Stream(Arc::new(LineStream::new(sink)))),
         }
     }
 
@@ -580,7 +580,12 @@ impl AuditWriter {
                     .await
                     .map_err(|_| AuditUnavailable::new(AuditUnavailableReason::Stopped))?
             }
-            WriterInner::Stream(stream) => stream.append(&line),
+            WriterInner::Stream(stream) => {
+                let stream = Arc::clone(stream);
+                tokio::task::spawn_blocking(move || stream.append(&line))
+                    .await
+                    .map_err(|_| AuditUnavailable::new(AuditUnavailableReason::Stopped))?
+            }
         }
     }
 
@@ -2046,6 +2051,65 @@ mod tests {
             );
         });
         assert_eq!(writes.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn a_blocked_stream_append_does_not_stall_other_runtime_work() {
+        struct BlockingSink {
+            entered: std::sync::mpsc::Sender<()>,
+            release: std::sync::mpsc::Receiver<()>,
+        }
+
+        impl Write for BlockingSink {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.entered.send(()).expect("write entered");
+                self.release.recv().expect("write released");
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let (entered, write_entered) = std::sync::mpsc::channel();
+        let (release, write_released) = std::sync::mpsc::channel();
+        let (other_done, other_finished) = std::sync::mpsc::channel();
+
+        // Drive the writer from a current-thread runtime on its own OS
+        // thread, so this test's own assertions cannot become part of the
+        // stall it is checking for.
+        let runtime_thread = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("current-thread runtime");
+            runtime.block_on(async move {
+                let writer = AuditWriter::from_line_sink(Box::new(BlockingSink {
+                    entered,
+                    release: write_released,
+                }));
+                let blocked = tokio::spawn({
+                    let writer = writer.clone();
+                    async move { writer.append(request("blocked")).await }
+                });
+                tokio::spawn(async move {
+                    other_done.send(()).expect("other task signaled");
+                });
+                blocked.await.expect("join").expect("append");
+            });
+        });
+
+        write_entered
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the blocked write started");
+        // A current-thread runtime has exactly one worker: the other task can
+        // only complete here if the stream append runs off that worker.
+        other_finished
+            .recv_timeout(Duration::from_millis(200))
+            .expect("another task made progress while the stream append was blocked");
+        release.send(()).expect("release the blocked write");
+        runtime_thread.join().expect("runtime thread joined");
     }
 
     #[test]
