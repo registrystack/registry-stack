@@ -1562,6 +1562,9 @@ impl AuditRuntime {
                 if !audit_path_has_valid_shape(path) {
                     return Err(AuditDestinationError::InvalidPathComponent);
                 }
+                if !audit_path_ends_in_file_name(path) {
+                    return Err(AuditDestinationError::NoFileName);
+                }
                 Some(PathBuf::from("/relay-runtime/audit.jsonl"))
             }
             None => None,
@@ -1591,14 +1594,22 @@ fn audit_path_has_valid_shape(path: &str) -> bool {
     }
 }
 
-/// The JSON Schema pattern of the paths `audit_path_has_valid_shape`
-/// accepts: an absolute path with no `..` segment, or a relative path that
-/// neither starts with `.` or `..` nor contains a `..` segment.
+/// Whether `path` ends in a file name. `Path` drops a trailing `/` or `.`,
+/// so `a/b/` and `a/b/.` would otherwise pass as the file `b` and then fail
+/// to open as one at startup.
+fn audit_path_ends_in_file_name(path: &str) -> bool {
+    !matches!(path.rsplit('/').next(), None | Some("" | "."))
+}
+
+/// The JSON Schema pattern of the paths `audit_path_has_valid_shape` and
+/// `audit_path_ends_in_file_name` accept: an absolute path with no `..`
+/// segment, or a relative path that neither starts with `.` or `..` nor
+/// contains a `..` segment, ending in a file name.
 #[cfg(any(feature = "schema", test))]
 fn relay_audit_path_pattern() -> String {
     let segment = registry_platform_audit::AUDIT_PATH_SEGMENT_PATTERN;
-    let first = r"(?:[^/.][^/]*|\.(?:[^/.][^/]*|\.[^/]+))";
-    format!("^(?:/+(?:{segment}(?:/+{segment})*)?|{first}(?:/+{segment})*)/*$")
+    let name = r"(?:[^/.][^/]*|\.(?:[^/.][^/]*|\.[^/]+))";
+    format!("^(?:/+(?:{segment}/+)*{name}|{name}(?:(?:/+{segment})*/+{name})?)$")
 }
 
 /// State the rules `AuditRuntime::check_shape` enforces: the `stdout`
@@ -1716,10 +1727,28 @@ mod tests {
         for path in paths {
             assert_eq!(
                 pattern.is_match(&path),
-                audit_path_has_valid_shape(&path),
+                audit_path_has_valid_shape(&path) && audit_path_ends_in_file_name(&path),
                 "{path:?}"
             );
         }
+    }
+
+    #[test]
+    fn an_audit_path_that_does_not_end_in_a_file_name_is_refused() {
+        let audit = |path: &str| AuditRuntime {
+            destination: AuditDestinationKind::File,
+            path: Some(path.to_owned()),
+            rotate_bytes: None,
+            retain_days: None,
+        };
+        for path in ["/", "audit/", "audit/.", "/var/lib/audit/events.jsonl/"] {
+            assert_eq!(
+                audit(path).check_shape(),
+                Err(AuditDestinationError::NoFileName),
+                "{path:?}"
+            );
+        }
+        assert_eq!(audit("audit/./events.jsonl").check_shape(), Ok(()));
     }
 
     #[test]
