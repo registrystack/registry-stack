@@ -61,7 +61,8 @@ const registryLegendFrontmatter = z.object({
   // array cannot state; the values it validates against are the list itself.
   persona: z.array(z.enum(DOC_PERSONAS as [string, ...string[]])).optional(),
   // How the page's journey is replayed: the toolset it runs against, the page
-  // a reader finishes first, or why it is not replayed. The product's tutorial
+  // a reader finishes first, or why it is not replayed, and whether the journey
+  // starts in a Registry Stack checkout. The product's tutorial
   // gate (scripts/tutorial-runner/gate.mjs) requires it on every page under
   // start/ or tutorials/ that runs the toolset's commands.
   tutorial_test: z
@@ -69,6 +70,7 @@ const registryLegendFrontmatter = z.object({
       toolset: z.string().min(1),
       after: z.string().min(1).optional(),
       skip: z.string().min(1).optional(),
+      checkout: z.literal(true).optional(),
     })
     .strict()
     .optional(),

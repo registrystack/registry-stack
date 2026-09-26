@@ -17,7 +17,9 @@
 //
 // Several pages replay in the order given, in the same reader directory, each
 // in a fresh shell: a tutorial that continues from another starts where the
-// reader left off, in a new terminal.
+// reader left off, in a new terminal. When the first page's frontmatter sets
+// tutorial_test.checkout, the reader directory starts as a copy of this
+// checkout instead (tutorial-runner/checkout.mjs).
 //
 // The toolset puts the product binaries under test on PATH and stops any
 // service the journey left running, whether it passed or failed.
@@ -40,7 +42,8 @@ import { fileURLToPath } from 'node:url';
 
 import { checkExcerpt } from './tutorial-runner/excerpt.mjs';
 import { checkExpectation } from './tutorial-runner/expect.mjs';
-import { planGate } from './tutorial-runner/gate.mjs';
+import { copyCheckout } from './tutorial-runner/checkout.mjs';
+import { frontmatter, planGate } from './tutorial-runner/gate.mjs';
 import { readJourney } from './tutorial-runner/page.mjs';
 import { TOOLSETS, ToolsetError } from './tutorial-runner/toolsets.mjs';
 
@@ -80,7 +83,8 @@ const blockName = (step) => BLOCK_NAMES[step.kind] ?? 'the sh fence';
 const quote = (text) => `'${text.replaceAll("'", "'\\''")}'`;
 const outName = (index) => `${String(index).padStart(3, '0')}.out`;
 
-function printPlan(steps) {
+function printPlan(steps, checkout) {
+  if (checkout) console.log('start in a copy of the checkout');
   for (const step of steps) {
     const exit = step.exit === undefined ? '' : ` (expects exit ${step.exit})`;
     if (step.kind === 'run') console.log(`run   ${where(step)}: ${step.code.split('\n')[0]}${exit}`);
@@ -188,7 +192,7 @@ async function checkBlocks(steps, outDir) {
   return failures;
 }
 
-async function replay(pages, toolset) {
+async function replay(pages, toolset, checkout) {
   const steps = pages.flat();
   const workRoot = await realpath(await mkdtemp(join(tmpdir(), 'tutorial-run.')));
   const readerDir = join(workRoot, 'reader');
@@ -207,6 +211,7 @@ async function replay(pages, toolset) {
   try {
     await toolset.prepare({ repoRoot: REPO_ROOT, binDir });
     prepared = true;
+    if (checkout) await copyCheckout(REPO_ROOT, readerDir);
     const scriptPath = join(workRoot, 'journey.sh');
     await writeFile(scriptPath, await journeyScript(pages, outDir));
     const code = await runScript(scriptPath, readerDir, binDir);
@@ -248,10 +253,13 @@ async function replay(pages, toolset) {
 // any annotation error.
 async function readPages(paths) {
   const pages = [];
+  let checkout = false;
   let offset = 0;
   let annotationErrors = 0;
   for (const page of paths) {
-    const { steps, errors } = readJourney(await readFile(page, 'utf8'));
+    const text = await readFile(page, 'utf8');
+    if (pages.length === 0) checkout = frontmatter(text).tutorial_test?.checkout === true;
+    const { steps, errors } = readJourney(text);
     for (const error of errors) console.error(`${page}: ${error}`);
     annotationErrors += errors.length;
     const name = paths.length > 1 ? basename(page) : undefined;
@@ -264,29 +272,29 @@ async function readPages(paths) {
     );
     offset += steps.length;
   }
-  return annotationErrors > 0 ? null : pages;
+  return annotationErrors > 0 ? null : { pages, checkout };
 }
 
 async function runGate(toolsetName, dryRun) {
   const toolset = TOOLSETS[toolsetName];
-  const { journeys, skipped, errors } = await planGate(DOCS_ROOT, toolsetName, toolset.commands);
+  const { journeys, checkout, skipped, errors } = await planGate(DOCS_ROOT, toolsetName, toolset.commands);
   for (const error of errors) console.error(error);
   if (errors.length > 0) return 2;
   const planned = [];
   for (const journey of journeys) {
-    const pages = await readPages(journey.map((slug) => join(DOCS_ROOT, `${slug}.mdx`)));
-    if (!pages) return 2;
-    planned.push({ journey, pages });
+    const read = await readPages(journey.map((slug) => join(DOCS_ROOT, `${slug}.mdx`)));
+    if (!read) return 2;
+    planned.push({ journey, pages: read.pages, checkout: checkout.includes(journey[0]) });
   }
   for (const { slug, reason } of skipped) console.log(`skip  page ${slug}: ${reason}`);
   const failed = [];
-  for (const { journey, pages } of planned) {
+  for (const { journey, pages, checkout: fromCheckout } of planned) {
     console.log(`\njourney ${journey.join(' -> ')}`);
     if (dryRun) {
-      printPlan(pages.flat());
+      printPlan(pages.flat(), fromCheckout);
       continue;
     }
-    const status = await replay(pages, toolset);
+    const status = await replay(pages, toolset, fromCheckout);
     if (status === 130) return 130;
     if (status !== 0) failed.push(journey.at(-1));
   }
@@ -303,10 +311,10 @@ async function runGate(toolsetName, dryRun) {
 
 const options = parseArgs(process.argv.slice(2));
 if (options.gate !== undefined) process.exit(await runGate(options.gate, options.dryRun));
-const pages = await readPages(options.pages);
-if (!pages) process.exit(2);
+const read = await readPages(options.pages);
+if (!read) process.exit(2);
 if (options.dryRun) {
-  printPlan(pages.flat());
+  printPlan(read.pages.flat(), read.checkout);
   process.exit(0);
 }
-process.exit(await replay(pages, TOOLSETS[options.toolset]));
+process.exit(await replay(read.pages, TOOLSETS[options.toolset], read.checkout));

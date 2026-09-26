@@ -6,6 +6,8 @@
 //     toolset: breg                  the toolset its journey runs against
 //     after: tutorials/first-breg    optional: the page a reader finishes first
 //     skip: <reason>                 optional: why the page is not replayed
+//     checkout: true                 optional: the journey starts at the root of
+//                                    a copy of this checkout (checkout.mjs)
 //
 // A page with `after` continues where that page leaves the reader, so the
 // gate replays the two as one journey, and replays the first page only as the
@@ -24,9 +26,9 @@ import YAML from 'yaml';
 import { readJourney } from './page.mjs';
 
 const SECTIONS = ['start', 'tutorials'];
-const KEYS = new Set(['toolset', 'after', 'skip']);
+const KEYS = new Set(['toolset', 'after', 'skip', 'checkout']);
 
-function frontmatter(text) {
+export function frontmatter(text) {
   const match = text.match(/^---\n([\s\S]*?)\n---\n/u);
   return match ? (YAML.parse(match[1]) ?? {}) : {};
 }
@@ -52,14 +54,17 @@ async function readPages(docsRoot) {
   return pages;
 }
 
-// Return { journeys, skipped, errors }: journeys are lists of page slugs, each
-// replayed in order in one reader directory; skipped pages carry their reason;
-// errors are sentences naming a page, and a gate with any runs nothing.
+// Return { journeys, checkout, skipped, errors }: journeys are lists of page
+// slugs, each replayed in order in one reader directory; checkout names the
+// pages whose journey starts in a copy of the checkout; skipped pages carry
+// their reason; errors are sentences naming a page, and a gate with any runs
+// nothing.
 export async function planGate(docsRoot, toolset, commandPattern) {
   const errors = [];
   const skipped = [];
   const replayed = new Map();
   const skippedSlugs = new Set();
+  const checkout = new Set();
   for (const { slug, declaration, commands } of await readPages(docsRoot)) {
     const runs = commands.some((code) => commandPattern.test(code));
     if (declaration === undefined) {
@@ -71,11 +76,11 @@ export async function planGate(docsRoot, toolset, commandPattern) {
       continue;
     }
     if (declaration === null || typeof declaration !== 'object' || Array.isArray(declaration)) {
-      errors.push(`${slug}.mdx: tutorial_test is a mapping with toolset, after, or skip`);
+      errors.push(`${slug}.mdx: tutorial_test is a mapping with toolset, after, skip, or checkout`);
       continue;
     }
     const unknown = Object.keys(declaration).filter((key) => !KEYS.has(key));
-    for (const key of unknown) errors.push(`${slug}.mdx: unknown tutorial_test key ${key} (expected toolset, after, or skip)`);
+    for (const key of unknown) errors.push(`${slug}.mdx: unknown tutorial_test key ${key} (expected toolset, after, skip, or checkout)`);
     if (!declaration.toolset) {
       errors.push(`${slug}.mdx: tutorial_test needs a toolset`);
       continue;
@@ -85,6 +90,11 @@ export async function planGate(docsRoot, toolset, commandPattern) {
       errors.push(`${slug}.mdx declares toolset ${toolset} but runs no ${toolset} commands; remove its tutorial_test`);
       continue;
     }
+    if (declaration.checkout !== undefined && declaration.checkout !== true) {
+      errors.push(`${slug}.mdx: tutorial_test.checkout is true or absent`);
+      continue;
+    }
+    if (declaration.checkout) checkout.add(slug);
     if (declaration.skip !== undefined) {
       skipped.push({ slug, reason: String(declaration.skip) });
       skippedSlugs.add(slug);
@@ -108,8 +118,11 @@ export async function planGate(docsRoot, toolset, commandPattern) {
     else if (!replayed.has(after)) {
       errors.push(`${slug}.mdx: tutorial_test.after names ${after}, which no page under start/ or tutorials/ replays with ${toolset}`);
     } else if (chain(slug) === undefined) errors.push(`${slug}.mdx: tutorial_test.after leads back to itself`);
+    else if (checkout.has(slug)) {
+      errors.push(`${slug}.mdx: tutorial_test.checkout belongs on ${chain(slug)[0]}, where the journey starts`);
+    }
     continued.add(after);
   }
   const journeys = errors.length > 0 ? [] : [...replayed.keys()].filter((slug) => !continued.has(slug)).sort().map(chain);
-  return { journeys, skipped, errors: errors.sort() };
+  return { journeys, checkout: journeys.map((journey) => journey[0]).filter((slug) => checkout.has(slug)), skipped, errors: errors.sort() };
 }

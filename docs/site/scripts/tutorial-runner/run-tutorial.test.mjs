@@ -272,3 +272,22 @@ test('a gate needs a toolset that names its commands, and no pages beside it', a
   assert.match((await run(['--gate', 'none'])).output, /toolset none has no commands to gate/u);
   assert.match((await run(['--gate', 'breg', 'page.mdx'])).output, /--gate takes no pages/u);
 });
+
+test('a journey whose page asks for the checkout starts at the root of a copy of it', async () => {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'tutorial-runner-checkout.')));
+  try {
+    const page = join(dir, 'page.mdx');
+    await writeFile(
+      page,
+      '---\ntitle: t\ntutorial_test:\n  toolset: none\n  checkout: true\n---\n\n' +
+        fence('sh', 'test -f docs/site/scripts/run-tutorial.mjs\ntest ! -e .git\nprintf copied') +
+        fence('text test-expect', 'copied'),
+    );
+    const plan = await run(['--dry-run', page]);
+    assert.match(plan.output, /^start in a copy of the checkout$/mu);
+    const { code, output } = await run([page]);
+    assert.equal(code, 0, output);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
