@@ -993,11 +993,11 @@ class CiChangesTest(unittest.TestCase):
         for path in infrastructure:
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["breg_tutorial"])
-        # Listed inputs, and the issuer tooling `bregctl dev` links.
+        # The issuer tooling `bregctl dev` links, and any BReg product
+        # material, which selects the BReg packages the replay builds.
         for path in (
-            "products/breg/quickstart/run.sh",
-            "products/breg/quickstart/support/quickstart.py",
             "crates/registry-thunderid-tooling/src/local.rs",
+            "products/breg/quickstart/run.sh",
         ):
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["breg_tutorial"])
@@ -1031,10 +1031,9 @@ class CiChangesTest(unittest.TestCase):
         )
         # The replay starts `bregctl dev` and no Evidence binary, and
         # it replays neither composition page. The offline composition proof
-        # owns the Evidence toolset and those pages' commands. A change to
-        # registry-evidence itself still reaches the replay, because Registry
-        # Issuer tooling links it and `bregctl dev` issues the reader's operator token.
+        # owns the Evidence toolset and those pages' commands.
         for path in (
+            "crates/registry-evidence/src/source.rs",
             "crates/registry-evidencectl/src/source_cli.rs",
             "docs/site/src/content/docs/tutorials/evidence-from-breg.mdx",
             "docs/site/src/content/docs/tutorials/deploy-evidence-from-breg.mdx",
