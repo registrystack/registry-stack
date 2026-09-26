@@ -209,6 +209,7 @@ async fn cached_review_result_cannot_authorize_fresh_apply_but_committed_receipt
     .await;
     let apply = action(&before.body, "apply_request", None);
 
+    let entries_before = database.audit_entries().len();
     let unavailable = send_action(
         &app,
         &apply,
@@ -218,6 +219,9 @@ async fn cached_review_result_cannot_authorize_fresh_apply_but_committed_receipt
     )
     .await;
     assert_eq!(unavailable.status, StatusCode::SERVICE_UNAVAILABLE);
+    // The attempt precedes the receipt preflight's reads and the review
+    // authority, so even this refusal is a request answered in order.
+    assert_requested_then_answered(&database.audit_entries()[entries_before..]);
     assert_eq!(application_result_count(&database).await, 0);
     assert_eq!(authority_state.lookups.load(Ordering::SeqCst), 1);
 
@@ -248,6 +252,7 @@ async fn cached_review_result_cannot_authorize_fresh_apply_but_committed_receipt
     assert_eq!(authority_state.lookups.load(Ordering::SeqCst), 3);
 
     authority_state.mode.store(0, Ordering::SeqCst);
+    let entries_before = database.audit_entries().len();
     let replay = send_action(
         &app,
         &apply,
@@ -257,6 +262,8 @@ async fn cached_review_result_cannot_authorize_fresh_apply_but_committed_receipt
     )
     .await;
     assert_eq!(replay.status, StatusCode::OK, "{}", replay.body);
+    // The receipt branch records its attempt once, before its preflight.
+    assert_requested_then_answered(&database.audit_entries()[entries_before..]);
     assert_eq!(replay.body, applied.body);
     assert_eq!(
         authority_state.lookups.load(Ordering::SeqCst),
@@ -266,6 +273,22 @@ async fn cached_review_result_cannot_authorize_fresh_apply_but_committed_receipt
 
     authority_server.abort();
     database.cleanup().await;
+}
+
+/// One call's general audit entries: its single attempt request entry first,
+/// then at least one response under the same correlation.
+fn assert_requested_then_answered(entries: &[serde_json::Value]) {
+    let entries = entries
+        .iter()
+        .filter(|entry| entry["schema"] == "breg-audit/v2")
+        .collect::<Vec<_>>();
+    assert!(entries.len() >= 2, "{entries:?}");
+    assert_eq!(entries[0]["phase"], "request", "{entries:?}");
+    assert_eq!(entries[0]["record"]["phase"], "attempt");
+    for entry in &entries[1..] {
+        assert_eq!(entry["phase"], "response", "{entries:?}");
+        assert_eq!(entry["correlation"], entries[0]["correlation"]);
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

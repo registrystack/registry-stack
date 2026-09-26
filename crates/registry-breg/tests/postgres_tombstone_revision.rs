@@ -337,7 +337,8 @@ async fn tombstone_refusals_faults_and_concurrency_have_no_duplicate_effects() {
         assert_eq!(
             durable_counts(&fixture.database, &fixture.table).await,
             DurableCounts {
-                audit: before.audit + 1,
+                // The attempt and the unfinished answer to it.
+                audit: before.audit + 2,
                 ..before
             }
         );

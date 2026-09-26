@@ -6,10 +6,15 @@
 //! `response` entry with its outcome, both through the one platform
 //! [`AuditWriter`] the process opened at startup and both correlated by the
 //! request id Base Registry Engine minted. A refusal is one `response` entry.
+//! A request that goes on to protected I/O holds its attempt as an
+//! [`AuditRequest`] until its terminal or refusal entry answers it; one that
+//! ends first writes an `unfinished` response, so no attempt stays unpaired.
 //! Entries carry keyed references and closed-vocabulary terms, never a raw
 //! principal, record id, selector, token, or free text.
 
-use registry_platform_audit::{AuditEntry, AuditKeyHasher, AuditProfile, AuditWriter};
+use registry_platform_audit::{
+    AuditEntry, AuditKeyHasher, AuditProfile, AuditRequest, AuditWriter,
+};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -80,6 +85,28 @@ impl RegistryAudit {
             .await
             .map_err(|_| RegistryAuditError::Unavailable)?;
         Ok(Self::new(profile, writer))
+    }
+
+    /// Append a `request` entry and return the handle that owes its
+    /// `response`. Dropped unanswered, the handle writes `unfinished` as the
+    /// response under the entry's schema and correlation.
+    pub(crate) async fn begin(
+        &self,
+        entry: AuditEntry,
+        unfinished: Value,
+    ) -> Result<AuditRequest, RegistryAuditError> {
+        if entry.phase() != registry_platform_audit::AuditPhase::Request {
+            return Err(RegistryAuditError::InvalidContext);
+        }
+        self.writer
+            .begin(
+                entry.schema(),
+                entry.correlation(),
+                entry.record().clone(),
+                unfinished,
+            )
+            .await
+            .map_err(|_| RegistryAuditError::Unavailable)
     }
 
     /// Append one entry. A refused append is the audit-unavailable refusal:
@@ -258,6 +285,8 @@ pub(crate) enum WebhookAuditOutcome {
     PayloadExpired,
     WorkerInterrupted,
     ReplayRequested,
+    ReplayCommitted,
+    ReplayRefused,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -281,17 +310,50 @@ pub(crate) struct WebhookAudit<'a> {
     pub disposition: WebhookAuditDisposition,
 }
 
-/// Append one minimized attempt or refusal before protected record I/O.
-///
-/// An attempt is the `request` entry of the request it names and must be
-/// accepted before any protected read or write starts. A refusal is the single
-/// `response` entry of a request that performs no protected I/O.
+/// Append one minimized refusal before protected record I/O: the single
+/// `response` entry of a request that performs no protected I/O, or the one
+/// that answers the attempt a request holds. An attempt goes through
+/// [`begin_pre_io_audit`], which owes its response, so this refuses one.
 pub async fn record_pre_io_audit(
     audit: &RegistryAudit,
     expected: &ExpectedRegistryIdentity,
     claims: &ClaimContext,
     event: PreIoAudit<'_>,
 ) -> Result<(), RegistryAuditError> {
+    if event.kind != PreIoAuditKind::Refusal {
+        return Err(RegistryAuditError::InvalidContext);
+    }
+    let record = pre_io_record(audit, expected, claims, &event)?;
+    audit
+        .append(pre_io_entry(event.kind, event.correlation, record))
+        .await
+}
+
+/// Append the attempt `request` entry of a request that goes on to protected
+/// I/O, and return the handle that owes its `response`. The terminal or
+/// refusal entry the request writes under its request id answers it; a
+/// request that returns, fails, or is canceled first writes an `unfinished`
+/// response naming only the operation and the request when the handle is
+/// dropped, so no attempt is left unpaired.
+pub(crate) async fn begin_pre_io_audit(
+    audit: &RegistryAudit,
+    expected: &ExpectedRegistryIdentity,
+    claims: &ClaimContext,
+    event: PreIoAudit<'_>,
+) -> Result<AuditRequest, RegistryAuditError> {
+    if event.kind != PreIoAuditKind::Attempt {
+        return Err(RegistryAuditError::InvalidContext);
+    }
+    let record = pre_io_record(audit, expected, claims, &event)?;
+    begin_attempt(audit, event.correlation, record).await
+}
+
+fn pre_io_record(
+    audit: &RegistryAudit,
+    expected: &ExpectedRegistryIdentity,
+    claims: &ClaimContext,
+    event: &PreIoAudit<'_>,
+) -> Result<Value, RegistryAuditError> {
     let profile = audit.profile();
     if event.operation_id.is_empty() || !profile_is_keyed(profile) {
         return Err(RegistryAuditError::InvalidContext);
@@ -341,17 +403,45 @@ pub async fn record_pre_io_audit(
         }
     }
     insert_refusal_reason(&mut record, event.refusal_reason);
-    audit
-        .append(pre_io_entry(event.kind, event.correlation, record))
-        .await
+    Ok(record)
 }
 
+/// [`record_pre_io_audit`] for a governed action request.
 pub(crate) async fn record_action_pre_io_audit(
     audit: &RegistryAudit,
     expected: &ExpectedRegistryIdentity,
     claims: &ActionClaimContext,
     event: PreIoAudit<'_>,
 ) -> Result<(), RegistryAuditError> {
+    if event.kind != PreIoAuditKind::Refusal {
+        return Err(RegistryAuditError::InvalidContext);
+    }
+    let record = action_pre_io_record(audit, expected, claims, &event)?;
+    audit
+        .append(pre_io_entry(event.kind, event.correlation, record))
+        .await
+}
+
+/// [`begin_pre_io_audit`] for a governed action request.
+pub(crate) async fn begin_action_pre_io_audit(
+    audit: &RegistryAudit,
+    expected: &ExpectedRegistryIdentity,
+    claims: &ActionClaimContext,
+    event: PreIoAudit<'_>,
+) -> Result<AuditRequest, RegistryAuditError> {
+    if event.kind != PreIoAuditKind::Attempt {
+        return Err(RegistryAuditError::InvalidContext);
+    }
+    let record = action_pre_io_record(audit, expected, claims, &event)?;
+    begin_attempt(audit, event.correlation, record).await
+}
+
+fn action_pre_io_record(
+    audit: &RegistryAudit,
+    expected: &ExpectedRegistryIdentity,
+    claims: &ActionClaimContext,
+    event: &PreIoAudit<'_>,
+) -> Result<Value, RegistryAuditError> {
     let profile = audit.profile();
     if event.operation_id.is_empty()
         || event.target_record.is_some()
@@ -384,9 +474,47 @@ pub(crate) async fn record_action_pre_io_audit(
         "actionId": claims.action_id(),
     });
     insert_refusal_reason(&mut record, event.refusal_reason);
+    Ok(record)
+}
+
+/// Append `record` as the attempt `request` entry of `correlation`.
+async fn begin_attempt(
+    audit: &RegistryAudit,
+    correlation: &RequestCorrelation,
+    record: Value,
+) -> Result<AuditRequest, RegistryAuditError> {
+    let unfinished = unfinished_record(&record);
     audit
-        .append(pre_io_entry(event.kind, event.correlation, record))
+        .writer()
+        .begin(
+            AUDIT_SCHEMA,
+            correlation.request_id().to_string(),
+            record,
+            unfinished,
+        )
         .await
+        .map_err(|_| RegistryAuditError::Unavailable)
+}
+
+/// The `response` an attempt writes when its request ends without a
+/// terminal or refusal entry: the operation and request it answers, and
+/// nothing the request read or was about to write.
+fn unfinished_record(attempt: &Value) -> Value {
+    let mut record = serde_json::Map::new();
+    record.insert("phase".to_owned(), json!("unfinished"));
+    for field in [
+        "method",
+        "operationId",
+        "requestId",
+        "traceId",
+        "packageRevision",
+        "actionId",
+    ] {
+        if let Some(value) = attempt.get(field) {
+            record.insert(field.to_owned(), value.clone());
+        }
+    }
+    Value::Object(record)
 }
 
 fn pre_io_phase_name(kind: PreIoAuditKind) -> &'static str {
@@ -680,8 +808,13 @@ pub(crate) fn webhook_entry(
         ) => event.attempt >= 0,
         (
             WebhookAuditPhase::Replay,
-            WebhookAuditOutcome::ReplayRequested,
+            WebhookAuditOutcome::ReplayRequested | WebhookAuditOutcome::ReplayCommitted,
             WebhookAuditDisposition::ReplayPending,
+        )
+        | (
+            WebhookAuditPhase::Replay,
+            WebhookAuditOutcome::ReplayRefused,
+            WebhookAuditDisposition::DeadLettered,
         ) => event.attempt == 0,
         _ => false,
     };
@@ -723,11 +856,15 @@ pub(crate) fn webhook_entry(
         "generation": event.generation,
         "attempt": event.attempt,
     });
-    Ok(match event.phase {
-        WebhookAuditPhase::Attempt => {
+    // An attempt's start and an operator's replay request are requests;
+    // the terminal disposition and the replay's committed or refused reset
+    // answer them under the same correlation.
+    Ok(match (event.phase, event.outcome) {
+        (WebhookAuditPhase::Attempt, _)
+        | (WebhookAuditPhase::Replay, WebhookAuditOutcome::ReplayRequested) => {
             AuditEntry::request(WEBHOOK_AUDIT_SCHEMA, correlation, record)
         }
-        WebhookAuditPhase::Terminal | WebhookAuditPhase::Replay => {
+        (WebhookAuditPhase::Terminal | WebhookAuditPhase::Replay, _) => {
             AuditEntry::response(WEBHOOK_AUDIT_SCHEMA, correlation, record)
         }
     })
@@ -761,6 +898,8 @@ fn webhook_outcome_name(outcome: WebhookAuditOutcome) -> &'static str {
         WebhookAuditOutcome::PayloadExpired => "payload_expired",
         WebhookAuditOutcome::WorkerInterrupted => "worker_interrupted",
         WebhookAuditOutcome::ReplayRequested => "replay_requested",
+        WebhookAuditOutcome::ReplayCommitted => "replay_committed",
+        WebhookAuditOutcome::ReplayRefused => "replay_refused",
     }
 }
 

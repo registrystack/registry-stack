@@ -22,6 +22,8 @@ pub(crate) enum RequestRetentionCliError {
     ActiveDetailPinned,
     RetainMode,
     AttachmentStorageBindingMismatch,
+    /// The erasure committed without its audit entry.
+    ErasureUnaudited,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -151,6 +153,7 @@ fn map_error(error: RequestRetentionError) -> RequestRetentionCliError {
         RequestRetentionError::AttachmentStorageBindingMismatch => {
             RequestRetentionCliError::AttachmentStorageBindingMismatch
         }
+        RequestRetentionError::ErasureUnaudited => RequestRetentionCliError::ErasureUnaudited,
         RequestRetentionError::ActiveProposalRequiresRebase
         | RequestRetentionError::Unavailable => RequestRetentionCliError::Operator,
     }
@@ -166,6 +169,14 @@ fn operator_runtime() -> Result<tokio::runtime::Runtime, RequestRetentionCliErro
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_unaudited_erasure_stays_distinct_from_a_refused_one() {
+        assert_eq!(
+            map_error(RequestRetentionError::ErasureUnaudited),
+            RequestRetentionCliError::ErasureUnaudited
+        );
+    }
+
     #[test]
     fn attachment_binding_refusal_preserves_actionable_cli_error() {
         assert_eq!(

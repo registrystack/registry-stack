@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use deadpool_postgres::Client;
-use registry_platform_audit::{AuditEntry, AuditProfile};
+use registry_platform_audit::{AuditEntry, AuditProfile, AuditRequest};
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_crypto::field_encryption::{
     envelope_member_json, FieldCryptoError, MAX_FIELD_PLAINTEXT_BYTES,
@@ -29,9 +29,9 @@ use uuid::Uuid;
 
 use crate::artifacts::event_data_schema_binding;
 use crate::audit::{
-    action_terminal_entry, profile_is_keyed, record_action_pre_io_audit, record_pre_io_audit,
-    terminal_entry, PreIoAudit, PreIoAuditKind, RegistryAudit, RegistryAuditError, TerminalAudit,
-    TerminalAuditOutcome,
+    action_terminal_entry, begin_action_pre_io_audit, begin_pre_io_audit, profile_is_keyed,
+    record_action_pre_io_audit, record_pre_io_audit, terminal_entry, PreIoAudit, PreIoAuditKind,
+    RegistryAudit, RegistryAuditError, TerminalAudit, TerminalAuditOutcome,
 };
 use crate::compiler::{
     WEBHOOK_ATTEMPT_TIMEOUT_MS, WEBHOOK_BACKOFF_MULTIPLIER, WEBHOOK_INITIAL_BACKOFF_MS,
@@ -1134,8 +1134,7 @@ impl MutationCoordinator {
                 .await?;
             return Err(error);
         }
-        self.record_boundary_audit(&request, PreIoAuditKind::Attempt)
-            .await?;
+        let _attempt = self.begin_boundary_audit(&request).await?;
         if let Err(error) = self.stage_attachment(client, &request).await {
             self.record_boundary_audit(&request, PreIoAuditKind::Refusal)
                 .await?;
@@ -1187,8 +1186,7 @@ impl MutationCoordinator {
                 .await?;
             return Err(error);
         }
-        self.record_batch_boundary_audit(&request, PreIoAuditKind::Attempt)
-            .await?;
+        let _attempt = self.begin_batch_boundary_audit(&request).await?;
         let result = self
             .execute_batch_after_attempt(client, &request, fault)
             .await;
@@ -1200,6 +1198,50 @@ impl MutationCoordinator {
             MutationError::RetryableConflict => MutationError::Unavailable,
             other => other,
         })
+    }
+
+    /// Append the batch's attempt and hold it until its terminal or refusal
+    /// entry answers it.
+    async fn begin_batch_boundary_audit(
+        &self,
+        request: &BatchMutationRequest<'_>,
+    ) -> Result<AuditRequest, MutationError> {
+        Ok(begin_pre_io_audit(
+            &self.audit,
+            &self.expected,
+            request.claims,
+            PreIoAudit {
+                kind: PreIoAuditKind::Attempt,
+                method: request.plan.route.method,
+                operation_id: &request.plan.route.id,
+                target_record: None,
+                refusal_reason: None,
+                correlation: &request.correlation,
+            },
+        )
+        .await?)
+    }
+
+    /// Append the mutation's attempt and hold it until its terminal or
+    /// refusal entry answers it.
+    async fn begin_boundary_audit(
+        &self,
+        request: &MutationRequest<'_>,
+    ) -> Result<AuditRequest, MutationError> {
+        Ok(begin_pre_io_audit(
+            &self.audit,
+            &self.expected,
+            request.claims,
+            PreIoAudit {
+                kind: PreIoAuditKind::Attempt,
+                method: request.plan.route.method,
+                operation_id: &request.plan.route.id,
+                target_record: request.record_id,
+                refusal_reason: None,
+                correlation: &request.correlation,
+            },
+        )
+        .await?)
     }
 
     async fn record_batch_boundary_audit(
