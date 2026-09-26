@@ -6101,6 +6101,7 @@ dependencies = [
  "deadpool-postgres",
  "futures",
  "http",
+ "jsonschema",
  "jsonwebtoken",
  "registry-platform-audit",
  "registry-platform-authcommon",

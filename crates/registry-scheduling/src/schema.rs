@@ -119,7 +119,8 @@ fn install_runtime_constraints(schema: &mut Value) {
 
 /// State the shape `AuditConfig::destination` requires: a `file`
 /// destination, the default, names an absolute `path`, and `stdout` takes
-/// none of the file-only settings. The rotation and retention bounds are the
+/// none of the file-only settings. An explicit null reads as absent, as
+/// serde reads it at load. The rotation and retention bounds are the
 /// platform writer's.
 fn set_audit_destination_constraints(schema: &mut Value) {
     set_definition_property(
@@ -165,9 +166,9 @@ fn set_audit_destination_constraints(schema: &mut Value) {
             "then".to_owned(),
             serde_json::json!({
                 "not": {"anyOf": [
-                    {"required": ["path"]},
-                    {"required": ["rotateBytes"]},
-                    {"required": ["retainDays"]}
+                    {"required": ["path"], "properties": {"path": {"not": {"type": "null"}}}},
+                    {"required": ["rotateBytes"], "properties": {"rotateBytes": {"not": {"type": "null"}}}},
+                    {"required": ["retainDays"], "properties": {"retainDays": {"not": {"type": "null"}}}}
                 ]}
             }),
         );
@@ -388,6 +389,40 @@ mod tests {
         );
         assert_eq!(audit["if"]["properties"]["destination"]["const"], "stdout");
         assert_eq!(audit["else"]["required"], serde_json::json!(["path"]));
+    }
+
+    #[test]
+    fn audit_schema_states_the_destination_rules_the_runtime_enforces() {
+        let documents = runtime_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[RUNTIME_SCHEMA_FILE]).unwrap();
+        let audit = serde_json::json!({
+            "$defs": document["$defs"],
+            "$ref": "#/$defs/AuditConfig"
+        });
+        let validator = jsonschema::JSONSchema::compile(&audit).unwrap();
+        let key = "secret:env/AUDIT_HASH_KEY";
+        for accepted in [
+            serde_json::json!({"hashKeyRef": key, "path": "/var/lib/scheduling/audit.jsonl"}),
+            serde_json::json!({"hashKeyRef": key, "destination": "file", "path": "/audit.jsonl",
+                "rotateBytes": 1_048_576, "retainDays": 1}),
+            serde_json::json!({"hashKeyRef": key, "destination": "stdout"}),
+            // An explicit null reads as absent, as it does at load.
+            serde_json::json!({"hashKeyRef": key, "destination": "stdout", "path": null}),
+            serde_json::json!({"hashKeyRef": key, "destination": "stdout",
+                "path": null, "rotateBytes": null, "retainDays": null}),
+        ] {
+            assert!(validator.is_valid(&accepted), "{accepted}");
+        }
+        for refused in [
+            serde_json::json!({"hashKeyRef": key}),
+            serde_json::json!({"hashKeyRef": key, "path": null}),
+            serde_json::json!({"hashKeyRef": key, "path": "audit.jsonl"}),
+            serde_json::json!({"hashKeyRef": key, "destination": "stdout", "path": "/audit.jsonl"}),
+            serde_json::json!({"hashKeyRef": key, "destination": "stdout", "rotateBytes": 1_048_576}),
+            serde_json::json!({"hashKeyRef": key, "destination": "stdout", "retainDays": 1}),
+        ] {
+            assert!(!validator.is_valid(&refused), "{refused}");
+        }
     }
 
     #[test]
