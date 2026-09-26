@@ -17,7 +17,7 @@ use std::{
     os::unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex as StdMutex,
     },
     time::{Duration, SystemTime},
@@ -44,6 +44,7 @@ const MAX_ENTRY_BYTES: usize = 1024 * 1024;
 const MAX_SCHEMA_BYTES: usize = 128;
 const MAX_CORRELATION_BYTES: usize = 256;
 const SEGMENT_SEQUENCE_DIGITS: usize = 8;
+const DETACHED_LOCK_ATTEMPTS: usize = 1024;
 const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 const TIME_FORMAT: &[FormatItem<'static>] =
     format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
@@ -525,6 +526,59 @@ impl AuditDestination {
 #[derive(Clone)]
 pub struct AuditWriter {
     inner: Arc<WriterInner>,
+    open: Arc<OpenRequests>,
+}
+
+/// The schema and correlation a request entry and its responses share.
+type RequestKey = (String, String);
+
+/// The request entries whose [`AuditRequest`] still owes a response, by
+/// schema and correlation, oldest first.
+#[derive(Default)]
+struct OpenRequests(StdMutex<std::collections::HashMap<RequestKey, Vec<Arc<AtomicBool>>>>);
+
+impl OpenRequests {
+    fn open(&self, key: RequestKey) -> Arc<AtomicBool> {
+        let answered = Arc::new(AtomicBool::new(false));
+        if let Ok(mut open) = self.0.lock() {
+            open.entry(key).or_default().push(Arc::clone(&answered));
+        }
+        answered
+    }
+
+    /// Mark the oldest open request under `key` answered.
+    fn answer(&self, key: &RequestKey) {
+        let Ok(mut open) = self.0.lock() else {
+            return;
+        };
+        if let Some(waiting) = open.get_mut(key) {
+            if !waiting.is_empty() {
+                waiting.remove(0).store(true, Ordering::Release);
+            }
+            if waiting.is_empty() {
+                open.remove(key);
+            }
+        }
+    }
+
+    /// Close `answered` under `key`, reporting whether it is still owed a
+    /// response. Checked and removed under one lock, so a response cannot be
+    /// counted after the owner decided it had none.
+    fn close(&self, key: &RequestKey, answered: &Arc<AtomicBool>) -> bool {
+        let Ok(mut open) = self.0.lock() else {
+            return !answered.load(Ordering::Acquire);
+        };
+        if answered.load(Ordering::Acquire) {
+            return false;
+        }
+        if let Some(waiting) = open.get_mut(key) {
+            waiting.retain(|candidate| !Arc::ptr_eq(candidate, answered));
+            if waiting.is_empty() {
+                open.remove(key);
+            }
+        }
+        true
+    }
 }
 
 enum WriterInner {
@@ -565,6 +619,7 @@ impl AuditWriter {
         };
         Ok(Self {
             inner: Arc::new(inner),
+            open: Arc::default(),
         })
     }
 
@@ -574,13 +629,25 @@ impl AuditWriter {
     pub fn from_line_sink(sink: Box<dyn Write + Send>) -> Self {
         Self {
             inner: Arc::new(WriterInner::Stream(Arc::new(LineStream::new(sink)))),
+            open: Arc::default(),
         }
     }
 
     /// Append one entry. For the file destination this returns only after the
     /// entry's bytes are durable. Canceling the caller does not cancel an
     /// enqueued file write or the other entries in its group commit.
+    ///
+    /// An accepted `response` entry answers the oldest [`AuditRequest`] still
+    /// open under the same schema and correlation.
     pub async fn append(&self, entry: AuditEntry) -> Result<(), AuditUnavailable> {
+        self.write(&entry).await?;
+        if entry.phase == AuditPhase::Response {
+            self.open.answer(&(entry.schema, entry.correlation));
+        }
+        Ok(())
+    }
+
+    async fn write(&self, entry: &AuditEntry) -> Result<(), AuditUnavailable> {
         let line = entry.to_line()?;
         match self.inner.as_ref() {
             WriterInner::File(file) => {
@@ -594,6 +661,67 @@ impl AuditWriter {
                 tokio::task::spawn_blocking(move || stream.append(&line))
                     .await
                     .map_err(|_| AuditUnavailable::new(AuditUnavailableReason::Stopped))?
+            }
+        }
+    }
+
+    /// Append the `request` entry of one audited operation and return the
+    /// [`AuditRequest`] that owes its `response` entry.
+    ///
+    /// `request` and `unfinished` are the product's minimized records. The
+    /// handle writes `unfinished` as the `response` entry if it is dropped
+    /// before any response is accepted, so an early return, an error, a
+    /// panic, or a canceled future still pairs the request entry. Every
+    /// `response` the handle writes carries the request's schema and
+    /// correlation. A response appended through [`Self::append`] under the
+    /// same schema and correlation answers it too, so an operation whose
+    /// outcome is written elsewhere only holds the handle until it returns.
+    pub async fn begin(
+        &self,
+        schema: impl Into<String>,
+        correlation: impl Into<String>,
+        request: Value,
+        unfinished: Value,
+    ) -> Result<AuditRequest, AuditUnavailable> {
+        let schema = schema.into();
+        let correlation = correlation.into();
+        if !unfinished.is_object() {
+            return Err(AuditUnavailable::new(AuditUnavailableReason::InvalidEntry));
+        }
+        self.write(&AuditEntry::request(
+            schema.clone(),
+            correlation.clone(),
+            request,
+        ))
+        .await?;
+        let answered = self.open.open((schema.clone(), correlation.clone()));
+        Ok(AuditRequest {
+            writer: self.clone(),
+            schema,
+            correlation,
+            answered,
+            unfinished,
+        })
+    }
+
+    /// Write `entry` without waiting for the destination to accept it.
+    fn append_detached(&self, entry: &AuditEntry) {
+        let line = match entry.to_line() {
+            Ok(line) => line,
+            Err(_) => {
+                tracing::error!("an unfinished response entry is malformed and was not written");
+                return;
+            }
+        };
+        match self.inner.as_ref() {
+            WriterInner::File(file) => file.enqueue_detached(line),
+            WriterInner::Stream(stream) => {
+                // Written inline, unlike `write`: a blocking task queued from
+                // a drop during runtime shutdown may never run, and the
+                // unfinished response is the entry that must not be lost.
+                if stream.append(&line).is_err() {
+                    tracing::error!("an unfinished response entry was not accepted");
+                }
             }
         }
     }
@@ -631,6 +759,87 @@ impl AuditWriter {
         match self.inner.as_ref() {
             WriterInner::File(file) => file.durable_writes.load(Ordering::Relaxed),
             WriterInner::Stream(_) => 0,
+        }
+    }
+}
+
+/// An accepted `request` entry that still owes its `response` entry.
+///
+/// [`AuditRequest::respond`] appends a `response` entry and waits for the
+/// destination to accept it; an operation may respond more than once. A
+/// handle dropped before any response was accepted writes the `unfinished`
+/// record given to [`AuditWriter::begin`] as its `response` entry. That write
+/// cannot be awaited, so an operation with a known outcome, a refusal
+/// included, responds with it instead of relying on the drop.
+#[must_use = "an audit request writes its unfinished response entry when dropped"]
+pub struct AuditRequest {
+    writer: AuditWriter,
+    schema: String,
+    correlation: String,
+    /// Set once a response entry under this schema and correlation was
+    /// accepted.
+    answered: Arc<AtomicBool>,
+    /// The record written if the handle is dropped unanswered.
+    unfinished: Value,
+}
+
+impl std::fmt::Debug for AuditRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AuditRequest")
+            .field("schema", &self.schema)
+            .field("answered", &self.is_answered())
+            .finish_non_exhaustive()
+    }
+}
+
+impl AuditRequest {
+    /// The correlation its request and response entries share.
+    #[must_use]
+    pub fn correlation(&self) -> &str {
+        &self.correlation
+    }
+
+    /// Whether a response entry was accepted.
+    #[must_use]
+    pub fn is_answered(&self) -> bool {
+        self.answered.load(Ordering::Acquire)
+    }
+
+    /// Append one `response` entry. A refused entry leaves the request
+    /// unanswered, so a later drop still writes the unfinished record.
+    pub async fn respond(&mut self, record: Value) -> Result<(), AuditUnavailable> {
+        self.writer
+            .write(&AuditEntry::response(
+                self.schema.clone(),
+                self.correlation.clone(),
+                record,
+            ))
+            .await?;
+        // Answer this request, not an older one open under its correlation.
+        self.writer.open.close(
+            &(self.schema.clone(), self.correlation.clone()),
+            &self.answered,
+        );
+        self.answered.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    /// Append `record` as the only `response` entry and release the handle.
+    pub async fn finish(mut self, record: Value) -> Result<(), AuditUnavailable> {
+        self.respond(record).await
+    }
+}
+
+impl Drop for AuditRequest {
+    fn drop(&mut self) {
+        let key = (
+            std::mem::take(&mut self.schema),
+            std::mem::take(&mut self.correlation),
+        );
+        if self.writer.open.close(&key, &self.answered) {
+            let entry = AuditEntry::response(key.0, key.1, std::mem::take(&mut self.unfinished));
+            self.writer.append_detached(&entry);
         }
     }
 }
@@ -767,6 +976,65 @@ impl GroupCommitFile {
         }
         self.file.ready().await
     }
+
+    /// Queue `line` without waiting for it to be durable, then flush it on
+    /// the current runtime. A line queued when no runtime can flush it, or
+    /// whose flush is canceled at shutdown, is written by the next append or
+    /// when the last reference to the file is dropped.
+    fn enqueue_detached(self: &Arc<Self>, line: String) {
+        let runtime = tokio::runtime::Handle::try_current().ok();
+        let mut line = Some(line);
+        // Every holder of the state lock releases it without awaiting, so a
+        // short wait is enough unless the state is poisoned by a stop.
+        for _ in 0..DETACHED_LOCK_ATTEMPTS {
+            if let Ok(mut state) = self.state.try_lock() {
+                if state.stopped {
+                    tracing::error!(
+                        "audit writer stopped; an unfinished response entry was not written"
+                    );
+                    return;
+                }
+                state.pending.extend(line.take());
+                state.enqueued = state.enqueued.saturating_add(1);
+                break;
+            }
+            std::thread::yield_now();
+        }
+        let Some(runtime) = runtime else {
+            if line.is_some() {
+                tracing::error!("audit file state is busy outside a runtime; an unfinished response entry was not written");
+            }
+            return;
+        };
+        let file = Arc::clone(self);
+        runtime.spawn(async move {
+            let result = match line {
+                Some(line) => file.append(line).await,
+                None => {
+                    let _writer = file.flush.lock().await;
+                    file.flush_once().await
+                }
+            };
+            if result.is_err() {
+                tracing::error!("an unfinished response entry was not accepted");
+            }
+        });
+    }
+}
+
+impl Drop for GroupCommitFile {
+    /// Write the lines still queued, such as an unfinished response whose
+    /// flush was canceled when the runtime shut down.
+    fn drop(&mut self) {
+        let state = self.state.get_mut();
+        if state.stopped || state.pending.is_empty() {
+            return;
+        }
+        let lines = std::mem::take(&mut state.pending);
+        if let Err(error) = self.file.write_lines_blocking(lines) {
+            tracing::error!(%error, "queued audit entries were not written at shutdown");
+        }
+    }
 }
 
 /// A single-writer JSON Lines file with online size rotation and age-based
@@ -783,6 +1051,7 @@ struct SegmentedFile {
     retain: Duration,
     state: tokio::sync::Mutex<FileState>,
     healthy: AtomicBool,
+    in_flight: Arc<AtomicUsize>,
     lock_fingerprint: FileFingerprint,
     writer_lock: File,
     #[cfg(test)]
@@ -864,6 +1133,7 @@ impl SegmentedFile {
                 next_sequence,
             }),
             healthy: AtomicBool::new(true),
+            in_flight: Arc::new(AtomicUsize::new(0)),
             lock_fingerprint,
             writer_lock,
             #[cfg(test)]
@@ -906,7 +1176,49 @@ impl SegmentedFile {
             )));
         }
         let mut state = self.state.lock().await;
-        let request = AppendRequest {
+        let request = self.append_request(&state, lines)?;
+        let in_flight = InFlightWrite::start(&self.in_flight);
+        let outcome = tokio::task::spawn_blocking(move || {
+            let _in_flight = in_flight;
+            request.run()
+        })
+        .await
+        .map_err(|error| AuditError::Io(io::Error::other(error)))
+        .and_then(|result| result);
+        self.settle(&mut state, outcome)
+    }
+
+    /// Write `lines` on the calling thread, outside any runtime. The owner of
+    /// the last reference calls it, so no other write can hold the state.
+    fn write_lines_blocking(&self, lines: Vec<String>) -> Result<(), AuditError> {
+        if !self.healthy.load(Ordering::Acquire) {
+            return Err(AuditError::Io(io::Error::other(
+                "audit writer stopped after a failed write",
+            )));
+        }
+        // A canceled caller can leave its blocking write running; writing
+        // beside it could interleave two runs of lines in the active file.
+        if self.in_flight.load(Ordering::Acquire) != 0 {
+            return Err(AuditError::Io(io::Error::other(
+                "an earlier audit write is still in flight",
+            )));
+        }
+        let mut state = self
+            .state
+            .try_lock()
+            .map_err(|_| AuditError::Io(io::Error::other("audit file state is held")))?;
+        let outcome = self
+            .append_request(&state, lines)
+            .and_then(AppendRequest::run);
+        self.settle(&mut state, outcome)
+    }
+
+    fn append_request(
+        &self,
+        state: &FileState,
+        lines: Vec<String>,
+    ) -> Result<AppendRequest, AuditError> {
+        Ok(AppendRequest {
             path: self.path.clone(),
             rotate_bytes: self.rotate_bytes,
             retain: self.retain,
@@ -919,11 +1231,14 @@ impl SegmentedFile {
             next_sequence: state.next_sequence,
             #[cfg(test)]
             sync_hook: self.sync_hook.clone(),
-        };
-        let outcome = tokio::task::spawn_blocking(move || request.run())
-            .await
-            .map_err(|error| AuditError::Io(io::Error::other(error)))
-            .and_then(|result| result);
+        })
+    }
+
+    fn settle(
+        &self,
+        state: &mut FileState,
+        outcome: Result<AppendResult, AuditError>,
+    ) -> Result<(), AuditError> {
         match outcome {
             Ok(result) => {
                 if let Some(active) = result.replacement {
@@ -938,6 +1253,23 @@ impl SegmentedFile {
                 Err(error)
             }
         }
+    }
+}
+
+/// Counts one blocking write from its start until its thread finishes it,
+/// even when the caller that awaited it was canceled.
+struct InFlightWrite(Arc<AtomicUsize>);
+
+impl InFlightWrite {
+    fn start(counter: &Arc<AtomicUsize>) -> Self {
+        counter.fetch_add(1, Ordering::AcqRel);
+        Self(Arc::clone(counter))
+    }
+}
+
+impl Drop for InFlightWrite {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -1399,6 +1731,7 @@ mod tests {
         file.sync_hook = Some(hook);
         AuditWriter {
             inner: Arc::new(WriterInner::File(Arc::new(GroupCommitFile::new(file)))),
+            open: Arc::default(),
         }
     }
 
@@ -2710,5 +3043,323 @@ mod tests {
         AuditWriter::open(AuditDestination::File(destination))
             .await
             .expect_err("leftover hash-chained journal");
+    }
+
+    const SCHEMA: &str = "registry.test.audit/v2";
+
+    fn unfinished() -> Value {
+        json!({"operationId": "read", "outcome": "unfinished"})
+    }
+
+    fn buffered() -> (AuditWriter, SharedBuffer) {
+        let buffer = SharedBuffer::default();
+        (
+            AuditWriter::from_line_sink(Box::new(buffer.clone())),
+            buffer,
+        )
+    }
+
+    fn buffered_lines(buffer: &SharedBuffer) -> Vec<Value> {
+        String::from_utf8(buffer.0.lock().expect("buffer").clone())
+            .expect("utf-8")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("json line"))
+            .collect()
+    }
+
+    fn assert_paired(entries: &[Value], outcome: &str) {
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        assert_eq!(entries[0]["phase"], "request");
+        assert_eq!(entries[1]["phase"], "response");
+        assert_eq!(entries[1]["schema"], entries[0]["schema"]);
+        assert_eq!(entries[1]["correlation"], entries[0]["correlation"]);
+        assert_eq!(entries[1]["record"]["outcome"], outcome);
+    }
+
+    #[tokio::test]
+    async fn an_answered_request_writes_only_its_responses() {
+        let (writer, buffer) = buffered();
+        let mut request = writer
+            .begin(
+                SCHEMA,
+                "req-1",
+                json!({"operationId": "read"}),
+                unfinished(),
+            )
+            .await
+            .expect("request");
+        assert_eq!(request.correlation(), "req-1");
+        assert!(!request.is_answered());
+        request
+            .respond(json!({"outcome": "returned"}))
+            .await
+            .expect("response");
+        assert!(request.is_answered());
+        request
+            .respond(json!({"outcome": "returned"}))
+            .await
+            .expect("second response");
+        drop(request);
+        let entries = buffered_lines(&buffer);
+        assert_eq!(entries.len(), 3);
+        assert!(entries[1..]
+            .iter()
+            .all(|entry| entry["record"]["outcome"] == "returned"
+                && entry["correlation"] == "req-1"
+                && entry["schema"] == SCHEMA));
+    }
+
+    #[tokio::test]
+    async fn a_response_appended_elsewhere_answers_the_open_request() {
+        let (writer, buffer) = buffered();
+        let request = writer
+            .begin(
+                SCHEMA,
+                "req-1",
+                json!({"operationId": "read"}),
+                unfinished(),
+            )
+            .await
+            .expect("request");
+        writer
+            .append(AuditEntry::response(
+                SCHEMA,
+                "req-1",
+                json!({"outcome": "returned"}),
+            ))
+            .await
+            .expect("response");
+        assert!(request.is_answered());
+        drop(request);
+        assert_paired(&buffered_lines(&buffer), "returned");
+    }
+
+    #[tokio::test]
+    async fn a_response_in_another_schema_does_not_answer_the_request() {
+        let (writer, buffer) = buffered();
+        let request = writer
+            .begin(SCHEMA, "req-1", json!({"operationId": "run"}), unfinished())
+            .await
+            .expect("request");
+        writer
+            .append(AuditEntry::response(
+                "registry.test.other/v1",
+                "req-1",
+                json!({"outcome": "refused"}),
+            ))
+            .await
+            .expect("other schema");
+        assert!(!request.is_answered());
+        drop(request);
+        let entries = buffered_lines(&buffer);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[2]["schema"], SCHEMA);
+        assert_eq!(entries[2]["correlation"], "req-1");
+        assert_eq!(entries[2]["record"]["outcome"], "unfinished");
+    }
+
+    #[tokio::test]
+    async fn one_response_answers_one_of_two_requests_sharing_a_correlation() {
+        let (writer, buffer) = buffered();
+        let first = writer
+            .begin(SCHEMA, "shared", json!({"n": 1}), unfinished())
+            .await
+            .expect("first");
+        let mut second = writer
+            .begin(SCHEMA, "shared", json!({"n": 2}), unfinished())
+            .await
+            .expect("second");
+        second
+            .respond(json!({"outcome": "returned"}))
+            .await
+            .expect("second answers itself");
+        assert!(!first.is_answered(), "the second's response is its own");
+        drop(second);
+        drop(first);
+        let outcomes: Vec<_> = buffered_lines(&buffer)
+            .iter()
+            .filter(|entry| entry["phase"] == "response")
+            .map(|entry| entry["record"]["outcome"].clone())
+            .collect();
+        assert_eq!(outcomes, [json!("returned"), json!("unfinished")]);
+    }
+
+    #[tokio::test]
+    async fn a_request_dropped_unanswered_writes_its_unfinished_response() {
+        let (writer, buffer) = buffered();
+        let request = writer
+            .begin(
+                SCHEMA,
+                "req-1",
+                json!({"operationId": "read"}),
+                unfinished(),
+            )
+            .await
+            .expect("request");
+        drop(request);
+        assert_paired(&buffered_lines(&buffer), "unfinished");
+    }
+
+    #[tokio::test]
+    async fn an_early_error_return_pairs_the_request() {
+        async fn refused(writer: &AuditWriter) -> Result<(), &'static str> {
+            let _request = writer
+                .begin(
+                    SCHEMA,
+                    "req-1",
+                    json!({"operationId": "read"}),
+                    unfinished(),
+                )
+                .await
+                .map_err(|_| "audit")?;
+            Err("not found")?;
+            Ok(())
+        }
+        let (writer, buffer) = buffered();
+        assert_eq!(refused(&writer).await, Err("not found"));
+        assert_paired(&buffered_lines(&buffer), "unfinished");
+    }
+
+    #[tokio::test]
+    async fn a_refused_response_leaves_the_request_owed() {
+        let (writer, buffer) = buffered();
+        let mut request = writer
+            .begin(
+                SCHEMA,
+                "req-1",
+                json!({"operationId": "read"}),
+                unfinished(),
+            )
+            .await
+            .expect("request");
+        let refused = request.respond(json!(["not", "an", "object"])).await;
+        assert_eq!(
+            refused.map_err(|error| error.reason()),
+            Err(AuditUnavailableReason::InvalidEntry)
+        );
+        assert!(!request.is_answered());
+        drop(request);
+        assert_paired(&buffered_lines(&buffer), "unfinished");
+    }
+
+    #[tokio::test]
+    async fn an_unfinished_record_that_is_not_an_object_writes_no_request() {
+        let (writer, buffer) = buffered();
+        let refused = writer
+            .begin(
+                SCHEMA,
+                "req-1",
+                json!({"operationId": "read"}),
+                json!("gone"),
+            )
+            .await;
+        assert!(refused.is_err());
+        assert!(buffered_lines(&buffer).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_canceled_operation_pairs_its_request_in_the_file() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        let writer = AuditWriter::open(AuditDestination::File(destination))
+            .await
+            .expect("open");
+        let (started, begun) = tokio::sync::oneshot::channel();
+        let operation = tokio::spawn({
+            let writer = writer.clone();
+            async move {
+                let _request = writer
+                    .begin(
+                        SCHEMA,
+                        "req-1",
+                        json!({"operationId": "read"}),
+                        unfinished(),
+                    )
+                    .await
+                    .expect("request");
+                started.send(()).expect("signal");
+                std::future::pending::<()>().await;
+            }
+        });
+        begun.await.expect("begun");
+        operation.abort();
+        assert!(operation.await.expect_err("aborted").is_cancelled());
+        // A later append is ordered after the queued unfinished response.
+        writer
+            .append(AuditEntry::response(SCHEMA, "other", json!({})))
+            .await
+            .expect("later entry");
+        let entries = lines(&path);
+        assert_paired(&entries[..2], "unfinished");
+        assert_eq!(entries[2]["correlation"], "other");
+    }
+
+    #[tokio::test]
+    async fn a_panicking_operation_pairs_its_request() {
+        let (writer, buffer) = buffered();
+        let operation = tokio::spawn({
+            let writer = writer.clone();
+            async move {
+                let _request = writer
+                    .begin(
+                        SCHEMA,
+                        "req-1",
+                        json!({"operationId": "read"}),
+                        unfinished(),
+                    )
+                    .await
+                    .expect("request");
+                panic!("handler failed");
+            }
+        });
+        assert!(operation.await.expect_err("panicked").is_panic());
+        assert_paired(&buffered_lines(&buffer), "unfinished");
+    }
+
+    #[test]
+    fn a_command_that_exits_after_an_early_return_pairs_its_request() {
+        // An operator command runs on a current-thread runtime and exits as
+        // soon as its future returns, before a spawned flush can run.
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_path_buf();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let result: Result<(), &str> = runtime.block_on(async move {
+            let writer = AuditWriter::open(AuditDestination::File(destination))
+                .await
+                .expect("open");
+            let _request = writer
+                .begin(
+                    SCHEMA,
+                    "req-1",
+                    json!({"operationId": "erase"}),
+                    unfinished(),
+                )
+                .await
+                .expect("request");
+            Err("database unavailable")
+        });
+        assert_eq!(result, Err("database unavailable"));
+        drop(runtime);
+        assert_paired(&lines(&path), "unfinished");
+    }
+
+    #[tokio::test]
+    async fn a_stopped_writer_refuses_the_request_and_writes_nothing() {
+        let writer = AuditWriter::from_line_sink(Box::new(FailingSink));
+        assert!(writer
+            .begin(
+                SCHEMA,
+                "req-1",
+                json!({"operationId": "read"}),
+                unfinished()
+            )
+            .await
+            .is_err());
+        assert!(!writer.ready().await);
     }
 }

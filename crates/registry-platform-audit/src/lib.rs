@@ -5,6 +5,9 @@
 //!   file or to stdout: a `request` entry before protected I/O and a
 //!   `response` entry with the outcome, sharing one correlation. It fails
 //!   closed: an entry the destination does not accept is an error.
+//!   [`AuditWriter::begin`] writes the `request` entry and returns an
+//!   [`AuditRequest`] that owes the `response`: dropped unanswered, it writes
+//!   the product's `unfinished` record, so no request entry stays unpaired.
 //! - [`AuditProfile`] and [`AuditKeyHasher`] derive keyed, domain-separated
 //!   references so audit records never carry raw identifiers.
 //! - [`redact`] minimizes query strings, email addresses, and phone numbers.
@@ -25,7 +28,7 @@ mod writer;
 #[cfg(unix)]
 pub use writer::{
     AuditDestination, AuditDestinationError, AuditDestinationKind, AuditEntry, AuditPhase,
-    AuditUnavailable, AuditUnavailableReason, AuditWriter, FileDestination,
+    AuditRequest, AuditUnavailable, AuditUnavailableReason, AuditWriter, FileDestination,
     DEFAULT_AUDIT_RETAIN_DAYS, DEFAULT_AUDIT_ROTATE_BYTES, MAX_AUDIT_RETAIN_DAYS,
     MIN_AUDIT_ROTATE_BYTES,
 };
