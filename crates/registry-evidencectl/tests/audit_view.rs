@@ -172,6 +172,7 @@ fn structured_sd_jwt_release_uses_the_same_minimized_audit_view() {
     )
     .expect("bundle writes");
     fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o400)).expect("bundle mode");
+    refresh_package_envelope(&fixture.root.join(".evidence/dev/bundle"));
 
     let mut view = successful_view();
     view["events"][0]["responseProtection"] = json!("sd-jwt-vc");
@@ -236,6 +237,7 @@ fn multi_concept_release_requires_and_prints_the_exact_declared_list() {
     .expect("bundle writes");
     fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o400))
         .expect("seal updated bundle");
+    refresh_package_envelope(&fixture.root.join(".evidence/dev/bundle"));
 
     let mut view = successful_view();
     view["events"][1]["disclosedConcepts"] = json!([
@@ -601,6 +603,7 @@ impl Fixture {
                 .as_bytes(),
             0o400,
         );
+        refresh_package_envelope(&root.join(".evidence/dev/bundle"));
 
         let evidence = temporary.path().join("evidence-stub");
         executable(
@@ -667,6 +670,32 @@ fn private_file(path: &Path, contents: &[u8], mode: u32) {
 
 fn executable(path: &Path, contents: &[u8]) {
     private_file(path, contents, 0o700);
+}
+
+/// Republish the local test package after an intended authored change.
+fn refresh_package_envelope(root: &Path) {
+    fs::set_permissions(root, fs::Permissions::from_mode(0o700))
+        .expect("open package directory for publication");
+    let sum_file = root.join(registry_platform_config::SUM_FILE);
+    if sum_file.exists() {
+        fs::remove_file(&sum_file).expect("remove stale package sum file");
+    }
+    registry_platform_config::write_sum_file(
+        root,
+        None,
+        &registry_platform_config::PackageLimits {
+            max_files: 1_024,
+            max_file_bytes: 1024 * 1024,
+            max_total_bytes: 16 * 1024 * 1024,
+            max_depth: 3,
+            max_path_bytes: 128,
+        },
+        "evidencectl package",
+    )
+    .expect("publish local test package");
+    fs::set_permissions(sum_file, fs::Permissions::from_mode(0o400))
+        .expect("seal package sum file");
+    fs::set_permissions(root, fs::Permissions::from_mode(0o500)).expect("seal package directory");
 }
 
 fn assert_success(output: &Output) {

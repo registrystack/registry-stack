@@ -281,7 +281,7 @@ fn actual_binary_checks_and_evaluates_an_immutable_project() {
 
     assert_success(
         &check,
-        "Evidence deployment ",
+        "Evidence package ",
         " passed check (3 requirements)\n",
     );
     assert_success(
@@ -300,7 +300,7 @@ fn dependency_check_proves_the_real_runtime_boundaries() {
 
     assert_success(
         &deployment.check_with_runtime_dependencies(),
-        "Evidence deployment ",
+        "Evidence package ",
         " passed check (4 requirements)\n",
     );
 }
@@ -314,7 +314,7 @@ fn dependency_check_accepts_an_audit_sink_inside_the_required_root() {
 
     assert_success(
         &deployment.check_with_audit_under(deployment.root.path()),
-        "Evidence deployment ",
+        "Evidence package ",
         " passed check (4 requirements)\n",
     );
 }
@@ -428,7 +428,7 @@ fn dependency_check_trusts_a_private_ca_issuer_only_through_its_named_profile() 
 
     assert_success(
         &output,
-        "Evidence deployment ",
+        "Evidence package ",
         " passed check (4 requirements)\n",
     );
 }
@@ -536,7 +536,7 @@ async fn dependency_check_without_the_audit_lock_passes_beside_a_running_writer(
 
     assert_success(
         &output,
-        "Evidence deployment ",
+        "Evidence package ",
         " passed check (4 requirements)\n",
     );
     assert!(
@@ -2174,7 +2174,7 @@ fn check_accepts_a_gated_acquisition_kind_the_operator_enabled() {
 
     assert_success(
         &deployment.check(),
-        "Evidence deployment ",
+        "Evidence package ",
         " passed check (1 requirements)\n",
     );
 }

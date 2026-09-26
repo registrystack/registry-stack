@@ -1672,7 +1672,11 @@ mod tests {
 
         let documented: Vec<_> = projects
             .iter()
-            .filter(|(_, argument)| !argument.is_hide_set())
+            .filter(|(path, argument)| {
+                // Clap does not propagate a hidden command's state to its
+                // arguments. The retired build spelling is not public API.
+                path != "evidencectl build" && !argument.is_hide_set()
+            })
             .collect();
         assert_eq!(
             documented
@@ -1680,7 +1684,6 @@ mod tests {
                 .map(|(path, _)| path.as_str())
                 .collect::<std::collections::BTreeSet<_>>(),
             std::collections::BTreeSet::from([
-                "evidencectl package",
                 "evidencectl fixtures run",
                 "evidencectl source add",
                 "evidencectl source suggest",
@@ -1744,7 +1747,8 @@ mod tests {
             vec!["evidencectl", "fixtures", "run"],
             vec![
                 "evidencectl",
-                "build",
+                "package",
+                ".",
                 "--target",
                 "deployment/local",
                 "--output",

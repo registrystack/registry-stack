@@ -5409,6 +5409,7 @@ properties:
             vec![
                 "audit/",
                 "bundle/",
+                "bundle/SHA256SUMS",
                 "bundle/adapters/",
                 "bundle/adapters/adult-status-source-extract.rhai",
                 "bundle/adapters/adult-status-source-prepare.rhai",

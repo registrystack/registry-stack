@@ -1375,6 +1375,7 @@ async fn discovery_omits_an_authority_shape_that_the_runtime_would_deny_as_ambig
         1,
     );
     fs::write(&configuration_path, configuration).expect("test configuration is rewritten");
+    refresh_package_envelope(&prepared.bundle_root);
     make_read_only(&prepared.bundle_root);
     let runtime = Arc::new(
         EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
@@ -1441,6 +1442,7 @@ async fn task_grant_router_matches_local_profile_by_issuer_and_refuses_ambiguity
         1,
     );
     fs::write(&configuration_path, configuration).expect("local profile id is written");
+    refresh_package_envelope(&prepared.bundle_root);
     make_read_only(&prepared.bundle_root);
     let runtime = Arc::new(
         EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
@@ -1484,6 +1486,7 @@ async fn task_grant_router_matches_local_profile_by_issuer_and_refuses_ambiguity
     );
     configuration.insert_str(requirements_start, &duplicate);
     fs::write(&configuration_path, configuration).expect("duplicate local profile is written");
+    refresh_package_envelope(&ambiguous.bundle_root);
     make_read_only(&ambiguous.bundle_root);
     let runtime = Arc::new(
         EvidenceRuntime::initialize_with_authenticator(&ambiguous.runtime_path, authenticator())
@@ -1545,6 +1548,7 @@ async fn discovery_refuses_duplicate_handles_visible_to_one_requester() {
         1,
     );
     fs::write(&configuration_path, configuration).expect("test configuration is rewritten");
+    refresh_package_envelope(&prepared.bundle_root);
     make_read_only(&prepared.bundle_root);
     let runtime = Arc::new(
         EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
@@ -1587,6 +1591,7 @@ async fn discovery_uses_the_bounded_per_principal_request_budget() {
         1,
     );
     fs::write(&configuration_path, configuration).expect("test configuration is rewritten");
+    refresh_package_envelope(&prepared.bundle_root);
     make_read_only(&prepared.bundle_root);
     let runtime = Arc::new(
         EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
@@ -1811,11 +1816,9 @@ async fn local_runtime_prepares_a_bearer_free_procedure_and_keeps_the_real_secur
         1,
     );
     fs::write(&configuration_path, local).expect("local configuration is written");
-    let fixture_directory = prepared.bundle_root.join("fixtures");
-    for entry in fs::read_dir(&fixture_directory).expect("fixture directory reads") {
-        fs::remove_file(entry.expect("fixture entry reads").path())
-            .expect("unreferenced fixture is removed");
-    }
+    fs::remove_dir_all(prepared.bundle_root.join("fixtures"))
+        .expect("unreferenced fixture directory is removed");
+    refresh_package_envelope(&prepared.bundle_root);
     make_read_only(&prepared.bundle_root);
 
     // Close independent expectations before the source exists and before a
@@ -4441,6 +4444,7 @@ async fn unsigned_output_requires_both_bundle_and_grant_permission() {
     );
     fs::write(&configuration_path, &configuration).expect("test configuration is rewritten");
     regenerate_discovery_description(&prepared.bundle_root);
+    refresh_package_envelope(&prepared.bundle_root);
     make_read_only(&prepared.bundle_root);
     let runtime = Arc::new(
         EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
@@ -4490,6 +4494,7 @@ async fn unsigned_output_requires_both_bundle_and_grant_permission() {
         1,
     );
     fs::write(&configuration_path, &configuration).expect("test configuration is rewritten");
+    refresh_package_envelope(&prepared.bundle_root);
     make_read_only(&prepared.bundle_root);
     let runtime = Arc::new(
         EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
@@ -4809,6 +4814,7 @@ async fn sd_jwt_vc_acceptance(grant_permits: bool) -> PreparedAcceptance {
     }
     fs::write(&configuration_path, &configuration).expect("test configuration is rewritten");
     regenerate_discovery_description(&prepared.bundle_root);
+    refresh_package_envelope(&prepared.bundle_root);
     make_read_only(&prepared.bundle_root);
     prepared
 }
@@ -4843,6 +4849,7 @@ async fn holder_bound_acceptance() -> PreparedAcceptance {
     );
     fs::write(&configuration_path, &configuration).expect("test configuration is rewritten");
     regenerate_discovery_description(&prepared.bundle_root);
+    refresh_package_envelope(&prepared.bundle_root);
     make_read_only(&prepared.bundle_root);
     prepared
 }
@@ -5854,6 +5861,7 @@ async fn holder_bound_batch_acceptance(ceiling: u16) -> PreparedAcceptance {
     );
     fs::write(&configuration_path, &configuration).expect("test configuration is rewritten");
     regenerate_discovery_description(&prepared.bundle_root);
+    refresh_package_envelope(&prepared.bundle_root);
     make_read_only(&prepared.bundle_root);
     prepared
 }
@@ -6819,6 +6827,7 @@ async fn reordered_grant_subjects_resolve_by_role_and_emit_declaration_order() {
         1,
     );
     fs::write(&configuration_path, configuration).expect("test configuration is rewritten");
+    refresh_package_envelope(&prepared.bundle_root);
     make_read_only(&prepared.bundle_root);
     let runtime = Arc::new(
         EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
@@ -7071,6 +7080,7 @@ async fn failed_selector_budget_is_enforced_by_the_runtime_and_scoped_to_authori
         1,
     );
     fs::write(&configuration_path, configuration).expect("test configuration is rewritten");
+    refresh_package_envelope(&prepared.bundle_root);
     make_read_only(&prepared.bundle_root);
     let runtime =
         EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
@@ -7503,6 +7513,7 @@ async fn runtime_output_gate_rejects_every_fixture_injected_derivation_without_r
         make_writable(&prepared.bundle_root);
         fs::write(prepared.bundle_root.join(script_path), script)
             .expect("test derivation replacement succeeds");
+        refresh_package_envelope(&prepared.bundle_root);
         make_read_only(&prepared.bundle_root);
         let runtime =
             EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
@@ -7661,6 +7672,7 @@ async fn runtime_rejects_an_extra_extracted_fact_before_derivation_or_release() 
         1,
     );
     fs::write(adapter_path, adapter).expect("test adapter replacement succeeds");
+    refresh_package_envelope(&prepared.bundle_root);
     make_read_only(&prepared.bundle_root);
     let runtime =
         EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
