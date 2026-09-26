@@ -1244,11 +1244,27 @@ fn create_directory(path: &Path) -> Result<(), AuditError> {
     if fs::symlink_metadata(path).is_ok() {
         return Ok(());
     }
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(path)
-        .map_err(AuditError::Io)
+    // Each missing directory is created and then set to owner-only access
+    // explicitly, since the process umask can mask the requested mode.
+    let mut missing = Vec::new();
+    let mut ancestor = path;
+    while fs::symlink_metadata(ancestor).is_err() {
+        missing.push(ancestor);
+        match ancestor.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => ancestor = parent,
+            _ => break,
+        }
+    }
+    for directory in missing.into_iter().rev() {
+        match fs::DirBuilder::new().mode(0o700).create(directory) {
+            Ok(()) => fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
+                .map_err(AuditError::Io)?,
+            // Another process created it between the check and here.
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(AuditError::Io(error)),
+        }
+    }
+    Ok(())
 }
 
 /// The audit directory must be a real directory owned by this user and not
@@ -1760,6 +1776,57 @@ mod tests {
                 assert!(writer.ready().await);
             });
         assert_eq!(lines(&path).len(), 1);
+    }
+
+    #[test]
+    fn an_owner_masking_umask_still_creates_usable_audit_directories() {
+        const CHILD: &str = "REGISTRY_AUDIT_UMASK_DIRECTORY_CHILD";
+        // The umask is process wide, so the check runs in a child process
+        // rather than beside the other tests.
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().expect("test binary"))
+                .args([
+                    "--exact",
+                    "writer::tests::an_owner_masking_umask_still_creates_usable_audit_directories",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .status()
+                .expect("child test");
+            assert!(status.success(), "child test failed");
+            return;
+        }
+        let directory = directory();
+        let path = directory
+            .path()
+            .join("audit")
+            .join("service")
+            .join("audit.jsonl");
+        let destination = FileDestination::new(path.clone()).expect("absolute path");
+        rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o777));
+
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(async {
+                let writer = AuditWriter::open(AuditDestination::File(destination))
+                    .await
+                    .expect("open");
+                writer.append(request("req-1")).await.expect("append");
+                assert!(writer.ready().await);
+            });
+        assert_eq!(lines(&path).len(), 1);
+        for created in [
+            directory.path().join("audit"),
+            directory.path().join("audit").join("service"),
+        ] {
+            let mode = fs::metadata(&created)
+                .expect("directory")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o700, "{}", created.display());
+        }
     }
 
     #[tokio::test]
