@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- Upgrade a registry whose active package the previous `bregctl` release
+  built. A package without the shared `SHA256SUMS` envelope is read as the
+  predecessor by `test --baseline-runtime-config`, `package
+  --baseline-runtime-config`, `apply`, and the field-encryption preflight,
+  verified from its signed manifest: the BReg signature against the trust
+  anchor, every file's digest, and a closure that refuses any file the
+  manifest does not list, including a stray `SHA256SUMS` or `REVISION`. Test,
+  package, and apply a successor with this `bregctl`; do not rebuild the
+  active package, which changes its revision and schema fingerprint.
+  - `breg` startup, `verify`, `diff`, and `migration explain` still refuse a
+    package without `SHA256SUMS`, and say to apply a successor with this
+    `bregctl`.
+  - A runtime configuration that pins `package.expectedDigest` on such a
+    predecessor is refused with `package.digest_pin_unverifiable`; remove the
+    pin until the successor is active.
+  - The migration rehearsal in `test` no longer refuses when the predecessor
+    schema this compiler installs measures differently from its signed
+    fingerprint, which a predecessor built by an earlier release always does.
+    The test report carries the finding
+    `migration.rehearsal.baseline_fingerprint_drift` with both fingerprints.
+    A predecessor schema that cannot be installed is still refused with
+    `migration.rehearsal.baseline_not_reproducible`, and the rehearsed
+    migration must still reach the candidate fingerprint.
+
 - Answer every audited request entry. A read, mutation, action, or request
   action that ends after its attempt without a terminal or refusal entry,
   because it failed, timed out, or its caller went away, writes a response
