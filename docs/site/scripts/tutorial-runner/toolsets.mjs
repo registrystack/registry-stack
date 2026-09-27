@@ -6,8 +6,9 @@
 // product-specific code in the runner.
 
 import { spawn, spawnSync } from 'node:child_process';
-import { accessSync, closeSync, constants, existsSync, openSync, readFileSync, statSync } from 'node:fs';
-import { mkdir, readdir, symlink } from 'node:fs/promises';
+import { accessSync, closeSync, constants, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmod, mkdir, readdir, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -22,6 +23,62 @@ function checkBinary(variable, path) {
     accessSync(path, constants.X_OK);
   } catch {
     throw new ToolsetError(`${variable} is not executable: ${path}`);
+  }
+}
+
+// Runs cargo with args. On macOS, returns the directory holding the AWS-LC
+// FIPS dylib the built binaries load at run time, which Cargo supplies only to
+// the processes it launches itself; the build messages name it, and
+// scripts/cargo_runtime_library_path.py reads them the way
+// scripts/cargo-runtime-library-path.sh does for a reader's shell.
+export function cargoBuild({ repoRoot, args, env = process.env, platform = process.platform }) {
+  if (platform !== 'darwin') {
+    const build = spawnSync('cargo', args, { cwd: repoRoot, stdio: 'inherit', env });
+    if (build.status !== 0) throw new ToolsetError('cargo build failed');
+    return undefined;
+  }
+  const build = spawnSync('cargo', [...args, '--message-format=json-render-diagnostics'], {
+    cwd: repoRoot,
+    stdio: ['ignore', 'pipe', 'inherit'],
+    env,
+    maxBuffer: 1 << 30,
+  });
+  const scratch = mkdtempSync(join(tmpdir(), 'tutorial-cargo-'));
+  try {
+    const messages = join(scratch, 'messages.json');
+    writeFileSync(messages, build.stdout ?? '');
+    const parser = join(repoRoot, 'scripts', 'cargo_runtime_library_path.py');
+    if (build.status !== 0) {
+      spawnSync('python3', [parser, '--render-diagnostics', messages], { stdio: ['ignore', 2, 'inherit'], env });
+      throw new ToolsetError('cargo build failed');
+    }
+    const resolved = spawnSync('python3', [parser, messages], { stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8', env });
+    if (resolved.status !== 0) throw new ToolsetError('could not find the AWS-LC FIPS runtime library of the build');
+    return resolved.stdout.trim();
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+const quote = (value) => `'${value.replaceAll("'", `'\\''`)}'`;
+
+// Serves each [name, path] binary by name from binDir. With a runtime library
+// directory, each name is a wrapper that sets DYLD_FALLBACK_LIBRARY_PATH
+// itself, because macOS drops that variable whenever a protected binary such
+// as /bin/sh or /usr/bin/env starts a process.
+export async function serveBinaries(binDir, entries, libraryDir) {
+  await mkdir(binDir, { recursive: true });
+  for (const [name, path] of entries) {
+    const served = join(binDir, name);
+    if (!libraryDir) {
+      await symlink(path, served);
+      continue;
+    }
+    await writeFile(
+      served,
+      `#!/bin/sh\nDYLD_FALLBACK_LIBRARY_PATH=${quote(libraryDir)}\${DYLD_FALLBACK_LIBRARY_PATH:+:\$DYLD_FALLBACK_LIBRARY_PATH}\nexport DYLD_FALLBACK_LIBRARY_PATH\nexec ${quote(path)} "\$@"\n`,
+    );
+    await chmod(served, 0o755);
   }
 }
 
@@ -53,23 +110,27 @@ function productToolset({
         throw new ToolsetError(`set ${names}, or ${neither} to build from source`);
       }
       let paths = given;
+      let libraryDir;
       if (!given[0]) {
         const profile = process.env[profileVariable] ?? 'ci';
         if (!['ci', 'release'].includes(profile)) {
           throw new ToolsetError(`unsupported tutorial Cargo profile: ${profile} (expected ci or release)`);
         }
         const targetDir = join(repoRoot, 'target', targetName);
-        const build = spawnSync('cargo', ['build', '--locked', '--profile', profile, ...cargoArgs, '--bins'], {
-          cwd: repoRoot,
-          stdio: 'inherit',
-          env: { ...process.env, CARGO_TARGET_DIR: targetDir },
-        });
-        if (build.status !== 0) throw new ToolsetError(`building ${label} failed`);
+        try {
+          libraryDir = cargoBuild({
+            repoRoot,
+            args: ['build', '--locked', '--profile', profile, ...cargoArgs, '--bins'],
+            env: { ...process.env, CARGO_TARGET_DIR: targetDir },
+          });
+        } catch (error) {
+          if (error instanceof ToolsetError) throw new ToolsetError(`building ${label} failed: ${error.message}`);
+          throw error;
+        }
         paths = binaries.map(([name]) => join(targetDir, profile, name));
       }
       binaries.forEach(([, variable], i) => checkBinary(variable, paths[i]));
-      await mkdir(binDir, { recursive: true });
-      for (const [i, [name]] of binaries.entries()) await symlink(paths[i], join(binDir, name));
+      await serveBinaries(binDir, binaries.map(([name], i) => [name, paths[i]]), libraryDir);
       return {};
     },
 

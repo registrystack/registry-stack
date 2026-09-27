@@ -102,7 +102,7 @@ Security traceability: `products/discovery/contracts/security-invariant-matrix.y
 [x] ~/.cargo/bin/cargo-deny check
 [x] products/discovery/scripts/check-contracts.sh
 [x] products/discovery/scripts/test-http.sh
-[x] products/discovery/scripts/test-adopter-tutorial.sh
+[x] (cd docs/site && npm run check:tutorial:discovery)
 [x] products/evidence/scripts/check-contracts.sh
 [x] products/evidence/scripts/check-source-neutrality.sh
 [x] products/evidence/scripts/check-verifier-portability.sh
