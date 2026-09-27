@@ -84,5 +84,25 @@ jobs:
           products/relay-v2/scripts/check-generated.sh
           products/evidence/scripts/check-authoring-no-io.sh
 
-      - name: Verify the Discovery adopter tutorial
-        run: products/discovery/scripts/test-adopter-tutorial.sh
+      - name: Test the Discovery language bindings
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The Node and Python bindings are Cargo-built native libraries.
+          # Prepare their exact AWS-LC FIPS output in this shell before invoking
+          # either host directly. SIP strips DYLD_* variables from protected
+          # executables, so the Python bootstrap explicitly preloads the library
+          # from the helper's non-DYLD carrier.
+          source scripts/cargo-runtime-library-path.sh
+          registry_prepare_cargo_runtime "$PWD" --manifest-path "$PWD/Cargo.toml" \
+            --locked -p registry-discovery-client-node
+          (
+            cd crates/registry-discovery-client-node
+            npm ci --ignore-scripts --no-audit --no-fund
+            npm run build:debug
+            node --test __test__/*.test.js
+          )
+          (
+            cd crates/registry-discovery-client-py
+            python3 -m unittest discover -s tests/python -v
+          )
