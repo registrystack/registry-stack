@@ -620,9 +620,44 @@ class CiChangesTest(unittest.TestCase):
 
     def test_every_relay_tutorial_input_replays_the_product_gate(self) -> None:
         for path in RELAY_TUTORIAL_INPUTS:
+            if path.endswith("/**"):
+                continue
             with self.subTest(path=path):
                 self.assertTrue(Path(path).is_file())
                 self.assertTrue(classify(self.workspace, (path,))["relay_v2_contracts"])
+
+    def test_relay_tutorial_routing(self) -> None:
+        infrastructure = (
+            "docs/site/scripts/run-tutorial.mjs",
+            "docs/site/scripts/tutorial-runner/toolsets.mjs",
+            "docs/site/src/content/docs/tutorials/publish-governed-sqlite-registry.mdx",
+            "docs/site/package.json",
+        )
+        for path in infrastructure:
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["relay_v2_contracts"]
+                )
+
+    def test_relay_tutorial_inputs_cover_every_replayed_tutorial(self) -> None:
+        docs = Path(__file__).resolve().parents[2] / "docs/site/src/content/docs"
+        slugs = []
+        for section in ("start", "tutorials"):
+            for page in sorted((docs / section).glob("*.mdx")):
+                frontmatter = yaml.safe_load(page.read_text().split("---\n")[1])
+                declaration = frontmatter.get("tutorial_test") or {}
+                if declaration.get("toolset") == "relay" and "skip" not in declaration:
+                    slugs.append(f"{section}/{page.stem}")
+        self.assertIn("tutorials/publish-governed-sqlite-registry", slugs)
+        for slug in slugs:
+            with self.subTest(slug=slug):
+                page = f"docs/site/src/content/docs/{slug}.mdx"
+                self.assertTrue(
+                    any(
+                        fnmatch.fnmatchcase(page, pattern)
+                        for pattern in RELAY_TUTORIAL_INPUTS
+                    )
+                )
 
     def test_relay_v2_paths_select_the_editor_and_reverse_dependents(self) -> None:
         outputs = classify(

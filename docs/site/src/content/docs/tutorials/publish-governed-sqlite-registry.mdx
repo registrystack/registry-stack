@@ -16,6 +16,8 @@ standards_referenced:
   - json-schema
   - json-ld
   - shacl
+tutorial_test:
+  toolset: relay
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
@@ -58,7 +60,7 @@ You need two binaries: `relay` serves a sealed package, while `relayctl` authors
 project. The installer accepts Linux amd64 only and places both in `~/.local/bin` unless you set
 `RELAY_INSTALL_DIR`:
 
-```sh
+```sh test-skip="installs a release from the network; the runner serves the binaries under test"
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/relay-install.sh | bash
 relay --version
 relayctl --version
@@ -85,7 +87,7 @@ It reports the files it created. Every `relayctl` command reports in the same sh
 saying what happened, then the detail underneath. Add `--json` to any of them for the full report
 as JSON, which carries more than the summary a person reads.
 
-```text
+```text test-expect
 Initialized an authoring project. 7 files written.
   registry.yaml
   runtime.yaml
@@ -107,7 +109,7 @@ The institution's database is an input, not part of the project. Create a small 
 
 Create `registry.sql` and put this in it:
 
-```sql
+```sql title="registry.sql" test-file
 CREATE TABLE businesses (
   registration_number TEXT PRIMARY KEY NOT NULL,
   record_revision     TEXT NOT NULL,
@@ -160,7 +162,7 @@ relayctl inspect registry.sqlite
 The report opens with a fingerprint of the whole schema, then lists every table, view, index, and
 column:
 
-```text
+```text test-expect
 Inspected the SQLite structure. 3 objects.
   fingerprint  sha256:b3c73e50829bf63f8034bac74ce23c9b387fa4e84ca0afc27bb98d5eccc0fe18
 
@@ -191,20 +193,20 @@ hashed. The same stored schema always produces the same fingerprint, on any mach
 run, so a value that differs from the one this tutorial prints means your schema text differs, not
 that your run went wrong.
 
-Copy your own fingerprint out of that report. Writing it into the contract is how you say which
+That fingerprint is what you write into the contract, and writing it there is how you say which
 schema you reviewed. If someone later adds, drops, or retypes a column, the fingerprint changes
 and Relay refuses to serve rather than guessing whether your review still applies.
 
 ## Write the contract
 
 The contract names the register, binds the resource to the view, publishes three properties, and
-then discloses only two of them. It is shown here one section at a time. Empty `registry.yaml`
-first, then append each block below in the order it appears; together they are the file
-`relayctl check` reads.
+then discloses only two of them. It is shown here one section at a time. Replace the starter
+`registry.yaml` with the first block, then add each block below to the end of the file in the
+order it appears; together they are the file `relayctl check` reads.
 
 Start with what the document is:
 
-```yaml
+```yaml title="registry.yaml" test-file
 apiVersion: relay.registrystack.org/v2alpha1
 kind: RegistryContract
 metadata:
@@ -219,7 +221,7 @@ by hand.
 
 Next, who the register belongs to and what it claims to be authoritative about:
 
-```yaml
+```yaml title="registry.yaml" test-append
 registry:
   registryIdentifier: urn:example:registry:businesses
   name: Business register
@@ -242,7 +244,7 @@ honest setting for an alignment you have read but not conformance-tested.
 Then the three roles that have to be attributable to someone, and where locally defined terms
 live:
 
-```yaml
+```yaml title="registry.yaml" test-append
 governance:
   controller: urn:example:authority:registrar
   publisher: urn:example:authority:registrar
@@ -258,7 +260,7 @@ meaningful when someone is named as answerable for it.
 
 Next, the vocabularies this contract classifies against:
 
-```yaml
+```yaml title="registry.yaml" test-append
 classifications:
   privacy:
     scheme: https://w3id.org/dpv
@@ -278,22 +280,22 @@ which is the file the production gate will check later in this tutorial.
 
 Now the source, which is where your fingerprint goes:
 
-```yaml
+```yaml title="registry.yaml" test-append
 sources:
   registry:
     kind: sqlite
     profile: snapshot
-    expectedSchemaFingerprint: sha256:<your-schema-fingerprint>
+    expectedSchemaFingerprint: sha256:b3c73e50829bf63f8034bac74ce23c9b387fa4e84ca0afc27bb98d5eccc0fe18
 ```
 
-Replace `sha256:<your-schema-fingerprint>` with the value `relayctl inspect` printed for your
-database. Nothing else in the tutorial substitutes for it: a contract carrying anyone else's
+This is the value `relayctl inspect` printed above. If yours differed, your schema text differs
+from this page's, so write your own value here instead: a contract carrying anyone else's
 fingerprint is refused with `source.schema_fingerprint_mismatch`.
 
 The resource is the largest section, so it arrives in five parts. First its identity and the view
 it binds to:
 
-```yaml
+```yaml title="registry.yaml" test-append
 resources:
   - id: registered-business
     datasetIdentifier: businesses
@@ -318,7 +320,7 @@ itself, so the defaults are what you would have to override to publish something
 
 Then the four columns that carry record identity rather than content:
 
-```yaml
+```yaml title="registry.yaml" test-append
     recordContext:
       recordIdentifier:
         sourceColumn: registration_number
@@ -338,7 +340,7 @@ produce, so a value the register invents later is a refusal rather than a surpri
 
 Then the properties the contract knows about:
 
-```yaml
+```yaml title="registry.yaml" test-append
     properties:
       legalName:
         label: Legal name
@@ -368,7 +370,7 @@ publishing it: the next block decides who gets which of them.
 
 Then the disclosure and access decision:
 
-```yaml
+```yaml title="registry.yaml" test-append
     disclosureProfiles:
       public:
         properties:
@@ -391,7 +393,7 @@ deployment, which is why it will need no identity provider later.
 
 Then why the register is doing this at all:
 
-```yaml
+```yaml title="registry.yaml" test-append
     processingDescriptions:
       - id: consultation
         operationRefs:
@@ -410,7 +412,7 @@ can always be traced back to the stated reason for releasing it.
 
 Finally, what a caller may read about the register itself:
 
-```yaml
+```yaml title="registry.yaml" test-append
 metadataVisibility:
   service: public
   resources: public
@@ -434,7 +436,7 @@ exist, and reports the revision of what it compiled. The two counts are the acce
 configuration key paths: how many keys `registry.yaml` and `runtime.yaml` will each take, not how
 many yours uses:
 
-```text
+```text test-expect
 Authoring check passed.
   contract revision   sha256:<authoring-contract-revision>
   registry key paths  <n>
@@ -465,34 +467,37 @@ Two of the generated files are review inputs rather than outputs. `generated/rep
 is the list of source columns and output properties with the handling each one carries.
 `generated/governance/classification-review-starter.yaml` is a pre-filled review record for
 exactly that inventory. Its `classificationInventoryDigest` is a digest of your own inventory,
-so it changes whenever the contract changes what is classified:
+so it changes whenever the contract changes what is classified. For the contract on this page,
+the file opens like this:
 
-```yaml
+```yaml test-excerpt="generated/governance/classification-review-starter.yaml"
 apiVersion: relay.registrystack.org/classification-review/v1
 kind: ClassificationReview
 registryIdentifier: urn:example:registry:businesses
-classificationInventoryDigest: sha256:<inventory-digest>
+classificationInventoryDigest: sha256:b01c845f9aabc500bae3756dd3daa855c182f540d48ccc5a341ccd2ca25e5e1f
 method: generated
 reviewer: urn:example:authority:registrar
 reviewDate: pending-review
 status: suggested
 rationaleRef: pending-review
-generatedIdentification: ...
 ```
+
+It goes on to a `generatedIdentification` block naming the identification report and the rule
+pack that produced the suggested classifications.
 
 `status: suggested` and `reviewDate: pending-review` are the tool saying it has an opinion and no
 authority. Only a person supplies the rest.
 
 ## See what production refuses
 
-```sh
+```sh test-exit="1"
 relayctl check . --production
 ```
 
 The starter project is refused, and the diagnostics say exactly why. Each one gives its severity,
 its code, the file and key it is about, and the sentence underneath:
 
-```text
+```text test-expect
 Production check refused.
 
   error    codelist.unreviewed  codelists/record-lifecycle.yaml
@@ -518,11 +523,11 @@ Replace `governance/classification-review.yaml` with the review a person signs o
 `classificationInventoryDigest` out of the starter file `generate` wrote, and use the date on
 which you actually read the inventory:
 
-```yaml
+```yaml title="governance/classification-review.yaml" test-file
 apiVersion: relay.registrystack.org/classification-review/v1
 kind: ClassificationReview
 registryIdentifier: urn:example:registry:businesses
-classificationInventoryDigest: sha256:<inventory-digest>
+classificationInventoryDigest: sha256:b01c845f9aabc500bae3756dd3daa855c182f540d48ccc5a341ccd2ca25e5e1f
 method: manual
 reviewer: urn:example:authority:registrar
 reviewDate: 2026-08-11
@@ -536,7 +541,7 @@ the review binds the report and rule pack that produced them, which the starter 
 
 Write the rationale it points at, in `governance/classification-review-rationale.md`:
 
-```markdown
+```markdown title="governance/classification-review-rationale.md" test-file
 # Classification review
 
 The registrar read `generated/reports/classification-inventory.json` on
@@ -548,7 +553,7 @@ review.
 
 Mark the legal basis reviewed in `governance/legal-basis.yaml`:
 
-```yaml
+```yaml title="governance/legal-basis.yaml" test-file
 status: reviewed
 legalBasis: Public inspection of the business register under the Companies Act.
 ```
@@ -556,7 +561,7 @@ legalBasis: Public inspection of the business register under the Companies Act.
 And the codelist in `codelists/record-lifecycle.yaml`, which has to list every lifecycle value
 the view can produce:
 
-```yaml
+```yaml title="codelists/record-lifecycle.yaml" test-file
 id: record-lifecycle
 version: draft-1
 values: [ACTIVE, RETIRED]
@@ -569,7 +574,7 @@ Now run the production check again:
 relayctl check . --production
 ```
 
-```text
+```text test-expect
 Production check passed.
   contract revision   sha256:<contract-revision>
   registry key paths  <n>
@@ -587,7 +592,7 @@ gives will carry this value rather than the earlier one.
 relayctl package . --output package
 ```
 
-```text
+```text test-expect
 Sealed a deployment package. <n> artifacts, <n> files.
   package version    relay.registrystack.org/package/v1alpha3
   package revision   sha256:<package-revision>
@@ -609,7 +614,7 @@ cannot be produced from a revision that would fail `check --production`.
 `runtime.yaml` from `relayctl init` already points at `registry.sqlite` and `package`, so it
 needs no edit. Read it once:
 
-```yaml
+```yaml test-excerpt="runtime.yaml"
 apiVersion: relay.registrystack.org/v2alpha1
 kind: RelayRuntime
 server: {bind: "127.0.0.1:8080"}
@@ -626,7 +631,7 @@ even for requests that would have been anonymous.
 
 Create the audit directory and the integrity key, then start the service:
 
-```sh
+```sh test-background="http://127.0.0.1:8080/ready"
 mkdir -m 700 var
 export RELAY_AUDIT_KEY="$(openssl rand -base64 32)"
 relay serve --runtime runtime.yaml
@@ -649,7 +654,7 @@ Leave that running and open a second shell in the same directory.
 curl -s http://127.0.0.1:8080/ready
 ```
 
-```json
+```json test-expect
 {"status":"ready"}
 ```
 
@@ -659,37 +664,48 @@ Then ask for a record:
 curl -s http://127.0.0.1:8080/v2/resources/registered-business/records/BIZ-0001
 ```
 
-The answer, abridged to the part this step is about. The real one also carries the URLs a caller
-follows to the generated schema, vocabulary, and JSON-LD context:
+The answer:
 
-```json
+```json test-expect
 {
   "data": {
-    "recordIdentifier": "BIZ-0001",
-    "revisionIdentifier": "3",
-    "lifecycleState": "ACTIVE",
-    "recordedAt": "2026-02-11T09:00:00Z",
     "authorityIdentifier": "urn:example:authority:registrar",
     "domainData": {
-      "legalName": "Aurora Freight Cooperative",
-      "legalForm": "COOPERATIVE"
-    }
+      "legalForm": "COOPERATIVE",
+      "legalName": "Aurora Freight Cooperative"
+    },
+    "lifecycleState": "ACTIVE",
+    "recordIdentifier": "BIZ-0001",
+    "recordedAt": "2026-02-11T09:00:00Z",
+    "revisionIdentifier": "3",
+    "schemaReference": "https://registry.example.invalid/v2/artifacts/registered-business--read--access-profile-public-schema",
+    "semanticModelReference": "https://registry.example.invalid/v2/artifacts/registered-business--read--access-profile-public-vocabulary"
   },
   "meta": {
     "accessProfile": "public",
-    "disclosureProfile": "public",
-    "selectedFields": ["legalName", "legalForm"],
     "contractRevision": "sha256:<contract-revision>",
-    "sourceRevision": {"profile": "snapshot", "status": "versioned", "value": "sha256:<digest>"},
-    "registryIdentifier": "urn:example:registry:businesses",
     "datasetIdentifier": "businesses",
-    "entityTypeIdentifier": "business"
+    "disclosureProfile": "public",
+    "entityTypeIdentifier": "business",
+    "family": "consultation",
+    "links": {
+      "context": "https://registry.example.invalid/v2/artifacts/registered-business--read--access-profile-public-context",
+      "schema": "https://registry.example.invalid/v2/artifacts/registered-business--read--access-profile-public-schema",
+      "self": "https://registry.example.invalid/v2/resources/registered-business/records/{recordIdentifier}",
+      "semanticModel": "https://registry.example.invalid/v2/artifacts/registered-business--read--access-profile-public-vocabulary"
+    },
+    "operationIdentifier": "registered-business.read",
+    "pattern": "retrieve",
+    "registryIdentifier": "urn:example:registry:businesses",
+    "selectedFields": ["legalName", "legalForm"],
+    "sourceRevision": {"profile": "snapshot", "status": "versioned", "value": "sha256:<digest>"}
   }
 }
 ```
 
 `domainData` carries the two disclosed fields. The address is in the view and in the contract,
-and it is not here. Every answer also states which contract revision produced it and which
+and it is not here. The `links` are the URLs a caller follows to the generated schema,
+vocabulary, and JSON-LD context that describe this answer. Every answer also states which contract revision produced it and which
 source revision it read, so a caller can tell two answers apart without asking you.
 
 ## Ask for less, then try to ask for more
@@ -700,7 +716,11 @@ A caller can narrow the answer:
 curl -s 'http://127.0.0.1:8080/v2/resources/registered-business/records/BIZ-0001?fields=legalName'
 ```
 
-`domainData` now contains `legalName` alone, and `meta.selectedFields` says so.
+`domainData` now contains `legalName` alone, and `meta.selectedFields` says so:
+
+```json test-excerpt
+{"domainData": {"legalName": "Aurora Freight Cooperative"}}
+```
 
 A caller cannot widen it:
 
@@ -708,7 +728,7 @@ A caller cannot widen it:
 curl -s 'http://127.0.0.1:8080/v2/resources/registered-business/records/BIZ-0001?fields=registeredAddress'
 ```
 
-```json
+```json test-expect
 {
   "type": "https://id.registrystack.org/problems/registry-relay/request/fields_invalid",
   "title": "Field selection is invalid",
@@ -728,7 +748,7 @@ answer. An unknown record is a separate refusal:
 curl -s http://127.0.0.1:8080/v2/resources/registered-business/records/BIZ-9999
 ```
 
-```json
+```json test-expect
 {
   "type": "https://id.registrystack.org/problems/registry-relay/consultation/unresolved",
   "title": "Requested record was not resolved",
@@ -751,32 +771,42 @@ Stop the service with `Ctrl+C` and read the first audit line:
 head -n 1 var/audit.jsonl
 ```
 
-The line is one JSON object. Abridged to the fields this step is about:
+The line is one JSON object, shown here without its `timestamp_unix_ms`:
 
-```json
+```json test-excerpt
 {
   "envelope_id": "<envelope-id>",
   "prev_hash": null,
   "record": {
-    "operationIdentifier": "registered-business.read",
-    "resourceIdentifier": "registered-business",
-    "principalKind": "anonymous",
     "accessProfile": "public",
-    "disclosureProfile": "public",
-    "selectedProperties": ["legalName", "legalForm"],
-    "processingDescriptionIdentifiers": ["consultation"],
+    "accessRuleRevision": "sha256:<access-rule-revision>",
     "contractRevision": "sha256:<contract-revision>",
+    "disclosureHandling": "public",
+    "disclosureProfile": "public",
+    "operationId": "<operation-id>",
+    "operationIdentifier": "registered-business.read",
+    "operationSurface": "record-read",
+    "phase": "attempt",
+    "principalKind": "anonymous",
+    "processingDescriptionIdentifiers": ["consultation"],
+    "processingHandling": "public",
+    "registryIdentifier": "urn:example:registry:businesses",
+    "resourceIdentifier": "registered-business",
+    "rowBoundaryKind": "none",
+    "schema": "registry.relay.audit/v2alpha1",
+    "selectedProperties": ["legalName", "legalForm"],
     "sourceRevision": {"profile": "snapshot", "status": "versioned", "value": "sha256:<digest>"},
-    "phase": "attempt"
+    "traceId": "<trace-id>",
+    "transformIdentifiers": [],
+    "wireFormat": "json"
   },
   "record_hash": "<record-hash>"
 }
 ```
 
-The envelope also carries `timestamp_unix_ms`. The full `record` carries more than is shown: the
-registry identifier, the revision of the access rules that were applied, the operation surface
-and wire format, the trace identifier shared with the log line, and the handling levels the
-answer was released under. None of them is a field value either.
+Besides the operation and the properties it released, the `record` carries the revision of the access rules that were
+applied, the operation surface and wire format, the trace identifier shared with the log line,
+and the handling levels the answer was released under. None of them is a field value.
 
 Read what is not there. The line records that an anonymous caller reached the
 `registered-business.read` operation, and that the contract scoped the answer to the properties
@@ -816,7 +846,7 @@ unset RELAY_AUDIT_KEY
 | `project.destination_not_empty` from `relayctl init` | The target directory already has files | Initialize into a new directory name. |
 | `contract.yaml_invalid` from `relayctl check` | A required key is missing, an unknown key is present, or the YAML does not parse | Every key in the contract above is required. `registry.alignmentTargets` needs at least one entry. |
 | `resource.view_unknown` | `source.view` names something that is not a view in the database | Relay binds to views only. Add a `CREATE VIEW` for the columns you intend to publish. |
-| `source.schema_fingerprint_invalid` | `expectedSchemaFingerprint` still holds the `sha256:<your-schema-fingerprint>` placeholder | Run `relayctl inspect registry.sqlite` and paste the value it prints. |
+| `source.schema_fingerprint_invalid` | `expectedSchemaFingerprint` is not a `sha256:` digest, usually because it was only partly pasted | Run `relayctl inspect registry.sqlite` and paste the whole value it prints. |
 | `source.schema_fingerprint_mismatch` | The contract holds a fingerprint from a different schema, usually because the SQL was retyped rather than copied | Run `relayctl inspect registry.sqlite` again and paste the current value. |
 | `metadata.reference_visibility_invalid` | A public audience cannot resolve the schema or vocabulary the answer points at | Set `metadataVisibility.resources` and `.semantics` to `public` when any access profile is public. |
 | `classification.review_inventory_stale` | The contract changed after the review was recorded | Run `relayctl generate .` again and copy the new digest from `generated/governance/classification-review-starter.yaml`. |
