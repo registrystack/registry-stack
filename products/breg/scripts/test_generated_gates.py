@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -210,6 +211,34 @@ class GeneratedGateTests(unittest.TestCase):
         self.assertIn('rm -rf -- "$tls_dir"', tls_gate)
         self.assertIn('chmod 600 "$tls_dir"/*.key', tls_gate)
         self.assertNotIn("trusted-ca.key\" \"$caller", tls_gate)
+
+    def test_postgres_tls_setup_only_mode_stops_before_the_proof(self) -> None:
+        tls_gate = (SCRIPT_DIR / "test-postgres-tls.sh").read_text(encoding="utf-8")
+        setup_only = tls_gate.index('BREG_TEST_TLS_SETUP_ONLY:-0}" == "1"')
+        self.assertLess(tls_gate.index('pg_isready -q -d "$database_url"'), setup_only)
+        self.assertLess(setup_only, tls_gate.index("cargo test --locked -p registry-breg"))
+
+    def test_local_postgres_tls_helper_prepares_the_ci_shape(self) -> None:
+        helper = SCRIPT_DIR / "local-postgres-tls.sh"
+        self.assertTrue(os.access(helper, os.X_OK))
+        text = helper.read_text(encoding="utf-8")
+        workflow = (SCRIPT_DIR.parents[2] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        image = re.search(r"image='(postgis/postgis@sha256:[0-9a-f]{64})'", text)
+        self.assertIsNotNone(image)
+        self.assertIn(f"image: {image.group(1)}", workflow)
+        self.assertIn("BREG_TEST_TLS_SETUP_ONLY=1", text)
+        self.assertIn("docker inspect -f '{{.Id}}'", text)
+        self.assertIn("-p 127.0.0.1::5432", text)
+        self.assertIn('tls_dir="$repo_root/target/breg-postgres-tls"', text)
+        for name in (
+            "BREG_TEST_DATABASE_URL",
+            "BREG_TEST_TLS_DATABASE_URL",
+            "BREG_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL",
+            "BREG_TEST_TLS_DATABASE_HOST",
+            "BREG_TEST_TLS_POSTGRES_CONTAINER_ID",
+            "BREG_TEST_TLS_CA_PEM_PATH",
+        ):
+            self.assertIn(f"export {name}=", text)
 
     def test_comparator_rejects_a_symbolic_link_without_reading_its_target(self) -> None:
         if os.name == "nt":

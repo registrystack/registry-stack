@@ -118,7 +118,24 @@ BREG_TEST_DATABASE_URL=postgresql://breg:breg_test@localhost:5432/breg \
 ```
 
 `products/breg/scripts/test-postgres-tls.sh` proves the TLS behavior and needs
-the `BREG_TEST_TLS_*` variables the `breg-contracts` job exports.
+the `BREG_TEST_TLS_*` variables the `breg-contracts` job exports. The adopter
+workflow needs the same TLS PostgreSQL: without it `bregctl test` refuses with
+only `test.database.unavailable`. Locally, one command starts a disposable
+TLS-only PostGIS container for the checkout and prints the exports both scripts
+read:
+
+```sh
+eval "$(products/breg/scripts/local-postgres-tls.sh)"
+products/breg/scripts/test-postgres-tls.sh
+products/breg/scripts/test-adopter-workflow.sh
+products/breg/scripts/local-postgres-tls.sh --stop
+```
+
+The container accepts TLS connections only, so run `test-postgres.sh` against a
+separate plain container. Doing the setup by hand trips the same four details
+each time: the container ID must be the full hex ID, the CA copy cannot sit
+directly in `/tmp`, the URL host must be `localhost` (the certificate's name),
+and the PostGIS image starts PostgreSQL twice before it is really ready.
 
 Native development lifecycle change. The test owns a PostgreSQL container, so
 it needs Docker:
