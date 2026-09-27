@@ -6,9 +6,9 @@
 //! gateway exchanges it (RFC 8693) at the issuer for a token bound to the
 //! registry's audience and scopes, presenting its own client credential as the
 //! actor, so the registry sees the citizen as subject and this gateway as the
-//! agent acting for them. The exchanged token cannot outlive the citizen's
-//! token, and it is used for that one call only. Nothing here reads the
-//! inbound verifier or its configuration.
+//! agent acting for them. The exchanged token is never used after the
+//! citizen's token expires, and it is used for that one call only. Nothing
+//! here reads the inbound verifier or its configuration.
 
 use std::{sync::Arc, time::Duration};
 
@@ -344,8 +344,13 @@ mod tests {
         assert_ne!(claims["aud"], AUDIENCE);
     }
 
+    /// The test authorization server bounds the issued token by the subject
+    /// token it received, so an issued expiry within the citizen's proves the
+    /// exchange carried the citizen's token. The gateway's own bound is the
+    /// exchange context deadline, set to the citizen's expiry in
+    /// `authorization_with_actor` and enforced by `ExchangeAuthorization`.
     #[tokio::test]
-    async fn the_exchanged_token_never_outlives_the_citizens_token() {
+    async fn the_exchange_sends_the_citizens_token_and_accepts_the_issued_token() {
         let fixture = fixture().await;
         let expires_at = now() + 30;
         let caller = caller(&fixture, "citizen-a", expires_at);
