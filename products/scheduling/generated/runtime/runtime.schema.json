@@ -659,6 +659,20 @@
     "destinations": {
       "$ref": "#/$defs/DestinationsConfig"
     },
+    "identity": {
+      "additionalProperties": false,
+      "description": "The logical identity of the database this deployment owns. The first\n`schedulingctl apply` records it; every later apply and every startup\nrefuses a database that recorded another.",
+      "properties": {
+        "databaseId": {
+          "description": "An operator-chosen logical id for the database, for example\n`scheduling-production`. It is never derived from a URL or a\nPostgreSQL database name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "databaseId"
+      ],
+      "type": "object"
+    },
     "kind": {
       "const": "SchedulingRuntimeConfig",
       "type": "string"
@@ -679,6 +693,7 @@
   "required": [
     "apiVersion",
     "kind",
+    "identity",
     "package",
     "listener",
     "secretProviders",

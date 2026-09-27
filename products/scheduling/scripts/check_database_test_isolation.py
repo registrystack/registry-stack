@@ -11,7 +11,11 @@ from pathlib import Path
 
 DATABASE_SUITES = {
     "registry-scheduling": {"postgres_commitments"},
-    "registry-schedulingctl": {"records_apply_postgres", "intents_postgres"},
+    "registry-schedulingctl": {
+        "records_apply_postgres",
+        "intents_postgres",
+        "activation_postgres",
+    },
 }
 
 

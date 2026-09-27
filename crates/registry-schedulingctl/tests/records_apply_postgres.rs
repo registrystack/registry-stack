@@ -2,8 +2,8 @@
 
 //! `records apply` against a real PostgreSQL, on a disposable schema.
 //!
-//! The test proves the one attributable operator write end to end: the schema
-//! migration runs, the first document lands whole (locations, pools, members,
+//! The test proves the one attributable operator write end to end: the
+//! package is activated, the first document lands whole (locations, pools, members,
 //! and the typed exception columns), a second document replaces the first
 //! rather than appending to it, and every apply writes a `request` audit
 //! entry before its transaction and a `response` entry carrying the
@@ -13,7 +13,7 @@
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_scheduling::config::RuntimeConfig;
 use registry_scheduling::store::PostgresStore;
-use registry_schedulingctl::records;
+use registry_schedulingctl::{activation, records};
 use serde_json::{json, Value};
 use std::path::Path;
 use uuid::Uuid;
@@ -164,12 +164,24 @@ fn apply_error(config: &Path, records_path: &Path) -> String {
     .expect("records apply does not panic")
 }
 
-/// Every entry the audit file at `path` holds, in write order.
+/// Activate the package `config` names, the way an operator does before
+/// the first records apply.
+fn activate(config: &Path) {
+    let config = config.to_path_buf();
+    std::thread::spawn(move || activation::apply(&config, None, &[]))
+        .join()
+        .expect("apply does not panic")
+        .expect("the package activates");
+}
+
+/// Every `records apply` entry the audit file at `path` holds, in write
+/// order; the activation entries beside them carry their own schema.
 fn audit_entries(path: &Path) -> Vec<Value> {
     std::fs::read_to_string(path)
         .unwrap_or_default()
         .lines()
-        .map(|line| serde_json::from_str(line).expect("an audit entry is JSON"))
+        .map(|line| serde_json::from_str::<Value>(line).expect("an audit entry is JSON"))
+        .filter(|entry| entry["schema"] == "registry-scheduling-audit/v1")
         .collect()
 }
 
@@ -214,6 +226,7 @@ async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
              package:\n  root: {project}\n\
              listener:\n  bind: 127.0.0.1:8105\n  tlsTermination: development-loopback\n\
              secretProviders:\n  environment: {{}}\n\
+             identity:\n  databaseId: scheduling-ctl-test\n\
              authentication:\n  oidc:\n    issuer: https://identity.example.test\n\
              \x20   audience: urn:example:scheduling\n\
              database:\n  runtimeUrlRef: secret:env/SCHEDULING_RECORDS_TEST_DATABASE\n\
@@ -240,11 +253,7 @@ async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
     let resolver = SecretResolver::new([SecretProvider::Environment], "")
         .expect("the environment secret provider configures");
     let store = PostgresStore::connect_migration(&config.database, &resolver).unwrap();
-    store.migrate().await.expect("the schema migrates");
-    store
-        .adopt("registry-updates")
-        .await
-        .expect("the policy identity adopts the database");
+    activate(&config_path);
 
     let report = apply(&config_path, &root.path().join("first.yaml"));
     assert_eq!(report["command"], "records-apply");
@@ -376,6 +385,7 @@ async fn records_apply_rejects_a_different_deployment_identity_without_writing()
              package:\n  root: {project}\n\
              listener:\n  bind: 127.0.0.1:8105\n  tlsTermination: development-loopback\n\
              secretProviders:\n  environment: {{}}\n\
+             identity:\n  databaseId: scheduling-ctl-test\n\
              authentication:\n  oidc:\n    issuer: https://identity.example.test\n\
              \x20   audience: urn:example:scheduling\n\
              database:\n  runtimeUrlRef: secret:env/SCHEDULING_RECORDS_IDENTITY_DATABASE\n\
@@ -413,11 +423,7 @@ async fn records_apply_rejects_a_different_deployment_identity_without_writing()
     let resolver = SecretResolver::new([SecretProvider::Environment], "")
         .expect("the environment secret provider configures");
     let store = PostgresStore::connect_migration(&config.database, &resolver).unwrap();
-    store.migrate().await.expect("the schema migrates");
-    store
-        .adopt("registry-updates")
-        .await
-        .expect("the first policy identity adopts the database");
+    activate(&adopted_config);
     apply(&adopted_config, &root.path().join("first.yaml"));
     let (before, _) = store.facts().await.expect("the first records landed");
 
@@ -493,6 +499,100 @@ async fn records_apply_rejects_a_different_deployment_identity_without_writing()
     assert_eq!(
         unchanged, before,
         "an unaudited apply changed the existing facts"
+    );
+
+    admin
+        .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))
+        .await
+        .expect("the disposable schema is dropped");
+}
+
+/// A database no package was ever activated on refuses the records, naming
+/// the commands that activate one, and neither the database nor the audit
+/// stream is written.
+#[tokio::test]
+async fn records_apply_refuses_a_database_with_no_active_package() {
+    let base = std::env::var("SCHEDULING_TEST_DATABASE_URL")
+        .expect("SCHEDULING_TEST_DATABASE_URL names a disposable PostgreSQL test server");
+    let schema = format!("records_inactive_{}", Uuid::new_v4().simple());
+    let (admin, connection) = tokio_postgres::connect(&base, tokio_postgres::NoTls)
+        .await
+        .expect("the test server accepts an administrative connection");
+    tokio::spawn(async move {
+        connection
+            .await
+            .expect("the administrative connection stays up")
+    });
+    admin
+        .batch_execute(&format!("CREATE SCHEMA {schema}"))
+        .await
+        .expect("a disposable schema is created");
+
+    let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let project = root.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("scheduling.yaml"), POLICY).unwrap();
+    registry_platform_config::package::write_sum_file(
+        &project,
+        None,
+        &registry_scheduling::config::package_limits(),
+        registry_scheduling::config::PACKAGE_COMMAND,
+    )
+    .expect("the package is sealed");
+    std::fs::write(root.path().join("first.yaml"), FIRST_RECORDS).unwrap();
+    std::fs::write(
+        root.path().join("runtime.yaml"),
+        format!(
+            "apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1\n\
+             kind: SchedulingRuntimeConfig\n\
+             package:\n  root: {project}\n\
+             listener:\n  bind: 127.0.0.1:8105\n  tlsTermination: development-loopback\n\
+             secretProviders:\n  environment: {{}}\n\
+             identity:\n  databaseId: scheduling-ctl-test\n\
+             authentication:\n  oidc:\n    issuer: https://identity.example.test\n\
+             \x20   audience: urn:example:scheduling\n\
+             database:\n  runtimeUrlRef: secret:env/SCHEDULING_RECORDS_INACTIVE_DATABASE\n\
+             \x20 migrationUrlRef: secret:env/SCHEDULING_RECORDS_INACTIVE_DATABASE\n\
+             \x20 testOnlyPlaintext: true\n\
+             audit:\n  path: {audit}\n  hashKeyRef: secret:env/SCHEDULING_RECORDS_INACTIVE_AUDIT\n\
+             retention:\n  attemptReceiptDays: 2\n",
+            project = project.display(),
+            audit = root.path().join("audit.ndjson").display(),
+        ),
+    )
+    .unwrap();
+    let config_path = root.path().join("runtime.yaml");
+    std::env::set_var(
+        "SCHEDULING_RECORDS_INACTIVE_DATABASE",
+        scoped_url(&base, &schema),
+    );
+    std::env::set_var(
+        "SCHEDULING_RECORDS_INACTIVE_AUDIT",
+        "0123456789abcdef0123456789abcdef",
+    );
+    let config = RuntimeConfig::load(&config_path).expect("the runtime configuration loads");
+    let resolver = SecretResolver::new([SecretProvider::Environment], "")
+        .expect("the environment secret provider configures");
+    let store = PostgresStore::connect_migration(&config.database, &resolver).unwrap();
+    // The schema is current, so only the missing activation stands between
+    // the records and the database.
+    store.migrate().await.expect("the schema migrates");
+
+    let error = apply_error(&config_path, &root.path().join("first.yaml"));
+    assert_eq!(
+        error,
+        "no Scheduling package has been applied to this database; run \
+         `schedulingctl plan --runtime-config FILE` then \
+         `schedulingctl apply --runtime-config FILE`"
+    );
+    let (facts, _) = store.facts().await.expect("the empty records are readable");
+    assert!(
+        facts.locations.is_empty(),
+        "the refused apply wrote records"
+    );
+    assert!(
+        !root.path().join("audit.schedulingctl.ndjson").exists(),
+        "the refused apply opened the audit stream"
     );
 
     admin

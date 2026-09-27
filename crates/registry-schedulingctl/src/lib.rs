@@ -4,11 +4,13 @@
 //! tooling: `init` writes a complete starter project, `check` validates the
 //! authored policy offline, `test` replays every fixture offline, `explain`
 //! publishes what the runtime would serve, `package` writes the deployment
-//! identity the runtime verifies, `records apply` performs the one
-//! attributable operator write of a deployment's live environment records,
-//! and `intents` reads the delivery intents a deployment's sweep has stopped
-//! carrying.
+//! identity the runtime verifies, `plan`, `apply`, and `status` activate a
+//! verified package on a deployment's database and report its activation
+//! ledger, `records apply` performs the one attributable operator write of a
+//! deployment's live environment records, and `intents` reads the delivery
+//! intents a deployment's sweep has stopped carrying.
 
+pub mod activation;
 pub mod intents;
 mod project;
 pub mod records;
@@ -52,6 +54,12 @@ enum Command {
     Explain(ProjectArgs),
     /// Write the checked policy into a new package directory the runtime verifies.
     Package(PackageArgs),
+    /// Report what `apply` would do to a deployment's database, writing nothing.
+    Plan(ActivationArgs),
+    /// Activate the verified package on a deployment's database.
+    Apply(ApplyArgs),
+    /// Report the active package and the activation ledger of a deployment's database.
+    Status(ActivationArgs),
     /// Apply the live environment records of a deployment.
     Records(RecordsArgs),
     /// List delivery intents a deployment's sweep has stopped carrying.
@@ -99,6 +107,26 @@ struct PackageArgs {
     /// Free-text revision recorded in the package's REVISION file and covered by its digest.
     #[arg(long, value_name = "TEXT")]
     revision: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct ActivationArgs {
+    /// Runtime configuration document of the deployment.
+    #[arg(long, value_name = "FILE")]
+    runtime_config: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct ApplyArgs {
+    /// Runtime configuration document of the deployment to activate.
+    #[arg(long, value_name = "FILE")]
+    runtime_config: PathBuf,
+    /// Change or ticket reference; recorded only as a keyed hash.
+    #[arg(long, value_name = "TEXT", value_parser = activation::bounded_operator_text)]
+    operator_reference: Option<String>,
+    /// Reference to a backup taken before this apply; repeatable.
+    #[arg(long = "backup", value_name = "REFERENCE", value_parser = activation::bounded_operator_text)]
+    backups: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -190,6 +218,20 @@ where
             return ExitCode::from(2);
         }
     };
+    if let Command::Apply(args) = &cli.command {
+        if args.backups.len() > activation::MAX_BACKUP_REFERENCES {
+            let message = format!(
+                "--backup may be given at most {} times",
+                activation::MAX_BACKUP_REFERENCES
+            );
+            if machine_mode {
+                write_failure(&usage_failure(message), OutputFormat::Json, stdout, stderr);
+            } else {
+                let _ = writeln!(stderr, "error: {message}");
+            }
+            return ExitCode::from(2);
+        }
+    }
     let format = cli.format;
     let deny_findings = matches!(&cli.command, Command::Check(args) if args.deny_findings);
     match run(cli) {
@@ -234,6 +276,13 @@ fn run(cli: Cli) -> Result<Value> {
             Some(output) => project::package(&args.project, &output, args.revision.as_deref()),
             None => project::package_dry_run(&args.project, args.revision.as_deref()),
         },
+        Command::Plan(args) => activation::plan(&args.runtime_config),
+        Command::Apply(args) => activation::apply(
+            &args.runtime_config,
+            args.operator_reference.as_deref(),
+            &args.backups,
+        ),
+        Command::Status(args) => activation::status(&args.runtime_config),
         Command::Records(args) => match args.command {
             RecordsCommand::Apply(apply) => records::apply(&apply.config, &apply.records),
         },
@@ -245,9 +294,18 @@ fn run(cli: Cli) -> Result<Value> {
 /// found something when the caller passed `--deny-findings`, a value whose
 /// text is outside its grammar (never gated behind `--deny-findings`, because
 /// there is nothing to opt into), or a fixture run with failing cases, which
-/// always fails the build. The report is the evidence; the exit code is the
-/// signal.
+/// always fails the build. An activation plan that names a refusal apply
+/// would raise is a refusal too, except that the candidate is already the
+/// active package: that plan reports `changesPending: false` and nothing
+/// else. The report is the evidence; the exit code is the signal.
 fn report_is_refusal(report: &Value, deny_findings: bool) -> bool {
+    if report["command"] == "plan" {
+        return report["refusals"].as_array().is_some_and(|refusals| {
+            refusals
+                .iter()
+                .any(|refusal| refusal["code"] != "schedulingctl.activation.package-already-active")
+        });
+    }
     if report["command"] == "check" {
         return report["status"] == "invalid"
             || (deny_findings && report["status"] == "incomplete");
@@ -292,6 +350,22 @@ fn classify_failure(error: &anyhow::Error) -> (u8, Value) {
                 "path": "runtime.yaml",
                 "message": format!("{error:#}"),
                 "suggestedAction": "Correct the runtime configuration the message names, then retry.",
+            }),
+        );
+    }
+    if let Some(activation::Refusal(refusal)) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<activation::Refusal>())
+    {
+        return (
+            DOMAIN_REFUSAL_EXIT,
+            json!({
+                "severity": "error",
+                "code": activation::refusal_code(refusal),
+                "artifact": "database",
+                "path": "database",
+                "message": format!("{error:#}"),
+                "suggestedAction": "Run the command the message names, or correct what it names, then retry.",
             }),
         );
     }
@@ -419,6 +493,12 @@ fn human_lead(report: &Value) -> String {
             "Package planned; nothing was written.".to_owned()
         }
         ("package", _, _) => "Package written.".to_owned(),
+        ("plan", _, _) if report["changesPending"] == false => {
+            "Activation planned: the package is already active; nothing needs applying.".to_owned()
+        }
+        ("plan", _, _) => "Activation planned; nothing was written.".to_owned(),
+        ("apply", _, _) => "Package activated.".to_owned(),
+        ("status", _, _) => "Activation status read.".to_owned(),
         ("records-apply", _, _) => "Environment records applied.".to_owned(),
         ("intents", _, _) => "Undelivered delivery intents listed.".to_owned(),
         _ => format!("{command} succeeded."),
@@ -477,6 +557,87 @@ mod tests {
         let exit = main_entry_from(all, &mut stdout, &mut stderr);
         let report = serde_json::from_slice(&stdout).unwrap_or(Value::Null);
         (exit, report, stderr)
+    }
+
+    #[test]
+    fn activation_operator_text_outside_its_bounds_is_a_usage_error() {
+        let (exit, report, _) = run_json(&[
+            "apply",
+            "--runtime-config",
+            "runtime.yaml",
+            "--operator-reference",
+            "change\n42",
+        ]);
+        assert_eq!(exit, ExitCode::from(2));
+        assert_eq!(report["command"], "usage");
+
+        let long = "x".repeat(activation::MAX_OPERATOR_TEXT_BYTES + 1);
+        let (exit, _, _) = run_json(&[
+            "apply",
+            "--runtime-config",
+            "runtime.yaml",
+            "--backup",
+            &long,
+        ]);
+        assert_eq!(exit, ExitCode::from(2));
+
+        let mut arguments = vec!["apply", "--runtime-config", "runtime.yaml"];
+        for _ in 0..=activation::MAX_BACKUP_REFERENCES {
+            arguments.extend(["--backup", "snapshot"]);
+        }
+        let (exit, report, _) = run_json(&arguments);
+        assert_eq!(exit, ExitCode::from(2));
+        assert!(report["diagnostics"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("--backup may be given at most 16 times"));
+    }
+
+    #[test]
+    fn a_plan_naming_a_refusal_is_a_refusal_unless_the_package_is_already_active() {
+        let plan = |codes: &[&str]| {
+            json!({
+                "command": "plan",
+                "refusals": codes
+                    .iter()
+                    .map(|code| json!({"code": code, "message": "m"}))
+                    .collect::<Vec<_>>(),
+            })
+        };
+        assert!(!report_is_refusal(&plan(&[]), false));
+        assert!(!report_is_refusal(
+            &plan(&["schedulingctl.activation.package-already-active"]),
+            false
+        ));
+        assert!(report_is_refusal(
+            &plan(&["schedulingctl.activation.database-id-mismatch"]),
+            false
+        ));
+        assert!(report_is_refusal(
+            &plan(&[
+                "schedulingctl.activation.package-already-active",
+                "schedulingctl.activation.database-id-mismatch"
+            ]),
+            false
+        ));
+    }
+
+    #[test]
+    fn an_activation_refusal_is_a_domain_refusal_and_a_store_failure_is_operational() {
+        let refusal = activation::refusal_or_failure(StoreError::NotActivated)
+            .context("reading the Scheduling activation ledger");
+        let (exit, diagnostic) = classify_failure(&refusal);
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(diagnostic["code"], "schedulingctl.activation.not-activated");
+        assert!(diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("run `schedulingctl plan --runtime-config FILE` then `schedulingctl apply --runtime-config FILE`"));
+
+        let (exit, diagnostic) =
+            classify_failure(&activation::refusal_or_failure(StoreError::Corrupt));
+        assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
+        assert_eq!(diagnostic["code"], "schedulingctl.store-unavailable");
     }
 
     fn initialized(template: &str) -> (tempfile::TempDir, PathBuf) {
@@ -1146,6 +1307,7 @@ mod tests {
                  package:\n  root: {}\n\
                  listener:\n  bind: 127.0.0.1:8105\n  tlsTermination: development-loopback\n\
                  secretProviders:\n  environment: {{}}\n\
+                 identity:\n  databaseId: scheduling-ctl-test\n\
                  authentication:\n  oidc:\n    issuer: https://issuer.example.test\n\
                  \x20   audience: scheduling-api\n\
                  database:\n  runtimeUrlRef: secret:env/SCHEDULINGCTL_TEST_DATABASE\n\

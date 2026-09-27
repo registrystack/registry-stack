@@ -67,6 +67,11 @@ pub const SCHEDULING_REMOVED_KEYS: &[RemovedKey] = &[REMOVED_OIDC_JWKS_URI];
 pub struct RuntimeConfig {
     pub api_version: String,
     pub kind: String,
+    /// The logical identity of the database this deployment owns. The first
+    /// `schedulingctl apply` records it; every later apply and every startup
+    /// refuses a database that recorded another.
+    #[cfg_attr(feature = "schema", schemars(required, with = "IdentityConfig"))]
+    pub identity: Option<IdentityConfig>,
     pub package: PackageConfig,
     pub listener: ListenerConfig,
     pub secret_providers: SecretProvidersConfig,
@@ -76,6 +81,20 @@ pub struct RuntimeConfig {
     #[serde(default)]
     pub destinations: DestinationsConfig,
     pub retention: RetentionConfig,
+}
+
+/// The longest `identity.databaseId` accepted, in bytes.
+pub const MAX_DATABASE_ID_BYTES: usize = 256;
+
+/// The deployment identity block.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IdentityConfig {
+    /// An operator-chosen logical id for the database, for example
+    /// `scheduling-production`. It is never derived from a URL or a
+    /// PostgreSQL database name.
+    pub database_id: String,
 }
 
 /// The policy and package identity produced by one verified package load.
@@ -348,6 +367,15 @@ impl RuntimeConfig {
         })
     }
 
+    /// The configured `identity.databaseId`. [`RuntimeConfig::check`] has
+    /// refused a document without one.
+    #[must_use]
+    pub fn database_id(&self) -> &str {
+        self.identity
+            .as_ref()
+            .map_or("", |identity| identity.database_id.as_str())
+    }
+
     /// Return the digest of the verified package this deployment serves.
     pub fn package_digest(&self) -> Result<String, RuntimeConfigError> {
         Ok(verify_scheduling_package(&self.package)?
@@ -360,6 +388,17 @@ impl RuntimeConfig {
             || self.kind != SCHEDULING_RUNTIME_KIND
         {
             return Err(RuntimeConfigError::InvalidEnvelope);
+        }
+        let Some(identity) = &self.identity else {
+            return Err(RuntimeConfigError::MissingIdentity);
+        };
+        let database_id = identity.database_id.as_str();
+        if database_id.trim().is_empty()
+            || database_id.trim() != database_id
+            || database_id.len() > MAX_DATABASE_ID_BYTES
+            || database_id.chars().any(char::is_control)
+        {
+            return Err(RuntimeConfigError::InvalidIdentity);
         }
         self.package.check()?;
         self.secret_providers.check()?;
@@ -606,6 +645,14 @@ pub enum RuntimeConfigError {
         "apiVersion and kind must be exactly registry.registrystack.org/scheduling-runtime/v1alpha1 and SchedulingRuntimeConfig"
     )]
     InvalidEnvelope,
+    #[error(
+        "identity.databaseId is required; add\nidentity:\n  databaseId: scheduling-production\nwith the logical id of the database this deployment owns"
+    )]
+    MissingIdentity,
+    #[error(
+        "identity.databaseId must be non-empty, at most 256 bytes, without surrounding whitespace or control characters"
+    )]
+    InvalidIdentity,
     #[error("the operated runtime path {0} must be absolute")]
     RelativeOperatedPath(&'static str),
     #[error("the authored scheduling policy could not be read")]
@@ -667,6 +714,7 @@ impl RuntimeConfigError {
             Self::Block(error) => error.field(),
             Self::PackageDigest(_) => "package.expectedDigest",
             Self::InvalidEnvelope => "apiVersion",
+            Self::MissingIdentity | Self::InvalidIdentity => "identity.databaseId",
             Self::RelativeOperatedPath(path) => path,
             Self::InvalidOidc | Self::Oidc => "authentication.oidc",
             Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",
@@ -801,6 +849,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
         serde_json::json!({
             "apiVersion": SCHEDULING_RUNTIME_API_VERSION,
             "kind": SCHEDULING_RUNTIME_KIND,
+            "identity": {"databaseId": "scheduling-test"},
             "package": {"root": package},
             "listener": {"bind": "127.0.0.1:8105", "tlsTermination": tls},
             "secretProviders": {"file": {"root": root.join("secrets")}, "environment": {}},
@@ -848,6 +897,61 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
         let loaded = config.load_policy().expect("policy loads");
         let policy = loaded.policy;
         assert_eq!(policy.scheduling.id, "standalone-exact-time");
+    }
+
+    #[test]
+    fn identity_database_id_is_required_and_names_the_key_to_add() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        write_policy(&package);
+        let mut document = operator_value(&package, "development-loopback");
+        document.as_object_mut().unwrap().remove("identity");
+        let error = RuntimeConfig::load(write_operator(root.path(), document))
+            .expect_err("a configuration without identity is refused");
+        assert!(
+            matches!(error, RuntimeConfigError::MissingIdentity),
+            "{error}"
+        );
+        assert_eq!(error.path(), "identity.databaseId");
+        assert!(
+            error.to_string().contains("identity:\n  databaseId:"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn identity_database_id_is_a_bounded_trimmed_printable_value() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        write_policy(&package);
+        let load = |database_id: serde_json::Value| {
+            let mut document = operator_value(&package, "development-loopback");
+            document["identity"] = serde_json::json!({"databaseId": database_id});
+            RuntimeConfig::load(write_operator(root.path(), document))
+        };
+        let config = load(serde_json::json!("scheduling-production")).expect("valid id");
+        assert_eq!(config.database_id(), "scheduling-production");
+        load(serde_json::json!("x".repeat(MAX_DATABASE_ID_BYTES)))
+            .expect("the bound itself is accepted");
+        for invalid in [
+            String::new(),
+            "   ".to_owned(),
+            " scheduling-production".to_owned(),
+            "scheduling-production ".to_owned(),
+            "scheduling\nproduction".to_owned(),
+            "x".repeat(MAX_DATABASE_ID_BYTES + 1),
+        ] {
+            let error = load(serde_json::json!(invalid)).expect_err("invalid id is refused");
+            assert!(
+                matches!(error, RuntimeConfigError::InvalidIdentity),
+                "{invalid:?}: {error}"
+            );
+            assert_eq!(error.path(), "identity.databaseId");
+        }
+        let mut document = operator_value(&package, "development-loopback");
+        document["identity"]["extra"] = serde_json::json!("value");
+        RuntimeConfig::load(write_operator(root.path(), document))
+            .expect_err("identity refuses an unknown key");
     }
 
     #[test]

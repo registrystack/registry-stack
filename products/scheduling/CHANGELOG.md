@@ -8,6 +8,51 @@
 - Log at `info` when `RUST_LOG` is unset or invalid. The runtime previously
   logged errors only by default, so a deployment without `RUST_LOG` lost every
   info and warn record.
+- BREAKING: activate a package with `schedulingctl plan`, `schedulingctl
+  apply`, and `schedulingctl status`, recorded in a database activation
+  ledger, instead of `scheduling migrate` and a startup that adopts the
+  database and publishes the policy.
+  - `identity.databaseId` is required in `runtime.yaml`: an operator-chosen
+    logical id for the database, recorded by the first apply. An apply,
+    `records apply`, or startup under another id is refused, naming only the
+    key.
+  - `schedulingctl plan --runtime-config FILE` reads with the runtime
+    credential and writes nothing, on an empty database too. It reports the
+    active and candidate package digests, the database identity check, the
+    pending schema versions, the policy revision the apply would publish,
+    whether retained hook deliveries stay deliverable, and `changesPending`.
+  - `schedulingctl apply --runtime-config FILE [--operator-reference TEXT]
+    [--backup REF]...` connects with the migration credential and, in one
+    transaction under the migration advisory lock, applies the pending schema
+    versions, binds the scheduling id, publishes the policy, grants the
+    runtime role when the credentials are two roles, and records one ledger
+    row. Any valid package applies, an earlier one included, each as a new
+    row; the active package refuses with `nothing needs applying`. The
+    operator reference is kept only as a keyed hash scoped by the activation
+    id. Apply writes a `scheduling-activation-audit/v1` request entry to
+    `audit.schedulingctl.ndjson` before the transaction and a response entry
+    after it, and applies nothing when the request entry is refused.
+  - `schedulingctl status --runtime-config FILE` reads the full activation
+    history, the schema version, and the role mode.
+  - In split role mode the runtime role reads the ledger and the schema
+    history but cannot write either; it keeps ordinary write access to the
+    product tables. Single role mode is reported by `plan`, `apply`, and
+    `status`.
+  - `scheduling serve` writes no activation state. It refuses a database with
+    no active package, a verified package the ledger does not name, and a
+    ledger recorded for another `identity.databaseId`, naming `schedulingctl
+    plan` then `schedulingctl apply`; `package.expectedDigest` still pins the
+    package at `package.root`.
+  - `scheduling migrate` is removed; it exits 2 naming `schedulingctl plan
+    --runtime-config FILE` then `schedulingctl apply --runtime-config FILE`.
+  - The operator commands exit 0 on success, 1 on a refusal, 2 on a usage
+    error, and 3 on an operational failure.
+  - `schedulingctl records apply` refuses a database no `schedulingctl apply`
+    has activated.
+  - Upgrade: add `identity.databaseId`, then run `schedulingctl apply` once
+    after upgrading, before starting the upgraded runtime; a pre-WP3 database
+    is adopted by that first apply, which also backfills the retained policy
+    document.
 
 ## v0.35.0 - 2026-09-28
 

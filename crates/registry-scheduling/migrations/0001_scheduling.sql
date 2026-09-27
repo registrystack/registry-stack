@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS scheduling_meta (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 -- The empty scheduling_id marks a database no deployment has adopted yet;
--- `scheduling migrate` claims it for the policy's scheduling id, and every
+-- `schedulingctl apply` claims it for the policy's scheduling id, and every
 -- serve refuses both an empty and a mismatched one.
 INSERT INTO scheduling_meta (singleton, scheduling_id, policy_revision, policy_digest)
 VALUES (true, '', 1, '')

@@ -25,6 +25,10 @@ use uuid::Uuid;
 /// The schema identifier every Scheduling audit entry carries.
 pub const SCHEDULING_AUDIT_SCHEMA: &str = "registry-scheduling-audit/v1";
 
+/// The schema identifier of the entries `schedulingctl apply` writes for one
+/// package activation.
+pub const ACTIVATION_AUDIT_SCHEMA: &str = "scheduling-activation-audit/v1";
+
 /// The process-wide Scheduling audit destination.
 #[derive(Clone, Debug)]
 pub struct SchedulingAudit {
@@ -76,6 +80,38 @@ impl SchedulingAudit {
                 record,
                 unfinished,
             )
+            .await
+    }
+
+    /// Append the `request` entry of one package activation, before the
+    /// activation transaction opens. Refused, the activation writes nothing.
+    pub async fn activation_request(
+        &self,
+        activation_id: Uuid,
+        record: Value,
+    ) -> Result<(), AuditUnavailable> {
+        self.writer
+            .append(AuditEntry::request(
+                ACTIVATION_AUDIT_SCHEMA,
+                activation_id.to_string(),
+                record,
+            ))
+            .await
+    }
+
+    /// Append the `response` entry of one package activation, after its
+    /// transaction committed or rolled back.
+    pub async fn activation_response(
+        &self,
+        activation_id: Uuid,
+        record: Value,
+    ) -> Result<(), AuditUnavailable> {
+        self.writer
+            .append(AuditEntry::response(
+                ACTIVATION_AUDIT_SCHEMA,
+                activation_id.to_string(),
+                record,
+            ))
             .await
     }
 

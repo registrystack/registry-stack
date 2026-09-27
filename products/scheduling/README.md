@@ -59,31 +59,53 @@ arrival window the selected starter needs. Copy the runtime example to
 `runtime.yaml`, set its
 absolute paths and secret references, and read
 [RUNTIME-CONFIG.md](RUNTIME-CONFIG.md) for every block, field, and default.
-Then apply the live environment records and start:
+Then activate the package, apply the live environment records, and start:
 
 ```sh
-scheduling --runtime-config "$PWD/runtime.yaml" migrate
+schedulingctl plan --runtime-config "$PWD/runtime.yaml"
+schedulingctl apply --runtime-config "$PWD/runtime.yaml" --operator-reference CHG-1234
 schedulingctl records apply "$PWD/runtime.yaml" "$PWD/records.yaml"
 scheduling --runtime-config "$PWD/runtime.yaml" serve
 ```
 
-`migrate` applies the schema and binds the database to the policy's
-scheduling id, which every later start verifies before it writes anything.
-A `serve` that finds a schema older than the one its binary carries refuses
-at the readiness check rather than serving against it, so an upgrade runs
-`migrate` before it restarts the new runtime. Availability cursors last at
-most 15 minutes; callers should deduplicate entries by their start when a
+`plan` reads with the runtime credential and writes nothing: it names the
+active and candidate package digests, whether the database identity matches
+`identity.databaseId`, the schema versions still to apply, the policy revision
+the apply would publish, and `changesPending`. `apply` is the only writer of
+the activation ledger. With the migration credential and under one advisory
+lock, it applies the pending schema versions, binds the database to the
+policy's scheduling id, publishes the policy, grants the runtime role its
+access when the two credentials name different roles, and records one ledger
+row, all in one transaction. It writes an activation request entry to
+`audit.schedulingctl.ndjson` before that transaction and a response entry
+after it, and applies nothing when the request entry cannot be written.
+`--operator-reference` (a change ticket, for instance) is kept only as a keyed
+hash, and each `--backup REF` is recorded as given. Applying the package that
+is already active refuses with `nothing needs applying`; any other valid
+package, including an earlier one, applies as a new row. `status` reads the
+full activation history and reports whether the two credentials are one role
+(`single`) or two (`split`).
+
+`serve` writes no activation state. It refuses to start when the ledger holds
+no row, when the ledger belongs to another `identity.databaseId`, when the
+verified package is not the active one, or when `package.expectedDigest` names
+another package; each refusal names `schedulingctl plan` then
+`schedulingctl apply`. A `serve` that finds a schema older than the one its
+binary carries refuses at the readiness check rather than serving against it,
+so an upgrade runs `schedulingctl apply` once before it restarts the new
+runtime; a database from before the ledger is adopted by that first apply,
+which also backfills the retained policy document. Availability cursors last
+at most 15 minutes; callers should deduplicate entries by their start when a
 policy, records, or runtime change overlaps an in-flight listing.
-The migration also retains the current policy document beside its digest. On
-an upgrade from an earlier schema, start once with the unchanged policy to
-backfill that document before publishing a policy change.
 `records apply` is the one attributable operator write of a deployment's
 environment records: the locations with their time zones, the resource pools
 and their members, the published arrival windows, and the dated exceptions
 such as closures. The policy references that supply by identifier; it does
 not embed it. A records replacement locks standing supply and refuses to move,
 remove, or reduce a window below its live bookings and holds; the operator
-error names the affected window and deficit. Database
+error names the affected window and deficit. It refuses a database no
+`schedulingctl apply` has activated, and one whose ledger names another
+`identity.databaseId`. Database
 transport security is not configurable in production: the runtime requires
 TLS on both connections, and the plaintext escape is a `postgres-test` build
 switch documented in [RUNTIME-CONFIG.md](RUNTIME-CONFIG.md).
@@ -106,8 +128,8 @@ products/scheduling/demo/run.sh
 ```
 
 which provisions a disposable TLS-enabled PostgreSQL database, a throwaway
-signing key and JWKS, migrates and applies example environment records, and
-serves the runtime on loopback (see `products/scheduling/demo/README.md`). A
+signing key and JWKS, activates the package, applies example environment
+records, and serves the runtime on loopback (see `products/scheduling/demo/README.md`). A
 verb over that same provisioning shape does not fit as a surgical addition:
 the shape depends on Docker container lifecycle, TLS certificate generation,
 and JWT signing infrastructure the demo carries in

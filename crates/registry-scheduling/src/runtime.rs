@@ -46,7 +46,9 @@ use crate::config::{ReminderDestinationConfig, RuntimeConfig, RuntimeConfigError
 use crate::hooks::{ActivatedHooks, HookActivationError, HookRuntimeIdentity};
 use crate::http::{router, HttpState};
 use crate::service::SchedulingService;
-use crate::store::{OutboxRow, PostgresStore, StoreError, REMINDER_SEND_TIMEOUT};
+use crate::store::{
+    OutboxRow, PostgresStore, RoleMode, StoreError, REMINDER_SEND_TIMEOUT, SINGLE_ROLE_STATEMENT,
+};
 
 /// How often each background loop wakes. The intervals are fixed constants,
 /// not configuration: they are internal mechanics of one deployment, not an
@@ -90,7 +92,12 @@ pub fn command() -> Command {
                 .required(true),
         )
         .subcommand_required(true)
-        .subcommand(Command::new("migrate").about("Apply Scheduling database migrations"))
+        // Kept only to refuse by name: `schedulingctl apply` migrates now.
+        .subcommand(
+            Command::new("migrate")
+                .about("Removed; run `schedulingctl plan` then `schedulingctl apply`")
+                .hide(true),
+        )
         .subcommand(Command::new("serve").about("Run the Scheduling HTTP service"))
 }
 
@@ -99,7 +106,7 @@ pub async fn run(matches: &clap::ArgMatches) -> Result<(), RuntimeError> {
         .get_one::<String>("runtime-config")
         .ok_or(RuntimeError::Arguments)?;
     match matches.subcommand_name() {
-        Some("migrate") => migrate_from_path(path).await,
+        Some("migrate") => Err(RuntimeError::RemovedCommand),
         Some("serve") => serve_from_path(path).await,
         _ => Err(RuntimeError::Arguments),
     }
@@ -108,26 +115,6 @@ pub async fn run(matches: &clap::ArgMatches) -> Result<(), RuntimeError> {
 /// Name the provisioning or startup act a store failure happened in.
 fn database_step(stage: &'static str) -> impl Fn(StoreError) -> RuntimeError {
     move |source| RuntimeError::Database { stage, source }
-}
-
-pub async fn migrate_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
-    let config = RuntimeConfig::load(path)?;
-    let policy = config.load_policy()?.policy;
-    let secrets = secret_resolver(&config)?;
-    let store = PostgresStore::connect_migration(&config.database, &secrets)
-        .map_err(database_step("migration database configuration"))?;
-    store
-        .migrate()
-        .await
-        .map_err(database_step("schema migration"))?;
-    // Migrations leave the deployment identity unset; adopting it here is the
-    // provisioning act that binds this database to the policy's scheduling
-    // id, which every serve verifies before it writes anything.
-    store
-        .adopt(&policy.scheduling.id)
-        .await
-        .map_err(database_step("deployment adoption"))?;
-    Ok(())
 }
 
 pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
@@ -146,18 +133,52 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         .await
         .map_err(database_step("schema readiness check"))?;
 
-    // The deployment identity is read before anything is written: the store
-    // refuses to apply a policy under a scheduling id the deployment does not
-    // carry, and an empty one is a deployment that has not been adopted yet.
-    let (stored_id, stored_revision, stored_digest) = store
+    // The activation ledger names the package `schedulingctl apply` accepted
+    // for this database. Startup serves only that package, on the database
+    // the ledger recorded, and writes no activation state of its own.
+    let active = store
+        .active_activation()
+        .await
+        .map_err(database_step("activation check"))?
+        .ok_or(StoreError::NotActivated)
+        .map_err(database_step("activation check"))?;
+    if active.database_id != config.database_id() {
+        return Err(database_step("activation check")(
+            StoreError::DatabaseIdMismatch,
+        ));
+    }
+    if active.package_digest != package_digest {
+        return Err(database_step("activation check")(
+            StoreError::PackageNotActive {
+                active: active.package_digest,
+                candidate: package_digest,
+            },
+        ));
+    }
+    match store
+        .effective_role_mode()
+        .await
+        .and_then(|mode| mode.ok_or(StoreError::Corrupt))
+        .map_err(database_step("role mode check"))?
+    {
+        RoleMode::Single => tracing::warn!(role_mode = "single", "{SINGLE_ROLE_STATEMENT}"),
+        RoleMode::Split => tracing::info!(
+            role_mode = "split",
+            "the runtime credential cannot write the Scheduling activation ledger"
+        ),
+    }
+
+    // The accepted package's policy is the one apply published, under the
+    // stored revision and the scheduling id apply adopted.
+    let (stored_id, policy_revision, stored_digest) = store
         .scheduling_meta()
         .await
         .map_err(database_step("deployment identity read"))?;
-    if stored_id.is_empty() {
-        return Err(RuntimeError::Unbootstrapped);
-    }
     if stored_id != scheduling_id {
         return Err(RuntimeError::DeploymentIdentity);
+    }
+    if stored_digest != policy_digest {
+        return Err(database_step("activation check")(StoreError::Corrupt));
     }
     let database_schema = store
         .schema_name()
@@ -165,59 +186,35 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         .map_err(database_step("hook schema discovery"))?;
     let hook_payload_retention =
         Duration::from_secs(u64::from(config.retention.hook_payload_days) * 24 * 60 * 60);
-    let expected_policy_revision = if stored_digest == policy_digest {
-        stored_revision
-    } else {
-        stored_revision
-            .checked_add(1)
-            .ok_or(RuntimeError::HookActivation(
-                HookActivationError::InvalidIdentity,
-            ))?
-    };
 
     // Resolve and validate every destination, including its signing material,
-    // before policy publication. A first start with a bad secret must not
-    // advance the durable policy revision and then fail to serve it.
+    // before the listener binds.
     let hooks = ActivatedHooks::activate(
         &policy.hooks,
         &config.destinations.hooks,
         &secrets,
         HookRuntimeIdentity {
             scheduling_id: scheduling_id.clone(),
-            policy_revision: expected_policy_revision,
+            policy_revision,
             policy_digest: policy_digest.clone(),
         },
-        database_schema.clone(),
+        database_schema,
         hook_payload_retention,
     )?;
 
-    // The audit destination is keyed and opened before the policy revision
-    // can move, so a mis-provisioned deployment never advances state it
-    // cannot hold to account.
+    // The audit destination is keyed and opened before the listener binds,
+    // so a mis-provisioned deployment never serves a request it cannot hold
+    // to account.
     let (audit_hasher, audit) = open_audit(&config, &secrets, None).await?;
 
-    // Before publishing a changed policy, prove that every retained event can
-    // still use the exact destination binding captured for it. A deployment
-    // may retain extra explicit bindings while old deliveries drain.
-    if stored_revision > 0 && !stored_digest.is_empty() {
-        let retained_hooks = ActivatedHooks::activate(
-            &policy.hooks,
-            &config.destinations.hooks,
-            &secrets,
-            HookRuntimeIdentity {
-                scheduling_id: stored_id.clone(),
-                policy_revision: stored_revision,
-                policy_digest: stored_digest.clone(),
-            },
-            database_schema.clone(),
-            hook_payload_retention,
-        )?;
-        retained_hooks
-            .delivery_service(store.clone(), audit.clone())
-            .verify_retained_bindings()
-            .await
-            .map_err(|_| RuntimeError::HookDelivery)?;
-    }
+    // Prove that every retained event can still use the exact destination
+    // binding captured for it. A deployment may retain extra explicit
+    // bindings while old deliveries drain.
+    let hook_delivery = hooks.delivery_service(store.clone(), audit.clone());
+    hook_delivery
+        .verify_retained_bindings()
+        .await
+        .map_err(|_| RuntimeError::HookDelivery)?;
 
     let (verifier, keys) = config.oidc_verifier(&secrets).await?;
     let authenticator = Arc::new(SchedulingAuthenticator::new(
@@ -232,26 +229,6 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         }
         None => None,
     };
-
-    // Publishing a policy may bump the revision every process start only when
-    // the digest changed; the anchors the policy names must exist for any
-    // offering to resolve supply.
-    let pool_ids = offering_pool_ids(&policy);
-    let policy_revision = store
-        .apply_policy(&scheduling_id, &policy_digest, &pool_ids, &policy)
-        .await
-        .map_err(database_step("policy publication"))?;
-
-    if policy_revision != expected_policy_revision {
-        return Err(RuntimeError::HookActivation(
-            HookActivationError::InvalidIdentity,
-        ));
-    }
-    let hook_delivery = hooks.delivery_service(store.clone(), audit.clone());
-    hook_delivery
-        .verify_retained_bindings()
-        .await
-        .map_err(|_| RuntimeError::HookDelivery)?;
 
     let service = Arc::new(
         SchedulingService::new(
@@ -412,14 +389,25 @@ pub enum RuntimeError {
     #[error("a Scheduling background worker stopped")]
     WorkerStopped,
     #[error(
-        "the deployment identity is unset: adopt this database before serving, by running \
-         `scheduling migrate` with this runtime configuration"
+        "`scheduling migrate` is removed; run `schedulingctl plan --runtime-config FILE` then `schedulingctl apply --runtime-config FILE`"
     )]
-    Unbootstrapped,
+    RemovedCommand,
     #[error("the deployment's scheduling id does not match the authored policy")]
     DeploymentIdentity,
     #[error("a due reminder intent could not be rendered as an event")]
     ReminderEvent,
+}
+
+impl RuntimeError {
+    /// The process exit code: 2 for a command line the binary no longer
+    /// accepts, 1 for every other refusal or failure.
+    #[must_use]
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            Self::RemovedCommand => 2,
+            _ => 1,
+        }
+    }
 }
 
 /// Serve until a supervised background loop stops. The listener never stops on
@@ -532,18 +520,6 @@ pub fn secret_resolver(config: &RuntimeConfig) -> Result<SecretResolver, Runtime
         .secret_providers
         .resolver()
         .map_err(|_| RuntimeError::SecretConfiguration)
-}
-
-/// The pool anchors the policy's exact-time offerings name.
-fn offering_pool_ids(policy: &registry_scheduling_core::SchedulingPolicy) -> Vec<String> {
-    let mut ids: Vec<String> = policy
-        .offerings
-        .iter()
-        .filter_map(|offering| offering.exact_time.as_ref().map(|exact| exact.pool.clone()))
-        .collect();
-    ids.sort();
-    ids.dedup();
-    ids
 }
 
 // ---------------------------------------------------------------------------
@@ -1015,6 +991,37 @@ mod tests {
             },
             hooks: Vec::new(),
         };
-        assert_eq!(offering_pool_ids(&policy), vec!["north".to_owned()]);
+        assert_eq!(
+            crate::store::policy_pool_ids(&policy),
+            vec!["north".to_owned()]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_removed_migrate_command_refuses_as_usage_naming_plan_then_apply() {
+        let command = command();
+        let visible: Vec<_> = command
+            .get_subcommands()
+            .filter(|subcommand| !subcommand.is_hide_set())
+            .map(|subcommand| subcommand.get_name().to_owned())
+            .collect();
+        assert_eq!(visible, vec!["serve".to_owned()]);
+
+        // The path is never read: the refusal comes before any configuration.
+        let matches = command
+            .try_get_matches_from([
+                "scheduling",
+                "--runtime-config",
+                "/nonexistent/runtime.yaml",
+                "migrate",
+            ])
+            .expect("the removed command still parses so it can refuse by name");
+        let error = run(&matches).await.expect_err("migrate is removed");
+        assert!(matches!(error, RuntimeError::RemovedCommand), "{error:?}");
+        assert_eq!(error.exit_code(), 2);
+        assert_eq!(
+            error.to_string(),
+            "`scheduling migrate` is removed; run `schedulingctl plan --runtime-config FILE` then `schedulingctl apply --runtime-config FILE`"
+        );
     }
 }

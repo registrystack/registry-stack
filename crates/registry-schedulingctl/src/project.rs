@@ -66,7 +66,7 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         "created": created,
         "next": [
             "Run schedulingctl check PROJECT, then schedulingctl test PROJECT.",
-            "Copy runtime.example.yaml to runtime.yaml, set its absolute paths, run scheduling migrate, apply records.yaml, then run scheduling serve with it.",
+            "Copy runtime.example.yaml to runtime.yaml, set its absolute paths, run schedulingctl plan --runtime-config runtime.yaml then schedulingctl apply --runtime-config runtime.yaml, apply records.yaml, then run scheduling serve with it.",
         ],
     }))
 }
