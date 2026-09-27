@@ -1966,18 +1966,13 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
             issuer(&args.docker_bin, &state, &terminate)?;
         }
         ensure_active(&terminate)?;
-        // Migrations are idempotent and guarded by an advisory lock. Run them
-        // on every start so a retained database is upgraded with the binaries
-        // that now own it; this is the only step using the migration credential.
-        command_cancellable(
-            Command::new(&args.casework_bin)
-                .arg("--runtime-config")
-                .arg(root.join("operator.yaml"))
-                .arg("migrate"),
+        // Apply the session package on every start so a retained database is
+        // upgraded with the binaries that now own it. Apply runs in one
+        // transaction under an advisory lock, and it is the only step using the
+        // migration credential; the runtime never writes its own configuration.
+        activation_outcome(
+            crate::project::apply(&root.join("operator.yaml"), None, Vec::new()),
             &root,
-            "migrate",
-            None,
-            &terminate,
         )?;
         grants(&args.docker_bin, &state, &terminate)?;
         state.migrated = true;
@@ -3262,9 +3257,7 @@ fn command_before_cancellable(
 fn checked_output(output: NativeOutput, root: &Path, name: &str) -> Result<Vec<u8>> {
     if !output.success {
         let logs = root.join("logs").display().to_string();
-        let refusal = refused_check(&output.stderr)
-            .or_else(|| refused_check(&output.stdout))
-            .or_else(|| native_migration_refusal(name, &output.stderr));
+        let refusal = refused_check(&output.stderr).or_else(|| refused_check(&output.stdout));
         match refusal {
             Some(check) => bail!(
                 "native {name} refused: {check}. The full report and owner-only diagnostics are in {logs}"
@@ -3275,21 +3268,39 @@ fn checked_output(output: NativeOutput, root: &Path, name: &str) -> Result<Vec<u
     Ok(output.stdout)
 }
 
-fn native_migration_refusal(name: &str, diagnostics: &[u8]) -> Option<String> {
-    if name != "migrate" {
-        return None;
-    }
-    let diagnostics = String::from_utf8_lossy(diagnostics);
-    let line = diagnostics
-        .lines()
-        .find(|line| !line.trim().is_empty())?
-        .trim()
-        .strip_prefix("casework: ")?
-        .trim();
-    if line.is_empty() {
-        return None;
-    }
-    Some(line.chars().take(MAX_REFUSAL).collect())
+/// Accept an apply that activated the session package, or that found it
+/// already active on a retained database, and name any other refusal.
+fn activation_outcome(result: Result<Value>, root: &Path) -> Result<()> {
+    let error = match result {
+        Ok(_) => return Ok(()),
+        Err(error) => error,
+    };
+    let logs = root.join("logs").display().to_string();
+    let refusals = error.chain().find_map(|cause| {
+        match cause.downcast_ref::<registry_casework::ActivationError>()? {
+            registry_casework::ActivationError::Refused(refusals) => Some(refusals),
+            registry_casework::ActivationError::Store(_)
+            | registry_casework::ActivationError::AppliedUnaudited { .. } => None,
+        }
+    });
+    let Some(refusals) = refusals else {
+        let cause: String = format!("{error:#}").chars().take(MAX_REFUSAL).collect();
+        bail!("native activation failed: {cause}. Private diagnostics are in {logs}");
+    };
+    let Some(refusal) = refusals
+        .iter()
+        .find(|refusal| refusal.code != "casework.activation.already-active")
+    else {
+        return Ok(());
+    };
+    let named: String = format!("{}: {}", refusal.code, refusal.message)
+        .chars()
+        .take(MAX_REFUSAL)
+        .collect();
+    bail!(
+        "native activation refused: {named}. Run caseworkctl plan --runtime-config {} for every refusal; private diagnostics are in {logs}",
+        root.join("operator.yaml").display()
+    )
 }
 
 /// The refusal a failed start reports, naming the supervisor's own cause when

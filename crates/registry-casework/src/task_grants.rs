@@ -65,9 +65,102 @@ async fn eligible_officer(
     Ok(row.get(0))
 }
 
+/// Activate the configured immutable template versions inside
+/// `transaction`, under the same Directory lock used by approval and live
+/// eligibility checks, and invalidate every live grant whose template is no
+/// longer active. A configured version whose stored document differs, or one
+/// larger than the template bound, is refused.
+pub(crate) async fn activate_task_templates_in(
+    transaction: &Transaction<'_>,
+    audit: &mut crate::audit::AuditOperation,
+    templates: &[TaskTemplate],
+) -> Result<(), StoreError> {
+    transaction
+        .query_one(
+            "SELECT directory_revision FROM casework_meta WHERE singleton=true FOR UPDATE",
+            &[],
+        )
+        .await?;
+    for template in templates {
+        let document = serde_json::to_value(template)?;
+        if serde_json::to_vec(&document)?.len() > 65536 {
+            return Err(StoreError::Configuration);
+        }
+        if let Some(row) = transaction.query_opt("SELECT document FROM casework_task_templates WHERE template_id=$1 AND template_version=$2", &[&template.id,&template.version]).await? {
+            if row.get::<_,Value>(0) != document { return Err(StoreError::Configuration); }
+        } else {
+            transaction.execute("INSERT INTO casework_task_templates(template_id,template_version,document) VALUES($1,$2,$3)", &[&template.id,&template.version,&document]).await?;
+        }
+    }
+    transaction
+        .execute(
+            "UPDATE casework_task_templates SET active=false WHERE active",
+            &[],
+        )
+        .await?;
+    for template in templates {
+        transaction.execute("UPDATE casework_task_templates SET active=true WHERE template_id=$1 AND template_version=$2", &[&template.id,&template.version]).await?;
+    }
+    let rows = transaction.query("SELECT i.*,g.grant_id FROM casework_task_grants g JOIN casework_items i ON i.item_id=g.item_id WHERE g.invalidated_at IS NULL AND g.expires_at>now() AND NOT EXISTS(SELECT 1 FROM casework_task_templates t WHERE t.active AND t.document=g.record->'template') ORDER BY i.item_id,g.grant_id FOR UPDATE OF i", &[]).await?;
+    for row in rows {
+        let item = crate::store::row_to_item(&row)?;
+        invalidate(
+            transaction,
+            audit,
+            &item,
+            row.get("grant_id"),
+            "template",
+            None,
+        )
+        .await?;
+    }
+    let review_rows = transaction
+        .query(
+            "SELECT g.grant_id,g.record
+             FROM casework_review_task_grants g
+             WHERE g.invalidated_at IS NULL AND g.expires_at>now()
+               AND NOT EXISTS(
+                 SELECT 1 FROM casework_task_templates t
+                 WHERE t.active AND t.document=g.record->'template'
+               )
+             ORDER BY g.task_id,g.grant_id
+             FOR UPDATE OF g",
+            &[],
+        )
+        .await?;
+    for row in review_rows {
+        let id = row.get("grant_id");
+        let grant: ReviewTaskGrant = serde_json::from_value(row.get("record"))?;
+        let first_invalidation = transaction
+            .execute(
+                "UPDATE casework_review_task_grants
+                 SET invalidated_at=now(),invalidation_reason='template'
+                 WHERE grant_id=$1 AND invalidated_at IS NULL",
+                &[&id],
+            )
+            .await?
+            == 1;
+        if first_invalidation {
+            review_grant_event(
+                transaction,
+                audit,
+                &grant,
+                id,
+                "task_grant_invalidated",
+                Some("template"),
+                None,
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
 impl PostgresStore {
-    /// Activate the configured immutable template versions under the same
-    /// Directory lock used by approval and live eligibility checks.
+    /// Activate the configured template versions in a transaction of their
+    /// own. Package activation runs [`activate_task_templates_in`] inside its
+    /// activation transaction instead.
+    #[cfg(all(test, feature = "postgres-test"))]
     pub(crate) async fn activate_task_templates(
         &self,
         templates: &[TaskTemplate],
@@ -75,84 +168,7 @@ impl PostgresStore {
         let mut audit = self.begin_background_audit().await?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        transaction
-            .query_one(
-                "SELECT directory_revision FROM casework_meta WHERE singleton=true FOR UPDATE",
-                &[],
-            )
-            .await?;
-        for template in templates {
-            let document = serde_json::to_value(template)?;
-            if serde_json::to_vec(&document)?.len() > 65536 {
-                return Err(StoreError::Configuration);
-            }
-            if let Some(row) = transaction.query_opt("SELECT document FROM casework_task_templates WHERE template_id=$1 AND template_version=$2", &[&template.id,&template.version]).await? {
-                if row.get::<_,Value>(0) != document { return Err(StoreError::Configuration); }
-            } else {
-                transaction.execute("INSERT INTO casework_task_templates(template_id,template_version,document) VALUES($1,$2,$3)", &[&template.id,&template.version,&document]).await?;
-            }
-        }
-        transaction
-            .execute(
-                "UPDATE casework_task_templates SET active=false WHERE active",
-                &[],
-            )
-            .await?;
-        for template in templates {
-            transaction.execute("UPDATE casework_task_templates SET active=true WHERE template_id=$1 AND template_version=$2", &[&template.id,&template.version]).await?;
-        }
-        let rows = transaction.query("SELECT i.*,g.grant_id FROM casework_task_grants g JOIN casework_items i ON i.item_id=g.item_id WHERE g.invalidated_at IS NULL AND g.expires_at>now() AND NOT EXISTS(SELECT 1 FROM casework_task_templates t WHERE t.active AND t.document=g.record->'template') ORDER BY i.item_id,g.grant_id FOR UPDATE OF i", &[]).await?;
-        for row in rows {
-            let item = crate::store::row_to_item(&row)?;
-            invalidate(
-                &transaction,
-                &mut audit,
-                &item,
-                row.get("grant_id"),
-                "template",
-                None,
-            )
-            .await?;
-        }
-        let review_rows = transaction
-            .query(
-                "SELECT g.grant_id,g.record
-                 FROM casework_review_task_grants g
-                 WHERE g.invalidated_at IS NULL AND g.expires_at>now()
-                   AND NOT EXISTS(
-                     SELECT 1 FROM casework_task_templates t
-                     WHERE t.active AND t.document=g.record->'template'
-                   )
-                 ORDER BY g.task_id,g.grant_id
-                 FOR UPDATE OF g",
-                &[],
-            )
-            .await?;
-        for row in review_rows {
-            let id = row.get("grant_id");
-            let grant: ReviewTaskGrant = serde_json::from_value(row.get("record"))?;
-            let first_invalidation = transaction
-                .execute(
-                    "UPDATE casework_review_task_grants
-                     SET invalidated_at=now(),invalidation_reason='template'
-                     WHERE grant_id=$1 AND invalidated_at IS NULL",
-                    &[&id],
-                )
-                .await?
-                == 1;
-            if first_invalidation {
-                review_grant_event(
-                    &transaction,
-                    &mut audit,
-                    &grant,
-                    id,
-                    "task_grant_invalidated",
-                    Some("template"),
-                    None,
-                )
-                .await?;
-            }
-        }
+        activate_task_templates_in(&transaction, &mut audit, templates).await?;
         audit.commit(transaction).await?;
         Ok(())
     }

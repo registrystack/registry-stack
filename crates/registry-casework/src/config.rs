@@ -224,6 +224,11 @@ pub fn validate_breg_source_description(
 pub struct RuntimeConfig {
     pub api_version: String,
     pub kind: String,
+    // Required. Optional here only so that a missing block is refused with a
+    // diagnostic naming the key to add, rather than a generic parse error; the
+    // generated schema lists it as required.
+    #[serde(default)]
+    pub identity: Option<IdentityConfig>,
     pub package: RuntimePackageConfig,
     pub listener: ListenerConfig,
     #[serde(default)]
@@ -238,6 +243,30 @@ pub struct RuntimeConfig {
     pub sources: BTreeMap<String, registry_casework_breg::BregBinding>,
     #[serde(default)]
     pub review_completion_destinations: BTreeMap<String, ReviewCompletionRuntimeConfig>,
+}
+
+/// The longest `identity.databaseId` accepted, in bytes. It matches the bound
+/// the Base Registry Engine applies to its own deployment identifiers.
+pub const MAX_DATABASE_ID_BYTES: usize = 256;
+
+/// The logical identity of the database this deployment activates packages
+/// in. It is chosen by the operator (for example `casework-production`) and
+/// never derived from a URL or a PostgreSQL database name. The first
+/// `caseworkctl apply` records it, and every later apply and every startup
+/// refuses a database whose recorded identity differs.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IdentityConfig {
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = MAX_DATABASE_ID_BYTES)))]
+    pub database_id: String,
+}
+
+fn valid_database_id(value: &str) -> bool {
+    !value.trim().is_empty()
+        && value.trim() == value
+        && value.len() <= MAX_DATABASE_ID_BYTES
+        && !value.chars().any(char::is_control)
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -625,6 +654,12 @@ impl RuntimeConfig {
         if self.kind != RUNTIME_CONFIG_KIND {
             return Err(RuntimeConfigError::InvalidKind);
         }
+        let Some(identity) = &self.identity else {
+            return Err(RuntimeConfigError::MissingIdentity);
+        };
+        if !valid_database_id(&identity.database_id) {
+            return Err(RuntimeConfigError::InvalidDatabaseId);
+        }
         self.package.shared().check()?;
         self.secret_providers.check()?;
         self.audit.destination()?;
@@ -698,6 +733,15 @@ impl RuntimeConfig {
             return Err(RuntimeConfigError::PlaintextDatabase);
         }
         Ok(())
+    }
+
+    /// The operator-chosen database identity. Empty only on a document that
+    /// [`RuntimeConfig::check`] has not accepted.
+    #[must_use]
+    pub fn database_id(&self) -> &str {
+        self.identity
+            .as_ref()
+            .map_or("", |identity| identity.database_id.as_str())
     }
 
     /// Verify the package at `package.root` again and return its digest.
@@ -1203,6 +1247,7 @@ reviewProducers:
         let mut document = serde_json::json!({
             "apiVersion": RUNTIME_CONFIG_API_VERSION,
             "kind": RUNTIME_CONFIG_KIND,
+            "identity": {"databaseId": "casework-test"},
             "package": {"root": package},
             "listener": {"bind": "127.0.0.1:8100", "tlsTermination": tls},
             "secretProviders": {"file": {"root": root.join("secrets")}, "environment": {}},
@@ -1818,6 +1863,60 @@ reviewProducers:
         let verified = write_package(&package);
         let operator = write_operator(root, &operator_value(&package, tls));
         (package, operator, verified)
+    }
+
+    #[test]
+    fn a_missing_identity_block_is_refused_with_the_key_to_add() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let mut document = operator_value(&package, "operator-controlled-upstream");
+        document.as_object_mut().unwrap().remove("identity");
+        let operator = write_operator(root.path(), &document);
+
+        let error = RuntimeConfig::load(&operator).expect_err("identity is required");
+        assert!(
+            matches!(error, RuntimeConfigError::MissingIdentity),
+            "{error:?}"
+        );
+        assert_eq!(error.path(), "identity.databaseId");
+        let message = error.to_string();
+        assert!(
+            message.contains("identity:") && message.contains("databaseId:"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn an_invalid_database_id_is_refused() {
+        let long = "d".repeat(MAX_DATABASE_ID_BYTES + 1);
+        for invalid in ["", " casework", "casework ", "case\twork", long.as_str()] {
+            let root = canonical_tempdir();
+            let package = root.path().join("package");
+            std::fs::create_dir(&package).unwrap();
+            write_package(&package);
+            let mut document = operator_value(&package, "operator-controlled-upstream");
+            document["identity"]["databaseId"] = serde_json::json!(invalid);
+            let operator = write_operator(root.path(), &document);
+
+            let error = RuntimeConfig::load(&operator).expect_err("invalid databaseId");
+            assert!(
+                matches!(error, RuntimeConfigError::InvalidDatabaseId),
+                "{invalid:?}: {error:?}"
+            );
+            assert_eq!(error.path(), "identity.databaseId");
+        }
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let mut document = operator_value(&package, "operator-controlled-upstream");
+        let longest = "d".repeat(MAX_DATABASE_ID_BYTES);
+        document["identity"]["databaseId"] = serde_json::json!(longest);
+        let operator = write_operator(root.path(), &document);
+        let config = RuntimeConfig::load(&operator).expect("the longest id is accepted");
+        assert_eq!(config.database_id(), longest);
     }
 
     #[test]
@@ -2649,6 +2748,14 @@ pub enum RuntimeConfigError {
     InvalidApiVersion,
     #[error("unsupported Casework runtime kind; expected CaseworkRuntimeConfig")]
     InvalidKind,
+    #[error(
+        "the runtime configuration must name the database it activates packages in; add `identity: {{databaseId: casework-production}}` with a logical id chosen for this deployment"
+    )]
+    MissingIdentity,
+    #[error(
+        "identity.databaseId must be non-empty, at most 256 bytes, without surrounding whitespace or control characters"
+    )]
+    InvalidDatabaseId,
     #[error("the operated runtime path {0} must be absolute")]
     RelativeOperatedPath(&'static str),
     #[error("the Casework project is invalid")]
@@ -2736,6 +2843,7 @@ impl RuntimeConfigError {
             Self::Block(error) => error.field(),
             Self::InvalidApiVersion => "apiVersion",
             Self::InvalidKind => "kind",
+            Self::MissingIdentity | Self::InvalidDatabaseId => "identity.databaseId",
             Self::RelativeOperatedPath(path) => path,
             Self::InvalidReviewCompletionAuth { path } => path,
             Self::InvalidSourceBinding { path, .. } => path,

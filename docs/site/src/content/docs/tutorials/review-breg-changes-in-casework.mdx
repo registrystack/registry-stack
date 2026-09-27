@@ -180,7 +180,8 @@ servers under their service managers, and check setup readiness:
 bregctl --format json apply \
   --runtime-config /etc/registry-breg/runtime.yaml \
   --package /srv/registry/package --initial
-casework --runtime-config /etc/registry-casework/runtime.yaml migrate
+caseworkctl plan --runtime-config /etc/registry-casework/runtime.yaml
+caseworkctl apply --runtime-config /etc/registry-casework/runtime.yaml
 
 bregctl doctor --runtime-config /etc/registry-breg/runtime.yaml
 caseworkctl doctor --runtime-config /etc/registry-casework/runtime.yaml

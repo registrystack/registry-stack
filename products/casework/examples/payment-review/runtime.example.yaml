@@ -1,5 +1,7 @@
 apiVersion: registry.registrystack.org/casework-runtime/v1alpha1
 kind: CaseworkRuntimeConfig
+identity:
+  databaseId: casework-payment-review
 package:
   root: /srv/registry-casework/payment-review
 listener:

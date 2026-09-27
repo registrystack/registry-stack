@@ -58,8 +58,15 @@ enum Command {
     Test(ProjectArgs),
     /// Check live database, issuer, source and directory readiness.
     Doctor(DoctorArgs),
-    /// Manage Casework's own database.
-    Db(DbArgs),
+    /// Report what applying the configured package would change, without writing.
+    Plan(ActivationArgs),
+    /// Apply the configured package with migration authority and record it as active.
+    Apply(ApplyArgs),
+    /// Report the active package, every activation, and the runtime role mode.
+    Status(ActivationArgs),
+    /// Removed: refuses and names `caseworkctl plan` then `caseworkctl apply`.
+    #[command(hide = true)]
+    Db(RemovedCommandArgs),
     /// Preview or erase retained local payload copies for one source request.
     Retention(RetentionArgs),
     /// Preview or record an operator decision about one source attempt whose lease has expired.
@@ -179,16 +186,44 @@ struct OperatorArgs {
 }
 
 #[derive(Debug, Args)]
-struct DbArgs {
-    #[command(subcommand)]
-    command: DbCommand,
+struct ActivationArgs {
+    /// Absolute runtime configuration selecting the package and the database.
+    #[arg(long, value_name = "FILE")]
+    runtime_config: PathBuf,
 }
 
-#[derive(Debug, Subcommand)]
-enum DbCommand {
-    /// Apply Casework's embedded migrations with migration authority.
-    Migrate(OperatorArgs),
+#[derive(Debug, Args)]
+struct ApplyArgs {
+    #[command(flatten)]
+    activation: ActivationArgs,
+    /// Change or ticket reference for this activation; recorded and audited
+    /// only as a keyed hash, never as the text given.
+    #[arg(long, value_name = "TEXT", value_parser = parse_operator_reference)]
+    operator_reference: Option<String>,
+    /// Backup or snapshot reference recorded with this activation. Repeatable.
+    #[arg(long = "backup", value_name = "REF", value_parser = parse_backup_reference)]
+    backups: Vec<String>,
 }
+
+fn parse_operator_reference(value: &str) -> Result<String, String> {
+    registry_casework::validate_operator_reference(value).map(|()| value.to_owned())
+}
+
+fn parse_backup_reference(value: &str) -> Result<String, String> {
+    registry_casework::validate_backup_reference(value).map(|()| value.to_owned())
+}
+
+/// A removed command keeps its name only to refuse it and name the
+/// replacement; whatever followed it is ignored.
+#[derive(Debug, Args)]
+struct RemovedCommandArgs {
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
+    arguments: Vec<OsString>,
+}
+
+const REMOVED_DB_MIGRATE_MESSAGE: &str = "caseworkctl db migrate was removed; database changes \
+     are applied with a package activation: run `caseworkctl plan --runtime-config FILE` then \
+     `caseworkctl apply --runtime-config FILE`";
 
 #[derive(Debug, Args)]
 struct RetentionArgs {
@@ -348,14 +383,10 @@ where
         }
         Err(error) => {
             if machine_mode {
-                write_failure(
-                    &cli_report_envelope(
-                        "UsageReport",
-                        json!({"ok":false,"command":"usage","diagnostics":[diagnostic(
-                            "usage.invalid", "arguments", error.to_string(), "Correct the command arguments and retry."
-                        )]}),
-                    ),
-                    OutputFormat::Json,
+                write_usage_report(
+                    "usage.invalid",
+                    error.to_string(),
+                    "Correct the command arguments and retry.",
                     stdout,
                     stderr,
                 );
@@ -365,6 +396,14 @@ where
             return ExitCode::from(2);
         }
     };
+    if let Some((code, message, action)) = usage_refusal(&cli.command) {
+        if machine_mode {
+            write_usage_report(code, message, action, stdout, stderr);
+        } else {
+            let _ = writeln!(stderr, "error: {message}");
+        }
+        return ExitCode::from(2);
+    }
     let cli = match cli.command {
         Command::DevServiceGuard(args) => {
             return match dev::run_service_guard(args) {
@@ -394,6 +433,16 @@ where
     let command_kind = command_kind(&cli.command);
     let report_kind = cli_report_kind(&cli.command);
     match run(cli) {
+        Ok(report) if report_kind == "PlanReport" && report["ok"] == false => {
+            // A plan that names a refusal is the evidence and the refusal at
+            // once: the report goes to stdout and the exit code signals it.
+            let report = machine_report(format, report_kind, report);
+            if format == OutputFormat::Human {
+                let _ = render_human(&report, stdout);
+            }
+            write_failure(&report, format, stdout, stderr);
+            ExitCode::from(DOMAIN_REFUSAL_EXIT)
+        }
         Ok(report) => write_success(
             &machine_report(format, report_kind, report),
             format,
@@ -401,6 +450,19 @@ where
             stderr,
         ),
         Err(error) => {
+            if let Some((exit, diagnostics)) = activation_failure(&error) {
+                write_failure(
+                    &machine_report(
+                        format,
+                        report_kind,
+                        json!({"ok":false,"diagnostics":diagnostics}),
+                    ),
+                    format,
+                    stdout,
+                    stderr,
+                );
+                return ExitCode::from(exit);
+            }
             if let Some(denied) = error.downcast_ref::<project::DeniedFindings>() {
                 write_failure(
                     &machine_report(
@@ -427,6 +489,49 @@ where
             );
             ExitCode::from(exit)
         }
+    }
+}
+
+fn write_usage_report(
+    code: &str,
+    message: String,
+    action: &str,
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+) {
+    write_failure(
+        &cli_report_envelope(
+            "UsageReport",
+            json!({"ok":false,"command":"usage","diagnostics":[diagnostic(
+                code, "arguments", message, action
+            )]}),
+        ),
+        OutputFormat::Json,
+        stdout,
+        stderr,
+    );
+}
+
+/// A usage refusal clap cannot express: a removed command, or a repeatable
+/// flag given more often than its bound.
+fn usage_refusal(command: &Command) -> Option<(&'static str, String, &'static str)> {
+    match command {
+        Command::Db(_) => Some((
+            "usage.removed-command",
+            REMOVED_DB_MIGRATE_MESSAGE.to_owned(),
+            "Run caseworkctl plan --runtime-config FILE, then caseworkctl apply --runtime-config FILE.",
+        )),
+        Command::Apply(args) if args.backups.len() > registry_casework::MAX_BACKUP_REFERENCES => {
+            Some((
+                "usage.invalid",
+                format!(
+                    "--backup may be given at most {} times",
+                    registry_casework::MAX_BACKUP_REFERENCES
+                ),
+                "Correct the command arguments and retry.",
+            ))
+        }
+        _ => None,
     }
 }
 
@@ -459,7 +564,10 @@ fn cli_report_kind(command: &Command) -> &'static str {
             AttemptCommand::MarkUncertain(_) => "AttemptUncertainMarkingReport",
         },
         Command::Check(_) => "CheckReport",
-        Command::Db(_) => "DatabaseMigrationReport",
+        Command::Plan(_) => "PlanReport",
+        Command::Apply(_) => "ApplyReport",
+        Command::Status(_) => "StatusReport",
+        Command::Db(_) => "UsageReport",
         Command::Doctor(_) => "DoctorReport",
         Command::Explain(_) => "ExplainReport",
         Command::Init(_) => "InitReport",
@@ -481,15 +589,18 @@ enum CommandKind {
     Retention,
     AttemptSettlement,
     AttemptUncertainMarking,
-    Migration,
+    Activation,
 }
 
 fn command_kind(command: &Command) -> CommandKind {
     if matches!(command, Command::Retention(_)) {
         return CommandKind::Retention;
     }
-    if matches!(command, Command::Db(_)) {
-        return CommandKind::Migration;
+    if matches!(
+        command,
+        Command::Plan(_) | Command::Apply(_) | Command::Status(_)
+    ) {
+        return CommandKind::Activation;
     }
     if let Command::Attempt(args) = command {
         return match args.command {
@@ -654,7 +765,7 @@ fn operator_refusal(kind: CommandKind, error: &anyhow::Error) -> Option<Value> {
             }
             (
                 "casework.retention.refused",
-                "retention",
+                "retention".to_owned(),
                 store.to_string(),
                 "Correct the exact source selection or recover the pending attempt, then preview again.",
             )
@@ -685,7 +796,7 @@ fn operator_refusal(kind: CommandKind, error: &anyhow::Error) -> Option<Value> {
             };
             (
                 "casework.attempt-settlement.refused",
-                "attempt",
+                "attempt".to_owned(),
                 settlement.to_string(),
                 action,
             )
@@ -712,37 +823,27 @@ fn operator_refusal(kind: CommandKind, error: &anyhow::Error) -> Option<Value> {
             };
             (
                 "casework.attempt-mark-uncertain.refused",
-                "attempt",
+                "attempt".to_owned(),
                 marking.to_string(),
                 action,
             )
         }
-        CommandKind::Migration => {
-            // Only the refusals `casework migrate` names are passed through; a
-            // database that cannot be reached stays an operational failure.
-            let store = error
+        CommandKind::Activation => {
+            // An activation refusal carries its own diagnostics; this arm
+            // names only a source binding the adapters could not be built
+            // from. A database that cannot be reached stays an operational
+            // failure.
+            let runtime = error
                 .chain()
-                .find_map(|cause| cause.downcast_ref::<StoreError>())?;
-            let action = match store {
-                StoreError::SchemaNewer { .. } => {
-                    "Run the casework release that migrated this database or a later one; \
-                     Casework does not migrate a schema down."
-                }
-                StoreError::HostedWorkWouldBeDropped { .. } => {
-                    "Keep this database with the release that wrote it until its hosted work \
-                     is exported, then migrate a fresh Casework database."
-                }
-                StoreError::UnpublishedAuditWouldBeDropped { .. } => {
-                    "Run the casework release that wrote these audit records until its audit \
-                     publisher has published every one, then migrate again."
-                }
-                _ => return None,
+                .find_map(|cause| cause.downcast_ref::<registry_casework::RuntimeError>())?;
+            let registry_casework::RuntimeError::SourceConfiguration(source_id) = runtime else {
+                return None;
             };
             (
-                "casework.migration.refused",
-                "database",
-                store.to_string(),
-                action,
+                "casework.activation.source-binding-invalid",
+                format!("runtime.yaml:/sources/{source_id}"),
+                runtime.to_string(),
+                "Correct the operator source binding named by the refusal so it matches casework.yaml, then plan again.",
             )
         }
         CommandKind::Authoring | CommandKind::Operational => return None,
@@ -755,6 +856,119 @@ fn operator_refusal(kind: CommandKind, error: &anyhow::Error) -> Option<Value> {
         "message": message,
         "suggestedAction": action,
     }))
+}
+
+/// The diagnostics for an activation `apply` refused: one per refusal, each
+/// with the fix for its code. An audit destination that refused an entry is
+/// an operational failure, and so is an activation that committed while its
+/// response entry was refused; that one says the package is active.
+fn activation_failure(error: &anyhow::Error) -> Option<(u8, Value)> {
+    let activation = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<registry_casework::ActivationError>())?;
+    let (code, message, action) = match activation {
+        registry_casework::ActivationError::Refused(refusals) => {
+            return Some((
+                DOMAIN_REFUSAL_EXIT,
+                Value::from(activation_refusal_diagnostics(refusals)),
+            ));
+        }
+        registry_casework::ActivationError::Store(StoreError::AuditUnavailable) => (
+            "casework.activation.audit-unavailable",
+            "The Casework audit destination did not accept an activation entry, so the \
+             package was not applied."
+                .to_owned(),
+            "Restore the audit destination named at runtime.yaml:/audit, then apply again.",
+        ),
+        registry_casework::ActivationError::Store(_) => return None,
+        registry_casework::ActivationError::AppliedUnaudited { .. } => (
+            "casework.activation.applied-unaudited",
+            activation.to_string(),
+            "The package is active, so do not apply it again. Restore the audit destination \
+             and record the activation named by caseworkctl status in the audit trail.",
+        ),
+    };
+    Some((
+        OPERATIONAL_FAILURE_EXIT,
+        json!([{
+            "severity": "error",
+            "code": code,
+            "artifact": "runtime_dependency",
+            "path": "runtime.yaml:/audit",
+            "message": message,
+            "suggestedAction": action,
+        }]),
+    ))
+}
+
+/// A plan is a refusal when it names anything apply would refuse, except
+/// that the candidate is already the active package: that plan reports
+/// `changesPending: false` and exits successfully.
+fn plan_is_refusal(refusals: &[registry_casework::ActivationRefusal]) -> bool {
+    refusals
+        .iter()
+        .any(|refusal| refusal.code != "casework.activation.already-active")
+}
+
+fn activation_refusal_diagnostics(refusals: &[registry_casework::ActivationRefusal]) -> Vec<Value> {
+    refusals
+        .iter()
+        .map(|refusal| {
+            let action = match refusal
+                .code
+                .strip_prefix("casework.activation.")
+                .unwrap_or_default()
+            {
+                "already-active" => {
+                    "Nothing needs applying; change the package or its runtime bindings \
+                     before applying again."
+                }
+                "attempt-pending" => {
+                    "Recover or settle the named source's pending attempts, then plan again."
+                }
+                "database-id-mismatch" => {
+                    "Point database.runtimeUrlRef and database.migrationUrlRef at the database \
+                     this configuration belongs to, or correct identity.databaseId, then plan \
+                     again."
+                }
+                "hosted-work-would-be-dropped" => {
+                    "Keep this database with the release that wrote it until its hosted work \
+                     is exported, then apply this release to a fresh Casework database."
+                }
+                "schema-newer" => {
+                    "Run the casework release that migrated this database or a later one; \
+                     Casework does not migrate a schema down."
+                }
+                "stranded-work" => {
+                    "Keep the earlier package active until the named work finishes, or, once \
+                     you accept that it stays hidden or orphaned, set \
+                     package.acknowledgeStrandedWork to the digest the refusal names, then \
+                     plan again."
+                }
+                "template-changed" => {
+                    "Give the changed task template a new version in casework.yaml, then \
+                     package and plan again."
+                }
+                "template-too-large" => {
+                    "Shrink the named task template below the size bound, then package and \
+                     plan again."
+                }
+                "unpublished-audit-would-be-dropped" => {
+                    "Run the casework release that wrote these audit records until its audit \
+                     publisher has published every one, then apply again."
+                }
+                _ => "Correct what the refusal names, then plan again.",
+            };
+            json!({
+                "severity": "error",
+                "code": refusal.code,
+                "artifact": "operator_action",
+                "path": refusal.path,
+                "message": refusal.message,
+                "suggestedAction": action,
+            })
+        })
+        .collect()
 }
 
 fn runtime_diagnostic_location(error: &RuntimeConfigError) -> (&'static str, String, &'static str) {
@@ -946,7 +1160,9 @@ fn render_human(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
         ("test", _, _) => "Offline synthetic fixtures passed.",
         _ => "",
     };
-    if lead.is_empty() {
+    if report["ok"] == false {
+        writeln!(stdout, "{command} refused.")?;
+    } else if lead.is_empty() {
         writeln!(stdout, "{} succeeded.", command)?;
     } else {
         writeln!(stdout, "{lead}")?;
@@ -1004,11 +1220,14 @@ fn run(cli: Cli) -> Result<Value> {
         Command::Simulate(args) => project::simulate(&args.project, &args.fixture),
         Command::Test(args) => project::test(&args.project),
         Command::Doctor(args) => project::doctor(&args.runtime_config),
-        Command::Db(args) => match args.command {
-            DbCommand::Migrate(args) => {
-                project::db_migrate(&args.project, args.runtime_config.as_deref())
-            }
-        },
+        Command::Plan(args) => project::plan(&args.runtime_config),
+        Command::Apply(args) => project::apply(
+            &args.activation.runtime_config,
+            args.operator_reference,
+            args.backups,
+        ),
+        Command::Status(args) => project::status(&args.runtime_config),
+        Command::Db(_) => unreachable!("the removed command is refused before run"),
         Command::Retention(args) => match args.command {
             RetentionCommand::Erase(args) => project::retention_erase(
                 &args.operator.project,
@@ -1705,93 +1924,214 @@ mod tests {
         );
     }
 
+    fn run_args(arguments: &[&str]) -> (ExitCode, String, String) {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = main_entry_from(
+            std::iter::once("caseworkctl").chain(arguments.iter().copied()),
+            &mut stdout,
+            &mut stderr,
+        );
+        (
+            exit,
+            String::from_utf8(stdout).unwrap(),
+            String::from_utf8(stderr).unwrap(),
+        )
+    }
+
     #[test]
-    fn db_migrate_passes_migration_refusals_through_and_keeps_database_failures_generic() {
-        let kind = command_kind(
-            &Cli::try_parse_from(["caseworkctl", "db", "migrate", "."])
-                .unwrap()
-                .command,
-        );
-
-        let newer = anyhow::Error::new(StoreError::SchemaNewer {
-            found: 17,
-            supported: 16,
-        })
-        .context("applying Casework database migrations");
-        let (exit, diagnostic) = classify_failure(kind, &newer);
-        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
-        assert_eq!(diagnostic["code"], "casework.migration.refused");
-        assert_eq!(diagnostic["artifact"], "operator_action");
-        assert_eq!(diagnostic["path"], "database");
-        assert_eq!(
-            diagnostic["message"],
-            "the Casework database schema version 17 is newer than this binary supports (16); run a casework release that supports it"
-        );
-        assert_eq!(
-            diagnostic["suggestedAction"],
-            "Run the casework release that migrated this database or a later one; Casework does not migrate a schema down."
-        );
-
-        let hosted = anyhow::Error::new(StoreError::HostedWorkWouldBeDropped {
-            version: 15,
-            tables: vec![("casework_hosted_items", 1)],
-        })
-        .context("applying Casework database migrations");
-        let (exit, diagnostic) = classify_failure(kind, &hosted);
-        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
-        assert_eq!(diagnostic["code"], "casework.migration.refused");
-        assert_eq!(
-            diagnostic["message"],
-            StoreError::HostedWorkWouldBeDropped {
-                version: 15,
-                tables: vec![("casework_hosted_items", 1)],
-            }
-            .to_string()
-        );
-        assert!(
-            diagnostic["message"]
-                .as_str()
-                .unwrap()
-                .contains("casework_hosted_items (1 row)"),
-            "{diagnostic:#}"
-        );
-        assert_eq!(
-            diagnostic["suggestedAction"],
-            "Keep this database with the release that wrote it until its hosted work is exported, then migrate a fresh Casework database."
-        );
-
-        let audit = anyhow::Error::new(StoreError::UnpublishedAuditWouldBeDropped {
-            version: 17,
-            rows: 2,
-        })
-        .context("applying Casework database migrations");
-        let (exit, diagnostic) = classify_failure(kind, &audit);
-        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
-        assert_eq!(diagnostic["code"], "casework.migration.refused");
-        assert_eq!(
-            diagnostic["message"],
-            StoreError::UnpublishedAuditWouldBeDropped {
-                version: 17,
-                rows: 2
-            }
-            .to_string()
-        );
-        assert_eq!(
-            diagnostic["suggestedAction"],
-            "Run the casework release that wrote these audit records until its audit publisher has published every one, then migrate again."
-        );
-
-        for failure in [StoreError::Unavailable, StoreError::Corrupt] {
-            let failure =
-                anyhow::Error::new(failure).context("applying Casework database migrations");
-            let (exit, diagnostic) = classify_failure(kind, &failure);
-            assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
-            assert_eq!(diagnostic["code"], "caseworkctl.operational-failure");
-            assert_eq!(
-                diagnostic["message"],
-                "A Casework runtime dependency check failed."
+    fn the_removed_db_migrate_command_refuses_as_usage_naming_plan_then_apply() {
+        for arguments in [
+            &["db", "migrate", "."][..],
+            &["db", "migrate", ".", "--runtime-config", "runtime.yaml"][..],
+            &["db"][..],
+        ] {
+            let (exit, stdout, stderr) = run_args(arguments);
+            assert_eq!(exit, ExitCode::from(2), "{arguments:?}: {stderr}");
+            assert!(stdout.is_empty(), "{stdout}");
+            assert!(
+                stderr.contains(
+                    "run `caseworkctl plan --runtime-config FILE` then \
+                     `caseworkctl apply --runtime-config FILE`"
+                ),
+                "{stderr}"
             );
         }
+
+        let (exit, stdout, stderr) = run_args(&["--format", "json", "db", "migrate", "."]);
+        assert_eq!(exit, ExitCode::from(2));
+        assert!(stderr.is_empty(), "{stderr}");
+        let report: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(report["kind"], "UsageReport");
+        assert_eq!(report["ok"], false);
+        assert_eq!(report["diagnostics"][0]["code"], "usage.removed-command");
+        assert_eq!(report["diagnostics"][0]["path"], "arguments");
+        assert!(report["diagnostics"][0]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("caseworkctl db migrate was removed"));
+    }
+
+    #[test]
+    fn the_removed_db_command_is_hidden_from_help() {
+        let help = Cli::command().render_help().to_string();
+        assert!(!help.contains("\n  db "), "{help}");
+        for command in ["plan", "apply", "status"] {
+            assert!(help.contains(&format!("\n  {command} ")), "{help}");
+        }
+    }
+
+    #[test]
+    fn apply_bounds_its_operator_references_as_usage_errors() {
+        let long = "r".repeat(registry_casework::MAX_OPERATOR_REFERENCE_BYTES + 1);
+        for reference in ["", "change\n42", long.as_str()] {
+            let (exit, _, stderr) = run_args(&[
+                "apply",
+                "--runtime-config",
+                "runtime.yaml",
+                "--operator-reference",
+                reference,
+            ]);
+            assert_eq!(exit, ExitCode::from(2), "{reference:?}: {stderr}");
+            assert!(stderr.contains("--operator-reference"), "{stderr}");
+        }
+        let (exit, _, stderr) =
+            run_args(&["apply", "--runtime-config", "runtime.yaml", "--backup", ""]);
+        assert_eq!(exit, ExitCode::from(2), "{stderr}");
+        assert!(stderr.contains("--backup must not be empty"), "{stderr}");
+
+        let mut arguments = vec!["apply", "--runtime-config", "runtime.yaml"];
+        for _ in 0..=registry_casework::MAX_BACKUP_REFERENCES {
+            arguments.extend(["--backup", "snapshot"]);
+        }
+        let (exit, _, stderr) = run_args(&arguments);
+        assert_eq!(exit, ExitCode::from(2), "{stderr}");
+        assert!(
+            stderr.contains("--backup may be given at most 16 times"),
+            "{stderr}"
+        );
+    }
+
+    fn refusal(code: &str) -> registry_casework::ActivationRefusal {
+        registry_casework::ActivationRefusal {
+            code: format!("casework.activation.{code}"),
+            path: "database".to_owned(),
+            message: format!("{code} message"),
+        }
+    }
+
+    #[test]
+    fn every_activation_refusal_is_its_own_diagnostic_with_a_next_action() {
+        let codes = [
+            "already-active",
+            "attempt-pending",
+            "database-id-mismatch",
+            "hosted-work-would-be-dropped",
+            "schema-newer",
+            "stranded-work",
+            "template-changed",
+            "template-too-large",
+            "unpublished-audit-would-be-dropped",
+        ];
+        let refusals: Vec<_> = codes.iter().map(|code| refusal(code)).collect();
+        let diagnostics = activation_refusal_diagnostics(&refusals);
+        assert_eq!(diagnostics.len(), codes.len());
+        let mut actions = std::collections::BTreeSet::new();
+        for (diagnostic, code) in diagnostics.iter().zip(codes) {
+            assert_eq!(diagnostic["code"], format!("casework.activation.{code}"));
+            assert_eq!(diagnostic["artifact"], "operator_action");
+            assert_eq!(diagnostic["path"], "database");
+            assert_eq!(diagnostic["message"], format!("{code} message"));
+            let action = diagnostic["suggestedAction"].as_str().unwrap();
+            assert!(!action.is_empty(), "{code}");
+            actions.insert(action.to_owned());
+        }
+        assert_eq!(actions.len(), codes.len(), "each refusal names its own fix");
+
+        let error = anyhow::Error::new(registry_casework::ActivationError::Refused(vec![
+            refusal("database-id-mismatch"),
+            refusal("stranded-work"),
+        ]))
+        .context("applying the Casework package");
+        let (exit, report) = activation_failure(&error).expect("an activation refusal");
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(report.as_array().unwrap().len(), 2);
+
+        let failed = anyhow::Error::new(registry_casework::ActivationError::Store(
+            StoreError::Unavailable,
+        ));
+        assert!(activation_failure(&failed).is_none());
+        let (exit, diagnostic) = classify_failure(CommandKind::Activation, &failed);
+        assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
+        assert_eq!(
+            diagnostic["message"],
+            "A Casework runtime dependency check failed."
+        );
+    }
+
+    #[test]
+    fn an_activation_audit_failure_is_operational_and_an_unaudited_commit_says_it_applied() {
+        let refused = anyhow::Error::new(registry_casework::ActivationError::Store(
+            StoreError::AuditUnavailable,
+        ))
+        .context("applying the Casework package");
+        let (exit, report) = activation_failure(&refused).expect("an audit failure");
+        assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
+        assert_eq!(report[0]["code"], "casework.activation.audit-unavailable");
+        assert_eq!(report[0]["path"], "runtime.yaml:/audit");
+        assert!(report[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("the package was not applied"));
+
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let unaudited = anyhow::Error::new(registry_casework::ActivationError::AppliedUnaudited {
+            activation_id: uuid::Uuid::nil(),
+            package_digest: digest.clone(),
+        })
+        .context("applying the Casework package");
+        let (exit, report) = activation_failure(&unaudited).expect("an unaudited activation");
+        assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
+        assert_eq!(report[0]["code"], "casework.activation.applied-unaudited");
+        let message = report[0]["message"].as_str().unwrap();
+        assert!(
+            message.contains(&digest) && message.contains("is active"),
+            "{message}"
+        );
+        assert!(report[0]["suggestedAction"]
+            .as_str()
+            .unwrap()
+            .contains("do not apply it again"));
+    }
+
+    #[test]
+    fn a_plan_naming_a_refusal_is_a_refusal_unless_the_package_is_already_active() {
+        assert!(!plan_is_refusal(&[]));
+        assert!(!plan_is_refusal(&[refusal("already-active")]));
+        assert!(plan_is_refusal(&[refusal("database-id-mismatch")]));
+        assert!(plan_is_refusal(&[
+            refusal("already-active"),
+            refusal("stranded-work")
+        ]));
+    }
+
+    #[test]
+    fn an_invalid_source_binding_is_a_domain_refusal_naming_the_source() {
+        let error = anyhow::Error::new(registry_casework::RuntimeError::SourceConfiguration(
+            "registry".to_owned(),
+        ))
+        .context("building the Casework source adapters");
+        let (exit, diagnostic) = classify_failure(CommandKind::Activation, &error);
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(
+            diagnostic["code"],
+            "casework.activation.source-binding-invalid"
+        );
+        assert_eq!(diagnostic["path"], "runtime.yaml:/sources/registry");
+        assert_eq!(
+            diagnostic["message"],
+            "the Casework source binding for source registry is invalid"
+        );
     }
 
     #[test]
@@ -1804,7 +2144,7 @@ mod tests {
         let unmigrated = project::doctor_dependency_failure(
             "database",
             "the Casework runtime database is not ready".to_owned(),
-            "Apply the migrations with casework migrate or caseworkctl db migrate, then retry.",
+            "Run caseworkctl plan --runtime-config FILE, then caseworkctl apply --runtime-config FILE, then retry.",
             anyhow::Error::new(StoreError::SchemaNotCurrent {
                 applied: None,
                 required: 17,
@@ -1818,11 +2158,11 @@ mod tests {
         assert_eq!(diagnostic["path"], "doctor:/checks/database");
         assert_eq!(
             diagnostic["message"],
-            "the Casework runtime database is not ready: the Casework database schema is not current: no migration has been applied, and this binary requires version 17; apply the migrations with `casework migrate` or `caseworkctl db migrate`"
+            "the Casework runtime database is not ready: the Casework database schema is not current: no migration has been applied, and this binary requires version 17; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`"
         );
         assert_eq!(
             diagnostic["suggestedAction"],
-            "Apply the migrations with casework migrate or caseworkctl db migrate, then retry."
+            "Run caseworkctl plan --runtime-config FILE, then caseworkctl apply --runtime-config FILE, then retry."
         );
 
         // A cause outside the closed set of Casework errors is never echoed:

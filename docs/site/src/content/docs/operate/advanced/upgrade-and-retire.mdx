@@ -81,8 +81,8 @@ sequence on a restored copy first, as
    refused as `apply.resume.roles_differ`, naming the roles the activation started with. A new package applied under `database.roles` other than the ones the active activation serves with is refused as `apply.successor.roles_differ` before maintenance; apply the active package under the new roles first, then the new package. A role change, the active package applied under other `database.roles`, cannot be assessed by `bregctl migration reconcile`: when one stops before it finishes, fix the cause and rerun the same apply, which resumes it. Casework reports each BReg source as unavailable from here until step 5
    finishes.
 5. **Upgrade Casework.** Settle pending attempts first, since an upgrade can strand them. Run
-   `casework migrate` with the new binary, then start `casework` and run `caseworkctl doctor`; see
-   [Migrate and serve](../../casework/#migrate-and-serve).
+   `caseworkctl plan` and `caseworkctl apply` with the new binaries, then start `casework` and run
+   `caseworkctl doctor`; see [Plan, apply, and serve](../../casework/#plan-apply-and-serve).
 6. **Upgrade Evidence.** Package a fresh candidate with the new `evidencectl package`, run
    `evidence check --require-runtime-dependencies` with the new binary, start it, and verify a fresh synthetic
    assertion. Then start the new `evidence-oid4vci`.

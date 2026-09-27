@@ -2,6 +2,54 @@
 
 ## Unreleased
 
+- BREAKING: a Casework package is activated in the database by
+  `caseworkctl apply --runtime-config FILE`, and `casework serve` only reads
+  that activation. `caseworkctl plan` reports, with the runtime credential and
+  in a read-only transaction, what an apply would change: the pending schema
+  versions, the source generations and task templates it would register or
+  activate, work still pinned to a policy the candidate drops, the runtime
+  role's mode, and `changesPending`. `caseworkctl apply` uses the migration
+  credential and, in one transaction under the migration advisory lock,
+  migrates the schema, registers source generations, activates task
+  templates, refuses stranded pinned work, grants the runtime role its
+  privileges when the two credentials name different roles, and records one
+  row in a new activation ledger (schema migration 19). `--operator-reference`
+  is recorded and audited only as a keyed hash scoped to the activation, and
+  `--backup REF` may be given up to 16 times. Each apply writes a
+  `casework-activation-audit/v1` request entry before any database work and a
+  response entry after the commit; an audit destination that refuses the
+  request entry leaves the database untouched. `caseworkctl status` shows the
+  activation history and the role mode, and `caseworkctl doctor` gives the
+  plan or apply next step. Exit codes are 0 for success, 1 for a refusal, 2
+  for a usage error, and 3 for an operational failure, including an audit
+  destination that refused an entry; an apply that committed but whose
+  response entry was refused reports `casework.activation.applied-unaudited`
+  and must not be repeated. Re-applying the active package with nothing to
+  change is refused and names its digest.
+- BREAKING: `runtime.yaml` requires `identity.databaseId`, an operator-chosen
+  logical name for the deployment's database. The first apply records it, and
+  every later apply and every startup refuses a database that recorded
+  another one without naming either value.
+- BREAKING: the runtime no longer migrates, registers source generations,
+  activates task templates, or checks stranded pinned work at startup. It
+  refuses a database with no activation, a schema other than its own, an
+  active package other than the one it loaded, an unregistered source
+  generation, a database identity other than its own, or a split-role
+  activation whose runtime credential can now write the activation ledger,
+  and each refusal names `caseworkctl plan` then `caseworkctl apply`.
+- BREAKING: `casework migrate` and `caseworkctl db migrate` are removed. Each
+  still parses only to refuse with exit 2 and name `caseworkctl plan
+  --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`; the
+  `DatabaseMigrationReport` kind is gone, and the `caseworkctl/v1alpha2` wire
+  contract adds `PlanReport`, `ApplyReport`, and `StatusReport` and the
+  `DoctorReport` `roleMode` and `singleRoleStatement` fields.
+- Upgrade: add `identity.databaseId` to `runtime.yaml`, then run
+  `caseworkctl plan` and `caseworkctl apply` once with the new binaries
+  before starting the runtime. The first apply on a database an earlier
+  release migrated adopts it: it applies the pending migrations and records
+  the first activation. `caseworkctl dev` applies in-process on every start
+  and keeps its split runtime and migration roles.
+
 ## v0.35.0 - 2026-09-28
 
 - BREAKING: Casework reads `runtime.yaml` through the shared Registry Stack
@@ -159,10 +207,10 @@
 - BREAKING: `GET /ready` answers `503` once a source's reconciliation has
   failed five consecutive passes, and until one pass for that source succeeds.
   Schema migration 18 records each pass's outcome, so every replica and
-  `doctor` see the same health; run `casework migrate` before serving this
-  release. A database that was never migrated, or that an earlier release
-  migrated, is now named as `the Casework database schema is not current`
-  with the migrate instruction, instead of as invalid stored data.
+  `doctor` see the same health; `caseworkctl apply` applies it. A database
+  whose schema is not the runtime's own is refused at startup with the
+  `caseworkctl plan` then `caseworkctl apply` instruction, instead of as
+  invalid stored data.
 - One item a reconciliation or event-synchronization pass cannot apply no
   longer stops the rest of the pass. The pass applies every other claimed
   item, logs how many it could not apply, and retries each after its claim

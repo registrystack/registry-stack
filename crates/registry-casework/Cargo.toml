@@ -76,6 +76,11 @@ tower.workspace = true
 wiremock.workspace = true
 
 [[test]]
+name = "activation_postgres"
+path = "tests/activation_postgres.rs"
+required-features = ["postgres-test"]
+
+[[test]]
 name = "postgres_transactions"
 path = "tests/postgres_transactions.rs"
 required-features = ["postgres-test"]

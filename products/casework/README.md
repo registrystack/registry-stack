@@ -399,8 +399,8 @@ writes selects `.casework/package` in the project, which
 `caseworkctl package . --output .casework/package` builds, and
 `caseworkctl dev` packages the project on each start. `source add --apply` updates reviewed authoring
 inputs; it does not activate a production package. The deployment operator
-installs and atomically selects the reviewed package, then restarts or rolls out
-Casework. Activating a new package does not rewrite running clock occurrences;
+installs and atomically selects the reviewed package, activates it with
+`caseworkctl apply`, then restarts or rolls out Casework. Activating a new package does not rewrite running clock occurrences;
 each keeps its pinned clock policy and calculation. Holiday changes use the
 Administrator preview-and-apply flow described above.
 
@@ -408,14 +408,45 @@ The source-backed starter can use the explicit local configuration in
 [Source-backed development](DEV-SOURCES.md). Every declared source still needs
 a running source system with its own access profiles. For a deployment, follow
 [Deploy Registry Casework](../../docs/site/src/content/docs/operate/casework.mdx)
-to install the package, runtime configuration, and credentials. The deployment
-runtime applies migrations and serves the package through the `casework`
-binary:
+to install the package, runtime configuration, and credentials. A package is
+activated in the database before the runtime serves it:
 
 ```sh
-casework --runtime-config /etc/registry-casework/runtime.yaml migrate
+caseworkctl plan --runtime-config /etc/registry-casework/runtime.yaml
+caseworkctl apply --runtime-config /etc/registry-casework/runtime.yaml \
+  --operator-reference CHANGE-1234 --backup pg_dump-2026-09-27
 casework --runtime-config /etc/registry-casework/runtime.yaml serve
 ```
+
+`caseworkctl plan` connects with the runtime credential in a read-only
+transaction and reports the active activation, the candidate package digest,
+the pending schema versions, the source generations and task templates the
+activation would change, work still pinned to a policy the candidate drops, and
+`changesPending`. `caseworkctl apply` connects with the migration credential and,
+in one transaction under the migration advisory lock, applies pending schema
+migrations, registers source generations, activates task templates, refuses
+stranded pinned work, grants the runtime role its privileges when the two
+credentials name different roles, and records one row in the activation
+ledger. Re-applying the active package with nothing to change is refused and
+names its digest. `--operator-reference` is stored and audited only as a
+keyed hash scoped to the activation, and each `--backup` reference (at most
+16) is recorded as given. `caseworkctl status --runtime-config FILE` shows the
+activation history and the role mode. Exit codes are 0 for success, 1 for a
+refusal, 2 for a usage error, and 3 for an operational failure; pending changes
+are the `changesPending` field, never an exit code.
+
+The runtime configuration names its database with `identity.databaseId`, an
+operator-chosen logical identity. The first apply records it; every later apply
+and every `casework serve` start refuses a database that recorded another one.
+Startup only reads: it refuses a database with no activation, a schema other
+than its own, an active package other than the one it loaded, a source
+generation the ledger has not registered, or an activation recorded split-role
+whose runtime credential can now write the ledger, and each refusal names
+`caseworkctl plan` then `caseworkctl apply`. `casework migrate` and
+`caseworkctl db migrate` were removed; each still parses only to refuse with
+exit 2 and name the two commands. The first `caseworkctl apply` on a database
+an earlier release migrated adopts it: it migrates to the current schema and
+records the first activation.
 
 After the Administrator establishes the directory, check the same deployed
 package and runtime configuration:
@@ -633,6 +664,7 @@ The following operator-supplied variables select the maintained suites:
 | `CASEWORK_ASSIGNMENT_TEST_DATABASE_URL` | `--test assignment_postgres` | May be shared: the fixture creates a unique schema |
 | `CASEWORK_ROUTING_TEST_DATABASE_URL` | `--test routing_postgres` | May be shared: the fixture creates a unique schema |
 | `CASEWORK_INBOX_TEST_DATABASE_URL` | `--test inbox_ordering_postgres` | May be shared: the fixture creates a unique schema |
+| `CASEWORK_ACTIVATION_TEST_DATABASE_URL` | `--test activation_postgres` | May be shared: each test creates a unique schema; the split-role tests also create and drop their own login roles, so the URL's role must be allowed to create roles |
 
 The first four suites run `DROP SCHEMA public CASCADE`, so each of those four
 variables must resolve to a database no other suite uses. The remaining suites
@@ -652,9 +684,10 @@ export CASEWORK_REVIEW_MIGRATION_TEST_DATABASE_URL=postgresql://localhost/casewo
 export CASEWORK_ASSIGNMENT_TEST_DATABASE_URL=postgresql://localhost/casework_review_test
 export CASEWORK_ROUTING_TEST_DATABASE_URL=postgresql://localhost/casework_review_test
 export CASEWORK_INBOX_TEST_DATABASE_URL=postgresql://localhost/casework_inbox_ordering_test
+export CASEWORK_ACTIVATION_TEST_DATABASE_URL=postgresql://localhost/casework_activation_test
 cargo test -p registry-casework --features postgres-test --test postgres_transactions --locked
 cargo test -p registry-caseworkctl --features postgres-test --lib --locked \
-  -- --exact cli_contract_tests::db_migrate_reports_a_schema_newer_than_this_binary_with_its_own_refusal
+  -- --exact cli_contract_tests::apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal
 cargo test -p registry-casework --features postgres-test --test service_visibility --locked
 cargo test -p registry-casework --features postgres-test --test source_retention_postgres --locked
 cargo test -p registry-casework --features postgres-test --lib --locked \
@@ -663,6 +696,7 @@ cargo test -p registry-casework --features postgres-test --locked \
   --test review_postgres --test review_http --test review_payment_fixture_postgres \
   --test review_migration_postgres --test assignment_postgres --test routing_postgres
 cargo test -p registry-casework --features postgres-test --test inbox_ordering_postgres --locked
+cargo test -p registry-casework --features postgres-test --test activation_postgres --locked
 ```
 
 The maintained BReg, payment, and standalone review examples have one aggregate

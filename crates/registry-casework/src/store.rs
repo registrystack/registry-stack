@@ -47,9 +47,10 @@ const OCCURRENCE_IDENTITY_MIGRATION: &str =
 const AUDIT_WRITER_MIGRATION: &str = include_str!("../migrations/0017_audit_writer.sql");
 const SOURCE_RECONCILIATION_HEALTH_MIGRATION: &str =
     include_str!("../migrations/0018_source_reconciliation_health.sql");
+const ACTIVATIONS_MIGRATION: &str = include_str!("../migrations/0019_activations.sql");
 
 /// Every schema version in ledger order.
-const MIGRATIONS: [(i64, &str); 18] = [
+pub(crate) const MIGRATIONS: [(i64, &str); 19] = [
     (1, MIGRATION),
     (2, HOSTED_MIGRATION),
     (3, ASSIGNMENT_MIGRATION),
@@ -68,15 +69,16 @@ const MIGRATIONS: [(i64, &str); 18] = [
     (16, OCCURRENCE_IDENTITY_MIGRATION),
     (17, AUDIT_WRITER_MIGRATION),
     (18, SOURCE_RECONCILIATION_HEALTH_MIGRATION),
+    (19, ACTIVATIONS_MIGRATION),
 ];
 
 /// The newest schema version this binary knows how to run against.
-const SUPPORTED_SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;
+pub(crate) const SUPPORTED_SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;
 
 /// Refuse a ledger written by a newer binary, so a rollback onto an older one
 /// names the version skew instead of passing as a migration or failing as
 /// invalid data.
-fn refuse_newer_schema(newest_applied: Option<i64>) -> Result<(), StoreError> {
+pub(crate) fn refuse_newer_schema(newest_applied: Option<i64>) -> Result<(), StoreError> {
     match newest_applied {
         Some(found) if found > SUPPORTED_SCHEMA_VERSION => Err(StoreError::SchemaNewer {
             found,
@@ -191,6 +193,156 @@ async fn refuse_to_drop_unpublished_audit(
     }
 }
 
+/// Record `generation` as the binding generation of `source_id` inside
+/// `transaction`: subjects bound under another generation are rebound, other
+/// generations' reconciliation progress is dropped, and this generation's
+/// progress row is created. Refuses while an attempt under another generation
+/// is pending or uncertain.
+pub(crate) async fn register_source_generation_in(
+    transaction: &tokio_postgres::Transaction<'_>,
+    source_id: &str,
+    generation: &str,
+) -> Result<(), StoreError> {
+    if source_id.is_empty() || generation.is_empty() {
+        return Err(StoreError::Invalid);
+    }
+    let live:bool=transaction.query_one("SELECT EXISTS(SELECT 1 FROM casework_attempts a JOIN casework_items i ON i.item_id=a.item_id JOIN casework_subjects s ON s.source_id=i.source_id AND s.subject_kind=i.subject_kind AND s.subject_id=i.subject_id WHERE s.source_id=$1 AND s.binding_generation<>$2 AND a.state IN ('pending','uncertain'))", &[&source_id,&generation]).await?.get(0);
+    if live {
+        return Err(StoreError::AttemptPending);
+    }
+    // Source reconciliation locks its progress row before it reads or
+    // rebinds subjects; registration takes the same order.
+    transaction.execute(
+        "SELECT 1 FROM casework_source_reconciliation_progress WHERE source_id=$1 ORDER BY binding_generation FOR UPDATE",
+        &[&source_id],
+    ).await?;
+    transaction.execute(
+        "UPDATE casework_subjects SET binding_generation=$2,wanted_revision=0,applied_revision=0,representation_etag=NULL,sync_pending=true,sync_lease_until=NULL WHERE source_id=$1 AND binding_generation<>$2 AND erased_at IS NULL",
+        &[&source_id,&generation],
+    ).await?;
+    transaction.execute(
+        "DELETE FROM casework_source_reconciliation_progress WHERE source_id=$1 AND binding_generation<>$2",
+        &[&source_id, &generation],
+    ).await?;
+    transaction.execute(
+        "INSERT INTO casework_source_reconciliation_progress(source_id,binding_generation) VALUES($1,$2) ON CONFLICT(source_id,binding_generation) DO NOTHING",
+        &[&source_id, &generation],
+    ).await?;
+    Ok(())
+}
+
+/// In-flight reviews grouped by pinned policy, subject source and type, and
+/// active stage, plus open work items per queue and per source, read inside
+/// `client`.
+pub(crate) async fn pinned_work_inventory_in(
+    client: &tokio_postgres::Transaction<'_>,
+) -> Result<crate::pinned_work::PinnedWorkInventory, StoreError> {
+    let mut inventory = crate::pinned_work::PinnedWorkInventory::default();
+    for row in client
+        .query(
+            "SELECT policy_snapshot,subject_source,subject_type,active_stage_index,count(*) FROM casework_review_requests WHERE lifecycle='reviewing' GROUP BY policy_snapshot,subject_source,subject_type,active_stage_index",
+            &[],
+        )
+        .await?
+    {
+        let active_stage_index: i32 = row.try_get(3)?;
+        let reviews: i64 = row.try_get(4)?;
+        inventory.reviews.push(crate::pinned_work::PinnedReviewGroup {
+            policy: serde_json::from_value(row.try_get(0)?)
+                .map_err(|_| StoreError::Corrupt)?,
+            subject_source: row.try_get(1)?,
+            subject_type: row.try_get(2)?,
+            active_stage_index: usize::try_from(active_stage_index)
+                .map_err(|_| StoreError::Corrupt)?,
+            reviews: u64::try_from(reviews).map_err(|_| StoreError::Corrupt)?,
+        });
+    }
+    for row in client
+        .query(
+            "SELECT queue_id,count(*) FROM casework_items WHERE erased_at IS NULL AND state NOT IN ('completed','superseded','cancelled') GROUP BY queue_id",
+            &[],
+        )
+        .await?
+    {
+        let items: i64 = row.try_get(1)?;
+        inventory.work_items.insert(
+            row.try_get(0)?,
+            u64::try_from(items).map_err(|_| StoreError::Corrupt)?,
+        );
+    }
+    for row in client
+        .query(
+            "SELECT source_id,count(*) FROM casework_items WHERE erased_at IS NULL AND state NOT IN ('completed','superseded','cancelled') GROUP BY source_id",
+            &[],
+        )
+        .await?
+    {
+        let items: i64 = row.try_get(1)?;
+        inventory.work_items_by_source.insert(
+            row.try_get(0)?,
+            u64::try_from(items).map_err(|_| StoreError::Corrupt)?,
+        );
+    }
+    Ok(inventory)
+}
+
+/// Apply every unapplied migration in order under the ledger, inside the
+/// caller's transaction, and return the versions applied. The caller holds
+/// the migration lock for that transaction, so a refusal or a failure at any
+/// version leaves the schema exactly as it was. The checkpoint schema
+/// predates the ledger, so the ledger table is established first and version
+/// 1 is gated on it like every other version.
+pub(crate) async fn migrate_in(
+    transaction: &tokio_postgres::Transaction<'_>,
+) -> Result<Vec<i64>, StoreError> {
+    transaction
+        .batch_execute(
+            "CREATE TABLE IF NOT EXISTS casework_schema_migrations (\
+             version bigint PRIMARY KEY CHECK (version > 0),\
+             applied_at timestamptz NOT NULL);",
+        )
+        .await?;
+    let newest_applied: Option<i64> = transaction
+        .query_one("SELECT max(version) FROM casework_schema_migrations", &[])
+        .await?
+        .get(0);
+    refuse_newer_schema(newest_applied)?;
+    let mut versions = Vec::new();
+    for (version, migration) in MIGRATIONS {
+        let applied: bool = transaction
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM casework_schema_migrations WHERE version=$1)",
+                &[&version],
+            )
+            .await?
+            .get(0);
+        if applied {
+            continue;
+        }
+        if version == HOSTED_WORK_DROP_VERSION {
+            // Checked here, inside the same transaction that runs this
+            // version's SQL, so nothing can add a hosted-work row
+            // between the check and the drop below.
+            refuse_to_drop_hosted_work(transaction).await?;
+        }
+        if version == AUDIT_OUTBOX_DROP_VERSION {
+            // Checked here, inside the same transaction that runs this
+            // version's SQL, so nothing can add an unpublished row
+            // between the check and the drop below.
+            refuse_to_drop_unpublished_audit(transaction).await?;
+        }
+        transaction.batch_execute(migration).await?;
+        transaction
+            .execute(
+                "INSERT INTO casework_schema_migrations(version,applied_at) VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
+                &[&version],
+            )
+            .await?;
+        versions.push(version);
+    }
+    Ok(versions)
+}
+
 /// Bound how long a database connection takes to notice a server that
 /// stopped answering, for every setting the database URL leaves unset.
 ///
@@ -218,10 +370,11 @@ fn bound_database_connection(postgres: &mut PgConfig) {
     }
 }
 
-/// Serializes operator-run migrations on one session lock. A second migrator
-/// waits here instead of racing the ledger primary key. The key spells the
-/// ASCII bytes of "casework".
-const MIGRATION_LOCK_KEY: i64 = 0x6361_7365_776f_726b;
+/// Serializes operator-run migrations and package activations on one
+/// transaction-scoped advisory lock. A second migrator waits here instead of
+/// racing the ledger primary key. The key spells the ASCII bytes of
+/// "casework".
+pub const MIGRATION_LOCK_KEY: i64 = 0x6361_7365_776f_726b;
 pub(crate) const MAXIMUM_BOUNDED_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
@@ -374,6 +527,32 @@ impl PostgresStore {
             .map(|operation| operation.with_read_back(self.pool.clone()))
     }
 
+    /// Append the `request` entry of one audited operation whose entries
+    /// carry `schema` instead of the Casework audit schema.
+    pub(crate) async fn begin_audit_with_schema(
+        &self,
+        schema: &str,
+        request: Value,
+    ) -> Result<crate::audit::AuditOperation, StoreError> {
+        self.audit
+            .as_ref()
+            .ok_or(StoreError::AuditUnavailable)?
+            .begin_with_schema(schema, request)
+            .await
+            .map(|operation| operation.with_read_back(self.pool.clone()))
+    }
+
+    /// The key that pseudonymizes identifiers for this store's audit
+    /// destination.
+    pub(crate) fn audit_identifiers(
+        &self,
+    ) -> Result<registry_platform_audit::AuditKeyHasher, StoreError> {
+        self.audit
+            .as_ref()
+            .map(crate::CaseworkAudit::identifiers)
+            .ok_or(StoreError::AuditUnavailable)
+    }
+
     /// Start an audited operation that a caller requested when `actor` names
     /// one, and an audited unit of background work otherwise.
     pub(crate) async fn begin_audit_for(
@@ -396,74 +575,19 @@ impl PostgresStore {
         }
     }
 
+    /// Apply every unapplied schema migration in one transaction under the
+    /// migration lock, without recording an activation. Package activation
+    /// goes through [`PostgresStore::apply_activation`], which runs the same
+    /// migrations inside its own transaction; this entry point remains for
+    /// schema-only callers such as tests.
     pub async fn migrate(&self) -> Result<(), StoreError> {
         let mut client = self.client().await?;
-        client
-            .query_one("SELECT pg_advisory_lock($1)", &[&MIGRATION_LOCK_KEY])
-            .await?;
-        let applied = Self::apply_migrations(&mut client).await;
-        let released = client
-            .query_one("SELECT pg_advisory_unlock($1)", &[&MIGRATION_LOCK_KEY])
-            .await;
-        applied?;
-        if released?.get::<_, bool>(0) {
-            Ok(())
-        } else {
-            Err(StoreError::Corrupt)
-        }
-    }
-
-    /// Apply every unapplied migration in order under the ledger. The
-    /// checkpoint schema predates the ledger, so the ledger table is
-    /// established first and version 1 is gated on it like every other version.
-    async fn apply_migrations(client: &mut deadpool_postgres::Client) -> Result<(), StoreError> {
         let transaction = client.transaction().await?;
         transaction
-            .batch_execute(
-                "CREATE TABLE IF NOT EXISTS casework_schema_migrations (\
-                 version bigint PRIMARY KEY CHECK (version > 0),\
-                 applied_at timestamptz NOT NULL);",
-            )
+            .query_one("SELECT pg_advisory_xact_lock($1)", &[&MIGRATION_LOCK_KEY])
             .await?;
-        let newest_applied: Option<i64> = transaction
-            .query_one("SELECT max(version) FROM casework_schema_migrations", &[])
-            .await?
-            .get(0);
-        refuse_newer_schema(newest_applied)?;
+        migrate_in(&transaction).await?;
         transaction.commit().await?;
-
-        for (version, migration) in MIGRATIONS {
-            let transaction = client.transaction().await?;
-            let applied: bool = transaction
-                .query_one(
-                    "SELECT EXISTS(SELECT 1 FROM casework_schema_migrations WHERE version=$1)",
-                    &[&version],
-                )
-                .await?
-                .get(0);
-            if !applied {
-                if version == HOSTED_WORK_DROP_VERSION {
-                    // Checked here, inside the same transaction that runs this
-                    // version's SQL, so nothing can add a hosted-work row
-                    // between the check and the drop below.
-                    refuse_to_drop_hosted_work(&transaction).await?;
-                }
-                if version == AUDIT_OUTBOX_DROP_VERSION {
-                    // Checked here, inside the same transaction that runs this
-                    // version's SQL, so nothing can add an unpublished row
-                    // between the check and the drop below.
-                    refuse_to_drop_unpublished_audit(&transaction).await?;
-                }
-                transaction.batch_execute(migration).await?;
-                transaction
-                    .execute(
-                        "INSERT INTO casework_schema_migrations(version,applied_at) VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
-                        &[&version],
-                    )
-                    .await?;
-            }
-            transaction.commit().await?;
-        }
         Ok(())
     }
 
@@ -3297,27 +3421,9 @@ impl PostgresStore {
         source_id: &str,
         generation: &str,
     ) -> Result<(), StoreError> {
-        if source_id.is_empty() || generation.is_empty() {
-            return Err(StoreError::Invalid);
-        }
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        let live:bool=transaction.query_one("SELECT EXISTS(SELECT 1 FROM casework_attempts a JOIN casework_items i ON i.item_id=a.item_id JOIN casework_subjects s ON s.source_id=i.source_id AND s.subject_kind=i.subject_kind AND s.subject_id=i.subject_id WHERE s.source_id=$1 AND s.binding_generation<>$2 AND a.state IN ('pending','uncertain'))", &[&source_id,&generation]).await?.get(0);
-        if live {
-            return Err(StoreError::AttemptPending);
-        }
-        transaction.execute(
-            "UPDATE casework_subjects SET binding_generation=$2,wanted_revision=0,applied_revision=0,representation_etag=NULL,sync_pending=true,sync_lease_until=NULL WHERE source_id=$1 AND binding_generation<>$2 AND erased_at IS NULL",
-            &[&source_id,&generation],
-        ).await?;
-        transaction.execute(
-            "DELETE FROM casework_source_reconciliation_progress WHERE source_id=$1 AND binding_generation<>$2",
-            &[&source_id, &generation],
-        ).await?;
-        transaction.execute(
-            "INSERT INTO casework_source_reconciliation_progress(source_id,binding_generation) VALUES($1,$2) ON CONFLICT(source_id,binding_generation) DO NOTHING",
-            &[&source_id, &generation],
-        ).await?;
+        register_source_generation_in(&transaction, source_id, generation).await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -3404,53 +3510,10 @@ impl PostgresStore {
     pub(crate) async fn pinned_work_inventory(
         &self,
     ) -> Result<crate::pinned_work::PinnedWorkInventory, StoreError> {
-        let client = self.client().await?;
-        let mut inventory = crate::pinned_work::PinnedWorkInventory::default();
-        for row in client
-            .query(
-                "SELECT policy_snapshot,subject_source,subject_type,active_stage_index,count(*) FROM casework_review_requests WHERE lifecycle='reviewing' GROUP BY policy_snapshot,subject_source,subject_type,active_stage_index",
-                &[],
-            )
-            .await?
-        {
-            let active_stage_index: i32 = row.try_get(3)?;
-            let reviews: i64 = row.try_get(4)?;
-            inventory.reviews.push(crate::pinned_work::PinnedReviewGroup {
-                policy: serde_json::from_value(row.try_get(0)?)
-                    .map_err(|_| StoreError::Corrupt)?,
-                subject_source: row.try_get(1)?,
-                subject_type: row.try_get(2)?,
-                active_stage_index: usize::try_from(active_stage_index)
-                    .map_err(|_| StoreError::Corrupt)?,
-                reviews: u64::try_from(reviews).map_err(|_| StoreError::Corrupt)?,
-            });
-        }
-        for row in client
-            .query(
-                "SELECT queue_id,count(*) FROM casework_items WHERE erased_at IS NULL AND state NOT IN ('completed','superseded','cancelled') GROUP BY queue_id",
-                &[],
-            )
-            .await?
-        {
-            let items: i64 = row.try_get(1)?;
-            inventory.work_items.insert(
-                row.try_get(0)?,
-                u64::try_from(items).map_err(|_| StoreError::Corrupt)?,
-            );
-        }
-        for row in client
-            .query(
-                "SELECT source_id,count(*) FROM casework_items WHERE erased_at IS NULL AND state NOT IN ('completed','superseded','cancelled') GROUP BY source_id",
-                &[],
-            )
-            .await?
-        {
-            let items: i64 = row.try_get(1)?;
-            inventory.work_items_by_source.insert(
-                row.try_get(0)?,
-                u64::try_from(items).map_err(|_| StoreError::Corrupt)?,
-            );
-        }
+        let mut client = self.client().await?;
+        let transaction = client.build_transaction().read_only(true).start().await?;
+        let inventory = pinned_work_inventory_in(&transaction).await?;
+        transaction.commit().await?;
         Ok(inventory)
     }
 
@@ -4413,12 +4476,12 @@ pub enum StoreError {
     )]
     SchemaNewer { found: i64, supported: i64 },
     #[error(
-        "the Casework database schema is not current: {}, and this binary requires version {required}; apply the migrations with `casework migrate` or `caseworkctl db migrate`",
+        "the Casework database schema is not current: {}, and this binary requires version {required}; run `caseworkctl plan --runtime-config FILE` then `caseworkctl apply --runtime-config FILE`",
         applied_schema(*.applied)
     )]
     SchemaNotCurrent { applied: Option<i64>, required: i64 },
     #[error(
-        "the Casework database holds hosted work that schema migration {version} would drop: {}; nothing was changed. This release does not carry hosted work forward: keep this database with the release that wrote it until the work it holds is exported, then migrate a fresh Casework database for this release",
+        "the Casework database holds hosted work that schema migration {version} would drop: {}; nothing was changed. This release does not carry hosted work forward: keep this database with the release that wrote it until the work it holds is exported, then apply this release to a fresh Casework database with `caseworkctl apply --runtime-config FILE`",
         hosted_row_counts(.tables)
     )]
     HostedWorkWouldBeDropped {
@@ -4426,7 +4489,7 @@ pub enum StoreError {
         tables: Vec<(&'static str, i64)>,
     },
     #[error(
-        "the Casework database holds {rows} audit record(s) that schema migration {version} would drop before they reach the audit journal; nothing was changed. Run the release that wrote them until its audit publisher has published every record, then migrate again"
+        "the Casework database holds {rows} audit record(s) that schema migration {version} would drop before they reach the audit journal; nothing was changed. Run the release that wrote them until its audit publisher has published every record, then run `caseworkctl apply --runtime-config FILE` again"
     )]
     UnpublishedAuditWouldBeDropped { version: i64, rows: i64 },
     #[error("the Casework database operation failed{}", violated_constraint(.0))]

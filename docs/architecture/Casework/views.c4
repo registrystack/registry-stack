@@ -240,9 +240,10 @@ views {
       development client files itself only when apply is requested. That authoring composition
       activates no package and provisions no authority. Production selection is an operator
       action: install the reviewed Casework package, supply runtime bindings and secrets, add
-      task authority only when those templates are enabled, apply migrations with caseworkctl db
-      migrate or the casework binary\'s migrate entry point, then start or roll out the runtime
-      with its serve entry point. The caseworkctl dev command can run a retained local service over
+      task authority only when those templates are enabled, activate the package with caseworkctl
+      plan then caseworkctl apply, which migrate the schema and record the activation in one
+      transaction, then start or roll out the runtime with its serve entry point, which only
+      reads that activation. The caseworkctl dev command can run a retained local service over
       a BReg development session with token and task-exchange helpers. Doctor checks configuration,
       database, source, issuer and directory readiness, but source-reader readiness cannot attest that
       BReg webhook delivery is wired end to end. Retention erasure and uncertain-attempt

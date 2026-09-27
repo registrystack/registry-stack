@@ -3,7 +3,7 @@ set -eu
 
 # Build and execute the smallest maintained packaged-service journey for J1/J5.
 # The lifecycle integration test creates a temporary authored project, starts
-# the candidate service and CLI, runs explicit migrate/doctor/readiness checks,
+# the candidate service and CLI, runs explicit apply/doctor/readiness checks,
 # and retains pending and terminal work across process restarts.
 #
 # It also loads the exact unified Node and Python Casework facades against the
