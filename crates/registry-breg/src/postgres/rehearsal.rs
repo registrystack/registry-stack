@@ -41,7 +41,9 @@ use super::{
 
 /// The verified predecessor and the prepared candidate one rehearsal binds.
 pub struct SuccessorMigrationRehearsal<'a> {
-    /// The predecessor registry compiled from its signed sources.
+    /// The predecessor registry compiled from its signed sources. The
+    /// rehearsal installs it with the schema of the baseline the candidate's
+    /// migration plan binds.
     pub predecessor: &'a CompiledRegistry,
     /// The schema fingerprint the signed predecessor manifest binds.
     pub predecessor_schema_fingerprint: &'a str,
@@ -235,13 +237,26 @@ async fn rehearse_in_transaction(
     refuse_existing_managed_objects(transaction)
         .await
         .map_err(|_| MigrationRehearsalError::Database)?;
-    install_compiled_schema(transaction, rehearsal.predecessor, runtime_role)
+    // The successor plan was computed from the baseline its manifest binds,
+    // so the rehearsal installs that schema rather than the one the
+    // predecessor's sources compile to under this compiler.
+    let prior_baseline = rehearsal
+        .candidate
+        .manifest()
+        .migration_plan
+        .prior_baseline
+        .as_ref()
+        .ok_or(MigrationRehearsalError::NotSuccessor)?;
+    let predecessor = rehearsal
+        .predecessor
+        .with_migration_baseline_schema(prior_baseline);
+    install_compiled_schema(transaction, &predecessor, runtime_role)
         .await
         .map_err(|_| MigrationRehearsalError::BaselineNotReproducible)?;
     let predecessor_fingerprint = managed_schema_fingerprint(
         transaction,
         runtime_role,
-        &ExpectedManagedCatalog::compiled(rehearsal.predecessor),
+        &ExpectedManagedCatalog::compiled(&predecessor),
     )
     .await
     .map_err(|_| MigrationRehearsalError::BaselineNotReproducible)?;
@@ -257,7 +272,7 @@ async fn rehearse_in_transaction(
     let candidate = rehearsal.candidate.registry();
     match plan {
         Some(plan) => {
-            let prior_tables = entity_tables(rehearsal.predecessor);
+            let prior_tables = entity_tables(&predecessor);
             let candidate_tables = entity_tables(candidate);
             rehearse_assertions(
                 transaction,

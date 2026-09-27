@@ -283,6 +283,11 @@ load (release provenance).
   compiler cannot install is refused. The rehearsed migration must reach the
   candidate's own fingerprint. `apply` checks the live database before it
   migrates.
+- The rehearsal installs the predecessor schema from the baseline the
+  candidate's migration plan binds, not from the schema the predecessor's
+  sources compile to under this compiler, so an engine-owned object this
+  compiler adds, such as a reference index, is rehearsed as the plan creates
+  it rather than refused as already present.
 
 ### Tests
 
@@ -300,7 +305,10 @@ load (release provenance).
 covers both a drift that is reported and a final mismatch that is still
 refused, and
 `real_postgres_rehearsal_refuses_a_predecessor_it_cannot_install` covers the
-install refusal. `products/breg/scripts/test-adopter-workflow.sh
+install refusal.
+`crates/registry-breg/tests/postgres_reference_indexes.rs`:
+`the_rehearsal_installs_a_predecessor_baseline_without_reference_indexes`.
+`products/breg/scripts/test-adopter-workflow.sh
 --from-release` runs the upgrade from the previous release end to end.
 
 ### Accepted residuals

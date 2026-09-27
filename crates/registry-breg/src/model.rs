@@ -1652,6 +1652,30 @@ impl CompiledRegistry {
         }
     }
 
+    /// This registry with the schema-bearing inventories of a retained
+    /// migration baseline: its entities, physical names, actions, and the DDL
+    /// this generator emits for them. A successor plan is computed from the
+    /// baseline, so this is the schema the plan runs over, even when the
+    /// predecessor's sources compile to more engine-owned objects under this
+    /// compiler.
+    #[cfg(feature = "runtime")]
+    pub(crate) fn with_migration_baseline_schema(
+        &self,
+        baseline: &crate::package::CompiledRegistryMigrationBaseline,
+    ) -> Self {
+        Self {
+            entities: baseline.entities.clone(),
+            physical_names: baseline.physical_names.clone(),
+            action_inventory: baseline.actions.clone(),
+            ddl: crate::generated_ddl::generate_ddl_with_actions(
+                &baseline.entities,
+                &baseline.physical_names,
+                &baseline.actions,
+            ),
+            ..self.clone()
+        }
+    }
+
     pub fn registry_id(&self) -> &str {
         &self.registry_id
     }

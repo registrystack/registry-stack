@@ -36,9 +36,9 @@ use registry_breg::package::{
     PackageModuleSource, PackageSourceFile, SignaturePolicy, VerifiedPackage,
 };
 use registry_breg::postgres::{
-    install_compiled_schema, managed_schema_fingerprint, verify_catalog_identity_for_catalog,
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresKernelError,
-    PostgresRecordReadService, RegistryLockKey,
+    install_compiled_schema, managed_schema_fingerprint, rehearse_successor_migration,
+    verify_catalog_identity_for_catalog, ExpectedManagedCatalog, ExpectedRegistryIdentity,
+    PostgresKernelError, PostgresRecordReadService, RegistryLockKey, SuccessorMigrationRehearsal,
 };
 use registry_breg::startup::{prepare_startup, StartupError};
 use registry_breg::CompiledRegistry;
@@ -298,6 +298,96 @@ async fn a_successor_adds_reference_indexes_to_a_database_activated_without_them
     startup(&database, &successor, &upgraded, 2)
         .await
         .expect("startup accepts the upgraded catalog");
+    database.cleanup().await;
+}
+
+/// The rehearsal installs the predecessor the successor plan was computed
+/// from. A predecessor signed by an engine that did not index reference
+/// columns recompiles with them under this one, so installing the recompiled
+/// schema would already hold the index the plan adds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_rehearsal_installs_a_predecessor_baseline_without_reference_indexes() {
+    let database = TestDatabase::create(2).await;
+    let _unused_harness_configs = (&database.runtime_config, &database.tls_runtime_config);
+    let registry = compile_registry(1);
+    let fingerprint = rehearsed_fingerprint(&database, &registry).await;
+    let initial = prepare_package(build_request(
+        1,
+        None,
+        &fingerprint,
+        PackageMigrationPlanInput::InitialCompiledDdl,
+    ))
+    .expect("initial package prepares");
+    let prior_revision = initial.manifest().package_revision.clone();
+
+    // The fingerprint an engine without reference indexes signed.
+    let site_index = reference_index_name(&registry, "site");
+    let (mut migration, task) = database.connect_migration().await;
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("fingerprint transaction starts");
+    install_compiled_schema(&transaction, &registry, &database.runtime_role)
+        .await
+        .expect("schema installs");
+    transaction
+        .batch_execute(&format!("DROP INDEX registry_data.\"{site_index}\""))
+        .await
+        .expect("the reference index is removed");
+    let prior_fingerprint = managed_schema_fingerprint(
+        &transaction,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(&registry),
+    )
+    .await
+    .expect("the index-free catalog is fingerprinted");
+    transaction
+        .rollback()
+        .await
+        .expect("fingerprint rehearsal rolls back");
+    task.abort();
+
+    let mut baseline = CompiledRegistryMigrationBaseline::from_compiled(&prior_revision, &registry);
+    for entity in baseline.entities.values_mut() {
+        entity
+            .indexes
+            .retain(|member, _| !member.starts_with("reference:"));
+    }
+    for names in baseline.physical_names.entities.values_mut() {
+        names
+            .indexes
+            .retain(|member, _| !member.starts_with("reference:"));
+    }
+    let successor = prepare_package(build_request(
+        2,
+        Some(&prior_revision),
+        &fingerprint,
+        PackageMigrationPlanInput::SuccessorFromBaseline {
+            prior_baseline: Box::new(baseline),
+        },
+    ))
+    .expect("successor package prepares without reviewed SQL");
+
+    let outcome = rehearse_successor_migration(
+        &database.migration_config,
+        &database.migration_role,
+        &database.runtime_role,
+        SuccessorMigrationRehearsal {
+            predecessor: &registry,
+            predecessor_schema_fingerprint: &prior_fingerprint,
+            candidate: &successor,
+        },
+    )
+    .await
+    .expect("the successor rehearses over the index-free predecessor");
+    assert_eq!(
+        outcome.baseline_fingerprint_drift, None,
+        "the installed predecessor measures to the fingerprint it was signed with"
+    );
+    assert!(
+        !index_definitions(&database).await.contains_key(&site_index),
+        "the rehearsal rolls back"
+    );
     database.cleanup().await;
 }
 
