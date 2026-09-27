@@ -1153,6 +1153,20 @@ class Casework:
                       "hashKeyRef": "secret:file/audit-key"},
         })
 
+    def repackage(self, side: Side) -> bool:
+        """Rebuild the package with this side's caseworkctl when the deployed
+        one predates the shared package format, the upgrade step the Casework
+        changelog names. Returns whether a rebuild was needed."""
+        if (self.package / "SHA256SUMS").exists():
+            return False
+        rebuilt = self.work / "package-rebuilt"
+        side.run("caseworkctl", "package", str(self.project), "--output", str(rebuilt))
+        runtime = load_yaml(self.runtime)
+        runtime["package"]["root"] = str(rebuilt)
+        dump_yaml(self.runtime, runtime)
+        self.package = rebuilt
+        return True
+
     def call(self, actor: str, method: str, path: str, body: Any = None,
              headers: dict[str, str] | None = None) -> tuple[int, dict[str, str], Any]:
         subject, scope, human = CASEWORK_ACTORS[actor]
@@ -1262,6 +1276,7 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
 
     archived = archive_audit_tables(postgres, "casework", before_counts, work / "audit-table-archive")
     archived_files = archive_audit_files(casework.audit, "casework.ndjson", work / "audit-archive")
+    repackaged = casework.repackage(new)
     new.run("casework", *runtime, "migrate")
     casework.grant_existing()
     losses = row_count_losses(before_counts, postgres.row_counts("casework"), archived)
@@ -1281,7 +1296,7 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
         "tables": len(before_counts),
         "auditFilesArchived": archived_files,
         "archivedAuditTables": archived,
-        "adoptedInstanceClaim": claim is None,
+        "repackaged": repackaged,
         "viewDifferences": differences,
         "rowLosses": losses,
     }
