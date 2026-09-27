@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 
 use crate::contract::{
     EventConditionSource, EventTrigger, FieldTypeSource, HookSource, MutationMode, Operation,
-    PackageIdentitySource, ProvenanceFieldSource,
+    ProvenanceFieldSource,
 };
 use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::DdlInventory;
@@ -74,8 +74,6 @@ pub(crate) struct EffectiveModel<'a> {
     pub version: &'a str,
     pub default_language: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub package: Option<&'a PackageIdentitySource>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest_projection: Option<&'a CompiledManifestProjection>,
     pub module_order: &'a [String],
     pub module_closure: &'a [CompiledModuleIdentity],
@@ -95,7 +93,6 @@ pub(crate) fn generate_artifacts(
     registry_id: &str,
     version: &str,
     default_language: &str,
-    package: Option<&PackageIdentitySource>,
     manifest_projection: Option<&CompiledManifestProjection>,
     module_order: &[String],
     module_closure: &[CompiledModuleIdentity],
@@ -115,7 +112,6 @@ pub(crate) fn generate_artifacts(
         registry_id,
         version,
         default_language,
-        package,
         manifest_projection,
         module_order,
         module_closure,

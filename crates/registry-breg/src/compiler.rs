@@ -339,7 +339,6 @@ pub fn compile_project_with_assets(
         &project.registry.id,
         &project.registry.version,
         &project.registry.default_language,
-        project.package.as_ref(),
         manifest_projection.as_ref(),
         &module_order,
         &module_closure,

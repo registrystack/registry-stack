@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- BREAKING: `registryRevision` is a function of the compiled model only. The
+  project's `package` block no longer appears in
+  `compiled/effective-model.json`, so a project that declares a package
+  identity compiles to a different `registryRevision` than it did before, and
+  two projects that differ only in their package identity compile to the same
+  one.
+
 ## v0.35.0 - 2026-09-28
 
 - Upgrade a registry whose active package the previous `bregctl` release
