@@ -29,7 +29,8 @@
   - An ingestion run creation, cancellation, chunk replay, or receipt
     recovery refused after its `breg-ingestion-audit/v1` request entry is
     answered in that schema with a `refused` response, and not recorded again
-    as a general refusal.
+    as a general refusal. A transition whose commit returned an error is
+    answered `unfinished`, since that error does not prove a rollback.
   - Event delivery records a terminal outcome and a payload expiry only after
     the delivery state commits. An attempt whose lease commit fails is
     answered with `worker_interrupted`. An operator replay writes a
