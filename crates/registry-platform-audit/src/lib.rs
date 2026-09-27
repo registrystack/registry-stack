@@ -134,6 +134,32 @@ pub enum AuditError {
     },
 }
 
+impl AuditError {
+    /// Describe why an audit destination could not be opened, for a startup
+    /// refusal an operator reads. It carries the writer's own rule and
+    /// recovery sentence, or the operating system's error, and never the
+    /// configured path, a record, or a secret.
+    #[must_use]
+    pub fn operator_description(&self) -> String {
+        match self {
+            // A companion destination's lock can only be held by another
+            // invocation of that same one-shot command; the running service
+            // never opens this sibling file.
+            Self::SinkLocked {
+                role: Some(role), ..
+            } => format!(
+                "another {role} invocation holds the single-writer lock on its companion audit \
+                 file; wait for it to finish before starting this one"
+            ),
+            Self::SinkLocked { role: None, .. } => "another process holds the single-writer \
+                 lock beside the audit file; stop it before starting this one"
+                .to_owned(),
+            Self::Io(io) => format!("the audit file could not be opened: {io}"),
+            _ => "the audit file could not be opened".to_owned(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum AuditReferenceHashError {
@@ -622,6 +648,28 @@ fn hex_value_any(byte: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::{redact::QueryRedactor, *};
+
+    #[test]
+    fn a_lock_collision_says_whether_to_wait_or_stop_and_never_names_the_path() {
+        let path = "/var/lib/registry/audit.jsonl.lock";
+        let companion = AuditError::SinkLocked {
+            path: path.to_owned(),
+            role: Some("registryctl".to_owned()),
+        }
+        .operator_description();
+        assert!(companion.contains("registryctl"), "{companion}");
+        assert!(companion.contains("wait"), "{companion}");
+        assert!(!companion.contains("stop it"), "{companion}");
+        let service = AuditError::SinkLocked {
+            path: path.to_owned(),
+            role: None,
+        }
+        .operator_description();
+        assert!(service.contains("stop it"), "{service}");
+        for description in [companion, service] {
+            assert!(!description.contains(path), "{description}");
+        }
+    }
 
     #[test]
     fn audit_hash_secret_debug_never_exposes_raw_bytes() {

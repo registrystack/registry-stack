@@ -26,7 +26,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use clap::{Arg, Command};
-use registry_platform_audit::{AuditError, AuditProfile, AuditWriter};
+use registry_platform_audit::{AuditProfile, AuditWriter};
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_config::{ProtectedSecret, SecretProvider, SecretResolver};
 use registry_platform_httputil::destination::{
@@ -508,35 +508,10 @@ pub async fn open_audit(
             .for_process(process)
             .map_err(|error| RuntimeError::AuditDestination(error.to_string()))?;
     }
-    let writer = AuditWriter::open(destination).await.map_err(|error| {
-        RuntimeError::AuditDestination(describe_audit_destination_failure(&error))
-    })?;
+    let writer = AuditWriter::open(destination)
+        .await
+        .map_err(|error| RuntimeError::AuditDestination(error.operator_description()))?;
     Ok((audit_profile.key_hasher(), SchedulingAudit::new(writer)))
-}
-
-/// Name the rule an audit destination refusal broke, without a record or a
-/// path the operator did not configure.
-fn describe_audit_destination_failure(error: &AuditError) -> String {
-    match error {
-        // A companion destination's lock can only be held by another
-        // invocation of that same one-shot command; the running service
-        // never opens this sibling file.
-        AuditError::SinkLocked {
-            role: Some(role), ..
-        } => format!(
-            "another {role} invocation holds the single-writer lock on its companion audit \
-             file; wait for it to finish before starting this one"
-        ),
-        AuditError::SinkLocked { role: None, .. } => "another process holds the single-writer \
-             lock beside audit.path; stop it before starting this one"
-            .to_owned(),
-        AuditError::Io(io) if io.kind() == std::io::ErrorKind::PermissionDenied => format!(
-            "{io}; the audit directory must belong to the runtime user and not be group- or \
-             world-writable, and audit.path must belong to that user with mode 0600"
-        ),
-        AuditError::Io(io) => format!("the audit file could not be opened ({})", io.kind()),
-        _ => "the audit file could not be opened".to_owned(),
-    }
 }
 
 /// Resolve the audit key, naming the reference on refusal.
@@ -1057,27 +1032,5 @@ mod tests {
             hooks: Vec::new(),
         };
         assert_eq!(offering_pool_ids(&policy), vec!["north".to_owned()]);
-    }
-
-    #[test]
-    fn a_companion_lock_collision_names_the_colliding_role_and_says_to_wait() {
-        let error = AuditError::SinkLocked {
-            path: "/var/lib/scheduling/audit.schedulingctl.jsonl.lock".to_owned(),
-            role: Some("schedulingctl".to_owned()),
-        };
-        let message = describe_audit_destination_failure(&error);
-        assert!(message.contains("schedulingctl"), "{message}");
-        assert!(message.contains("wait"), "{message}");
-        assert!(!message.contains("stop it"), "{message}");
-    }
-
-    #[test]
-    fn a_service_lock_collision_says_to_stop_the_other_process() {
-        let error = AuditError::SinkLocked {
-            path: "/var/lib/scheduling/audit.jsonl.lock".to_owned(),
-            role: None,
-        };
-        let message = describe_audit_destination_failure(&error);
-        assert!(message.contains("stop it"), "{message}");
     }
 }

@@ -479,6 +479,10 @@ pub enum DeliveryAuditDisposition {
     DeadLettered,
     Expired,
     ReplayPending,
+    /// A terminal disposition's commit failed and its fate cannot be read
+    /// back, so the delivery may hold that disposition or still be leased.
+    /// It asserts no database state.
+    Unknown,
 }
 
 /// One neutral delivery-audit event.

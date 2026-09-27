@@ -8,8 +8,11 @@
   dropped unanswered, by an early return, a panic, or a canceled future,
   writes the product's `unfinished` record as the response, so a request
   entry stays unpaired only when the process stops while a write is in
-  flight. A file destination flushes that line on the runtime,
-  or when the last reference to the writer is dropped at shutdown.
+  flight, or when the writer has already stopped after a failed write: the
+  response a dropped handle owes is then logged and discarded while the
+  process keeps running, as is a response the stopped writer refuses. A file
+  destination flushes that line on the runtime, or when the last reference
+  to the writer is dropped at shutdown.
 
 - Refuse an audit file name longer than 246 bytes, including a process
   role's sibling name, so the writer's rotated and lock files fit a 255-byte

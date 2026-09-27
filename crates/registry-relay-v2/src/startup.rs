@@ -689,9 +689,16 @@ fn verifier_issuer_profile(issuer: &IssuerRuntime) -> Result<IssuerProfile, Star
 }
 
 async fn build_audit(destination: AuditDestination) -> Result<RelayAudit, StartupError> {
-    let writer = AuditWriter::open(destination)
-        .await
-        .map_err(|_| StartupError::AuditUnavailable)?;
+    let writer = AuditWriter::open(destination).await.map_err(|error| {
+        // The description names the rule the writer applied and how to
+        // recover, and never the path or a secret.
+        tracing::error!(
+            target: "registry_relay_v2::startup",
+            reason = %error.operator_description(),
+            "the audit destination was refused"
+        );
+        StartupError::AuditUnavailable
+    })?;
     Ok(RelayAudit::new(writer))
 }
 

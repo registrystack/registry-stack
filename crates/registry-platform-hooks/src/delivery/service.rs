@@ -1479,11 +1479,12 @@ impl<S: DeliverySeams> DeliveryService<S> {
                 None => {
                     // The disposition's fate cannot be read, and one that
                     // did commit is never answered by expiry recovery, so the
-                    // attempt is answered now as interrupted: a second
-                    // interrupted answer is harmless and none is not.
+                    // attempt is answered now as interrupted, with a
+                    // disposition that claims no database state: a second
+                    // answer is harmless and none is not.
                     let interrupted = PendingAudit {
                         outcome: DeliveryAuditOutcome::WorkerInterrupted,
-                        disposition: DeliveryAuditDisposition::RetryPending,
+                        disposition: DeliveryAuditDisposition::Unknown,
                         ..terminal
                     };
                     // A refused entry has already stopped the product's
@@ -1706,7 +1707,9 @@ fn transition_holds(
         }
         (
             DeliveryAuditPhase::Terminal,
-            DeliveryAuditDisposition::Leased | DeliveryAuditDisposition::ReplayPending,
+            DeliveryAuditDisposition::Leased
+            | DeliveryAuditDisposition::ReplayPending
+            | DeliveryAuditDisposition::Unknown,
         ) => false,
     }
 }
@@ -4041,8 +4044,9 @@ mod tests {
             vec![(
                 DeliveryAuditPhase::Terminal,
                 DeliveryAuditOutcome::WorkerInterrupted,
-                DeliveryAuditDisposition::RetryPending,
-            )]
+                DeliveryAuditDisposition::Unknown,
+            )],
+            "the answer claims neither a retry nor the refused delivery"
         );
         let backoff: Duration = READ_BACK_BACKOFF.iter().sum();
         assert!(
