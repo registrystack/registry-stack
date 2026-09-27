@@ -231,6 +231,18 @@ class SideTest(unittest.TestCase):
                 MODULE.check_binaries(side, "0.33.0", MODULE.BINARIES)
 
 
+def load_json(path: Path) -> object:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def dump_json(path: Path, document: object) -> None:
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+
+# JSON is YAML, so the runtime document round-trips without PyYAML, which the
+# release-tool CI step does not install.
+@unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
+@unittest.mock.patch.object(MODULE, "load_yaml", load_json)
 class CaseworkPackageTest(unittest.TestCase):
     def casework(self, root: Path) -> object:
         casework = MODULE.Casework.__new__(MODULE.Casework)
@@ -239,7 +251,7 @@ class CaseworkPackageTest(unittest.TestCase):
         casework.package = root / "package"
         casework.runtime = root / "runtime.yaml"
         casework.package.mkdir()
-        MODULE.dump_yaml(casework.runtime, {"package": {"root": str(casework.package)}})
+        dump_json(casework.runtime, {"package": {"root": str(casework.package)}})
         return casework
 
     def test_a_package_from_before_the_shared_format_is_rebuilt_by_the_new_side(self) -> None:
@@ -252,8 +264,7 @@ class CaseworkPackageTest(unittest.TestCase):
             side.run.assert_called_once_with("caseworkctl", "package", str(casework.project),
                                              "--output", str(rebuilt))
             self.assertEqual(casework.package, rebuilt)
-            self.assertEqual(MODULE.load_yaml(casework.runtime)["package"]["root"],
-                             str(rebuilt))
+            self.assertEqual(load_json(casework.runtime)["package"]["root"], str(rebuilt))
 
     def test_a_shared_format_package_is_kept(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -262,7 +273,7 @@ class CaseworkPackageTest(unittest.TestCase):
             side = unittest.mock.Mock()
             self.assertFalse(casework.repackage(side))
             side.run.assert_not_called()
-            self.assertEqual(MODULE.load_yaml(casework.runtime)["package"]["root"],
+            self.assertEqual(load_json(casework.runtime)["package"]["root"],
                              str(casework.package))
 
 
