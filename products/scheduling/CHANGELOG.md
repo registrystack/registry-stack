@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.35.0 - 2026-09-28
+
 - BREAKING: write audit through the shared platform audit writer instead of
   a hash-chained journal published from a PostgreSQL outbox.
   - The `audit` block takes `hashKeyRef`, `destination` (`file`, the

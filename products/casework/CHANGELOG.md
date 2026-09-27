@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.35.0 - 2026-09-28
+
 - BREAKING: Casework reads `runtime.yaml` through the shared Registry Stack
   runtime configuration loader and declares its secret providers, database,
   listener bind, OpenID Connect issuer and clients, and audit key through the

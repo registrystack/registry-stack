@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.35.0 - 2026-09-28
+
 - BREAKING: write audit through the shared platform audit writer instead of
   the keyed hash chain. Every entry is one JSON line with the members
   `schema`, `eventId`, `time`, `phase`, `correlation`, and `record`: an access

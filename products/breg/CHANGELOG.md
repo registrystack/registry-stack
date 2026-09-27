@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.35.0 - 2026-09-28
+
 - Upgrade a registry whose active package the previous `bregctl` release
   built. A package without the shared `SHA256SUMS` envelope is read as the
   predecessor by `diff --runtime-config`, `test --baseline-runtime-config`,
