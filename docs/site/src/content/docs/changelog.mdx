@@ -815,6 +815,16 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-breg/src/api/tests/immediate_action_tests.rs;
     products/breg/TASK_GRANTS.md. */}
 
+- BREAKING: BReg refuses to compile a module that contributes an access
+  profile declaring a `taskGrant`, whether on an entity it adds or on one it
+  extends, with `access_profile.task_grant.module_forbidden`. Task-grant
+  ceilings are checked only where grants are authored, in project
+  `accessProfiles`; declare the task-grant profile there.
+
+{/* Evidence: crates/registry-breg/src/compiler.rs, validate_module_access_profile_task_grants;
+    crates/registry-breg/tests/standing_agent_ceiling.rs, module_contributed_profiles_cannot_declare_a_task_grant;
+    products/breg/TASK_GRANTS.md. */}
+
 - BREAKING: BReg accepts an `act` claim of exactly `{sub, iss}` when `iss`
   equals the verified token issuer, as a token exchange writes it, beside
   exactly `{sub}`. A token whose `act.sub` is the trusted actor for its

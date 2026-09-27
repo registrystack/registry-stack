@@ -161,8 +161,9 @@ a fresh correlation identifier, action, keyed citizen and client pseudonyms,
 and outcome. A cancelled operation records a minimized `unfinished` response
 when the process and writer can complete it. Neither stream records field
 values, prompts, tokens, or model output. A refused request append prevents
-the operation; a refused response append prevents result release but cannot
-undo a committed registry effect.
+the operation; a refused response append cannot undo a committed registry
+effect, so the operation is answered as uncertain rather than refused, and the
+review page still signs out a person whose session it has already removed.
 
 The file destination durably accepts entries, rotates at 100 MiB by default,
 and retains sealed files for 90 days by default. Each process needs its own
