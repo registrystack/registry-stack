@@ -49,6 +49,28 @@ pub struct SuccessorMigrationRehearsal<'a> {
     pub candidate: &'a PreparedPackage,
 }
 
+/// What a successful rehearsal reports beside its success.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RehearsalOutcome {
+    /// The predecessor schema this compiler installs does not measure to the
+    /// fingerprint its signed manifest binds. The manifest does not record
+    /// which engine release built it, and the managed catalog includes
+    /// engine-owned tables, so a predecessor signed by an earlier release
+    /// always drifts. The comparison is advisory: the rehearsal still
+    /// installs the predecessor, runs the successor migration, and holds the
+    /// result to the candidate fingerprint, and apply checks the live database.
+    pub baseline_fingerprint_drift: Option<BaselineFingerprintDrift>,
+}
+
+/// The two predecessor schema fingerprints a drifted rehearsal compared.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BaselineFingerprintDrift {
+    /// The fingerprint the signed predecessor manifest binds.
+    pub signed: String,
+    /// The fingerprint of the predecessor schema this compiler installed.
+    pub measured: String,
+}
+
 /// Which assertion set of a reviewed migration a refusal names.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RehearsalAssertionPhase {
@@ -78,7 +100,7 @@ pub enum MigrationRehearsalError {
     NotSuccessor,
     #[error("the candidate package's reviewed migration plan could not be rederived")]
     ReviewedPlan,
-    #[error("the current compiler does not reproduce the verified predecessor schema fingerprint")]
+    #[error("the current compiler cannot install the verified predecessor schema")]
     BaselineNotReproducible,
     #[error("compiler statement {statement_id} failed: {failure}")]
     CompilerStatement {
@@ -129,7 +151,7 @@ pub async fn rehearse_successor_migration(
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
     rehearsal: SuccessorMigrationRehearsal<'_>,
-) -> RehearsalResult<()> {
+) -> RehearsalResult<RehearsalOutcome> {
     let candidate = rehearsal.candidate;
     let manifest = candidate.manifest();
     if manifest.prior_revision.is_none() || manifest.migration_plan.prior_baseline.is_none() {
@@ -205,7 +227,7 @@ async fn rehearse_in_transaction(
     rehearsal: &SuccessorMigrationRehearsal<'_>,
     plan: Option<&ValidatedReviewedMigrationPlan>,
     statements: &[RehearsedStatement<'_>],
-) -> RehearsalResult<()> {
+) -> RehearsalResult<RehearsalOutcome> {
     transaction
         .batch_execute("SET LOCAL lock_timeout = '5s'; SET LOCAL statement_timeout = '300s'")
         .await
@@ -223,9 +245,14 @@ async fn rehearse_in_transaction(
     )
     .await
     .map_err(|_| MigrationRehearsalError::BaselineNotReproducible)?;
-    if predecessor_fingerprint != rehearsal.predecessor_schema_fingerprint {
-        return Err(MigrationRehearsalError::BaselineNotReproducible);
-    }
+    let outcome = RehearsalOutcome {
+        baseline_fingerprint_drift: (predecessor_fingerprint
+            != rehearsal.predecessor_schema_fingerprint)
+            .then(|| BaselineFingerprintDrift {
+                signed: rehearsal.predecessor_schema_fingerprint.to_owned(),
+                measured: predecessor_fingerprint,
+            }),
+    };
 
     let candidate = rehearsal.candidate.registry();
     match plan {
@@ -298,7 +325,7 @@ async fn rehearse_in_transaction(
     if measured != rehearsal.candidate.manifest().schema_fingerprint {
         return Err(MigrationRehearsalError::FinalSchemaMismatch);
     }
-    Ok(())
+    Ok(outcome)
 }
 
 fn entity_tables(registry: &CompiledRegistry) -> Vec<String> {

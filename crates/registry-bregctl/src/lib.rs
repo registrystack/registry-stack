@@ -26,7 +26,7 @@ use registry_breg::package::{
     DIGEST_PIN_UNVERIFIABLE, FIXTURE_JOURNEYS_PATH, MAX_PACKAGE_SOURCE_FILE_BYTES,
     MAX_RHAI_PLANNER_PATH_BYTES, MAX_RHAI_PLANNER_SOURCE_BYTES,
 };
-use registry_breg::postgres::MigrationRehearsalError;
+use registry_breg::postgres::{BaselineFingerprintDrift, MigrationRehearsalError};
 use registry_breg::runtime_config::RuntimeConfigError;
 use registry_breg::tooling::{classify_registry_diff, CompiledRegistryDiff, DiffClassification};
 use registry_breg::{
@@ -1551,6 +1551,8 @@ struct SchemaTestSuccessReport {
     signing_input_sha256: String,
     successful_journey_ids: Vec<String>,
     receipt: ArtifactReport,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    diagnostics: Vec<Diagnostic>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -4069,7 +4071,29 @@ fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, FailureReport> {
             sha256: outcome.receipt_sha256,
             byte_length: outcome.receipt_bytes,
         },
+        diagnostics: outcome
+            .baseline_fingerprint_drift
+            .iter()
+            .map(baseline_fingerprint_drift_finding)
+            .collect(),
     })
+}
+
+/// The advisory finding for a predecessor schema that this compiler installs
+/// differently from the fingerprint its signed package binds.
+fn baseline_fingerprint_drift_finding(drift: &BaselineFingerprintDrift) -> Diagnostic {
+    Diagnostic {
+        severity: DiagnosticSeverity::Finding,
+        code: "migration.rehearsal.baseline_fingerprint_drift".to_owned(),
+        path: "baselineRuntimeConfig".to_owned(),
+        message: format!(
+            "the predecessor schema this bregctl installs measures {}, but its signed package binds {}; \
+             an earlier bregctl release built it, or this compiler installs it differently. The successor \
+             migration was rehearsed over this bregctl's installation of the predecessor and reaches the \
+             candidate fingerprint; apply checks the live database before it migrates",
+            drift.measured, drift.signed
+        ),
+    }
 }
 
 /// Compile the verified predecessor so `test` can rehearse the successor
@@ -10357,6 +10381,33 @@ fn render_report(lead: &str, pairs: &[(&str, String)], stdout: &mut dyn Write) -
     stdout.write_all(lines.finish().as_bytes())
 }
 
+/// Render the common report shape followed by the advisory findings a
+/// successful command still reports.
+fn render_report_with_findings(
+    lead: &str,
+    pairs: &[(&str, String)],
+    diagnostics: &[Diagnostic],
+    stdout: &mut dyn Write,
+) -> io::Result<()> {
+    let mut lines = report::Lines::new();
+    lines.lead(lead);
+    lines.pairs(pairs);
+    let findings = diagnostics
+        .iter()
+        .map(|diagnostic| report::Finding {
+            severity: match diagnostic.severity {
+                DiagnosticSeverity::Error => report::Severity::Error,
+                DiagnosticSeverity::Finding => report::Severity::Finding,
+            },
+            code: &diagnostic.code,
+            path: &diagnostic.path,
+            message: &diagnostic.message,
+        })
+        .collect::<Vec<_>>();
+    lines.findings(&findings);
+    stdout.write_all(lines.finish().as_bytes())
+}
+
 /// Map the CLI's diagnostic envelope onto the report renderer's findings, so
 /// a refusal, a check, and a diff all present a diagnostic the same way.
 fn report_findings(diagnostics: &[ToolDiagnostic]) -> Vec<report::Finding<'_>> {
@@ -11618,7 +11669,7 @@ fn write_schema_test_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        render_report(
+        render_report_with_findings(
             &format!(
                 "Fixture run passed. {}.",
                 report::counted(report.successful_journey_ids.len(), "journey")
@@ -11635,6 +11686,7 @@ fn write_schema_test_success(
                 ("receipt sha256", report.receipt.sha256.clone()),
                 ("receipt bytes", report.receipt.byte_length.to_string()),
             ],
+            &report.diagnostics,
             stdout,
         )
     };
@@ -14247,6 +14299,7 @@ mod tests {
                     sha256: "sha256:3333".to_owned(),
                     byte_length: 2,
                 },
+                diagnostics: Vec::new(),
             };
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
@@ -14257,8 +14310,75 @@ mod tests {
             );
             let rendered = plain(&stdout);
             assert!(rendered.contains(expected), "{rendered}");
+            assert!(
+                !rendered.contains("baseline_fingerprint_drift"),
+                "{rendered}"
+            );
             assert!(stderr.is_empty());
         }
+    }
+
+    #[test]
+    fn a_fixture_run_over_a_drifted_baseline_reports_the_drift_in_both_formats() {
+        let signed = format!("sha256:{}", "1".repeat(64));
+        let measured = format!("sha256:{}", "2".repeat(64));
+        let report = SchemaTestSuccessReport {
+            ok: true,
+            command: "test",
+            profile: ProfileArg::Production,
+            package_revision: "pkg-2".to_owned(),
+            schema_fingerprint: "sha256:3333".to_owned(),
+            signing_input_sha256: "sha256:4444".to_owned(),
+            successful_journey_ids: vec!["package-record-list".to_owned()],
+            receipt: ArtifactReport {
+                path: "result.json".to_owned(),
+                media_type: "application/json".to_owned(),
+                sha256: "sha256:5555".to_owned(),
+                byte_length: 2,
+            },
+            diagnostics: vec![baseline_fingerprint_drift_finding(
+                &BaselineFingerprintDrift {
+                    signed: signed.clone(),
+                    measured: measured.clone(),
+                },
+            )],
+        };
+
+        let mut json = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            write_schema_test_success(&report, OutputFormat::Json, &mut json, &mut stderr),
+            ExitCode::SUCCESS
+        );
+        let value: serde_json::Value = serde_json::from_slice(&json).expect("report is JSON");
+        assert_eq!(value["ok"], true);
+        let finding = &value["diagnostics"][0];
+        assert_eq!(
+            finding["code"],
+            "migration.rehearsal.baseline_fingerprint_drift"
+        );
+        assert_eq!(finding["severity"], "finding");
+        let message = finding["message"].as_str().expect("message is a string");
+        for expected in [
+            signed.as_str(),
+            measured.as_str(),
+            "apply checks the live database",
+        ] {
+            assert!(message.contains(expected), "{message}");
+        }
+
+        let mut human = Vec::new();
+        assert_eq!(
+            write_schema_test_success(&report, OutputFormat::Human, &mut human, &mut stderr),
+            ExitCode::SUCCESS
+        );
+        let rendered = plain(&human);
+        assert!(rendered.starts_with("Fixture run passed."), "{rendered}");
+        assert!(
+            rendered.contains("migration.rehearsal.baseline_fingerprint_drift"),
+            "{rendered}"
+        );
+        assert!(stderr.is_empty());
     }
 
     #[test]

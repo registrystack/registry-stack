@@ -41,7 +41,7 @@ use registry_breg::package::{
 use registry_breg::postgres::{
     install_compiled_schema, managed_schema_fingerprint, rehearse_successor_migration,
     ExpectedManagedCatalog, ExpectedRegistryIdentity, MigrationRehearsalError, PostgresFailure,
-    SuccessorMigrationRehearsal,
+    RehearsalOutcome, SuccessorMigrationRehearsal,
 };
 use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
@@ -1424,9 +1424,13 @@ async fn real_postgres_rehearsal_refuses_a_reviewed_plan_activation_would_refuse
         &target_fingerprint,
         backfill_source(rehearsal_request("rank-reviewed")),
     );
-    rehearse(&database, &base, &base_fingerprint, &accepted)
+    let outcome = rehearse(&database, &base, &base_fingerprint, &accepted)
         .await
         .expect("the reviewed plan activation accepts also rehearses");
+    assert!(
+        outcome.baseline_fingerprint_drift.is_none(),
+        "a reproduced baseline carries no drift warning"
+    );
     assert_rehearsal_database_clean(&database).await;
 
     // Comments, a line break after UPDATE, and statement words inside a
@@ -1532,13 +1536,80 @@ async fn real_postgres_rehearsal_refuses_a_reviewed_plan_activation_would_refuse
     );
     assert_rehearsal_database_clean(&database).await;
 
-    let wrong_baseline = rehearse(&database, &base, &target_fingerprint, &accepted)
+    // A predecessor signed by another engine release measures differently
+    // under this one; the drift is reported and the rehearsal continues to
+    // the strict final fingerprint check.
+    let drifted = rehearse(&database, &base, &target_fingerprint, &accepted)
         .await
-        .expect_err("a baseline that does not reproduce is refused before any step");
-    assert_eq!(
-        wrong_baseline,
-        MigrationRehearsalError::BaselineNotReproducible
+        .expect("a baseline that does not reproduce still rehearses the successor");
+    let drift = drifted
+        .baseline_fingerprint_drift
+        .expect("a baseline that does not reproduce is reported as drift");
+    assert_eq!(drift.signed, target_fingerprint);
+    assert_eq!(drift.measured, base_fingerprint);
+    assert_rehearsal_database_clean(&database).await;
+
+    // Drift does not relax the final check: a candidate that does not reach
+    // its own fingerprint is still refused.
+    let unreachable = prepare_reviewed_candidate(
+        &active,
+        &base,
+        &base_fingerprint,
+        backfill_source(BackfillSourceRequest {
+            final_fingerprint: &base_fingerprint,
+            ..rehearsal_request("rank-unreachable")
+        }),
     );
+    let refused = rehearse(&database, &base, &target_fingerprint, &unreachable)
+        .await
+        .expect_err("a drifted baseline does not relax the final fingerprint check");
+    assert_eq!(refused, MigrationRehearsalError::FinalSchemaMismatch);
+    assert_rehearsal_database_clean(&database).await;
+
+    database.cleanup().await;
+}
+
+/// A predecessor whose schema the current compiler cannot install is refused;
+/// only a fingerprint difference is advisory.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_rehearsal_refuses_a_predecessor_it_cannot_install() {
+    let database = TestDatabase::create(1).await;
+    let _unused_harness_configs = (&database.runtime_config, &database.tls_runtime_config);
+    // Without CREATE on the data schema, the predecessor schema cannot be
+    // installed.
+    database
+        .admin
+        .batch_execute(&format!(
+            "REVOKE CREATE ON SCHEMA registry_data FROM \"{}\"",
+            database.migration_role.as_str()
+        ))
+        .await
+        .expect("administrator revokes the data schema privilege");
+    let fingerprint = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+    let base = compile_variant(Variant::Base, 1);
+    let initial = prepare_and_load_initial(&base, fingerprint);
+    let active = target_identity(&initial);
+    let candidate = compile_variant(Variant::RankRequired, 2);
+    let prepared = prepare_reviewed_candidate(
+        &active,
+        &base,
+        fingerprint,
+        backfill_source(BackfillSourceRequest {
+            id: "rank-uninstallable",
+            current: &active,
+            prior: &base,
+            candidate: &candidate,
+            final_fingerprint: fingerprint,
+            pre: AssertionMode::True,
+            post: AssertionMode::True,
+            rehearsed_rows: 0,
+        }),
+    );
+
+    let refused = rehearse(&database, &base, fingerprint, &prepared)
+        .await
+        .expect_err("a predecessor schema that cannot be installed is refused");
+    assert_eq!(refused, MigrationRehearsalError::BaselineNotReproducible);
     assert_rehearsal_database_clean(&database).await;
 
     database.cleanup().await;
@@ -3763,7 +3834,7 @@ async fn rehearse(
     predecessor: &CompiledRegistry,
     predecessor_schema_fingerprint: &str,
     candidate: &PreparedPackage,
-) -> Result<(), MigrationRehearsalError> {
+) -> Result<RehearsalOutcome, MigrationRehearsalError> {
     rehearse_successor_migration(
         &database.migration_config,
         &database.migration_role,

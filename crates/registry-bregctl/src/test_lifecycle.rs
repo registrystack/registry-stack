@@ -11,7 +11,9 @@ use registry_breg::fixtures::{
     execute_schema_test, validate_fixture_journeys, FixtureError, SchemaTestCredentialBinding,
     SchemaTestCredentialBindings, SchemaTestRuntimeSetupError,
 };
-use registry_breg::postgres::{MigrationRehearsalError, SuccessorMigrationRehearsal};
+use registry_breg::postgres::{
+    BaselineFingerprintDrift, MigrationRehearsalError, SuccessorMigrationRehearsal,
+};
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 use registry_breg::startup;
 use serde::Deserialize;
@@ -45,6 +47,7 @@ pub(crate) struct TestLifecycleOutcome {
     pub successful_journey_ids: Vec<String>,
     pub receipt_sha256: String,
     pub receipt_bytes: usize,
+    pub baseline_fingerprint_drift: Option<BaselineFingerprintDrift>,
 }
 
 /// The receipt destination, held as its resolved parent descriptor plus the
@@ -199,8 +202,9 @@ pub(crate) fn run(
         .candidate
         .prepare(schema_fingerprint.clone())
         .map_err(|_| TestLifecycleError::Candidate)?;
+    let mut baseline_fingerprint_drift = None;
     if let Some(baseline) = &rehearsal_baseline {
-        runtime
+        baseline_fingerprint_drift = runtime
             .block_on(startup::rehearse_successor_migration(
                 &config,
                 SuccessorMigrationRehearsal {
@@ -210,7 +214,8 @@ pub(crate) fn run(
                 },
             ))
             .map_err(schema_preparation_error)?
-            .map_err(|error| TestLifecycleError::Rehearsal(Box::new(error)))?;
+            .map_err(|error| TestLifecycleError::Rehearsal(Box::new(error)))?
+            .baseline_fingerprint_drift;
     }
     let signing_input_sha256 = sha256(prepared.canonical_signed_bytes());
     let package_revision = prepared.package_revision().to_owned();
@@ -234,6 +239,7 @@ pub(crate) fn run(
         successful_journey_ids,
         receipt_sha256: sha256(&receipt_bytes),
         receipt_bytes: receipt_bytes.len(),
+        baseline_fingerprint_drift,
     })
 }
 
