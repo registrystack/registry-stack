@@ -166,8 +166,13 @@ Every pull request should make the review path clear:
   the refusal with a test. The documented audit-writer transition retires
   only BReg's audit journal/head and Casework's and Scheduling's audit outboxes.
   Preserve the retired audit state separately before removal, drain old outbox
-  publishers, and verify archived row counts in the release rehearsal. Every
-  retained domain and operational state table still requires row preservation.
+  publishers, and verify archived row counts in the release rehearsal. The
+  rehearsal verifies release binaries, and `v0.33.0` and `v0.34.0` shipped
+  Scheduling only as a container image, so Scheduling's outbox retirement is
+  covered instead by migration 8 refusing an undrained outbox and by the
+  operator archiving the old audit file; an image-driven rehearsal leg is
+  tracked separately. Every retained domain and operational state table still
+  requires row preservation.
 
 ## Dependency Changes
 

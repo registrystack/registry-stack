@@ -335,9 +335,10 @@ gone, so restore the audit destination and reconcile the erased request against 
 event delivery's attempt is recorded inside the transaction that leases it, before its request
 leaves. If that lease transaction does not commit, no request leaves and the attempt is answered
 `worker_interrupted`, so an attempt entry does not prove a request was sent. An attempt's terminal
-outcome is recorded only once the delivery's state has committed. When that commit fails, the
-attempt stays open until lease-expiry recovery answers it `worker_interrupted`, so a process that
-stops first leaves the attempt without a response. An operator replay is recorded as a request
+outcome is recorded only once the delivery's state has committed. When that commit fails and whether
+it committed cannot be read back, the attempt is answered `worker_interrupted` with disposition
+`unknown`, which claims no delivery state; read the delivery's state to learn it. Lease-expiry
+recovery answers the attempt again if its lease survived. An operator replay is recorded as a request
 before the reset and a response once it commits or is refused, or `replay_unfinished` when its
 commit failed and whether the reset committed cannot be read back; read the delivery's state before
 replaying it again.

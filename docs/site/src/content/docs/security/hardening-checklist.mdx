@@ -200,7 +200,9 @@ bundle, or the sealed Relay package. It assumes you have already configured your
   runtime file's `audit` block: `destination` is `file` (the default) or `stdout`, and a file
   destination takes `path`, `rotateBytes` (100 MiB by default), and `retainDays` (90 by default).
   Put `path` on storage whose append durability, permissions, capacity, and backup you own, in a
-  directory owned by the service user and not writable by group or others.
+  directory owned by the service user and not writable by group or others. When that directory
+  is missing, the writer creates it, but not below a world-writable directory that is not sticky;
+  there, create the audit directory yourself, owned by the service user, mode 0700.
 - Audit is fail-closed by contract, with no write-policy setting. Evidence Gateway durably accepts
   an access-attempt entry before every source stage and the disclosure-release entry before the
   response is released; Relay writes its attempt entry before SQLite access and its terminal entry
@@ -210,14 +212,17 @@ bundle, or the sealed Relay package. It assumes you have already configured your
   full or unwritable disk degrades to best-effort logging; it stops the service answering.
 - Run exactly one process per audit path. The writer takes an exclusive lock on `<path>.lock` for
   its whole life, and a second process pointed at the same path fails to start. Give each replica
-  its own path, or use `stdout` and let the platform's log collector gather every stream.
+  its own path, or use `stdout` and let the platform's log collector gather every stream. A path
+  reserves `<path>.<sequence>`, `<path>.lock`, `<path>.seq`, and `<path>.seq.tmp`, so no other
+  stream's path may be one of those names.
 - After any failed write the writer refuses every later entry until the process restarts, and
   readiness re-checks the active file, so renaming, truncating, or replacing it under a running
   process revokes readiness. Treat a sudden readiness loss with a healthy source as an audit-path
   problem first.
 - A file destination renames the active file to `<path>.<sequence>` when it would pass
-  `rotateBytes`, and deletes sealed files older than `retainDays` when it opens and each time it
-  rotates. Ship each sealed file before retention deletes it.
+  `rotateBytes`, and deletes sealed files older than `retainDays`, oldest sequence first, when it
+  opens and each time it rotates. A failed deletion is logged and retried later, never a reason to
+  stop. Ship each sealed file before retention deletes it.
 - The log carries no hash chain or signature, so the host that writes it can rewrite it
   undetected. Tamper evidence and completeness come only from shipping sealed files, or the
   `stdout` stream, to append-only storage that the service account cannot change: object storage
