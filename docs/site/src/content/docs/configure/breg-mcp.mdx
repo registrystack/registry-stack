@@ -466,8 +466,8 @@ Writes carry an idempotency key derived from the citizen, the tool, and the argu
 retried call replays its first answer instead of creating a second draft. A `start_application`
 identical to one whose draft is still open returns that draft. BReg binds each key to the active
 package revision, so after a package activation an identical `start_application` creates a new
-draft, even beside one still open from before the activation. Once 32 identical applications have
-closed or been left behind by an activation, it answers `not-permitted`.
+draft, even beside one still open from before the activation. Once more than 32 identical
+applications have closed or been left behind by an activation, it answers `not-permitted`.
 
 {/* Evidence: crates/registry-breg-mcp/src/tools.rs, start_input_schema(), update_input_schema();
     crates/registry-breg-mcp/src/gateway.rs, application_summary(), REGISTRY_DATA_NOTICE,
