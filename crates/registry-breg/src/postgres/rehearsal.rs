@@ -283,8 +283,8 @@ async fn rehearse_in_transaction(
         // table can never be present here to discard.
         false,
     )
-        .await
-        .map_err(|_| MigrationRehearsalError::Database)?;
+    .await
+    .map_err(|_| MigrationRehearsalError::Database)?;
     reconcile_compiled_runtime_acl(transaction, candidate, runtime_role)
         .await
         .map_err(|_| MigrationRehearsalError::Database)?;
