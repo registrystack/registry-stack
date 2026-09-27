@@ -446,7 +446,7 @@ pub fn export_evidence_source(
         "responseSchema":format!("schemas/{prefix}-response.yaml"),"extractScript":format!("adapters/{prefix}-extract.rhai"),"factSchema":format!("schemas/{prefix}-facts.yaml")
     }))?);
     artifacts.sort_by(|a, b| a.path.cmp(&b.path));
-    let manifest = json!({"formatVersion":1,"sourceId":prefix,"provenance":{"producer":"bregctl","registryId":registry.registry_id(),"packageRevision":registry.revision(),"entity":entity.id,"accessProfile":options.access_profile,"behaviorRevision":behavior_revision},"artifacts":artifacts.iter().map(|artifact|json!({"path":artifact.path,"sha256":digest(&artifact.bytes)})).collect::<Vec<_>>()});
+    let manifest = json!({"formatVersion":1,"sourceId":prefix,"provenance":{"producer":"bregctl","registryId":registry.registry_id(),"registryRevision":registry.revision(),"entity":entity.id,"accessProfile":options.access_profile,"behaviorRevision":behavior_revision},"artifacts":artifacts.iter().map(|artifact|json!({"path":artifact.path,"sha256":digest(&artifact.bytes)})).collect::<Vec<_>>()});
     artifacts.push(artifact(
         "source-export.json".into(),
         "application/json",

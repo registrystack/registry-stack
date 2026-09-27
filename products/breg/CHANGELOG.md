@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- BREAKING: an Evidence source export names the compiled model it came from
+  as `provenance.registryRevision` instead of `provenance.packageRevision`,
+  so `evidencectl` reports changed provenance for every BReg source on its
+  next import.
+
 - A runtime file may name one role as both `database.roles.migration` and
   `database.roles.runtime`, and then one reference as both
   `database.runtimeUrlRef` and `database.migrationUrlRef`. Two distinct roles

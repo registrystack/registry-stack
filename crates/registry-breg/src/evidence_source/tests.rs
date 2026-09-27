@@ -141,9 +141,13 @@ fn consumed_behavior_ignores_unselected_fields_but_reaches_sql_and_authority() {
         .push(json!({"id":"note","type":"string","maxLength":64,"classification":"internal"}));
     let after = export_evidence_source(&compiled(&unrelated, SQL), &options()).unwrap();
     assert_eq!(before.behavior_revision, after.behavior_revision);
+    let before_provenance = &yaml(&before, "source-export.json")["provenance"];
+    let after_provenance = &yaml(&after, "source-export.json")["provenance"];
+    assert!(before_provenance["registryRevision"].is_string());
+    assert!(before_provenance.get("packageRevision").is_none());
     assert_ne!(
-        yaml(&before, "source-export.json")["provenance"]["packageRevision"],
-        yaml(&after, "source-export.json")["provenance"]["packageRevision"]
+        before_provenance["registryRevision"],
+        after_provenance["registryRevision"]
     );
     let changed_sql =
         "SELECT r.id AS id, r.status <> 'active' AS active FROM registry_source.record r";
