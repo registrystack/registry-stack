@@ -20,7 +20,9 @@ mod change_request {
 mod history_store;
 #[allow(dead_code)]
 mod postgres {
-    pub use registry_breg::postgres::{ClaimContext, RowBoundaryContext, SqlIdentifier};
+    pub use registry_breg::postgres::{
+        ClaimContext, RowBoundaryContext, RuntimeRevoke, SqlIdentifier,
+    };
 
     pub(crate) struct ActionClaimContext {
         action_id: String,

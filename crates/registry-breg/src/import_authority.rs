@@ -191,6 +191,9 @@ pub(crate) async fn install(
     migration: &impl tokio_postgres::GenericClient,
     runtime_role: &SqlIdentifier,
 ) -> Result<(), ImportAuthorityError> {
+    let runtime_revoke = crate::postgres::RuntimeRevoke::detect(migration, runtime_role)
+        .await
+        .map_err(|_| ImportAuthorityError::Unavailable)?;
     migration
         .batch_execute(&format!(
             "CREATE TABLE IF NOT EXISTS registry_internal.registry_import_authorities (
@@ -238,7 +241,7 @@ pub(crate) async fn install(
                  ON registry_internal.registry_import_authorities (entity_id)
                  WHERE status = 'open';
              REVOKE ALL ON registry_internal.registry_import_authorities FROM PUBLIC;
-             REVOKE ALL ON registry_internal.registry_import_authorities FROM \"{role}\";
+             {runtime_revoke}
              GRANT SELECT ON registry_internal.registry_import_authorities TO \"{role}\";
              GRANT UPDATE ({columns}) ON registry_internal.registry_import_authorities
                  TO \"{role}\";
@@ -257,6 +260,7 @@ pub(crate) async fn install(
             window_days = MAX_IMPORT_AUTHORITY_WINDOW.as_secs() / (24 * 60 * 60),
             columns = RUNTIME_UPDATE_COLUMNS.join(", "),
             role = runtime_role.as_str(),
+            runtime_revoke = runtime_revoke.revoke_all_on("registry_internal.registry_import_authorities"),
         ))
         .await
         .map_err(|_| ImportAuthorityError::Unavailable)?;

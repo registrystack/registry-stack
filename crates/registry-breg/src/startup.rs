@@ -1954,7 +1954,15 @@ async fn verify_configured_runtime_role(
     if actual_role != runtime_role.as_str() {
         return Err(StartupError::DatabaseUnready);
     }
-    if (1..=13).any(|index| row.get::<_, bool>(index)) {
+    // Superuser, row-security bypass, role and database creation are refused in
+    // either role mode. In single-role mode the runtime role is the migration
+    // role, so it owns the managed schemas and their objects by design.
+    let refused: &[usize] = if migration_role == runtime_role {
+        &[1, 2, 3, 4, 7]
+    } else {
+        &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    };
+    if refused.iter().any(|index| row.get::<_, bool>(*index)) {
         return Err(StartupError::DatabaseUnready);
     }
     Ok(())

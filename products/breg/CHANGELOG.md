@@ -10,7 +10,14 @@
 - A runtime file may name one role as both `database.roles.migration` and
   `database.roles.runtime`, and then one reference as both
   `database.runtimeUrlRef` and `database.migrationUrlRef`. Two distinct roles
-  still need two distinct references.
+  still need two distinct references. With one role, `bregctl apply` grants
+  that role nothing beyond the ownership it already holds and revokes only
+  from `PUBLIC`, and `breg` serves as the owner of the registry schema.
+
+- BREAKING: the schema fingerprint no longer measures the runtime role's
+  grants, so one package fits a database served with one role or with two.
+  Every package's schema fingerprint changes; rebuild each package with this
+  `bregctl package`.
 
 - BREAKING: `registryRevision` is a function of the compiled model only. The
   project's `package` block no longer appears in
