@@ -302,8 +302,8 @@ async fn real_postgres_revision_http_is_bounded_authorized_atomic_and_audit_gate
     assert_eq!(
         audit_count(&database).await,
         before_fault + 2,
-        "terminal audit gate failure releases no held revision and answers the attempt as \
-         unfinished"
+        "a fault before the terminal audit releases no held revision and answers the attempt \
+         as unfinished"
     );
 
     let unkeyed = revision_router(

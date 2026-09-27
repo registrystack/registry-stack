@@ -614,8 +614,8 @@ async fn real_postgres_spatial_bbox_reads_preserve_authority_and_geojson_audit()
     assert_eq!(
         audit_count(&harness.database).await,
         before_fault + 2,
-        "terminal audit failure releases no held GeoJSON bytes and answers the attempt as \
-         unfinished"
+        "a fault before the terminal audit releases no held GeoJSON bytes and answers the \
+         attempt as unfinished"
     );
 
     let before_adapter_fault = audit_count(&harness.database).await;

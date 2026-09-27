@@ -228,7 +228,7 @@ impl MutationCoordinator {
             }
             break attempt;
         };
-        if result.is_err() && !fault.is_enabled() {
+        if failure_is_refusal(&result) && !fault.is_enabled() {
             self.record_action_boundary_audit(
                 claims,
                 input.route_id,
@@ -238,7 +238,9 @@ impl MutationCoordinator {
             .await?;
         }
         result.map_err(|error| match error {
-            MutationError::RetryableConflict => MutationError::Unavailable,
+            MutationError::RetryableConflict | MutationError::CommitUnresolved => {
+                MutationError::Unavailable
+            }
             other => other,
         })
     }
@@ -748,7 +750,7 @@ impl MutationCoordinator {
             }
             break attempt;
         };
-        if result.is_err() && !fault.is_enabled() {
+        if failure_is_refusal(&result) && !fault.is_enabled() {
             self.record_action_boundary_audit(
                 &claims,
                 &route_id,
@@ -847,7 +849,7 @@ impl MutationCoordinator {
                 input.correlation,
             )
             .await;
-        if result.is_err() {
+        if failure_is_refusal(&result) {
             self.record_action_boundary_audit(
                 claims,
                 input.route_id,
@@ -856,7 +858,10 @@ impl MutationCoordinator {
             )
             .await?;
         }
-        result
+        result.map_err(|error| match error {
+            MutationError::CommitUnresolved => MutationError::Unavailable,
+            other => other,
+        })
     }
 
     /// Append the action's attempt and hold it until its terminal or refusal
@@ -961,8 +966,11 @@ impl MutationCoordinator {
             transaction
                 .commit()
                 .await
-                .map_err(|_| MutationError::Unavailable)?;
-            self.audit.append(entry).await?;
+                .map_err(|_| MutationError::CommitUnresolved)?;
+            self.audit
+                .append(entry)
+                .await
+                .map_err(|_| MutationError::CommitUnresolved)?;
             return Ok(outcome);
         }
         if let Some(frozen) = frozen {
@@ -1243,8 +1251,11 @@ impl MutationCoordinator {
         transaction
             .commit()
             .await
-            .map_err(|_| MutationError::Unavailable)?;
-        self.audit.append(entry).await?;
+            .map_err(|_| MutationError::CommitUnresolved)?;
+        self.audit
+            .append(entry)
+            .await
+            .map_err(|_| MutationError::CommitUnresolved)?;
         fault.fail_at(MutationFaultPoint::AfterCommitBeforeResponseRelease)?;
         Ok(MutationOutcome {
             response: held,
@@ -1771,8 +1782,11 @@ impl MutationCoordinator {
         transaction
             .commit()
             .await
-            .map_err(|_| MutationError::Unavailable)?;
-        self.audit.append(entry).await?;
+            .map_err(|_| MutationError::CommitUnresolved)?;
+        self.audit
+            .append(entry)
+            .await
+            .map_err(|_| MutationError::CommitUnresolved)?;
         Ok(held)
     }
 
@@ -2729,7 +2743,7 @@ impl MutationCoordinator {
                 &mut attempt,
             )
             .await;
-        if result.is_err() && tokio::time::Instant::now() < deadline {
+        if failure_is_refusal(&result) && tokio::time::Instant::now() < deadline {
             self.record_action_boundary_audit(
                 claims,
                 route_id,
@@ -2738,7 +2752,11 @@ impl MutationCoordinator {
             )
             .await?;
         }
-        Ok(match result? {
+        let result = result.map_err(|error| match error {
+            MutationError::CommitUnresolved => MutationError::Unavailable,
+            other => other,
+        })?;
+        Ok(match result {
             Ok(mut prepared) => {
                 prepared.attempt = attempt;
                 Ok(prepared)
@@ -2825,8 +2843,11 @@ impl MutationCoordinator {
             transaction
                 .commit()
                 .await
-                .map_err(|_| MutationError::Unavailable)?;
-            self.audit.append(entry).await?;
+                .map_err(|_| MutationError::CommitUnresolved)?;
+            self.audit
+                .append(entry)
+                .await
+                .map_err(|_| MutationError::CommitUnresolved)?;
             return Ok(Err(outcome));
         }
         // This transaction proves current admission only. Its locks and entire
@@ -2924,7 +2945,10 @@ impl MutationCoordinator {
             }
             break result;
         };
-        if result.is_err() && !fault.is_enabled() && tokio::time::Instant::now() < deadline {
+        if failure_is_refusal(&result)
+            && !fault.is_enabled()
+            && tokio::time::Instant::now() < deadline
+        {
             self.record_action_boundary_audit(
                 claims,
                 route_id,
@@ -2934,7 +2958,9 @@ impl MutationCoordinator {
             .await?;
         }
         result.map_err(|error| match error {
-            MutationError::RetryableConflict => MutationError::Unavailable,
+            MutationError::RetryableConflict | MutationError::CommitUnresolved => {
+                MutationError::Unavailable
+            }
             other => other,
         })
     }

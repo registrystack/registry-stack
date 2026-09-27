@@ -104,8 +104,19 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             &format!("the runtime package was refused: {cause}"),
         );
     }
+    // The writer's own refusal names the rule and the recovery step, and
+    // never a path or a secret.
+    if let StartupError::AuditDestination(reason) = error {
+        return diagnostic(
+            "startup.audit.refused",
+            "audit",
+            &format!("the audit destination was refused: {reason}"),
+        );
+    }
     let (code, path, message) = match error {
-        StartupError::RuntimeConfig(_) | StartupError::PackageRefused(_) => {
+        StartupError::RuntimeConfig(_)
+        | StartupError::PackageRefused(_)
+        | StartupError::AuditDestination(_) => {
             unreachable!("handled above")
         }
         StartupError::ReviewAuthorityMissing { .. } => unreachable!("handled above"),
@@ -123,7 +134,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         StartupError::Audit => (
             "startup.audit.refused",
             "audit",
-            "the audit profile or destination was refused: the hash key must resolve, a file destination's directory must be creatable or owned by this user and not group- or world-writable, and neither it nor its bregctl companion destination may end in an incomplete final entry; archive a torn file and restart on a fresh path",
+            "the audit profile was refused: the hash key must resolve",
         ),
         StartupError::Cursor => (
             "startup.cursor.refused",
@@ -348,6 +359,11 @@ mod tests {
                 "database",
             ),
             (StartupError::Audit, "startup.audit.refused", "audit"),
+            (
+                StartupError::AuditDestination("the audit file could not be opened".to_owned()),
+                "startup.audit.refused",
+                "audit",
+            ),
             (StartupError::Cursor, "startup.cursor.refused", "cursor"),
             (
                 StartupError::Oidc,

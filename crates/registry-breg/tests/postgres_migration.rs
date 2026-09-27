@@ -4081,9 +4081,10 @@ async fn durable_snapshot(
 }
 
 /// The reconciliation audit records carry identities, the plan shape, and
-/// counts: one request entry before the transition and one correlated response
-/// entry after it commits. The operator's own reference must reach them only
-/// as a keyed hash.
+/// counts: every execution of `action` writes a request entry before its
+/// transition and one correlated response entry after it, and the last
+/// execution committed. The operator's own reference must reach them only as
+/// a keyed hash.
 async fn assert_reconcile_audit_is_minimized(database: &TestDatabase, action: &str) {
     let mut matched = Vec::new();
     for entry in database.audit_entries() {

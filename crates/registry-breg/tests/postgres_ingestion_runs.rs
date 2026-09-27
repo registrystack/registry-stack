@@ -804,6 +804,65 @@ async fn a_transition_whose_commit_fails_is_answered_unfinished() {
     harness.database.assert_every_audit_request_answered_once();
 }
 
+/// A run transition that committed but whose response entry was not
+/// accepted happened, so its request entry is answered unfinished and never
+/// refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_committed_transition_without_its_response_entry_is_answered_unfinished() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let faulted = harness
+        .restart(Some(MutationFaultPoint::AfterCommitBeforeResponseRelease))
+        .await;
+
+    let before = harness.database.audit_entries().len();
+    let lost = faulted
+        .post_json(
+            "/v1/records/widgets/ingestion-runs",
+            &claims,
+            harness.run_body(
+                "create",
+                &plan_chunks(&announce_items("unanswered-create", 4), 2),
+            ),
+        )
+        .await;
+    assert_eq!(lost.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        stored_run_count(&harness).await,
+        1,
+        "the creation committed"
+    );
+    assert_unfinished_in_the_ingestion_schema(
+        &harness.database.audit_entries()[before..],
+        "create",
+    );
+
+    let run_id = harness
+        .create_run(
+            &claims,
+            &plan_chunks(&announce_items("unanswered-cancel", 4), 2),
+        )
+        .await;
+    let before = harness.database.audit_entries().len();
+    let lost = faulted
+        .post_empty(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/cancel"),
+            &claims,
+        )
+        .await;
+    assert_eq!(lost.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        stored_run_status(&harness, &run_id).await.0,
+        "cancelled",
+        "the cancellation committed"
+    );
+    assert_unfinished_in_the_ingestion_schema(
+        &harness.database.audit_entries()[before..],
+        "cancel",
+    );
+    harness.database.assert_every_audit_request_answered_once();
+}
+
 fn assert_unfinished_in_the_ingestion_schema(entries: &[Value], transition: &str) {
     let ingestion = entries
         .iter()

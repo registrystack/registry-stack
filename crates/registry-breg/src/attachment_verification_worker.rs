@@ -86,8 +86,8 @@ impl AttachmentVerificationWorker {
     /// Claim and process at most one job. The lease commits and the attempt's
     /// `request` entry is accepted before any content read or verifier
     /// request; the verdict commits before its `response` entry is appended.
-    /// A refused entry or a cancellation leaves a lease which another worker
-    /// can retry.
+    /// A refused attempt entry, a failed verdict commit, or a cancellation
+    /// before that commit leaves a lease which another worker can retry.
     pub async fn run_once(&self) -> Result<bool> {
         // The durable lease is four minutes. A whole iteration, including
         // database waits and both external services, gets at most three, so a
@@ -145,16 +145,18 @@ impl AttachmentVerificationWorker {
         };
         // Erasure or lease expiry can win while the external verifier runs.
         // A stale verdict never creates replacement work or references.
-        // The terminal entry is accepted before the verdict commits, so a
-        // refused entry rolls the verdict back and the job is retried after
-        // its lease expires.
+        // The terminal entry is appended only after the verdict commits, so
+        // it never records a verdict that rolled back. A commit error does not
+        // prove either outcome: the attempt is then answered as unfinished
+        // when its handle drops, and a rolled-back job is retried after its
+        // lease expires.
+        transaction.commit().await.map_err(unavailable)?;
         self.audit_job(
             &job,
             "terminal",
             if updated { outcome } else { "discarded" },
         )
         .await?;
-        transaction.commit().await.map_err(unavailable)?;
         if updated && verdict.is_none() {
             crate::startup::OperationalEvent::AttachmentVerificationRetryPending.emit();
         }

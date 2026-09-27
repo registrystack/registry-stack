@@ -856,6 +856,65 @@ async fn field_encryption_erasure_scrubs_orphan_create_and_preserves_post_flip_s
         "the proposal count follows effects[].fieldChanges[], including an orphan create"
     );
 
+    // The request scrub commits and the closing commit then fails. The scrub
+    // is progress inside the lifecycle, never its answer, so the lifecycle
+    // request is answered as unfinished rather than as a committed step.
+    migration
+        .batch_execute(
+            "CREATE FUNCTION registry_internal.test_refuse_lifecycle_terminal() RETURNS trigger
+               LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'terminal refused at commit'; END $$;
+             CREATE CONSTRAINT TRIGGER test_refuse_lifecycle_terminal
+               AFTER INSERT ON registry_internal.registry_field_encryption_lifecycle_progress
+               DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+               WHEN (NEW.progress_kind = 'terminal')
+               EXECUTE FUNCTION registry_internal.test_refuse_lifecycle_terminal();",
+        )
+        .await
+        .expect("test installs a commit-time refusal");
+    let interrupted = erase_field_encryption_history(
+        &mut migration,
+        FieldEncryptionHistoryErasureRequest {
+            expected: &expected,
+            migration_role: &database.migration_role,
+            lock_key,
+            timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
+                .unwrap(),
+            audit: &database.audit(audit_profile.clone()),
+            operator_reference: "field-encryption-operator",
+            reason: "destroy pre-flip request snapshots",
+            registry: &registry,
+        },
+    )
+    .await
+    .expect_err("a failed closing commit ends the lifecycle unfinished");
+    assert_eq!(interrupted, FieldEncryptionHistoryErasureError::Unavailable);
+    migration
+        .batch_execute(
+            "DROP TRIGGER test_refuse_lifecycle_terminal
+               ON registry_internal.registry_field_encryption_lifecycle_progress;
+             DROP FUNCTION registry_internal.test_refuse_lifecycle_terminal();",
+        )
+        .await
+        .expect("test removes the commit-time refusal");
+    let lifecycle_entries = database
+        .audit_entries()
+        .into_iter()
+        .filter(|entry| entry["schema"] == FIELD_ENCRYPTION_AUDIT_SCHEMA)
+        .map(|entry| {
+            format!(
+                "{}/{}/{}",
+                entry["phase"].as_str().unwrap(),
+                entry["record"]["phase"].as_str().unwrap(),
+                entry["record"]["outcome"].as_str().unwrap()
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lifecycle_entries,
+        ["request/attempt/started", "response/terminal/unfinished"],
+        "a committed request scrub does not answer the lifecycle request"
+    );
+
     let outcome = erase_field_encryption_history(
         &mut migration,
         FieldEncryptionHistoryErasureRequest {

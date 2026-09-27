@@ -471,6 +471,67 @@ async fn create_only_action_requires_no_condition_and_replays_without_crud_grant
         }
     });
 
+    // A COMMIT that fails does not prove the action rolled back, so its
+    // attempt is answered `unfinished`, never refused.
+    let person_table = &registry.entities()["person"].physical_table;
+    database
+        .admin
+        .batch_execute(&format!(
+            "CREATE FUNCTION public.test_refuse_action_commit()
+               RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RAISE EXCEPTION 'test refuses this action commit'; END $$;
+             GRANT EXECUTE ON FUNCTION public.test_refuse_action_commit() TO PUBLIC;
+             CREATE CONSTRAINT TRIGGER test_refuse_action_commit
+               AFTER INSERT ON registry_data.\"{person_table}\"
+               DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+               EXECUTE FUNCTION public.test_refuse_action_commit();"
+        ))
+        .await
+        .expect("administrator installs the deferred commit refusal");
+    let journal_before = database.audit_entries().len();
+    let commit_refused = send(
+        &app,
+        Method::POST,
+        "/v1/actions/create-local-person",
+        Some(action_claims()),
+        &[
+            ("content-type", "application/json"),
+            ("idempotency-key", "commit-refused-key"),
+        ],
+        serde_json::to_vec(&body).expect("create-only body serializes"),
+    )
+    .await;
+    assert_eq!(commit_refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    database
+        .admin
+        .batch_execute(&format!(
+            "DROP TRIGGER test_refuse_action_commit ON registry_data.\"{person_table}\";
+             DROP FUNCTION public.test_refuse_action_commit();"
+        ))
+        .await
+        .expect("administrator removes the deferred commit refusal");
+    let journal = database.audit_entries()[journal_before..]
+        .iter()
+        .map(|entry| {
+            (
+                entry["phase"].as_str().unwrap_or_default().to_owned(),
+                entry["record"]["phase"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        journal,
+        [
+            ("request".to_owned(), "attempt".to_owned()),
+            ("response".to_owned(), "unfinished".to_owned()),
+        ],
+        "an unproven action commit is answered unfinished, never refused"
+    );
+    assert_eq!(entity_count(&database, &registry, "person").await, 0);
+
     let first = response_parts(
         send(
             &app,

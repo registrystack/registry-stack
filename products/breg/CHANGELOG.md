@@ -33,7 +33,9 @@
     answered `unfinished`, since that error does not prove a rollback.
   - Event delivery records a terminal outcome and a payload expiry only after
     the delivery state commits. An attempt whose lease commit fails is
-    answered with `worker_interrupted`. An operator replay writes a
+    answered with `worker_interrupted`. A terminal outcome whose commit
+    failed and cannot be read back is answered `worker_interrupted` with
+    disposition `unknown`, which claims no delivery state. An operator replay writes a
     `replay_requested` request before the reset and a `replay_committed` or
     `replay_refused` response after it, or `replay_unfinished` when the
     reset's commit failed and its fate cannot be read back.

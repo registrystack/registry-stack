@@ -814,7 +814,7 @@ impl MutationCoordinator {
             }
             tokio::task::yield_now().await;
         }
-        if result.is_err() && !fault.is_enabled() {
+        if failure_is_refusal(&result) && !fault.is_enabled() {
             record_pre_io_audit(
                 &self.audit,
                 &self.expected,
@@ -823,7 +823,10 @@ impl MutationCoordinator {
             )
             .await?;
         }
-        result
+        result.map_err(|error| match error {
+            MutationError::CommitUnresolved => MutationError::Unavailable,
+            other => other,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1195,8 +1198,11 @@ impl MutationCoordinator {
             transaction
                 .commit()
                 .await
-                .map_err(|_| MutationError::Unavailable)?;
-            self.audit.append(entry).await?;
+                .map_err(|_| MutationError::CommitUnresolved)?;
+            self.audit
+                .append(entry)
+                .await
+                .map_err(|_| MutationError::CommitUnresolved)?;
             return Ok(MutationOutcome {
                 response: stored.response,
                 replayed: true,
@@ -1324,8 +1330,11 @@ impl MutationCoordinator {
                 transaction
                     .commit()
                     .await
-                    .map_err(|_| MutationError::Unavailable)?;
-                self.audit.append(entry).await?;
+                    .map_err(|_| MutationError::CommitUnresolved)?;
+                self.audit
+                    .append(entry)
+                    .await
+                    .map_err(|_| MutationError::CommitUnresolved)?;
                 return Ok(MutationOutcome {
                     response: held,
                     replayed: true,
@@ -1725,8 +1734,11 @@ impl MutationCoordinator {
         transaction
             .commit()
             .await
-            .map_err(|_| MutationError::Unavailable)?;
-        self.audit.append(entry).await?;
+            .map_err(|_| MutationError::CommitUnresolved)?;
+        self.audit
+            .append(entry)
+            .await
+            .map_err(|_| MutationError::CommitUnresolved)?;
         fault.fail_at(MutationFaultPoint::AfterCommitBeforeResponseRelease)?;
         Ok(MutationOutcome {
             response: held,
