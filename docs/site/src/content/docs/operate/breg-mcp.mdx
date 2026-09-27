@@ -121,7 +121,8 @@ A gateway response entry records the tool call's `outcome`. It is `ok` when the 
 `refused` when the call failed with no registry effect, and `unfinished` when a create or patch
 was sent and its effect is unknown: a transport failure, a server error, or a response the gateway
 cannot use. A failed call also records its [tool error code](../../configure/breg-mcp/#tool-errors)
-as `reason`. A call answered `unfinished` may have changed the registry.
+as `reason`. A call answered `unfinished` may have changed the registry. A cancelled call is also
+recorded `unfinished`, whether or not it had sent a create or patch.
 
 {/* Evidence: crates/registry-breg-mcp/src/gateway.rs, call();
     crates/registry-breg-mcp/src/problems.rs, after_mutation();
