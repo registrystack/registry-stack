@@ -238,7 +238,7 @@ class GeneratedGateTests(unittest.TestCase):
             "BREG_TEST_TLS_POSTGRES_CONTAINER_ID",
             "BREG_TEST_TLS_CA_PEM_PATH",
         ):
-            self.assertIn(f"export {name}=", text)
+            self.assertIn(f"printf 'export {name}=%q\\n'", text)
 
     def test_comparator_rejects_a_symbolic_link_without_reading_its_target(self) -> None:
         if os.name == "nt":
