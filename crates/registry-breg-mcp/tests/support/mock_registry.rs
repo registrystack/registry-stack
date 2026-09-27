@@ -59,9 +59,13 @@ pub struct Application {
 struct Registry {
     addresses: BTreeMap<String, Vec<(String, Value)>>,
     applications: BTreeMap<Uuid, Application>,
-    /// Each idempotency key the stand-in has answered, with the application
-    /// it created and the creation record it replays.
-    created: BTreeMap<String, (Uuid, Value)>,
+    /// Each idempotency key the stand-in has answered, with the package
+    /// revision it was bound under, the application it created, and the
+    /// creation record it replays.
+    created: BTreeMap<String, (u64, Uuid, Value)>,
+    /// The active package revision. A real engine binds every idempotency
+    /// key to it, so a key first answered under another revision conflicts.
+    package_revision: u64,
     seen: Vec<Seen>,
     next_problem: Option<(Method, String, BRegProblemCode)>,
 }
@@ -152,6 +156,11 @@ impl MockRegistry {
             .get_mut(&identifier)
             .expect("application exists")
             .request = request;
+    }
+
+    /// Activate another package revision, as an operator upgrade would.
+    pub fn activate_package(&self) {
+        self.state.lock().package_revision += 1;
     }
 
     pub fn applications(&self) -> BTreeMap<Uuid, Application> {
@@ -418,8 +427,19 @@ async fn create_application(
     };
     let key = header_text(&headers, "idempotency-key");
     // A consumed key replays the response recorded when it was first
-    // answered, whatever state the application has reached since.
-    if let Some((identifier, created)) = state.lock().created.get(&key).cloned() {
+    // answered, whatever state the application has reached since, but only
+    // under the package revision it was bound to.
+    let (package_revision, consumed) = {
+        let registry = state.lock();
+        (
+            registry.package_revision,
+            registry.created.get(&key).cloned(),
+        )
+    };
+    if let Some((bound_revision, identifier, created)) = consumed {
+        if bound_revision != package_revision {
+            return problem(BRegProblemCode::IdempotencyConflict);
+        }
         return created_response(identifier, &created);
     }
     let identifier = Uuid::new_v4();
@@ -431,7 +451,9 @@ async fn create_application(
     let created = application_record(identifier, &application, false);
     let mut registry = state.lock();
     registry.applications.insert(identifier, application);
-    registry.created.insert(key, (identifier, created.clone()));
+    registry
+        .created
+        .insert(key, (package_revision, identifier, created.clone()));
     drop(registry);
     created_response(identifier, &created)
 }
