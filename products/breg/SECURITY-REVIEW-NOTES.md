@@ -259,10 +259,10 @@ load (release provenance).
 ### Enforcement and defaults
 
 - The fallback runs only when shared verification reports a missing
-  `SHA256SUMS`, and only on the predecessor reads: the `test` and `package`
-  baselines, the `apply` active package, and the field-encryption preflight.
-  `breg` startup, candidate loads, `verify`, `diff`, and `migration explain`
-  stay strict. They refuse with `package.integrity_refused` and say to
+  `SHA256SUMS`, and only on the predecessor reads: the `diff
+  --runtime-config` baseline, the `test` and `package` baselines, the `apply`
+  active package, and the field-encryption preflight. `breg` startup,
+  candidate loads, `verify`, and `migration explain` stay strict. They refuse with `package.integrity_refused` and say to
   test, package, and apply a successor with this `bregctl`.
 - A predecessor without the envelope still passes every signed-manifest
   check. The signature must verify against the configured trust anchor, and
@@ -299,7 +299,8 @@ load (release provenance).
 `predecessor_without_shared_envelope_is_accepted_only_without_a_digest_pin`.
 `crates/registry-bregctl/tests/cli.rs`:
 `package_without_the_shared_envelope_is_refused_by_verify_with_the_successor_fix`,
-`package_baseline_without_the_shared_envelope_is_read_unless_a_digest_pin_is_configured`.
+`package_baseline_without_the_shared_envelope_is_read_unless_a_digest_pin_is_configured`,
+`diff_reads_a_running_package_without_the_shared_envelope_unless_a_digest_pin_is_configured`.
 `crates/registry-breg/tests/postgres_migration.rs`:
 `real_postgres_rehearsal_refuses_a_reviewed_plan_activation_would_refuse`
 covers both a drift that is reported and a final mismatch that is still
