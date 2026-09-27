@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 const OPERATION_FORBIDDEN: &str = "access_profile.standing_agent.operation_forbidden";
 const DIRECT_MUTATION_FORBIDDEN: &str = "access_profile.standing_agent.direct_mutation_forbidden";
 const ACTION_FORBIDDEN: &str = "access_profile.standing_agent.action_forbidden";
+const MODULE_TASK_GRANT_FORBIDDEN: &str = "access_profile.task_grant.module_forbidden";
 
 fn project() -> Value {
     json!({
@@ -390,4 +391,53 @@ fn task_grant_and_human_profiles_keep_their_ceilings() {
     let import_codes = codes(&failure);
     assert!(import_codes.contains(&"access_profile.task_grant.direct_mutation_forbidden"));
     assert!(!import_codes.contains(&DIRECT_MUTATION_FORBIDDEN));
+}
+
+#[test]
+fn module_contributed_profiles_cannot_declare_a_task_grant() {
+    // A task grant is authored only in project accessProfiles, where its
+    // ceiling is checked. A module profile declaring one would otherwise
+    // escape the standing-agent ceiling and meet no task-grant ceiling.
+    let mut value = project();
+    value["modules"] = json!([{"id": "assistant-extension", "version": "1"}]);
+    let project = parse_project_json(&serde_json::to_vec(&value).expect("project serializes"))
+        .expect("project parses");
+    let delegated_profile = json!({
+        "id": "module-assistant", "principalClaim": "registry_principal",
+        "actorKind": "agent", "requesterClients": ["assistant-client"],
+        "taskGrant": {"sourceIssuer": "http://not-https.example", "permissions": []},
+        "operations": ["get", "list", "patch"],
+        "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": []
+    });
+    for module in [
+        json!({
+            "id": "assistant-extension", "version": "1",
+            "extendEntities": [{"entity": "note", "accessProfiles": [delegated_profile.clone()]}]
+        }),
+        json!({
+            "id": "assistant-extension", "version": "1",
+            "entities": [{
+                "id": "memo", "primaryDataset": "test-dataset", "route": "memos",
+                "mutationMode": "mutable", "classification": "internal",
+                "fields": [{"id": "label", "type": "string", "maxLength": 32, "required": true, "classification": "internal"}],
+                "accessProfiles": [delegated_profile.clone()]
+            }]
+        }),
+    ] {
+        let module = parse_module_json(&serde_json::to_vec(&module).expect("module serializes"))
+            .expect("module parses");
+        let failure = refused(
+            compile_project(
+                &project,
+                std::slice::from_ref(&module),
+                CompileProfile::Authoring,
+            ),
+            "a module cannot contribute a task-grant profile",
+        );
+        assert!(
+            codes(&failure).contains(&MODULE_TASK_GRANT_FORBIDDEN),
+            "module task grant was not refused: {:?}",
+            codes(&failure)
+        );
+    }
 }

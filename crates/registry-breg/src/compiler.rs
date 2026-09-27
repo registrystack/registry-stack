@@ -261,6 +261,7 @@ pub fn compile_project_with_assets(
         &mut diagnostics,
     );
     validate_project_entity_access_profiles(project, &mut diagnostics);
+    validate_module_access_profile_task_grants(&sources, &mut diagnostics);
     expand_project_access(project, &mut sources, &mut diagnostics);
     let vocabularies =
         resolve_vocabularies(project, &mut sources, &mut action_sources, &mut diagnostics);
@@ -1791,6 +1792,32 @@ fn validate_project_entity_access_profiles(
             "project.entities[].accessProfiles",
             "root project entities must declare access through top-level accessProfiles",
         ));
+    }
+}
+
+/// A task grant is authored only in project `accessProfiles`, where
+/// `expand_project_access` checks its ceiling and compiles its collection
+/// bounds. Before that expansion, every entity profile was contributed by a
+/// module (root project entities cannot declare local profiles), so a task
+/// grant here would escape the standing-agent ceiling and meet no task-grant
+/// ceiling.
+fn validate_module_access_profile_task_grants(
+    entities: &BTreeMap<String, EntitySource>,
+    errors: &mut Vec<Diagnostic>,
+) {
+    for entity in entities.values() {
+        for access in &entity.access_profiles {
+            if access.task_grant.is_some() {
+                errors.push(Diagnostic::error(
+                    "access_profile.task_grant.module_forbidden",
+                    format!(
+                        "entities[id={}].accessProfiles[id={}].taskGrant",
+                        entity.id, access.id
+                    ),
+                    "a module cannot contribute a task-grant profile; declare task grants in project accessProfiles",
+                ));
+            }
+        }
     }
 }
 
