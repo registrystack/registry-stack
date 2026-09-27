@@ -63,7 +63,7 @@ struct Registry {
     /// it created and the creation record it replays.
     created: BTreeMap<String, (Uuid, Value)>,
     seen: Vec<Seen>,
-    next_problem: Option<(Method, BRegProblemCode)>,
+    next_problem: Option<(Method, String, BRegProblemCode)>,
 }
 
 #[derive(Clone)]
@@ -164,7 +164,13 @@ impl MockRegistry {
 
     /// Answer the next request with this method with this problem.
     pub fn fail_next(&self, method: Method, code: BRegProblemCode) {
-        self.state.lock().next_problem = Some((method, code));
+        self.fail_next_at(method, "/", code);
+    }
+
+    /// Answer the next request with this method whose path starts with
+    /// `path_prefix` with this problem.
+    pub fn fail_next_at(&self, method: Method, path_prefix: &str, code: BRegProblemCode) {
+        self.state.lock().next_problem = Some((method, path_prefix.to_owned(), code));
     }
 
     pub fn stop(self) {
@@ -198,7 +204,7 @@ fn record(
     let fails = registry
         .next_problem
         .as_ref()
-        .is_some_and(|(expected, _)| *expected == method);
+        .is_some_and(|(expected, prefix, _)| *expected == method && path.starts_with(prefix));
     registry.seen.push(Seen {
         method,
         path,
@@ -209,7 +215,7 @@ fn record(
         if_match: header("if-match"),
     });
     if fails {
-        registry.next_problem.take().map(|(_, code)| code)
+        registry.next_problem.take().map(|(_, _, code)| code)
     } else {
         None
     }
