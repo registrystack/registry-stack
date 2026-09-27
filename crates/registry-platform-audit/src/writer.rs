@@ -593,14 +593,15 @@ impl OpenRequests {
         }
     }
 
-    /// Claim the oldest open request under `key` that no appended response
-    /// has claimed yet, counting that response as in flight on it, so its
+    /// Claim the oldest open request under `key` with no response in
+    /// flight, neither an appended one that claimed it nor one its own
+    /// handle is writing, counting that response as in flight on it, so its
     /// handle dropped meanwhile leaves the request to that response.
     fn claim(&self, key: &RequestKey) -> Option<OpenRequest> {
         let open = self.0.lock().ok()?;
         open.get(key)?.iter().find_map(|request| {
             let mut state = request.state.lock().ok()?;
-            if state.claimed {
+            if state.claimed || state.in_flight > 0 {
                 return None;
             }
             state.claimed = true;
@@ -751,7 +752,8 @@ impl AuditWriter {
     /// enqueued file write or the other entries in its group commit.
     ///
     /// An accepted `response` entry answers the oldest [`AuditRequest`] still
-    /// open under the same schema and correlation.
+    /// open under the same schema and correlation with no response of its own
+    /// being written.
     pub async fn append(&self, entry: AuditEntry) -> Result<(), AuditUnavailable> {
         // The write and the bookkeeping it implies run in one task that
         // outlives a canceled caller, so an accepted response always answers
@@ -1316,7 +1318,9 @@ impl GroupCommitFile {
         let runtime = tokio::runtime::Handle::try_current().ok();
         let mut line = Some(line);
         // Every holder of the state lock releases it without awaiting, so a
-        // short wait is enough unless the state is poisoned by a stop.
+        // short wait is usually enough; a line still not queued after it is
+        // queued below under a wait for the lock. The lock never poisons: a
+        // stop shows as `stopped` once the lock is taken.
         for _ in 0..DETACHED_LOCK_ATTEMPTS {
             if let Ok(mut state) = self.state.try_lock() {
                 if state.stopped {
@@ -4038,6 +4042,74 @@ mod tests {
         let lines = buffered_lines(&sink.buffer);
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert_paired(&lines, "returned");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_appended_response_skips_a_request_whose_own_response_is_in_flight() {
+        let sink = GatedSink::new();
+        sink.release();
+        let writer = AuditWriter::from_line_sink(Box::new(sink.clone()));
+        let first = writer
+            .begin(SCHEMA, "shared", json!({"n": 1}), unfinished())
+            .await
+            .expect("first");
+        let second = writer
+            .begin(SCHEMA, "shared", json!({"n": 2}), unfinished())
+            .await
+            .expect("second");
+        let first_state = Arc::clone(&first.state);
+        *sink.open.0.lock().expect("gate") = false;
+        // The first request's own response is being written.
+        let responding = tokio::spawn(async move {
+            let mut first = first;
+            let result = first.respond(json!({"outcome": "returned"})).await;
+            (first, result)
+        });
+        sink.wait_entered(3).await;
+        // A response appended elsewhere under the same correlation is meant
+        // for the second request, the only one still owed a response.
+        let appending = tokio::spawn({
+            let writer = writer.clone();
+            async move {
+                writer
+                    .append(AuditEntry::response(
+                        SCHEMA,
+                        "shared",
+                        json!({"outcome": "returned"}),
+                    ))
+                    .await
+            }
+        });
+        for _ in 0..500 {
+            if first_state.lock().expect("state").claimed
+                || second.state.lock().expect("state").claimed
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        sink.release();
+        let (first, responded) = responding.await.expect("respond task");
+        responded.expect("first response");
+        appending
+            .await
+            .expect("append task")
+            .expect("appended response");
+        assert!(first.is_answered());
+        assert!(
+            second.is_answered(),
+            "the appended response is the second's"
+        );
+        drop(first);
+        drop(second);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        writer.wait_for_detached_entries();
+        let outcomes: Vec<_> = buffered_lines(&sink.buffer)
+            .iter()
+            .filter(|entry| entry["phase"] == "response")
+            .map(|entry| entry["record"]["outcome"].clone())
+            .collect();
+        assert_eq!(outcomes, [json!("returned"), json!("returned")]);
     }
 
     #[tokio::test]
