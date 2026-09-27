@@ -34,7 +34,6 @@ impl Action {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Outcome {
     Ok,
-    Conflicted,
     Refused,
 }
 
@@ -42,7 +41,6 @@ impl Outcome {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Ok => "ok",
-            Self::Conflicted => "conflicted",
             Self::Refused => "refused",
         }
     }

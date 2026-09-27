@@ -231,6 +231,51 @@ async fn a_conflicted_submit_rerenders_from_a_fresh_read_not_the_stale_one() {
 }
 
 #[tokio::test]
+async fn a_conflicted_submit_is_journaled_refused() {
+    let harness = Harness::start().await;
+    let (cookie, page) = harness.review().await;
+    let csrf = page.input("csrf").unwrap();
+    let view = page.input("view").unwrap();
+
+    // A view this session never rendered, then a draft that changed under
+    // the rendered view: both conflict before any effect.
+    harness
+        .post(
+            &submit_path(),
+            Some(&cookie),
+            &[("csrf", &csrf), ("view", "unrendered")],
+        )
+        .await;
+    harness.environment.registry.agent_patch();
+    let stale = harness
+        .post(
+            &submit_path(),
+            Some(&cookie),
+            &[("csrf", &csrf), ("view", &view)],
+        )
+        .await;
+    assert_eq!(stale.status, StatusCode::CONFLICT, "{}", stale.body);
+    assert_eq!(harness.environment.registry.submit_effects(), 0);
+
+    let mut submit_outcomes = Vec::new();
+    for _ in 0..100 {
+        submit_outcomes = harness
+            .environment
+            .audit_text()
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .filter(|entry| entry["phase"] == "response" && entry["record"]["action"] == "submit")
+            .map(|entry| entry["record"]["outcome"].clone())
+            .collect();
+        if submit_outcomes.len() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(submit_outcomes, ["refused", "refused"]);
+}
+
+#[tokio::test]
 async fn t4_cross_citizen_read_and_submit_give_not_found() {
     let harness = Harness::start().await;
     let (owner_cookie, owner_page) = harness.review().await;
