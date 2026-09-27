@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.35.0 - 2026-09-28
+
 ### BREAKING: write audit through the shared platform audit writer
 
 Relay no longer keeps a keyed hash chain over its audit log. Each audit line is

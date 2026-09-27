@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.35.0 - 2026-09-28
+
 - Add `AuditWriter::begin`, which appends a `request` entry and returns an
   `AuditRequest` that owes its `response`. A response the handle writes, or
   one appended under the same schema and correlation, answers it; a handle
