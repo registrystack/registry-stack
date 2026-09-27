@@ -32,7 +32,9 @@ jobs:
           # napi-rs CLI 3.8.2 requires Node 22.13 or later.
           node-version: 22.20.0
           cache: npm
-          cache-dependency-path: crates/registry-discovery-client-node/package-lock.json
+          cache-dependency-path: |
+            crates/registry-discovery-client-node/package-lock.json
+            docs/site/package-lock.json
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
@@ -106,3 +108,13 @@ jobs:
             cd crates/registry-discovery-client-py
             python3 -m unittest discover -s tests/python -v
           )
+
+      - name: Replay the Discovery tutorial from source
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The runner builds the tutorial binaries itself and serves them with
+          # their AWS-LC FIPS runtime library, as a contributor's gate does.
+          cd docs/site
+          npm ci --no-audit --no-fund
+          npm run check:tutorial:discovery

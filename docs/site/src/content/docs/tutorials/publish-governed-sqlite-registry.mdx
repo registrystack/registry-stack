@@ -612,7 +612,11 @@ a revision that would fail `check --production`.
 `runtime.yaml` from `relayctl init` already points at `registry.sqlite`, so it needs no edit.
 Read it once:
 
-```yaml test-excerpt="runtime.yaml"
+```sh
+cat runtime.yaml
+```
+
+```yaml test-expect
 apiVersion: registry.registrystack.org/relay-runtime/v1alpha1
 kind: RelayRuntimeConfig
 listener: {bind: "127.0.0.1:8080"}
