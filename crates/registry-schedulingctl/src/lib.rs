@@ -18,7 +18,9 @@ mod templates;
 
 use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use registry_platform_audit::AuditUnavailable;
 use registry_scheduling::config::RuntimeConfigError;
+use registry_scheduling::runtime::RuntimeError;
 use registry_scheduling::store::StoreError;
 use registry_scheduling_core::AUTHORED_POLICY_FILE;
 use serde_json::{json, Value};
@@ -333,6 +335,25 @@ fn usage_failure(message: String) -> Value {
 
 fn classify_failure(error: &anyhow::Error) -> (u8, Value) {
     let io_failure = error.chain().any(|cause| cause.is::<std::io::Error>());
+    // An apply that committed and then lost its response audit entry is not
+    // a refusal: the activation stands, and the operator restores the audit
+    // destination and confirms the ledger.
+    if let Some(applied) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<activation::AppliedUnaudited>())
+    {
+        return (
+            OPERATIONAL_FAILURE_EXIT,
+            json!({
+                "severity": "error",
+                "code": "schedulingctl.activation.applied-unaudited",
+                "artifact": "audit",
+                "path": "audit.path",
+                "message": applied.to_string(),
+                "suggestedAction": "Restore the schedulingctl audit destination, then run `schedulingctl status --runtime-config FILE` to confirm the active package.",
+            }),
+        );
+    }
     // A runtime configuration that will not load is a defect in an authored
     // document; a store that cannot be reached is a defect in the deployment
     // environment. Both name their own artifact instead of hiding behind the
@@ -350,6 +371,25 @@ fn classify_failure(error: &anyhow::Error) -> (u8, Value) {
                 "path": "runtime.yaml",
                 "message": format!("{error:#}"),
                 "suggestedAction": "Correct the runtime configuration the message names, then retry.",
+            }),
+        );
+    }
+    if error.chain().any(|cause| {
+        cause.is::<AuditUnavailable>()
+            || matches!(
+                cause.downcast_ref::<RuntimeError>(),
+                Some(RuntimeError::AuditDestination(_))
+            )
+    }) {
+        return (
+            OPERATIONAL_FAILURE_EXIT,
+            json!({
+                "severity": "error",
+                "code": "schedulingctl.audit-unavailable",
+                "artifact": "audit",
+                "path": "audit.path",
+                "message": format!("{error:#}"),
+                "suggestedAction": "Restore the schedulingctl audit destination beside audit.path, then retry.",
             }),
         );
     }
@@ -638,6 +678,56 @@ mod tests {
             classify_failure(&activation::refusal_or_failure(StoreError::Corrupt));
         assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
         assert_eq!(diagnostic["code"], "schedulingctl.store-unavailable");
+    }
+
+    #[test]
+    fn an_unavailable_audit_is_an_operational_failure_and_an_unaudited_apply_says_it_applied() {
+        let destination = anyhow::Error::new(
+            registry_scheduling::runtime::RuntimeError::AuditDestination("closed".to_owned()),
+        )
+        .context("opening the schedulingctl audit destination");
+        let (exit, diagnostic) = classify_failure(&destination);
+        assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
+        assert_eq!(diagnostic["code"], "schedulingctl.audit-unavailable");
+
+        struct Refusing;
+        impl io::Write for Refusing {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::other("refused"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let audit = registry_scheduling::audit::SchedulingAudit::new(
+            registry_platform_audit::AuditWriter::from_line_sink(Box::new(Refusing)),
+        );
+        let unavailable = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(audit.activation_request(uuid::Uuid::new_v4(), json!({})))
+            .expect_err("the refusing sink refuses the append");
+        let request = anyhow::Error::new(unavailable)
+            .context("writing the activation.apply request audit entry; nothing was applied");
+        let (exit, diagnostic) = classify_failure(&request);
+        assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
+        assert_eq!(diagnostic["code"], "schedulingctl.audit-unavailable");
+
+        let applied = anyhow::Error::new(activation::AppliedUnaudited {
+            package_digest: "sha256:00".to_owned(),
+            activation_id: uuid::Uuid::nil(),
+            cause: "audit destination is unavailable".to_owned(),
+        });
+        let (exit, diagnostic) = classify_failure(&applied);
+        assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
+        assert_eq!(
+            diagnostic["code"],
+            "schedulingctl.activation.applied-unaudited"
+        );
+        assert!(diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("`schedulingctl status --runtime-config FILE`"));
     }
 
     fn initialized(template: &str) -> (tempfile::TempDir, PathBuf) {

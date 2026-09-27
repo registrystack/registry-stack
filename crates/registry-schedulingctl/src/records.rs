@@ -49,7 +49,8 @@ pub fn apply(config_path: &Path, records_path: &Path) -> Result<Value> {
         .build()
         .context("starting the Scheduling operator runtime")?;
     // Records land only on a database `schedulingctl apply` has activated,
-    // and only on the database this configuration's ledger names.
+    // only on the database this configuration's ledger names, and only while
+    // this configuration's package is the active one.
     runtime
         .block_on(store.ready())
         .map_err(crate::activation::refusal_or_failure)
@@ -62,6 +63,14 @@ pub fn apply(config_path: &Path, records_path: &Path) -> Result<Value> {
     if active.database_id != config.database_id() {
         return Err(crate::activation::refusal_or_failure(
             StoreError::DatabaseIdMismatch,
+        ));
+    }
+    if active.package_digest != policy.package_digest {
+        return Err(crate::activation::refusal_or_failure(
+            StoreError::PackageNotActive {
+                active: active.package_digest,
+                candidate: policy.package_digest,
+            },
         ));
     }
     let (_, audit) = runtime

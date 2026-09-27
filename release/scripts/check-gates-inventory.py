@@ -378,6 +378,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "cargo test --locked -p registry-schedulingctl --features postgres-test --test intents_postgres",
     ),
     (
+        "Scheduling package activation suite",
+        "cargo test --locked -p registry-schedulingctl --features postgres-test --test activation_postgres",
+    ),
+    (
         "Release Linux Node client path filter",
         "release_linux_node_clients: ${{ steps.filter.outputs.release_linux_node_clients }}",
     ),

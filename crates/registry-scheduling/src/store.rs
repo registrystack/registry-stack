@@ -177,6 +177,13 @@ pub enum StoreError {
         "the verified package {candidate} is not the active package {active} on this database; run `schedulingctl plan --runtime-config FILE` then `schedulingctl apply --runtime-config FILE`"
     )]
     PackageNotActive { active: String, candidate: String },
+    /// The ledger recorded split role mode, and the runtime credential can
+    /// now write the ledger: a grant was added after the apply, or the role
+    /// gained the migration role's authority.
+    #[error(
+        "the activation ledger records split role mode, but the runtime credential can now write the ledger; run `schedulingctl apply --runtime-config FILE` to reissue the runtime role's grants and record the role mode it holds"
+    )]
+    RoleModeDrift,
     /// A retained hook event could not be proven deliverable under the
     /// destination binding it was captured for.
     #[error(
@@ -250,6 +257,7 @@ impl StoreError {
                 | Self::DatabaseIdMismatch
                 | Self::PackageAlreadyActive { .. }
                 | Self::PackageNotActive { .. }
+                | Self::RoleModeDrift
                 | Self::RetainedHookBindings
                 | Self::DeploymentIdentity
                 | Self::PolicyInUse(_)

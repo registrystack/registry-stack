@@ -81,16 +81,22 @@ row, all in one transaction. It writes an activation request entry to
 after it, and applies nothing when the request entry cannot be written.
 `--operator-reference` (a change ticket, for instance) is kept only as a keyed
 hash, and each `--backup REF` is recorded as given. Applying the package that
-is already active refuses with `nothing needs applying`; any other valid
-package, including an earlier one, applies as a new row. `status` reads the
-full activation history and reports whether the two credentials are one role
-(`single`) or two (`split`).
+is already active refuses with `nothing needs applying` unless a schema
+version is pending, the runtime credential is another role than the ledger
+recorded, or its role mode changed; any other valid package, including an
+earlier one, applies as a new row. Each row records the runtime role and the
+role mode that role actually holds after the grants: `split` when it cannot
+write the ledger, `single` when it can, through a grant, ownership, membership
+in the migration role, or a superuser attribute. `status` reads the full
+activation history and the role mode the runtime credential holds now.
 
 `serve` writes no activation state. It refuses to start when the ledger holds
 no row, when the ledger belongs to another `identity.databaseId`, when the
 verified package is not the active one, or when `package.expectedDigest` names
 another package; each refusal names `schedulingctl plan` then
-`schedulingctl apply`. A `serve` that finds a schema older than the one its
+`schedulingctl apply`. It also refuses when the ledger recorded `split` and the
+runtime credential can now write the ledger, naming `schedulingctl apply` to
+reissue the grants. A `serve` that finds a schema older than the one its
 binary carries refuses at the readiness check rather than serving against it,
 so an upgrade runs `schedulingctl apply` once before it restarts the new
 runtime; a database from before the ledger is adopted by that first apply,
@@ -104,8 +110,8 @@ such as closures. The policy references that supply by identifier; it does
 not embed it. A records replacement locks standing supply and refuses to move,
 remove, or reduce a window below its live bookings and holds; the operator
 error names the affected window and deficit. It refuses a database no
-`schedulingctl apply` has activated, and one whose ledger names another
-`identity.databaseId`. Database
+`schedulingctl apply` has activated, one whose ledger names another
+`identity.databaseId`, and one where another package is active. Database
 transport security is not configurable in production: the runtime requires
 TLS on both connections, and the plaintext escape is a `postgres-test` build
 switch documented in [RUNTIME-CONFIG.md](RUNTIME-CONFIG.md).

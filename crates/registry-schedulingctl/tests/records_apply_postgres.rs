@@ -427,7 +427,29 @@ async fn records_apply_rejects_a_different_deployment_identity_without_writing()
     apply(&adopted_config, &root.path().join("first.yaml"));
     let (before, _) = store.facts().await.expect("the first records landed");
 
+    // Another deployment's package is not the one the ledger names, so it
+    // is refused before its audit opens or the database is written.
     let error = apply_error(&other_config, &root.path().join("second.yaml"));
+    assert!(error.contains("is not the active package"), "{error}");
+    let (after, _) = store
+        .facts()
+        .await
+        .expect("the existing records remain readable");
+    assert_eq!(after, before, "the refused package changed the facts");
+    assert!(
+        audit_entries(&root.path().join("other-audit.schedulingctl.ndjson")).is_empty(),
+        "the refused package wrote an audit entry"
+    );
+
+    // A deployment row naming another scheduling id under the active
+    // package is refused inside the replacement transaction.
+    admin
+        .batch_execute(&format!(
+            "UPDATE {schema}.scheduling_meta SET scheduling_id = 'permit-renewals'"
+        ))
+        .await
+        .expect("the deployment row is rebound");
+    let error = apply_error(&adopted_config, &root.path().join("second.yaml"));
     assert_eq!(
         error,
         "replacing the environment records: the Scheduling database belongs to another deployment"
@@ -443,8 +465,9 @@ async fn records_apply_rejects_a_different_deployment_identity_without_writing()
     // The request entry was written before the transaction the store
     // refused; the refusal still writes a paired response so the request is
     // never left orphaned.
-    let refused = audit_entries(&root.path().join("other-audit.schedulingctl.ndjson"));
-    assert_eq!(refused.len(), 2, "{refused:?}");
+    let entries = audit_entries(&root.path().join("adopted-audit.schedulingctl.ndjson"));
+    assert_eq!(entries.len(), 4, "{entries:?}");
+    let refused = &entries[2..];
     assert_eq!(refused[0]["phase"], "request");
     assert_eq!(refused[1]["phase"], "response");
     assert_eq!(refused[0]["correlation"], refused[1]["correlation"]);
@@ -472,7 +495,7 @@ async fn records_apply_rejects_a_different_deployment_identity_without_writing()
         ]
     );
     let text =
-        std::fs::read_to_string(root.path().join("other-audit.schedulingctl.ndjson")).unwrap();
+        std::fs::read_to_string(root.path().join("adopted-audit.schedulingctl.ndjson")).unwrap();
     assert!(
         !text.contains("belongs to another deployment"),
         "the store's refusal leaked into the audit stream: {text}"
@@ -507,11 +530,11 @@ async fn records_apply_rejects_a_different_deployment_identity_without_writing()
         .expect("the disposable schema is dropped");
 }
 
-/// A database no package was ever activated on refuses the records, naming
-/// the commands that activate one, and neither the database nor the audit
-/// stream is written.
+/// A database no package was ever activated on, or one where another
+/// package is active, refuses the records, naming the commands that activate
+/// this one, and neither the database nor the audit stream is written.
 #[tokio::test]
-async fn records_apply_refuses_a_database_with_no_active_package() {
+async fn records_apply_refuses_a_database_where_this_package_is_not_active() {
     let base = std::env::var("SCHEDULING_TEST_DATABASE_URL")
         .expect("SCHEDULING_TEST_DATABASE_URL names a disposable PostgreSQL test server");
     let schema = format!("records_inactive_{}", Uuid::new_v4().simple());
@@ -540,10 +563,8 @@ async fn records_apply_refuses_a_database_with_no_active_package() {
     )
     .expect("the package is sealed");
     std::fs::write(root.path().join("first.yaml"), FIRST_RECORDS).unwrap();
-    std::fs::write(
-        root.path().join("runtime.yaml"),
-        format!(
-            "apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1\n\
+    let runtime_text = format!(
+        "apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1\n\
              kind: SchedulingRuntimeConfig\n\
              package:\n  root: {project}\n\
              listener:\n  bind: 127.0.0.1:8105\n  tlsTermination: development-loopback\n\
@@ -556,11 +577,10 @@ async fn records_apply_refuses_a_database_with_no_active_package() {
              \x20 testOnlyPlaintext: true\n\
              audit:\n  path: {audit}\n  hashKeyRef: secret:env/SCHEDULING_RECORDS_INACTIVE_AUDIT\n\
              retention:\n  attemptReceiptDays: 2\n",
-            project = project.display(),
-            audit = root.path().join("audit.ndjson").display(),
-        ),
-    )
-    .unwrap();
+        project = project.display(),
+        audit = root.path().join("audit.ndjson").display(),
+    );
+    std::fs::write(root.path().join("runtime.yaml"), &runtime_text).unwrap();
     let config_path = root.path().join("runtime.yaml");
     std::env::set_var(
         "SCHEDULING_RECORDS_INACTIVE_DATABASE",
@@ -593,6 +613,54 @@ async fn records_apply_refuses_a_database_with_no_active_package() {
     assert!(
         !root.path().join("audit.schedulingctl.ndjson").exists(),
         "the refused apply opened the audit stream"
+    );
+
+    // Another package is active than the one this configuration verifies.
+    activate(&config_path);
+    let successor = root.path().join("successor");
+    std::fs::create_dir_all(&successor).unwrap();
+    std::fs::write(
+        successor.join("scheduling.yaml"),
+        POLICY.replacen(
+            "label: Registry record update",
+            "label: Registry record visit",
+            1,
+        ),
+    )
+    .unwrap();
+    registry_platform_config::package::write_sum_file(
+        &successor,
+        None,
+        &registry_scheduling::config::package_limits(),
+        registry_scheduling::config::PACKAGE_COMMAND,
+    )
+    .expect("the successor package is sealed");
+    let successor_config = root.path().join("successor.yaml");
+    std::fs::write(
+        &successor_config,
+        runtime_text.replace(
+            &format!("root: {}\n", project.display()),
+            &format!("root: {}\n", successor.display()),
+        ),
+    )
+    .unwrap();
+    let error = apply_error(&successor_config, &root.path().join("first.yaml"));
+    assert!(
+        error.contains("is not the active package")
+            && error.ends_with(
+                "run `schedulingctl plan --runtime-config FILE` then \
+                 `schedulingctl apply --runtime-config FILE`"
+            ),
+        "{error}"
+    );
+    let (facts, _) = store.facts().await.expect("the records are readable");
+    assert!(
+        facts.locations.is_empty(),
+        "the refused apply wrote records"
+    );
+    assert!(
+        audit_entries(&root.path().join("audit.schedulingctl.ndjson")).is_empty(),
+        "the refused apply audited a records write"
     );
 
     admin

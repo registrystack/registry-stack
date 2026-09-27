@@ -161,6 +161,11 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         .and_then(|mode| mode.ok_or(StoreError::Corrupt))
         .map_err(database_step("role mode check"))?
     {
+        // A ledger that recorded split mode for a credential that can now
+        // write it means a grant or a membership was added after the apply.
+        RoleMode::Single if active.role_mode == RoleMode::Split => {
+            return Err(database_step("role mode check")(StoreError::RoleModeDrift));
+        }
         RoleMode::Single => tracing::warn!(role_mode = "single", "{SINGLE_ROLE_STATEMENT}"),
         RoleMode::Split => tracing::info!(
             role_mode = "split",

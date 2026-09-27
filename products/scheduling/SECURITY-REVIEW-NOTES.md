@@ -441,7 +441,16 @@ then revokes INSERT, UPDATE, DELETE, and TRUNCATE on the ledger and on
 PUBLIC, all inside the activation transaction. When they are one role
 (single role mode) the separation does not hold, and `plan`, `apply`, and
 `status` say so rather than refuse it, since a single-role local deployment
-is an ordinary layout. The runtime keeps broad DML on the product tables it
+is an ordinary layout. The mode the ledger records is not the comparison of
+user names: after the grants, apply reads what the runtime role can actually
+do to the ledger (a write privilege, ownership of the ledger or the schema,
+membership in the migration role, or a superuser or BYPASSRLS attribute) and
+records `single` if any holds, with the runtime role's name. Startup refuses
+a ledger that recorded `split` for a credential that can now write it, a
+grant or membership added after the apply, naming `schedulingctl apply` to
+reissue the grants. Re-applying the active package is accepted when the
+runtime role or its mode differs from the recorded row, so rotating the
+runtime role or moving to split mode is one more apply. The runtime keeps broad DML on the product tables it
 serves from, which SCHEDULING-DEC-10 records with its reasoning: the ledger
 decides what a restart may serve, so it is the table the runtime must not
 rewrite.
@@ -449,7 +458,12 @@ rewrite.
 **Serialization and identity.** The whole activation (schema versions,
 scheduling-id adoption, policy publication, the ledger row, and the grants)
 is one transaction under `pg_advisory_xact_lock` on the migration key, so a
-concurrent apply waits and then sees what the first committed.
+concurrent apply waits and then sees what the first committed. When the
+supply and meta tables exist, apply locks every supply anchor and then the
+meta row before it runs any migration, the order a capacity transaction
+takes them, so a migration's table locks are never held while the apply
+waits on a booking; the retained-binding check runs before those locks on
+its own connection.
 `identity.databaseId` is recorded by the first apply, and a later apply,
 `records apply`, or startup under another id is refused before any statement
 changes the database. The refusal names only the key: both values are
@@ -463,8 +477,12 @@ response names the outcome (`allowed`, `refused` with its closed
 `schedulingctl.activation.*` reason, or `failed`), the predecessor, and the
 effects. An audit destination that cannot be opened, or a request entry it
 refuses, applies nothing. A response entry refused after the commit leaves
-the activation in place and is reported as a failure; the ledger row is the
-durable record of that activation.
+the activation in place and is reported as
+`schedulingctl.activation.applied-unaudited` (exit 3), naming
+`schedulingctl status` to confirm it; the ledger row is the durable record of
+that activation. An audit destination that cannot be opened or written is an
+operational failure (`schedulingctl.audit-unavailable`, exit 3), not a
+refusal.
 
 **Operator-reference hashing.** `--operator-reference` (at most 256 bytes,
 printable) is stored in the ledger and written to the audit stream only as a
@@ -485,19 +503,27 @@ commands.
 **Tests, one per invariant:**
 `startup_refuses_a_database_the_ledger_does_not_name_for_this_package`
 (SCHEDULING-SEC-29),
-`split_roles_deny_the_runtime_a_ledger_write_and_the_service_still_serves`
+`split_roles_deny_the_runtime_a_ledger_write_and_the_service_still_serves`,
+`a_runtime_role_that_can_write_the_ledger_is_refused_at_startup_until_apply_reissues_its_grants`,
+`a_runtime_role_holding_the_migration_role_is_recorded_as_single`, and
+`rotating_the_runtime_role_reapplies_the_active_package`
 (SCHEDULING-SEC-30),
-`apply_refuses_the_active_package_and_a_foreign_database_without_writing`
-and `apply_waits_for_the_migration_lock_another_apply_holds`
+`apply_refuses_the_active_package_and_a_foreign_database_without_writing`,
+`apply_waits_for_the_migration_lock_another_apply_holds`, and
+`apply_takes_the_publication_locks_before_it_migrates`
 (SCHEDULING-SEC-31), and
-`apply_refuses_to_activate_without_its_audit_destination`
+`apply_refuses_to_activate_without_its_audit_destination`,
+`apply_writes_nothing_when_its_request_audit_entry_is_refused`, and
+`an_apply_whose_response_audit_entry_is_refused_reports_it_applied_unaudited`
 (SCHEDULING-SEC-32), all in
 `crates/registry-schedulingctl/tests/activation_postgres.rs`;
-`plan_on_an_empty_database_reports_the_initial_activation_and_writes_nothing`
-and `apply_records_one_row_per_activation_and_a_previous_package_is_a_new_row`
-in the same suite; `the_removed_migrate_command_refuses_as_usage_naming_plan_then_apply`
+`plan_on_an_empty_database_reports_the_initial_activation_and_writes_nothing`,
+`plan_before_the_first_split_apply_reports_the_initial_activation`, and
+`apply_records_one_row_per_activation_and_a_previous_package_is_a_new_row`
+(which also shows one operator reference hashing differently in two
+activations) in the same suite; `the_removed_migrate_command_refuses_as_usage_naming_plan_then_apply`
 (`crates/registry-scheduling/src/runtime.rs`); and
-`records_apply_refuses_a_database_with_no_active_package`
+`records_apply_refuses_a_database_where_this_package_is_not_active`
 (`crates/registry-schedulingctl/tests/records_apply_postgres.rs`).
 
 ## Known deferrals
