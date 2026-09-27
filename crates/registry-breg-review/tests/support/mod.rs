@@ -111,6 +111,19 @@ pub struct MockRegistry {
     pause_next_metadata_response: AtomicBool,
     metadata_response_paused: tokio::sync::Semaphore,
     release_metadata_response: tokio::sync::Semaphore,
+    /// How the registry answers the next draft read instead of the draft.
+    next_draft_read: Mutex<Option<Injected>>,
+    /// A problem the registry answers the next submit with, before any effect.
+    next_submit_problem: Mutex<Option<BRegProblemCode>>,
+}
+
+/// An answer injected in place of the one the mock would give.
+#[derive(Clone, Copy)]
+enum Injected {
+    /// A bare 503, as a registry that cannot answer returns.
+    Unavailable,
+    /// A definite registry problem.
+    Problem(BRegProblemCode),
 }
 
 impl MockRegistry {
@@ -161,6 +174,8 @@ impl MockRegistry {
             pause_next_metadata_response: AtomicBool::new(false),
             metadata_response_paused: tokio::sync::Semaphore::new(0),
             release_metadata_response: tokio::sync::Semaphore::new(0),
+            next_draft_read: Mutex::new(None),
+            next_submit_problem: Mutex::new(None),
         }
     }
 
@@ -202,6 +217,22 @@ impl MockRegistry {
     pub fn lose_next_submit_response_after_commit(&self) {
         self.lose_next_submit_response
             .store(true, Ordering::Release);
+    }
+
+    /// The registry answers the next draft read with a bare 503.
+    pub fn fail_next_draft_read(&self) {
+        *self.next_draft_read.lock().unwrap() = Some(Injected::Unavailable);
+    }
+
+    /// The registry answers the next draft read with the problem `code`.
+    pub fn refuse_next_draft_read(&self, code: BRegProblemCode) {
+        *self.next_draft_read.lock().unwrap() = Some(Injected::Problem(code));
+    }
+
+    /// The registry declines the next submit with the problem `code`, before
+    /// the submit takes any effect.
+    pub fn refuse_next_submit(&self, code: BRegProblemCode) {
+        *self.next_submit_problem.lock().unwrap() = Some(code);
     }
 
     pub fn pause_next_metadata_response(&self) {
@@ -348,10 +379,13 @@ fn json_response(status: StatusCode, body: &Value, extra: &[(&str, String)]) -> 
 fn problem(code: BRegProblemCode) -> Response {
     let status = code.status();
     let title = match status {
+        400 => "Bad Request",
         401 => "Unauthorized",
         404 => "Not Found",
         409 => "Conflict",
         412 => "Precondition Failed",
+        415 => "Unsupported Media Type",
+        422 => "Unprocessable Content",
         428 => "Precondition Required",
         _ => panic!("unregistered mock problem status"),
     };
@@ -644,6 +678,11 @@ async fn read_draft(
     if *registry.refusing_tokens.lock().unwrap() {
         return problem(BRegProblemCode::AuthenticationRefused);
     }
+    match registry.next_draft_read.lock().unwrap().take() {
+        Some(Injected::Unavailable) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        Some(Injected::Problem(code)) => return problem(code),
+        None => {}
+    }
     let caller = subject(&headers);
     let drafts = registry.drafts.lock().unwrap();
     let Some(draft) = drafts.get(identifier.as_str()) else {
@@ -714,6 +753,9 @@ async fn submit_draft(
             return receipt_response(receipt);
         }
         return problem(BRegProblemCode::IdempotencyConflict);
+    }
+    if let Some(code) = registry.next_submit_problem.lock().unwrap().take() {
+        return problem(code);
     }
     if if_match != action_etag(draft.action_generation) {
         registry.apply_deferred_withdrawal();
@@ -1081,6 +1123,43 @@ impl Environment {
     }
 }
 
+/// An audit destination a test controls: it keeps every line the page writes
+/// and refuses every write once its budget of accepted writes is spent.
+#[derive(Clone, Default)]
+pub struct AuditSink {
+    lines: Arc<Mutex<Vec<u8>>>,
+    /// Writes still accepted; `None` accepts every write.
+    budget: Arc<Mutex<Option<u64>>>,
+}
+
+impl AuditSink {
+    /// Accept `writes` more writes, then refuse every later one.
+    pub fn fail_after(&self, writes: u64) {
+        *self.budget.lock().unwrap() = Some(writes);
+    }
+
+    pub fn text(&self) -> String {
+        String::from_utf8(self.lines.lock().unwrap().clone()).unwrap()
+    }
+}
+
+impl std::io::Write for AuditSink {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        let mut budget = self.budget.lock().unwrap();
+        match budget.as_mut() {
+            Some(0) => return Err(std::io::Error::other("the test audit sink refuses")),
+            Some(remaining) => *remaining -= 1,
+            None => {}
+        }
+        self.lines.lock().unwrap().extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// A running page and the browser that drives it.
 pub struct Harness {
     pub environment: Environment,
@@ -1133,14 +1212,28 @@ impl Harness {
     }
 
     pub async fn start_with(options: Options) -> Self {
+        Self::start_over(options, None).await
+    }
+
+    /// Start a page whose audit stream is `sink` instead of its journal file.
+    pub async fn start_with_audit_sink(sink: &AuditSink) -> Self {
+        Self::start_over(Options::default(), Some(sink.clone())).await
+    }
+
+    async fn start_over(options: Options, sink: Option<AuditSink>) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let environment = Environment::prepare(address, &options).await;
         let config = registry_breg_review::RuntimeConfig::load(&environment.config_path)
             .expect("runtime document loads");
-        let router = registry_breg_review::router(config)
-            .await
-            .expect("review page starts");
+        let router = match sink {
+            Some(sink) => {
+                let writer = registry_platform_audit::AuditWriter::from_line_sink(Box::new(sink));
+                registry_breg_review::router_with_audit_writer(config, writer).await
+            }
+            None => registry_breg_review::router(config).await,
+        }
+        .expect("review page starts");
         tokio::spawn(async move {
             registry_breg_review::serve_until(listener, router, std::future::pending())
                 .await

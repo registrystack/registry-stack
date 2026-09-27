@@ -29,6 +29,8 @@ pub(crate) enum Refusal {
     NotFound,
     /// The registry no longer accepts the person's token.
     SignedOut,
+    /// The registry definitely declined the request, so it had no effect.
+    Refused(String),
     /// The registry failed, or answered outside the shape this page reads.
     Unavailable(String),
 }
@@ -38,6 +40,9 @@ impl Refusal {
         match error.status() {
             Some(403 | 404) => Self::NotFound,
             Some(401) => Self::SignedOut,
+            // A rate limit is a refusal worth retrying later.
+            Some(429) => Self::Unavailable(error.to_string()),
+            Some(400..=499) => Self::Refused(error.to_string()),
             _ => Self::Unavailable(error.to_string()),
         }
     }

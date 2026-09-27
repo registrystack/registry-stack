@@ -229,13 +229,13 @@ async fn complete(
         Ok(redeemed) => redeemed,
         Err(error) => {
             tracing::warn!(%error, "the authorization code could not be redeemed");
-            let (outcome, problem) = match error {
+            let problem = match error {
                 TokenError::Transport { .. } | TokenError::Unavailable => {
-                    (Outcome::Failed, Problem::SignInUnavailable)
+                    Problem::SignInUnavailable
                 }
-                _ => (Outcome::Refused, Problem::SignInRefused),
+                _ => Problem::SignInRefused,
             };
-            return Err(finish_problem(app, operation, outcome, problem).await);
+            return Err(finish_problem(app, operation, Outcome::Refused, problem).await);
         }
     };
     let Some(id_token) = redeemed.id_token() else {
@@ -281,24 +281,24 @@ async fn complete(
         Ok(citizen) => citizen,
         Err(_) => {
             tracing::error!("a citizen pseudonym could not be derived");
-            return Err(finish_problem(app, operation, Outcome::Failed, Problem::Internal).await);
+            return Err(finish_problem(app, operation, Outcome::Refused, Problem::Internal).await);
         }
     };
     let session_cookie = match fresh(app) {
         Ok(value) => value,
         Err(_) => {
-            return Err(finish_problem(app, operation, Outcome::Failed, Problem::Internal).await)
+            return Err(finish_problem(app, operation, Outcome::Refused, Problem::Internal).await)
         }
     };
     let csrf = match fresh(app) {
         Ok(value) => value,
         Err(_) => {
-            return Err(finish_problem(app, operation, Outcome::Failed, Problem::Internal).await)
+            return Err(finish_problem(app, operation, Outcome::Refused, Problem::Internal).await)
         }
     };
     // The session is opened before the sign-in is audited: it is cheap,
     // in-memory, and reversible, so a browser that never receives it never
-    // has a "succeeded" audit record made in its name. An audit failure
+    // has an "ok" audit record made in its name. An audit failure
     // after this point removes the session again rather than leave it
     // behind unconfirmed.
     let registry = Arc::new(app.registry.with_bearer_token(redeemed.into_access_token()));
@@ -315,7 +315,7 @@ async fn complete(
         );
     }
     let rollback = SessionRollback::armed(&app.sessions, &session_cookie);
-    if let Err(error) = operation.finish(Outcome::Succeeded, Some(&citizen)).await {
+    if let Err(error) = operation.finish(Outcome::Ok, Some(&citizen)).await {
         tracing::error!(%error, "the sign-in could not be audited");
         return Err(app.problem(Problem::AuditUnavailable));
     }

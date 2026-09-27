@@ -148,7 +148,11 @@ with a notice instead of submitting.
   interrupted or uncertain operation records `unfinished`. It names people
   and the client only by keyed pseudonyms and never holds a token, cookie,
   CSRF value, record value, or network address. When the stream cannot accept
-  an entry, the page refuses the action or result.
+  a request entry, the page refuses the operation. When it cannot accept a
+  response entry, the page withholds a read, answers a committed submit as
+  `registry-unavailable` so a retry shows its stored result, and still signs
+  out a person whose session it has already removed; the unanswered request
+  then records `unfinished`.
 - Neither the operational log nor the journal carries a token, code, state,
   nonce, cookie, or subject identifier.
 
