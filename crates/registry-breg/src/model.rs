@@ -1659,7 +1659,7 @@ impl CompiledRegistry {
     /// predecessor's sources compile to more engine-owned objects under this
     /// compiler.
     #[cfg(all(feature = "runtime", feature = "tooling"))]
-    pub(crate) fn with_migration_baseline_schema(
+    pub fn with_migration_baseline_schema(
         &self,
         baseline: &crate::package::CompiledRegistryMigrationBaseline,
     ) -> Self {

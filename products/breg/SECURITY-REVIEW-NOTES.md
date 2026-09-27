@@ -301,6 +301,8 @@ load (release provenance).
 `package_without_the_shared_envelope_is_refused_by_verify_with_the_successor_fix`,
 `package_baseline_without_the_shared_envelope_is_read_unless_a_digest_pin_is_configured`,
 `diff_reads_a_running_package_without_the_shared_envelope_unless_a_digest_pin_is_configured`.
+`crates/registry-breg/src/tooling.rs`:
+`a_signed_baseline_without_an_index_reports_the_index_the_plan_adds`.
 `crates/registry-breg/tests/postgres_migration.rs`:
 `real_postgres_rehearsal_refuses_a_reviewed_plan_activation_would_refuse`
 covers both a drift that is reported and a final mismatch that is still

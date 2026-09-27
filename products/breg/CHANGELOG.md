@@ -30,6 +30,9 @@
     plan was computed from, so a successor of a package built before
     compiler-owned reference indexes no longer fails its rehearsal with
     `migration.rehearsal.compiler_statement_failed` on the index it adds.
+  - `diff --runtime-config` classifies changes against the running package's
+    signed migration baseline, so it reports an index the successor plan
+    creates, such as a compiler-owned reference index, as a lock risk.
   - A registry activated by an earlier release records no instance claim, so
     `breg` refuses to serve it after the first successor apply on this
     release until the operator runs `bregctl instance-claim adopt
