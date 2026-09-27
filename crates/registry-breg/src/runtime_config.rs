@@ -1454,7 +1454,10 @@ impl DatabaseConfig {
             parse_secret_reference(raw.runtime_url_ref, RuntimeConfigError::InvalidDatabase)?;
         let migration_url_ref =
             parse_secret_reference(raw.migration_url_ref, RuntimeConfigError::InvalidDatabase)?;
-        if runtime_url_ref == migration_url_ref {
+        let roles = SqlRoles::from_raw(raw.roles)?;
+        // One database reference logs in as one role, so two references are
+        // required only when the runtime and migration roles differ.
+        if runtime_url_ref == migration_url_ref && roles.migration != roles.runtime {
             return Err(RuntimeConfigError::InvalidDatabase);
         }
         let pool_bounds = PoolBounds::new(
@@ -1468,7 +1471,7 @@ impl DatabaseConfig {
             runtime_url_ref,
             migration_url_ref,
             pool_bounds,
-            roles: SqlRoles::from_raw(raw.roles)?,
+            roles,
         })
     }
 
@@ -2290,9 +2293,6 @@ pub struct SqlRoles {
 
 impl SqlRoles {
     fn from_raw(raw: RawSqlRoles) -> Result<Self> {
-        if raw.migration == raw.runtime {
-            return Err(RuntimeConfigError::InvalidDatabase);
-        }
         Ok(Self {
             migration: SqlIdentifier::parse(&raw.migration)
                 .map_err(|_| RuntimeConfigError::InvalidDatabase)?,
