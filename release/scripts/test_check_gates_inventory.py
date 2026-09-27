@@ -998,6 +998,11 @@ class GateInventoryTest(unittest.TestCase):
                 "true # Scheduling delivery intent reads disabled",
                 "Scheduling delivery intent suite",
             ),
+            (
+                "cargo test --locked -p registry-schedulingctl --features postgres-test --test activation_postgres",
+                "true # Scheduling package activation disabled",
+                "Scheduling package activation suite",
+            ),
         ):
             with self.subTest(gate=gate):
                 text = self.workflow.replace(snippet, replacement, 1)

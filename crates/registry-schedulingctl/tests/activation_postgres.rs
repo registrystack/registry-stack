@@ -475,22 +475,52 @@ async fn apply_records_one_row_per_activation_and_a_previous_package_is_a_new_ro
     assert_eq!(successor["schemaVersionsApplied"], serde_json::json!([]));
     assert_eq!(successor["effects"]["policyRevision"], 3);
 
-    // Going back is an activation like any other.
-    let back = apply(&first_config).expect("the previous package activates again");
-    assert_eq!(back["applyOrder"], 3);
-    assert_eq!(back["packageDigest"], initial["packageDigest"]);
-    assert_eq!(back["predecessorPackageDigest"], successor["packageDigest"]);
-    assert_eq!(deployment.ledger_rows().await, 3);
+    // Going back is an activation like any other. The same operator
+    // reference on it hashes differently: the hash is keyed to the
+    // activation, so two rows cannot be linked by it.
+    let rehashed = ctl({
+        let config = first_config.clone();
+        move || activation::apply(&config, Some("CHG-4242"), &[])
+    })
+    .expect("the previous package activates again");
+    let second_hash: String = deployment
+        .admin
+        .query_one(
+            &format!(
+                "SELECT operator_reference_hash FROM {}.scheduling_activations \
+                 WHERE apply_order = 3",
+                deployment.schema
+            ),
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_ne!(second_hash, hash, "one reference linked two activations");
+    assert!(!second_hash.contains("CHG-4242"));
 
-    let report = status(&first_config);
+    let back = apply(&second_config).expect("the successor activates again");
+    assert_eq!(rehashed["applyOrder"], 3);
+    assert_eq!(rehashed["packageDigest"], initial["packageDigest"]);
+    assert_eq!(
+        rehashed["predecessorPackageDigest"],
+        successor["packageDigest"]
+    );
+    assert_eq!(back["applyOrder"], 4);
+    assert_eq!(back["packageDigest"], successor["packageDigest"]);
+    assert_eq!(deployment.ledger_rows().await, 4);
+
+    let report = status(&second_config);
     assert_eq!(
         report["activePackage"]["packageDigest"],
-        initial["packageDigest"]
+        successor["packageDigest"]
     );
     let history = report["history"].as_array().unwrap();
-    assert_eq!(history.len(), 3);
+    assert_eq!(history.len(), 4);
     assert_eq!(history[0]["planKind"], "initial");
     assert_eq!(history[2]["planKind"], "successor");
+    assert_eq!(history[0]["roleMode"], "single");
+    assert!(history[0]["runtimeRole"].is_string(), "{report}");
     assert_eq!(report["schemaVersion"], 9);
     assert_eq!(report["roleMode"], "single");
     assert!(report["roleModeStatement"].is_string());
@@ -769,10 +799,7 @@ async fn split_roles_deny_the_runtime_a_ledger_write_and_the_service_still_serve
         .await
         .expect("the runtime reads the ledger");
     for statement in [
-        "INSERT INTO scheduling_activations(activation_id, apply_order, package_digest, \
-         database_id, plan_kind, applied_at, role_mode) VALUES(gen_random_uuid(), 2, \
-         'sha256:0000000000000000000000000000000000000000000000000000000000000000', \
-         'scheduling-activation-test', 'initial', now(), 'split')",
+        LEDGER_INSERT,
         "UPDATE scheduling_activations SET database_id='elsewhere'",
         "DELETE FROM scheduling_activations",
         "DELETE FROM scheduling_schema_migrations",
@@ -816,5 +843,299 @@ async fn split_roles_deny_the_runtime_a_ledger_write_and_the_service_still_serve
         1,
         "startup wrote the ledger"
     );
+    deployment.drop().await;
+}
+
+#[tokio::test]
+async fn plan_before_the_first_split_apply_reports_the_initial_activation() {
+    // The runtime role holds nothing until the first apply grants it, so it
+    // cannot even see the schema: plan must read that as an empty database.
+    let deployment = Deployment::split("activation_plan_split").await;
+    let package = deployment.package("package", POLICY);
+    let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
+
+    let report = plan(&config);
+    assert!(report["activePackage"].is_null(), "{report}");
+    assert_eq!(report["databaseIdCheck"], "initial");
+    assert_eq!(report["retainedHookBindings"], "none-retained");
+    assert_eq!(report["changesPending"], true);
+    assert_eq!(report["refusals"], serde_json::json!([]));
+    assert_eq!(deployment.tables().await, 0, "plan created a table");
+    deployment.drop().await;
+}
+
+/// Whether `statement`, run by `client`, is refused for want of privilege.
+async fn denied(client: &tokio_postgres::Client, statement: &str) -> bool {
+    client
+        .batch_execute(statement)
+        .await
+        .err()
+        .and_then(|error| error.code().cloned())
+        == Some(tokio_postgres::error::SqlState::INSUFFICIENT_PRIVILEGE)
+}
+
+const LEDGER_INSERT: &str = "INSERT INTO scheduling_activations(activation_id, apply_order, \
+     package_digest, database_id, plan_kind, applied_at, role_mode, runtime_role) \
+     VALUES(gen_random_uuid(), 99, \
+     'sha256:0000000000000000000000000000000000000000000000000000000000000000', \
+     'scheduling-activation-test', 'initial', now(), 'split', 'intruder')";
+
+#[tokio::test]
+async fn a_runtime_role_that_can_write_the_ledger_is_refused_at_startup_until_apply_reissues_its_grants(
+) {
+    let deployment = Deployment::split("activation_drift").await;
+    let runtime_role = deployment.roles[0].clone();
+    let package = deployment.package("package", POLICY);
+    let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
+    let applied = apply(&config).expect("the package activates");
+    assert_eq!(applied["roleMode"], "split");
+
+    // Someone grants the runtime role a ledger write after the apply.
+    deployment
+        .admin
+        .batch_execute(&format!(
+            "GRANT INSERT ON {}.scheduling_activations TO {runtime_role}",
+            deployment.schema
+        ))
+        .await
+        .unwrap();
+    let error = registry_scheduling::runtime::serve_from_path(&config)
+        .await
+        .expect_err("startup refuses a split ledger the runtime role can write")
+        .to_string();
+    assert!(
+        error.contains("records split role mode")
+            && error.contains("run `schedulingctl apply --runtime-config FILE`"),
+        "{error}"
+    );
+
+    // The active package applies again, because its recorded role mode no
+    // longer holds; plan says so without calling it a refusal.
+    let report = plan(&config);
+    assert_eq!(report["changesPending"], true, "{report}");
+    assert_eq!(report["effectiveRoleMode"], "single");
+    assert_eq!(report["refusals"], serde_json::json!([]));
+    let reapplied = apply(&config).expect("apply reissues the runtime role's grants");
+    assert_eq!(reapplied["applyOrder"], 2);
+    assert_eq!(reapplied["roleMode"], "split");
+    let runtime = connect(&std::env::var(&deployment.runtime_secret).unwrap()).await;
+    assert!(denied(&runtime, LEDGER_INSERT).await, "the grant survived");
+    assert_eq!(plan(&config)["changesPending"], false);
+    assert_eq!(deployment.ledger_rows().await, 2);
+    deployment.drop().await;
+}
+
+#[tokio::test]
+async fn a_runtime_role_holding_the_migration_role_is_recorded_as_single() {
+    let deployment = Deployment::split("activation_member").await;
+    let (runtime_role, migration_role) = (deployment.roles[0].clone(), deployment.roles[1].clone());
+    deployment
+        .admin
+        .batch_execute(&format!("GRANT {migration_role} TO {runtime_role}"))
+        .await
+        .unwrap();
+    let package = deployment.package("package", POLICY);
+    let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
+
+    let applied = apply(&config).expect("the package activates");
+    assert_eq!(applied["roleMode"], "single", "{applied}");
+    assert!(applied["roleModeStatement"].is_string());
+    let report = status(&config);
+    assert_eq!(report["history"][0]["roleMode"], "single");
+    assert_eq!(report["roleMode"], "single");
+    deployment.drop().await;
+}
+
+#[tokio::test]
+async fn rotating_the_runtime_role_reapplies_the_active_package() {
+    let mut deployment = Deployment::split("activation_rotate").await;
+    let package = deployment.package("package", POLICY);
+    let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
+    apply(&config).expect("the package activates");
+
+    let rotated = format!("scheduling_rotated_{}", Uuid::new_v4().simple());
+    let password = Uuid::new_v4().simple().to_string();
+    deployment
+        .admin
+        .batch_execute(&format!(
+            "CREATE ROLE {rotated} LOGIN PASSWORD '{password}'"
+        ))
+        .await
+        .unwrap();
+    deployment.roles.insert(0, rotated.clone());
+    std::env::set_var(
+        &deployment.runtime_secret,
+        scoped_url(
+            &with_login(&base_url(), &rotated, &password),
+            &deployment.schema,
+        ),
+    );
+
+    let reapplied = apply(&config).expect("the active package applies for the rotated role");
+    assert_eq!(reapplied["applyOrder"], 2);
+    assert_eq!(reapplied["roleMode"], "split");
+    let report = status(&config);
+    assert_eq!(report["history"][1]["runtimeRole"], rotated.as_str());
+    let runtime = connect(&std::env::var(&deployment.runtime_secret).unwrap()).await;
+    assert!(denied(&runtime, LEDGER_INSERT).await);
+    assert_eq!(plan(&config)["changesPending"], false);
+    deployment.drop().await;
+}
+
+/// An audit sink that accepts its first `lines` lines and refuses every
+/// later write.
+struct LimitedSink {
+    lines: usize,
+}
+
+impl std::io::Write for LimitedSink {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        if self.lines == 0 {
+            return Err(std::io::Error::other("the test sink refuses this append"));
+        }
+        self.lines -= buffer
+            .iter()
+            .filter(|byte| **byte == b'\n')
+            .count()
+            .min(self.lines);
+        Ok(buffer.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn apply_audited_by(config: &Path, lines: usize) -> anyhow::Result<Value> {
+    let config = config.to_path_buf();
+    ctl(move || {
+        activation::apply_with_audit_sink(&config, None, &[], Box::new(LimitedSink { lines }))
+    })
+}
+
+#[tokio::test]
+async fn apply_writes_nothing_when_its_request_audit_entry_is_refused() {
+    let deployment = Deployment::single("activation_audit_request").await;
+    let package = deployment.package("package", POLICY);
+    let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
+
+    let error = apply_audited_by(&config, 0).expect_err("the unaudited apply refuses");
+    assert!(
+        format!("{error:#}")
+            .starts_with("writing the activation.apply request audit entry; nothing was applied"),
+        "{error:#}"
+    );
+    assert!(error
+        .chain()
+        .any(|cause| cause.is::<registry_platform_audit::AuditUnavailable>()));
+    assert_eq!(deployment.tables().await, 0, "an unaudited apply wrote");
+    deployment.drop().await;
+}
+
+#[tokio::test]
+async fn an_apply_whose_response_audit_entry_is_refused_reports_it_applied_unaudited() {
+    let deployment = Deployment::single("activation_audit_response").await;
+    let package = deployment.package("package", POLICY);
+    let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
+
+    let error = apply_audited_by(&config, 1).expect_err("the unaudited response is reported");
+    let unaudited = error
+        .downcast_ref::<activation::AppliedUnaudited>()
+        .expect("the failure says the package was applied unaudited");
+    let message = unaudited.to_string();
+    assert!(message.contains("was applied as activation"), "{message}");
+    assert!(
+        message.contains("`schedulingctl status --runtime-config FILE`"),
+        "{message}"
+    );
+    assert_eq!(deployment.ledger_rows().await, 1, "the activation stands");
+    deployment.drop().await;
+}
+
+#[tokio::test]
+async fn apply_takes_the_publication_locks_before_it_migrates() {
+    // Split roles name the waiting apply among sibling tests on the server.
+    let deployment = Deployment::split("activation_lock_order").await;
+    let migration_role = deployment.roles[1].clone();
+    let package = deployment.package("package", POLICY);
+    let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
+    apply(&config).expect("the package activates");
+    assert!(
+        deployment
+            .scalar_i64("SELECT count(*) FROM {schema}.scheduling_supply")
+            .await
+            > 0,
+        "the policy anchors no supply to wait on"
+    );
+
+    // A database from before the ledger: its last schema version pending.
+    deployment
+        .admin
+        .batch_execute(&format!(
+            "DROP TABLE {schema}.scheduling_activations;\
+             DELETE FROM {schema}.scheduling_schema_migrations WHERE version = 9;",
+            schema = deployment.schema
+        ))
+        .await
+        .unwrap();
+
+    // A capacity transaction holds a supply anchor.
+    let holder = connect(&base_url()).await;
+    holder.batch_execute("BEGIN").await.unwrap();
+    holder
+        .batch_execute(&format!(
+            "SELECT supply_id FROM {}.scheduling_supply FOR UPDATE",
+            deployment.schema
+        ))
+        .await
+        .unwrap();
+    let waiting = std::thread::spawn({
+        let config = config.clone();
+        move || activation::apply(&config, None, &[])
+    });
+
+    let mut blocked = false;
+    for _ in 0..200 {
+        let waiters: i64 = deployment
+            .admin
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity \
+                 WHERE usename=$1 AND wait_event_type='Lock' \
+                 AND wait_event IN ('transactionid', 'tuple')",
+                &[&migration_role],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        if waiters > 0 {
+            blocked = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(blocked, "the apply never waited on the supply anchor");
+    // A row-lock wait holds a tuple lock in AccessExclusive mode, so only
+    // relation locks show a migration's DDL.
+    let exclusive: i64 = deployment
+        .admin
+        .query_one(
+            "SELECT count(*) FROM pg_locks JOIN pg_stat_activity USING (pid) \
+             WHERE usename=$1 AND granted AND locktype='relation' \
+             AND mode='AccessExclusiveLock'",
+            &[&migration_role],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        exclusive, 0,
+        "the apply held migration locks while it waited on supply"
+    );
+
+    holder.batch_execute("COMMIT").await.unwrap();
+    let report = waiting
+        .join()
+        .expect("the apply does not panic")
+        .expect("the apply proceeds once the anchor is released");
+    assert_eq!(report["schemaVersionsApplied"], serde_json::json!([9]));
     deployment.drop().await;
 }

@@ -226,17 +226,26 @@ entries:
       - {path: crates/registry-scheduling/src/config.rs, name: identity_database_id_is_required_and_names_the_key_to_add}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: plan_on_an_empty_database_reports_the_initial_activation_and_writes_nothing, features: [postgres-test]}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_records_one_row_per_activation_and_a_previous_package_is_a_new_row, features: [postgres-test]}
-      - {path: crates/registry-schedulingctl/tests/records_apply_postgres.rs, name: records_apply_refuses_a_database_with_no_active_package, features: [postgres-test]}
+      - {path: crates/registry-schedulingctl/tests/records_apply_postgres.rs, name: records_apply_refuses_a_database_where_this_package_is_not_active, features: [postgres-test]}
+      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: plan_before_the_first_split_apply_reports_the_initial_activation, features: [postgres-test]}
   - id: SCHEDULING-SEC-30
     tests:
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: split_roles_deny_the_runtime_a_ledger_write_and_the_service_still_serves, features: [postgres-test]}
+      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: a_runtime_role_that_can_write_the_ledger_is_refused_at_startup_until_apply_reissues_its_grants, features: [postgres-test]}
+      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: a_runtime_role_holding_the_migration_role_is_recorded_as_single, features: [postgres-test]}
+      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: rotating_the_runtime_role_reapplies_the_active_package, features: [postgres-test]}
   - id: SCHEDULING-SEC-31
     tests:
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_refuses_the_active_package_and_a_foreign_database_without_writing, features: [postgres-test]}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_waits_for_the_migration_lock_another_apply_holds, features: [postgres-test]}
       - {path: crates/registry-schedulingctl/tests/records_apply_postgres.rs, name: records_apply_rejects_a_different_deployment_identity_without_writing, features: [postgres-test]}
+      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_takes_the_publication_locks_before_it_migrates, features: [postgres-test]}
   - id: SCHEDULING-SEC-32
     tests:
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_refuses_to_activate_without_its_audit_destination, features: [postgres-test]}
+      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_writes_nothing_when_its_request_audit_entry_is_refused, features: [postgres-test]}
+      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: an_apply_whose_response_audit_entry_is_refused_reports_it_applied_unaudited, features: [postgres-test]}
+      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_records_one_row_per_activation_and_a_previous_package_is_a_new_row, features: [postgres-test]}
+      - {path: crates/registry-schedulingctl/src/lib.rs, name: an_unavailable_audit_is_an_operational_failure_and_an_unaudited_apply_says_it_applied}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_records_one_row_per_activation_and_a_previous_package_is_a_new_row, features: [postgres-test]}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_refuses_the_active_package_and_a_foreign_database_without_writing, features: [postgres-test]}

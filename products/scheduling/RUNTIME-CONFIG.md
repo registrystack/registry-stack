@@ -96,7 +96,14 @@ ledger but not write it; it keeps ordinary write access to the product tables
 it serves from. When both
 credentials are the same role (single role mode), `plan`, `apply`, and
 `status` say so, because that role can write the ledger and the separation
-does not hold.
+does not hold. The ledger records the runtime role and the mode it holds
+after the grants, read from its privileges: a runtime role that can write the
+ledger through a grant, ownership, membership in the migration role, or a
+superuser or BYPASSRLS attribute is recorded as `single` even when the two
+credentials are different roles. Re-running `apply` with the active package
+reissues the grants after the runtime role is rotated or the deployment moves
+to split mode, and `scheduling serve` refuses a ledger that recorded `split`
+for a credential that can now write it.
 Transport security on the database connection is not optional: Scheduling sets
 `sslmode` to `Require` on both connections and refuses a connection it cannot
 protect. `database.trustedRootCertificateRef` is optional and selects the PEM

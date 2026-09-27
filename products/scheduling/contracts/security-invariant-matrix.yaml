@@ -541,7 +541,8 @@ invariants:
       pins the package at package.root. scheduling migrate is removed.
     refusal: >-
       Refuse to start when the ledger holds no row, names another package, or
-      belongs to another identity.databaseId, naming schedulingctl plan
+      belongs to another identity.databaseId, and refuse records apply when
+      another package is active, naming schedulingctl plan
       --runtime-config FILE then schedulingctl apply --runtime-config FILE;
       refuse a pin mismatch naming package.expectedDigest; exit 2 for the
       removed migrate command naming the same two commands.
@@ -559,14 +560,22 @@ invariants:
       connections. When they differ it grants the runtime role its schema,
       table, sequence, and function access, then revokes INSERT, UPDATE,
       DELETE, and TRUNCATE on scheduling_activations and
-      scheduling_schema_migrations, in the activation transaction.
+      scheduling_schema_migrations, in the activation transaction. The row
+      records the runtime role and the role mode it holds after the grants,
+      read from its ledger privileges, ownership, membership in the migration
+      role, and superuser or BYPASSRLS attributes. scheduling serve compares
+      that recorded mode with the one its credential holds.
     refusal: >-
       PostgreSQL refuses every runtime-role write to the ledger and the
       schema history with insufficient_privilege, while the service still
-      starts and serves.
+      starts and serves. Startup refuses a ledger that recorded split mode
+      for a credential that can now write it, naming schedulingctl apply
+      --runtime-config FILE to reissue the grants.
     partialNote: >-
       In single role mode both credentials are one role that can write the
-      ledger; plan, apply, and status report the mode and do not refuse it.
+      ledger; plan, apply, and status report the mode and do not refuse it,
+      and a runtime role holding the migration role's authority is recorded
+      as single.
       In split mode the runtime role keeps ordinary write access to the
       product tables it serves from (SCHEDULING-DEC-10).
     negativeTest:
@@ -589,7 +598,9 @@ invariants:
       Refuse an apply or records apply under another identity.databaseId,
       naming only the key and leaving the ledger, schema, and policy
       unchanged; a second apply waits for the lock and then runs against the
-      state the first committed.
+      state the first committed. An apply takes every supply anchor and the
+      meta row before it migrates, so no migration lock is held while it
+      waits on a capacity transaction.
     negativeTest:
       path: crates/registry-schedulingctl/tests/activation_postgres.rs
       name: apply_refuses_the_active_package_and_a_foreign_database_without_writing
@@ -609,7 +620,9 @@ invariants:
     refusal: >-
       Apply nothing when the audit destination cannot be opened or the
       request entry is refused; record a refused or failed activation as a
-      response entry with its closed reason.
+      response entry with its closed reason; report a response entry refused
+      after the commit as schedulingctl.activation.applied-unaudited, exit 3,
+      naming schedulingctl status --runtime-config FILE.
     negativeTest:
       path: crates/registry-schedulingctl/tests/activation_postgres.rs
       name: apply_refuses_to_activate_without_its_audit_destination

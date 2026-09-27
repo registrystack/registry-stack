@@ -27,28 +27,37 @@
     versions, binds the scheduling id, publishes the policy, grants the
     runtime role when the credentials are two roles, and records one ledger
     row. Any valid package applies, an earlier one included, each as a new
-    row; the active package refuses with `nothing needs applying`. The
+    row; the active package refuses with `nothing needs applying` unless a
+    schema version is pending or the runtime role or its role mode changed,
+    so a rotated runtime role or a move to split mode re-applies it. The
     operator reference is kept only as a keyed hash scoped by the activation
     id. Apply writes a `scheduling-activation-audit/v1` request entry to
     `audit.schedulingctl.ndjson` before the transaction and a response entry
-    after it, and applies nothing when the request entry is refused.
+    after it, and applies nothing when the request entry is refused. A
+    response entry refused after the commit exits 3 with
+    `schedulingctl.activation.applied-unaudited`, naming `schedulingctl
+    status`; an audit destination that cannot be written exits 3 with
+    `schedulingctl.audit-unavailable`.
   - `schedulingctl status --runtime-config FILE` reads the full activation
     history, the schema version, and the role mode.
   - In split role mode the runtime role reads the ledger and the schema
     history but cannot write either; it keeps ordinary write access to the
     product tables. Single role mode is reported by `plan`, `apply`, and
-    `status`.
+    `status`. Each ledger row records the runtime role and the role mode it
+    holds after the grants, read from its privileges and memberships.
   - `scheduling serve` writes no activation state. It refuses a database with
     no active package, a verified package the ledger does not name, and a
     ledger recorded for another `identity.databaseId`, naming `schedulingctl
     plan` then `schedulingctl apply`; `package.expectedDigest` still pins the
-    package at `package.root`.
+    package at `package.root`. It refuses a ledger that recorded split role
+    mode for a runtime credential that can now write it, naming
+    `schedulingctl apply`.
   - `scheduling migrate` is removed; it exits 2 naming `schedulingctl plan
     --runtime-config FILE` then `schedulingctl apply --runtime-config FILE`.
   - The operator commands exit 0 on success, 1 on a refusal, 2 on a usage
     error, and 3 on an operational failure.
   - `schedulingctl records apply` refuses a database no `schedulingctl apply`
-    has activated.
+    has activated, and one where another package is active.
   - Upgrade: add `identity.databaseId`, then run `schedulingctl apply` once
     after upgrading, before starting the upgraded runtime; a pre-WP3 database
     is adopted by that first apply, which also backfills the retained policy

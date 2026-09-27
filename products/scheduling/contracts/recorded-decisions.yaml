@@ -205,8 +205,9 @@ decisions:
       schedulingctl apply accepts any package that verifies and checks,
       including one this database served before, and records each as a new
       ledger row with the package it replaced as its predecessor. Applying the
-      package that is already active, with no schema version pending, is
-      refused with nothing needs applying and writes no row.
+      package that is already active, with no schema version pending, under
+      the runtime role and role mode the ledger recorded, is refused with
+      nothing needs applying and writes no row.
     reasoning: >-
       Going back to an earlier package is an ordinary operator decision, not a
       rollback the ledger must model: the policy revision still advances, and
@@ -214,10 +215,13 @@ decisions:
       Refusing the active package keeps the history free of rows that changed
       nothing, and lets a pipeline tell a no-op from an activation by the exit
       code. When a schema version is pending, as after an upgrade, the same
-      package applies, because the apply is what migrates and adopts.
+      package applies, because the apply is what migrates and adopts; when
+      the runtime role was rotated or its role mode changed, it applies
+      because the apply is what issues the grants.
     evidence:
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_records_one_row_per_activation_and_a_previous_package_is_a_new_row, features: [postgres-test]}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_refuses_the_active_package_and_a_foreign_database_without_writing, features: [postgres-test]}
+      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: rotating_the_runtime_role_reapplies_the_active_package, features: [postgres-test]}
   - id: SCHEDULING-DEC-10
     subject: The runtime role keeps write access to the product tables
     decision: >-

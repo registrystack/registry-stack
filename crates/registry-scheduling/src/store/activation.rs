@@ -32,9 +32,12 @@ pub const SINGLE_ROLE_STATEMENT: &str =
 
 const ACTIVATION_COLUMNS: &str = "activation_id, apply_order, package_digest, \
      predecessor_package_digest, database_id, plan_kind, applied_at, \
-     operator_reference_hash, backup_references, role_mode";
+     operator_reference_hash, backup_references, role_mode, runtime_role";
 
-/// Whether the runtime credential can write the activation ledger.
+/// Whether the runtime credential can write the activation ledger. The ledger
+/// records the mode the runtime role actually holds once an apply's grants
+/// are issued, read from its privileges and memberships rather than from
+/// whether its user name differs from the migration credential's.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RoleMode {
     /// One credential migrates and serves, so it can also rewrite the ledger.
@@ -74,6 +77,8 @@ pub struct Activation {
     pub operator_reference_hash: Option<String>,
     pub backup_references: Vec<String>,
     pub role_mode: RoleMode,
+    /// The PostgreSQL user the runtime credential connected as.
+    pub runtime_role: String,
 }
 
 /// The schema versions a database holds, and the ones this release would
@@ -125,9 +130,12 @@ pub struct ActivationRequest<'a> {
     pub policy: &'a SchedulingPolicy,
     pub operator_reference_hash: Option<&'a str>,
     pub backup_references: &'a [String],
+    /// `split` when the runtime and migration credentials are different
+    /// users, so apply grants the runtime role the service's privileges and
+    /// withholds the ledger's. The mode recorded is the one the runtime role
+    /// holds after those grants.
     pub role_mode: RoleMode,
-    /// The PostgreSQL user the runtime credential connects as. Split mode
-    /// grants it the service's privileges and withholds the ledger's.
+    /// The PostgreSQL user the runtime credential connects as.
     pub runtime_role: &'a str,
 }
 
@@ -157,6 +165,13 @@ pub struct ActivationPlan {
     pub retained_hook_bindings_verified: Option<bool>,
     /// Every refusal apply would raise that is known without writing.
     pub refusals: Vec<StoreError>,
+    /// The PostgreSQL user the planning credential connects as.
+    pub runtime_role: String,
+    /// The role mode that user holds over the ledger now, or none before
+    /// the first apply created it.
+    pub effective_role_mode: Option<RoleMode>,
+    /// Whether an apply of the candidate would record an activation.
+    pub changes_pending: bool,
 }
 
 impl PostgresStore {
@@ -192,33 +207,23 @@ impl PostgresStore {
             .get(0))
     }
 
-    /// `split` when this store's credential cannot insert, update, or delete
-    /// activation ledger rows, `single` when it can, and none before the
-    /// first apply created the ledger.
+    /// The role mode this store's credential holds over the activation
+    /// ledger, or none before the first apply created it.
     pub async fn effective_role_mode(&self) -> Result<Option<RoleMode>, StoreError> {
         let client = self.client().await?;
-        if !ledger_exists(&**client).await? {
-            return Ok(None);
-        }
-        let writes: bool = client
-            .query_one(
-                "SELECT has_table_privilege('scheduling_activations', 'INSERT, UPDATE, DELETE')",
-                &[],
-            )
+        let user: String = client
+            .query_one("SELECT current_user::text", &[])
             .await?
             .get(0);
-        Ok(Some(if writes {
-            RoleMode::Single
-        } else {
-            RoleMode::Split
-        }))
+        role_mode_in(&**client, &user, None).await
     }
 
     /// Accept one package in one transaction under the migration lock:
-    /// refuse a foreign database, or the package already active on a schema
-    /// with nothing pending, before any statement changes anything, then migrate, adopt the scheduling id,
-    /// publish the policy, record the ledger row, and in split mode grant the
-    /// runtime role the service's privileges without the ledger's.
+    /// refuse a foreign database, or the package already active with nothing
+    /// left to change, before any statement changes anything, then migrate,
+    /// adopt the scheduling id, publish the policy, in split mode grant the
+    /// runtime role the service's privileges without the ledger's, and
+    /// record the ledger row with the role mode those grants leave it.
     ///
     /// `verify_retained` proves retained hook events stay deliverable under
     /// the candidate. It runs on its own connection against the committed
@@ -241,8 +246,27 @@ impl PostgresStore {
 
         let active = active_activation_in(&*transaction).await?;
         let schema = schema_state_in(&*transaction).await?;
+        let migration_role: String = transaction
+            .query_one("SELECT current_user::text", &[])
+            .await?
+            .get(0);
         if let Some(active) = &active {
-            refuse_ledger_mismatch(active, request.database_id, request.package_digest, &schema)?;
+            if active.database_id != request.database_id {
+                return Err(StoreError::DatabaseIdMismatch);
+            }
+            let mode_now =
+                role_mode_in(&*transaction, request.runtime_role, Some(&migration_role)).await?;
+            if already_active(
+                active,
+                request.package_digest,
+                request.runtime_role,
+                mode_now,
+                &schema,
+            ) {
+                return Err(StoreError::PackageAlreadyActive {
+                    digest: active.package_digest.clone(),
+                });
+            }
         }
         schema.check()?;
         let deployed = deployed_policy_in(&*transaction).await?;
@@ -253,8 +277,23 @@ impl PostgresStore {
             }
         }
 
+        // Lock order: the migration advisory lock, then every supply anchor
+        // and the meta row, then the schema migrations. A capacity
+        // transaction takes one anchor and then the meta row, so the
+        // publication locks come before any migration DDL lock and a
+        // migration never holds a table while it waits on an anchor. The
+        // retained-binding check above runs before them on its own
+        // connection, because it reads the meta row under a share lock. A
+        // database without the supply and meta tables has no anchor to wait
+        // on, so its publication locks are taken once migrations create them.
+        let publication_locked = publication_tables_exist(&*transaction).await?;
+        if publication_locked {
+            lock_publication(&transaction).await?;
+        }
         let schema_versions_applied = apply_migrations_in(&transaction).await?;
-        lock_publication(&transaction).await?;
+        if !publication_locked {
+            lock_publication(&transaction).await?;
+        }
         let scheduling_id_adopted = transaction
             .execute(
                 "UPDATE scheduling_meta SET scheduling_id=$1, updated_at=now() \
@@ -283,6 +322,15 @@ impl PostgresStore {
         )
         .await?;
 
+        if request.role_mode == RoleMode::Split {
+            grant_runtime_role(&transaction, request.runtime_role).await?;
+        }
+        // The mode recorded is the authority the runtime role holds once the
+        // grants are issued, which a membership or a superuser attribute can
+        // make single even when the two credentials are different users.
+        let role_mode = role_mode_in(&*transaction, request.runtime_role, Some(&migration_role))
+            .await?
+            .ok_or(StoreError::Corrupt)?;
         let predecessor = active.as_ref().map(|active| active.package_digest.as_str());
         let plan_kind = if predecessor.is_some() {
             "successor"
@@ -293,7 +341,7 @@ impl PostgresStore {
             .query_one(
                 &format!(
                     "INSERT INTO scheduling_activations({ACTIVATION_COLUMNS}) \
-                     SELECT $1, COALESCE(max(apply_order), 0) + 1, $2, $3, $4, $5, now(), $6, $7, $8 \
+                     SELECT $1, COALESCE(max(apply_order), 0) + 1, $2, $3, $4, $5, now(), $6, $7, $8, $9 \
                      FROM scheduling_activations RETURNING {ACTIVATION_COLUMNS}"
                 ),
                 &[
@@ -304,14 +352,12 @@ impl PostgresStore {
                     &plan_kind,
                     &request.operator_reference_hash,
                     &request.backup_references,
-                    &request.role_mode.as_str(),
+                    &role_mode.as_str(),
+                    &request.runtime_role,
                 ],
             )
             .await?;
         let activation = activation_from_row(&row)?;
-        if request.role_mode == RoleMode::Split {
-            grant_runtime_role(&transaction, request.runtime_role).await?;
-        }
         transaction.commit().await?;
         Ok(ActivationOutcome {
             activation,
@@ -347,11 +393,24 @@ impl PostgresStore {
 
         let active = active_activation_in(&*transaction).await?;
         let schema = schema_state_in(&*transaction).await?;
+        let runtime_role: String = transaction
+            .query_one("SELECT current_user::text", &[])
+            .await?
+            .get(0);
+        let effective_role_mode = role_mode_in(&*transaction, &runtime_role, None).await?;
+        let mut changes_pending = true;
         if let Some(active) = &active {
             if active.database_id != database_id {
                 refusals.push(StoreError::DatabaseIdMismatch);
             }
-            if active.package_digest == package_digest && schema.pending.is_empty() {
+            if already_active(
+                active,
+                package_digest,
+                &runtime_role,
+                effective_role_mode,
+                &schema,
+            ) {
+                changes_pending = false;
                 refusals.push(StoreError::PackageAlreadyActive {
                     digest: active.package_digest.clone(),
                 });
@@ -366,6 +425,9 @@ impl PostgresStore {
                 publication: None,
                 retained_hook_bindings_verified: None,
                 refusals,
+                runtime_role,
+                effective_role_mode,
+                changes_pending,
             });
         }
         let deployed = deployed_policy_in(&*transaction).await?;
@@ -421,29 +483,80 @@ impl PostgresStore {
             publication,
             retained_hook_bindings_verified,
             refusals,
+            runtime_role,
+            effective_role_mode,
+            changes_pending,
         })
     }
 }
 
-/// Refuse a ledger that belongs to another database, or a candidate that is
-/// already the active package. The active package is accepted again only
-/// when this release still has schema versions to apply, because apply is
-/// the only command that migrates and startup refuses a pending schema.
-fn refuse_ledger_mismatch(
+/// Whether an apply of the candidate would change nothing: it is the active
+/// package, this release has no schema version left to apply, and the
+/// runtime credential is the role the ledger recorded, holding the role mode
+/// the ledger recorded. The active package is accepted again otherwise,
+/// because apply is the only command that migrates, and the only one that
+/// grants a rotated runtime role, moves a deployment to split mode, or
+/// reissues grants someone widened.
+fn already_active(
     active: &Activation,
-    database_id: &str,
     package_digest: &str,
+    runtime_role: &str,
+    role_mode: Option<RoleMode>,
     schema: &SchemaState,
-) -> Result<(), StoreError> {
-    if active.database_id != database_id {
-        return Err(StoreError::DatabaseIdMismatch);
+) -> bool {
+    active.package_digest == package_digest
+        && schema.pending.is_empty()
+        && active.runtime_role == runtime_role
+        && role_mode == Some(active.role_mode)
+}
+
+/// The role mode `role` holds over the activation ledger, or none before
+/// the first apply created it. It is `single` when the role can insert,
+/// update, delete, or truncate ledger rows, is or holds the ledger's owner,
+/// the schema's owner, or `migration_role`, or is a superuser or bypasses
+/// row security; `split` otherwise.
+async fn role_mode_in(
+    client: &impl GenericClient,
+    role: &str,
+    migration_role: Option<&str>,
+) -> Result<Option<RoleMode>, StoreError> {
+    if !ledger_exists(client).await? {
+        return Ok(None);
     }
-    if active.package_digest == package_digest && schema.pending.is_empty() {
-        return Err(StoreError::PackageAlreadyActive {
-            digest: active.package_digest.clone(),
-        });
-    }
-    Ok(())
+    let writes: bool = client
+        .query_opt(
+            "SELECT has_table_privilege(r.oid, c.oid, 'INSERT, UPDATE, DELETE, TRUNCATE') \
+                 OR pg_has_role(r.oid, c.relowner, 'USAGE') \
+                 OR pg_has_role(r.oid, n.nspowner, 'USAGE') \
+                 OR COALESCE(pg_has_role(r.oid, m.oid, 'USAGE'), false) \
+                 OR r.rolsuper OR r.rolbypassrls \
+             FROM pg_roles AS r \
+             CROSS JOIN pg_class AS c \
+             JOIN pg_namespace AS n ON n.oid = c.relnamespace \
+             LEFT JOIN pg_roles AS m ON m.rolname = $2::text \
+             WHERE r.rolname = $1::text AND c.oid = to_regclass('scheduling_activations')",
+            &[&role, &migration_role],
+        )
+        .await?
+        .ok_or(StoreError::Corrupt)?
+        .get(0);
+    Ok(Some(if writes {
+        RoleMode::Single
+    } else {
+        RoleMode::Split
+    }))
+}
+
+/// Whether the tables the publication locks read exist yet.
+async fn publication_tables_exist(client: &impl GenericClient) -> Result<bool, StoreError> {
+    Ok(client
+        .query_one(
+            "SELECT to_regclass('scheduling_supply') IS NOT NULL \
+                 AND to_regclass('scheduling_meta') IS NOT NULL",
+            &[],
+        )
+        .await?
+        .get(0))
 }
 
 /// Refuse a database another deployment adopted. An empty id is a database
@@ -544,6 +657,7 @@ fn activation_from_row(row: &tokio_postgres::Row) -> Result<Activation, StoreErr
         operator_reference_hash: row.try_get(7)?,
         backup_references: row.try_get(8)?,
         role_mode: RoleMode::parse(row.try_get::<_, &str>(9)?)?,
+        runtime_role: row.try_get(10)?,
     })
 }
 

@@ -175,6 +175,7 @@ pub(crate) fn refusal_code(error: &StoreError) -> &'static str {
             "schedulingctl.activation.package-already-active"
         }
         StoreError::PackageNotActive { .. } => "schedulingctl.activation.package-not-active",
+        StoreError::RoleModeDrift => "schedulingctl.activation.role-mode-drift",
         StoreError::NotActivated => "schedulingctl.activation.not-activated",
         StoreError::SchemaPending { .. } => "schedulingctl.activation.schema-pending",
         StoreError::SchemaNewer { .. } => "schedulingctl.activation.schema-newer",
@@ -204,6 +205,7 @@ fn activation_json(activation: &Activation) -> Value {
         "operatorReferenceHash": activation.operator_reference_hash,
         "backupReferences": activation.backup_references,
         "roleMode": activation.role_mode.as_str(),
+        "runtimeRole": activation.runtime_role,
     })
 }
 
@@ -230,23 +232,20 @@ pub fn plan(config_path: &Path) -> Result<Value> {
     let loaded = load(config_path)?;
     let store = connect_runtime(&loaded)?;
     let runtime = operator_runtime()?;
-    let schema = runtime
-        .block_on(store.schema_name())
-        .context("reading the Scheduling database schema")?;
     let audit = refusing_audit();
+    // The schema is read only once a deployment exists: before the first
+    // split apply the runtime credential holds no USAGE on it yet.
     let plan = runtime
         .block_on(store.plan_activation(
             loaded.config.database_id(),
             &loaded.package_digest,
             &loaded.policy,
-            |deployed| verify_retained(&loaded, &store, &audit, &schema, deployed),
+            |deployed| async {
+                let schema = store.schema_name().await?;
+                verify_retained(&loaded, &store, &audit, &schema, deployed).await
+            },
         ))
         .context("planning the Scheduling activation")?;
-    let changes_pending = plan
-        .active
-        .as_ref()
-        .is_none_or(|active| active.package_digest != loaded.package_digest)
-        || !plan.schema.pending.is_empty();
     let database_id_check = match &plan.active {
         None => "initial",
         Some(active) if active.database_id == loaded.config.database_id() => "match",
@@ -269,6 +268,8 @@ pub fn plan(config_path: &Path) -> Result<Value> {
         "activePackage": plan.active.as_ref().map(|active| json!({
             "packageDigest": active.package_digest,
             "activationId": active.activation_id.to_string(),
+            "roleMode": active.role_mode.as_str(),
+            "runtimeRole": active.runtime_role,
         })),
         "candidatePackageDigest": loaded.package_digest,
         "databaseId": loaded.config.database_id(),
@@ -284,15 +285,60 @@ pub fn plan(config_path: &Path) -> Result<Value> {
             "revision": plan.publication.as_ref().map(|publication| publication.revision()),
         },
         "retainedHookBindings": retained_hook_bindings,
-        "changesPending": changes_pending,
+        "runtimeRole": plan.runtime_role,
+        "effectiveRoleMode": plan.effective_role_mode.map(RoleMode::as_str),
+        "changesPending": plan.changes_pending,
         "refusals": refusals,
     }))
 }
+
+/// The root error of an apply that committed but whose response audit entry
+/// could not be written: the activation stands, unaudited.
+#[derive(Debug)]
+pub struct AppliedUnaudited {
+    pub(crate) package_digest: String,
+    pub(crate) activation_id: Uuid,
+    pub(crate) cause: String,
+}
+
+impl std::fmt::Display for AppliedUnaudited {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "package {} was applied as activation {}, but its activation.apply response audit entry could not be written ({}); the activation stands. Restore the schedulingctl audit destination beside audit.path, then run `schedulingctl status --runtime-config FILE` to confirm the active package",
+            self.package_digest, self.activation_id, self.cause
+        )
+    }
+}
+
+impl std::error::Error for AppliedUnaudited {}
 
 pub fn apply(
     config_path: &Path,
     operator_reference: Option<&str>,
     backups: &[String],
+) -> Result<Value> {
+    apply_audited(config_path, operator_reference, backups, None)
+}
+
+/// Apply with the schedulingctl audit written to `sink` instead of the
+/// configured destination, so a test can refuse a chosen append.
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub fn apply_with_audit_sink(
+    config_path: &Path,
+    operator_reference: Option<&str>,
+    backups: &[String],
+    sink: Box<dyn io::Write + Send>,
+) -> Result<Value> {
+    apply_audited(config_path, operator_reference, backups, Some(sink))
+}
+
+fn apply_audited(
+    config_path: &Path,
+    operator_reference: Option<&str>,
+    backups: &[String],
+    sink: Option<Box<dyn io::Write + Send>>,
 ) -> Result<Value> {
     let loaded = load(config_path)?;
     let runtime_store = connect_runtime(&loaded)?;
@@ -332,6 +378,10 @@ pub fn apply(
             Some("schedulingctl"),
         ))
         .context("opening the schedulingctl audit destination")?;
+    let audit = match sink {
+        Some(sink) => SchedulingAudit::new(AuditWriter::from_line_sink(sink)),
+        None => audit,
+    };
     let activation_id = Uuid::new_v4();
     let operator_reference_hash = operator_reference
         .map(|reference| {
@@ -407,14 +457,17 @@ pub fn apply(
         json!({
             "outcome": "allowed",
             "reason": "authorization.allowed",
+            "roleMode": outcome.activation.role_mode.as_str(),
             "predecessorPackageDigest": outcome.activation.predecessor_package_digest,
             "schemaVersionsApplied": outcome.schema_versions_applied,
             "effects": effects,
         }),
     )
-    .context(
-        "the package was applied, but the activation.apply response audit entry could not be written",
-    )?;
+    .map_err(|cause| AppliedUnaudited {
+        package_digest: outcome.activation.package_digest.clone(),
+        activation_id,
+        cause: format!("{cause:#}"),
+    })?;
     let mut report = json!({
         "ok": true,
         "command": "apply",
@@ -423,11 +476,11 @@ pub fn apply(
         "applyOrder": outcome.activation.apply_order,
         "packageDigest": outcome.activation.package_digest,
         "predecessorPackageDigest": outcome.activation.predecessor_package_digest,
-        "roleMode": role_mode.as_str(),
+        "roleMode": outcome.activation.role_mode.as_str(),
         "schemaVersionsApplied": outcome.schema_versions_applied,
         "effects": effects,
     });
-    if role_mode == RoleMode::Single {
+    if outcome.activation.role_mode == RoleMode::Single {
         report["roleModeStatement"] = json!(SINGLE_ROLE_STATEMENT);
     }
     Ok(report)
