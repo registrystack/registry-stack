@@ -1,6 +1,6 @@
 ---
 title: Publish and consume a Registry Discovery index
-description: Build a local Discovery index from Evidence and Relay advertisements, resolve a requirement, and select exact records to hand to native product trust.
+description: Package a local Discovery index from Evidence and Relay advertisements, resolve a requirement, and select exact records to hand to native product trust.
 status: draft
 owner: registry-docs
 source_repos:
@@ -25,11 +25,11 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 Registry Discovery helps an application find which Evidence Gateway or Registry Relay service
 can answer a question. In this tutorial you play every role: two providers publish a short public
-description of their service, an operator builds those descriptions into an index and serves it,
+description of their service, an operator packages those descriptions into an index and serves it,
 and a consumer asks the index which services fit a requirement and picks one of each kind.
 
 <QuickstartMeta
-  outcome="One immutable local index, one resolved requirement, and exact Evidence and Relay selections."
+  outcome="One immutable local package, one resolved requirement, and exact Evidence and Relay selections."
   time="About 15 minutes after the Rust dependencies are available"
   level="Local development with synthetic data"
   prerequisites={['Git', 'Rust 1.95.0 through rustup', 'Python 3', 'curl', 'shasum', 'Local ports 38080 and 38090']}
@@ -58,8 +58,8 @@ that stays in Cargo's build directory, so the helper points `DYLD_FALLBACK_LIBRA
 this shell. Run every `discoveryctl` and `discovery` command below in this shell; the second shell
 this tutorial opens only runs Python and `curl`.
 
-`discoveryctl` is the operator's offline tool: it checks the authoring project and builds the
-index. `discovery` is the runtime that serves one built index.
+`discoveryctl` is the operator's offline tool: it checks the authoring project and packages the
+index. `discovery` is the runtime that serves one verified package.
 
 ## Confirm the provider publications
 
@@ -91,7 +91,7 @@ Discovery runtime does not reconstruct provider metadata.
 
 ## Check the operator project
 
-Copy the tutorial's operator project out of the checkout, so the index you build stays separate
+Copy the tutorial's operator project out of the checkout, so the package you write stays separate
 from the source files:
 
 ```sh
@@ -142,15 +142,15 @@ discoveryctl check --project discovery-project --allow-loopback
 valid origins=2 mappings=1
 ```
 
-`discoveryctl check` validates the files without contacting either URL. The build in the next
-section is the only step that fetches the descriptions.
+`discoveryctl check` validates the files without contacting either URL. The package step in the
+next section is the only step that fetches the descriptions.
 
 {/* Evidence: `crates/registry-discoveryctl/src/project.rs`, test
     `check_is_offline_and_accepts_an_unreachable_https_origin`, proves the offline check.
     `crates/registry-discoveryctl/tests/build.rs`, test
-    `build_fetches_each_origin_once_and_preserves_semantic_revisions`, covers the one-shot fetch. */}
+    `package_fetches_each_origin_once_and_preserves_semantic_revisions`, covers the one-shot fetch. */}
 
-## Build the index
+## Package the index
 
 Play the two providers by serving their descriptions at the URLs `origins.yaml` approved. The
 server keeps running, so open a second shell at the root of the checkout and start it there:
@@ -160,41 +160,49 @@ python3 products/discovery/tutorial/publication_server.py \
   --descriptions products/discovery/fixtures/descriptions
 ```
 
-Back in the first shell, build the index:
+Back in the first shell, package the index:
 
 ```sh
-discoveryctl build \
+discoveryctl package \
   --project discovery-project \
-  --output discovery-project/discovery-index.json \
+  --output discovery-project/package \
   --allow-loopback
 ```
 
 ```text test-expect
-built catalogRevision=sha256:b4b7195f36691c245bf49a88a248049ed899c0c41dbf1a87a386571c0dbfba0f mappingRevision=sha256:332004ca3920c498539180946e8f2637e9998ba7e49cd98f31e19d6f818857ac
+packaged packageDigest=sha256:<package-digest> catalogRevision=sha256:b4b7195f36691c245bf49a88a248049ed899c0c41dbf1a87a386571c0dbfba0f mappingRevision=sha256:332004ca3920c498539180946e8f2637e9998ba7e49cd98f31e19d6f818857ac
 ```
 
-Both revisions are content addressed. The catalog revision is a digest of what the provider
+The two revisions are content addressed. The catalog revision is a digest of what the provider
 descriptions mean once normalized, and the mapping revision a digest of the operator's
 mappings, so the same inputs build the same revisions on any machine. A provider that
 reformats its file without changing its meaning keeps the same catalog revision. To detect any
 change to the exact bytes a provider published, compare each record's `originContentDigest`,
 which appears in the search results below.
 
-The build fetched each description once, and the index is now complete. In the second shell,
-stop the publication server with `Ctrl+C`. Discovery never contacts a provider while it
-serves, so nothing below needs it.
+The package digest is different: it covers the exact index file through the package's
+`SHA256SUMS` file, and the index records when this run fetched each description and when it was
+built. Your package digest therefore differs from anyone else's, and from your own next run.
+
+The package step fetched each description once and wrote the complete package to
+`discovery-project/package`. In the second shell, stop the publication server with `Ctrl+C`.
+Discovery never contacts a provider while it serves, so nothing below needs it.
 
 ## Serve the index
+
+`discovery-project/runtime.yaml` names the listener, the package root, and the request and
+response limits. It reads the package root from `DISCOVERY_PACKAGE_ROOT`. Discovery accepts only
+absolute paths for both files, so the command below builds them from `$PWD`. It names no origin, mapping, or trust setting: the runtime checks the package
+against its `SHA256SUMS` at startup, then serves that index and nothing else.
 
 In the first shell, start Discovery:
 
 ```sh test-background="http://127.0.0.1:38080/ready"
-discovery --runtime discovery-project/runtime.yaml
+DISCOVERY_PACKAGE_ROOT="$PWD/discovery-project/package" \
+  discovery --runtime-config "$PWD/discovery-project/runtime.yaml"
 ```
 
-`discovery-project/runtime.yaml` names the listener, the index file beside it, and the request
-and response limits. It names no origin, mapping, or trust setting: the runtime serves the index
-it loaded at startup and nothing else. In the second shell, confirm that it is ready:
+In the second shell, confirm that it is ready:
 
 ```sh
 curl -s http://127.0.0.1:38080/ready
@@ -233,7 +241,7 @@ curl -s \
 }
 ```
 
-The answer carries the mapping revision the build printed, so the application can record which
+The answer carries the mapping revision the package step printed, so the application can record which
 version of your mapping it relied on. When a requirement has several alternatives, the
 application picks one, and then needs a provider for every Evidence type listed in it. Here there
 is one alternative with one type.
@@ -316,9 +324,9 @@ curl -s --get \
 }
 ```
 
-Both answers carry the `catalogRevision` the build printed, because both come from the one index
-you built. Each result names the description it came from, with the same digest you checked at
-the start, and `originFetchedAt`, the time your build fetched it.
+Both answers carry the `catalogRevision` the package step printed, because both come from the one
+index you packaged. Each result names the description it came from, with the same digest you
+checked at the start, and `originFetchedAt`, the time your package step fetched it.
 
 ## Select and hand off
 
@@ -351,16 +359,17 @@ searches and saves selections, from Rust, Node.js, or Python.
 | --- | --- | --- | --- |
 | Assertion provider | Packaged Evidence public description | Public Evidence endpoint, profile, evidence type, or issuer role changes | Publish the exact packaged bytes at the approved URL |
 | Data publisher | Packaged Relay public description | Public Relay endpoint, profile, semantic class, operation family, or authority role changes | Publish the exact sealed artifact bytes at the approved URL |
-| Operator | `origins.yaml`, mapping files, immutable index, and `runtime.yaml` | An approved origin or mapping changes | Run offline `check`, explicit `build`, deploy the complete index, then restart Discovery |
+| Operator | `origins.yaml`, mapping files, immutable package, and `runtime.yaml` | An approved origin or mapping changes | Run offline `check`, explicit `package`, deploy the complete package, pin its digest when required, then restart Discovery |
 | Consumer or verifier | Saved exact selection and native product trust | A catalog revision, mapping revision, origin digest, binding, or local trust decision changes | Re-evaluate local trust, then call the selected native endpoint directly |
 
-The operator does not run a synchronization scheduler or maintain a writable catalog. A failed build
-does not replace the deployed index. Deploy a complete new index and restart the process when the
-change is intentional.
+The operator does not run a synchronization scheduler or maintain a writable catalog. A failed
+package operation does not replace the deployed package. Deploy a complete new package and restart
+the process when the change is intentional.
 
-{/* Tier-C evidence: `products/discovery/README.md` defines check, explicit build, deployment, and restart
+{/* Tier-C evidence: `products/discovery/README.md` defines check, explicit package, deployment, and restart
     as the maintenance loop. `crates/registry-discoveryctl/tests/build.rs`, test
-    `failed_origin_fetch_leaves_the_previous_output_untouched`, proves atomic replacement.
+    `failed_origin_fetch_leaves_the_previous_output_untouched`, proves that a failed collection
+    leaves the prior output unchanged.
     `crates/registry-discovery/src/startup.rs`, test
     `runtime_is_closed_and_contains_no_origin_mapping_trust_or_fetch_configuration`, defines the
     runtime configuration boundary. `crates/registry-discovery-client/tests/native_journey.rs`, test
@@ -370,7 +379,7 @@ change is intentional.
 
 ## Clean up the local services
 
-Stop Discovery in the first shell with `Ctrl+C`, then remove the project copy and the index built
+Stop Discovery in the first shell with `Ctrl+C`, then remove the project copy and the package written
 into it:
 
 ```sh
@@ -382,7 +391,7 @@ The compiled binaries stay under `target/release`, so a second run reuses them.
 ## What you built
 
 - The provider roles supplied two deterministic public descriptions.
-- The operator checked explicit origins and mappings offline, built one immutable index, and
+- The operator checked explicit origins and mappings offline, packaged one immutable index, and
   served it with Discovery.
 - The consumer resolved one requirement and found one Evidence and one Relay service, both from
   the same catalog revision, ready to save as selections.
@@ -394,7 +403,8 @@ The compiled binaries stay under `target/release`, so a second run reuses them.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | The publication server or Discovery stops at startup | Port `38090` or `38080` is already in use | Stop the process using the port, then start the service again |
-| `discoveryctl build` cannot fetch an origin | The publication server is not running in the other shell | Start the publication server, then run the build again; a failed build leaves no partial index |
+| `discoveryctl package` cannot fetch an origin | The publication server is not running in the other shell | Start the publication server, then run the package step again; a failed package step leaves no partial package |
+| `discoveryctl package` refuses the output directory | `discovery-project/package` is left from an earlier run, and a package is never replaced in place | Remove `discovery-project/package`, then run the package step again |
 | Cargo cannot resolve dependencies | The clean checkout has not acquired the locked Rust dependencies | Restore network access to the Cargo registry or provide a populated Cargo cache |
 | A publication digest differs | The provider bytes do not match the tutorial's reviewed fixture | Restore the clean checkout or review the changed publication before indexing it |
 | Native handoff is refused | The selected binding does not match the adopter-owned product trust record | Keep the selection inert, correct the local trust decision, and retry the native handoff |
@@ -403,12 +413,13 @@ The compiled binaries stay under `target/release`, so a second run reuses them.
     `complete_evidence_and_relay_journeys_build_select_trust_and_invoke_natively`, proves the trust
     refusal occurs before credential construction and provider traffic.
     `crates/registry-discoveryctl/tests/build.rs`, test
-    `failed_origin_fetch_leaves_the_previous_output_untouched`, proves a failed build writes no
-    index. Maintainer reviewed and accepted this trust-boundary claim on 2026-08-14. */}
+    `failed_origin_fetch_leaves_the_previous_output_untouched`, proves a failed package step
+    writes no package, and test `package_refuses_an_existing_output_without_changing_it` proves an
+    earlier package is never replaced. Maintainer reviewed and accepted this trust-boundary claim on 2026-08-14. */}
 
 ## Next
 
-- [Build and run a Registry Discovery index](../../configure/discovery/) with your approved HTTPS
+- [Package and run a Registry Discovery index](../../configure/discovery/) with your approved HTTPS
   origins, deployment directory, and runtime limits.
 - [Registry Discovery is an index](../../explanation/discovery-as-an-index/) explains why trust and
   invocation stay in the native products.
