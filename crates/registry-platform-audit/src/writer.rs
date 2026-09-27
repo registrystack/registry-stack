@@ -50,6 +50,7 @@ pub const AUDIT_PATH_SEGMENT_PATTERN: &str = r"(?:[^/.][^/]*|\.(?:[^/.][^/]*|\.[
 /// The JSON Schema pattern of a path [`FileDestination::new`] accepts: an
 /// absolute path with no `..` segment that ends in a file name, stated for
 /// runtime configuration schemas so an editor refuses what startup refuses.
+/// The file name's length limit is checked at startup only.
 pub const ABSOLUTE_AUDIT_PATH_PATTERN: &str =
     r"^/+(?:(?:[^/.][^/]*|\.(?:[^/.][^/]*|\.[^/]+)?)/+)*(?:[^/.][^/]*|\.(?:[^/.][^/]*|\.[^/]+))$";
 
@@ -57,6 +58,15 @@ const MAX_ENTRY_BYTES: usize = 1024 * 1024;
 const MAX_SCHEMA_BYTES: usize = 128;
 const MAX_CORRELATION_BYTES: usize = 256;
 const SEGMENT_SEQUENCE_DIGITS: usize = 8;
+/// The suffix of the lock companion beside the active file.
+const LOCK_SUFFIX: &str = ".lock";
+/// The longest file name common filesystems accept.
+const MAX_FILE_NAME_BYTES: usize = 255;
+/// The longest active file name that leaves room for every sibling the
+/// writer names after it: a sealed segment adds `.` and the sequence digits,
+/// the longest suffix, and the lock companion adds [`LOCK_SUFFIX`].
+const MAX_AUDIT_FILE_NAME_BYTES: usize = MAX_FILE_NAME_BYTES - 1 - SEGMENT_SEQUENCE_DIGITS;
+const _: () = assert!(LOCK_SUFFIX.len() <= 1 + SEGMENT_SEQUENCE_DIGITS);
 const DETACHED_LOCK_ATTEMPTS: usize = 1024;
 const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 const TIME_FORMAT: &[FormatItem<'static>] =
@@ -247,6 +257,11 @@ pub enum AuditDestinationError {
     InvalidPathComponent,
     #[error("audit.path must end in a file name, not `/` or a `.` segment")]
     NoFileName,
+    #[error(
+        "audit.path must end in a file name of at most {maximum} bytes, so the \
+         writer's rotated and lock files fit the {MAX_FILE_NAME_BYTES}-byte file-name limit"
+    )]
+    FileNameTooLong { maximum: usize },
     #[error("audit.{field} applies only when audit.destination is file")]
     FileOnlyField { field: &'static str },
     #[error("audit.rotateBytes must be between {minimum} and {maximum}")]
@@ -304,8 +319,15 @@ impl FileDestination {
             .as_bytes()
             .rsplit(|byte| *byte == b'/')
             .next();
-        if matches!(name, None | Some(b"" | b".")) {
+        let Some(name) = name.filter(|name| !matches!(*name, b"" | b".")) else {
             return Err(AuditDestinationError::NoFileName);
+        };
+        // A name the writer could open but not rotate would stop it at the
+        // first rotation.
+        if name.len() > MAX_AUDIT_FILE_NAME_BYTES {
+            return Err(AuditDestinationError::FileNameTooLong {
+                maximum: MAX_AUDIT_FILE_NAME_BYTES,
+            });
         }
         Ok(Self {
             path,
@@ -532,6 +554,11 @@ impl AuditDestination {
                 if let Some(extension) = file.path.extension() {
                     name.push(".");
                     name.push(extension);
+                }
+                if name.len() > MAX_AUDIT_FILE_NAME_BYTES {
+                    return Err(AuditDestinationError::FileNameTooLong {
+                        maximum: MAX_AUDIT_FILE_NAME_BYTES - 1 - role.len(),
+                    });
                 }
                 Ok(Self::File(FileDestination {
                     path: file.path.with_file_name(name),
@@ -1820,7 +1847,7 @@ fn segment_path(path: &Path, sequence: u64) -> PathBuf {
 
 fn lock_path(path: &Path) -> PathBuf {
     let mut value = path.as_os_str().to_os_string();
-    value.push(".lock");
+    value.push(LOCK_SUFFIX);
     PathBuf::from(value)
 }
 
@@ -3046,6 +3073,57 @@ mod tests {
             );
         }
         assert!(FileDestination::new("/var/lib/./audit/.events.jsonl").is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_file_name_leaves_room_for_the_longest_sibling_the_writer_names() {
+        let directory = directory();
+        let longest = "a".repeat(MAX_AUDIT_FILE_NAME_BYTES);
+        let too_long = "a".repeat(MAX_AUDIT_FILE_NAME_BYTES + 1);
+        assert_eq!(
+            FileDestination::new(directory.path().join(&too_long)),
+            Err(AuditDestinationError::FileNameTooLong {
+                maximum: MAX_AUDIT_FILE_NAME_BYTES
+            })
+        );
+        let service = AuditDestination::File(
+            FileDestination::new(directory.path().join(&longest)).expect("longest"),
+        );
+        // A process role lengthens the name by the role and its separator.
+        assert_eq!(
+            service.for_process("bregctl"),
+            Err(AuditDestinationError::FileNameTooLong {
+                maximum: MAX_AUDIT_FILE_NAME_BYTES - ".bregctl".len()
+            })
+        );
+        let shorter = "a".repeat(MAX_AUDIT_FILE_NAME_BYTES - ".bregctl".len());
+        AuditDestination::File(FileDestination::new(directory.path().join(shorter)).expect("fits"))
+            .for_process("bregctl")
+            .expect("the role still fits");
+
+        // The longest accepted name still rotates on a 255-byte name limit.
+        let AuditDestination::File(file) = service else {
+            unreachable!()
+        };
+        let path = file.path().to_path_buf();
+        let writer = AuditWriter::open(AuditDestination::File(
+            file.with_rotate_bytes(MIN_AUDIT_ROTATE_BYTES)
+                .expect("rotation"),
+        ))
+        .await
+        .expect("open");
+        let padding = "x".repeat(4096);
+        for index in 0..300 {
+            writer
+                .append(AuditEntry::request(
+                    "schema/v2",
+                    format!("req-{index}"),
+                    json!({"padding": padding}),
+                ))
+                .await
+                .expect("append across a rotation");
+        }
+        assert!(!sealed_segments(&path).expect("sealed").is_empty());
     }
 
     #[test]
