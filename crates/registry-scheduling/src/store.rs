@@ -277,14 +277,22 @@ impl PostgresStore {
     /// capacity lock. A commit that took effect is answered as committed,
     /// one that rolled back as the query failure it was, and one whose
     /// status cannot be read as [`CommitError::Unacknowledged`].
+    ///
+    /// A commitment's task grant is re-checked after the transaction id is
+    /// read, so no database round trip separates that re-check from the
+    /// `COMMIT` it guards.
     async fn commit_capacity(
         &self,
         transaction: deadpool_postgres::Transaction<'_>,
+        grant: Option<&Commitment<'_>>,
     ) -> Result<(), CommitError> {
         let transaction_id: String = transaction
             .query_one("SELECT pg_current_xact_id()::text", &[])
             .await?
             .get(0);
+        if let Some(commitment) = grant {
+            self.recheck_grant(commitment)?;
+        }
         let failure = match transaction.commit().await {
             Ok(()) if !self.acknowledgment_lost() => return Ok(()),
             Ok(()) => None,
@@ -1206,7 +1214,7 @@ impl PostgresStore {
         replace_facts_in_transaction(&transaction, scheduling_id, facts).await?;
         // The swap takes every supply anchor, so its commit is read back
         // like a capacity commit when its acknowledgment is lost.
-        match self.commit_capacity(transaction).await {
+        match self.commit_capacity(transaction, None).await {
             Ok(()) => Ok(()),
             Err(CommitError::Store(error)) => Err(error),
             Err(CommitError::Query(error)) => Err(error.into()),
@@ -1510,8 +1518,7 @@ impl PostgresStore {
                 ),
             )
             .await?;
-        self.recheck_grant(&commitment)?;
-        self.commit_capacity(transaction).await?;
+        self.commit_capacity(transaction, Some(&commitment)).await?;
         Ok(CommitOutcome::Hold(claim))
     }
 
@@ -1618,8 +1625,7 @@ impl PostgresStore {
                 ),
             )
             .await?;
-        self.recheck_grant(&commitment)?;
-        self.commit_capacity(transaction).await?;
+        self.commit_capacity(transaction, Some(&commitment)).await?;
         Ok(CommitOutcome::Booking(claim))
     }
 
@@ -1764,8 +1770,7 @@ impl PostgresStore {
                 ),
             )
             .await?;
-        self.recheck_grant(&commitment)?;
-        self.commit_capacity(transaction).await?;
+        self.commit_capacity(transaction, Some(&commitment)).await?;
         Ok(CommitOutcome::Booking(claim))
     }
 
@@ -1831,8 +1836,7 @@ impl PostgresStore {
                 Value::Null,
             )
             .await?;
-        self.recheck_grant(&commitment)?;
-        self.commit_capacity(transaction).await?;
+        self.commit_capacity(transaction, Some(&commitment)).await?;
         Ok(CommitOutcome::Released)
     }
 
@@ -1989,8 +1993,7 @@ impl PostgresStore {
                 ),
             )
             .await?;
-        self.recheck_grant(&commitment)?;
-        self.commit_capacity(transaction).await?;
+        self.commit_capacity(transaction, Some(&commitment)).await?;
         Ok(CommitOutcome::Booking(moved))
     }
 
@@ -2115,8 +2118,7 @@ impl PostgresStore {
                 ),
             )
             .await?;
-        self.recheck_grant(&commitment)?;
-        self.commit_capacity(transaction).await?;
+        self.commit_capacity(transaction, Some(&commitment)).await?;
         Ok(CommitOutcome::Cancelled(cancelled))
     }
 
