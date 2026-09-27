@@ -3219,6 +3219,14 @@ fn field_encryption_preflight_failure(
                 error,
             );
         }
+        FieldEncryptionPreflightLifecycleError::PredecessorPackage(
+            PackageError::DigestPinUnverifiable,
+        ) => {
+            return digest_pin_unverifiable_failure(
+                "field-encryption preflight",
+                "field_encryption.preflight",
+            );
+        }
         error => error,
     };
     let (code, path, message, artifact, action) = match error {
