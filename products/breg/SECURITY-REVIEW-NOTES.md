@@ -236,3 +236,81 @@ writer and verifier.
 - The OIDC issuer and JWKS URI accept loopback `http` in every environment,
   as before this change; `operate/breg.mdx` recommends an `https` issuer for
   production.
+
+## Upgrading from a package built before the shared envelope
+
+The change lets predecessor reads accept a BReg package built by the
+previous `bregctl` release, which has no `SHA256SUMS` or `REVISION`, and makes
+the migration rehearsal's predecessor fingerprint comparison advisory
+(`verify_predecessor_shared_package` in `crates/registry-breg/src/package.rs`,
+`RuntimeConfig::verify_predecessor_package_envelope` in
+`crates/registry-breg/src/runtime_config.rs`, and `rehearse_in_transaction` in
+`crates/registry-breg/src/postgres/rehearsal.rs`).
+
+### Threat
+
+A live registry runs a package the previous release built. Without these
+changes the operator cannot test, package, or apply a successor, so an
+upgrade stalls. Relaxing the checks for that case must not let a package
+that is unsigned, altered, or swapped act as a predecessor. It must not skip
+a pinned digest silently, and it must not reach the runtime or a successor
+load (release provenance).
+
+### Enforcement and defaults
+
+- The fallback runs only when shared verification reports a missing
+  `SHA256SUMS`, and only on the predecessor reads: the `test` and `package`
+  baselines, the `apply` active package, and the field-encryption preflight.
+  `breg` startup, candidate loads, `verify`, `diff`, and `migration explain`
+  stay strict. They refuse with `package.integrity_refused` and say to
+  test, package, and apply a successor with this `bregctl`.
+- A predecessor without the envelope still passes every signed-manifest
+  check. The signature must verify against the configured trust anchor, and
+  every file must match the size and digest its manifest records. Any file
+  the manifest does not list is refused by the closure check, and that
+  includes a stray `SHA256SUMS` or `REVISION`. The environment, instance,
+  database, revision, and sequence bindings still apply.
+- When the runtime configuration sets `package.expectedDigest`, the fallback
+  refuses with `package.digest_pin_unverifiable`, because a pin cannot be
+  checked on a package without `SHA256SUMS`.
+- The rehearsal's predecessor fingerprint comparison is advisory. The package
+  manifest does not record which engine release built it, and the managed
+  catalog includes tables the engine owns, so a predecessor signed by an
+  earlier release always drifts. A drift is reported as
+  `migration.rehearsal.baseline_fingerprint_drift`, with the signed and the
+  measured fingerprints, and it does not stop `test`. Activation is still
+  protected by the other checks. A predecessor schema that the current
+  compiler cannot install is refused. The rehearsed migration must reach the
+  candidate's own fingerprint. `apply` checks the live database before it
+  migrates.
+
+### Tests
+
+`crates/registry-breg/tests/postgres_package.rs`:
+`predecessor_built_before_the_shared_envelope_verifies_from_its_signed_manifest`,
+`predecessor_without_the_shared_envelope_keeps_every_signed_manifest_check`,
+`package_without_the_shared_envelope_is_refused_outside_predecessor_reads`.
+`crates/registry-breg/tests/runtime_config.rs`:
+`predecessor_without_shared_envelope_is_accepted_only_without_a_digest_pin`.
+`crates/registry-bregctl/tests/cli.rs`:
+`package_without_the_shared_envelope_is_refused_by_verify_with_the_successor_fix`,
+`package_baseline_without_the_shared_envelope_is_read_unless_a_digest_pin_is_configured`.
+`crates/registry-breg/tests/postgres_migration.rs`:
+`real_postgres_rehearsal_refuses_a_reviewed_plan_activation_would_refuse`
+covers both a drift that is reported and a final mismatch that is still
+refused, and
+`real_postgres_rehearsal_refuses_a_predecessor_it_cannot_install` covers the
+install refusal. `products/breg/scripts/test-adopter-workflow.sh
+--from-release` runs the upgrade from the previous release end to end.
+
+### Accepted residuals
+
+- A predecessor without the envelope has no package digest, so it cannot be
+  pinned; it is bound only by its signature and the active revision in the
+  runtime configuration. `SHA256SUMS` is unsigned, so the signed manifest
+  already carried every integrity guarantee the fallback relies on, and the
+  closure reader still refuses symbolic links and special files.
+- The same-engine fingerprint comparison no longer stops `test`. Because the
+  predecessor fingerprint is signed, a drift under the same engine can only
+  come from compiler nondeterminism, and the strict final check still
+  catches any effect on the candidate.
