@@ -848,6 +848,11 @@ pub enum PackageError {
     Integrity,
     #[error("the shared package envelope is invalid")]
     Envelope,
+    /// A predecessor built before the shared package format has no
+    /// `SHA256SUMS`, so a `package.expectedDigest` pin cannot be checked
+    /// against it. The pin refuses the package rather than being skipped.
+    #[error("{}", DIGEST_PIN_UNVERIFIABLE)]
+    DigestPinUnverifiable,
     #[error("the package deployment binding is invalid")]
     Binding,
     /// One deployment binding differs from the runtime configuration. Only
@@ -881,6 +886,11 @@ pub enum PackageError {
 }
 
 pub type Result<T> = std::result::Result<T, PackageError>;
+
+/// The operator-facing refusal for [`PackageError::DigestPinUnverifiable`].
+pub const DIGEST_PIN_UNVERIFIABLE: &str =
+    "package.expectedDigest cannot be checked on a package without SHA256SUMS; remove \
+     package.expectedDigest until a successor packaged by this bregctl is active";
 
 /// The runtime configuration key whose value a package binding must equal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3899,7 +3909,7 @@ pub fn load_package_with_verified_envelope(
         &envelope.signed.files,
         manifest_bytes.len(),
         production,
-        shared,
+        Some(shared),
     )?;
     let (registry, reviewed_migration_plan) = rederive(&envelope.signed, &loaded)?;
 
@@ -3917,7 +3927,11 @@ fn verify_shared_package(root: &Path) -> Result<SharedVerifiedPackage> {
         &shared_package_limits(),
         "bregctl package",
     )
-    .map_err(|error| match error.kind() {
+    .map_err(shared_package_error)
+}
+
+fn shared_package_error(error: registry_platform_config::package::PackageError) -> PackageError {
+    match error.kind() {
         // A symbolic-link, missing, or special package root or entry is a
         // path refusal, so operators get the path fix rather than a rebuild.
         registry_platform_config::package::PackageErrorKind::RootInvalid { .. }
@@ -3925,7 +3939,35 @@ fn verify_shared_package(root: &Path) -> Result<SharedVerifiedPackage> {
             PackageError::UnsafePath
         }
         _ => PackageError::Envelope,
-    })
+    }
+}
+
+/// Verify the shared envelope of a database-active predecessor. A predecessor
+/// written by a `bregctl` release before the shared package format has no
+/// `SHA256SUMS`, and it cannot gain one without editing a live package. Its
+/// signed manifest already binds the size and digest of every file, and the
+/// predecessor closure check still refuses any file it does not list,
+/// `SHA256SUMS` and `REVISION` included, so such a package returns `None`
+/// here and is verified from its signature and signed manifest alone. Only
+/// predecessor reads take this path: startup, activation targets, and
+/// integrity inspection keep requiring the shared envelope.
+pub fn verify_predecessor_shared_package(root: &Path) -> Result<Option<SharedVerifiedPackage>> {
+    match registry_platform_config::package::verify_package(
+        root,
+        &shared_package_limits(),
+        "bregctl package",
+    ) {
+        Ok(shared) => Ok(Some(shared)),
+        Err(error)
+            if matches!(
+                error.kind(),
+                registry_platform_config::package::PackageErrorKind::SumFileMissing
+            ) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(shared_package_error(error)),
+    }
 }
 
 fn bind_shared_file(shared: &SharedVerifiedPackage, relative: &str, bytes: &[u8]) -> Result<()> {
@@ -3973,16 +4015,18 @@ pub fn load_predecessor_package(
     root: &Path,
     context: &PredecessorPackageContext<'_>,
 ) -> Result<VerifiedPredecessorPackage> {
-    let shared = verify_shared_package(root)?;
-    load_predecessor_package_with_verified_envelope(root, context, &shared)
+    let shared = verify_predecessor_shared_package(root)?;
+    load_predecessor_package_with_verified_envelope(root, context, shared.as_ref())
 }
 
 /// Load an active predecessor from the same shared envelope verification used
-/// to select it.
+/// to select it. `None` is a predecessor built before the shared package
+/// format, which has no `SHA256SUMS`: its signed manifest alone binds the
+/// closure, see [`verify_predecessor_shared_package`].
 pub fn load_predecessor_package_with_verified_envelope(
     root: &Path,
     context: &PredecessorPackageContext<'_>,
-    shared: &SharedVerifiedPackage,
+    shared: Option<&SharedVerifiedPackage>,
 ) -> Result<VerifiedPredecessorPackage> {
     load_predecessor_closure(root, context, shared).map(|(package, _)| package)
 }
@@ -3998,15 +4042,15 @@ pub fn load_predecessor_rehearsal_baseline(
     root: &Path,
     context: &PredecessorPackageContext<'_>,
 ) -> Result<(VerifiedPredecessorPackage, CompiledRegistry)> {
-    let shared = verify_shared_package(root)?;
-    load_predecessor_rehearsal_baseline_with_verified_envelope(root, context, &shared)
+    let shared = verify_predecessor_shared_package(root)?;
+    load_predecessor_rehearsal_baseline_with_verified_envelope(root, context, shared.as_ref())
 }
 
 #[cfg(feature = "tooling")]
 pub fn load_predecessor_rehearsal_baseline_with_verified_envelope(
     root: &Path,
     context: &PredecessorPackageContext<'_>,
-    shared: &SharedVerifiedPackage,
+    shared: Option<&SharedVerifiedPackage>,
 ) -> Result<(VerifiedPredecessorPackage, CompiledRegistry)> {
     let (package, loaded) = load_predecessor_closure(root, context, shared)?;
     let registry = compile_signed_sources(&package.manifest, &loaded)?;
@@ -4016,18 +4060,22 @@ pub fn load_predecessor_rehearsal_baseline_with_verified_envelope(
 fn load_predecessor_closure(
     root: &Path,
     context: &PredecessorPackageContext<'_>,
-    shared: &SharedVerifiedPackage,
+    shared: Option<&SharedVerifiedPackage>,
 ) -> Result<(VerifiedPredecessorPackage, BTreeMap<String, Vec<u8>>)> {
     validate_root(root)?;
     let production = context.database_initialization_environment != "local";
     if production {
         ensure_safe_permissions(root)?;
     }
-    bind_shared_envelope_files(root, shared, production)?;
+    if let Some(shared) = shared {
+        bind_shared_envelope_files(root, shared, production)?;
+    }
 
     let manifest_path = root.join(MANIFEST_PATH);
     let manifest_bytes = read_bounded_regular(&manifest_path, MAX_MANIFEST_BYTES, production)?;
-    bind_shared_file(shared, MANIFEST_PATH, &manifest_bytes)?;
+    if let Some(shared) = shared {
+        bind_shared_file(shared, MANIFEST_PATH, &manifest_bytes)?;
+    }
     let envelope: PackageEnvelope = parse_canonical(&manifest_bytes)?;
     if envelope.api_version != PACKAGE_API_VERSION
         || envelope.signed.files.is_empty()
@@ -4137,7 +4185,7 @@ fn inspect_package(
         &envelope.signed.files,
         manifest_bytes.len(),
         true,
-        shared,
+        Some(shared),
     )?;
     let (registry, _reviewed_migration_plan) = rederive(&envelope.signed, &loaded)?;
     #[cfg(feature = "tooling")]
@@ -5004,7 +5052,7 @@ fn load_closure(
     entries: &[PackageFile],
     manifest_size: usize,
     production: bool,
-    shared: &SharedVerifiedPackage,
+    shared: Option<&SharedVerifiedPackage>,
 ) -> Result<BTreeMap<String, Vec<u8>>> {
     let mut listed = BTreeSet::new();
     let mut loaded = BTreeMap::new();
@@ -5024,7 +5072,9 @@ fn load_closure(
         reject_relative_symlinks(root, relative)?;
         let path = root.join(relative);
         let bytes = read_bounded_regular(&path, MAX_FILE_BYTES, production)?;
-        bind_shared_file(shared, &entry.path, &bytes)?;
+        if let Some(shared) = shared {
+            bind_shared_file(shared, &entry.path, &bytes)?;
+        }
         if bytes.len() as u64 != entry.size || digest(&bytes) != entry.sha256 {
             return Err(PackageError::Integrity);
         }
@@ -5040,14 +5090,16 @@ fn load_closure(
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
     expected.insert(MANIFEST_PATH.to_owned());
-    let shared_files = shared.files().map(str::to_owned).collect::<BTreeSet<_>>();
-    if shared_files.contains(REVISION_FILE) {
-        expected.insert(REVISION_FILE.to_owned());
+    if let Some(shared) = shared {
+        let shared_files = shared.files().map(str::to_owned).collect::<BTreeSet<_>>();
+        if shared_files.contains(REVISION_FILE) {
+            expected.insert(REVISION_FILE.to_owned());
+        }
+        if shared_files != expected {
+            return Err(PackageError::Envelope);
+        }
+        expected.insert(SUM_FILE.to_owned());
     }
-    if shared_files != expected {
-        return Err(PackageError::Envelope);
-    }
-    expected.insert(SUM_FILE.to_owned());
     if actual != expected {
         return Err(PackageError::Closure);
     }

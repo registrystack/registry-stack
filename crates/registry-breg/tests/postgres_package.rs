@@ -1334,6 +1334,143 @@ fn predecessor_package_refuses_altered_or_forged_closure_bytes() {
 }
 
 #[test]
+fn predecessor_built_before_the_shared_envelope_verifies_from_its_signed_manifest() {
+    let signing = generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("test key generates");
+    let fixture = PackageFixture::build(
+        "production",
+        1,
+        None,
+        fingerprint(1),
+        PlanChoice::Schema,
+        Some(&signing),
+    );
+    let revision = read_envelope(fixture.root.path()).signed.package_revision;
+    strip_shared_package_envelope(fixture.root.path());
+
+    let predecessor = load_predecessor_package(
+        fixture.root.path(),
+        &fixture.predecessor_context(&revision, 1),
+    )
+    .expect("a signed predecessor without SHA256SUMS verifies");
+    assert_eq!(predecessor.package_revision(), revision);
+    assert_eq!(predecessor.schema_fingerprint(), fingerprint(1));
+
+    #[cfg(feature = "tooling")]
+    {
+        let (baseline, _registry) = registry_breg::package::load_predecessor_rehearsal_baseline(
+            fixture.root.path(),
+            &fixture.predecessor_context(&revision, 1),
+        )
+        .expect("a signed predecessor without SHA256SUMS is a rehearsal baseline");
+        assert_eq!(baseline.package_revision(), revision);
+    }
+}
+
+#[test]
+fn predecessor_without_the_shared_envelope_keeps_every_signed_manifest_check() {
+    let signing = generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("test key generates");
+    let forged = PackageFixture::build(
+        "production",
+        1,
+        None,
+        fingerprint(1),
+        PlanChoice::Schema,
+        Some(&signing),
+    );
+    let forged_revision = read_envelope(forged.root.path()).signed.package_revision;
+    rewrite_envelope(forged.root.path(), |envelope| {
+        let byte_length = envelope.signatures[0].signature_hex.len() / 2;
+        envelope.signatures[0].signature_hex = "00".repeat(byte_length);
+    });
+    strip_shared_package_envelope(forged.root.path());
+    assert_eq!(
+        predecessor_load_error(
+            forged.root.path(),
+            &forged.predecessor_context(&forged_revision, 1),
+        ),
+        PackageError::Signature
+    );
+
+    let tampered =
+        PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let revision = read_envelope(tampered.root.path()).signed.package_revision;
+    strip_shared_package_envelope(tampered.root.path());
+    fs::write(
+        governed_model_path(tampered.root.path()),
+        b"tampered governed model",
+    )
+    .expect("governed model tamper writes");
+    assert_eq!(
+        predecessor_load_error(
+            tampered.root.path(),
+            &local_predecessor_context(&revision, 1)
+        ),
+        PackageError::Integrity
+    );
+
+    let extra = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let revision = read_envelope(extra.root.path()).signed.package_revision;
+    strip_shared_package_envelope(extra.root.path());
+    fs::write(extra.root.path().join("unsigned.txt"), b"not signed").expect("extra file writes");
+    assert_eq!(
+        predecessor_load_error(extra.root.path(), &local_predecessor_context(&revision, 1)),
+        PackageError::Closure
+    );
+
+    let stray_revision =
+        PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let revision = read_envelope(stray_revision.root.path())
+        .signed
+        .package_revision;
+    strip_shared_package_envelope(stray_revision.root.path());
+    fs::write(stray_revision.root.path().join(REVISION_FILE), "v1\n")
+        .expect("stray revision file writes");
+    assert_eq!(
+        predecessor_load_error(
+            stray_revision.root.path(),
+            &local_predecessor_context(&revision, 1)
+        ),
+        PackageError::Closure
+    );
+
+    let rebound = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let revision = read_envelope(rebound.root.path()).signed.package_revision;
+    strip_shared_package_envelope(rebound.root.path());
+    let wrong_database = PredecessorPackageContext {
+        database_id: "another-database",
+        ..local_predecessor_context(&revision, 1)
+    };
+    assert_eq!(
+        predecessor_load_error(rebound.root.path(), &wrong_database),
+        PackageError::BindingMismatch(PackageBindingField::DatabaseId)
+    );
+}
+
+#[test]
+fn package_without_the_shared_envelope_is_refused_outside_predecessor_reads() {
+    let fixture = PackageFixture::build("local", 1, None, fingerprint(1), PlanChoice::Schema, None);
+    let revision = read_envelope(fixture.root.path()).signed.package_revision;
+    strip_shared_package_envelope(fixture.root.path());
+
+    assert_eq!(
+        load_error(
+            fixture.root.path(),
+            &local_context(PackageIntent::Startup {
+                active_revision: &revision,
+                active_sequence: 1,
+            }),
+        ),
+        PackageError::Envelope
+    );
+    assert_eq!(
+        registry_breg::package::inspect_package_integrity(fixture.root.path())
+            .err()
+            .expect("integrity inspection refuses a package without SHA256SUMS"),
+        PackageError::Envelope
+    );
+}
+
+#[test]
 fn predecessor_verification_does_not_authorize_runtime_or_weaken_successor() {
     let legacy_revision = "legacy-compiler-source-revision";
     let legacy = legacy_compiler_fixture(legacy_revision);
@@ -4445,6 +4582,17 @@ fn rewrite_envelope(root: &Path, mutate: impl FnOnce(&mut PackageEnvelope)) {
     mutate(&mut envelope);
     write_json(&root.join("package.json"), &envelope);
     refresh_shared_package_envelope(root);
+}
+
+/// Reduce a package to the layout a `bregctl` release before the shared
+/// package format wrote: the signed manifest and its files, with no
+/// `SHA256SUMS` or `REVISION`.
+fn strip_shared_package_envelope(root: &Path) {
+    fs::remove_file(root.join(SUM_FILE)).expect("shared package checksum file removes");
+    let revision = root.join(REVISION_FILE);
+    if revision.exists() {
+        fs::remove_file(revision).expect("shared package revision file removes");
+    }
 }
 
 fn refresh_shared_package_envelope(root: &Path) {

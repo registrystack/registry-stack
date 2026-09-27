@@ -125,6 +125,17 @@ const EVENT_DESTINATION_PATH_SCHEMA_PATTERN: &str =
 pub const RUNTIME_CONFIG_API_VERSION: &str = "registry.registrystack.org/breg-runtime/v1alpha1";
 pub const RUNTIME_CONFIG_KIND: &str = "BRegRuntimeConfig";
 
+/// Why the database-active predecessor's shared envelope was refused.
+#[derive(Debug, Error, Clone, Eq, PartialEq)]
+pub enum PredecessorEnvelopeError {
+    /// The shared envelope is present and refused.
+    #[error(transparent)]
+    Shared(registry_platform_config::package::PackageError),
+    /// The package has no shared envelope and cannot be accepted without it.
+    #[error(transparent)]
+    Package(PackageError),
+}
+
 #[derive(Debug, Error, Clone, Copy, Eq, PartialEq)]
 pub enum RuntimeConfigError {
     #[error("the runtime configuration file is unavailable")]
@@ -892,6 +903,39 @@ impl RuntimeConfig {
             .map_err(|error| error.naming_root_as("package.root"))
     }
 
+    /// Verify the shared envelope of the database-active predecessor and the
+    /// optional package digest pin. A predecessor written before the shared
+    /// package format returns `None` and is verified from its signed manifest
+    /// alone (see [`verify_predecessor_shared_package`]); a configured pin
+    /// names a `SHA256SUMS` digest, so it refuses such a package.
+    ///
+    /// [`verify_predecessor_shared_package`]: crate::package::verify_predecessor_shared_package
+    pub fn verify_predecessor_package_envelope(
+        &self,
+    ) -> std::result::Result<
+        Option<registry_platform_config::package::VerifiedPackage>,
+        PredecessorEnvelopeError,
+    > {
+        match self.verify_package_envelope() {
+            Ok(shared) => Ok(Some(shared)),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    registry_platform_config::package::PackageErrorKind::SumFileMissing
+                ) =>
+            {
+                if self.package.shared.expected_digest.is_some() {
+                    Err(PredecessorEnvelopeError::Package(
+                        PackageError::DigestPinUnverifiable,
+                    ))
+                } else {
+                    Ok(None)
+                }
+            }
+            Err(error) => Err(PredecessorEnvelopeError::Shared(error)),
+        }
+    }
+
     /// Verify the configured package pin and consume that same shared
     /// envelope through BReg's signature, binding, and derivation checks.
     pub fn load_active_package(&self) -> std::result::Result<VerifiedPackage, PackageError> {
@@ -911,8 +955,11 @@ impl RuntimeConfig {
         &self,
     ) -> std::result::Result<VerifiedPredecessorPackage, PackageError> {
         let shared = self
-            .verify_package_envelope()
-            .map_err(|_| PackageError::Envelope)?;
+            .verify_predecessor_package_envelope()
+            .map_err(|error| match error {
+                PredecessorEnvelopeError::Shared(_) => PackageError::Envelope,
+                PredecessorEnvelopeError::Package(error) => error,
+            })?;
         load_predecessor_package_with_verified_envelope(
             self.package().root(),
             &PredecessorPackageContext {
@@ -926,7 +973,7 @@ impl RuntimeConfig {
                 expected_package_revision: self.package().active_revision(),
                 expected_sequence: self.package().active_sequence(),
             },
-            &shared,
+            shared.as_ref(),
         )
     }
 

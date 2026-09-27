@@ -23,8 +23,8 @@ use registry_breg::package::{
     inspect_package_integrity, CompiledRegistryChangeClass, MigrationInspectionPlanKind,
     MigrationInspectionSummary, PackageBuildRequest, PackageError, PackageMigrationPlanInput,
     PackageModuleSource, PackageSourceFile, PreparedPackage, SignaturePolicy,
-    FIXTURE_JOURNEYS_PATH, MAX_PACKAGE_SOURCE_FILE_BYTES, MAX_RHAI_PLANNER_PATH_BYTES,
-    MAX_RHAI_PLANNER_SOURCE_BYTES,
+    DIGEST_PIN_UNVERIFIABLE, FIXTURE_JOURNEYS_PATH, MAX_PACKAGE_SOURCE_FILE_BYTES,
+    MAX_RHAI_PLANNER_PATH_BYTES, MAX_RHAI_PLANNER_SOURCE_BYTES,
 };
 use registry_breg::postgres::MigrationRehearsalError;
 use registry_breg::runtime_config::RuntimeConfigError;
@@ -4782,6 +4782,9 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
         ApplyLifecycleError::RuntimeConfig(error) => {
             return runtime_config_failure("apply", "apply", error);
         }
+        ApplyLifecycleError::CurrentPackage(PackageError::DigestPinUnverifiable) => {
+            return digest_pin_unverifiable_failure("apply", "apply");
+        }
         ApplyLifecycleError::CurrentPackage(PackageError::BindingMismatch(field))
         | ApplyLifecycleError::TargetPackage(PackageError::BindingMismatch(field)) => {
             let subject = if matches!(error, ApplyLifecycleError::CurrentPackage(_)) {
@@ -5367,6 +5370,9 @@ fn inspection_failure(
                 )],
             };
         }
+        RuntimePackageInspectionError::Package(PackageError::DigestPinUnverifiable) => {
+            return digest_pin_unverifiable_failure(command, prefix);
+        }
         other => other,
     };
     let (code, path, message, artifact, action) = match error {
@@ -5399,6 +5405,7 @@ fn inspection_failure(
                     "anchor_not_canonical",
                     SuggestedAction::VerifyPackageIntegrity,
                 ),
+                PackageError::DigestPinUnverifiable => unreachable!("handled before match"),
                 PackageError::Envelope
                 | PackageError::Closure
                 | PackageError::Integrity
@@ -5428,6 +5435,23 @@ fn inspection_failure(
             diagnostic(&code, path, message),
             artifact,
             action,
+        )],
+    }
+}
+
+/// A predecessor without `SHA256SUMS` under a `package.expectedDigest` pin.
+fn digest_pin_unverifiable_failure(command: &'static str, prefix: &str) -> FailureReport {
+    FailureReport {
+        ok: false,
+        command,
+        diagnostics: vec![tool_diagnostic(
+            diagnostic(
+                &format!("{prefix}.package.digest_pin_unverifiable"),
+                "package.expectedDigest",
+                DIGEST_PIN_UNVERIFIABLE,
+            ),
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
         )],
     }
 }
@@ -5493,6 +5517,10 @@ fn package_diff_failure(error: PackageError) -> FailureReport {
         PackageError::TrustAnchorNotCanonical => (
             "diff.baseline.anchor_not_canonical",
             SuggestedAction::VerifyPackageIntegrity,
+        ),
+        PackageError::DigestPinUnverifiable => (
+            "diff.baseline.digest_pin_unverifiable",
+            SuggestedAction::CorrectRuntimeConfiguration,
         ),
         PackageError::Envelope
         | PackageError::Closure
