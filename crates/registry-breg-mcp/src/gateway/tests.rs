@@ -457,30 +457,53 @@ async fn a_stale_revision_or_a_closed_application_is_not_written() {
 async fn registry_problems_map_to_stable_codes_with_a_trace() {
     let fixture = Fixture::start().await;
     let caller = fixture.caller(CITIZEN_A);
-    fixture
-        .registry
-        .fail_next(http::Method::POST, BRegProblemCode::IdempotencyConflict);
-    let conflict = fixture
-        .call(&caller, START_APPLICATION, start_arguments())
-        .await;
-    assert_eq!(error_code(&conflict), "idempotency-conflict");
-    assert!(conflict["error"]["traceId"].is_string());
     let draft = fixture.registry.add_application(
         json!({"address": ADDRESS_A, "newAddressLine": "5 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
         draft_request(),
     );
-    fixture
-        .registry
-        .fail_next(http::Method::PATCH, BRegProblemCode::PreconditionFailed);
-    let stale = fixture
-        .call(
+    let update = || {
+        fixture.call(
             &caller,
             UPDATE_APPLICATION,
             json!({"applicationId": draft.to_string(), "expectedRevision": "1",
                 "patch": [{"op": "replace", "path": "/newLocality", "value": "Old Town"}]}),
         )
-        .await;
+    };
+    fixture
+        .registry
+        .fail_next(http::Method::PATCH, BRegProblemCode::IdempotencyConflict);
+    let conflict = update().await;
+    assert_eq!(error_code(&conflict), "idempotency-conflict");
+    assert!(conflict["error"]["traceId"].is_string());
+    fixture
+        .registry
+        .fail_next(http::Method::PATCH, BRegProblemCode::PreconditionFailed);
+    let stale = update().await;
     assert_eq!(error_code(&stale), "stale-application");
+}
+
+#[tokio::test]
+async fn a_start_steps_past_a_key_the_registry_will_not_replay() {
+    let (audit, capture) = ToolAuditLog::capture();
+    let fixture = Fixture::start_with_audit(Some(audit)).await;
+    let caller = fixture.caller(CITIZEN_A);
+    fixture
+        .registry
+        .fail_next(http::Method::POST, BRegProblemCode::IdempotencyConflict);
+    let started = fixture
+        .call(&caller, START_APPLICATION, start_arguments())
+        .await;
+    let application = started_identifier(&started);
+    assert_eq!(response_record(&capture)["outcome"], "ok");
+    let keys: Vec<String> = fixture
+        .writes()
+        .into_iter()
+        .map(|seen| seen.idempotency_key.expect("key"))
+        .collect();
+    assert_eq!(keys.len(), 2);
+    assert_ne!(keys[0], keys[1]);
+    assert_eq!(fixture.registry.applications().len(), 1);
+    assert!(fixture.registry.applications().contains_key(&application));
 }
 
 #[tokio::test]
@@ -583,6 +606,37 @@ async fn a_start_past_too_many_closed_applications_is_refused() {
         fixture.registry.applications().len(),
         usize::try_from(MAX_CLOSED_REPEATS + 1).expect("bound fits")
     );
+}
+
+#[tokio::test]
+async fn a_start_after_a_package_activation_opens_a_new_one() {
+    for closed in [true, false] {
+        let (audit, capture) = ToolAuditLog::capture();
+        let fixture = Fixture::start_with_audit(Some(audit)).await;
+        let caller = fixture.caller(CITIZEN_A);
+        let start = || fixture.call(&caller, START_APPLICATION, start_arguments());
+        let first = started_identifier(&start().await);
+        if closed {
+            fixture.registry.set_request(
+                first,
+                json!({"bregState": "cancelled", "editable": false, "proposalVersion": 1}),
+            );
+        }
+
+        fixture.registry.activate_package();
+        let second = start().await;
+        assert_eq!(second["application"]["status"], "prepared", "{closed}");
+        let second = started_identifier(&second);
+        assert_ne!(second, first, "{closed}");
+        let entries = capture.entries();
+        let last = entries.last().expect("audited");
+        assert_eq!(last["phase"], "response", "{closed}");
+        assert_eq!(last["record"]["outcome"], "ok", "{closed}");
+
+        // A retry under the same revision lands on the same draft.
+        assert_eq!(started_identifier(&start().await), second, "{closed}");
+        assert_eq!(fixture.registry.applications().len(), 2, "{closed}");
+    }
 }
 
 #[tokio::test]
