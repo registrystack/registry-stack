@@ -1146,10 +1146,13 @@ async fn an_apply_waiting_for_a_runtime_directory_lock_holds_no_migration_lock()
     let observer = connect(&base_url()).await;
     let observe = async {
         tokio::time::sleep(Duration::from_millis(750)).await;
+        // Only relation locks: a row-lock wait also holds a tuple lock in
+        // AccessExclusiveLock mode, and that is the wait itself.
         let strong: i64 = observer
             .query_one(
                 "SELECT count(*) FROM pg_locks l JOIN pg_class c ON c.oid=l.relation JOIN pg_namespace n ON n.oid=c.relnamespace
-                 WHERE n.nspname=$1 AND l.granted AND l.mode NOT IN ('AccessShareLock','RowShareLock','RowExclusiveLock')",
+                 WHERE n.nspname=$1 AND l.locktype='relation' AND l.granted
+                   AND l.mode NOT IN ('AccessShareLock','RowShareLock','RowExclusiveLock')",
                 &[&fixture.schema],
             )
             .await
@@ -1252,17 +1255,51 @@ async fn a_runtime_role_that_owns_a_casework_table_is_refused_by_apply_and_at_st
         .batch_execute(&fix)
         .await
         .expect("reassign the runtime role's objects");
-    let applied = fixture
-        .apply(&candidate(&project, &second, &[]))
+
+    // Taking the table back also took the runtime role's grants on it, so
+    // startup refuses until apply reissues them, and the active package is
+    // pending again rather than already active.
+    let missing = check_activation(&runtime, DATABASE_ID, &first, &[])
         .await
-        .expect("apply after the reassignment");
+        .expect_err("a split activation whose runtime role lost its grants is refused");
+    assert!(
+        matches!(missing, RuntimeError::RuntimeGrantsMissing),
+        "{missing}"
+    );
+    assert!(missing
+        .to_string()
+        .contains("caseworkctl apply --runtime-config FILE"));
+    let plan = runtime
+        .plan_activation(&candidate(&project, &first, &[]))
+        .await
+        .expect("plan");
+    assert!(plan.changes_pending, "{:?}", plan.refusals);
+    assert_eq!(plan.runtime_role_mode, Some(RoleMode::Split));
+    assert!(
+        plan.effects.is_none(),
+        "the runtime role cannot read the reassigned table until apply"
+    );
+    let applied = fixture
+        .apply(&candidate(&project, &first, &[]))
+        .await
+        .expect("apply reissues the grants after the reassignment");
     assert_eq!(applied.activation.role_mode, RoleMode::Split);
     assert_eq!(
-        check_activation(&runtime, DATABASE_ID, &second, &[])
+        check_activation(&runtime, DATABASE_ID, &first, &[])
             .await
             .expect("the reassigned split activation starts"),
         RoleMode::Split
     );
+    connect(&fixture.runtime_url)
+        .await
+        .batch_execute(
+            "SELECT count(*) FROM casework_task_templates;
+             INSERT INTO casework_task_templates SELECT * FROM casework_task_templates WHERE false;
+             UPDATE casework_task_templates SET active=active WHERE false;
+             DELETE FROM casework_task_templates WHERE false",
+        )
+        .await
+        .expect("the runtime role writes its work table again");
     drop(runtime);
     fixture.drop_runtime_role().await;
 }
@@ -1300,10 +1337,7 @@ async fn a_runtime_role_with_create_on_the_schema_is_refused_by_apply_and_at_sta
     );
     let message = refused.to_string();
     assert!(message.contains(&fix), "{message}");
-    assert!(
-        message.contains("caseworkctl apply --runtime-config FILE"),
-        "{message}"
-    );
+    assert!(message.contains(REVOKE_NEXT), "{message}");
     assert_eq!(fixture.relation_count().await, 0, "apply changed nothing");
 
     fixture
@@ -1332,20 +1366,16 @@ async fn a_runtime_role_with_create_on_the_schema_is_refused_by_apply_and_at_sta
     );
     let message = weakened.to_string();
     assert!(message.contains(&fix), "{message}");
-    assert!(
-        message.contains("caseworkctl apply --runtime-config FILE"),
-        "{message}"
-    );
+    assert!(message.contains(REVOKE_NEXT), "{message}");
     drop(runtime);
     fixture.drop_runtime_role().await;
 }
 
-/// Writing the schema-migration ledger or creating triggers on a Casework
-/// table is authority over the activation ledger as much as writing it, so
-/// startup refuses the split activation, and apply takes both privileges
-/// back.
+/// Writing the schema-migration ledger is authority over the activation
+/// ledger as much as writing it, so startup refuses the split activation,
+/// and apply takes the privilege back.
 #[tokio::test]
-async fn schema_ledger_writes_and_trigger_privileges_weaken_a_split_activation() {
+async fn schema_ledger_writes_weaken_a_split_activation_until_apply_revokes_them() {
     let fixture = Fixture::split("ledgerwrite").await;
     let project = project();
     let first = digest('a');
@@ -1356,7 +1386,7 @@ async fn schema_ledger_writes_and_trigger_privileges_weaken_a_split_activation()
     let runtime = fixture.runtime();
     for grant in [
         "GRANT INSERT ON casework_schema_migrations TO {role}",
-        "GRANT TRIGGER ON casework_task_templates TO {role}",
+        "GRANT UPDATE ON casework_schema_migrations TO {role}",
     ] {
         fixture
             .client
@@ -1387,6 +1417,219 @@ async fn schema_ledger_writes_and_trigger_privileges_weaken_a_split_activation()
     }
     drop(runtime);
     fixture.drop_runtime_role().await;
+}
+
+/// The next action every `REVOKE` or `DROP TRIGGER` fix ends with.
+const REVOKE_NEXT: &str =
+    "then rerun the command that refused, or `caseworkctl plan --runtime-config FILE` to confirm";
+
+/// TRIGGER on a Casework table, and CREATE on the schema held through
+/// `PUBLIC`, let the runtime role attach code that runs as the migration
+/// role. Each is refused at startup and by split-role apply, naming the
+/// revoke from whoever holds it.
+#[tokio::test]
+async fn trigger_and_public_privileges_are_refused_naming_their_revoke() {
+    let fixture = Fixture::split("revoke").await;
+    let project = project();
+    let first = digest('a');
+    fixture
+        .apply(&candidate(&project, &first, &[]))
+        .await
+        .expect("split-role apply");
+    let runtime = fixture.runtime();
+    let schema = fixture.schema.clone();
+    let role = fixture.runtime_user.clone();
+    for (grant, fix) in [
+        (
+            format!("GRANT TRIGGER ON casework_teams TO {role}"),
+            format!("REVOKE TRIGGER ON {schema}.casework_teams FROM {role}"),
+        ),
+        (
+            "GRANT TRIGGER ON casework_teams TO PUBLIC".to_owned(),
+            format!("REVOKE TRIGGER ON {schema}.casework_teams FROM PUBLIC"),
+        ),
+        (
+            format!("GRANT CREATE ON SCHEMA {schema} TO PUBLIC"),
+            format!("REVOKE CREATE ON SCHEMA {schema} FROM PUBLIC"),
+        ),
+    ] {
+        fixture
+            .client
+            .batch_execute(&grant)
+            .await
+            .expect("grant a weakening privilege");
+        let weakened = check_activation(&runtime, DATABASE_ID, &first, &[])
+            .await
+            .expect_err("the privilege weakens the split activation");
+        assert!(
+            matches!(weakened, RuntimeError::RoleModeWeakened { .. }),
+            "{grant}: {weakened}"
+        );
+        let message = weakened.to_string();
+        assert!(message.contains(&fix), "{grant}: {message}");
+        assert!(message.contains(REVOKE_NEXT), "{grant}: {message}");
+        let refused = fixture
+            .apply(&candidate(&project, &digest('b'), &[]))
+            .await
+            .expect_err("split-role apply refuses the privilege");
+        assert_eq!(
+            refusal_codes(&refused),
+            ["casework.activation.role-mode-weakened"],
+            "{grant}"
+        );
+        assert!(refused.to_string().contains(&fix), "{grant}: {refused}");
+        assert_eq!(fixture.ledger().await.len(), 1, "{grant}");
+        fixture
+            .client
+            .batch_execute(&fix)
+            .await
+            .expect("revoke the privilege");
+        assert_eq!(
+            check_activation(&runtime, DATABASE_ID, &first, &[])
+                .await
+                .expect("the split activation starts after the revoke"),
+            RoleMode::Split,
+            "{grant}"
+        );
+    }
+    drop(runtime);
+    fixture.drop_runtime_role().await;
+}
+
+/// A trigger no Casework migration creates runs as whichever role fires it,
+/// the migration role inside apply included, and it outlives the ownership
+/// its author held. Split-role apply, plan, and startup refuse it by name
+/// until it is dropped.
+#[tokio::test]
+async fn a_trigger_left_by_a_runtime_role_that_owned_a_table_is_refused_after_reassignment() {
+    let fixture = Fixture::split("trigger").await;
+    let project = project();
+    let first = digest('a');
+    fixture
+        .apply(&candidate(&project, &first, &[]))
+        .await
+        .expect("split-role apply");
+    let migration_user = fixture
+        .migration
+        .current_user()
+        .await
+        .expect("migration role");
+    let schema = fixture.schema.clone();
+    let role = fixture.runtime_user.clone();
+    fixture
+        .client
+        .batch_execute(&format!(
+            "CREATE FUNCTION stray_touch() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN RETURN NULL; END$$;
+             ALTER TABLE casework_teams OWNER TO {role}"
+        ))
+        .await
+        .expect("give the runtime role a work table");
+    connect(&fixture.runtime_url)
+        .await
+        .batch_execute(
+            "CREATE TRIGGER stray_touch AFTER INSERT ON casework_teams FOR EACH ROW EXECUTE FUNCTION stray_touch()",
+        )
+        .await
+        .expect("the owning runtime role attaches a trigger");
+    fixture
+        .client
+        .batch_execute(&format!("REASSIGN OWNED BY {role} TO {migration_user}"))
+        .await
+        .expect("reassign the runtime role's objects");
+    let fix = format!("DROP TRIGGER stray_touch ON {schema}.casework_teams");
+
+    let runtime = fixture.runtime();
+    let weakened = check_activation(&runtime, DATABASE_ID, &first, &[])
+        .await
+        .expect_err("a stray trigger weakens the split activation");
+    assert!(
+        matches!(weakened, RuntimeError::RoleModeWeakened { .. }),
+        "{weakened}"
+    );
+    let message = weakened.to_string();
+    assert!(message.contains(&fix), "{message}");
+    assert!(message.contains(REVOKE_NEXT), "{message}");
+    let plan = runtime
+        .plan_activation(&candidate(&project, &first, &[]))
+        .await
+        .expect("plan");
+    assert!(!plan.changes_pending);
+    assert!(
+        plan.refusals.iter().any(|refusal| {
+            refusal.code == "casework.activation.role-mode-weakened"
+                && refusal.message.contains(&fix)
+        }),
+        "{:?}",
+        plan.refusals
+    );
+    let refused = fixture
+        .apply(&candidate(&project, &first, &[]))
+        .await
+        .expect_err("split-role apply refuses the stray trigger");
+    assert_eq!(
+        refusal_codes(&refused),
+        ["casework.activation.role-mode-weakened"]
+    );
+    let message = refused.to_string();
+    assert!(message.contains(&fix), "{message}");
+    assert!(message.contains(REVOKE_NEXT), "{message}");
+    assert_eq!(fixture.ledger().await.len(), 1, "apply recorded nothing");
+
+    fixture
+        .client
+        .batch_execute(&fix)
+        .await
+        .expect("drop the stray trigger");
+    let applied = fixture
+        .apply(&candidate(&project, &first, &[]))
+        .await
+        .expect("apply reissues the grants once the trigger is gone");
+    assert_eq!(applied.activation.role_mode, RoleMode::Split);
+    assert_eq!(
+        check_activation(&runtime, DATABASE_ID, &first, &[])
+            .await
+            .expect("the split activation starts"),
+        RoleMode::Split
+    );
+    drop(runtime);
+    fixture.drop_runtime_role().await;
+}
+
+/// A single-role deployment already holds the ledger, so a trigger it adds
+/// to a Casework table refuses nothing.
+#[tokio::test]
+async fn a_trigger_on_a_casework_table_refuses_no_single_role_apply() {
+    let fixture = Fixture::single("singletrigger").await;
+    let project = project();
+    let first = digest('a');
+    fixture
+        .apply(&candidate(&project, &first, &[]))
+        .await
+        .expect("single-role apply");
+    fixture
+        .client
+        .batch_execute(
+            "CREATE FUNCTION stray_touch() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN RETURN NULL; END$$;
+             CREATE TRIGGER stray_touch AFTER INSERT ON casework_teams FOR EACH ROW EXECUTE FUNCTION stray_touch()",
+        )
+        .await
+        .expect("attach a trigger");
+    let runtime = fixture.runtime();
+    assert_eq!(
+        check_activation(&runtime, DATABASE_ID, &first, &[])
+            .await
+            .expect("a single-role activation starts"),
+        RoleMode::Single
+    );
+    let plan = runtime
+        .plan_activation(&candidate(&project, &digest('b'), &[]))
+        .await
+        .expect("plan");
+    assert!(plan.changes_pending, "{:?}", plan.refusals);
+    fixture
+        .apply(&candidate(&project, &digest('b'), &[]))
+        .await
+        .expect("single-role apply ignores the trigger");
 }
 
 /// `serve` itself refuses a migrated database no package was applied to:

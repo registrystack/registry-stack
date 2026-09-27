@@ -77,9 +77,10 @@ two-person rule enforce it on who can read the migration credential.
   That is what serving needs. Split mode separates authority over the two
   ledgers and the schema, not over work data, template activation, or source
   generation registration.
-- Apply also revokes `TRIGGER` on every Casework table and view from the
-  runtime role, since a trigger it attached would run as whichever role fires
-  it, including the migration role inside apply.
+- A trigger runs as whichever role fires it, including the migration role
+  inside apply, and it has no owner of its own: one the runtime role attached
+  while it owned a table survives `REASSIGN OWNED BY`. Apply therefore never
+  issues `TRIGGER`, and refuses rather than revokes it, as below.
 - The role mode is recorded from the runtime role's effective authority after
   the grants, not from whether the two credentials name different roles. The
   runtime role counts as single-role when it is a superuser or bypasses row
@@ -88,19 +89,41 @@ two-person rule enforce it on who can read the migration credential.
   role. It counts as single-role too when it can reach the ledger through code
   that runs as the migration role: it owns, or is a member of the owner of,
   any `casework_*` table, sequence, view, or function, holds `TRIGGER` on a
-  Casework table or view, or holds `CREATE` on the schema. A deferred
-  constraint trigger on `casework_task_templates`, for example, fires as the
-  migration role at apply's commit and can insert a ledger row.
-- Split-role apply refuses such ownership or `CREATE` before it changes
-  anything, with `casework.activation.role-mode-weakened`, rather than record
-  it as single-role, since reassigning the objects or revoking the grant
-  takes the authority away. The refusal names the statements to run as the
-  migration role, `REASSIGN OWNED BY <owner> TO <migration role>` and
-  `REVOKE CREATE ON SCHEMA <schema> FROM <grantee>`, then rerunning
-  `caseworkctl apply --runtime-config FILE`. `plan` reports the same refusal
-  once the ledger exists, and startup's refusal of a weakened split-role
-  activation names the same statements from the same check
-  (`activation::stray_authority`).
+  Casework table or view, or holds `CREATE` on the schema, and whatever role
+  it is when a trigger no Casework migration creates is attached to a
+  Casework table. A deferred constraint trigger on `casework_task_templates`,
+  for example, fires as the migration role at apply's commit and can insert a
+  ledger row. The triggers the migrations create are
+  `activation::MIGRATION_TRIGGERS`, matched by table, name, and the function
+  in the Casework schema they execute, and a unit test holds that set equal to
+  the `CREATE TRIGGER` statements in the migrations.
+- Split-role apply refuses such ownership, `CREATE`, `TRIGGER`, or trigger
+  before it changes anything, with `casework.activation.role-mode-weakened`,
+  rather than record it as single-role, since reassigning the objects,
+  revoking the grant, or dropping the trigger takes the authority away. The
+  refusal names each statement to run as the migration role:
+  `REASSIGN OWNED BY <owner> TO <migration role>`,
+  `REVOKE CREATE ON SCHEMA <schema> FROM <grantee>`,
+  `REVOKE TRIGGER ON <schema>.<table> FROM <grantee>`, and
+  `DROP TRIGGER <trigger> ON <schema>.<table>`. A privilege held through
+  `PUBLIC` is named `FROM PUBLIC`. Reassigning takes the runtime role's
+  grants on the objects too, so a fix with a `REASSIGN` ends with
+  `caseworkctl apply --runtime-config FILE` to reissue them; the others end
+  with rerunning the command that refused, or
+  `caseworkctl plan --runtime-config FILE` to confirm. `plan` reports the same
+  refusal once the ledger exists, and startup's refusal of a weakened
+  split-role activation names the same statements from the same check
+  (`activation::stray_authority`). A single-role deployment already holds the
+  ledger and is refused none of these.
+- A split-role runtime role that no longer holds every grant apply issues it,
+  as after `REASSIGN OWNED BY` takes a table back, is refused at startup with
+  `RuntimeError::RuntimeGrantsMissing`, naming
+  `caseworkctl apply --runtime-config FILE`. `plan` reports the active
+  package as pending, without effects when the runtime role can no longer
+  read a Casework table, and apply reissues the grants. The grants checked
+  are schema `USAGE`, `SELECT` on both ledgers, full DML on every other
+  Casework table, `USAGE` on the sequences, and `EXECUTE` on the Casework
+  functions.
 - Re-applying the active package is allowed, and planned as pending, when the
   effective role mode differs from the latest row or the runtime role's grants
   are not current, so moving to split or rotating the runtime role reissues
@@ -150,7 +173,12 @@ holds no lock stronger than a row lock while the runtime works.
   `a_runtime_role_that_gained_ledger_authority_is_refused_at_startup_until_apply_records_it`,
   `a_runtime_role_that_owns_a_casework_table_is_refused_by_apply_and_at_startup`,
   `a_runtime_role_with_create_on_the_schema_is_refused_by_apply_and_at_startup`,
-  `schema_ledger_writes_and_trigger_privileges_weaken_a_split_activation`,
+  `trigger_and_public_privileges_are_refused_naming_their_revoke`,
+  `a_trigger_left_by_a_runtime_role_that_owned_a_table_is_refused_after_reassignment`,
+  `a_trigger_on_a_casework_table_refuses_no_single_role_apply`,
+  `schema_ledger_writes_weaken_a_split_activation_until_apply_revokes_them`,
+  `the_known_triggers_are_exactly_the_ones_the_migrations_create` (in
+  `activation.rs`),
   `serve_refuses_an_unapplied_database_before_listening_or_writing` (through
   `serve_from_path`: the refusal, no listener, and no `casework_*` row written),
   `split_role_runtime_cannot_write_the_ledgers_but_still_serves`,
@@ -182,18 +210,16 @@ and need `CASEWORK_ACTIVATION_TEST_DATABASE_URL`.
   template, or register a source binding generation, without `caseworkctl
   apply` and without a ledger row or activation audit entry. Split mode
   protects the ledgers and the schema, not that activation state.
-- Triggers have no owner. A trigger the runtime role attached to a Casework
-  table while it owned the table survives `REASSIGN OWNED BY`, and its
-  function, reassigned to the migration role, still runs as whichever role
-  fires it. Apply does not look for such triggers; an operator who reassigns
-  after the refusal should drop any trigger on a `casework_*` table that no
-  Casework migration created.
 - A future migration that alters `casework_meta` itself could still meet a
   runtime transaction queued for its `FOR SHARE` lock; PostgreSQL detects the
   deadlock and rolls one side back, and apply can be retried.
 - `plan` run as a rotated runtime role that has no schema `USAGE` yet sees an
   empty database and reports an initial activation; apply, which connects as
   the migration role, reads the real state.
+- `plan` run as a runtime role that has schema `USAGE` but no `SELECT` on a
+  ledger, a rotated role in a schema `PUBLIC` can use or one that lost a
+  ledger it owned to `REASSIGN OWNED BY`, fails with a permission-denied
+  database error rather than a report; apply reads the real state.
 - `plan` sees the runtime role's membership in the migration role only through
   ownership; apply, which runs as the migration role, sees it directly.
 - If reading the ledger back after a refused response entry also fails, apply
