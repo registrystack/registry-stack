@@ -1,7 +1,9 @@
 # Scheduling runtime configuration
 
 Scheduling reads one versioned operator document selected with
-`scheduling --runtime-config ABSOLUTE_FILE serve` or `migrate`. The selected
+`scheduling --runtime-config ABSOLUTE_FILE serve`, and `schedulingctl plan`,
+`schedulingctl apply`, and `schedulingctl status` read the same document with
+`--runtime-config ABSOLUTE_FILE`. The selected
 file path and every operated resource path are absolute, and none may pass
 through a symbolic link. Local development tooling may resolve paths before it
 writes the file. The file is read through the shared Registry Stack runtime
@@ -41,6 +43,24 @@ without `SHA256SUMS`, such as an authored project; each refusal names
 `SHA256SUMS`. Any other package is a startup refusal that names the expected
 digest and the one found.
 
+`identity.databaseId` is required: an operator-chosen logical id for the
+database this deployment owns, such as `scheduling-production`, non-empty, at
+most 256 bytes, without surrounding whitespace or control characters. It is
+never derived from a URL or a PostgreSQL database name. The first
+`schedulingctl apply` records it in the activation ledger. Every later apply,
+`records apply`, and startup refuses a configuration whose
+`identity.databaseId` differs from the recorded one, naming only the key, so
+two deployments pointed at one database by mistake cannot activate over each
+other.
+
+The runtime serves only the package the activation ledger names. Startup
+reads the ledger with the runtime credential and writes no activation state:
+it refuses when no package has been applied, when the verified package at
+`package.root` is not the active one, and when the ledger belongs to another
+`identity.databaseId`. Each refusal names `schedulingctl plan --runtime-config
+FILE` then `schedulingctl apply --runtime-config FILE`. `scheduling migrate`
+is removed and exits 2 naming the same two commands.
+
 `listener` is required. `listener.bind` is required and is one numeric
 socket address, including bracketed IPv6 forms. `listener.tlsTermination` is
 required. Use
@@ -65,6 +85,18 @@ and exactly one hard link; `openssl rand -hex 32` generates the audit key.
 
 `database.runtimeUrlRef` supplies the least-privilege service connection and
 `database.migrationUrlRef` supplies the operator-run migration connection.
+`schedulingctl plan` and `schedulingctl status` connect with the runtime
+credential and only read; `schedulingctl apply` connects with the migration
+credential. When the two credentials log in as different PostgreSQL roles
+(split role mode), apply grants the runtime role USAGE on the schema,
+SELECT, INSERT, UPDATE, and DELETE on its tables, use of its sequences, and
+EXECUTE on its functions, then revokes INSERT, UPDATE, DELETE, and TRUNCATE on
+the activation ledger and the schema history. The runtime role can read the
+ledger but not write it; it keeps ordinary write access to the product tables
+it serves from. When both
+credentials are the same role (single role mode), `plan`, `apply`, and
+`status` say so, because that role can write the ledger and the separation
+does not hold.
 Transport security on the database connection is not optional: Scheduling sets
 `sslmode` to `Require` on both connections and refuses a connection it cannot
 protect. `database.trustedRootCertificateRef` is optional and selects the PEM

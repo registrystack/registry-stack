@@ -326,8 +326,8 @@ async fn fixture_publishing_with_hook_url(
 
     // The admin connection seeds the facts the policy resolves supply
     // against (the path operator tooling owns), and the store adopts the
-    // deployment identity, the same provisioning verb `scheduling migrate`
-    // runs on a fresh database.
+    // deployment identity, the same claim `schedulingctl apply` makes on a
+    // fresh database.
     for statement in [
         "INSERT INTO scheduling_locations(location_id, timezone) VALUES('north-counter','UTC')",
         "INSERT INTO scheduling_pools(pool_id) VALUES('north-counter')",
@@ -3294,9 +3294,8 @@ async fn a_history_cursor_is_re_authorized_against_the_caller_of_the_page() {
     assert_eq!(page["items"].as_array().map(Vec::len), Some(1));
 }
 
-/// Write a runtime configuration whose migration database is a port nothing
-/// listens on, so `scheduling migrate` fails at the connection and nowhere
-/// else.
+/// Write a runtime configuration whose database is a port nothing listens
+/// on, so `scheduling serve` fails at the connection and nowhere else.
 fn unreachable_deployment(root: &std::path::Path) -> std::path::PathBuf {
     let package = root.join("package");
     std::fs::create_dir_all(&package).expect("a package directory");
@@ -3323,6 +3322,7 @@ fn unreachable_deployment(root: &std::path::Path) -> std::path::PathBuf {
         "package": {"root": package},
         "listener": {"bind": "127.0.0.1:8199", "tlsTermination": "development-loopback"},
         "secretProviders": {"environment": {}},
+        "identity": {"databaseId": "scheduling-closed-port"},
         "database": {
             "runtimeUrlRef": format!("secret:env/{secret_name}"),
             "migrationUrlRef": format!("secret:env/{secret_name}"),
@@ -3351,12 +3351,12 @@ async fn a_database_that_refuses_at_startup_names_the_step_and_the_cause() {
     let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap())
         .expect("a temporary deployment root");
     let operator = unreachable_deployment(root.path());
-    let failure = registry_scheduling::runtime::migrate_from_path(&operator)
+    let failure = registry_scheduling::runtime::serve_from_path(&operator)
         .await
-        .expect_err("an unreachable database fails the migration");
+        .expect_err("an unreachable database fails startup");
     let message = failure.to_string();
     assert!(
-        message.contains("schema migration"),
+        message.contains("schema readiness check"),
         "{message} does not name the startup step that failed"
     );
     assert!(

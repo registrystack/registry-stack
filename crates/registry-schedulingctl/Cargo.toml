@@ -23,6 +23,7 @@ anyhow.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 clap.workspace = true
+registry-platform-audit.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
 registry-scheduling.workspace = true
@@ -48,4 +49,8 @@ required-features = ["postgres-test"]
 
 [[test]]
 name = "intents_postgres"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "activation_postgres"
 required-features = ["postgres-test"]

@@ -199,3 +199,43 @@ decisions:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: records_replacement_refuses_to_move_a_window_with_standing_commitments}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_records_swap_waits_for_the_capacity_transaction_holding_the_pool}
       - {path: crates/registry-schedulingctl/tests/records_apply_postgres.rs, name: records_apply_replaces_facts_wholesale_and_audits_each_write}
+  - id: SCHEDULING-DEC-09
+    subject: Any valid package applies, an earlier one included, but the active one does not
+    decision: >-
+      schedulingctl apply accepts any package that verifies and checks,
+      including one this database served before, and records each as a new
+      ledger row with the package it replaced as its predecessor. Applying the
+      package that is already active, with no schema version pending, is
+      refused with nothing needs applying and writes no row.
+    reasoning: >-
+      Going back to an earlier package is an ordinary operator decision, not a
+      rollback the ledger must model: the policy revision still advances, and
+      the ledger records the choice in order rather than rewriting history.
+      Refusing the active package keeps the history free of rows that changed
+      nothing, and lets a pipeline tell a no-op from an activation by the exit
+      code. When a schema version is pending, as after an upgrade, the same
+      package applies, because the apply is what migrates and adopts.
+    evidence:
+      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_records_one_row_per_activation_and_a_previous_package_is_a_new_row, features: [postgres-test]}
+      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_refuses_the_active_package_and_a_foreign_database_without_writing, features: [postgres-test]}
+  - id: SCHEDULING-DEC-10
+    subject: The runtime role keeps write access to the product tables
+    decision: >-
+      In split role mode apply revokes the runtime role's writes only on the
+      activation ledger and the schema history. The runtime keeps SELECT,
+      INSERT, UPDATE, and DELETE on every other Scheduling table, including
+      the policy revisions and scheduling_meta.
+    reasoning: >-
+      The runtime writes claims, receipts, outbox rows, and delivery state on
+      every request, and table-by-table grants would have to follow every
+      later migration or break the service. The ledger is the one record that
+      decides what the runtime may serve, so it is the one the runtime must
+      not be able to rewrite; startup refuses whatever the ledger does not
+      name, so a runtime that rewrote a policy row still cannot make a
+      restart serve a package no operator applied.
+    residual: >-
+      A compromised runtime credential can still corrupt product data it
+      serves from; the ledger and the audit stream are where that is
+      detected, not prevented.
+    evidence:
+      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: split_roles_deny_the_runtime_a_ledger_write_and_the_service_still_serves, features: [postgres-test]}

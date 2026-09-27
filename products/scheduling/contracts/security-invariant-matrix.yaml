@@ -525,6 +525,94 @@ invariants:
     negativeTest:
       path: crates/registry-scheduling/tests/postgres_commitments.rs
       name: release_hold_refuses_indistinguishably_for_missing_and_unauthorized_holds
+  - id: SCHEDULING-SEC-29
+    state: enforced
+    threat: >-
+      A package reaches the serving runtime without an operator's recorded
+      activation: a package swapped under package.root, a configuration
+      pointed at another database, or a startup that adopts the database and
+      publishes the policy on its own, so the deployment answers under terms
+      nobody applied and no record says who applied them.
+    enforcementPoint: >-
+      scheduling serve reads the activation ledger with the runtime
+      credential before it binds the listener, compares the ledger's
+      identity.databaseId and active package digest with the verified
+      package, and writes no activation state. package.expectedDigest still
+      pins the package at package.root. scheduling migrate is removed.
+    refusal: >-
+      Refuse to start when the ledger holds no row, names another package, or
+      belongs to another identity.databaseId, naming schedulingctl plan
+      --runtime-config FILE then schedulingctl apply --runtime-config FILE;
+      refuse a pin mismatch naming package.expectedDigest; exit 2 for the
+      removed migrate command naming the same two commands.
+    negativeTest:
+      path: crates/registry-schedulingctl/tests/activation_postgres.rs
+      name: startup_refuses_a_database_the_ledger_does_not_name_for_this_package
+  - id: SCHEDULING-SEC-30
+    state: partial
+    threat: >-
+      The service credential rewrites the activation ledger or the schema
+      history, so a compromised runtime can name itself a package no operator
+      applied or erase the record of one that was.
+    enforcementPoint: >-
+      schedulingctl apply compares current_user on the runtime and migration
+      connections. When they differ it grants the runtime role its schema,
+      table, sequence, and function access, then revokes INSERT, UPDATE,
+      DELETE, and TRUNCATE on scheduling_activations and
+      scheduling_schema_migrations, in the activation transaction.
+    refusal: >-
+      PostgreSQL refuses every runtime-role write to the ledger and the
+      schema history with insufficient_privilege, while the service still
+      starts and serves.
+    partialNote: >-
+      In single role mode both credentials are one role that can write the
+      ledger; plan, apply, and status report the mode and do not refuse it.
+      In split mode the runtime role keeps ordinary write access to the
+      product tables it serves from (SCHEDULING-DEC-10).
+    negativeTest:
+      path: crates/registry-schedulingctl/tests/activation_postgres.rs
+      name: split_roles_deny_the_runtime_a_ledger_write_and_the_service_still_serves
+  - id: SCHEDULING-SEC-31
+    state: enforced
+    threat: >-
+      Two deployments pointed at one database by mistake activate over each
+      other, or two concurrent applies interleave their schema, adoption, and
+      publication writes, so the ledger names a package whose state was only
+      partly written.
+    enforcementPoint: >-
+      schedulingctl apply runs its whole activation in one transaction under
+      pg_advisory_xact_lock on the migration key, and compares the ledger's
+      recorded identity.databaseId with the configuration's before any
+      statement changes the database; records apply makes the same identity
+      check before it replaces records.
+    refusal: >-
+      Refuse an apply or records apply under another identity.databaseId,
+      naming only the key and leaving the ledger, schema, and policy
+      unchanged; a second apply waits for the lock and then runs against the
+      state the first committed.
+    negativeTest:
+      path: crates/registry-schedulingctl/tests/activation_postgres.rs
+      name: apply_refuses_the_active_package_and_a_foreign_database_without_writing
+  - id: SCHEDULING-SEC-32
+    state: enforced
+    threat: >-
+      A package is activated with no accountability record, or the record
+      names the operator's change reference in the clear, so an activation
+      cannot be attributed, or its attribution leaks an operator identifier
+      into the audit stream and the database.
+    enforcementPoint: >-
+      schedulingctl apply writes a scheduling-activation-audit/v1 request
+      entry to the schedulingctl audit destination before it opens the
+      activation transaction and a response entry with the outcome after it
+      commits or refuses. --operator-reference is stored and audited only as
+      a keyed hash under audit.hashKeyRef, scoped by the activation id.
+    refusal: >-
+      Apply nothing when the audit destination cannot be opened or the
+      request entry is refused; record a refused or failed activation as a
+      response entry with its closed reason.
+    negativeTest:
+      path: crates/registry-schedulingctl/tests/activation_postgres.rs
+      name: apply_refuses_to_activate_without_its_audit_destination
 deferred:
   - id: SCHEDULING-DEF-01
     subject: Full task-grant bounds re-checked inside the capacity transaction

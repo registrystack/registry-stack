@@ -581,7 +581,8 @@ exceptions: []
 /// template and the committed example can never drift from what an adopter
 /// initializes; the absolute paths an operator replaces are placeholders.
 pub(super) const RUNTIME_EXAMPLE: &str = r#"# A complete Scheduling runtime configuration: the document
-# `scheduling serve --runtime-config` reads and `scheduling migrate` reads.
+# `scheduling serve --runtime-config` reads and `schedulingctl plan`,
+# `schedulingctl apply`, and `schedulingctl status` read with --runtime-config.
 # Copy it to runtime.yaml, set every absolute path to this deployment's real
 # location, and point the secret references at secrets the configured provider
 # can resolve. Scheduling reads the authored policy at
@@ -606,6 +607,12 @@ package:
   # `schedulingctl package` prints, the SHA-256 digest of SHA256SUMS. Any
   # other package is a startup refusal.
   # expectedDigest: sha256:<64 lowercase hex digits>
+identity:
+  # The name of the one database this deployment owns. `schedulingctl apply`
+  # records it in the database's activation ledger, and apply, records apply,
+  # and startup refuse a database whose ledger names another. Choose it once
+  # per database; it is an operator label, never a secret or a URL.
+  databaseId: registry-scheduling-production
 listener:
   # Required: the IP address and port the runtime listens on.
   bind: 127.0.0.1:8105

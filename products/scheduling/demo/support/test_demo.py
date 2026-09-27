@@ -144,6 +144,7 @@ class RuntimeConfigTest(unittest.TestCase):
             "apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1",
             "kind: SchedulingRuntimeConfig",
             "root: /run/package",
+            "databaseId: scheduling-demo",
             "bind: 127.0.0.1:8105",
             "tlsTermination: development-loopback",
             "root: /run/secrets",

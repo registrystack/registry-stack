@@ -6283,6 +6283,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "clap",
+ "registry-platform-audit",
  "registry-platform-buildinfo",
  "registry-platform-config",
  "registry-scheduling",

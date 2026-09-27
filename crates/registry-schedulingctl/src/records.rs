@@ -48,11 +48,22 @@ pub fn apply(config_path: &Path, records_path: &Path) -> Result<Value> {
         .enable_all()
         .build()
         .context("starting the Scheduling operator runtime")?;
+    // Records land only on a database `schedulingctl apply` has activated,
+    // and only on the database this configuration's ledger names.
     runtime
         .block_on(store.ready())
-        .context(
-            "checking the Scheduling schema; run `scheduling --runtime-config <runtime.yaml> migrate` first",
-        )?;
+        .map_err(crate::activation::refusal_or_failure)
+        .context("checking the Scheduling schema")?;
+    let active = runtime
+        .block_on(store.active_activation())
+        .map_err(crate::activation::refusal_or_failure)
+        .context("reading the Scheduling activation ledger")?
+        .ok_or_else(|| crate::activation::refusal_or_failure(StoreError::NotActivated))?;
+    if active.database_id != config.database_id() {
+        return Err(crate::activation::refusal_or_failure(
+            StoreError::DatabaseIdMismatch,
+        ));
+    }
     let (_, audit) = runtime
         .block_on(open_audit(&config, &resolver, Some("schedulingctl")))
         .context("opening the schedulingctl audit destination")?;

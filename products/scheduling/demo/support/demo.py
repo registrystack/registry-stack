@@ -400,6 +400,8 @@ apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1
 kind: SchedulingRuntimeConfig
 package:
   root: {package_root}
+identity:
+  databaseId: scheduling-demo
 listener:
   bind: 127.0.0.1:{port}
   tlsTermination: development-loopback

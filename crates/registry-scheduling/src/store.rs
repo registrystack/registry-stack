@@ -60,6 +60,13 @@ use uuid::Uuid;
 use crate::config::{describe_secret_failure, DatabaseConfig};
 use crate::hooks::{ActivatedHooks, HookCaptureError};
 
+mod activation;
+use activation::{apply_migrations_in, schema_state_in};
+pub use activation::{
+    policy_pool_ids, Activation, ActivationOutcome, ActivationPlan, ActivationRequest,
+    DeployedPolicy, RoleMode, SchemaState, SINGLE_ROLE_STATEMENT,
+};
+
 const SCHEDULING_MIGRATION: &str = include_str!("../migrations/0001_scheduling.sql");
 const FACTS_REVISION_MIGRATION: &str =
     include_str!("../migrations/0002_facts_revision_and_suppressed.sql");
@@ -76,10 +83,11 @@ const DUPLICATE_LOOKUP_INDEX_MIGRATION: &str =
 const DUPLICATE_LOOKUP_INDEX_MIGRATION_VERSION: i64 = 7;
 const AUDIT_WRITER_MIGRATION: &str = include_str!("../migrations/0008_audit_writer.sql");
 const AUDIT_WRITER_MIGRATION_VERSION: i64 = 8;
+const ACTIVATIONS_MIGRATION: &str = include_str!("../migrations/0009_activations.sql");
+const ACTIVATIONS_MIGRATION_VERSION: i64 = 9;
 
 /// Every schema version in ledger order.
-const MIGRATIONS: [(i64, &str); 2] = [(1, SCHEDULING_MIGRATION), (2, FACTS_REVISION_MIGRATION)];
-const SCHEMA_VERSIONS: [i64; 8] = [
+const SCHEMA_VERSIONS: [i64; 9] = [
     1,
     2,
     HOOK_DELIVERY_MIGRATION_VERSION,
@@ -88,11 +96,13 @@ const SCHEMA_VERSIONS: [i64; 8] = [
     WINDOW_REVISION_HEADS_MIGRATION_VERSION,
     DUPLICATE_LOOKUP_INDEX_MIGRATION_VERSION,
     AUDIT_WRITER_MIGRATION_VERSION,
+    ACTIVATIONS_MIGRATION_VERSION,
 ];
 
-/// Serializes operator-run migrations on one session lock. A second migrator
-/// waits here instead of racing the ledger primary key. The key spells the
-/// ASCII bytes of "sched".
+/// Serializes schema migration and package activation on one transaction
+/// lock. A second `schedulingctl apply` waits here until the first commits or
+/// rolls back, so two applies never race the ledger. The key spells the ASCII
+/// bytes of "sched".
 const MIGRATION_LOCK_KEY: i64 = 0x7363_6865_6475_6c65;
 
 /// The advisory-lock namespace the hold ceiling serializes one caller in. The
@@ -135,9 +145,44 @@ pub enum StoreError {
     )]
     Unacknowledged,
     #[error(
-        "the Scheduling database holds {rows} audit record(s) that schema migration {version} would drop before they reach the audit journal; nothing was changed. Run the release that wrote them until its audit publisher has published every record, then migrate again"
+        "the Scheduling database holds {rows} audit record(s) that schema migration {version} would drop before they reach the audit journal; nothing was changed. Run the release that wrote them until its audit publisher has published every record, then run `schedulingctl apply --runtime-config FILE` again"
     )]
     UnpublishedAuditWouldBeDropped { version: i64, rows: i64 },
+    /// The schema is behind this release. Only `schedulingctl apply`
+    /// migrates it.
+    #[error(
+        "the Scheduling database schema is behind this release (pending versions {}); run `schedulingctl plan --runtime-config FILE` then `schedulingctl apply --runtime-config FILE`",
+        versions(pending)
+    )]
+    SchemaPending { pending: Vec<i64> },
+    #[error(
+        "the Scheduling database holds schema version {version}, newer than this release knows; run the Scheduling release that applied it"
+    )]
+    SchemaNewer { version: i64 },
+    #[error(
+        "no Scheduling package has been applied to this database; run `schedulingctl plan --runtime-config FILE` then `schedulingctl apply --runtime-config FILE`"
+    )]
+    NotActivated,
+    /// The ledger recorded another database identity. Only the key is
+    /// named: the two values are operator identifiers, not a diagnosis.
+    #[error(
+        "the database identity recorded by the activation ledger differs from the runtime configuration at identity.databaseId; point database.runtimeUrlRef and database.migrationUrlRef at the database this deployment owns, or correct identity.databaseId"
+    )]
+    DatabaseIdMismatch,
+    #[error(
+        "package {digest} is already the active package on this database; nothing needs applying"
+    )]
+    PackageAlreadyActive { digest: String },
+    #[error(
+        "the verified package {candidate} is not the active package {active} on this database; run `schedulingctl plan --runtime-config FILE` then `schedulingctl apply --runtime-config FILE`"
+    )]
+    PackageNotActive { active: String, candidate: String },
+    /// A retained hook event could not be proven deliverable under the
+    /// destination binding it was captured for.
+    #[error(
+        "the candidate policy cannot deliver every retained hook event under the destination binding it was captured for, or the retained deliveries could not be read; keep those destinations declared and unchanged until their deliveries drain"
+    )]
+    RetainedHookBindings,
     /// The environment records would retire or reduce supply that live
     /// appointments or holds still occupy. The swap is refused whole, so the
     /// operator either keeps the supply or closes what stands on it first.
@@ -181,6 +226,38 @@ pub enum StoreError {
     Query(#[from] tokio_postgres::Error),
     #[error("the Scheduling database connection could not be established: {0}")]
     Pool(#[from] deadpool_postgres::PoolError),
+}
+
+fn versions(versions: &[i64]) -> String {
+    versions
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+impl StoreError {
+    /// Whether this is a refusal the operator answers by changing an input
+    /// or running another command, as opposed to a database that is
+    /// unreachable or failed.
+    #[must_use]
+    pub fn is_activation_refusal(&self) -> bool {
+        matches!(
+            self,
+            Self::SchemaPending { .. }
+                | Self::SchemaNewer { .. }
+                | Self::NotActivated
+                | Self::DatabaseIdMismatch
+                | Self::PackageAlreadyActive { .. }
+                | Self::PackageNotActive { .. }
+                | Self::RetainedHookBindings
+                | Self::DeploymentIdentity
+                | Self::PolicyInUse(_)
+                | Self::CombinedInvariant(_)
+                | Self::SupplyIdentifierCollision(_)
+                | Self::UnpublishedAuditWouldBeDropped { .. }
+        )
+    }
 }
 
 #[derive(Clone)]
@@ -669,251 +746,44 @@ impl PostgresStore {
         self.client().await
     }
 
-    pub(crate) async fn schema_name(&self) -> Result<String, StoreError> {
+    /// The schema this store's connections work in.
+    pub async fn schema_name(&self) -> Result<String, StoreError> {
         let client = self.client().await?;
-        let schema: String = client
-            .query_one("SELECT current_schema()", &[])
-            .await?
-            .get(0);
-        let valid = !schema.is_empty()
-            && schema.len() <= 63
-            && schema
-                .bytes()
-                .next()
-                .is_some_and(|byte| byte == b'_' || byte.is_ascii_lowercase())
-            && schema
-                .bytes()
-                .all(|byte| byte == b'_' || byte.is_ascii_lowercase() || byte.is_ascii_digit());
-        if valid {
-            Ok(schema)
-        } else {
-            Err(StoreError::Corrupt)
-        }
+        current_schema_in(&**client).await
     }
 
-    pub async fn migrate(&self) -> Result<(), StoreError> {
+    /// Apply every pending schema migration in one transaction, serialized on
+    /// the migration lock. `schedulingctl apply` runs the same migrations
+    /// inside its activation transaction; this entry point serves the
+    /// database suites that provision a schema without activating a package.
+    pub async fn migrate(&self) -> Result<Vec<i64>, StoreError> {
         let mut client = self.client().await?;
-        client
-            .query_one("SELECT pg_advisory_lock($1)", &[&MIGRATION_LOCK_KEY])
-            .await?;
-        let applied = Self::apply_migrations(&mut client).await;
-        let released = client
-            .query_one("SELECT pg_advisory_unlock($1)", &[&MIGRATION_LOCK_KEY])
-            .await;
-        applied?;
-        if released?.get::<_, bool>(0) {
-            Ok(())
-        } else {
-            Err(StoreError::Corrupt)
-        }
-    }
-
-    async fn apply_migrations(client: &mut deadpool_postgres::Client) -> Result<(), StoreError> {
         let transaction = client.transaction().await?;
         transaction
-            .batch_execute(
-                "CREATE TABLE IF NOT EXISTS scheduling_schema_migrations (\
-                 version bigint PRIMARY KEY CHECK (version > 0),\
-                 applied_at timestamptz NOT NULL);",
-            )
+            .execute("SELECT pg_advisory_xact_lock($1)", &[&MIGRATION_LOCK_KEY])
             .await?;
+        let applied = apply_migrations_in(&transaction).await?;
         transaction.commit().await?;
-
-        for (version, migration) in MIGRATIONS {
-            let transaction = client.transaction().await?;
-            let applied: bool = transaction
-                .query_one(
-                    "SELECT EXISTS(SELECT 1 FROM scheduling_schema_migrations WHERE version=$1)",
-                    &[&version],
-                )
-                .await?
-                .get(0);
-            if !applied {
-                transaction.batch_execute(migration).await?;
-                transaction
-                    .execute(
-                        "INSERT INTO scheduling_schema_migrations(version,applied_at) VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
-                        &[&version],
-                    )
-                    .await?;
-            }
-            transaction.commit().await?;
-        }
-        let transaction = client.transaction().await?;
-        let applied: bool = transaction
-            .query_one(
-                "SELECT EXISTS(SELECT 1 FROM scheduling_schema_migrations WHERE version=$1)",
-                &[&HOOK_DELIVERY_MIGRATION_VERSION],
-            )
-            .await?
-            .get(0);
-        if !applied {
-            let schema: String = transaction
-                .query_one("SELECT current_schema()", &[])
-                .await?
-                .get(0);
-            let valid = !schema.is_empty()
-                && schema.len() <= 63
-                && schema
-                    .bytes()
-                    .next()
-                    .is_some_and(|byte| byte == b'_' || byte.is_ascii_lowercase())
-                && schema
-                    .bytes()
-                    .all(|byte| byte == b'_' || byte.is_ascii_lowercase() || byte.is_ascii_digit());
-            if !valid {
-                return Err(StoreError::Corrupt);
-            }
-            registry_platform_hooks::delivery_schema::install(&*transaction, &schema).await?;
-            transaction
-                .execute(
-                    "INSERT INTO scheduling_schema_migrations(version,applied_at) VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
-                    &[&HOOK_DELIVERY_MIGRATION_VERSION],
-                )
-                .await?;
-        }
-        transaction.commit().await?;
-
-        let transaction = client.transaction().await?;
-        let applied: bool = transaction
-            .query_one(
-                "SELECT EXISTS(SELECT 1 FROM scheduling_schema_migrations WHERE version=$1)",
-                &[&POLICY_DOCUMENT_MIGRATION_VERSION],
-            )
-            .await?
-            .get(0);
-        if !applied {
-            transaction.batch_execute(POLICY_DOCUMENT_MIGRATION).await?;
-            transaction
-                .execute(
-                    "INSERT INTO scheduling_schema_migrations(version,applied_at) VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
-                    &[&POLICY_DOCUMENT_MIGRATION_VERSION],
-                )
-                .await?;
-        }
-        transaction.commit().await?;
-
-        let transaction = client.transaction().await?;
-        let applied: bool = transaction
-            .query_one(
-                "SELECT EXISTS(SELECT 1 FROM scheduling_schema_migrations WHERE version=$1)",
-                &[&WINDOW_RECORDS_MIGRATION_VERSION],
-            )
-            .await?
-            .get(0);
-        if !applied {
-            transaction.batch_execute(WINDOW_RECORDS_MIGRATION).await?;
-            transaction
-                .execute(
-                    "INSERT INTO scheduling_schema_migrations(version,applied_at) VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
-                    &[&WINDOW_RECORDS_MIGRATION_VERSION],
-                )
-                .await?;
-        }
-        transaction.commit().await?;
-
-        let transaction = client.transaction().await?;
-        let applied: bool = transaction
-            .query_one(
-                "SELECT EXISTS(SELECT 1 FROM scheduling_schema_migrations WHERE version=$1)",
-                &[&WINDOW_REVISION_HEADS_MIGRATION_VERSION],
-            )
-            .await?
-            .get(0);
-        if !applied {
-            transaction
-                .batch_execute(WINDOW_REVISION_HEADS_MIGRATION)
-                .await?;
-            transaction
-                .execute(
-                    "INSERT INTO scheduling_schema_migrations(version,applied_at) VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
-                    &[&WINDOW_REVISION_HEADS_MIGRATION_VERSION],
-                )
-                .await?;
-        }
-        transaction.commit().await?;
-
-        let transaction = client.transaction().await?;
-        let applied: bool = transaction
-            .query_one(
-                "SELECT EXISTS(SELECT 1 FROM scheduling_schema_migrations WHERE version=$1)",
-                &[&DUPLICATE_LOOKUP_INDEX_MIGRATION_VERSION],
-            )
-            .await?
-            .get(0);
-        if !applied {
-            transaction
-                .batch_execute(DUPLICATE_LOOKUP_INDEX_MIGRATION)
-                .await?;
-            transaction
-                .execute(
-                    "INSERT INTO scheduling_schema_migrations(version,applied_at) VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
-                    &[&DUPLICATE_LOOKUP_INDEX_MIGRATION_VERSION],
-                )
-                .await?;
-        }
-        transaction.commit().await?;
-
-        let transaction = client.transaction().await?;
-        let applied: bool = transaction
-            .query_one(
-                "SELECT EXISTS(SELECT 1 FROM scheduling_schema_migrations WHERE version=$1)",
-                &[&AUDIT_WRITER_MIGRATION_VERSION],
-            )
-            .await?
-            .get(0);
-        if !applied {
-            // Hold the table exclusively for the rest of this transaction so no
-            // concurrent writer can insert an unpublished row between the count
-            // below and the drop the migration performs.
-            transaction
-                .batch_execute("LOCK TABLE scheduling_audit_outbox IN ACCESS EXCLUSIVE MODE")
-                .await?;
-            let rows: i64 = transaction
-                .query_one(
-                    "SELECT count(*) FROM scheduling_audit_outbox WHERE published_at IS NULL",
-                    &[],
-                )
-                .await?
-                .get(0);
-            if rows != 0 {
-                return Err(StoreError::UnpublishedAuditWouldBeDropped {
-                    version: AUDIT_WRITER_MIGRATION_VERSION,
-                    rows,
-                });
-            }
-            transaction.batch_execute(AUDIT_WRITER_MIGRATION).await?;
-            transaction
-                .execute(
-                    "INSERT INTO scheduling_schema_migrations(version,applied_at) VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
-                    &[&AUDIT_WRITER_MIGRATION_VERSION],
-                )
-                .await?;
-        }
-        transaction.commit().await?;
-        Ok(())
+        Ok(applied)
     }
 
-    pub async fn ready(&self) -> Result<(), StoreError> {
+    /// The schema versions this database holds and the ones this release
+    /// would still apply.
+    pub async fn schema_state(&self) -> Result<SchemaState, StoreError> {
         let client = self.client().await?;
-        let applied = client
-            .query(
-                "SELECT version FROM scheduling_schema_migrations ORDER BY version",
-                &[],
-            )
-            .await?;
-        let schema_is_current = applied.len() == SCHEMA_VERSIONS.len()
-            && applied
-                .iter()
-                .zip(SCHEMA_VERSIONS.iter())
-                .all(|(row, expected)| {
-                    row.try_get::<_, i64>(0)
-                        .is_ok_and(|version| version == *expected)
-                });
-        if schema_is_current {
+        schema_state_in(&**client).await
+    }
+
+    /// Refuse a database whose schema is not exactly this release's.
+    pub async fn ready(&self) -> Result<(), StoreError> {
+        let state = self.schema_state().await?;
+        state.check()?;
+        if state.pending.is_empty() {
             Ok(())
         } else {
-            Err(StoreError::Corrupt)
+            Err(StoreError::SchemaPending {
+                pending: state.pending,
+            })
         }
     }
 
@@ -982,122 +852,22 @@ impl PostgresStore {
         if policy.policy_digest() != policy_digest {
             return Err(StoreError::Corrupt);
         }
-        let policy_document = serde_json::to_value(policy).map_err(|_| StoreError::Corrupt)?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        transaction
-            .execute(
-                "SELECT supply_id FROM scheduling_supply ORDER BY supply_id FOR UPDATE",
-                &[],
-            )
-            .await?;
-        let row = transaction
+        lock_publication(&transaction).await?;
+        let stored_id: String = transaction
             .query_one(
-                "SELECT scheduling_id, policy_revision, policy_digest FROM scheduling_meta WHERE singleton FOR UPDATE",
+                "SELECT scheduling_id FROM scheduling_meta WHERE singleton",
                 &[],
             )
-            .await?;
-        if row.get::<_, String>(0) != scheduling_id {
+            .await?
+            .get(0);
+        if stored_id != scheduling_id {
             return Err(StoreError::Corrupt);
         }
-        // The candidate policy answers for the window records this
-        // deployment already holds. Every supply anchor and the meta row are
-        // locked here, and a records swap takes the same two in the same
-        // order, so the records read cannot move under this decision.
-        refuse_combined_conflicts(policy, &deployed_windows(&transaction).await?)?;
-        let revision;
-        let stored_revision = row.get::<_, i64>(1);
-        let stored_digest = row.get::<_, String>(2);
-        if stored_digest != policy_digest {
-            if !stored_digest.is_empty() {
-                let current_document: Option<Value> = transaction
-                    .query_opt(
-                        "SELECT policy_document FROM scheduling_policy_revisions \
-                         WHERE policy_revision=$1 AND policy_digest=$2",
-                        &[&stored_revision, &stored_digest],
-                    )
-                    .await?
-                    .and_then(|stored| stored.get(0));
-                let Some(current_document) = current_document else {
-                    return Err(StoreError::PolicyInUse(
-                        "the current policy document is unavailable; reapply the current policy before publishing a change"
-                            .to_owned(),
-                    ));
-                };
-                // The historical document and digest are preserved as they
-                // were published; only the lifecycle terms governed by the
-                // current policy shape are compared.
-                let current = retained_policy(current_document)?;
-                let now = self.observed_now();
-                let active_offerings = transaction
-                    .query(
-                        "SELECT DISTINCT offering FROM scheduling_claims \
-                         WHERE state='active' \
-                           AND (kind='booking' OR (kind='hold' AND hold_expires_at > $1)) \
-                         ORDER BY offering",
-                        &[&now],
-                    )
-                    .await?;
-                for active in active_offerings {
-                    let offering_id: String = active.get(0);
-                    let Some(current_offering) = current.offering(&offering_id) else {
-                        return Err(StoreError::PolicyInUse(format!(
-                            "offering {offering_id} has active commitments but is absent from the retained current policy"
-                        )));
-                    };
-                    let retained = policy.offering(&offering_id).is_some_and(|proposed| {
-                        let same_supply = match (
-                            &current_offering.exact_time,
-                            &proposed.exact_time,
-                            &current_offering.arrival,
-                            &proposed.arrival,
-                        ) {
-                            (Some(current), Some(next), None, None) => current.pool == next.pool,
-                            (None, None, Some(current), Some(next)) => {
-                                current.window == next.window
-                            }
-                            _ => false,
-                        };
-                        proposed.service == current_offering.service
-                            && proposed.location == current_offering.location
-                            && proposed.mode == current_offering.mode
-                            && same_supply
-                    });
-                    if !retained {
-                        return Err(StoreError::PolicyInUse(format!(
-                            "offering {offering_id} has active commitments and must retain its service, location, mode, and supply"
-                        )));
-                    }
-                }
-            }
-            revision = row.get::<_, i64>(1) + 1;
-            transaction
-                .execute(
-                    "INSERT INTO scheduling_policy_revisions(\
-                     policy_revision, policy_digest, policy_document) VALUES($1,$2,$3)",
-                    &[&revision, &policy_digest, &policy_document],
-                )
-                .await?;
-            transaction
-                .execute(
-                    "UPDATE scheduling_meta SET policy_revision=$1, policy_digest=$2, \
-                     updated_at=now() WHERE singleton",
-                    &[&revision, &policy_digest],
-                )
-                .await?;
-        } else {
-            revision = stored_revision;
-            transaction
-                .execute(
-                    "UPDATE scheduling_policy_revisions SET policy_document=$2 \
-                     WHERE policy_revision=$1 AND policy_document IS NULL",
-                    &[&revision, &policy_document],
-                )
-                .await?;
-        }
-        for id in pool_ids {
-            anchor_supply(&transaction, id, "pool").await?;
-        }
+        let publication =
+            check_policy_publication(&transaction, self.observed_now(), policy).await?;
+        let revision = publish_policy(&transaction, &publication, policy, pool_ids).await?;
         transaction.commit().await?;
         Ok(revision)
     }
@@ -2759,6 +2529,210 @@ async fn guard_revisions(
         return Err(CommitError::FactsStale);
     }
     Ok(())
+}
+
+/// The current schema of a connection, refused unless it is a plain
+/// lower-case identifier that statements may name without quoting.
+async fn current_schema_in(
+    client: &impl tokio_postgres::GenericClient,
+) -> Result<String, StoreError> {
+    let schema: Option<String> = client
+        .query_one("SELECT current_schema()", &[])
+        .await?
+        .get(0);
+    let schema = schema.ok_or(StoreError::Corrupt)?;
+    let valid = !schema.is_empty()
+        && schema.len() <= 63
+        && schema
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte == b'_' || byte.is_ascii_lowercase())
+        && schema
+            .bytes()
+            .all(|byte| byte == b'_' || byte.is_ascii_lowercase() || byte.is_ascii_digit());
+    if valid {
+        Ok(schema)
+    } else {
+        Err(StoreError::Corrupt)
+    }
+}
+
+/// Take the policy publication locks in the store's documented order: every
+/// existing supply anchor, in identifier order, and then the meta row.
+/// Capacity transactions take one anchor and then the meta row, so no
+/// commitment can land between a publication's impact assessment and its
+/// write.
+async fn lock_publication(
+    transaction: &deadpool_postgres::Transaction<'_>,
+) -> Result<(), StoreError> {
+    transaction
+        .execute(
+            "SELECT supply_id FROM scheduling_supply ORDER BY supply_id FOR UPDATE",
+            &[],
+        )
+        .await?;
+    transaction
+        .execute(
+            "SELECT 1 FROM scheduling_meta WHERE singleton FOR UPDATE",
+            &[],
+        )
+        .await?;
+    Ok(())
+}
+
+/// What publishing a policy would do, decided against the deployed state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PolicyPublication {
+    /// The policy revision and digest the database serves now. An empty
+    /// digest is a database no policy has been published to.
+    pub stored_revision: i64,
+    pub stored_digest: String,
+    /// The candidate's digest.
+    pub policy_digest: String,
+    /// Whether publishing advances the policy revision: the digest changed.
+    pub advances: bool,
+}
+
+impl PolicyPublication {
+    /// The revision the candidate is served under once published.
+    #[must_use]
+    pub fn revision(&self) -> i64 {
+        if self.advances {
+            self.stored_revision + 1
+        } else {
+            self.stored_revision
+        }
+    }
+}
+
+/// Prove a candidate policy may be published: it contradicts none of the
+/// deployed window records, and every offering with standing commitments
+/// keeps its service, location, mode, and supply. The check reads and never
+/// writes, so a read-only transaction may run it; a publishing transaction
+/// runs it after [`lock_publication`], so nothing it read can move before the
+/// write.
+async fn check_policy_publication(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    now: DateTime<Utc>,
+    policy: &SchedulingPolicy,
+) -> Result<PolicyPublication, StoreError> {
+    let policy_digest = policy.policy_digest();
+    let row = transaction
+        .query_one(
+            "SELECT policy_revision, policy_digest FROM scheduling_meta WHERE singleton",
+            &[],
+        )
+        .await?;
+    // The candidate policy answers for the window records this deployment
+    // already holds.
+    refuse_combined_conflicts(policy, &deployed_windows(transaction).await?)?;
+    let stored_revision = row.get::<_, i64>(0);
+    let stored_digest = row.get::<_, String>(1);
+    if stored_digest != policy_digest && !stored_digest.is_empty() {
+        let current_document: Option<Value> = transaction
+            .query_opt(
+                "SELECT policy_document FROM scheduling_policy_revisions \
+                 WHERE policy_revision=$1 AND policy_digest=$2",
+                &[&stored_revision, &stored_digest],
+            )
+            .await?
+            .and_then(|stored| stored.get(0));
+        let Some(current_document) = current_document else {
+            return Err(StoreError::PolicyInUse(
+                "the current policy document is unavailable; reapply the current policy before publishing a change"
+                    .to_owned(),
+            ));
+        };
+        // The historical document and digest are preserved as they were
+        // published; only the lifecycle terms governed by the current policy
+        // shape are compared.
+        let current = retained_policy(current_document)?;
+        let active_offerings = transaction
+            .query(
+                "SELECT DISTINCT offering FROM scheduling_claims \
+                 WHERE state='active' \
+                   AND (kind='booking' OR (kind='hold' AND hold_expires_at > $1)) \
+                 ORDER BY offering",
+                &[&now],
+            )
+            .await?;
+        for active in active_offerings {
+            let offering_id: String = active.get(0);
+            let Some(current_offering) = current.offering(&offering_id) else {
+                return Err(StoreError::PolicyInUse(format!(
+                    "offering {offering_id} has active commitments but is absent from the retained current policy"
+                )));
+            };
+            let retained = policy.offering(&offering_id).is_some_and(|proposed| {
+                let same_supply = match (
+                    &current_offering.exact_time,
+                    &proposed.exact_time,
+                    &current_offering.arrival,
+                    &proposed.arrival,
+                ) {
+                    (Some(current), Some(next), None, None) => current.pool == next.pool,
+                    (None, None, Some(current), Some(next)) => current.window == next.window,
+                    _ => false,
+                };
+                proposed.service == current_offering.service
+                    && proposed.location == current_offering.location
+                    && proposed.mode == current_offering.mode
+                    && same_supply
+            });
+            if !retained {
+                return Err(StoreError::PolicyInUse(format!(
+                    "offering {offering_id} has active commitments and must retain its service, location, mode, and supply"
+                )));
+            }
+        }
+    }
+    Ok(PolicyPublication {
+        advances: stored_digest != policy_digest,
+        stored_revision,
+        stored_digest,
+        policy_digest,
+    })
+}
+
+/// Publish a checked policy: a changed digest takes the next revision, the
+/// same digest backfills its retained document, and every pool the policy's
+/// offerings name is anchored. The caller holds the publication locks.
+async fn publish_policy(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    publication: &PolicyPublication,
+    policy: &SchedulingPolicy,
+    pool_ids: &[String],
+) -> Result<i64, StoreError> {
+    let policy_document = serde_json::to_value(policy).map_err(|_| StoreError::Corrupt)?;
+    let revision = publication.revision();
+    if publication.advances {
+        transaction
+            .execute(
+                "INSERT INTO scheduling_policy_revisions(\
+                 policy_revision, policy_digest, policy_document) VALUES($1,$2,$3)",
+                &[&revision, &publication.policy_digest, &policy_document],
+            )
+            .await?;
+        transaction
+            .execute(
+                "UPDATE scheduling_meta SET policy_revision=$1, policy_digest=$2, \
+                 updated_at=now() WHERE singleton",
+                &[&revision, &publication.policy_digest],
+            )
+            .await?;
+    } else {
+        transaction
+            .execute(
+                "UPDATE scheduling_policy_revisions SET policy_document=$2 \
+                 WHERE policy_revision=$1 AND policy_document IS NULL",
+                &[&revision, &policy_document],
+            )
+            .await?;
+    }
+    for id in pool_ids {
+        anchor_supply(transaction, id, "pool").await?;
+    }
+    Ok(revision)
 }
 
 /// Read a retained policy document. Earlier branch builds carried mutable

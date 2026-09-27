@@ -166,7 +166,7 @@ project="$run_dir/project"
 "$schedulingctl" check --deny-findings "$project" >/dev/null
 "$schedulingctl" test "$project" >/dev/null
 "$schedulingctl" package "$project" --output "$run_dir/package" >/dev/null
-"$scheduling" --runtime-config "$run_dir/runtime.yaml" migrate
+"$schedulingctl" apply --runtime-config "$run_dir/runtime.yaml" --operator-reference demo >/dev/null
 "$schedulingctl" records apply "$run_dir/runtime.yaml" "$run_dir/records.yaml" >/dev/null
 
 printf 'serving the Scheduling runtime on 127.0.0.1:%s\n' "$http_port"
