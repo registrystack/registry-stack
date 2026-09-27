@@ -69,10 +69,7 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<(), String> {
-    let path = cli
-        .runtime_config
-        .ok_or_else(|| "--runtime-config is required".to_owned())?;
-    let config = RuntimeConfig::load(&path)
+    let config = RuntimeConfig::load(&cli.runtime_config)
         .map_err(|error| format!("the runtime configuration could not be loaded: {error}"))?;
     match cli.command {
         Command::Check => {

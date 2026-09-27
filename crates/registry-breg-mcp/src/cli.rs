@@ -15,8 +15,8 @@ use clap::{CommandFactory, Parser, Subcommand};
 )]
 pub struct Cli {
     /// Absolute path to the gateway runtime configuration document.
-    #[arg(long = "runtime-config", value_name = "FILE", global = true)]
-    pub runtime_config: Option<PathBuf>,
+    #[arg(long = "runtime-config", value_name = "FILE")]
+    pub runtime_config: PathBuf,
     #[command(subcommand)]
     pub command: Command,
 }

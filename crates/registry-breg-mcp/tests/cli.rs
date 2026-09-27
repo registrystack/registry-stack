@@ -212,6 +212,19 @@ fn the_runtime_configuration_is_required() {
 }
 
 #[test]
+fn the_runtime_configuration_is_named_before_the_subcommand() {
+    let outcome = run(&["check", "--runtime-config", "/etc/breg-mcp/runtime.yaml"]);
+    assert!(!outcome.success);
+    assert!(
+        outcome
+            .output
+            .contains("unexpected argument '--runtime-config'"),
+        "{}",
+        outcome.output
+    );
+}
+
+#[test]
 fn serve_answers_health_and_stops_on_terminate() {
     use std::io::{Read as _, Write as _};
 
