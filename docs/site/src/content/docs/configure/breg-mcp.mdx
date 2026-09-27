@@ -52,7 +52,7 @@ These properties hold for every deployment, whatever the chat host does:
 - The target of an application comes from the citizen's own linked record, never from tool
   arguments. The gateway resolves that record through the agent profile's linked lookup and writes
   the target and owner fields itself. A tool argument or edit naming either field is refused before
-  any registry call.
+  the gateway reads or writes any record.
 - The chat host's token is never forwarded. The gateway removes it from the request once verified
   and performs an RFC 8693 token exchange on every tool call, calling BReg only with the delegated
   token that exchange returns.
@@ -67,10 +67,12 @@ must not rely on BReg to tie a change request's target to the requester's own re
 {/* Evidence: crates/registry-breg-mcp/clippy.toml;
     products/breg/scripts/check-mcp-gateway-boundary.sh;
     crates/registry-breg/tests/standing_agent_ceiling.rs;
-    crates/registry-breg-mcp/src/tools.rs, a_smuggled_target_argument_is_refused_before_any_call;
+    crates/registry-breg-mcp/src/tools.rs, a_smuggled_target_argument_is_refused_before_any_call,
+    a_controlled_api_name_that_differs_from_its_identifier_is_refused_by_the_contract;
     crates/registry-breg-mcp/src/inbound.rs, require_caller();
-    crates/registry-breg-mcp/src/outbound.rs, delegated(),
-    the_exchanged_token_never_outlives_the_citizens_token;
+    crates/registry-breg-mcp/src/outbound.rs, delegated(), authorization_with_actor();
+    crates/registry-platform-httputil/src/client/exchange_authorization.rs,
+    an_upstream_token_is_not_held_past_the_subject_token_expiry;
     crates/registry-breg-review/README.md;
     products/breg/acceptance/citizen-address-correction/README.md. */}
 

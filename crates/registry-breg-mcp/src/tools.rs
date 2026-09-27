@@ -145,9 +145,12 @@ fn object_schema(properties: Map<String, Value>, required: &[&str]) -> Map<Strin
 }
 
 /// Refuse, before any registry call, an argument or edit that names a field
-/// the gateway writes itself. The full parse against the published contract
-/// follows; this screen needs only the operator-configured field names, so a
-/// smuggled target never reaches the registry, not even as a metadata read.
+/// the gateway writes itself by its operator-configured field identifier.
+/// Arguments and patch paths use API names, which only the published metadata
+/// states, so this screen catches a field whose API name equals its
+/// identifier without even a metadata read. The full parse against the
+/// published contract follows and refuses every other name for either field
+/// before any record is read or written.
 pub(crate) fn screen_controlled(
     tool: &str,
     arguments: Option<&Map<String, Value>>,
@@ -297,7 +300,10 @@ fn only_keys(arguments: &Map<String, Value>, allowed: &[&str]) -> Result<(), Arg
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::tests::fixture_contract;
+    use crate::contract::{
+        tests::{divergent_fixture, fixture_contract, spec},
+        ContractSpec,
+    };
 
     const OTHER_ADDRESS: &str = "0f0e0d0c-0b0a-4908-8706-050403020100";
     const APPLICATION: &str = "25e4ef6d-80bd-4e88-8e83-59b17cd26a4f";
@@ -449,6 +455,34 @@ mod tests {
                 controlled
             ),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn a_controlled_api_name_that_differs_from_its_identifier_is_refused_by_the_contract() {
+        // The target's identifier is "target-ref" and its API name "address".
+        // The early screen knows only the configured identifiers, so the
+        // contract parse is what refuses the API name, before any record is
+        // read or written.
+        let metadata = registry_breg_client::BRegMetadata::from_slice(&divergent_fixture())
+            .expect("divergent fixture metadata");
+        let spec = ContractSpec {
+            target_field: "target-ref".to_owned(),
+            ..spec()
+        };
+        let contract = Contract::derive(&metadata, &spec).expect("divergent contract");
+        let start = object(json!({"newLocality": "x", "address": OTHER_ADDRESS}));
+        assert_eq!(
+            parse_start(Some(&start), &contract),
+            Err(ArgumentError::UnknownArgument)
+        );
+        let update = object(
+            json!({"applicationId": APPLICATION, "expectedRevision": "1",
+            "patch": [{"op": "replace", "path": "/address", "value": OTHER_ADDRESS}]}),
+        );
+        assert_eq!(
+            parse_update(Some(&update), &contract),
+            Err(ArgumentError::FieldNotEditable)
         );
     }
 

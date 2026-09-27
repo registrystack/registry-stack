@@ -81,6 +81,9 @@ impl ToolErrorCode {
 pub(crate) struct ToolError {
     pub(crate) code: ToolErrorCode,
     pub(crate) trace_id: Option<String>,
+    /// Whether a mutating registry request was sent and its effect is not
+    /// known, so the call is audited `unfinished` rather than `refused`.
+    pub(crate) effect_unknown: bool,
 }
 
 impl ToolError {
@@ -88,7 +91,21 @@ impl ToolError {
         Self {
             code,
             trace_id: None,
+            effect_unknown: false,
         }
+    }
+
+    /// This failure answers a mutating registry request that was sent. A
+    /// transport, server, or protocol failure leaves its effect unknown; a
+    /// registry refusal is definite.
+    pub(crate) const fn after_mutation(mut self) -> Self {
+        self.effect_unknown = matches!(
+            self.code,
+            ToolErrorCode::RegistryUnavailable
+                | ToolErrorCode::ServiceUnavailable
+                | ToolErrorCode::UnexpectedResponse
+        );
+        self
     }
 
     pub(crate) fn into_result(self) -> CallToolResult {
@@ -161,6 +178,7 @@ impl From<BaseRegistryClientError> for ToolError {
             BaseRegistryClientError::Problem { code, trace_id, .. } => Self {
                 code: problem_code(&code),
                 trace_id: Some(trace_id.as_str().to_owned()),
+                effect_unknown: false,
             },
             BaseRegistryClientError::InvalidRequest { .. } => {
                 Self::new(ToolErrorCode::InvalidArguments)
@@ -172,6 +190,7 @@ impl From<BaseRegistryClientError> for ToolError {
             BaseRegistryClientError::Protocol { trace_id, .. } => Self {
                 code: ToolErrorCode::UnexpectedResponse,
                 trace_id: trace_id.map(|trace_id| trace_id.as_str().to_owned()),
+                effect_unknown: false,
             },
             // A client that cannot be used as configured, or a variant a later
             // client version adds, is a fault of this service.

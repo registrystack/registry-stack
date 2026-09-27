@@ -68,8 +68,8 @@ that records its owner: the gateway resolves the citizen's own record through
 the agent profile's linked lookup, under the delegated token, and writes both
 fields itself. A lookup that finds no record, or more than one, refuses the call
 and creates nothing. An argument or patch path naming either field is refused
-before any registry call. An application that no longer names the citizen's own
-record is reported exactly as one that does not exist.
+before the gateway reads or writes any record. An application that no longer
+names the citizen's own record is reported exactly as one that does not exist.
 
 Registry text is returned as labelled structured data with a notice that it is
 data, never instructions.
@@ -192,9 +192,12 @@ Each tool call is audited twice, before any token exchange or registry call
 and before its result is released. The shared writer emits `request` and
 `response` JSON Lines entries with one `correlation`, the tool,
 keyed pseudonyms of the citizen (`principalPseudonym`) and the chat-host client
-(`clientPseudonym`), and the closed outcome code. A cancelled call emits an
-`unfinished` response. The pseudonyms are the shared audit
-reference hashes of `[issuer, subject]` and `[issuer, client_id]` under the
+(`clientPseudonym`), and the outcome: `ok`, `refused` for a failure that had
+no registry effect, or `unfinished` when a create or patch was sent and its
+effect is unknown, as after a transport failure, a server error, or a response
+the gateway cannot use. A failed call also records its tool error code as
+`reason`. A cancelled call emits an `unfinished` response. The pseudonyms
+are the shared audit reference hashes of `[issuer, subject]` and `[issuer, client_id]` under the
 classes `breg-mcp-principal-v1` and `breg-mcp-client-v1`: named as BReg's
 authorization audit names them, and derived as the citizen review page derives
 its own. A call whose request entry cannot be accepted performs no protected

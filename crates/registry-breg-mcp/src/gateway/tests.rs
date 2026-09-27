@@ -670,9 +670,11 @@ async fn every_call_is_audited_without_values_or_credentials() {
             (START_APPLICATION, "request", None),
             (START_APPLICATION, "response", Some("ok")),
             (START_APPLICATION, "request", None),
-            (START_APPLICATION, "response", Some("invalid-arguments")),
+            (START_APPLICATION, "response", Some("refused")),
         ]
     );
+    assert!(entries[1]["record"].get("reason").is_none());
+    assert_eq!(entries[3]["record"]["reason"], "invalid-arguments");
     assert_eq!(
         entries[0]["record"]["principalPseudonym"],
         caller.citizen_pseudonym()
@@ -774,4 +776,131 @@ fn request_state_maps_to_one_citizen_status() {
             "{state:?} {review:?}"
         );
     }
+}
+
+fn response_record(capture: &AuditCapture) -> Value {
+    let entries = capture.entries();
+    assert_eq!(entries.len(), 2, "{entries:?}");
+    assert_eq!(entries[1]["phase"], "response");
+    entries[1]["record"].clone()
+}
+
+#[tokio::test]
+async fn a_failed_readback_after_a_committed_start_is_unfinished() {
+    for code in [
+        BRegProblemCode::ResourceNotFound,
+        BRegProblemCode::AuthenticationRefused,
+        BRegProblemCode::ServiceUnavailable,
+    ] {
+        let (audit, capture) = ToolAuditLog::capture();
+        let fixture = Fixture::start_with_audit(Some(audit)).await;
+        let caller = fixture.caller(CITIZEN_A);
+        fixture.registry.fail_next_at(
+            http::Method::GET,
+            "/v1/records/address-correction-requests/",
+            code,
+        );
+        let value = fixture
+            .call(&caller, START_APPLICATION, start_arguments())
+            .await;
+        assert_eq!(error_code(&value), "registry-unavailable", "{code:?}");
+        let record = response_record(&capture);
+        assert_eq!(record["outcome"], "unfinished", "{code:?}");
+        assert_eq!(record["reason"], "registry-unavailable", "{code:?}");
+        assert_eq!(fixture.registry.applications().len(), 1, "{code:?}");
+
+        // A retry replays the same key and lands on the same draft.
+        let retried = fixture
+            .call(&caller, START_APPLICATION, start_arguments())
+            .await;
+        assert_eq!(retried["isError"], false, "{retried}");
+        assert_eq!(fixture.registry.applications().len(), 1, "{code:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_token_exchange_failure_on_a_read_tool_is_refused() {
+    let (audit, capture) = ToolAuditLog::capture();
+    let fixture = Fixture::start_with_audit(Some(audit)).await;
+    let caller = fixture.caller(CITIZEN_A);
+    fixture.server.stop().await;
+    let arguments = Map::new();
+    let result = fixture
+        .gateway
+        .call(&caller, GET_MY_DETAILS, Some(&arguments))
+        .await;
+    assert_eq!(result.is_error, Some(true));
+    let record = response_record(&capture);
+    assert_eq!(record["outcome"], "refused");
+    assert_eq!(record["reason"], "registry-unavailable");
+    assert!(fixture.registry.seen().is_empty());
+}
+
+#[tokio::test]
+async fn a_registry_failure_on_a_read_tool_is_refused() {
+    let (audit, capture) = ToolAuditLog::capture();
+    let fixture = Fixture::start_with_audit(Some(audit)).await;
+    let caller = fixture.caller(CITIZEN_A);
+    fixture.registry.fail_next_at(
+        http::Method::GET,
+        "/v1/records/",
+        BRegProblemCode::ServiceUnavailable,
+    );
+    let value = fixture.call(&caller, GET_MY_DETAILS, json!({})).await;
+    assert_eq!(error_code(&value), "registry-unavailable");
+    let record = response_record(&capture);
+    assert_eq!(record["outcome"], "refused");
+    assert_eq!(record["reason"], "registry-unavailable");
+}
+
+#[tokio::test]
+async fn a_registry_failure_on_the_update_patch_is_unfinished() {
+    let (audit, capture) = ToolAuditLog::capture();
+    let fixture = Fixture::start_with_audit(Some(audit)).await;
+    let caller = fixture.caller(CITIZEN_A);
+    let draft = fixture.registry.add_application(
+        json!({"address": ADDRESS_A, "newAddressLine": "5 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
+        draft_request(),
+    );
+    fixture
+        .registry
+        .fail_next(http::Method::PATCH, BRegProblemCode::ServiceUnavailable);
+    let value = fixture
+        .call(
+            &caller,
+            UPDATE_APPLICATION,
+            json!({"applicationId": draft.to_string(), "expectedRevision": "1",
+                "patch": [{"op": "replace", "path": "/newLocality", "value": "Old Town"}]}),
+        )
+        .await;
+    assert_eq!(error_code(&value), "registry-unavailable");
+    let record = response_record(&capture);
+    assert_eq!(record["outcome"], "unfinished");
+    assert_eq!(record["reason"], "registry-unavailable");
+}
+
+#[tokio::test]
+async fn a_definite_refusal_of_the_update_patch_is_refused() {
+    let (audit, capture) = ToolAuditLog::capture();
+    let fixture = Fixture::start_with_audit(Some(audit)).await;
+    let caller = fixture.caller(CITIZEN_A);
+    let draft = fixture.registry.add_application(
+        json!({"address": ADDRESS_A, "newAddressLine": "5 Quay", "newLocality": "Port Selene", "newPostalCode": "PS-500"}),
+        draft_request(),
+    );
+    fixture
+        .registry
+        .fail_next(http::Method::PATCH, BRegProblemCode::PreconditionFailed);
+    let value = fixture
+        .call(
+            &caller,
+            UPDATE_APPLICATION,
+            json!({"applicationId": draft.to_string(), "expectedRevision": "1",
+                "patch": [{"op": "replace", "path": "/newLocality", "value": "Old Town"}]}),
+        )
+        .await;
+    assert_eq!(error_code(&value), "stale-application");
+    let record = response_record(&capture);
+    assert_eq!(record["outcome"], "refused");
+    assert_eq!(record["reason"], "stale-application");
 }

@@ -224,7 +224,7 @@ pub(crate) mod tests {
     /// identifier-based and API-name-based field resolution, which
     /// [`FIXTURE`] itself cannot: there, every reference field's identifier
     /// and API name are equal.
-    fn divergent_fixture() -> Vec<u8> {
+    pub(crate) fn divergent_fixture() -> Vec<u8> {
         let mut document: Value = serde_json::from_slice(FIXTURE).expect("fixture parses");
 
         // The create operation's field definition, and the identifier lists

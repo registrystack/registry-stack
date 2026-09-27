@@ -242,21 +242,14 @@ impl Gateway {
             Ok(_) => "ok",
             Err(error) => error.code.as_str(),
         };
-        // A transport or protocol failure can follow a committed mutation.
-        // Record that its fate is unfinished without changing the deliberate
-        // stale-update refusal returned to a later retry.
+        // A failure after a mutating registry request was sent may follow a
+        // committed mutation, so its fate is recorded unfinished without
+        // changing the deliberate stale-update refusal returned to a later
+        // retry. Every other failure had no registry effect and is refused.
         let (audit_outcome, reason) = match &outcome {
-            Err(error)
-                if matches!(
-                    error.code,
-                    ToolErrorCode::RegistryUnavailable
-                        | ToolErrorCode::ServiceUnavailable
-                        | ToolErrorCode::UnexpectedResponse
-                ) =>
-            {
-                ("unfinished", Some(code))
-            }
-            _ => (code, None),
+            Ok(_) => (code, None),
+            Err(error) if error.effect_unknown => ("unfinished", Some(code)),
+            Err(_) => ("refused", Some(code)),
         };
         if audit_request
             .respond(audit_record.response(audit_outcome, reason))
@@ -446,13 +439,28 @@ impl Gateway {
             let created = session
                 .client
                 .create_record(&binding, &request, &key, BRegRecordFormat::Json)
-                .await?;
+                .await
+                .map_err(|error| ToolError::from(error).after_mutation())?;
             let application = Uuid::parse_str(&created.value.data.record_identifier)
-                .map_err(|_| ToolError::new(ToolErrorCode::UnexpectedResponse))?;
+                .map_err(|_| ToolError::new(ToolErrorCode::UnexpectedResponse).after_mutation())?;
             // A replay answers with the response recorded at creation, so the
-            // application's current state is read back before deciding.
-            let (record, _) = self.owned_application(&session, &own, application).await?;
-            if !application_status(&record)?.is_closed() {
+            // application's current state is read back before deciding. The
+            // create has committed by then, so a failed read back is answered
+            // as unavailable: a retry replays the same key and reads again.
+            let (record, status) = async {
+                let (record, _) = self.owned_application(&session, &own, application).await?;
+                let status = application_status(&record)?;
+                Ok::<_, ToolError>((record, status))
+            }
+            .await
+            .map_err(|error| {
+                ToolError {
+                    code: ToolErrorCode::RegistryUnavailable,
+                    ..error
+                }
+                .after_mutation()
+            })?;
+            if !status.is_closed() {
                 return application_value(&session.contract, &record);
             }
         }
@@ -530,8 +538,9 @@ impl Gateway {
                 &key,
                 BRegRecordFormat::Json,
             )
-            .await?;
-        application_value(&session.contract, &patched.value.data)
+            .await
+            .map_err(|error| ToolError::from(error).after_mutation())?;
+        application_value(&session.contract, &patched.value.data).map_err(ToolError::after_mutation)
     }
 
     async fn prepare_review(
