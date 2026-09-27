@@ -3895,6 +3895,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn migrations_are_contiguous_and_the_outbox_drop_is_the_audit_writer_migration() {
+        let mut files: Vec<(i64, String)> =
+            std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations"))
+                .expect("read the migrations directory")
+                .map(|entry| {
+                    let name = entry
+                        .expect("read a migrations entry")
+                        .file_name()
+                        .into_string()
+                        .expect("a UTF-8 migration file name");
+                    let version = name
+                        .split_once('_')
+                        .and_then(|(prefix, _)| prefix.parse().ok())
+                        .unwrap_or_else(|| panic!("{name} starts with a version number"));
+                    (version, name)
+                })
+                .collect();
+        files.sort();
+        let versions: Vec<i64> = MIGRATIONS.iter().map(|(version, _)| *version).collect();
+        let expected: Vec<i64> = (1..=i64::try_from(MIGRATIONS.len()).unwrap()).collect();
+        assert_eq!(versions, expected, "the ledger versions run 1..=N without a gap");
+        assert_eq!(
+            files.iter().map(|(version, _)| *version).collect::<Vec<_>>(),
+            expected,
+            "every migration file has its own version and the ledger names each one"
+        );
+        let (_, drop_file) = &files[usize::try_from(AUDIT_OUTBOX_DROP_VERSION - 1).unwrap()];
+        assert_eq!(drop_file, "0017_audit_writer.sql");
+        assert_eq!(
+            MIGRATIONS[usize::try_from(AUDIT_OUTBOX_DROP_VERSION - 1).unwrap()].1,
+            AUDIT_WRITER_MIGRATION,
+            "the outbox drop version is the migration that installs the audit writer"
+        );
+    }
+
+    #[test]
     fn settlement_text_is_bounded_non_empty_and_free_of_control_characters() {
         let at_bound = "x".repeat(256);
         let over_bound = "x".repeat(257);
