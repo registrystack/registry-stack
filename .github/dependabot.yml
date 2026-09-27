@@ -138,6 +138,11 @@ updates:
         update-types:
           - minor
           - patch
+    # @types/vscode is pinned to the engines.vscode floor: vsce refuses to
+    # package when the types are newer than the oldest supported editor.
+    # Move both together when the floor is raised.
+    ignore:
+      - dependency-name: "@types/vscode"
 
   # Architecture diagram site (LikeC4) dependencies.
   - package-ecosystem: npm
