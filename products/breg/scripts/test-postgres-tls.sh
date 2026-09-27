@@ -161,6 +161,12 @@ for attempt in {1..30}; do
   sleep 1
 done
 
+# Setup-only mode leaves the container TLS-only with the caller's CA copies and
+# skips the proof, for local lanes that need a TLS PostgreSQL but not this test.
+if [[ "${BREG_TEST_TLS_SETUP_ONLY:-0}" == "1" ]]; then
+  exit 0
+fi
+
 export BREG_TEST_TLS_CA_DER_PATH="${caller_ca_der_path:-$tls_dir/trusted-ca.der}"
 export BREG_TEST_TLS_WRONG_CA_DER_PATH="$tls_dir/wrong-ca.der"
 export BREG_TEST_TLS_DATABASE_URL="$database_url"
