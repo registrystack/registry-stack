@@ -1825,8 +1825,9 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("\n  discovery-contracts:\n", workflow)
         self.assertIn("products/discovery/scripts/check-contracts.sh", workflow)
         self.assertIn(
-            "products/discovery/scripts/test-adopter-tutorial.sh", workflow
+            "node docs/site/scripts/run-tutorial.mjs --gate discovery", workflow
         )
+        self.assertNotIn("products/discovery/scripts/test-adopter-tutorial.sh", workflow)
         self.assertIn("\n  evidence-contracts:\n", workflow)
         self.assertIn("products/evidence/scripts/check-contracts.sh", workflow)
         self.assertIn(
@@ -1919,7 +1920,7 @@ class CiChangesTest(unittest.TestCase):
             with self.subTest(entry_point=entry_point):
                 self.assertIn(entry_point, breg_job)
 
-    def test_discovery_contracts_pins_node_for_adopter_binding_tests(self) -> None:
+    def test_discovery_contracts_pins_node_for_the_tutorial_runner(self) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
         discovery_job = workflow.split("\n  discovery-contracts:\n", 1)[1].split(
             "\n  relay-v2-contracts:\n", 1
@@ -1932,10 +1933,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("node-version: 22.12.0", discovery_job)
         self.assertIn("cache: npm", discovery_job)
         self.assertIn(
-            "cache-dependency-path: |\n"
-            "            crates/registry-discovery-client-node/package-lock.json\n"
-            "            docs/site/package-lock.json\n",
-            discovery_job,
+            "cache-dependency-path: docs/site/package-lock.json\n", discovery_job
         )
 
     def test_archive_content_is_immutable_during_routine_docs_changes(self) -> None:

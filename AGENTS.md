@@ -340,7 +340,7 @@ Registry Discovery contracts and end-to-end client handoff:
 ```bash
 products/discovery/scripts/check-contracts.sh
 products/discovery/scripts/test-http.sh
-products/discovery/scripts/test-adopter-tutorial.sh
+(cd docs/site && npm run check:tutorial:discovery)
 ```
 
 Registry Discovery language bindings, from their respective crate directories:

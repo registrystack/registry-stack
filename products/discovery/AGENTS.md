@@ -42,12 +42,13 @@ from the monorepo root:
 ```sh
 products/discovery/scripts/check-contracts.sh
 products/discovery/scripts/test-http.sh
-products/discovery/scripts/test-adopter-tutorial.sh
+(cd docs/site && npm run check:tutorial:discovery)
 ```
 
 The contract gate checks publication artifacts and traceability. HTTP tests
-exercise runtime queries; the adopter journey proves selection, explicit local
-acceptance, and native-client handoff. Keep that composition straightforward:
+exercise runtime queries, and their native journey proves selection, explicit
+local acceptance, and native-client handoff. The tutorial gate replays the
+published adopter tutorial from a copy of the checkout. Keep that composition straightforward:
 one metadata selection, an explicit application trust decision, then the
 existing native client, without a new proxy or trust service.
 Profile changes also affect Evidence and Relay publication, so verify those
