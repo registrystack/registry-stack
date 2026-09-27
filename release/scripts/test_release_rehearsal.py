@@ -284,6 +284,14 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertIn("schedulingctl-v${REHEARSAL_VERSION}-linux-amd64", merge)
         self.assertIn("for operator_tool in bregctl caseworkctl schedulingctl", merge)
         self.assertIn('"dist/image-bin/${operator_tool}" --version', merge)
+        self.assertIn(
+            "if (( release_major > 0 || release_minor >= 35 )); then", merge
+        )
+        self.assertIn("for breg_service in breg-mcp breg-review; do", merge)
+        self.assertIn(
+            'dist/bin/${breg_service}-v${REHEARSAL_VERSION}-linux-amd64', merge
+        )
+        self.assertIn('dist/image-bin/${breg_service}" --version', merge)
         self.assertNotIn("${{ inputs.", merge)
         for forbidden in (
             "npm publish",

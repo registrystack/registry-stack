@@ -241,9 +241,76 @@ fn request_action_target_authority_uses_verified_target_claims() {
     assert_eq!(authority[0].row_boundaries[0].field(), "site");
 }
 
+#[test]
+fn delegated_token_is_admitted_only_by_an_agent_profile() {
+    use super::{authorize_route, QueryOptions};
+    let registry = delegation_registry();
+    let service = service_for(registry.clone());
+    let submit = route(
+        &registry,
+        "records.placement-correction-request.request.submit",
+    );
+    let get = route(&registry, "records.placement-correction-request.get");
+    let reviewer = QueryOptions::parse(Some("accessProfile=request-reviewer"), false).unwrap();
+    let agent = QueryOptions::parse(Some("accessProfile=standing-agent"), false).unwrap();
+    let claims = |actor: Option<&str>| {
+        VerifiedRequestClaims::authenticated(
+            "principal",
+            "citizen",
+            BTreeSet::new(),
+            None,
+            BTreeMap::new(),
+        )
+        .and_then(|claims| {
+            claims.with_contextual_authority(
+                Some(registry_platform_oidc::ActorKind::Agent),
+                Some("agent-client".to_owned()),
+                actor.map(str::to_owned),
+                None,
+                BTreeMap::new(),
+            )
+        })
+        .expect("verified claims are valid")
+    };
+    let delegated = claims(Some("00000000-0000-4000-8000-0000000000aa"));
+    let direct = claims(None);
+
+    // `request-reviewer` declares no actorKind and holds submit_request.
+    assert!(authorize_route(&service, submit, &delegated, &reviewer).is_none());
+    assert!(authorize_route(&service, submit, &direct, &reviewer).is_some());
+    assert!(authorize_route(&service, get, &delegated, &reviewer).is_none());
+    assert!(authorize_route(&service, get, &delegated, &agent).is_some());
+}
+
+/// The fixture below plus a standing agent profile that reads requests.
+fn delegation_registry() -> Arc<CompiledRegistry> {
+    let mut project: serde_json::Value = serde_json::from_str(COMPILED_REGISTRY_PROJECT).unwrap();
+    project["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id": "standing-agent",
+            "principalClaim": "principal",
+            "actorKind": "agent",
+            "requesterClients": ["agent-client"],
+            "permissions": [{
+                "entity": "placement-correction-request",
+                "operations": ["get"],
+                "readableFields": ["placement"],
+                "rowBoundaries": []
+            }]
+        }));
+    let project =
+        parse_project_json(&serde_json::to_vec(&project).unwrap()).expect("fixture parses");
+    Arc::new(compile_project(&project, &[], CompileProfile::Authoring).expect("fixture compiles"))
+}
+
 fn compiled_registry() -> Arc<CompiledRegistry> {
-    let project = parse_project_json(
-        br#"{
+    let project = parse_project_json(COMPILED_REGISTRY_PROJECT.as_bytes()).expect("fixture parses");
+    Arc::new(compile_project(&project, &[], CompileProfile::Authoring).expect("fixture compiles"))
+}
+
+const COMPILED_REGISTRY_PROJECT: &str = r#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",
           "kind":"RegistryProject",
           "registry":{"id":"change-request-http","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -289,11 +356,7 @@ fn compiled_registry() -> Arc<CompiledRegistry> {
               "rowBoundaries": []
             }]
           }]
-        }"#,
-    )
-    .expect("fixture parses");
-    Arc::new(compile_project(&project, &[], CompileProfile::Authoring).expect("fixture compiles"))
-}
+        }"#;
 
 fn route<'a>(registry: &'a CompiledRegistry, route_id: &str) -> &'a CompiledRoute {
     registry

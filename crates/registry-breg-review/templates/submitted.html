@@ -1,0 +1,10 @@
+{% extends "layout.html" %}
+{% block title %}Request submitted{% endblock %}
+{% block main %}
+<h1 data-outcome="submitted">Request submitted</h1>
+<p>Your request was submitted for review. You can close this page.</p>
+<form method="post" action="/signout" class="sign-out">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<button type="submit">Sign out</button>
+</form>
+{% endblock %}

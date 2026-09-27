@@ -101,7 +101,7 @@ class Row:
     shared_blocks: tuple[str, ...]
     reference_refusal: TestRef | Exemption
     authored_refusal: TestRef | Exemption
-    digest_mismatch: TestRef
+    digest_mismatch: TestRef | Exemption
     rust_blocks: tuple[RustBlock, ...] = ()
     hand_schemas: tuple[HandSchema, ...] = ()
 
@@ -417,10 +417,72 @@ ROWS: tuple[Row, ...] = (
             ),
         ),
     ),
+    Row(
+        product="breg-mcp",
+        loader_sources=("crates/registry-breg-mcp/src",),
+        runtime_schema=Exemption("the citizen service publishes no generated runtime schema"),
+        shared_blocks=(),
+        reference_refusal=TestRef(
+            "crates/registry-breg-mcp/src/config.rs",
+            "runtime_loader_refuses_environment_expressions_in_secret_references",
+        ),
+        authored_refusal=Exemption(
+            "the citizen service reads runtime configuration and registry HTTP metadata, "
+            "not authored package files"
+        ),
+        digest_mismatch=Exemption(
+            "the citizen service owns no installed package; the separate BReg runtime "
+            "verifies the package it serves"
+        ),
+        rust_blocks=(
+            RustBlock(
+                "crates/registry-breg-mcp/src/config.rs", "RuntimeConfig", "listener", "PrivateListenerConfig",
+            ),
+            RustBlock(
+                "crates/registry-breg-mcp/src/config.rs", "RuntimeConfig", "secret_providers", "SecretProvidersConfig",
+            ),
+            RustBlock(
+                "crates/registry-breg-mcp/src/config.rs", "AuditConfig", "key", "AuditKeyConfig",
+            ),
+            RustBlock(
+                "crates/registry-breg-mcp/src/config.rs", "ResourceServerConfig", "jwks_source", "JwksSource",
+            ),
+        ),
+    ),
+    Row(
+        product="breg-review",
+        loader_sources=("crates/registry-breg-review/src",),
+        runtime_schema=Exemption("the citizen service publishes no generated runtime schema"),
+        shared_blocks=(),
+        reference_refusal=TestRef(
+            "crates/registry-breg-review/src/config.rs",
+            "runtime_loader_refuses_environment_expressions_in_secret_references",
+        ),
+        authored_refusal=Exemption(
+            "the citizen service reads runtime configuration and registry HTTP metadata, "
+            "not authored package files"
+        ),
+        digest_mismatch=Exemption(
+            "the citizen service owns no installed package; the separate BReg runtime "
+            "verifies the package it serves"
+        ),
+        rust_blocks=(
+            RustBlock(
+                "crates/registry-breg-review/src/config.rs", "RuntimeConfig", "listener", "PrivateListenerConfig",
+            ),
+            RustBlock(
+                "crates/registry-breg-review/src/config.rs", "RuntimeConfig", "secret_providers", "SecretProvidersConfig",
+            ),
+            RustBlock(
+                "crates/registry-breg-review/src/config.rs", "AuditConfig", "key", "AuditKeyConfig",
+            ),
+        ),
+    ),
 )
 
 EXPECTED_PRODUCTS = frozenset(
-    {"relay", "render", "discovery", "evidence", "breg", "casework", "scheduling"}
+    {"relay", "render", "discovery", "evidence", "breg", "casework", "scheduling",
+     "breg-mcp", "breg-review"}
 )
 
 
@@ -765,6 +827,14 @@ def check(root: Path, rows: tuple[Row, ...] = ROWS) -> list[str]:
         problems += check_exemption(row, "runtime_schema", row.runtime_schema)
         problems += check_exemption(row, "reference_refusal", row.reference_refusal)
         problems += check_exemption(row, "authored_refusal", row.authored_refusal)
+        problems += check_exemption(row, "digest_mismatch", row.digest_mismatch)
+        if isinstance(row.digest_mismatch, Exemption) and (
+            "PackageConfig" in row.shared_blocks
+            or any(block.block == "PackageConfig" for block in row.rust_blocks)
+        ):
+            problems.append(
+                f"{row.product}: a runtime holding PackageConfig must name a digest mismatch test"
+            )
         problems += check_schema(root, row, canonical)
         problems += check_rust_blocks(root, row, canonical)
         problems += check_hand_schemas(root, row, canonical)

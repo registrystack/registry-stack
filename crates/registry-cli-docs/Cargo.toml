@@ -21,6 +21,8 @@ registry-relay-v2.workspace = true
 registry-render.workspace = true
 registry-relayctl.workspace = true
 registry-breg = { workspace = true, features = ["runtime"] }
+registry-breg-mcp.workspace = true
+registry-breg-review.workspace = true
 registry-bregctl.workspace = true
 registry-caseworkctl.workspace = true
 registry-casework.workspace = true

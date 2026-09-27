@@ -286,6 +286,28 @@ class ConfigConformanceFixtureTest(unittest.TestCase):
             row(authored_refusal=gate.Exemption("")),
         )
 
+    def test_a_digest_exemption_needs_a_reason(self) -> None:
+        self.assert_one_problem(
+            "sample: the digest_mismatch exemption needs a reason",
+            row(digest_mismatch=gate.Exemption("")),
+        )
+
+    def test_a_runtime_without_a_package_can_explain_digest_non_applicability(self) -> None:
+        self.assertEqual(
+            [],
+            self.problems(row(digest_mismatch=gate.Exemption("no installed package"))),
+        )
+
+    def test_a_runtime_holding_a_package_cannot_exempt_its_digest_proof(self) -> None:
+        self.with_runtime_struct(self.RUNTIME_STRUCT)
+        problems = self.problems(dataclasses.replace(
+            self.block_row(), digest_mismatch=gate.Exemption("not tested")
+        ))
+        self.assertEqual(
+            ["sample: a runtime holding PackageConfig must name a digest mismatch test"],
+            problems,
+        )
+
     def test_an_exempt_schema_declares_no_shared_blocks(self) -> None:
         self.assert_one_problem(
             "sample: a product without a runtime schema declares no shared blocks",

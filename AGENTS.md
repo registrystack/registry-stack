@@ -80,6 +80,8 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-breg-client` | Base Registry Engine client and its opaque authorization handles |
 | `crates/registry-breg-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
 | `crates/registry-breg-client-py` | Internal PyO3 binding used to assemble the unified Python client |
+| `crates/registry-breg-mcp` | Citizen-facing MCP gateway beside the Base Registry Engine and the `breg-mcp` binary |
+| `crates/registry-breg-review` | Server-rendered citizen review page for BReg change requests and the `breg-review` binary |
 | `crates/registry-linkml` | LinkML reader and embedded PublicSchema snapshot behind `bregctl init --from publicschema` |
 | `crates/registry-casework-core` | Source-neutral Casework model, HTTP DTOs, transition rules, and source adapter contract |
 | `crates/registry-casework-breg` | BReg source adapter for Casework discovery, current visibility, promoted actions, and attempt recovery |
@@ -140,6 +142,25 @@ Its approved contracts, acceptance journeys, quickstart, generated examples, and
 gates live under `products/breg`. A registry project is configuration: the
 runtime has no built-in business, facility, authority, permit, or asset model,
 and none may become a Rust type, built-in operation, or special route.
+
+`registry-breg-mcp` (`breg-mcp`) is a supporting service beside the Base
+Registry Engine in the same sense `registry-evidence-oid4vci` is beside
+Evidence, not a runtime product of its own: it serves MCP to a chat host acting
+for one verified citizen and adds no registry semantics. It verifies the chat
+host's token as a protected resource, exchanges it for a delegated registry
+token on every call, and never forwards the inbound token. Every decision about
+what the citizen may see or change is the registry's, under its agent access
+profile; the gateway writes an application's target record and owner itself,
+from the citizen's own linked record and the token subject, and never from tool
+arguments. No product crate depends on it, and it depends on the engine only
+through `registry-breg-client`; `registry-breg` is a dev-dependency for its
+PostgreSQL end-to-end suite. `crates/registry-breg-mcp/clippy.toml` disallows
+the client methods it must never reach, and
+`products/breg/scripts/check-mcp-gateway-boundary.sh` proves that list still
+resolves and refuses. `registry-breg-review` (`breg-review`) is the paired
+review page a citizen uses to submit a draft the gateway prepared; it too
+depends on the engine only through `registry-breg-client`, and neither
+service depends on the other or on `registry-breg` outside dev-dependencies.
 
 Registry Casework is implemented by `registry-casework`,
 `registry-casework-core`, `registry-casework-breg`, `registry-caseworkctl`, and

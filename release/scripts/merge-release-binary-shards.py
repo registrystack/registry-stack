@@ -19,6 +19,7 @@ MINT_RETIREMENT_VERSION = (0, 31, 0)
 # From this version schedulingctl is published and each stateful product image
 # carries its operator tool beside the runtime binary.
 OPERATOR_TOOL_VERSION = (0, 36, 0)
+BREG_SERVICES_RELEASE_MINIMUM_VERSION = (0, 35, 0)
 
 
 class ShardError(ValueError):
@@ -43,6 +44,12 @@ def rosters(version: str) -> tuple[dict[str, list[str]], list[tuple[str, str]]]:
         image_bins.append(("breg", breg[0]))
         if parsed >= OPERATOR_TOOL_VERSION:
             image_bins.append(("bregctl", breg[1]))
+    if parsed >= BREG_SERVICES_RELEASE_MINIMUM_VERSION:
+        # The citizen MCP gateway and its review page ship in the BReg set.
+        for service in ("breg-mcp", "breg-review"):
+            asset = f"{service}-{tag}-linux-amd64"
+            breg.append(asset)
+            image_bins.append((service, asset))
     casework: list[str] = []
     if parsed >= (0, 30, 0):
         casework = [

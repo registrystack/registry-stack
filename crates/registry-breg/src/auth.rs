@@ -248,10 +248,28 @@ impl RegistryAuthenticator {
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
 
-        let actor_kind = Some(
+        let requester_client = verified
+            .matched_client_id()
+            .map_err(|_| AuthenticationError::InvalidClaims)?
+            .map(str::to_owned);
+        let actor_subject = optional_actor_subject(claims.get("act"), &self.issuer)?;
+        if let Some(actor) = actor_subject.as_deref() {
+            let client = requester_client
+                .as_deref()
+                .ok_or(AuthenticationError::InvalidClaims)?;
+            if self.trusted_actors.get(client).map(String::as_str) != Some(actor) {
+                return Err(AuthenticationError::InvalidClaims);
+            }
+        }
+        // A token exchange copies the subject's claims, so a kind claim on a
+        // delegated token describes the person, not the caller. The trusted
+        // actor verified above is the caller, and it is always an agent.
+        let actor_kind = Some(if actor_subject.is_some() {
+            registry_platform_oidc::ActorKind::Agent
+        } else {
             actor_kind(&verified.claims, &self.contextual_claims)
-                .map_err(|_| AuthenticationError::InvalidClaims)?,
-        );
+                .map_err(|_| AuthenticationError::InvalidClaims)?
+        });
         // The person is named by the configured principal claim, the same
         // claim every access profile reads. A review authority compares this
         // identity with its own caller principals, so it must not fall back
@@ -274,19 +292,6 @@ impl RegistryAuthenticator {
             grant
                 .verify_context(&verified, &self.audience)
                 .map_err(|_| AuthenticationError::InvalidClaims)?;
-        }
-        let requester_client = verified
-            .matched_client_id()
-            .map_err(|_| AuthenticationError::InvalidClaims)?
-            .map(str::to_owned);
-        let actor_subject = optional_actor_subject(claims.get("act"))?;
-        if let Some(actor) = actor_subject.as_deref() {
-            let client = requester_client
-                .as_deref()
-                .ok_or(AuthenticationError::InvalidClaims)?;
-            if self.trusted_actors.get(client).map(String::as_str) != Some(actor) {
-                return Err(AuthenticationError::InvalidClaims);
-            }
         }
         let grant_subjects = if grant.is_some() {
             bounded_identity(claims.get("identity"))?
@@ -673,15 +678,23 @@ fn optional_direct_string(value: Option<&Value>) -> Result<Option<String>, Authe
     }
 }
 
-fn optional_actor_subject(value: Option<&Value>) -> Result<Option<String>, AuthenticationError> {
+/// Reads `act` as exactly `{sub}` or `{sub, iss}`. An issuer may only repeat
+/// the verified token issuer; any other member, including a nested `act`, is
+/// refused.
+fn optional_actor_subject(
+    value: Option<&Value>,
+    token_issuer: &str,
+) -> Result<Option<String>, AuthenticationError> {
     let Some(value) = value else {
         return Ok(None);
     };
     let object = value
         .as_object()
         .ok_or(AuthenticationError::InvalidClaims)?;
-    if object.len() != 1 {
-        return Err(AuthenticationError::InvalidClaims);
+    match object.len() {
+        1 => {}
+        2 if object.get("iss").and_then(Value::as_str) == Some(token_issuer) => {}
+        _ => return Err(AuthenticationError::InvalidClaims),
     }
     required_direct_string(object.get("sub")).map(Some)
 }

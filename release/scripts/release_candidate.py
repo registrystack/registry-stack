@@ -70,6 +70,12 @@ IMAGE_OPERATOR_TOOLS = {
     "casework": "caseworkctl",
     "scheduling": "schedulingctl",
 }
+# The citizen MCP gateway and its review page ship in the BReg release set.
+BREG_SERVICES_RELEASE_MINIMUM_VERSION = (0, 35, 0)
+BREG_SERVICES_RUNTIME_IMAGE_NAMES = SCHEDULING_RUNTIME_IMAGE_NAMES | {
+    "breg-mcp",
+    "breg-review",
+}
 V2_TOP_LEVEL_FIELDS = {
     "schema_version",
     "repository",
@@ -109,7 +115,7 @@ SECURITY_EVIDENCE_COMMON_REQUIRED_FILES = {
 }
 SECURITY_EVIDENCE_REQUIRED_FILES = SECURITY_EVIDENCE_COMMON_REQUIRED_FILES | {
     f"{directory}/{image}.{suffix}.json"
-    for image in SCHEDULING_RUNTIME_IMAGE_NAMES
+    for image in BREG_SERVICES_RUNTIME_IMAGE_NAMES
     for directory, suffix in (
         ("image-sbom", "spdx"),
         ("syft", "syft"),
@@ -141,7 +147,9 @@ def _candidate_image_names(version: str) -> set[str]:
         return CASEWORK_RUNTIME_IMAGE_NAMES | {"mint"}
     if parsed < SCHEDULING_RELEASE_MINIMUM_VERSION:
         return CASEWORK_RUNTIME_IMAGE_NAMES
-    return SCHEDULING_RUNTIME_IMAGE_NAMES
+    if parsed < BREG_SERVICES_RELEASE_MINIMUM_VERSION:
+        return SCHEDULING_RUNTIME_IMAGE_NAMES
+    return BREG_SERVICES_RUNTIME_IMAGE_NAMES
 
 
 def image_operator_tools(version: str) -> dict[str, str]:
@@ -426,6 +434,10 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
             inventory[f"bregctl-{tag}-{platform}"] = "binary"
         inventory[f"breg-{tag}-install.sh"] = "installer"
         inventory["breg-install.sh"] = "installer"
+    if version_tuple >= BREG_SERVICES_RELEASE_MINIMUM_VERSION:
+        for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
+            inventory[f"breg-mcp-{tag}-{platform}"] = "binary"
+            inventory[f"breg-review-{tag}-{platform}"] = "binary"
     if version_tuple >= CASEWORK_RELEASE_MINIMUM_VERSION:
         for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
             inventory[f"casework-{tag}-{platform}"] = "binary"

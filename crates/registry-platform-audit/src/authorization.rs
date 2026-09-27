@@ -80,6 +80,31 @@ impl AuthorizationAuditEvent {
         operation: impl Into<String>,
         reason: impl Into<String>,
     ) -> Result<Self, AuthorizationAuditError> {
+        Self::without_purpose(
+            actor_kind,
+            principal_pseudonym,
+            client_pseudonym,
+            grant_pseudonym,
+            approver_pseudonym,
+            operation,
+            AuthorizationOutcome::Denied,
+            reason,
+        )
+    }
+
+    /// Build an event, allowed or denied, for a product whose privacy
+    /// contract never records a purpose, or whose authority carries none.
+    #[allow(clippy::too_many_arguments)]
+    pub fn without_purpose(
+        actor_kind: impl Into<String>,
+        principal_pseudonym: impl Into<String>,
+        client_pseudonym: impl Into<String>,
+        grant_pseudonym: Option<String>,
+        approver_pseudonym: Option<String>,
+        operation: impl Into<String>,
+        outcome: AuthorizationOutcome,
+        reason: impl Into<String>,
+    ) -> Result<Self, AuthorizationAuditError> {
         let event = Self {
             actor_kind: actor_kind.into(),
             principal_pseudonym: principal_pseudonym.into(),
@@ -88,7 +113,7 @@ impl AuthorizationAuditEvent {
             approver_pseudonym,
             purpose: None,
             operation: operation.into(),
-            outcome: AuthorizationOutcome::Denied,
+            outcome,
             reason: reason.into(),
         };
         event.validate()?;
@@ -394,6 +419,46 @@ mod tests {
         .expect("valid privacy-minimal denial");
         let value = serde_json::to_value(event).expect("serializes");
         assert!(value.get("purpose").is_none());
+    }
+
+    #[test]
+    fn event_without_purpose_serves_either_outcome_and_omits_purpose() {
+        for (outcome, reason) in [
+            (AuthorizationOutcome::Allowed, "authorization.allowed"),
+            (AuthorizationOutcome::Denied, "authorization.refused"),
+        ] {
+            let event = AuthorizationAuditEvent::without_purpose(
+                "agent",
+                format!("hmac-sha256:{}", digest('a')),
+                format!("hmac-sha256:{}", digest('b')),
+                None,
+                None,
+                "get",
+                outcome,
+                reason,
+            )
+            .expect("valid purpose-free event");
+            assert_eq!(event.purpose(), None);
+            assert_eq!(event.outcome(), outcome);
+            let value = serde_json::to_value(event).expect("serializes");
+            assert!(value.get("purpose").is_none());
+        }
+    }
+
+    #[test]
+    fn event_without_purpose_still_rejects_raw_identity_values() {
+        let error = AuthorizationAuditEvent::without_purpose(
+            "agent",
+            "raw-principal-canary",
+            format!("sha256:{}", digest('b')),
+            None,
+            None,
+            "get",
+            AuthorizationOutcome::Allowed,
+            "authorization.allowed",
+        )
+        .expect_err("raw principal is not accepted");
+        assert_eq!(error, AuthorizationAuditError::InvalidPseudonym);
     }
 
     #[test]

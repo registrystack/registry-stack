@@ -6,6 +6,15 @@ compile_error!(
     "registry-platform-testing is a test-only crate; enable feature \"test-utils\" from dev-dependencies"
 );
 
+#[cfg(feature = "test-authorization-server")]
+mod authorization_server;
+
+#[cfg(feature = "test-authorization-server")]
+pub use authorization_server::{
+    ExchangeProfile, TestActorKind, TestAuthorizationServer, TestAuthorizationServerBuilder,
+    TestClient,
+};
+
 use std::{
     sync::{
         atomic::{AtomicU64, Ordering},
