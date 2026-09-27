@@ -5879,6 +5879,125 @@ fn canonical_package_tampering_is_refused_without_rendering_package_values() {
     }
 }
 
+#[test]
+fn package_without_the_shared_envelope_is_refused_by_verify_with_the_successor_fix() {
+    let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    strip_shared_package_envelope(&fixture.package);
+
+    for (prefix, command) in [
+        ("verify", vec!["verify"]),
+        ("migration.explain", vec!["migration", "explain"]),
+    ] {
+        let mut arguments = vec!["--format", "json"];
+        arguments.extend(command);
+        arguments.extend(["--runtime-config", path(&fixture.runtime_config)]);
+        assert_inspection_refusal(
+            &arguments,
+            &format!("{prefix}.package.integrity_refused"),
+            "verified_package",
+            "verify_package_integrity",
+            &[path(&fixture.runtime_config), path(&fixture.package)],
+        );
+        let report = json_stdout(&bregctl(&arguments));
+        let message = report["diagnostics"][0]["message"]
+            .as_str()
+            .expect("refusal message is a string");
+        assert!(
+            message.contains("apply a successor with this bregctl"),
+            "{message}"
+        );
+    }
+}
+
+#[test]
+fn package_baseline_without_the_shared_envelope_is_read_unless_a_digest_pin_is_configured() {
+    let (project, _signing, key_id) = packaging_project();
+    let fingerprint = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+    let prepared = prepare_packaging_candidate(
+        &project,
+        PACKAGE_DATABASE,
+        fingerprint,
+        1,
+        vec![key_id.clone()],
+    );
+    let receipt = project.path().join("baseline-receipt.json");
+    fs::write(
+        &receipt,
+        schema_test_receipt_bytes(&prepared, &["package-record-list"]),
+    )
+    .expect("schema-test receipt writes");
+    let signature_key_arg = format!("--signature-key-id={key_id}");
+    let package_with_baseline = |runtime_config: &Path, name: &str| {
+        bregctl(&[
+            "--format",
+            "json",
+            "package",
+            path(project.path()),
+            "--database-id",
+            PACKAGE_DATABASE,
+            "--schema-fingerprint",
+            fingerprint,
+            "--signature-threshold",
+            "1",
+            &signature_key_arg,
+            "--baseline-runtime-config",
+            path(runtime_config),
+            "--test-receipt",
+            path(&receipt),
+            "--output",
+            path(&project.path().join(name)),
+        ])
+    };
+
+    let enveloped = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    let expected = json_stdout(&package_with_baseline(
+        &enveloped.runtime_config,
+        "enveloped-build",
+    ))["diagnostics"][0]["code"]
+        .clone();
+    assert!(
+        !expected
+            .as_str()
+            .is_some_and(|code| code.starts_with("package.baseline")),
+        "{expected}"
+    );
+
+    let legacy = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    strip_shared_package_envelope(&legacy.package);
+    let unpinned = json_stdout(&package_with_baseline(
+        &legacy.runtime_config,
+        "legacy-build",
+    ));
+    assert_eq!(unpinned["diagnostics"][0]["code"], expected, "{unpinned}");
+
+    let pinned_runtime = legacy.variant(
+        "pinned",
+        &format!("  trustAnchorPath: {}", path(&legacy.anchor)),
+        &format!(
+            "  trustAnchorPath: {}\n  expectedDigest: sha256:{}",
+            path(&legacy.anchor),
+            "0".repeat(64)
+        ),
+    );
+    let pinned = package_with_baseline(&pinned_runtime, "pinned-build");
+    assert_eq!(pinned.status.code(), Some(1), "{pinned:?}");
+    let report = json_stdout(&pinned);
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "package.baseline.package.digest_pin_unverifiable"
+    );
+    assert_tool_diagnostic(
+        &report["diagnostics"][0],
+        "runtime_configuration",
+        "correct_runtime_configuration",
+    );
+    let message = report["diagnostics"][0]["message"]
+        .as_str()
+        .expect("pin refusal message is a string");
+    assert!(message.contains("package.expectedDigest"), "{message}");
+    assert!(message.contains("SHA256SUMS"), "{message}");
+}
+
 #[cfg(unix)]
 #[test]
 fn unsafe_package_permissions_are_refused_without_rendering_paths() {
@@ -6393,6 +6512,14 @@ fn assert_filter_example(operation: &Value, api_name: &str, example: &str) {
 
 fn path(path: &Path) -> &str {
     path.to_str().expect("test path is UTF-8")
+}
+
+fn strip_shared_package_envelope(root: &Path) {
+    fs::remove_file(root.join("SHA256SUMS")).expect("shared package checksum file removes");
+    let revision = root.join("REVISION");
+    if revision.exists() {
+        fs::remove_file(revision).expect("shared package revision file removes");
+    }
 }
 
 #[cfg(unix)]

@@ -15,10 +15,11 @@ use base64::Engine as _;
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::event_destination::EventDestinationActivationError;
+use registry_breg::package::PackageError;
 use registry_breg::runtime_config::{
     load_runtime_config, load_runtime_config_with_env, parse_runtime_config,
-    parse_runtime_config_with_env, RuntimeConfigError, RUNTIME_CONFIG_API_VERSION,
-    RUNTIME_CONFIG_KIND,
+    parse_runtime_config_with_env, PredecessorEnvelopeError, RuntimeConfigError,
+    RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND,
 };
 use registry_platform_config::package::{write_sum_file, PackageLimits};
 use registry_platform_crypto::PrivateJwk;
@@ -250,6 +251,57 @@ fn shared_package_envelope_and_pin_are_checked_before_startup() {
              deploy the pinned package or update package.expectedDigest",
             written.digest()
         )
+    );
+}
+
+#[test]
+fn predecessor_without_shared_envelope_is_accepted_only_without_a_digest_pin() {
+    let fixture = RuntimeFixture::new();
+    fs::write(
+        fixture.package_root.join("package.json"),
+        b"governed-package\n",
+    )
+    .expect("governed package placeholder writes");
+    let raw = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let unpinned = parse_runtime_config(&raw).expect("runtime without a pin parses");
+    assert!(unpinned
+        .verify_predecessor_package_envelope()
+        .expect("an unpinned predecessor without SHA256SUMS is left to its signed manifest")
+        .is_none());
+    assert!(
+        unpinned.verify_package_envelope().is_err(),
+        "startup still requires SHA256SUMS"
+    );
+
+    let pinned = parse_runtime_config(&raw.replace(
+        &format!("  root: {}\n", fixture.package_root.display()),
+        &format!(
+            "  root: {}\n  expectedDigest: sha256:{}\n",
+            fixture.package_root.display(),
+            "0".repeat(64)
+        ),
+    ))
+    .expect("runtime with a pin parses");
+    let refusal = pinned
+        .verify_predecessor_package_envelope()
+        .expect_err("a pinned predecessor without SHA256SUMS is refused");
+    assert_eq!(
+        refusal,
+        PredecessorEnvelopeError::Package(PackageError::DigestPinUnverifiable)
+    );
+    let message = refusal.to_string();
+    assert!(message.contains("package.expectedDigest"), "{message}");
+    assert!(message.contains("SHA256SUMS"), "{message}");
+    assert_eq!(
+        pinned
+            .load_active_predecessor_package()
+            .err()
+            .expect("apply's predecessor load refuses the pinned package"),
+        PackageError::DigestPinUnverifiable
     );
 }
 

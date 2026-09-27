@@ -4965,6 +4965,7 @@ dependencies = [
  "registry-manifest-core",
  "registry-platform-buildinfo",
  "registry-platform-canonical-json",
+ "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-hooks",
  "registry-platform-httputil",
