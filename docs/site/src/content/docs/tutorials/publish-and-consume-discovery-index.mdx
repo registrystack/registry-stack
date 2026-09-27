@@ -1,11 +1,11 @@
 ---
 title: Publish and consume a Registry Discovery index
-description: Package a local Discovery index from Evidence and Relay advertisements, select exact records, and hand them to native product trust.
+description: Build a local Discovery index from Evidence and Relay advertisements, resolve a requirement, and select exact records to hand to native product trust.
 status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-14"
+last_reviewed: "2026-09-27"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -16,43 +16,50 @@ locale: en
 standards_referenced:
   - dcat
   - json-ld
+tutorial_test:
+  toolset: discovery
+  checkout: true
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Package a local Registry Discovery index from exact Evidence Gateway and Registry Relay publication
-bytes, resolve and select one record for each product, then verify both selections through the
-maintained native clients and adopter-owned trust.
+Registry Discovery helps an application find which Evidence Gateway or Registry Relay service
+can answer a question. In this tutorial you play every role: two providers publish a short public
+description of their service, an operator builds those descriptions into an index and serves it,
+and a consumer asks the index which services fit a requirement and picks one of each kind.
 
 <QuickstartMeta
-  outcome="One immutable local package, exact Evidence and Relay selections, and two direct native client handoffs."
+  outcome="One immutable local index, one resolved requirement, and exact Evidence and Relay selections."
   time="About 15 minutes after the Rust dependencies are available"
   level="Local development with synthetic data"
-  prerequisites={['Git', 'Rust 1.95.0 through rustup', 'Python 3', 'curl', 'shasum', 'Bash', 'Local ports 38080 and 38090']}
+  prerequisites={['Git', 'Rust 1.95.0 through rustup', 'Python 3', 'curl', 'shasum', 'Local ports 38080 and 38090']}
 />
 
 ## Before you start
 
-Use a clean checkout. The tutorial compiles the two Discovery binaries from the locked workspace,
-starts only loopback services, and creates its authoring project in a temporary directory.
+Clone the repository and work from its root. Every service in this tutorial listens on loopback
+only.
 
-```sh
+```sh test-skip="the runner starts in a copy of this checkout"
 git clone --depth 1 --quiet https://github.com/registrystack/registry-stack.git
 cd registry-stack
-test -f products/discovery/scripts/test-adopter-tutorial.sh
-printf 'checkout ready\n'
 ```
 
-The final two commands report:
+Build the two Discovery binaries from the locked workspace and put them on your `PATH`:
 
-```text
-checkout ready
+```sh test-skip="builds from source; the runner serves the binaries under test"
+cargo build --locked --release -p registry-discovery -p registry-discoveryctl
+export PATH="$PWD/target/release:$PATH"
 ```
+
+`discoveryctl` is the operator's offline tool: it checks the authoring project and builds the
+index. `discovery` is the runtime that serves one built index.
 
 ## Confirm the provider publications
 
-The Evidence assertion provider and Relay data publisher each contribute one closed, public JSON-LD
-description. Confirm the exact bytes supplied by the checkout.
+Each provider describes its service in one public JSON-LD file. The checkout carries an example
+description for an Evidence Gateway deployment and one for a Registry Relay deployment. Check that
+yours are the files this tutorial was written against:
 
 ```sh
 shasum -a 256 \
@@ -60,7 +67,7 @@ shasum -a 256 \
   products/discovery/fixtures/descriptions/relay.jsonld
 ```
 
-```text
+```text test-expect
 fc96f3a8cb0d82239425ea5712dceca975a5899e5528616648174da661fae905  products/discovery/fixtures/descriptions/evidence.jsonld
 5a34fa469803b7c28b3d5e7134a42398e326a2f173aacae9090d29787bc8f4d7  products/discovery/fixtures/descriptions/relay.jsonld
 ```
@@ -76,16 +83,19 @@ Discovery runtime does not reconstruct provider metadata.
     `provider_discovery_description_preserves_semantic_class_operation_family_correlation`, bind
     the profile to native provider packaging. */}
 
-## Inspect the operator project
+## Check the operator project
 
-The operator owns an explicit list of provider description URLs. Local HTTP is enabled only for this
-loopback tutorial.
+Copy the tutorial's operator project out of the checkout, so the index you build stays separate
+from the source files:
 
 ```sh
-sed -n '1,80p' products/discovery/tutorial/project/origins.yaml
+cp -R products/discovery/tutorial/project discovery-project
 ```
 
-```yaml
+As the operator, you decide which providers the index includes. `discovery-project/origins.yaml`
+lists the URL of each approved description:
+
+```yaml test-excerpt="discovery-project/origins.yaml"
 schemaVersion: registry-discovery/origins/v1alpha1
 origins:
   - originId: tutorial-evidence
@@ -98,13 +108,11 @@ origins:
     enabled: true
 ```
 
-The operator also owns the mapping from an application requirement to one Evidence type.
+You also decide which kind of evidence satisfies a requirement an application may have.
+`discovery-project/mappings/adult-status.yaml` says that the adult-status requirement is met by
+one Evidence type:
 
-```sh
-sed -n '1,80p' products/discovery/tutorial/project/mappings/adult-status.yaml
-```
-
-```yaml
+```yaml test-excerpt="discovery-project/mappings/adult-status.yaml"
 schemaVersion: registry-discovery/evidence-mapping/v1alpha1
 mappingId: urn:example:mapping:adult-status
 mappingAuthorityId: urn:example:mapping-authority
@@ -116,63 +124,209 @@ alternatives:
       - urn:example:evidence-type:adult-status
 ```
 
-`discoveryctl check` validates these authoring files without contacting either URL. The later explicit
-package command is the only step that fetches the enabled origins.
+Check both files. Nothing serves the two URLs yet, and the check does not need them to.
+`--allow-loopback` accepts the `http://127.0.0.1` URLs; without it, `discoveryctl` accepts only
+HTTPS origins, which is what a real deployment uses.
+
+```sh
+discoveryctl check --project discovery-project --allow-loopback
+```
+
+```text test-expect
+valid origins=2 mappings=1
+```
+
+`discoveryctl check` validates the files without contacting either URL. The build in the next
+section is the only step that fetches the descriptions.
 
 {/* Evidence: `crates/registry-discoveryctl/src/project.rs`, test
     `check_is_offline_and_accepts_an_unreachable_https_origin`, proves the offline check.
     `crates/registry-discoveryctl/tests/build.rs`, test
-    `package_fetches_each_origin_once_and_preserves_semantic_revisions`, covers the one-shot fetch. */}
+    `build_fetches_each_origin_once_and_preserves_semantic_revisions`, covers the one-shot fetch. */}
 
-## Package, serve, select, and hand off
+## Build the index
 
-Run the product-owned reader journey. The script builds `discovery` and `discoveryctl`, copies the
-operator project into a fresh temporary directory, checks it before starting the provider, performs
-one explicit package operation, starts Discovery from that verified package, waits for readiness,
-and calls the real resolve and search routes.
+Play the two providers by serving their descriptions at the URLs `origins.yaml` approved. The
+server keeps running, so start it in its own shell:
+
+```sh test-background="http://127.0.0.1:38090/evidence.jsonld"
+python3 products/discovery/tutorial/publication_server.py \
+  --descriptions products/discovery/fixtures/descriptions
+```
+
+Open a second shell at the root of the checkout and build the index:
 
 ```sh
-bash products/discovery/scripts/test-adopter-tutorial.sh
+discoveryctl build \
+  --project discovery-project \
+  --output discovery-project/discovery-index.json \
+  --allow-loopback
 ```
 
-The output ends with these role-oriented results. Revision and record digests are stable for the
-checked-in semantic inputs.
-
-```text
-[checkout] building discovery and discoveryctl from locked source
-[provider] evidence.jsonld sha256=fc96f3a8cb0d82239425ea5712dceca975a5899e5528616648174da661fae905
-[provider] relay.jsonld sha256=5a34fa469803b7c28b3d5e7134a42398e326a2f173aacae9090d29787bc8f4d7
-[operator] offline check: valid origins=2 mappings=1
-[operator] explicit package: packaged packageDigest=sha256:<digest-for-this-run> catalogRevision=sha256:b4b7195f36691c245bf49a88a248049ed899c0c41dbf1a87a386571c0dbfba0f mappingRevision=sha256:332004ca3920c498539180946e8f2637e9998ba7e49cd98f31e19d6f818857ac
-[operator] readiness: {"status":"ready"}
-[consumer] resolved evidenceType=urn:example:evidence-type:adult-status alternatives=1
-[consumer] selected evidence recordId=urn:registrystack:discovery:record:sha256:676659c10ce5cc9d353f4fd2816673c7947e612151efbbe1cc4d42372d9be9d5
-[consumer] selected relay recordId=urn:registrystack:discovery:record:sha256:aa220c11f493c266bc22adf5dc7ca82fb7a83842e6e887dc0e8e5680f4f84244
-[handoff] adopter-owned Evidence trust accepted; native assertion verified
-[handoff] adopter-owned Relay trust accepted; native list response verified
-[cleanup] local services stopped; temporary project removed
-Registry Discovery adopter tutorial: PASS
+```text test-expect
+built catalogRevision=sha256:b4b7195f36691c245bf49a88a248049ed899c0c41dbf1a87a386571c0dbfba0f mappingRevision=sha256:332004ca3920c498539180946e8f2637e9998ba7e49cd98f31e19d6f818857ac
 ```
 
-The consumer first resolves the requirement and chooses one complete Evidence Type alternative.
-Each alternative is an AND-list, so the consumer searches and explicitly chooses one provider for
-every required type. It separately searches one correlated Relay semantic-class and operation-family
-tuple and records one exact Relay result. The saved typed selections contain public metadata,
-complete resolution context, capability matches, and revision provenance only. Rust, Node.js, and
-Python applications perform the same workflow through their maintained Discovery client binding.
+Both revisions are content addressed. The catalog revision is derived from the provider bytes
+the build fetched, and the mapping revision from the operator's mappings, so the same inputs
+build the same revisions on any machine.
 
-The package digest covers the exact canonical index and optional `REVISION` through `SHA256SUMS`.
-The semantic revisions above remain stable for the checked-in descriptions and mappings. The
-package digest can change on a later run because the index truthfully records that run's
-`originFetchedAt` and `builtAt` provenance.
+The build fetched each description once, and the index is now complete. Go back to the first
+shell and stop the publication server with `Ctrl+C`. Discovery never contacts a provider while it
+serves, so nothing below needs it.
 
-The final two handoff checks revalidate each persisted selection, then repeat the exact-selection
-boundary against publications derived by the native products. The adopter's existing Evidence and
-Relay trust configurations must accept a saved selection before a credential is created or a native
-request is sent. The maintained Evidence client uses the selected requirement and Evidence Type with
-the adopter's native request policy, then requests and verifies an assertion directly. The maintained
-Relay client uses native metadata to map the selected public tuple to a concrete operation, then reads
-a collection directly. Discovery is stopped before those direct calls.
+## Serve the index
+
+In the first shell, start Discovery:
+
+```sh test-background="http://127.0.0.1:38080/ready"
+discovery --runtime discovery-project/runtime.yaml
+```
+
+`discovery-project/runtime.yaml` names the listener, the index file beside it, and the request
+and response limits. It names no origin, mapping, or trust setting: the runtime serves the index
+it loaded at startup and nothing else. In the second shell, confirm that it is ready:
+
+```sh
+curl -s http://127.0.0.1:38080/ready
+```
+
+```json test-expect
+{"status":"ready"}
+```
+
+## Resolve a requirement
+
+Now play the consumer. An application knows what it needs to establish, such as whether a
+person is an adult, but not which provider can tell it. Ask Discovery which Evidence types satisfy
+the adult-status requirement in the example jurisdiction:
+
+```sh
+curl -s \
+  -H 'Content-Type: application/json' \
+  --data '{"requirementId":"urn:example:requirement:adult-status","jurisdiction":"urn:example:jurisdiction"}' \
+  http://127.0.0.1:38080/v1/evidence-types/resolve
+```
+
+```json test-expect
+{
+  "requirementId": "urn:example:requirement:adult-status",
+  "jurisdiction": "urn:example:jurisdiction",
+  "mappingRevision": "sha256:332004ca3920c498539180946e8f2637e9998ba7e49cd98f31e19d6f818857ac",
+  "alternatives": [
+    {
+      "evidenceTypeListId": "urn:example:evidence-type-list:adult-status",
+      "evidenceTypeIds": ["urn:example:evidence-type:adult-status"],
+      "mappingId": "urn:example:mapping:adult-status",
+      "mappingAuthorityId": "urn:example:mapping-authority"
+    }
+  ]
+}
+```
+
+The answer carries the mapping revision the build printed, so the application can record which
+version of your mapping it relied on. When a requirement has several alternatives, the
+application picks one, and then needs a provider for every Evidence type listed in it. Here there
+is one alternative with one type.
+
+## Search for the providers
+
+Search for Evidence services that assert the resolved type:
+
+```sh
+curl -s --get \
+  --data-urlencode 'serviceKind=evidence' \
+  --data-urlencode 'evidenceType=urn:example:evidence-type:adult-status' \
+  http://127.0.0.1:38080/v1/services
+```
+
+```json test-expect
+{
+  "catalogRevision": "sha256:b4b7195f36691c245bf49a88a248049ed899c0c41dbf1a87a386571c0dbfba0f",
+  "items": [
+    {
+      "recordId": "urn:registrystack:discovery:record:sha256:676659c10ce5cc9d353f4fd2816673c7947e612151efbbe1cc4d42372d9be9d5",
+      "bindingId": "urn:registrystack:discovery:binding:sha256:2f9ccc4629c7ea2409d986a9c0ee6e3afe6e63326ca7b1be7d9eb8c69082d96c",
+      "serviceId": "urn:example:service:evidence",
+      "serviceKind": "evidence",
+      "title": "Example Evidence",
+      "description": "Public signed evidence assertions",
+      "endpointUrl": "https://evidence.example.org",
+      "publisherId": "urn:example:publisher",
+      "jurisdictions": ["https://publications.europa.eu/resource/authority/territory/DEU"],
+      "conformsTo": ["https://registrystack.org/evidence/profile/v1"],
+      "evidenceTypeIds": ["urn:example:evidence-type:adult-status"],
+      "semanticClassIds": [],
+      "operationFamilyIds": [],
+      "originId": "tutorial-evidence",
+      "originUrl": "http://127.0.0.1:38090/evidence.jsonld",
+      "originContentDigest": "sha256:fc96f3a8cb0d82239425ea5712dceca975a5899e5528616648174da661fae905",
+      "originFetchedAt": "<fetched-at>"
+    }
+  ]
+}
+```
+
+Relay services are found by what they hold and what they let you do with it: a semantic class,
+such as a person, and an operation family, such as a lookup. Search for Relay services that look
+up a person:
+
+```sh
+curl -s --get \
+  --data-urlencode 'serviceKind=relay' \
+  --data-urlencode 'semanticClass=urn:example:class:person' \
+  --data-urlencode 'operationFamily=urn:example:operation:lookup' \
+  http://127.0.0.1:38080/v1/services
+```
+
+```json test-expect
+{
+  "catalogRevision": "sha256:b4b7195f36691c245bf49a88a248049ed899c0c41dbf1a87a386571c0dbfba0f",
+  "items": [
+    {
+      "recordId": "urn:registrystack:discovery:record:sha256:aa220c11f493c266bc22adf5dc7ca82fb7a83842e6e887dc0e8e5680f4f84244",
+      "bindingId": "urn:registrystack:discovery:binding:sha256:cfbc42c572f4b0dfd81d10cd47c149e54451e2f0fa61f79b842b54eff51fb4e6",
+      "serviceId": "urn:example:service:relay",
+      "serviceKind": "relay",
+      "title": "Example Relay",
+      "description": "Public registry query metadata",
+      "endpointUrl": "https://relay.example.org",
+      "operatorId": "urn:example:operator",
+      "registryAuthorityId": "urn:example:authority",
+      "jurisdictions": ["https://publications.europa.eu/resource/authority/territory/DEU"],
+      "conformsTo": ["https://registrystack.org/relay/profile/v2"],
+      "evidenceTypeIds": [],
+      "semanticClassIds": ["urn:example:class:person"],
+      "operationFamilyIds": ["urn:example:operation:lookup"],
+      "originId": "tutorial-relay",
+      "originUrl": "http://127.0.0.1:38090/relay.jsonld",
+      "originContentDigest": "sha256:5a34fa469803b7c28b3d5e7134a42398e326a2f173aacae9090d29787bc8f4d7",
+      "originFetchedAt": "<fetched-at>"
+    }
+  ]
+}
+```
+
+Both answers carry the `catalogRevision` the build printed, because both come from the one index
+you built. Each result names the description it came from, with the same digest you checked at
+the start, and `originFetchedAt`, the time your build fetched it.
+
+## Select and hand off
+
+Each search found one service, so the choice is made. What the application saves is a
+selection: the `recordId` and `bindingId` of the result it chose, what it searched for, and the
+`catalogRevision` and `mappingRevision` it chose under. That is enough to explain the choice later
+and to notice when the index changes. A selection is public metadata only. It is not a credential,
+and it does not make the provider trusted.
+
+Calling the provider is a separate step that does not involve Discovery. The application's own
+Evidence Gateway or Registry Relay configuration decides whether it trusts the selected service.
+If it does, the application calls the service's `endpointUrl` directly with that product's
+client: the Evidence client requests and verifies an assertion, and the Relay client finds the
+matching operation in Relay's own metadata and reads from it. No credential, request, or response
+passes through Discovery. In an application, the Discovery namespace of the
+[unified Registry Stack client](../../reference/client-api/#registry-discovery) runs these
+searches and saves selections, from Rust, Node.js, or Python.
 
 {/* Tier-C evidence: `crates/registry-discovery-client/src/selection.rs`, test
     `discovery_metadata_has_no_trust_or_native_io_capability`, excludes trust and native I/O from a
@@ -188,17 +342,16 @@ a collection directly. Discovery is stopped before those direct calls.
 | --- | --- | --- | --- |
 | Assertion provider | Packaged Evidence public description | Public Evidence endpoint, profile, evidence type, or issuer role changes | Publish the exact packaged bytes at the approved URL |
 | Data publisher | Packaged Relay public description | Public Relay endpoint, profile, semantic class, operation family, or authority role changes | Publish the exact sealed artifact bytes at the approved URL |
-| Operator | `origins.yaml`, mapping files, immutable package, and `runtime.yaml` | An approved origin or mapping changes | Run offline `check`, explicit `package`, deploy the complete package, pin its digest when required, then restart Discovery |
+| Operator | `origins.yaml`, mapping files, immutable index, and `runtime.yaml` | An approved origin or mapping changes | Run offline `check`, explicit `build`, deploy the complete index, then restart Discovery |
 | Consumer or verifier | Saved exact selection and native product trust | A catalog revision, mapping revision, origin digest, binding, or local trust decision changes | Re-evaluate local trust, then call the selected native endpoint directly |
 
-The operator does not run a synchronization scheduler or maintain a writable catalog. A failed
-package operation does not replace the deployed package. Deploy a complete new package and restart
-the process when the change is intentional.
+The operator does not run a synchronization scheduler or maintain a writable catalog. A failed build
+does not replace the deployed index. Deploy a complete new index and restart the process when the
+change is intentional.
 
-{/* Tier-C evidence: `products/discovery/README.md` defines check, explicit package, deployment, and restart
+{/* Tier-C evidence: `products/discovery/README.md` defines check, explicit build, deployment, and restart
     as the maintenance loop. `crates/registry-discoveryctl/tests/build.rs`, test
-    `failed_origin_fetch_leaves_the_previous_output_untouched`, proves that a failed collection
-    leaves the prior output unchanged.
+    `failed_origin_fetch_leaves_the_previous_output_untouched`, proves atomic replacement.
     `crates/registry-discovery/src/startup.rs`, test
     `runtime_is_closed_and_contains_no_origin_mapping_trust_or_fetch_configuration`, defines the
     runtime configuration boundary. `crates/registry-discovery-client/tests/native_journey.rs`, test
@@ -208,37 +361,45 @@ the process when the change is intentional.
 
 ## Clean up the local services
 
-The runner stops Discovery and the publication server and removes the temporary project on success,
-failure, or `Ctrl+C`. The compiled binaries remain under `target/discovery-tutorial-source` so a
-second run can reuse them. The runner's final cleanup line confirms that neither loopback service
-remains active.
+Stop Discovery in the first shell with `Ctrl+C`, then remove the project copy and the index built
+into it:
+
+```sh
+rm -rf discovery-project
+```
+
+The compiled binaries stay under `target/release`, so a second run reuses them.
 
 ## What you built
 
 - The provider roles supplied two deterministic public descriptions.
-- The operator checked explicit origins and mappings offline, packaged one immutable index, started
-  Discovery, and waited for `{"status":"ready"}`.
-- The consumer resolved one Evidence requirement and made exact Evidence and Relay selections.
-- The verifier applied adopter-owned native trust and used the existing clients without routing
-  credentials, native requests, or responses through Discovery.
+- The operator checked explicit origins and mappings offline, built one immutable index, and
+  served it with Discovery.
+- The consumer resolved one requirement and found one Evidence and one Relay service, both from
+  the same catalog revision, ready to save as selections.
+- Trusting and calling the chosen services stays with the application and the product clients,
+  outside Discovery.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| The publication server or Discovery stops before readiness | Port `38090` or `38080` is already in use | Stop the process using the port, then run the tutorial again |
+| The publication server or Discovery stops at startup | Port `38090` or `38080` is already in use | Stop the process using the port, then start the service again |
+| `discoveryctl build` cannot fetch an origin | The publication server is not running in the other shell | Start the publication server, then run the build again; a failed build leaves no partial index |
 | Cargo cannot resolve dependencies | The clean checkout has not acquired the locked Rust dependencies | Restore network access to the Cargo registry or provide a populated Cargo cache |
 | A publication digest differs | The provider bytes do not match the tutorial's reviewed fixture | Restore the clean checkout or review the changed publication before indexing it |
 | Native handoff is refused | The selected binding does not match the adopter-owned product trust record | Keep the selection inert, correct the local trust decision, and retry the native handoff |
 
 {/* Tier-C evidence: `crates/registry-discovery-client/tests/native_journey.rs`, test
     `complete_evidence_and_relay_journeys_build_select_trust_and_invoke_natively`, proves the trust
-    refusal occurs before credential construction and provider traffic. Maintainer reviewed and
-    accepted this trust-boundary claim on 2026-08-14. */}
+    refusal occurs before credential construction and provider traffic.
+    `crates/registry-discoveryctl/tests/build.rs`, test
+    `failed_origin_fetch_leaves_the_previous_output_untouched`, proves a failed build writes no
+    index. Maintainer reviewed and accepted this trust-boundary claim on 2026-08-14. */}
 
 ## Next
 
-- [Package and run a Registry Discovery index](../../configure/discovery/) with your approved HTTPS
+- [Build and run a Registry Discovery index](../../configure/discovery/) with your approved HTTPS
   origins, deployment directory, and runtime limits.
 - [Registry Discovery is an index](../../explanation/discovery-as-an-index/) explains why trust and
   invocation stay in the native products.
