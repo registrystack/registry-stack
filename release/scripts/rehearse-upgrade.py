@@ -903,9 +903,15 @@ class Breg:
         baseline_args = ["--baseline-runtime-config", str(baseline)] if baseline else []
         signing = ["--database-id", BREG_DATABASE_ID, *baseline_args,
                    "--signature-threshold", "1", "--signature-key-id", BREG_SIGNER]
-        side.run_json("bregctl", "--format", "json", "test", str(self.project),
-                      "--runtime-config", str(test_runtime), "--credentials",
-                      str(credentials), *signing, "--output", str(build / "receipt.json"))
+        tested = side.run_json("bregctl", "--format", "json", "test", str(self.project),
+                               "--runtime-config", str(test_runtime), "--credentials",
+                               str(credentials), *signing, "--output",
+                               str(build / "receipt.json"))
+        # A passing test may still carry advisory findings, such as a
+        # predecessor fingerprint drift; they belong in the rehearsal log.
+        for diagnostic in tested.get("diagnostics", []):
+            print(f"{side.label} bregctl test: {diagnostic.get('severity')} "
+                  f"{diagnostic.get('code')}", file=sys.stderr)
         output = build / "out"
         package_args = ["--format", "json", "package", str(self.project), *signing,
                         "--test-receipt", str(build / "receipt.json"), "--output", str(output)]
@@ -1019,6 +1025,14 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
                  "--acknowledge-retired-audit-discard")
     breg.write_runtime(breg.runtime, "registry", successor, successor_revision,
                        registry["package"]["sequence"], breg.port)
+    # A registry activated before the instance claim records none, and the
+    # runtime refuses to serve it until the operator adopts it once, the
+    # documented step after its first apply on a release that has the claim.
+    claim = new.run_json("bregctl", "--format", "json", "instance-claim", "status",
+                         "--runtime-config", str(breg.runtime))["status"]["claim"]
+    if claim is None:
+        new.run_json("bregctl", "--format", "json", "instance-claim", "adopt",
+                     "--runtime-config", str(breg.runtime), "--acknowledge-original-retired")
     new.run_json("bregctl", "--format", "json", "verify", "--runtime-config", str(breg.runtime))
     service = Service(new, "breg", breg_arguments(breg_reads_runtime_config(new), breg.runtime),
                       work / "breg-successor.log", ready)
@@ -1037,6 +1051,7 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
         "tables": len(before_counts),
         "successorSequence": registry["package"]["sequence"],
         "archivedAuditTables": archived,
+        "adoptedInstanceClaim": claim is None,
         "viewDifferences": differences,
         "rowLosses": losses,
     }
@@ -1266,6 +1281,7 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
         "tables": len(before_counts),
         "auditFilesArchived": archived_files,
         "archivedAuditTables": archived,
+        "adoptedInstanceClaim": claim is None,
         "viewDifferences": differences,
         "rowLosses": losses,
     }
@@ -1598,9 +1614,12 @@ PRODUCTS = ("breg", "casework", "evidence")
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--to-bin-dir", type=Path, required=True,
+    parser.add_argument("--to-bin-dir", type=Path,
                         help="directory holding breg, bregctl, casework, caseworkctl, "
                              "evidence, and evidencectl built from this source")
+    parser.add_argument("--fetch-only", action="store_true",
+                        help="download and authenticate the previous release's binaries "
+                             "into WORK_DIR/from-bin, check their versions, and stop")
     parser.add_argument("--from-tag",
                         help="published release to upgrade from; defaults to the newest "
                              "release at or below the workspace version")
@@ -1616,7 +1635,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         help="use these previous-release binaries instead of downloading "
                              "them; their provenance is NOT verified")
     parser.add_argument("--report", type=Path, help="write the JSON report here")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.fetch_only and args.from_bin_dir is not None:
+        parser.error("--fetch-only downloads the release, so it refuses --from-bin-dir")
+    if not args.fetch_only and args.to_bin_dir is None:
+        parser.error("--to-bin-dir is required unless --fetch-only is given")
+    return args
 
 
 def main(argv: list[str]) -> int:
@@ -1642,8 +1666,14 @@ def main(argv: list[str]) -> int:
             report["fromProvenance"] = "UNVERIFIED local override"
             print(f"warning: {from_bin} is not authenticated as {from_tag}", file=sys.stderr)
         old = Side("from", from_bin, tls / "ca.pem")
-        new = Side("to", args.to_bin_dir.resolve(), tls / "ca.pem")
         report["fromVersions"] = check_binaries(old, from_tag[1:], binaries)
+        if args.fetch_only:
+            report["fromBinDir"] = str(from_bin)
+            if args.report:
+                args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+            print(json.dumps(report, indent=2, sort_keys=True))
+            return 0
+        new = Side("to", args.to_bin_dir.resolve(), tls / "ca.pem")
         report["toVersions"] = check_binaries(new, None, binaries)
         keys = Keys(work / "keys")
         postgres = None
