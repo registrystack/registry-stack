@@ -218,6 +218,18 @@ impl PostgresStore {
         role_mode_in(&**client, &user, None).await
     }
 
+    /// The refusal naming how this store's credential, a role other than the
+    /// migration role, can still write the ledger indirectly, or none when it
+    /// cannot.
+    pub async fn split_weakness(&self) -> Result<Option<StoreError>, StoreError> {
+        let client = self.client().await?;
+        let user: String = client
+            .query_one("SELECT current_user::text", &[])
+            .await?
+            .get(0);
+        split_weakness_in(&**client, &user).await
+    }
+
     /// Accept one package in one transaction under the migration lock:
     /// refuse a foreign database, or the package already active with nothing
     /// left to change, before any statement changes anything, then migrate,
@@ -253,6 +265,17 @@ impl PostgresStore {
         if let Some(active) = &active {
             if active.database_id != request.database_id {
                 return Err(StoreError::DatabaseIdMismatch);
+            }
+            // A weakened split is named before any statement, since an
+            // object the runtime role owns can also refuse the migration
+            // role's own reads; the check after the grants covers the first
+            // apply, which creates the ledger it reads.
+            if request.role_mode == RoleMode::Split {
+                if let Some(weakened) =
+                    split_weakness_in(&*transaction, request.runtime_role).await?
+                {
+                    return Err(weakened);
+                }
             }
             let mode_now =
                 role_mode_in(&*transaction, request.runtime_role, Some(&migration_role)).await?;
@@ -324,6 +347,9 @@ impl PostgresStore {
 
         if request.role_mode == RoleMode::Split {
             grant_runtime_role(&transaction, request.runtime_role).await?;
+            if let Some(weakened) = split_weakness_in(&*transaction, request.runtime_role).await? {
+                return Err(weakened);
+            }
         }
         // The mode recorded is the authority the runtime role holds once the
         // grants are issued, which a membership or a superuser attribute can
@@ -398,6 +424,9 @@ impl PostgresStore {
             .await?
             .get(0);
         let effective_role_mode = role_mode_in(&*transaction, &runtime_role, None).await?;
+        if let Some(weakened) = split_weakness_in(&*transaction, &runtime_role).await? {
+            refusals.push(weakened);
+        }
         let mut changes_pending = true;
         if let Some(active) = &active {
             if active.database_id != database_id {
@@ -512,9 +541,10 @@ fn already_active(
 
 /// The role mode `role` holds over the activation ledger, or none before
 /// the first apply created it. It is `single` when the role can insert,
-/// update, delete, or truncate ledger rows, is or holds the ledger's owner,
-/// the schema's owner, or `migration_role`, or is a superuser or bypasses
-/// row security; `split` otherwise.
+/// update, delete, or truncate ledger or schema history rows, is or holds
+/// the ledger's owner, the schema's owner, or `migration_role`, is a
+/// superuser or bypasses row security, or can write the ledger indirectly
+/// as [`split_weakness_in`] describes; `split` otherwise.
 async fn role_mode_in(
     client: &impl GenericClient,
     role: &str,
@@ -526,6 +556,9 @@ async fn role_mode_in(
     let writes: bool = client
         .query_opt(
             "SELECT has_table_privilege(r.oid, c.oid, 'INSERT, UPDATE, DELETE, TRUNCATE') \
+                 OR COALESCE(has_table_privilege(r.oid, \
+                        to_regclass('scheduling_schema_migrations'), \
+                        'INSERT, UPDATE, DELETE, TRUNCATE'), false) \
                  OR pg_has_role(r.oid, c.relowner, 'USAGE') \
                  OR pg_has_role(r.oid, n.nspowner, 'USAGE') \
                  OR COALESCE(pg_has_role(r.oid, m.oid, 'USAGE'), false) \
@@ -540,11 +573,71 @@ async fn role_mode_in(
         .await?
         .ok_or(StoreError::Corrupt)?
         .get(0);
-    Ok(Some(if writes {
-        RoleMode::Single
-    } else {
-        RoleMode::Split
-    }))
+    Ok(Some(
+        if writes || split_weakness_in(client, role).await?.is_some() {
+            RoleMode::Single
+        } else {
+            RoleMode::Split
+        },
+    ))
+}
+
+/// How `role`, a role other than the ledger's owner, can still write the
+/// ledger although apply revoked its writes: it owns, or holds a role that
+/// owns, the Scheduling schema or a `scheduling_*` relation or function in
+/// it, or it holds CREATE on the schema. Either lets it attach code that
+/// runs as the migration role inside a later apply, such as a deferred
+/// constraint trigger on a table apply writes. None when the ledger does not
+/// exist yet, when `role` is or holds the ledger's owner or is a superuser
+/// (single role mode), or when neither holds.
+async fn split_weakness_in(
+    client: &impl GenericClient,
+    role: &str,
+) -> Result<Option<StoreError>, StoreError> {
+    let Some(row) = client
+        .query_opt(
+            "SELECT quote_ident(r.rolname), quote_ident(n.nspname), \
+                 quote_ident(pg_get_userbyid(c.relowner)), \
+                 (SELECT quote_ident(pg_get_userbyid(owner)) FROM ( \
+                     SELECT n.nspowner AS owner \
+                     UNION ALL SELECT o.relowner FROM pg_class AS o \
+                         WHERE o.relnamespace = n.oid AND o.relname LIKE 'scheduling\\_%' \
+                     UNION ALL SELECT p.proowner FROM pg_proc AS p \
+                         WHERE p.pronamespace = n.oid AND p.proname LIKE 'scheduling\\_%' \
+                 ) AS owners \
+                 WHERE pg_has_role(r.oid, owner, 'USAGE') \
+                 ORDER BY owner = r.oid DESC, pg_get_userbyid(owner) LIMIT 1), \
+                 has_schema_privilege(r.oid, n.oid, 'CREATE') \
+             FROM pg_roles AS r \
+             CROSS JOIN pg_class AS c \
+             JOIN pg_namespace AS n ON n.oid = c.relnamespace \
+             WHERE r.rolname = $1::text AND c.oid = to_regclass('scheduling_activations') \
+               AND NOT pg_has_role(r.oid, c.relowner, 'USAGE') \
+               AND NOT r.rolsuper",
+            &[&role],
+        )
+        .await?
+    else {
+        return Ok(None);
+    };
+    let (runtime, schema, migration): (String, String, String) =
+        (row.try_get(0)?, row.try_get(1)?, row.try_get(2)?);
+    let owner: Option<String> = row.try_get(3)?;
+    let creates: bool = row.try_get(4)?;
+    let (cause, fix) = match owner {
+        Some(owner) => (
+            format!("{owner} owns an object in the Scheduling schema {schema}"),
+            format!("REASSIGN OWNED BY {owner} TO {migration}"),
+        ),
+        None if creates => (
+            format!("it holds CREATE on the Scheduling schema {schema}"),
+            format!("REVOKE CREATE ON SCHEMA {schema} FROM {runtime}"),
+        ),
+        None => return Ok(None),
+    };
+    Ok(Some(StoreError::SplitRoleWeakened(format!(
+        "the runtime role {runtime} is not separated from the migration role {migration}: {cause}, so it can write the activation ledger indirectly; run `{fix}` as a database administrator, then run `schedulingctl apply --runtime-config FILE`"
+    ))))
 }
 
 /// Whether the tables the publication locks read exist yet.

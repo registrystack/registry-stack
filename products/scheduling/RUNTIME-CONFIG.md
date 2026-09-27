@@ -103,7 +103,13 @@ superuser or BYPASSRLS attribute is recorded as `single` even when the two
 credentials are different roles. Re-running `apply` with the active package
 reissues the grants after the runtime role is rotated or the deployment moves
 to split mode, and `scheduling serve` refuses a ledger that recorded `split`
-for a credential that can now write it.
+for a credential that can now write it. A runtime role that owns, or is a
+member of an owner of, the Scheduling schema or any `scheduling_*` table,
+sequence, view, or function, or that holds CREATE on the schema, can write
+the ledger indirectly and no grant apply issues removes that. With two
+roles, `plan`, `apply`, and `serve` refuse it, naming `REASSIGN OWNED BY
+<owner> TO <migrator>` or `REVOKE CREATE ON SCHEMA <schema> FROM <runtime>`
+and then `schedulingctl apply --runtime-config FILE`.
 Transport security on the database connection is not optional: Scheduling sets
 `sslmode` to `Require` on both connections and refuses a connection it cannot
 protect. `database.trustedRootCertificateRef` is optional and selects the PEM

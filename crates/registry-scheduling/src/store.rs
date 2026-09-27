@@ -184,6 +184,12 @@ pub enum StoreError {
         "the activation ledger records split role mode, but the runtime credential can now write the ledger; run `schedulingctl apply --runtime-config FILE` to reissue the runtime role's grants and record the role mode it holds"
     )]
     RoleModeDrift,
+    /// The runtime role differs from the migration role but can still write
+    /// the ledger indirectly, through an object it owns or a schema CREATE
+    /// privilege, which the grants apply issues cannot take away. The text
+    /// names the runtime role and the statement that separates it.
+    #[error("{0}")]
+    SplitRoleWeakened(String),
     /// A retained hook event could not be proven deliverable under the
     /// destination binding it was captured for.
     #[error(
@@ -258,6 +264,7 @@ impl StoreError {
                 | Self::PackageAlreadyActive { .. }
                 | Self::PackageNotActive { .. }
                 | Self::RoleModeDrift
+                | Self::SplitRoleWeakened(_)
                 | Self::RetainedHookBindings
                 | Self::DeploymentIdentity
                 | Self::PolicyInUse(_)

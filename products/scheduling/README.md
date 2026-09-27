@@ -96,7 +96,10 @@ verified package is not the active one, or when `package.expectedDigest` names
 another package; each refusal names `schedulingctl plan` then
 `schedulingctl apply`. It also refuses when the ledger recorded `split` and the
 runtime credential can now write the ledger, naming `schedulingctl apply` to
-reissue the grants. A `serve` that finds a schema older than the one its
+reissue the grants. With two roles, `plan`, `apply`, and `serve` refuse a
+runtime role that owns a Scheduling object or holds CREATE on the schema,
+naming `REASSIGN OWNED BY` or `REVOKE CREATE ON SCHEMA` and then
+`schedulingctl apply`. A `serve` that finds a schema older than the one its
 binary carries refuses at the readiness check rather than serving against it,
 so an upgrade runs `schedulingctl apply` once before it restarts the new
 runtime; a database from before the ledger is adopted by that first apply,

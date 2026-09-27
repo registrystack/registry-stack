@@ -52,6 +52,12 @@
     package at `package.root`. It refuses a ledger that recorded split role
     mode for a runtime credential that can now write it, naming
     `schedulingctl apply`.
+  - In split role mode, `plan`, `apply`, and `scheduling serve` refuse with
+    `schedulingctl.activation.split-role-weakened` a runtime role that owns,
+    or is a member of an owner of, the Scheduling schema or a `scheduling_*`
+    table, sequence, view, or function, or that holds CREATE on the schema,
+    naming `REASSIGN OWNED BY` or `REVOKE CREATE ON SCHEMA` and then
+    `schedulingctl apply`.
   - `scheduling migrate` is removed; it exits 2 naming `schedulingctl plan
     --runtime-config FILE` then `schedulingctl apply --runtime-config FILE`.
   - The operator commands exit 0 on success, 1 on a refusal, 2 on a usage

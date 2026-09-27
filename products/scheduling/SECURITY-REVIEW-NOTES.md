@@ -443,12 +443,29 @@ PUBLIC, all inside the activation transaction. When they are one role
 `status` say so rather than refuse it, since a single-role local deployment
 is an ordinary layout. The mode the ledger records is not the comparison of
 user names: after the grants, apply reads what the runtime role can actually
-do to the ledger (a write privilege, ownership of the ledger or the schema,
+do to the ledger (a write privilege on the ledger or on
+`scheduling_schema_migrations`, ownership of the ledger or the schema,
 membership in the migration role, or a superuser or BYPASSRLS attribute) and
 records `single` if any holds, with the runtime role's name. Startup refuses
 a ledger that recorded `split` for a credential that can now write it, a
 grant or membership added after the apply, naming `schedulingctl apply` to
-reissue the grants. Re-applying the active package is accepted when the
+reissue the grants.
+
+**A weakened split.** A runtime role that differs from the migration role
+can still write the ledger indirectly when it owns, or is a member of a role
+that owns, the Scheduling schema or any other `scheduling_*` table,
+sequence, view, or function, or when it holds CREATE on the Scheduling
+schema: a deferred constraint trigger on a table apply updates, for
+example, fires as the migration role at commit and can insert an activation
+row. The grants apply issues cannot take either away, so they are not
+drift. In configured split mode `plan` reports the effective mode as
+`single` with the refusal `schedulingctl.activation.split-role-weakened`,
+`apply` refuses it before any schema, publication, or ledger statement
+(and again after the grants on a first apply), and startup refuses it in
+place of the drift refusal. Each refusal names the runtime role and the
+statement that separates it, `REASSIGN OWNED BY <owner> TO <migrator>` or
+`REVOKE CREATE ON SCHEMA <schema> FROM <runtime>`, run as a database
+administrator, then `schedulingctl apply --runtime-config FILE`. Re-applying the active package is accepted when the
 runtime role or its mode differs from the recorded row, so rotating the
 runtime role or moving to split mode is one more apply. The runtime keeps broad DML on the product tables it
 serves from, which SCHEDULING-DEC-10 records with its reasoning: the ledger
@@ -505,9 +522,12 @@ commands.
 (SCHEDULING-SEC-29),
 `split_roles_deny_the_runtime_a_ledger_write_and_the_service_still_serves`,
 `a_runtime_role_that_can_write_the_ledger_is_refused_at_startup_until_apply_reissues_its_grants`,
+`a_runtime_role_owning_a_scheduling_table_is_refused_in_split_mode_naming_reassign_owned`,
+`a_runtime_role_with_create_on_the_schema_is_refused_in_split_mode_naming_revoke_create`,
 `a_runtime_role_holding_the_migration_role_is_recorded_as_single`, and
 `rotating_the_runtime_role_reapplies_the_active_package`
-(SCHEDULING-SEC-30),
+(SCHEDULING-SEC-30; the drift test also grants UPDATE on
+`scheduling_schema_migrations`),
 `apply_refuses_the_active_package_and_a_foreign_database_without_writing`,
 `apply_waits_for_the_migration_lock_another_apply_holds`, and
 `apply_takes_the_publication_locks_before_it_migrates`
