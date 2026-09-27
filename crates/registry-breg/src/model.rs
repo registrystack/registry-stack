@@ -1658,7 +1658,7 @@ impl CompiledRegistry {
     /// baseline, so this is the schema the plan runs over, even when the
     /// predecessor's sources compile to more engine-owned objects under this
     /// compiler.
-    #[cfg(feature = "runtime")]
+    #[cfg(all(feature = "runtime", feature = "tooling"))]
     pub(crate) fn with_migration_baseline_schema(
         &self,
         baseline: &crate::package::CompiledRegistryMigrationBaseline,

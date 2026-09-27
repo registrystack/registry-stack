@@ -5910,6 +5910,51 @@ fn package_without_the_shared_envelope_is_refused_by_verify_with_the_successor_f
 }
 
 #[test]
+fn diff_reads_a_running_package_without_the_shared_envelope_unless_a_digest_pin_is_configured() {
+    let diff_against = |fixture: &RuntimePackageFixture, runtime_config: &Path| {
+        bregctl(&[
+            "--format",
+            "json",
+            "diff",
+            path(&fixture.package.join("source")),
+            "--runtime-config",
+            path(runtime_config),
+        ])
+    };
+
+    let enveloped = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    let expected = diff_against(&enveloped, &enveloped.runtime_config);
+    assert!(expected.status.success(), "{expected:?}");
+    let expected = json_stdout(&expected);
+    assert_eq!(expected["baselineAssurance"], "runtime_bound", "{expected}");
+
+    let legacy = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
+    strip_shared_package_envelope(&legacy.package);
+    let unpinned = diff_against(&legacy, &legacy.runtime_config);
+    assert!(unpinned.status.success(), "{unpinned:?}");
+    let unpinned = json_stdout(&unpinned);
+    assert_eq!(unpinned["baselineAssurance"], expected["baselineAssurance"]);
+    assert_eq!(unpinned["diff"], expected["diff"], "{unpinned}");
+
+    let pinned_runtime = legacy.variant(
+        "pinned",
+        &format!("  trustAnchorPath: {}", path(&legacy.anchor)),
+        &format!(
+            "  trustAnchorPath: {}\n  expectedDigest: sha256:{}",
+            path(&legacy.anchor),
+            "0".repeat(64)
+        ),
+    );
+    let pinned = diff_against(&legacy, &pinned_runtime);
+    assert_eq!(pinned.status.code(), Some(1), "{pinned:?}");
+    let report = json_stdout(&pinned);
+    assert_eq!(
+        report["diagnostics"][0]["code"], "diff.package.digest_pin_unverifiable",
+        "{report}"
+    );
+}
+
+#[test]
 fn package_baseline_without_the_shared_envelope_is_read_unless_a_digest_pin_is_configured() {
     let (project, _signing, key_id) = packaging_project();
     let fingerprint = "sha256:2222222222222222222222222222222222222222222222222222222222222222";

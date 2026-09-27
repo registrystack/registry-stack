@@ -3941,32 +3941,50 @@ fn data_lifecycle_failure(
 
 fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
     let candidate = compile(&args.project, ProfileArg::Authoring, "diff")?;
-    let (baseline, baseline_assurance) = match (&args.runtime_config, &args.package) {
-        (Some(runtime_path), None) => {
-            let inspected = inspect_runtime_package(runtime_path).map_err(|error| match error {
-                RuntimePackageInspectionError::RuntimeConfigPath => diff_failure(
-                    "diff.runtime_config.path_invalid",
-                    "runtimeConfig",
-                    "the runtime configuration path must be absolute",
-                ),
-                RuntimePackageInspectionError::RuntimeConfig(error) => {
-                    runtime_config_diff_failure(error)
-                }
-                RuntimePackageInspectionError::Package(error) => package_diff_failure(error),
-                RuntimePackageInspectionError::SharedPackage(message) => {
-                    diff_failure("diff.package.integrity_refused", "package", &message)
-                }
-            })?;
-            (inspected, BaselineAssurance::RuntimeBound)
-        }
-        (None, Some(package_root)) => (
-            inspect_package_integrity(package_root).map_err(package_diff_failure)?,
-            BaselineAssurance::IntegrityOnly,
-        ),
-        _ => unreachable!("clap enforces exactly one diff baseline selector"),
-    };
-    let compiled_diff =
-        classify_registry_diff(baseline.registry(), &candidate, baseline.package_revision());
+    let (baseline_registry, baseline_revision, baseline_assurance) =
+        match (&args.runtime_config, &args.package) {
+            (Some(runtime_path), None) => {
+                // The running package is the predecessor of the project being
+                // diffed, so it is read the way test and package read it: an
+                // earlier release's package is verified from its signed manifest.
+                let (predecessor, registry) = inspect_runtime_predecessor_rehearsal_baseline(
+                    runtime_path,
+                )
+                .map_err(|error| match error {
+                    RuntimePackageInspectionError::RuntimeConfigPath => diff_failure(
+                        "diff.runtime_config.path_invalid",
+                        "runtimeConfig",
+                        "the runtime configuration path must be absolute",
+                    ),
+                    RuntimePackageInspectionError::RuntimeConfig(error) => {
+                        runtime_config_diff_failure(error)
+                    }
+                    RuntimePackageInspectionError::Package(PackageError::DigestPinUnverifiable) => {
+                        digest_pin_unverifiable_failure("diff", "diff")
+                    }
+                    RuntimePackageInspectionError::Package(error) => package_diff_failure(error),
+                    RuntimePackageInspectionError::SharedPackage(message) => {
+                        diff_failure("diff.package.integrity_refused", "package", &message)
+                    }
+                })?;
+                (
+                    registry,
+                    predecessor.package_revision().to_owned(),
+                    BaselineAssurance::RuntimeBound,
+                )
+            }
+            (None, Some(package_root)) => {
+                let inspected =
+                    inspect_package_integrity(package_root).map_err(package_diff_failure)?;
+                (
+                    inspected.registry().clone(),
+                    inspected.package_revision().to_owned(),
+                    BaselineAssurance::IntegrityOnly,
+                )
+            }
+            _ => unreachable!("clap enforces exactly one diff baseline selector"),
+        };
+    let compiled_diff = classify_registry_diff(&baseline_registry, &candidate, &baseline_revision);
     let mut compiler_findings = candidate.findings().to_vec();
     compiler_findings.extend(unsupported_diff_findings(&compiled_diff));
     compiler_findings.extend(removed_value_findings(&compiled_diff));
